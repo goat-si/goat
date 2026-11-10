@@ -1,7 +1,19 @@
-import type { GoatBotDelivery } from "./rows.ts";
+import type { GoatBotDelivery, GoatBotRow } from "./rows.ts";
 
 /** A send the server refused. The chat renders it with the bot's current name. */
 export const GOAT_BOT_NOT_ACCEPTED = "not_accepted";
+
+/** A question's choices read A, B, C…; past Z they count on as numbers. */
+export function goatBotChoiceLetter(index: number): string {
+  return index < 26 ? String.fromCharCode(65 + index) : String(index + 1);
+}
+
+/** The composer's hint while a question in view still takes a pick; null otherwise. */
+export function goatBotOpenQuestionPlaceholder(rows: ReadonlyArray<GoatBotRow>): string | null {
+  return rows.some((row) => row.kind === "bot" && row.options.length > 0)
+    ? "Answer, or ask something else"
+    : null;
+}
 
 export function goatBotRejectionText(reason: string | undefined, botName: string): string {
   return reason === GOAT_BOT_NOT_ACCEPTED

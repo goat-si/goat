@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildGoatBotTimeline,
+  goatBotConversationPreview,
   type GoatBotItemReaders,
   type GoatBotMessagePresentation,
   type GoatBotPendingInput,
@@ -183,7 +184,7 @@ describe("questions a task asks in the main chat", () => {
     expect(optionsIn(null, items, { n1: proposal(1) })).toEqual([["b1", []]]);
   });
 
-  it("sends a pressed answer to the question's task, and shows that send in the main chat", () => {
+  it("sends a pressed answer to the question's task, and shows it in the main chat", () => {
     const items = [
       notice("n1", "2026-10-12T12:00:00Z"),
       bot("b1", "2026-10-12T12:00:01Z", "Save this as a skill? deploy-check"),
@@ -205,14 +206,11 @@ describe("questions a task asks in the main chat", () => {
           readers: readers({ b1: asked }, cards),
           taskId: null,
         }),
-      ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId] : [row.id]));
-    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([
-      ["n1"],
-      ["b1", "proposal"],
-      ["pending:c1"],
-    ]);
-    // A server that does not name open questions may not route an answer sent to a task.
-    expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", undefined], ["pending:c1"]]);
+      ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId ?? row.answer] : [row.id]));
+    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([["n1"], ["b1", "proposal"]]);
+    // A server that does not name open questions may not route an answer sent to a task, and the
+    // send answers the question there, so the picked choice shows inside it.
+    expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", "Save"]]);
   });
 
   it("shows an approval question of a known task in the main chat and closes it with the chip", () => {
@@ -256,10 +254,11 @@ describe("questions a task asks in the main chat", () => {
       }),
     ).map((row) => row.id);
     expect(pending).toContain("b1");
-    expect(pending).toContain("pending:c1");
+    // The pick on its way shows inside the question rather than as a second message.
+    expect(pending).not.toContain("pending:c1");
   });
 
-  it("keeps a pressed answer and the reply to it in the main chat", () => {
+  it("keeps a pressed answer, inside its question, and the reply to it in the main chat", () => {
     const work = { tone: "reply" as const, readAt: null, requestKey: null, taskId: "work" };
     const ids = content(
       buildGoatBotTimeline({
@@ -283,7 +282,7 @@ describe("questions a task asks in the main chat", () => {
         taskId: null,
       }),
     ).map((row) => row.id);
-    expect(ids).toEqual(["n1", "b1", "u1", "b2"]);
+    expect(ids).toEqual(["n1", "b1", "b2"]);
   });
 
   it("routes a turn's question from its chip and does not show the turn as a card", () => {
@@ -414,6 +413,130 @@ describe("a question the person answered", () => {
     expect(row).not.toHaveProperty("answer");
   });
 
+  it("shows a picked choice inside the question, without a second message from the person", () => {
+    const timeline = (
+      items: OrchestrationV2TurnItem[],
+      pendingInputs: GoatBotPendingInput[] = [],
+    ) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: rowsOf(items),
+          pendingInputs,
+          readers: readers({ b1: which }),
+        }),
+      );
+    for (const rows of [
+      timeline(asked, [pending("Release", "sending")]),
+      timeline([...asked, user("u1", "2026-10-12T12:00:02Z", "Release")]),
+    ]) {
+      expect(rows.filter((row) => row.kind === "user")).toEqual([]);
+      expect(rows.find((row) => row.id === "b1")).toMatchObject({
+        options: [],
+        choices: ["CI fix", "Release"],
+        answer: "Release",
+        answerIndex: 1,
+      });
+    }
+    // A typed answer stays the person's own message, and a failed pick stays visible to retry.
+    const typed = timeline([...asked, user("u1", "2026-10-12T12:00:02Z", "Neither")]);
+    expect(typed.filter((row) => row.kind === "user")).toHaveLength(1);
+    expect(typed.find((row) => row.id === "b1")).not.toHaveProperty("answerIndex");
+    const failed = timeline(asked, [pending("Release", "failed")]);
+    expect(failed.filter((row) => row.kind === "user")).toHaveLength(1);
+  });
+
+  it("shows a pick on its way in the question, and gives no older message the newest receipt", () => {
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([user("u0", "2026-10-12T12:00:00Z", "Ship it"), ...asked]),
+        pendingInputs: [pending("Release", "sending")],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(rows.find((row) => row.id === "b1")).toMatchObject({
+      answerIndex: 1,
+      answerSending: true,
+    });
+    expect(rows.filter((row) => row.kind === "user" && row.showReceipt)).toEqual([]);
+    // The roster still reads the pick as the person's newest message.
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })).toMatchObject({
+      text: "You: Release",
+      at: "2026-10-12T12:00:02Z",
+    });
+    // Also when the bot said something else between the question and the pick.
+    const withStatus = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([...asked, bot("s1", "2026-10-12T12:00:01.500Z", "Still here")]),
+        pendingInputs: [pending("Release", "sending")],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(
+      goatBotConversationPreview({ rows: withStatus, lastVisitedAt: null, active: true }),
+    ).toMatchObject({ text: "You: Release", at: "2026-10-12T12:00:02Z" });
+  });
+
+  it("shows a pick sent to a task's open question inside it while the task has not seen it", () => {
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const open = { ...card("proposal", 1), askInChat: true, openQuestionIds: ["q-save"] };
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([notice("n1", "2026-10-12T12:00:00Z"), ...asked]),
+        pendingInputs: [pending("Skip", "sending", { taskId: "proposal" })],
+        readers: readers({ b1: routed }, { n1: open }),
+        taskId: null,
+      }),
+    );
+    expect(rows.filter((row) => row.kind === "user")).toEqual([]);
+    expect(rows.find((row) => row.id === "b1")).toMatchObject({
+      options: [],
+      answerIndex: 1,
+      answerSending: true,
+    });
+    // Recorded but not yet seen by the task (its card is older than the pick): still the pick.
+    const unseen = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          notice("n1", "2026-10-12T12:00:00Z"),
+          ...asked,
+          user("u1", "2026-10-12T12:00:02Z", "Skip"),
+        ]),
+        pendingInputs: [],
+        readers: readers(
+          {
+            b1: routed,
+            u1: { tone: "reply", readAt: null, requestKey: "in-1", taskId: "proposal" },
+          },
+          { n1: { ...open, updatedAt: "2026-10-12T12:00:00Z" } },
+        ),
+        taskId: null,
+      }),
+    );
+    expect(unseen.filter((row) => row.kind === "user")).toEqual([]);
+    expect(unseen.find((row) => row.id === "b1")).toMatchObject({ answerIndex: 1 });
+  });
+
+  it("keeps a later message that only matches a choice as the person's own message", () => {
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          ...asked,
+          user("u1", "2026-10-12T12:00:02Z", "Neither"),
+          user("u2", "2026-10-12T12:00:03Z", "Release"),
+        ]),
+        pendingInputs: [],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(rows.filter((row) => row.kind === "user").map((row) => row.id)).toEqual(["u1", "u2"]);
+    expect(rows.find((row) => row.id === "b1")).not.toHaveProperty("answerIndex");
+  });
+
   it("still shows the answer after a reload, once the task closed the question", () => {
     const proposal = {
       ...card("proposal", 2, "Working"),
@@ -495,6 +618,8 @@ describe("a long chat of questions", () => {
     const at = () => DateTime.formatIso(DateTime.makeUnsafe(start + clock++ * 1_000));
     const closed = (key: string): GoatBotTaskCard => ({
       ...card(key, 1, "Waiting for your answer"),
+      // The cards closed their questions after the last reply came back.
+      updatedAt: "2026-10-13T00:00:00Z",
       askInChat: true,
       openQuestionIds: [],
     });

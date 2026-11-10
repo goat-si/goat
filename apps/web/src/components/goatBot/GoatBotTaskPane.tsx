@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   canSendToGoatBot,
+  goatBotOpenQuestionPlaceholder,
   isRetryableTaskStatus,
   presentTaskStatus,
   taskAttemptLabel,
@@ -65,6 +66,7 @@ export function GoatBotTaskPane({
   }, [canUpdate, environmentId, taskId, readThrough, update, refresh]);
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
+  const timelineRows = session.rowsForTask(taskId);
   return (
     <section
       aria-label="Task thread"
@@ -170,7 +172,7 @@ export function GoatBotTaskPane({
       </div>
       <GoatBotTimeline
         taskDetails
-        rows={session.rowsForTask(taskId)}
+        rows={timelineRows}
         environmentId={environmentId}
         onRetry={session.onRetryInput}
         onDiscard={session.onDiscardInput}
@@ -181,7 +183,7 @@ export function GoatBotTaskPane({
         botName={botName}
         placeholder={
           canSend
-            ? `Message ${botName}`
+            ? (goatBotOpenQuestionPlaceholder(timelineRows) ?? `Message ${botName}`)
             : memberDeleted
               ? `${member.name} was deleted`
               : `${botName} isn't available`

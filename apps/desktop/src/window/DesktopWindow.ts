@@ -43,11 +43,29 @@ import {
   MACOS_WINDOW_BUTTON_RADIUS,
 } from "./DesktopWindowAppearance.ts";
 import * as DesktopWindowMaterial from "./material/DesktopWindowMaterial.ts";
+import * as DesktopWindowBounds from "./DesktopWindowBounds.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
 
+type DisplayBounds = DesktopWindowBounds.DisplayBounds;
+
 const MIN_MAIN_WINDOW_WIDTH = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.width;
 const MIN_MAIN_WINDOW_HEIGHT = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.height;
+
+function parseMailtoAddress(rawUrl: string): Option.Option<string> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return Option.none();
+  }
+  if (url.protocol !== "mailto:" || url.pathname === "") return Option.none();
+  try {
+    return Option.some(decodeURIComponent(url.pathname));
+  } catch {
+    return Option.some(url.pathname);
+  }
+}
 
 function syncMacosWindowButtons(window: Electron.BrowserWindow): void {
   if (window.isDestroyed() || window.isFullScreen()) return;
@@ -129,92 +147,6 @@ function getIconOption(
     onNone: () => ({}),
     onSome: (icon) => ({ icon }),
   });
-}
-
-type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
-
-interface RectEdges {
-  readonly left: number;
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-}
-
-function toRectEdges(bounds: DisplayBounds): RectEdges {
-  return {
-    left: bounds.x,
-    top: bounds.y,
-    right: bounds.x + bounds.width,
-    bottom: bounds.y + bounds.height,
-  };
-}
-
-function subtractRect(rect: RectEdges, cover: RectEdges): readonly RectEdges[] {
-  const overlapLeft = Math.max(rect.left, cover.left);
-  const overlapTop = Math.max(rect.top, cover.top);
-  const overlapRight = Math.min(rect.right, cover.right);
-  const overlapBottom = Math.min(rect.bottom, cover.bottom);
-
-  if (overlapLeft >= overlapRight || overlapTop >= overlapBottom) {
-    return [rect];
-  }
-
-  const remainder: RectEdges[] = [];
-  if (rect.left < overlapLeft) {
-    remainder.push({
-      left: rect.left,
-      top: rect.top,
-      right: overlapLeft,
-      bottom: rect.bottom,
-    });
-  }
-  if (overlapRight < rect.right) {
-    remainder.push({
-      left: overlapRight,
-      top: rect.top,
-      right: rect.right,
-      bottom: rect.bottom,
-    });
-  }
-  if (rect.top < overlapTop) {
-    remainder.push({
-      left: overlapLeft,
-      top: rect.top,
-      right: overlapRight,
-      bottom: overlapTop,
-    });
-  }
-  if (overlapBottom < rect.bottom) {
-    remainder.push({
-      left: overlapLeft,
-      top: overlapBottom,
-      right: overlapRight,
-      bottom: rect.bottom,
-    });
-  }
-  return remainder;
-}
-
-function windowFitsWithinDisplays(
-  windowBounds: DesktopAppSettings.DesktopWindowBounds,
-  displays: readonly DisplayBounds[],
-): boolean {
-  if (windowBounds.width <= 0 || windowBounds.height <= 0 || displays.length === 0) {
-    return false;
-  }
-
-  let uncovered: readonly RectEdges[] = [toRectEdges(windowBounds)];
-  for (const display of displays) {
-    if (display.width <= 0 || display.height <= 0) {
-      continue;
-    }
-    const cover = toRectEdges(display);
-    uncovered = uncovered.flatMap((rect) => subtractRect(rect, cover));
-    if (uncovered.length === 0) {
-      return true;
-    }
-  }
-  return uncovered.length === 0;
 }
 
 function getOverlapArea(left: DisplayBounds, right: DisplayBounds): number {
@@ -323,7 +255,7 @@ export function resolveInitialMainWindowBounds(
   if (persistedBounds === null || validDisplays.length === 0) {
     return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
   }
-  if (windowFitsWithinDisplays(persistedBounds, validDisplays)) {
+  if (DesktopWindowBounds.fitsWithinDisplays(persistedBounds, validDisplays)) {
     return persistedBounds;
   }
   return clampWindowBoundsToDisplay(
@@ -684,6 +616,19 @@ export const make = Effect.gen(function* () {
               label: "Copy Link",
               click: () => {
                 void runPromise(electronShell.copyText(params.linkURL));
+              },
+            },
+            { type: "separator" },
+          );
+        }
+
+        const mailtoAddress = parseMailtoAddress(params.linkURL);
+        if (Option.isSome(mailtoAddress)) {
+          menuTemplate.push(
+            {
+              label: "Copy Email Address",
+              click: () => {
+                void runPromise(electronShell.copyText(mailtoAddress.value));
               },
             },
             { type: "separator" },

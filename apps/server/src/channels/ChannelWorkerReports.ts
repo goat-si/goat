@@ -322,7 +322,7 @@ const make = Effect.gen(function* () {
           const item = records.turnItems.find(
             (item) => item.type === "assistant_message" && item.messageId === message.id,
           );
-          return sessionFinalText(sql, taskId, item?.id, message.text);
+          return sessionFinalText(sql, taskId, run.id, item?.id, message.text);
         }),
         Effect.orElseSucceed(() => undefined),
       );

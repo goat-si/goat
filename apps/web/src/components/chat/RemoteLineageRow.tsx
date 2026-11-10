@@ -37,9 +37,12 @@ export function RemoteLineageRow({
       >
         <ThreadRelationshipIcon fallbackIcon={BotIcon} status={agent.status} />
         <span className="min-w-0 flex-1 truncate text-left">
-          {agent.title || agent.prompt || "Remote agent"} · {agent.remote.host}
+          {agent.title || agent.prompt || "Remote agent"}
         </span>
-        <span>{threadRelationshipStatusLabel(agent.status)}</span>
+        <span className="flex max-w-1/2 shrink-0 gap-1">
+          <span className="min-w-0 truncate">· {agent.remote.host}</span>
+          <span className="shrink-0">{threadRelationshipStatusLabel(agent.status)}</span>
+        </span>
       </ThreadDetailsControl>
     </li>
   );
