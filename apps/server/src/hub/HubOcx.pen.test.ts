@@ -64,7 +64,26 @@ it.effect.each([
     direct: true,
   },
   { name: "another ProxyCommand", proxy: "'/usr/bin/nc' -X 5 -x proxy:1080 %h %p", direct: false },
-  { name: "a command that only ends in pen", proxy: "'/usr/bin/open' pipe %n 22", direct: false },
+  {
+    name: "a binary whose name only ends in pen",
+    proxy: "'/usr/bin/open' pipe %n 22",
+    direct: false,
+  },
+  {
+    name: "Pen's pipe followed by a command",
+    proxy: "'/home/u/.local/bin/pen' pipe %n 22; id",
+    direct: false,
+  },
+  {
+    name: "Pen's pipe with an extra argument",
+    proxy: "'/home/u/.local/bin/pen' pipe %n 22 x",
+    direct: false,
+  },
+  {
+    name: "Pen's pipe under another variable",
+    proxy: "env LD_PRELOAD='/tmp/x.so' '/home/u/.local/bin/pen' pipe %n 22",
+    direct: false,
+  },
 ])("a Remote Link alias through $name is direct: $direct", ({ proxy, direct }) =>
   Effect.gen(function* () {
     const ocx = yield* HubOcx;
@@ -115,6 +134,7 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
   sshG: (alias: string) => string;
   keys: string;
   fingerprints?: string;
+  failSshG?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-hub-pen-" });
@@ -138,7 +158,9 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
                         : machine.keys
                       : "",
                 stderr: "",
-                code: ChildProcessSpawner.ExitCode(0),
+                code: ChildProcessSpawner.ExitCode(
+                  machine.failSshG === true && input.args[0] === "-G" ? 255 : 0,
+                ),
                 timedOut: false,
                 stdoutTruncated: false,
                 stderrTruncated: false,
@@ -218,8 +240,6 @@ it.effect(
       yield* changed("node");
       machine.sshG = penSshG(home, { user: "root" });
       yield* changed("User");
-      machine.sshG = penSshG(home, { hostkeyalias: "other" });
-      yield* changed("HostKeyAlias");
       machine.sshG = penSshG(home, {
         proxycommand: "env PEN_HOME='/tmp/x' '/home/u/.local/bin/pen' pipe %n 22",
       });
@@ -286,6 +306,53 @@ it.effect("a pin comes only from Pen's own ssh config and known_hosts", () =>
     machine.sshG = penSshG(home);
     expect(yield* ocx.pinnedFingerprint("pen-foo", "ED25519")).toBeUndefined();
     yield* write("");
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// ssh checks the key under HostKeyAlias or HostName, so Pen's record for the alias would not be it.
+it.effect("a Pen alias whose key ssh looks up under another name has no revision and no pin", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      fingerprints: FINGERPRINTS,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    for (const overrides of [{ hostkeyalias: "other" }, { hostname: "10.0.0.5" }]) {
+      machine.sshG = penSshG(home, overrides);
+      expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+      expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// A failed read proves nothing about the member, so it must not read as "another member".
+it.effect("a Pen alias whose settings cannot be read fails instead of answering no revision", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      failSshG: true,
+    };
+    const { ocx } = yield* penHome(machine);
+    const failed = yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip);
+    expect(failed._tag).toBe("HubOcxError");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("two recorded keys of the offered type name no pin", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      fingerprints: `pen-box ED25519 ${ED25519}\npen-box ED25519 ${ECDSA}\n`,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
     expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

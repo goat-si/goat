@@ -199,7 +199,7 @@ export class HubOcx extends Context.Service<
      * Identifies a Pen member's alias that Pen's own ssh config and known_hosts define, for a
      * person's consent to set it up as a Child; undefined for any other alias.
      */
-    readonly penAliasRevision: (alias: string) => Effect.Effect<string | undefined>;
+    readonly penAliasRevision: (alias: string) => Effect.Effect<string | undefined, HubOcxError>;
     /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
@@ -520,21 +520,40 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const unreadable = (alias: string) =>
+    new HubOcxError({
+      reason: "unreachable",
+      message: `Pen's SSH settings for ${alias} could not be read.`,
+    });
   /**
    * A Pen member's alias: a Host block in Pen's own ssh config whose effective settings route
-   * through Pen's pipe and check Pen's own known_hosts. Pen is recognized by its files, never by
-   * a pen-* name.
+   * through Pen's pipe and check Pen's own known_hosts under the alias itself. Pen is recognized
+   * by its files, never by a pen-* name. A read that fails is an error, never "not a member".
    */
   const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string) {
     if (!SAFE_ALIAS.test(alias)) return undefined;
     const directory = path.join(homeDirectory, ".ssh", "pen");
-    const config = yield* fs.readFileString(path.join(directory, "config"));
+    const config = yield* fs.readFileString(path.join(directory, "config")).pipe(
+      Effect.catchTags({
+        PlatformError: (error) =>
+          error.reason._tag === "NotFound" ? Effect.succeed("") : Effect.fail(unreadable(alias)),
+      }),
+    );
     if (!penConfigHosts(config).includes(alias)) return undefined;
-    const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
-    if (output.code !== 0 || output.timedOut) return undefined;
+    const ssh = yield* resolveSshCommand.pipe(Effect.mapError(() => unreadable(alias)));
+    const output = yield* run(ssh, ["-G", alias], 10_000).pipe(
+      Effect.mapError(() => unreadable(alias)),
+    );
+    if (output.code !== 0 || output.timedOut) return yield* unreadable(alias);
     const settings = sshSettings(output.stdout);
     const knownHosts = path.join(directory, "known_hosts");
-    return penKnownHostsFile(settings) === knownHosts ? { settings, knownHosts } : undefined;
+    // ssh checks the key under HostKeyAlias or HostName when they differ from the alias.
+    const keyedByAlias =
+      settings.get("hostname") === alias &&
+      ["", "none", undefined].includes(settings.get("hostkeyalias"));
+    return keyedByAlias && penKnownHostsFile(settings) === knownHosts
+      ? { settings, knownHosts }
+      : undefined;
   });
 
   return HubOcx.of({
@@ -631,18 +650,17 @@ const make = Effect.gen(function* () {
       },
       Effect.orElseSucceed(() => false),
     ),
-    penAliasRevision: Effect.fn("HubOcx.penAliasRevision")(
-      function* (alias) {
-        const member = yield* penMember(alias);
-        if (member === undefined) return undefined;
-        const keys = yield* run("ssh-keygen", ["-F", alias, "-f", member.knownHosts], 10_000);
-        return keys.code === 0 && !keys.timedOut
-          ? penRevision(member.settings, keys.stdout)
-          : undefined;
-      },
-      // Unreadable is not proof of the same member, so consent given for it does not hold.
-      Effect.orElseSucceed(() => undefined),
-    ),
+    penAliasRevision: Effect.fn("HubOcx.penAliasRevision")(function* (alias) {
+      const member = yield* penMember(alias);
+      if (member === undefined) return undefined;
+      const keys = yield* run("ssh-keygen", ["-F", alias, "-f", member.knownHosts], 10_000).pipe(
+        Effect.mapError(() => unreadable(alias)),
+      );
+      // ssh-keygen -F exits 1 when the file holds no key for the alias.
+      if (keys.code === 1 && !keys.timedOut) return undefined;
+      if (keys.code !== 0 || keys.timedOut) return yield* unreadable(alias);
+      return penRevision(member.settings, keys.stdout);
+    }),
     runningTurns: Effect.fn("HubOcx.runningTurns")(
       function* (alias, scope) {
         const status = yield* hosts.readOnHost(
