@@ -24,7 +24,6 @@ func TestFinishJoinFailsWhenAListedMachineTheServedViewCallsRevokedRefusesThisOn
 	defer rs.Close()
 	f := loginFake(t)
 	a := founder(t, ctx, rs, "a", nil)
-	bindTo(t, a, f, f.Key())
 	x := joiner(t, ctx, rs, a.invite(t, time.Minute), "x")
 	aPub := ident.B64.EncodeToString(a.d.id.SignPub)
 	xPub := ident.B64.EncodeToString(x.d.id.SignPub)
@@ -32,6 +31,8 @@ func TestFinishJoinFailsWhenAListedMachineTheServedViewCallsRevokedRefusesThisOn
 	if err := Call(a.st, Request{Op: "revoke", Subject: xPub, Compromised: true}, &res); err != nil {
 		t.Fatal(err)
 	}
+	// a binds only now, so x's copy never had the binding; a's check uses a's own.
+	bindTo(t, a, f, f.Key())
 	// x never hears of its revoke; it revokes a in its own copy and invites j.
 	if _, err := x.d.mesh().Append(x.d.id, mesh.TypeRevoke, time.Now().UnixMilli(), mesh.Fields{Subjects: []string{aPub}}); err != nil {
 		t.Fatal(err)
