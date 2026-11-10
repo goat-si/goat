@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
@@ -57,7 +59,9 @@ func installedService(st *state.Store) string {
 	return "none"
 }
 
-func render(tmpl string) (string, error) {
+// render fills a service template with this executable's path and the home folder, escaped for
+// the file it goes into: XML text in the launchd plist, systemd's quoted word in the unit.
+func render(tmpl string, plist bool) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -66,10 +70,29 @@ func render(tmpl string) (string, error) {
 		exe = p
 	}
 	h, _ := os.UserHomeDir()
-	out := strings.ReplaceAll(tmpl, "%h/.local/bin/pen", exe)
-	out = strings.ReplaceAll(out, "__PEN__", exe)
-	out = strings.ReplaceAll(out, "__HOME__", h)
-	return out, nil
+	return fill(tmpl, plist, exe, h)
+}
+
+func fill(tmpl string, plist bool, exe, home string) (string, error) {
+	if strings.ContainsAny(exe+home, "\x00\n\r") || !utf8.ValidString(exe+home) {
+		return "", fmt.Errorf("cannot write a service for this path (a line break or bytes that are not UTF-8): %q", exe)
+	}
+	if plist {
+		return strings.NewReplacer("__PEN__", xmlText(exe), "__HOME__", xmlText(home)).Replace(tmpl), nil
+	}
+	return strings.ReplaceAll(tmpl, "%h/.local/bin/pen", systemdWord(exe)), nil
+}
+
+func xmlText(s string) string {
+	var b strings.Builder
+	xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+// systemdWord quotes one ExecStart word: inside double quotes a backslash and a quote are
+// escaped, % starts a specifier (%%) and $ an environment variable ($$).
+func systemdWord(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(s) + `"`
 }
 
 func writeFile(path, content string) error {
@@ -95,7 +118,7 @@ func guiDomain() string { return "gui/" + strconv.Itoa(os.Getuid()) }
 func startService(mode string, st *state.Store) error {
 	switch mode {
 	case "systemd":
-		unit, err := render(ServiceUnit)
+		unit, err := render(ServiceUnit, false)
 		if err != nil {
 			return err
 		}
@@ -109,7 +132,7 @@ func startService(mode string, st *state.Store) error {
 			return err
 		}
 	case "launchd":
-		plist, err := render(LaunchdPlist)
+		plist, err := render(LaunchdPlist, true)
 		if err != nil {
 			return err
 		}
