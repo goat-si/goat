@@ -257,13 +257,14 @@ function GoatBotChoiceBadge(props: { readonly letter: string; readonly chosen?: 
 /**
  * A bot question with choices: one card, the question and its lettered choices. Once answered it
  * keeps the question, dimmed, and only the picked choice; a typed answer stays the person's own
- * message, so the card keeps just the question.
+ * message, so the card keeps just the question. The last row hands over to the composer.
  */
 export function GoatBotQuestionCard(props: {
   readonly children: ReactNode;
   readonly row: Extract<GoatBotRow, { kind: "bot" }>;
   readonly canAnswer: boolean;
   readonly onPick: (answer: string) => void;
+  readonly onSomethingElse?: (() => void) | undefined;
 }) {
   const { row } = props;
   const label = useScaledTextRole("label");
@@ -296,6 +297,21 @@ export function GoatBotQuestionCard(props: {
               </Text>
             </Pressable>
           ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Something else"
+            accessibilityHint="Type your own answer in the message field"
+            accessibilityState={{ disabled: !props.canAnswer }}
+            disabled={!props.canAnswer}
+            onPress={props.onSomethingElse}
+            className="min-h-[44px] flex-row items-center gap-2.5 rounded-xl px-1.5 py-1.5"
+            style={props.canAnswer ? undefined : { opacity: 0.5 }}
+          >
+            <GoatBotChoiceBadge letter={goatBotChoiceLetter(row.options.length)} />
+            <Text className="shrink text-foreground-muted" style={label}>
+              Something else
+            </Text>
+          </Pressable>
         </View>
       ) : picked !== undefined && row.answerIndex !== undefined ? (
         <View

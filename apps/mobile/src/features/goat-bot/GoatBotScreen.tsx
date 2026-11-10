@@ -4,6 +4,7 @@ import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotName,
   goatBotNotesRefreshKey,
+  goatBotOpenQuestionPlaceholder,
   hasGoatBotMarkdown,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
@@ -11,7 +12,15 @@ import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contra
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
+import {
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  type TextInputInstance,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import {
   KeyboardAvoidingView,
   useReanimatedKeyboardAnimation,
@@ -95,6 +104,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly botName?: string;
   /** The bot's profile avatar, shown beside its name. */
   readonly botEmoji?: string | null | undefined;
+  /** Moves to the composer, where the person types an answer of their own. */
+  readonly onSomethingElse?: () => void;
 }) {
   const { row } = props;
   const botName = props.botName ?? "GOAT Bot";
@@ -202,6 +213,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
             )
           }
+          onSomethingElse={props.onSomethingElse}
         >
           {prose}
         </GoatBotQuestionCard>
@@ -282,6 +294,8 @@ export function GoatBotScreen(props: {
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
   const [text, setText] = useState("");
+  const input = useRef<TextInputInstance>(null);
+  const focusComposer = useCallback(() => input.current?.focus(), []);
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const draftFiles = useRef(new Map<string, () => void>());
   const pickerLifetime = useRef<AbortController | null>(null);
@@ -324,6 +338,7 @@ export function GoatBotScreen(props: {
         environmentId={session.historyEnvironmentId}
         botName={title}
         botEmoji={botEmoji}
+        onSomethingElse={focusComposer}
       />
     ),
     [
@@ -338,6 +353,7 @@ export function GoatBotScreen(props: {
       session.historyEnvironmentId,
       title,
       botEmoji,
+      focusComposer,
     ],
   );
   const send = () => {
@@ -560,8 +576,9 @@ export function GoatBotScreen(props: {
             />
           ) : null}
           <TextInput
+            ref={input}
             accessibilityLabel={`Message ${title}`}
-            placeholder={`Message ${title}`}
+            placeholder={goatBotOpenQuestionPlaceholder(visibleRows) ?? `Message ${title}`}
             placeholderTextColorClassName="accent-placeholder"
             value={text}
             onChangeText={setText}

@@ -41,6 +41,7 @@ vi.mock("./GoatBotShimmerText", () => ({
     </span>
   ),
 }));
+const composer = vi.hoisted(() => ({ focus: vi.fn() }));
 const picker = vi.hoisted(() => ({
   onPicked: null as
     | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)
@@ -96,18 +97,35 @@ vi.mock("react-native", () => ({
     children,
     style,
     accessibilityLabel,
+    onPress,
   }: {
     children?: ReactNode;
     style?: unknown;
     accessibilityLabel?: string;
+    onPress?: () => void;
   }) => (
-    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel}>
+    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel} onClick={onPress}>
       {children}
     </button>
   ),
-  TextInput: ({ style }: { style?: unknown }) => (
-    <input aria-label="Message GOAT Bot" data-style={JSON.stringify(style)} />
-  ),
+  TextInput: ({
+    style,
+    placeholder,
+    ref,
+  }: {
+    style?: unknown;
+    placeholder?: string;
+    ref?: { current: unknown };
+  }) => {
+    if (ref) ref.current = { focus: composer.focus };
+    return (
+      <input
+        aria-label="Message GOAT Bot"
+        placeholder={placeholder}
+        data-style={JSON.stringify(style)}
+      />
+    );
+  },
   Platform: { OS: "ios" },
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
@@ -284,6 +302,27 @@ it("keeps answer chips and the send button off the retired blue message palette"
   });
   expect(screenView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await screenView.unmount();
+});
+
+it("hints that the composer answers an open question and moves there from Something else", async () => {
+  composer.focus.mockClear();
+  screenSession.rows = [{ ...bot, tone: "question", text: "Deploy now?", options: ["Yes"] }];
+  const view = await render(<GoatBotScreen visible />);
+  const input = () => view.container.querySelector('[aria-label="Message GOAT Bot"]');
+  expect(input()?.getAttribute("placeholder")).toBe("Answer, or ask something else");
+  await act(async () => {
+    view.container.querySelector<HTMLButtonElement>('[aria-label="Something else"]')?.click();
+  });
+  expect(composer.focus).toHaveBeenCalledTimes(1);
+  await view.unmount();
+
+  screenSession.rows = [{ ...bot, tone: "reply", text: "Done.", options: [] }];
+  const settled = await render(<GoatBotScreen visible />);
+  expect(
+    settled.container.querySelector('[aria-label="Message GOAT Bot"]')?.getAttribute("placeholder"),
+  ).toBe("Message GOAT Bot");
+  await settled.unmount();
+  screenSession.rows = [];
 });
 
 it("uses the light filled composer", async () => {
