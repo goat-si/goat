@@ -1668,8 +1668,9 @@ const make = Effect.gen(function* () {
           : null;
       const replyTo = turnAnswerReplyTo(task, base.kind);
       const told = replyDelivery({
-        // The outcome's card keeps the narration's key, so the work queue still sees it reach the person.
-        causeKey: "narration:" + pending.event.eventId + (goatOutcome ? ":text" : ":origin"),
+        // The told outcome holds the narration's key, so the work queue waits for the message the
+        // person reads; a GOAT outcome's card goes alongside it under its own key.
+        causeKey: "narration:" + pending.event.eventId + ":origin",
         destination: origin,
         kind: base.kind,
         text: evidence === null ? worded : worded + "\n\n" + evidence,
@@ -1681,7 +1682,7 @@ const make = Effect.gen(function* () {
       });
       const deliveries =
         goatOutcome && bot !== undefined
-          ? [chipDelivery(task, bot, "narration:" + pending.event.eventId + ":origin"), told]
+          ? [chipDelivery(task, bot, "narration:" + pending.event.eventId + ":card"), told]
           : [told];
       // Work started elsewhere shows up in the bot as its card; its result is on the card, and
       // only receipts and a turn's answer also arrive as messages.

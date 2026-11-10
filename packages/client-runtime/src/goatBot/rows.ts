@@ -316,12 +316,13 @@ export function buildGoatBotTimeline(input: {
   readonly taskId?: string | null;
   readonly knownTaskIds?: ReadonlyArray<string>;
   /**
-   * The main chat shows conversation only: work cards stay in their task's own view and the
-   * bot's work list. Set it only where that list reaches every task.
+   * The main chat shows conversation only: a work card stays in its task's own view when the
+   * bot's work list (`knownTaskIds`) can open it; cards of tasks outside that list still show.
    */
   readonly conversationOnly?: boolean;
 }): GoatBotRow[] {
   const knownTasks = new Set(input.knownTaskIds ?? []);
+  const listedTasks = new Set(input.knownTaskIds ?? []);
   // Each task's newest card, read before the messages so it also governs messages above it.
   const newestCards = new Map<string, GoatBotTaskCard>();
   const newestQuestionChips = new Map<string, GoatBotQuestionState>();
@@ -421,12 +422,13 @@ export function buildGoatBotTimeline(input: {
         presentation?.replyToKey != null &&
         answeredRequestKeys.has(presentation.replyToKey);
       // Without work cards the chat still hears from its tasks: the reply to a request made here,
-      // and how the work ended.
+      // what a task asks, and how the work ended.
       const toldInChat =
         input.conversationOnly === true &&
         input.taskId == null &&
         (presentation?.tone === "result" ||
           presentation?.tone === "failure" ||
+          presentation?.tone === "question" ||
           (presentation?.replyToKey != null && mainInputs.has(presentation.replyToKey)));
       if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer && !toldInChat)
         continue;
@@ -482,7 +484,8 @@ export function buildGoatBotTimeline(input: {
       const card = input.readers.taskCard(item);
       if (card === null) continue;
       if (input.taskId != null && card.key !== input.taskId) continue;
-      if (input.conversationOnly === true && input.taskId == null) continue;
+      if (input.conversationOnly === true && input.taskId == null && listedTasks.has(card.key))
+        continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
         cardIndexByKey.set(card.key, committed.length);

@@ -552,20 +552,23 @@ describe("a long chat of questions", () => {
 });
 
 describe("a conversation-only main chat", () => {
-  it("keeps work cards out of a conversation-only main chat, and in the task's own view", () => {
+  it("keeps a listed task's card out of the main chat, and in the task's own view", () => {
     const items = rowsOf([
       notice("n1", "2026-10-12T12:00:00Z"),
       bot("b1", "2026-10-12T12:00:01Z", "Started."),
+      notice("n2", "2026-10-12T12:00:02Z"),
     ]);
-    const cards = { n1: card("t1", 1, "Working") };
+    const cards = { n1: card("t1", 1, "Working"), n2: card("old", 1, "Done") };
     const main = buildGoatBotTimeline({
       visibleTurnItems: items,
       pendingInputs: [],
       readers: readers({}, cards),
       taskId: null,
+      knownTaskIds: ["t1"],
       conversationOnly: true,
     });
-    expect(content(main).map((row) => row.kind)).toEqual(["bot"]);
+    // A task the work list no longer reaches keeps its card, the only way to open it.
+    expect(content(main).map((row) => row.id)).toEqual(["b1", "n2"]);
     const own = buildGoatBotTimeline({
       visibleTurnItems: items,
       pendingInputs: [],
@@ -574,6 +577,7 @@ describe("a conversation-only main chat", () => {
         cards,
       ),
       taskId: "t1",
+      knownTaskIds: ["t1"],
       conversationOnly: true,
     });
     expect(content(own).map((row) => row.kind)).toEqual(["task", "bot"]);
@@ -594,7 +598,8 @@ describe("a conversation-only main chat", () => {
         bot("ack", "2026-10-12T12:00:02Z", "On it."),
         bot("milestone", "2026-10-12T12:00:03Z", "Cloned the repo."),
         bot("inside", "2026-10-12T12:00:04Z", "Answering a question asked in the task."),
-        bot("done", "2026-10-12T12:00:05Z", "17.8k stars."),
+        bot("asks", "2026-10-12T12:00:05Z", "Which repository?"),
+        bot("done", "2026-10-12T12:00:06Z", "17.8k stars."),
       ]),
       pendingInputs: [],
       readers: readers(
@@ -603,13 +608,15 @@ describe("a conversation-only main chat", () => {
           ack: task({ replyToKey: "in-ask" }),
           milestone: task({ tone: "status" }),
           inside: task({ replyToKey: "in-task-view" }),
+          asks: task({ tone: "question" }),
           done: task({ tone: "result" }),
         },
         { n1: card("t1", 1, "Working") },
       ),
       taskId: null,
+      knownTaskIds: ["t1"],
       conversationOnly: true,
     });
-    expect(content(rows).map((row) => row.id)).toEqual(["ask", "ack", "done"]);
+    expect(content(rows).map((row) => row.id)).toEqual(["ask", "ack", "asks", "done"]);
   });
 });
