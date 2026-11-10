@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -154,6 +155,17 @@ vi.mock("../../components/ui/Button", () => ({
 }));
 import { MobileBotWork } from "./MobileBotWork";
 
+// The chat's header chip opens the home; this stands in for it.
+function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      {props.taskId === undefined ? <button onClick={() => setOpen(true)}>Work</button> : null}
+      <MobileBotWork {...props} open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
 const at = "2026-11-11T02:00:00.000Z";
 const decode = Schema.decodeUnknownSync(BotThreadRow);
 const task = (taskId: string, title: string, worker?: string) =>
@@ -202,7 +214,7 @@ async function open(taskId?: string) {
   root ??= createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork
+      <WorkWithChip
         visible
         taskId={taskId === undefined ? undefined : ChannelTaskId.make(taskId)}
         onOpenTask={state.openTask}

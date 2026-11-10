@@ -14,6 +14,7 @@ const screenSession = vi.hoisted(() => ({
   supportsTaskThreads: false,
   requestedTaskId: undefined as string | null | undefined,
   workTaskId: undefined as string | undefined,
+  homeOpen: false,
   chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
 }));
 vi.mock("./MobileBotWork", () => ({
@@ -21,15 +22,22 @@ vi.mock("./MobileBotWork", () => ({
     taskId?: string;
     taskCard?: ReactNode;
     chatTasks?: ReadonlyArray<{ readonly key: string }>;
+    open?: boolean;
   }) => {
     screenSession.workTaskId = props.taskId;
+    screenSession.homeOpen = props.open ?? false;
     screenSession.chatTasks = props.chatTasks ?? [];
     return <section aria-label="Task header">{props.taskCard}</section>;
   },
 }));
 const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 vi.mock("./GoatBotFace", () => ({
-  GoatBotHeaderFace: () => null,
+  GoatBotHeaderFace: (props: { title: string; onPress?: () => void }) =>
+    props.onPress ? (
+      <button aria-label={`Chip ${props.title}`} onClick={props.onPress}>
+        {props.title}
+      </button>
+    ) : null,
   GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
     <i data-face={`${props.state}:${props.inView}`} />
   ),
@@ -364,6 +372,22 @@ it("puts the bot's model in the composer, opening a member's menu even when it c
   await member.unmount();
   models.main = null;
   models.member = null;
+});
+
+it("opens the bot's home from the header chip, which a task's own screen does not have", async () => {
+  const chat = await render(<GoatBotScreen visible />);
+  const chip = chat.container.querySelector<HTMLButtonElement>('[aria-label="Chip GOAT Bot"]');
+  expect(screenSession.homeOpen).toBe(false);
+  await act(async () => chip?.click());
+  expect(screenSession.homeOpen).toBe(true);
+  await chat.unmount();
+
+  screenSession.supportsTaskThreads = true;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const taskView = await render(<GoatBotScreen visible taskId={task} />);
+  expect(taskView.container.querySelector('[aria-label="Chip GOAT Bot"]')).toBeNull();
+  await taskView.unmount();
+  screenSession.supportsTaskThreads = false;
 });
 
 it("uses the light filled composer", async () => {

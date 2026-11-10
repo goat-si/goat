@@ -28,20 +28,19 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
 import { uuidv4 } from "../../lib/uuid";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
-import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { MobileBotTaskList } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
@@ -53,6 +52,9 @@ const tabs = ["Home", "Library"] as const;
 export function MobileBotWork(props: {
   readonly taskId?: ChannelTaskId;
   readonly taskCard?: ReactNode;
+  /** The home sheet's open state when the chat's header chip controls it. */
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
   readonly visible: boolean;
   readonly onOpenTask: (id: ChannelTaskId) => void;
   /** Opens a coding thread the task started. */
@@ -124,7 +126,9 @@ export function MobileBotWork(props: {
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
   );
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const open = props.open ?? ownOpen;
+  const setOpen = props.onOpenChange ?? setOwnOpen;
   const [tab, setTab] = useState<(typeof tabs)[number]>("Home");
   const peekEntry =
     peekTaskId === null
@@ -265,38 +269,28 @@ export function MobileBotWork(props: {
           ) : null}
           {props.taskCard}
         </View>
-      ) : Platform.OS === "ios" ? (
-        // The chat's header carries Work on its trailing side, like the web header's button.
-        <NativeStackScreenOptions
-          optionsVersion={botName}
-          options={{
-            unstable_headerRightItems: () => [
-              withNativeGlassHeaderItem({
-                accessibilityLabel: `Open ${botName} work`,
-                identifier: "goat-bot-work",
-                label: "Work",
-                onPress: () => setOpen(true),
-                type: "button" as const,
-              }),
-            ],
-          }}
-        />
-      ) : (
-        <View className="flex-row items-center justify-end">
+      ) : Platform.OS === "android" ? (
+        // Android hides the native header, so the chip that opens the home sits above the chat.
+        <View className="flex-row items-center px-4">
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Open ${botName} work`}
+            accessibilityLabel={botName}
+            accessibilityHint={`Opens ${botName}'s home`}
             onPress={() => setOpen(true)}
-            className="min-h-[44px] justify-center px-4 py-2"
+            className="min-h-[44px] justify-center"
           >
-            <Text className="text-foreground">Work</Text>
+            <View className="flex-row items-center gap-1.5 rounded-full bg-goat-bot-message px-3 py-1.5">
+              <Text className="font-semibold text-foreground">{botName}</Text>
+              <SymbolView name="chevron.down" size={11} tintColorClassName="accent-icon-muted" />
+            </View>
           </Pressable>
         </View>
-      )}
+      ) : null}
       <Modal
         visible={open}
         animationType="slide"
         presentationStyle="pageSheet"
+        allowSwipeDismissal
         onRequestClose={closeSheet}
       >
         <View className="flex-1 bg-screen px-4 pt-4">

@@ -286,6 +286,8 @@ export function GoatBotScreen(props: {
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
   const [text, setText] = useState("");
+  const [homeOpen, setHomeOpen] = useState(false);
+  const openHome = useCallback(() => setHomeOpen(true), []);
   const memberModelMenu = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const mainModelMenu = useMobileGoatBotModelMenu();
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
@@ -390,6 +392,7 @@ export function GoatBotScreen(props: {
           activity={session.activity ?? null}
           title={title}
           emoji={botEmoji}
+          onPress={taskId ? undefined : openHome}
           {...(member
             ? {
                 conversation: {
@@ -403,6 +406,8 @@ export function GoatBotScreen(props: {
       <View style={{ paddingTop: topInset }}>
         <MobileBotWork
           taskId={taskId}
+          open={homeOpen}
+          onOpenChange={setHomeOpen}
           visible={props.visible}
           onOpenTask={onSelectTask}
           onOpenThread={onSelectThread}

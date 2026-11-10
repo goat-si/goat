@@ -1,4 +1,5 @@
 import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
+import { useState } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -195,6 +196,17 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { MobileBotWork } from "./MobileBotWork";
+
+// The chat's header chip opens the home; this stands in for it.
+function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      {props.taskId === undefined ? <button onClick={() => setOpen(true)}>Work</button> : null}
+      <MobileBotWork {...props} open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(async () => {
@@ -222,7 +234,7 @@ async function render(
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork
+      <WorkWithChip
         visible
         taskId={taskId}
         taskCard={taskCard}
@@ -414,7 +426,7 @@ it("names a task the server no longer lists from its conversation card, not as m
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork
+      <WorkWithChip
         visible
         taskId={ChannelTaskId.make("task-old")}
         taskCardInfo={{ title: "Summarize the README", statusLabel: "Needs your input" }}

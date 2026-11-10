@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Animated as NativeAnimated,
   Easing,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -29,6 +30,7 @@ import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import Svg, { Path } from "react-native-svg";
 import { withUniwind } from "uniwind";
 
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
 
@@ -226,9 +228,40 @@ function GoatBotHeaderTitle(props: {
   readonly motion: FaceMotion | null;
   readonly title: string;
   readonly emoji: string | null;
+  readonly onPress?: (() => void) | undefined;
 }) {
   const label = goatBotFaceLabel(props.state);
   const accessibilityLabel = label ? `${props.title}, ${label}` : props.title;
+  if (props.onPress) {
+    // The chat's header is one chip: the bot's face and name, which opens its home.
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityHint={`Opens ${props.title}'s home`}
+        onPress={props.onPress}
+        className="min-h-[44px] justify-center"
+      >
+        <View
+          collapsable={false}
+          className="flex-row items-center gap-2 rounded-full bg-goat-bot-message py-1 pl-1 pr-3"
+        >
+          <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+            <GoatBotFaceAvatar
+              state={props.state}
+              size={28}
+              motion={props.motion}
+              emoji={props.emoji}
+            />
+          </View>
+          <Text key={accessibilityLabel} className="text-base font-semibold text-foreground">
+            {props.title}
+          </Text>
+          <SymbolView name="chevron.down" size={11} tintColorClassName="accent-icon-muted" />
+        </View>
+      </Pressable>
+    );
+  }
   return (
     // Unflattened so the text swap below stays in this row and leaves the native title view alone.
     <View collapsable={false} className="flex-row items-center gap-2">
@@ -262,6 +295,8 @@ export function GoatBotHeaderFace(props: {
   readonly conversation?: Parameters<typeof useMobileGoatBotFace>[1];
   /** The bot's profile avatar. */
   readonly emoji?: string | null | undefined;
+  /** Opens the bot's home; absent on a task's own screen, whose header is that task. */
+  readonly onPress?: (() => void) | undefined;
 }) {
   const face = useMobileGoatBotFace(props.activity, props.conversation);
   const emoji = goatBotAvatarEmoji(props.emoji);
@@ -275,15 +310,24 @@ export function GoatBotHeaderFace(props: {
   );
   const { state } = face;
   const title = props.title;
+  const onPress = props.onPress;
   const renderTitle = useCallback(
-    () => <GoatBotHeaderTitle state={state} motion={motion} title={title} emoji={emoji} />,
-    [state, motion, title, emoji],
+    () => (
+      <GoatBotHeaderTitle
+        state={state}
+        motion={motion}
+        title={title}
+        emoji={emoji}
+        onPress={onPress}
+      />
+    ),
+    [state, motion, title, emoji, onPress],
   );
   return (
     <NativeStackScreenOptions
       // The title is also the navigation bar's accessible name; the stack's default says GOAT Bot.
       options={{ title, headerTitle: renderTitle }}
-      optionsVersion={`${title}:${state}:${emoji ?? ""}:${motion === null ? "still" : "moving"}`}
+      optionsVersion={`${title}:${state}:${emoji ?? ""}:${motion === null ? "still" : "moving"}:${onPress ? "chip" : "title"}`}
     />
   );
 }
