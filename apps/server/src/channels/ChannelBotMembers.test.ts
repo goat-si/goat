@@ -286,6 +286,26 @@ describe("two bots", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "a bot's status carries the newest message of its own conversation for its roster row",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const registry = yield* ChannelBotRegistry.ChannelBotRegistry;
+        const member = yield* createMember("latest");
+        // A new member's chat opens with its greeting.
+        assert.strictEqual((yield* registry.status(owner, member.botId)).latest?.author, "bot");
+        yield* send(member.sessionThreadId, "how is the build?", "m-latest");
+        yield* send(botThreadId, "hello main", "main-latest");
+        const latest = (yield* registry.status(owner, member.botId)).latest;
+        assert.strictEqual(latest?.author, "person");
+        assert.strictEqual(latest?.text, "how is the build?");
+        assert.strictEqual((yield* registry.status(owner)).latest?.text, "hello main");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("a member answers in its own conversation and thread, and keeps its work apart", () => {
     const harness = makeHarness();
     const identities: Array<string> = [];
