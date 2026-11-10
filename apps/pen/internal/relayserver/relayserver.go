@@ -274,8 +274,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.room = rm
 	evicted := k.evicted
 	s.mu.Unlock()
-	defer s.release(k)
 	if f := s.Hooks.OnSocketDone; f != nil {
+		// Deferred first so it runs last, once release has given back the socket's room and share.
 		defer func() {
 			role := "client"
 			if k.role == roleNode {
@@ -284,6 +284,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f(nodeID, role)
 		}()
 	}
+	defer s.release(k)
 	if role == "node" {
 		rm.acceptUplink(k, origin)
 		if evicted {
