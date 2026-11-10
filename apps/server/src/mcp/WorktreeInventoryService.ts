@@ -41,9 +41,9 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 type LocalInput<A> = Omit<A, "host">;
 
 /**
- * How long a sweep keeps starting removals. Half the bound a caller on another machine waits
- * (HostThreadsMcpService REMOTE_TIMEOUT_MS), so the removal in flight finishes and its result
- * returns before that caller gives up.
+ * How long a sweep keeps checking and starting removals: half the bound a caller on another
+ * machine waits (HostThreadsMcpService REMOTE_TIMEOUT_MS), leaving the rest for the removal in
+ * flight. That removal is never cut short, since an interrupted delete leaves a half-removed checkout.
  */
 const CLEANUP_SWEEP_BUDGET_MS = 60_000;
 
@@ -829,7 +829,8 @@ const make = Effect.gen(function* () {
     const facts = yield* scan(input.repo);
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
-    const eligible: Array<{ fact: WorktreeFacts; entry: WorktreeMcpCleanupEntry }> = [];
+    let attempted = false;
+    let remaining = 0;
     for (const fact of facts) {
       if (fact.entry.main) continue;
       const entry = { path: fact.entry.path, branch: fact.entry.branch };
@@ -838,22 +839,22 @@ const make = Effect.gen(function* () {
         kept.push({ ...entry, reason: blocker });
         continue;
       }
+      // Each sweep attempts at least one removal, so a repeat reaches a different worktree.
+      if (!dryRun && attempted && (yield* Clock.currentTimeMillis) >= deadline) {
+        remaining++;
+        continue;
+      }
       const work = yield* unsavedWork(fact);
       if (work.blocker !== null) {
         kept.push({ ...entry, reason: work.blocker });
         continue;
       }
       const reason = fact.entry.missing ? "its folder is already gone" : work.saved!;
-      if (dryRun) removed.push({ ...entry, reason });
-      else eligible.push({ fact, entry: { ...entry, reason } });
-    }
-    let remaining = 0;
-    for (const [index, { fact, entry }] of eligible.entries()) {
-      // Every sweep removes at least one, so a caller repeating it always gets closer to 0.
-      if (index > 0 && (yield* Clock.currentTimeMillis) >= deadline) {
-        remaining = eligible.length - index;
-        break;
+      if (dryRun) {
+        removed.push({ ...entry, reason });
+        continue;
       }
+      attempted = true;
       yield* removeChecked(fact, {
         force: false,
         deleteBranch: false,
@@ -861,7 +862,7 @@ const make = Effect.gen(function* () {
       }).pipe(
         Effect.match({
           onFailure: (error) => kept.push({ ...entry, reason: error.message }),
-          onSuccess: () => removed.push(entry),
+          onSuccess: () => removed.push({ ...entry, reason }),
         }),
       );
     }
