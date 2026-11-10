@@ -82,7 +82,7 @@ export function useThreadLinkedPullRequest(input: {
   readonly persisted: ThreadLinkedPullRequest | null;
   readonly projectId: ProjectId | null;
   readonly threadBranch: string | null;
-  readonly gitStatus: Pick<VcsStatusResult, "refName" | "pr"> | null;
+  readonly gitStatus: VcsStatusResult | null;
 }) {
   const { serverThreadRef, persisted, projectId, threadBranch, gitStatus } = input;
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {

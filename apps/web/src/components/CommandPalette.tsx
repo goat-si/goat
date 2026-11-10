@@ -219,7 +219,6 @@ import {
   reduceCommandPaletteSearchState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import { childSearchEscape, useChildSearchEscape } from "./CommandPalette.escape";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteDialogFrame } from "./CommandPaletteDialogFrame";
@@ -311,7 +310,17 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       ? selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview"
       : false,
   );
-  useChildSearchEscape(state.open, state.mode, dispatch);
+  useEffect(() => {
+    if (!state.open || state.mode === "command") return;
+    const onEscapeKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.isComposing || event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      dispatch({ _tag: "BackToCommand" });
+    };
+    window.addEventListener("keydown", onEscapeKeyDown, true);
+    return () => window.removeEventListener("keydown", onEscapeKeyDown, true);
+  }, [state.mode, state.open]);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -414,10 +423,9 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
-          const escape = childSearchEscape(eventDetails, open, state.mode);
-          if (escape !== "ignore") {
+          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
             eventDetails.cancel();
-            if (escape === "back-to-command") dispatch({ _tag: "BackToCommand" });
+            dispatch({ _tag: "BackToCommand" });
             return;
           }
           setOpen(open);

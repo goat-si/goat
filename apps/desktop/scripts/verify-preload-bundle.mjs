@@ -103,20 +103,15 @@ const executeBundle = (source, sandboxModules) => {
     return sandboxModules.get(moduleName);
   };
 
-  // A real preload loads with the page's DOM; no page events fire while the bundle runs here.
-  const document = Object.assign(new EventTarget(), { fullscreenElement: null });
-  const window = Object.assign(new EventTarget(), { document });
-
   NodeVM.runInNewContext(
     source,
     {
-      document,
       process: sandboxProcess,
       require: requireSandboxModule,
       // Sandboxed preloads retain Chromium's web encoding APIs.
       TextEncoder,
       TextDecoder,
-      window,
+      window: { addEventListener: () => undefined },
     },
     {
       filename: "desktop-preload.cjs",

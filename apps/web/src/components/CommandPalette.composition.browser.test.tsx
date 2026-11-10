@@ -142,36 +142,3 @@ it("keeps the caret in place when an edit briefly makes the folder path not a pa
   await userEvent.keyboard("w");
   await expect.element(input()).toHaveValue("/wworkspace/project");
 });
-
-it("keeps a child search open on a composing Escape", async () => {
-  await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
-  using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
-  await userEvent.keyboard("{Control>}p{/Control}");
-  const palette = () => page.getByTestId("command-palette");
-  await expect.element(palette()).toHaveAttribute("data-palette-mode", "files");
-  // The empty picker's input is disabled; the guard is on keydown, not on the field.
-  const input = page.getByPlaceholder("Search files…", { exact: true });
-
-  for (const composition of [
-    { key: "Escape", isComposing: true, keyCode: 27 },
-    { key: "Escape", isComposing: false, keyCode: 229 },
-  ]) {
-    const event = new KeyboardEvent("keydown", {
-      ...composition,
-      bubbles: true,
-      cancelable: true,
-    });
-    await act(() => input.element().dispatchEvent(event));
-    expect(event.defaultPrevented, JSON.stringify(composition)).toBe(false);
-    await expect.element(palette()).toHaveAttribute("data-palette-mode", "files");
-  }
-
-  const escape = new KeyboardEvent("keydown", {
-    key: "Escape",
-    keyCode: 27,
-    bubbles: true,
-    cancelable: true,
-  });
-  await act(() => input.element().dispatchEvent(escape));
-  await expect.element(palette()).toHaveAttribute("data-palette-mode", "command");
-});

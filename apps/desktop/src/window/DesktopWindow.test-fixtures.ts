@@ -33,7 +33,6 @@ export function makeFakeBrowserWindow() {
     send: vi.fn(),
     setBackgroundThrottling: vi.fn(),
     setWindowOpenHandler: vi.fn(),
-    setIgnoreMenuShortcuts: vi.fn(),
     toggleDevTools: vi.fn(),
   };
 
@@ -81,7 +80,6 @@ export function makeFakeBrowserWindow() {
     navigationHistory: webContents.navigationHistory,
     reload: webContents.reload,
     reloadIgnoringCache: webContents.reloadIgnoringCache,
-    setIgnoreMenuShortcuts: webContents.setIgnoreMenuShortcuts,
     toggleDevTools: webContents.toggleDevTools,
     send: webContents.send,
     setZoomLevel: webContents.setZoomLevel,

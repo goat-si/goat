@@ -9,7 +9,6 @@ import { OpenCodexSyncButton } from "../opencodex/OpenCodexSyncDialog";
 import {
   AlertDialog,
   AlertDialogClose,
-  AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogPopup,
@@ -49,8 +48,6 @@ interface UpdateEverythingDialogProps {
   readonly onOpenChange: (open: boolean) => void;
   readonly everything: DialogEverything;
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
-  /** Machines are still looking for provider updates, so more rows can appear. */
-  readonly checking?: boolean;
 }
 
 export function UpdateEverythingDialog({
@@ -58,25 +55,18 @@ export function UpdateEverythingDialog({
   onOpenChange,
   everything,
   onConfirm,
-  checking = false,
 }: UpdateEverythingDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogPopup className="sm:max-w-xl">
         {open ? (
           everything.localEnvironmentId === null ? (
-            <DialogWithOpenCodex
-              everything={everything}
-              status={null}
-              onConfirm={onConfirm}
-              checking={checking}
-            />
+            <DialogWithOpenCodex everything={everything} status={null} onConfirm={onConfirm} />
           ) : (
             <LocalOpenCodexDialog
               environmentId={everything.localEnvironmentId}
               everything={everything}
               onConfirm={onConfirm}
-              checking={checking}
             />
           )
         ) : null}
@@ -93,7 +83,6 @@ function LocalOpenCodexDialog({
   readonly environmentId: EnvironmentId;
   readonly everything: DialogEverything;
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
-  readonly checking: boolean;
 }) {
   const result = useAtomValue(hostStatusAtom(environmentId, { local: true }));
   const hosts = Option.getOrNull(AsyncResult.value(result))?.hosts ?? [];
@@ -105,12 +94,10 @@ function DialogWithOpenCodex({
   everything,
   status,
   onConfirm,
-  checking,
 }: {
   readonly everything: DialogEverything;
   readonly status: OpenCodexUpdateStatus | null;
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
-  readonly checking: boolean;
 }) {
   const runtimes = buildRuntimesTab({
     providerMachines: everything.providerMachines,
@@ -129,7 +116,6 @@ function DialogWithOpenCodex({
       app={everything.appTab}
       runtimes={runtimes}
       onConfirm={onConfirm}
-      checking={checking}
       runtimesFooter={
         everything.localEnvironmentId === null ? null : (
           <div className="mt-2 flex items-center gap-3 border-t pt-2">
@@ -152,15 +138,12 @@ export function UpdateDialogView({
   runtimes,
   onConfirm,
   runtimesFooter = null,
-  checking = false,
 }: {
   readonly app: UpdateDialogTab;
   readonly runtimes: UpdateDialogTab;
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
   /** Shown under the Runtimes rows: the Sync OpenCodex action beside the OpenCodex update. */
   readonly runtimesFooter?: ReactNode;
-  /** Machines are still looking for provider updates, so more rows can appear. */
-  readonly checking?: boolean;
 }) {
   const tabs: Record<UpdateTab, UpdateDialogTab> = { app, runtimes };
   const [tab, setTab] = useState<UpdateTab>(() =>
@@ -194,7 +177,6 @@ export function UpdateDialogView({
             </TabsTab>
           ))}
         </TabsList>
-        {checking ? <AlertDialogDescription>Checking for more…</AlertDialogDescription> : null}
       </AlertDialogHeader>
       {(["app", "runtimes"] as const).map((name) => (
         <TabsPanel key={name} value={name}>

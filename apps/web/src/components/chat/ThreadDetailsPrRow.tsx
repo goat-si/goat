@@ -420,7 +420,7 @@ export function ThreadDetailsPrRow({
             size="sm"
             part={part}
             multiline={wrap}
-            className={wrap ? "items-start [&>svg]:mt-px" : undefined}
+            className={wrap ? "items-start [&>svg]:mt-0.5" : undefined}
             aria-label={openAriaLabel}
             onClick={onOpen}
             onAuxClick={onOpen}

@@ -1056,9 +1056,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     outline-offset: -2px;
   }
   [data-workspace-area]:focus-visible {
-    outline: none;
-  }
-  [data-workspace-keyboard-focus]:focus {
     outline: 2px solid var(--ring);
     outline-offset: -2px;
   }
