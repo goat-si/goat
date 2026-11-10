@@ -8,7 +8,6 @@ import (
 
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/state"
-	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 // What the CLI and the dashboard both say or check, so the two cannot drift apart.
@@ -51,13 +50,8 @@ func CompromisedNextSteps(name string, acct *mesh.Account) string {
 		"change the Google password, and reset the account's machine list at %s/device after signing in.", name, acct.LoginURL)
 }
 
-// ValidRelays checks a node's relay list: one relay may be any http(s)/ws(s) URL (a v1 token
-// carries it); several follow the token v2 rules.
+// ValidRelays checks a node's relay list by the invite token rules, since invites carry it.
 func ValidRelays(relays []string) error {
-	if len(relays) == 1 {
-		_, err := wire.RelayOrigin(relays[0])
-		return err
-	}
 	return mesh.ValidRelayList(relays)
 }
 
