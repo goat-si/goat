@@ -55,8 +55,8 @@ export function GoatBotTaskChip({
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const Icon = TONE_ICON[card.tone];
   return (
-    <div className="w-full max-w-[44rem] min-w-0 rounded-xl border border-border bg-card text-card-foreground">
-      <div className="overflow-hidden rounded-xl">
+    <div className="w-full max-w-[34rem] min-w-0 rounded-2xl border border-border bg-card text-card-foreground">
+      <div className="overflow-hidden rounded-2xl">
         <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs leading-4 font-medium">
           <Icon className={cn("size-3.5 shrink-0", TONE_TEXT[card.tone])} />
           <span className="truncate">{card.statusLabel}</span>
