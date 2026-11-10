@@ -30,7 +30,8 @@ func TestHelperJobChild(t *testing.T) {
 		os.Exit(3)
 	}
 	fmt.Println(g.Process.Pid)
-	select {}
+	g.Wait() // the grandchild never exits, so this blocks until the test kills this process
+	os.Exit(3)
 }
 
 // TestHelperJobGrandchild stands in for the daemon: it never exits by itself.
@@ -69,7 +70,9 @@ func TestADaemonEndsWithItsSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer windows.CloseHandle(h)
-	cmd.Process.Kill()
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatalf("killing the supervisor stand-in: %v (it ended before the test ended it)", err)
+	}
 	cmd.Wait()
 	ev, err := windows.WaitForSingleObject(h, 10000)
 	if err != nil || ev != windows.WAIT_OBJECT_0 {
