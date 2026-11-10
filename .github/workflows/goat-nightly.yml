@@ -796,9 +796,32 @@ jobs:
           flags="$flags --remap-path-prefix=$(native "$GITHUB_WORKSPACE")=/goat-build"
           echo "RUSTFLAGS=$flags" >> "$GITHUB_ENV"
 
+      # A promoted commit can predate the Windows helper (#1228). The workflow file
+      # comes from dev, the checkout from the promoted commit, so the build scripts
+      # of an older commit must not be asked for a flag they do not have.
       - name: Build Windows computer use helper
         if: matrix.platform == 'win'
-        run: node scripts/build-computer-use-helper-windows.ts --channel nightly --arch "${{ matrix.arch }}" --output "$RUNNER_TEMP/goat-computer-use-helper" --allow-any-parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          script=scripts/build-computer-use-helper-windows.ts
+          if [ ! -f "$script" ] ||
+            ! grep -q -- 'allow-any-parent' "$script" ||
+            ! grep -q -- 'computer-use-helper-dir' scripts/build-desktop-artifact.ts; then
+            echo "This commit predates the Windows helper; the package keeps the old Cua path."
+            exit 0
+          fi
+          args=(--channel "${{ needs.prepare.outputs.channel }}" --arch "${{ matrix.arch }}"
+            --output "$RUNNER_TEMP/goat-computer-use-helper")
+          # The helper's parent check follows the signing: this job builds an
+          # unsigned helper, which has no publisher to check a parent against.
+          if [ "$GOAT_DESKTOP_SIGNED" = "true" ]; then
+            args+=(--deferred-signing)
+          else
+            args+=(--allow-any-parent)
+          fi
+          node "$script" "${args[@]}"
+          echo "GOAT_COMPUTER_USE_HELPER_BUILT=true" >> "$GITHUB_ENV"
 
       - name: Build desktop app (unsigned)
         run: |
@@ -809,7 +832,9 @@ jobs:
             --ssh-runtime-archive-dir "$GITHUB_WORKSPACE/ssh-runtime-archives" --require-all-ssh-runtimes)
           if [ "${{ matrix.platform }}" = win ]; then
             args+=(--wsl-runtime "$GITHUB_WORKSPACE"/ssh-runtime-archives/goat-*-linux-${{ matrix.arch }}.tar.gz)
-            args+=(--computer-use-helper-dir "$RUNNER_TEMP/goat-computer-use-helper/computer-use-helper")
+            if [ "${GOAT_COMPUTER_USE_HELPER_BUILT:-false}" = "true" ]; then
+              args+=(--computer-use-helper-dir "$RUNNER_TEMP/goat-computer-use-helper/computer-use-helper")
+            fi
           fi
           node scripts/build-desktop-artifact.ts "${args[@]}"
 

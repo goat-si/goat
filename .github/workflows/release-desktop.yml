@@ -79,6 +79,13 @@ on:
         required: false
         default: ""
         type: string
+      # Whether this package is signed with Azure Trusted Signing, decided once
+      # by the caller (release.yml) so the helper's parent check and the signing
+      # of that helper cannot disagree.
+      windows_signed:
+        required: false
+        default: false
+        type: boolean
       # A runner of the target's own platform and architecture, for a `runner`
       # that cannot execute the target. The build job skips everything that
       # runs the packaged binaries, and a second job runs it there.
@@ -593,18 +600,11 @@ jobs:
             if [[ -n "${{ inputs.computer_use_helper_artifact }}" ]]; then
               args+=(--computer-use-helper-dir "$GITHUB_WORKSPACE/computer-use-helper")
             fi
-            if has_all \
-              "$AZURE_TENANT_ID" \
-              "$AZURE_CLIENT_ID" \
-              "$AZURE_CLIENT_SECRET" \
-              "$AZURE_TRUSTED_SIGNING_ENDPOINT" \
-              "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
-              "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" \
-              "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"; then
+            if [[ "${{ inputs.windows_signed }}" == "true" ]]; then
               echo "Windows signing enabled (Azure Trusted Signing)."
               args+=(--signed)
             else
-              echo "Windows signing disabled (missing one or more Azure Trusted Signing secrets)."
+              echo "Windows signing disabled (no Azure Trusted Signing secrets)."
             fi
           else
             echo "Signing disabled for ${{ inputs.platform }}."
