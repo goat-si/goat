@@ -8,13 +8,7 @@
   --text: #1b1f24;
   --muted: #667080;
   --accent: #2b62d9;
-  --accent-weak: #e9f0fd;
-  --ok: #1d7f46;
-  --ok-weak: #e6f4ec;
-  --warn: #965a00;
-  --warn-weak: #fdf3e1;
   --danger: #c0302b;
-  --danger-weak: #fcebea;
   --code-bg: #f1f3f6;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -110,11 +104,10 @@ pre,
   overflow: hidden;
   clip: rect(0 0 0 0);
 }
-.ok-text {
-  color: var(--ok);
-}
+.ok-text,
 .warn-text {
-  color: var(--warn);
+  color: var(--text);
+  font-weight: 500;
 }
 .danger-text {
   color: var(--danger);
@@ -149,8 +142,8 @@ pre,
 .notice {
   margin: 10px 16px 0;
   padding: 8px 12px;
-  border: 1px solid var(--warn);
-  background: var(--warn-weak);
+  border: 1px solid var(--line-strong);
+  background: var(--code-bg);
   color: var(--text);
   border-radius: 6px;
 }
@@ -187,7 +180,6 @@ main.stale,
   min-width: 0;
 }
 .panel.attention {
-  border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
 }
 .panel-hd {
@@ -237,7 +229,7 @@ main.stale,
   border-bottom: 0;
 }
 .grid-table tr.self td {
-  background: var(--accent-weak);
+  background: var(--code-bg);
 }
 .grid-table .actions {
   text-align: right;
@@ -305,11 +297,11 @@ main.stale,
 /* badges and buttons */
 .badge {
   display: inline-block;
-  padding: 0 6px;
+  padding: 0;
   border-radius: 4px;
   font-size: 12px;
   line-height: 18px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   color: var(--muted);
   white-space: nowrap;
   text-decoration: none;
@@ -319,20 +311,30 @@ main.stale,
   color: inherit;
   opacity: 0.85;
 }
-.badge.ok {
-  color: var(--ok);
-  background: var(--ok-weak);
-  border-color: transparent;
-}
-.badge.warn {
-  color: var(--warn);
-  background: var(--warn-weak);
-  border-color: transparent;
-}
+/* Status stays monochrome: a filled dot and full text colour mean live, plain grey means not. */
+.badge.ok,
+.badge.warn,
 .badge.danger {
-  color: var(--danger);
-  background: var(--danger-weak);
-  border-color: transparent;
+  color: var(--text);
+}
+.badge.ok::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+.badge.warn,
+.badge.danger,
+.badge.accent {
+  padding: 0 6px;
+}
+.badge.warn,
+.badge.danger {
+  border: 1px dashed var(--line-strong);
 }
 .badge.accent {
   color: #fff;
@@ -374,9 +376,6 @@ main.stale,
   background: var(--danger);
   border-color: var(--danger);
   color: #fff;
-}
-.btn.danger-ghost {
-  color: var(--danger);
 }
 .btn.ghost {
   background: transparent;
@@ -442,8 +441,8 @@ main.stale,
   margin-top: 8px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--danger-weak);
-  border: 1px solid var(--danger);
+  background: var(--code-bg);
+  border-left: 3px solid var(--danger);
 }
 .err .en {
   color: var(--text);
@@ -453,11 +452,11 @@ main.stale,
   margin-top: 8px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--ok-weak);
+  background: var(--code-bg);
 }
 .warn-box {
   padding: 8px 10px;
-  background: var(--warn-weak);
+  background: var(--code-bg);
   border-radius: 6px;
 }
 .results {
@@ -540,12 +539,4 @@ dialog h2 {
 }
 .kind {
   white-space: nowrap;
-}
-.kind-revoke,
-.kind-leave {
-  color: var(--danger);
-}
-.kind-admit,
-.kind-found {
-  color: var(--ok);
 }

@@ -447,7 +447,7 @@
       ? ""
       : h(
           "button",
-          { class: "btn small danger-ghost", type: "button", onclick: () => openRevoke(m) },
+          { class: "btn small", type: "button", onclick: () => openRevoke(m) },
           "제거 · Revoke",
         );
     return h(
@@ -860,7 +860,7 @@
       let note = "";
       if (e.kind === "admit")
         note = e.via === "google" ? "Google " + (e.email || "") : bi("초대", "invite");
-      if (e.compromised) note = h("span", { class: "danger-text" }, bi("유출됨", "compromised"));
+      if (e.compromised) note = h("strong", null, bi("유출됨", "compromised"));
       return h(
         "tr",
         null,
