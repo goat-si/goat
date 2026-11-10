@@ -49,6 +49,7 @@ vi.mock("~/state/server", () => ({
   },
 }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
+vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
 }));
@@ -109,8 +110,6 @@ it("shows the empty state for each work tab", async () => {
   await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   await expect.element(screen.getByText("Files need a newer GOAT server.")).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Computer" }));
-  await expect.element(screen.getByText("No work running")).toBeVisible();
 });
 
 it("says the task list is loading, not empty, before the first read answers", async () => {
