@@ -435,6 +435,9 @@ func (ds *dashboard) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	v := ds.d.view()
 	m, ok := v.MemberByNodeID(in.NodeID)
+	if !ok && in.Compromised {
+		m, ok = v.RevokedByNodeID(in.NodeID)
+	}
 	if !ok {
 		jsonError(w, http.StatusConflict, "not a current member")
 		return

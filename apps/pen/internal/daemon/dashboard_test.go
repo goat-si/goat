@@ -316,6 +316,9 @@ func TestDashboardRevokeNeedsTheMemberName(t *testing.T) {
 	if names(ls.Members) != "a" || len(ls.Revoked) != 1 || ls.Revoked[0].Name != "b" {
 		t.Fatalf("after revoke: members %s, revoked %+v", names(ls.Members), ls.Revoked)
 	}
+	// A machine found stolen after its plain revoke can still be revoked as compromised.
+	want(t, "plain revoke of revoked b", d.post("/api/revoke", bearer, map[string]any{"nodeId": b.d.NodeID(), "compromised": false, "confirmName": "b"}), http.StatusConflict)
+	want(t, "compromised revoke of revoked b", d.post("/api/revoke", bearer, map[string]any{"nodeId": b.d.NodeID(), "compromised": true, "confirmName": "b"}), http.StatusOK)
 }
 
 func TestDashboardLockAndRelaysUseTheDaemonOps(t *testing.T) {

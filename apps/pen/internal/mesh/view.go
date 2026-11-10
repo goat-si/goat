@@ -60,6 +60,16 @@ func (v *View) MemberByNodeID(nodeID string) (Member, bool) {
 	return Member{}, false
 }
 
+// RevokedByNodeID finds a revoked key by nodeId.
+func (v *View) RevokedByNodeID(nodeID string) (Member, bool) {
+	for _, m := range v.Revoked {
+		if m.NodeID == nodeID {
+			return m, true
+		}
+	}
+	return Member{}, false
+}
+
 // SortedMembers lists current members by name then nodeId.
 func (v *View) SortedMembers() []Member { return sortMembers(v.Members) }
 

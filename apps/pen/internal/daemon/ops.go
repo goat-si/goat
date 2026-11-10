@@ -16,11 +16,15 @@ import (
 
 func (d *Daemon) selfKey() string { return ident.B64.EncodeToString(d.id.SignPub) }
 
-// revoke signs a revoke of subject (a member's signPub) and pushes it.
+// revoke signs a revoke of subject (a member's signPub) and pushes it. A key already revoked can
+// still be revoked as compromised: a machine found stolen after it left must lose the keys it
+// admitted and the records it signed.
 func (d *Daemon) revoke(ctx context.Context, subject string, compromised bool) ([]PushResult, error) {
 	v := d.view()
 	if _, ok := v.Members[subject]; !ok {
-		return nil, errors.New("not a current member")
+		if _, was := v.Revoked[subject]; !was || !compromised {
+			return nil, errors.New("not a current member (a revoked one can only be revoked again with --compromised)")
+		}
 	}
 	if subject == d.selfKey() {
 		return nil, errors.New("to remove this node, use pen leave")

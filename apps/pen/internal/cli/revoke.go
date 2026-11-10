@@ -37,6 +37,13 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	m, err := Resolve(lsMembers(ls), pos[0])
+	if err != nil && *compromised {
+		// A machine found stolen after it left or was revoked: revoking it as compromised still
+		// removes the keys it admitted and the records it signed.
+		if r, rerr := Resolve(ls.Revoked, pos[0]); rerr == nil {
+			m, err = r, nil
+		}
+	}
 	if err != nil {
 		return fail(stderr, err)
 	}
