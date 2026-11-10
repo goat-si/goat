@@ -294,8 +294,10 @@ export class Store {
   }
 
   insertAssertion(hash: string, sub: string, name: string, exp: number, issuedAt: number): void {
+    // Two device flows for one machine that finish in the same second sign identical bytes; the
+    // first row (and whether it was used) stands.
     this.sql.exec(
-      "INSERT INTO assertions (hash, sub, name, exp, issued_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO assertions (hash, sub, name, exp, issued_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(hash) DO NOTHING",
       hash,
       sub,
       name,
