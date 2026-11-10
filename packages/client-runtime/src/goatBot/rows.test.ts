@@ -407,33 +407,6 @@ describe("buildGoatBotTimeline", () => {
     expect(tasks[0]).toMatchObject({ id: "n1", card: { revision: 3, statusLabel: "Done" } });
   });
 
-  it("keeps work cards out of a conversation-only main chat, and in the task's own view", () => {
-    const items = rowsOf([
-      notice("n1", "2026-10-12T12:00:00Z"),
-      bot("b1", "2026-10-12T12:00:01Z", "Started."),
-    ]);
-    const cards = { n1: card("t1", 1, "Working") };
-    const main = buildGoatBotTimeline({
-      visibleTurnItems: items,
-      pendingInputs: [],
-      readers: readers({}, cards),
-      taskId: null,
-      conversationOnly: true,
-    });
-    expect(content(main).map((row) => row.kind)).toEqual(["bot"]);
-    const own = buildGoatBotTimeline({
-      visibleTurnItems: items,
-      pendingInputs: [],
-      readers: readers(
-        { b1: { tone: "reply", readAt: null, requestKey: null, taskId: "t1" } },
-        cards,
-      ),
-      taskId: "t1",
-      conversationOnly: true,
-    });
-    expect(content(own).map((row) => row.kind)).toEqual(["task", "bot"]);
-  });
-
   it("drops a pending message once the server row with the same request key arrives", () => {
     const pending: GoatBotPendingInput[] = [
       {

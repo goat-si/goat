@@ -369,6 +369,8 @@ export function buildGoatBotTimeline(input: {
   const openOnCard = new Set<string>();
   const sentTasks = new Map<string, string | null>();
   const committed: UngroupedRow[] = [];
+  // Requests the person made in this view, so a task's reply to one of them is part of it.
+  const mainInputs = new Set<string>();
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
   let previousInputKey: string | null = null;
@@ -395,6 +397,7 @@ export function buildGoatBotTimeline(input: {
       }
       previousInputKey = presentation?.requestKey ?? null;
       sentTasks.set(item.id, presentation?.taskId ?? null);
+      if (input.taskId == null && presentation?.requestKey) mainInputs.add(presentation.requestKey);
       committed.push({
         kind: "user",
         id: item.id,
@@ -417,7 +420,16 @@ export function buildGoatBotTimeline(input: {
         input.taskId === null &&
         presentation?.replyToKey != null &&
         answeredRequestKeys.has(presentation.replyToKey);
-      if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer) continue;
+      // Without work cards the chat still hears from its tasks: the reply to a request made here,
+      // and how the work ended.
+      const toldInChat =
+        input.conversationOnly === true &&
+        input.taskId == null &&
+        (presentation?.tone === "result" ||
+          presentation?.tone === "failure" ||
+          (presentation?.replyToKey != null && mainInputs.has(presentation.replyToKey)));
+      if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer && !toldInChat)
+        continue;
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
