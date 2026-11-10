@@ -3,9 +3,14 @@ package cli
 import (
 	"fmt"
 	"io"
+	"syscall"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 )
+
+// downWait bounds how long pen down waits for the daemon process to exit after it acknowledged stop.
+const downWait = 10 * time.Second
 
 // RunDown stops the daemon (and its service, if one is installed).
 func RunDown(args []string, stdout, stderr io.Writer) int {
@@ -29,6 +34,10 @@ func RunDown(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	defer cl.Close()
+	var s daemon.Status
+	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+		return fail(stderr, err)
+	}
 	var ok map[string]bool
 	if err := cl.Send(daemon.Request{Op: "stop"}); err != nil {
 		return fail(stderr, err)
@@ -36,6 +45,26 @@ func RunDown(args []string, stdout, stderr io.Writer) int {
 	if err := cl.Next(&ok); err != nil {
 		return fail(stderr, err)
 	}
+	// The daemon still writes its state while it shuts down; scripts remove or replace files right after.
+	if !waitExit(s.PID, downWait) {
+		fmt.Fprintf(stdout, "pen is still stopping (pid %d)\n", s.PID)
+		return 0
+	}
 	fmt.Fprintln(stdout, "stopped pen")
 	return 0
+}
+
+// waitExit reports whether process pid is gone within d (a zombie counts as gone once its parent reaps it).
+func waitExit(pid int, d time.Duration) bool {
+	if pid <= 0 {
+		return true
+	}
+	deadline := time.Now().Add(d)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
 }
