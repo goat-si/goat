@@ -156,6 +156,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     retryable:
       isRetryableTaskStatus(chip.status) && host === undefined && chip.movedFrom === undefined,
     summary: summary.length > 0 ? summary : null,
+    ended: chip.status === "completed" || chip.status === "failed" || chip.status === "cancelled",
     attentionLabel: attentionLabel(chip),
     evidenceLabels: verificationLabels(chip, report.notRun),
     pullRequests: pullRequestLinks(chip),

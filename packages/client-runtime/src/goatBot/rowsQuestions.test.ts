@@ -744,4 +744,57 @@ describe("a conversation-only main chat", () => {
     });
     expect(content(rows).map((row) => row.id)).toEqual(["ask", "ack", "asks", "done"]);
   });
+
+  const outcome = (taskId: string): GoatBotMessagePresentation => ({
+    tone: "result",
+    readAt: null,
+    requestKey: null,
+    taskId,
+  });
+  const ended = (key: string, sourceLabel: string | null = null): GoatBotTaskCard => ({
+    ...card(key, 2, "Done"),
+    tone: "success",
+    ended: true,
+    summary: "17.8k stars.",
+    sourceLabel,
+  });
+
+  it("keeps the card of finished work whose outcome was never told in the chat", () => {
+    // A GOAT task that finished before outcomes became messages, and a Slack request whose
+    // result went to Slack: either card is the only place the chat shows how the work ended.
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([
+        notice("old", "2026-10-12T12:00:00Z"),
+        notice("slack", "2026-10-12T12:00:01Z"),
+      ]),
+      pendingInputs: [],
+      readers: readers({}, { old: ended("t-old"), slack: ended("t-slack", "Slack · Jun") }),
+      taskId: null,
+      knownTaskIds: ["t-old", "t-slack"],
+      conversationOnly: true,
+    });
+    expect(content(rows).map((row) => row.id)).toEqual(["old", "slack"]);
+  });
+
+  it("tells a task's outcome once in the chat and once in the task's own view", () => {
+    const items = rowsOf([
+      notice("card", "2026-10-12T12:00:00Z"),
+      bot("done", "2026-10-12T12:00:01Z", "17.8k stars."),
+    ]);
+    const view = (taskId: string | null, knownTaskIds: ReadonlyArray<string>) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: items,
+          pendingInputs: [],
+          readers: readers({ done: outcome("t1") }, { card: ended("t1") }),
+          taskId,
+          knownTaskIds,
+          conversationOnly: true,
+        }),
+      ).map((row) => row.id);
+    expect(view(null, ["t1"])).toEqual(["done"]);
+    // While the work list loads or fails the card is the way to the task, so it tells the outcome.
+    expect(view(null, [])).toEqual(["card"]);
+    expect(view("t1", ["t1"])).toEqual(["card"]);
+  });
 });

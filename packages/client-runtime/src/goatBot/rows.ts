@@ -52,6 +52,8 @@ export interface GoatBotTaskCard {
   /** Failed or stopped work on this machine, which a person may run again. */
   readonly retryable?: boolean;
   readonly summary: string | null;
+  /** The work has ended: done, failed or cancelled. */
+  readonly ended?: boolean;
   /** Something waiting on a person, such as "2 questions · 1 approval". */
   readonly attentionLabel: string | null;
   readonly evidenceLabels?: ReadonlyArray<string>;
@@ -365,6 +367,31 @@ export function buildGoatBotTimeline(input: {
     const newest = newestCards.get(card.key);
     if (newest === undefined || card.revision > newest.revision) newestCards.set(card.key, card);
   }
+  const isOutcome = (presentation: GoatBotMessagePresentation | null) =>
+    presentation?.tone === "result" || presentation?.tone === "failure";
+  const mainChat = input.conversationOnly === true && input.taskId == null;
+  // Tasks whose outcome a message tells in this chat.
+  const toldOutcomes = new Set<string>();
+  if (mainChat) {
+    for (const { item } of input.visibleTurnItems) {
+      if (item.type !== "assistant_message") continue;
+      const presentation = input.readers.message(item);
+      if (presentation?.taskId != null && isOutcome(presentation)) {
+        toldOutcomes.add(presentation.taskId);
+      }
+    }
+  }
+  /**
+   * A task's outcome shows once per view. The main chat tells it as a message where the work list
+   * opens the task, and keeps the card where it does not, or where no message told the ending.
+   */
+  const cardInMainChat = (key: string) =>
+    !listedTasks.has(key) || (newestCards.get(key)?.ended === true && !toldOutcomes.has(key));
+  /** A card with a summary already tells its task's outcome where it shows. */
+  const cardTellsOutcome = (taskId: string | null | undefined) =>
+    taskId != null &&
+    newestCards.get(taskId)?.summary != null &&
+    (input.taskId === taskId || (mainChat && cardInMainChat(taskId)));
   const questionState = (taskId: string | null | undefined) => {
     if (taskId == null) return undefined;
     const card = newestCards.get(taskId);
@@ -456,6 +483,7 @@ export function buildGoatBotTimeline(input: {
           (presentation?.replyToKey != null && mainInputs.has(presentation.replyToKey)));
       if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer && !toldInChat)
         continue;
+      if (isOutcome(presentation) && cardTellsOutcome(presentation?.taskId)) continue;
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
@@ -509,8 +537,7 @@ export function buildGoatBotTimeline(input: {
       const card = input.readers.taskCard(item);
       if (card === null) continue;
       if (input.taskId != null && card.key !== input.taskId) continue;
-      if (input.conversationOnly === true && input.taskId == null && listedTasks.has(card.key))
-        continue;
+      if (mainChat && !cardInMainChat(card.key)) continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
         cardIndexByKey.set(card.key, committed.length);
