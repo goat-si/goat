@@ -56,3 +56,14 @@ func (d *Daemon) capLog() {
 		d.opt.Logf("daemon.log: %v", err)
 	}
 }
+
+// pruneInvites removes expired invites, so an unused one does not keep its secret in offers.json.
+func (d *Daemon) pruneInvites() {
+	iv := d.inviteBook()
+	if iv == nil {
+		return
+	}
+	if err := iv.Prune(d.now()); err != nil {
+		d.opt.Logf("offers.json: %v", err)
+	}
+}

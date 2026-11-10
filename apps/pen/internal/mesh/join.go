@@ -199,6 +199,18 @@ func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
 	return x, iv.saveLocked(now)
 }
 
+// Prune drops expired invites from memory and offers.json.
+func (iv *Invites) Prune(now time.Time) error {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	for _, x := range iv.live {
+		if x.ExpiresAt <= now.UnixMilli() {
+			return iv.saveLocked(now)
+		}
+	}
+	return nil
+}
+
 // Lookup finds a live (unexpired, unused) invite.
 func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
 	iv.mu.Lock()
