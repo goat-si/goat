@@ -72,22 +72,6 @@ it.effect.each([
   }).pipe(Effect.provide(world(penConfig(proxy)))),
 );
 
-it.effect("a Pen alias's pin is the host key Pen recorded for it, of the offered type", () =>
-  Effect.gen(function* () {
-    const ocx = yield* HubOcx;
-    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBe(ED25519);
-    expect(yield* ocx.pinnedFingerprint("pen-box", "ECDSA")).toBe(ECDSA);
-    expect(yield* ocx.pinnedFingerprint("pen-box", "RSA")).toBeUndefined();
-  }).pipe(Effect.provide(world(penConfig("'/home/u/.local/bin/pen' pipe %n 22")))),
-);
-
-it.effect("an alias through another ProxyCommand has no Pen pin", () =>
-  Effect.gen(function* () {
-    const ocx = yield* HubOcx;
-    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
-  }).pipe(Effect.provide(world(penConfig("'/usr/bin/nc' %h %p")))),
-);
-
 const sleepingDevice = (failure: Dispatch.SshRemoteDispatchError | undefined) =>
   hubOcxLayer.pipe(
     Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
@@ -130,6 +114,7 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
   config: string;
   sshG: (alias: string) => string;
   keys: string;
+  fingerprints?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-hub-pen-" });
@@ -148,7 +133,9 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
                   input.args[0] === "-G"
                     ? machine.sshG(input.args[1] ?? "")
                     : input.args.includes(`${home}/.ssh/pen/known_hosts`)
-                      ? machine.keys
+                      ? input.args.includes("-l")
+                        ? (machine.fingerprints ?? "")
+                        : machine.keys
                       : "",
                 stderr: "",
                 code: ChildProcessSpawner.ExitCode(0),
@@ -261,5 +248,44 @@ it.effect("a revoked member, or an alias Pen did not write, has no revision", ()
     // Revoked or left: Pen rewrites its config without the member's Host block.
     yield* write("Host pen-*\n    ProxyCommand '/home/u/.local/bin/pen' pipe %n 22\n");
     expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+const FINGERPRINTS = `# Host pen-box found: line 1 \npen-box ECDSA ${ECDSA}\n# Host pen-box found: line 2 \npen-box ED25519 ${ED25519}\n`;
+
+it.effect("a Pen member's pin is the host key Pen recorded for it, of the offered type", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      fingerprints: FINGERPRINTS,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBe(ED25519);
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ECDSA")).toBe(ECDSA);
+    expect(yield* ocx.pinnedFingerprint("pen-box", "RSA")).toBeUndefined();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// Pen is recognized by its own files, never by the name: without them a pen-* alias is any alias.
+it.effect("a pin comes only from Pen's own ssh config and known_hosts", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      fingerprints: FINGERPRINTS,
+    };
+    const { ocx, home, write } = yield* penHome(machine);
+    machine.sshG = penSshG(home, { userknownhostsfile: "/home/u/.ssh/other_known_hosts" });
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    machine.sshG = penSshG(home, { proxycommand: "'/usr/bin/nc' %h %p" });
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    machine.sshG = penSshG(home);
+    expect(yield* ocx.pinnedFingerprint("pen-foo", "ED25519")).toBeUndefined();
+    yield* write("");
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
