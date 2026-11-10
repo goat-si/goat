@@ -291,10 +291,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.writeDaemonJSON(started)
 	// A redirect file left by a daemon that died holds a token nobody serves.
 	os.Remove(d.st.Path(DashboardFile))
+	d.capLog()
 	d.spawn(func() { d.serveControl(ctx, ln) })
 	d.startUplinks()
 	d.spawn(func() { d.acceptLoop(ctx) })
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
+	d.spawn(func() { d.every(ctx, logCapEvery, d.capLog) })
 	d.spawn(func() { d.hostKeysLoop(ctx) })
 	d.spawn(func() { d.forgetLoop(ctx) })
 	d.spawn(func() { d.wakeLoop(ctx) })
