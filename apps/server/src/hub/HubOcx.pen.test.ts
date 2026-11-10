@@ -2,9 +2,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
@@ -153,6 +155,8 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
   globalKeys?: string;
   /** Paths that exist besides the scratch home, such as ssh's global known_hosts. */
   existing?: ReadonlyArray<string>;
+  /** How a stat of Pen's config behaves: it never answers, or reports a FIFO. */
+  configStat?: "stalls" | "fifo";
 }) {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-hub-pen-" });
@@ -212,6 +216,12 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
                 machine.existing?.includes(path) === true
                   ? Effect.succeed(true)
                   : real.exists(path),
+              stat: (path: string) =>
+                !path.endsWith("/.ssh/pen/config") || machine.configStat === undefined
+                  ? real.stat(path)
+                  : machine.configStat === "stalls"
+                    ? Effect.never
+                    : Effect.map(real.stat(path), (info) => ({ ...info, type: "FIFO" as const })),
             })),
           ),
         ),
@@ -515,6 +525,74 @@ it.effect("a Pen alias on a port other than 22 has no revision, pin or direct ro
     };
     const { ocx, home } = yield* penHome(machine);
     machine.sshG = penSshG(home, { port: "2222" });
+    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    expect(yield* ocx.directAlias("pen-box")).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// The server holds every buffer to a limit, and no single read may hang it.
+it.effect("an oversized Pen config is a failed read, not a member", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box") + "#".repeat(70 * 1024),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      fingerprints: FINGERPRINTS,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    expect((yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip))._tag).toBe("HubOcxError");
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    expect(yield* ocx.directAlias("pen-box")).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a Pen config that is not a regular file is a failed read and is never opened", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      configStat: "fifo" as const,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    expect((yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip))._tag).toBe("HubOcxError");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a read of Pen's config that never finishes fails after its deadline", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      configStat: "stalls" as const,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    const read = yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip, Effect.forkChild);
+    const direct = yield* ocx.directAlias("pen-box").pipe(Effect.forkChild);
+    yield* TestClock.adjust("6 seconds");
+    expect((yield* Fiber.join(read))._tag).toBe("HubOcxError");
+    expect(yield* Fiber.join(direct)).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// ssh trusts certificates a @cert-authority line names, which Pen never writes.
+it.effect("a Pen alias with a marker line in Pen's known_hosts is not trusted", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys:
+        keyLines("node1", "AAAA1") +
+        "# Host pen-box found: line 2 CA\n@cert-authority pen-box ssh-ed25519 AAAACA\n",
+      fingerprints: FINGERPRINTS,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
     expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
     expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
     expect(yield* ocx.directAlias("pen-box")).toBe(false);

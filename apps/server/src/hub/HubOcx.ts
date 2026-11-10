@@ -40,6 +40,10 @@ import {
 } from "./penSshRoute.ts";
 
 const MAX_BYTES = 256 * 1024;
+// Pen's ssh config is one short Host block per member (about 250 bytes); 64 KiB holds hundreds.
+const PEN_CONFIG_MAX_BYTES = 64 * 1024;
+// A file read on the Pen path that has not finished by then counts as failed, never as pending.
+const PEN_READ_TIMEOUT = "5 seconds";
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
 /** Arguments are code-built; this keeps every one inert inside single quotes. */
 const SAFE_ARG = /^[A-Za-z0-9_.:=/+-]+$/u;
@@ -531,15 +535,49 @@ const make = Effect.gen(function* () {
    * through Pen's pipe and check Pen's own known_hosts under the alias itself. Pen is recognized
    * by its files, never by a pen-* name. A read that fails is an error, never "not a member".
    */
+  /**
+   * Pen's ssh config, or "" when there is none. Only a regular file is opened (opening a FIFO
+   * can block), at most PEN_CONFIG_MAX_BYTES is read, and the whole read has a deadline.
+   */
+  const readPenConfig = (alias: string, file: string) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tooBig = (info: { readonly type: string; readonly size: bigint }) =>
+          info.type !== "File" || info.size > BigInt(PEN_CONFIG_MAX_BYTES);
+        const found = yield* fs.stat(file).pipe(Effect.option);
+        if (Option.isNone(found)) {
+          if (yield* fs.exists(file)) return yield* unreadable(alias);
+          return "";
+        }
+        if (tooBig(found.value)) return yield* unreadable(alias);
+        const handle = yield* fs.open(file, { flag: "r" });
+        if (tooBig(yield* handle.stat)) return yield* unreadable(alias);
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        while (size <= PEN_CONFIG_MAX_BYTES) {
+          const chunk = yield* handle.readAlloc(PEN_CONFIG_MAX_BYTES + 1 - size);
+          if (Option.isNone(chunk)) break;
+          chunks.push(chunk.value);
+          size += chunk.value.length;
+        }
+        if (size > PEN_CONFIG_MAX_BYTES) return yield* unreadable(alias);
+        return new TextDecoder().decode(Buffer.concat(chunks));
+      }),
+    ).pipe(
+      Effect.timeout(PEN_READ_TIMEOUT),
+      Effect.mapError(() => unreadable(alias)),
+    );
+  /** Whether a file exists, within the read deadline; a check that fails is a failed read. */
+  const existsWithin = (alias: string, file: string) =>
+    fs.exists(file).pipe(
+      Effect.timeout(PEN_READ_TIMEOUT),
+      Effect.mapError(() => unreadable(alias)),
+    );
+
   const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string) {
     if (!SAFE_ALIAS.test(alias)) return undefined;
     const directory = path.join(homeDirectory, ".ssh", "pen");
-    const config = yield* fs.readFileString(path.join(directory, "config")).pipe(
-      Effect.catchTags({
-        PlatformError: (error) =>
-          error.reason._tag === "NotFound" ? Effect.succeed("") : Effect.fail(unreadable(alias)),
-      }),
-    );
+    const config = yield* readPenConfig(alias, path.join(directory, "config"));
     if (!penConfigHosts(config).includes(alias)) return undefined;
     const ssh = yield* resolveSshCommand.pipe(Effect.mapError(() => unreadable(alias)));
     const output = yield* run(ssh, ["-G", alias], 10_000).pipe(
@@ -559,18 +597,25 @@ const make = Effect.gen(function* () {
     const globals = penGlobalFiles(settings);
     if (globals === undefined) return undefined;
     // The default pair prints like one file of that whole name; if one exists, ssh's choice is unknown.
-    const whole = globals.join(" ");
-    if (globals.length > 1 && (yield* fs.exists(whole).pipe(Effect.orElseSucceed(() => true))))
-      return undefined;
+    if (globals.length > 1 && (yield* existsWithin(alias, globals.join(" ")))) return undefined;
     for (const file of globals) {
-      if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => true)))) continue;
+      if (!(yield* existsWithin(alias, file))) continue;
       const found = yield* run("ssh-keygen", ["-F", alias, "-f", file], 10_000).pipe(
         Effect.mapError(() => unreadable(alias)),
       );
       if (found.timedOut || (found.code !== 0 && found.code !== 1)) return yield* unreadable(alias);
       if (found.code === 0 && found.stdout.trim() !== "") return undefined;
     }
-    return { settings, knownHosts };
+    // ssh-keygen -F exits 1 when the file holds no key for the alias.
+    const recorded = yield* run("ssh-keygen", ["-F", alias, "-f", knownHosts], 10_000).pipe(
+      Effect.mapError(() => unreadable(alias)),
+    );
+    if (recorded.timedOut || (recorded.code !== 0 && recorded.code !== 1))
+      return yield* unreadable(alias);
+    const lines = recorded.code === 0 ? recorded.stdout : "";
+    // A @cert-authority or @revoked line changes what ssh accepts, and Pen never writes one.
+    if (lines.split(/\r?\n/u).some((line) => line.trimStart().startsWith("@"))) return undefined;
+    return { settings, knownHosts, recorded: lines };
   });
 
   return HubOcx.of({
@@ -672,13 +717,7 @@ const make = Effect.gen(function* () {
     penAliasRevision: Effect.fn("HubOcx.penAliasRevision")(function* (alias) {
       const member = yield* penMember(alias);
       if (member === undefined) return undefined;
-      const keys = yield* run("ssh-keygen", ["-F", alias, "-f", member.knownHosts], 10_000).pipe(
-        Effect.mapError(() => unreadable(alias)),
-      );
-      // ssh-keygen -F exits 1 when the file holds no key for the alias.
-      if (keys.code === 1 && !keys.timedOut) return undefined;
-      if (keys.code !== 0 || keys.timedOut) return yield* unreadable(alias);
-      return penRevision(member.settings, keys.stdout);
+      return penRevision(member.settings, member.recorded);
     }),
     runningTurns: Effect.fn("HubOcx.runningTurns")(
       function* (alias, scope) {
