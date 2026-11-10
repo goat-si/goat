@@ -256,12 +256,13 @@ describe("botComputers", () => {
 });
 
 describe("goatBotArtifactDays", () => {
-  // Local times, since days follow the device's calendar.
-  const at = (day: number, hour: number) => new Date(2026, 10, day, hour).toISOString();
+  // @effect-diagnostics-next-line globalDate:off - days follow the device's local calendar.
+  const local = (day: number, hour: number) => new Date(2026, 10, day, hour);
+  const at = (day: number, hour: number) => local(day, hour).toISOString();
   const file = (name: string, modifiedAt: string) => ({ relativePath: name, size: 1, modifiedAt });
 
   it("puts newest-first files under one heading per local day, keeping their order", () => {
-    const now = new Date(2026, 10, 11, 12).getTime();
+    const now = local(11, 12).getTime();
     const files = [
       file("late.md", at(11, 9)),
       file("early.md", at(11, 0)),
@@ -281,7 +282,7 @@ describe("goatBotArtifactDays", () => {
           weekday: "short",
           month: "short",
           day: "numeric",
-        }).format(new Date(2026, 10, 2)),
+        }).format(local(2, 0)),
         names: ["old.csv"],
       },
     ]);
