@@ -22,7 +22,8 @@ function Free-Port {
 	return $p
 }
 
-# Start-Relay starts relaytest and returns once it printed its first line (it is listening).
+# Start-Relay starts relaytest and returns once it printed its first line (it is listening), or fails
+# after 30 s instead of holding the job until its timeout.
 function Start-Relay([int]$port, [string]$public) {
 	$psi = New-Object Diagnostics.ProcessStartInfo
 	$psi.FileName = Join-Path $work 'relaytest.exe'
@@ -31,7 +32,11 @@ function Start-Relay([int]$port, [string]$public) {
 	$psi.UseShellExecute = $false
 	$psi.RedirectStandardOutput = $true
 	$p = [Diagnostics.Process]::Start($psi)
-	[void]$p.StandardOutput.ReadLine()
+	$line = $p.StandardOutput.ReadLineAsync()
+	if (-not $line.Wait(30000) -or $null -eq $line.Result) {
+		if (-not $p.HasExited) { $p.Kill() }
+		Fail "relaytest on port $port did not start"
+	}
 	return $p
 }
 
