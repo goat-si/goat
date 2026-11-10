@@ -76,7 +76,7 @@ func TestFinishJoinFailsOnACutCopyFromAPlainlyRevokedMachineThatWonTheRevokeRace
 	// pair does with probability one half, so 64 pairs fail by 2^-64.
 	heads, aN, xN := headsOf(a.d.mesh()), counter(a.d.mesh(), aPub), counter(x.d.mesh(), xPub)
 	var aRevokesX, xRevokesA *mesh.Record
-	start := time.Now().UnixMilli()
+	start := int64(1_800_000_000_000) // fixed record times; the keys stay random, so the pairs still vary
 	for at := start; xRevokesA == nil && at < start+64; at++ {
 		ra, err := mesh.Sign(a.d.id, a.d.mesh().MeshID, mesh.TypeRevoke, aN+1, heads, at, mesh.Fields{Subjects: []string{xPub}})
 		if err != nil {
