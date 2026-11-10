@@ -123,6 +123,14 @@ After `--compromised` on a mesh with Google sign-in, Pen tells you what else to 
 `pen lock on`, change your Google password, and clear your account's machine list from the reset
 link on the sign-in page.
 
+When a member cannot keep a change another machine sends it, the command that made the change
+(`pen revoke`, `pen lock`, `pen approve` and the like) lists that member as "not taken", and `pen ls`
+on that member says why. "state cannot be written" means its
+state folder is full or not writable: free disk space or fix the folder's permissions, and the next
+sync catches up. "mesh full" means the mesh holds 3840 records, the most Pen keeps for new members,
+names, locks and sign-in changes (removals still work up to 4096); start a new mesh with `pen up`
+on one machine and join the others to it.
+
 ## Relays
 
 Each machine keeps a connection to every relay in its list and uses whichever answers first, so one
