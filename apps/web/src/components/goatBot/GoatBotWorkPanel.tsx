@@ -13,7 +13,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
@@ -66,6 +66,11 @@ export function GoatBotWorkPanel({
   } | null>(null);
   // Back returns focus to the row the peek opened from.
   const [returnTo, setReturnTo] = useState<ChannelTaskId | null>(null);
+  // Back also returns Home to where it was scrolled.
+  const homeScroll = useRef(0);
+  const restoreHome = (element: HTMLElement | null) => {
+    if (element !== null) element.scrollTop = homeScroll.current;
+  };
   const member = useGoatBotMember();
   const botName = useGoatBotName();
   const avatar = useGoatBotAvatar();
@@ -78,11 +83,26 @@ export function GoatBotWorkPanel({
   );
   const work = groupBotWork(rows, [], environmentId);
   const tasks = [...work.inProgress, ...work.done];
-  if (peek !== null && peekRows !== undefined) {
+  const peeked =
+    peek === null
+      ? undefined
+      : rows.find(
+          (row): row is Extract<BotThreadRow, { kind: "task" }> =>
+            row.kind === "task" && row.task.taskId === peek.taskId,
+        );
+  // A task the list no longer has, once it has loaded, closes its peek.
+  const peekGone = peek !== null && loaded && !failed && peeked === undefined;
+  if (peek !== null && peekRows !== undefined && !peekGone) {
     return (
       <GoatBotWorkPeek
         taskId={peek.taskId}
-        title={peek.title}
+        title={peeked?.task.title ?? peek.title}
+        statusLabel={
+          peeked === undefined
+            ? ""
+            : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
+        }
+        worker={peeked?.worker ?? null}
         rows={peekRows(peek.taskId)}
         environmentId={environmentId}
         onRetry={onRetryInput}
@@ -107,7 +127,14 @@ export function GoatBotWorkPanel({
             </TabsTab>
           ))}
         </TabsList>
-        <TabsPanel value="Home" className="mt-5 min-h-0 overflow-y-auto">
+        <TabsPanel
+          value="Home"
+          className="mt-5 min-h-0 overflow-y-auto"
+          ref={restoreHome}
+          onScroll={(event) => {
+            homeScroll.current = event.currentTarget.scrollTop;
+          }}
+        >
           <div className="space-y-6">
             <GoatBotStatusCard
               className="rounded-xl border border-border p-3"
