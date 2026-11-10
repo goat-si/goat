@@ -112,6 +112,7 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
       goals,
       waiting,
       tracked,
+      scope: input.scope,
       onReady: (threadId) =>
         observeSurvivorNotification({
           client,
@@ -613,6 +614,19 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
       if (signal.type === "Goal" && !goalActive) {
         yield* entry.service.recordGoalBlock(entry.binding, entry.binding);
         goalActive = true;
+        // GOAT cannot own goal continuations across a restart, so it pauses the goal and lets the
+        // surviving turn finish its work; only when Codex refuses the pause is that turn stopped.
+        const paused = yield* input.client
+          .request("thread/goal/set", { threadId, status: "paused" })
+          .pipe(
+            Effect.as(true),
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not pause the Codex goal of a surviving turn", {
+                cause,
+              }).pipe(Effect.as(false)),
+            ),
+          );
+        if (paused) continue;
         yield* entry.gate.withPermits(1)(
           interruptSurvivor({
             binding: entry.binding,
