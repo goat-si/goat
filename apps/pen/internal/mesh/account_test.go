@@ -201,3 +201,23 @@ func TestUnknownMembersInsideACardOrLoginKeyAreIgnored(t *testing.T) {
 		t.Fatalf("member %v, account %+v; the records must take effect as without the extra members", isMember(v, x), v.Account)
 	}
 }
+
+func TestASignerRevokedOnlyAsAnAdmitOfACompromisedKeyLosesItsBindingAndLock(t *testing.T) {
+	a, c, d := detID(1), detID(2), detID(3)
+	b, found := newMesh(t, a)
+	ac := b.admit(a, c, found)
+	cd := b.admit(c, d, ac)
+	bind := b.bind(d, "1001", cd)
+	lock := b.lock(d, true, bind)
+	if v := b.view(); sub(v) != "1001" || !v.Locked {
+		t.Fatalf("before: sub %q locked %v", sub(v), v.Locked)
+	}
+	b.sign(a, TypeRevoke, []*Record{lock}, Fields{Subjects: []string{pub(c)}, Compromised: true})
+	v := b.view()
+	if isMember(v, d) {
+		t.Fatal("d, admitted by the compromised c, is still a member")
+	}
+	if v.Account != nil || v.Locked {
+		t.Fatalf("d's account %+v and lock %v kept effect after c was revoked as compromised", v.Account, v.Locked)
+	}
+}

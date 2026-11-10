@@ -570,3 +570,25 @@ func TestAJoinerRevokedElsewhereLearnsItWhenItSyncsAfterJoining(t *testing.T) {
 		t.Fatal("the joiner went on although a member it synced with had revoked it")
 	}
 }
+
+func TestWithFourAssertedAccountSessionsAFifthIsRefused4429(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	// Each of the four sends a valid assertion and holds the member waiting for its card.
+	for range MaxAccountSessions {
+		j := newcomer(t)
+		toOffer(t, ctx, rs, a, j, f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now()))
+	}
+	j := newcomer(t)
+	_, err := OpenAny(ctx, []string{rs.URL}, a.id.NodeID(), func(conn relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, conn, session.KindAccount, a.id.NodeID(), a.id.NoisePub, j, nil, session.Payload{V: 1, Stream: "account", Name: "j"})
+	})
+	if relay.CodeOf(err) != wire.CodeCaps {
+		t.Fatalf("fifth session: %v, want 4429", err)
+	}
+}
