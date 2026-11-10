@@ -196,6 +196,36 @@ it("names a member bot on its update and leaves a reply unlabeled", async () => 
   expect(view.container.textContent).not.toContain("· Update");
 });
 
+it("ends a bot group with its time when the group's last row is a task card", async () => {
+  const time = goatBotTime("2026-10-12T09:41:00Z");
+  h = createNativeMemoryHarness();
+  const task = (groupPosition: "last" | "middle"): GoatBotRow => ({
+    kind: "task",
+    id: "card",
+    createdAt: "2026-10-12T09:41:00Z",
+    firstInGroup: false,
+    groupPosition,
+    card: {
+      key: "task-1",
+      revision: 1,
+      updatedAt: "2026-10-12T09:41:00Z",
+      title: "Check disks",
+      statusLabel: "Running",
+      tone: "active",
+      sourceLabel: null,
+      summary: null,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  });
+  view = renderNative(h, <GoatBotTimelineRow {...props} row={task("last")} />);
+  await view.render();
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(<GoatBotTimelineRow {...props} row={task("middle")} />);
+  expect(view.container.textContent).not.toContain(time);
+});
+
 it("opens the task represented by a task row", async () => {
   h = createNativeMemoryHarness();
   const onSelectTask = vi.fn();

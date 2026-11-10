@@ -119,6 +119,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
             onSelectTask ? () => onSelectTask(ChannelTaskId.make(row.card.key)) : undefined
           }
         />
+        <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
       </View>
     );
   }
