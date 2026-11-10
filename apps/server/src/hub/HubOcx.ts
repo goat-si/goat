@@ -551,9 +551,18 @@ const make = Effect.gen(function* () {
     const keyedByAlias =
       settings.get("hostname") === alias &&
       ["", "none", undefined].includes(settings.get("hostkeyalias"));
-    return keyedByAlias && penKnownHostsFile(settings) === knownHosts
-      ? { settings, knownHosts }
-      : undefined;
+    if (!keyedByAlias || penKnownHostsFile(settings) !== knownHosts) return undefined;
+    // ssh also accepts a key a global known_hosts file holds for the alias, so there must be none.
+    for (const file of (settings.get("globalknownhostsfile") ?? "").split(" ")) {
+      if (!file.startsWith("/") || !(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => true))))
+        continue;
+      const found = yield* run("ssh-keygen", ["-F", alias, "-f", file], 10_000).pipe(
+        Effect.mapError(() => unreadable(alias)),
+      );
+      if (found.timedOut || (found.code !== 0 && found.code !== 1)) return yield* unreadable(alias);
+      if (found.code === 0 && found.stdout.trim() !== "") return undefined;
+    }
+    return { settings, knownHosts };
   });
 
   return HubOcx.of({

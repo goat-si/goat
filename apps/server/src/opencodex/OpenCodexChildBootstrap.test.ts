@@ -398,6 +398,40 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
+  it.effect("a read that finds the alias gone never drops a grant given while it ran", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+      yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      home.machine.penRevisions.delete("pen-box");
+      // The member comes back and a person turns the switch on while the stale read is in flight.
+      home.machine.duringPenRead = Effect.gen(function* () {
+        home.machine.penRevisions.set("pen-box", "pen:node2");
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      }).pipe(Effect.orDie);
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(true);
+    }),
+  );
+
+  it.effect(
+    "a grant seen gone stays gone after a restart, even when its first removal could not be saved",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+        home.machine.penRevisions.delete("pen-box");
+        yield* fs.chmod(home.stateDir, 0o500);
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+        yield* fs.chmod(home.stateDir, 0o700);
+        // A later read, with the file writable again, saves the removal.
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+        home.machine.penRevisions.set("pen-box", "pen:node1");
+        const restarted = yield* build(home.baseDir, home.machine, home.calls);
+        expect(yield* restarted.bootstrap.sshOptIn("pen-box")).toBe(false);
+      }),
+  );
+
   it.effect("an opted-in SSH host joins on the person's consent now and after setups, once", () =>
     Effect.gen(function* () {
       const home = yield* setup();

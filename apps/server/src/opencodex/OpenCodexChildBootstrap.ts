@@ -754,13 +754,16 @@ const make = Effect.gen(function* () {
   )(function* (alias) {
     if (!SAFE_ALIAS.test(alias) || hasCloudMachineAliasPrefix(alias) || !(yield* hubEnabled))
       return undefined;
+    // Read first: the alias read below waits, and a grant given meanwhile is not this read's to end.
+    const before = yield* consents.held(alias);
     const read = yield* aliasRevision(alias).pipe(Effect.option);
     // Unreadable proves nothing, so the grant stays; a read that finds no alias ends it, so the
     // same name coming back later needs a person again.
     if (Option.isNone(read)) return undefined;
     if (read.value === undefined) {
-      if ((yield* consents.held(alias)) !== undefined)
-        yield* consents.forget(alias).pipe(Effect.ignore({ log: true }));
+      yield* (before === undefined ? consents.flush : consents.retire(alias, before.grantId)).pipe(
+        Effect.ignore({ log: true }),
+      );
       return undefined;
     }
     if ((yield* consents.held(alias)) === undefined) return false;

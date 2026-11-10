@@ -82,6 +82,8 @@ export interface Machine {
   /** Pen members' aliases, by the revision of their Pen settings and recorded keys. */
   penRevisions: Map<string, string>;
   penRevisionReadable: boolean;
+  /** Runs after a Pen revision is read and before it is answered, as a slow ssh -G would. */
+  duringPenRead: Effect.Effect<void> | undefined;
   revisionReadable: boolean;
   /** Bumped by each Forget, as SshHostSetup does. */
   generations: Map<string, number>;
@@ -298,7 +300,13 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
             Effect.suspend(() => machine.duringEnsure).pipe(Effect.as(machine.runtime)),
           penAliasRevision: (alias) =>
             machine.penRevisionReadable
-              ? Effect.sync(() => machine.penRevisions.get(alias))
+              ? Effect.gen(function* () {
+                  const revision = machine.penRevisions.get(alias);
+                  const hook = machine.duringPenRead;
+                  machine.duringPenRead = undefined;
+                  if (hook !== undefined) yield* hook;
+                  return revision;
+                })
               : Effect.fail(new HubOcxError({ reason: "unreachable", message: "ssh -G failed" })),
         }),
       ),
@@ -481,6 +489,7 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     revisions: new Map([["lidge-ts", "rev-1"]]),
     penRevisions: new Map(),
     penRevisionReadable: true,
+    duringPenRead: undefined,
     revisionReadable: true,
     generations: new Map(),
     sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),
