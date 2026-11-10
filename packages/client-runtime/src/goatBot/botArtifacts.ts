@@ -94,6 +94,35 @@ export async function readWholeBotArtifact(
 export const botArtifactName = (relativePath: string) =>
   relativePath.split("/").at(-1) ?? relativePath;
 
+const INLINE_CODE = /`([^`\n]+)`/g;
+
+/**
+ * Library files a reply names in inline code, in order, each once: by its path inside the
+ * artifacts folder, or by a full path ending in that folder and path.
+ */
+export function goatBotReplyFiles<File extends { readonly relativePath: string }>(
+  text: string,
+  files: ReadonlyArray<File>,
+): ReadonlyArray<File> {
+  const named: Array<File> = [];
+  for (const match of text.matchAll(INLINE_CODE)) {
+    const code = (match[1] ?? "").trim();
+    const file = files.find(
+      (candidate) =>
+        code === candidate.relativePath || code.endsWith(`/artifacts/${candidate.relativePath}`),
+    );
+    if (file !== undefined && !named.includes(file)) named.push(file);
+  }
+  return named;
+}
+
+/** True when a reply has inline code that could name a saved file, so the Library is worth reading. */
+export function goatBotReplyMayNameFile(text: string): boolean {
+  for (const match of text.matchAll(INLINE_CODE))
+    if (/[^/\s]\.[A-Za-z0-9]{1,8}$/.test((match[1] ?? "").trim())) return true;
+  return false;
+}
+
 const TEXT_TYPES = new Set(["application/json", "text/csv"]);
 /** Larger text stays a download: decoding and rendering it would stall the chat. */
 export const BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES = 1024 * 1024;
@@ -212,4 +241,27 @@ export function botComputers(tasks: ReadonlyArray<BotComputerTask>): ReadonlyArr
       host,
       tasks: [...items].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     }));
+}
+
+const PREVIEW_TEXT_CHARS = 1200;
+
+/**
+ * What a reply's file card previews from the file's first chunk: the start of a text or
+ * markdown file, or an image that fits in that chunk. Anything else shows no preview.
+ */
+export function botArtifactPreview(
+  answer: ChannelReadBotArtifactResult,
+):
+  | { readonly kind: "markdown" | "text"; readonly text: string }
+  | { readonly kind: "image"; readonly bytes: Uint8Array<ArrayBuffer>; readonly mimeType: string }
+  | null {
+  if (answer.status !== "chunk" || answer.offset !== 0) return null;
+  const kind = botArtifactViewKind(answer.mimeType, answer.relativePath, answer.size);
+  if (kind === "download" || (kind === "image" && !answer.done)) return null;
+  const decoded = Base64.decode(answer.bytesBase64);
+  if (Result.isFailure(decoded)) return null;
+  const bytes = new Uint8Array(decoded.success);
+  if (kind === "image") return { kind, bytes, mimeType: answer.mimeType };
+  const text = new TextDecoder().decode(bytes.subarray(0, PREVIEW_TEXT_CHARS * 4));
+  return { kind, text: text.slice(0, PREVIEW_TEXT_CHARS) };
 }
