@@ -12,11 +12,14 @@ import { isSshHostUnreachable } from "@goat/shared/sshFailure";
 import { resolveSshCommand } from "@goat/ssh/command";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
 import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's FileSystem cannot open with O_NONBLOCK.
+import * as NodeFS from "node:fs";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -40,8 +43,14 @@ import {
 } from "./penSshRoute.ts";
 
 const MAX_BYTES = 256 * 1024;
-// Pen's ssh config is one short Host block per member (about 250 bytes); 64 KiB holds hundreds.
-const PEN_CONFIG_MAX_BYTES = 64 * 1024;
+// Pen writes one Host block per member: a name and login user of at most 32 bytes each, about
+// 130 fixed bytes and three local paths. A mesh holds at most 4096 records, so at most 4096
+// members; 1 KiB a block leaves the paths about 800 bytes, so 4 MiB covers any mesh.
+const PEN_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
+const PEN_CONFIG_CHUNK = 64 * 1024;
+// Opening a FIFO for reading would wait for a writer and hold a pool thread; O_NONBLOCK returns at
+// once, and the handle's own stat then refuses anything but a regular file. Windows has no FIFOs.
+const PEN_OPEN_FLAGS = NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NONBLOCK ?? 0);
 // A file read on the Pen path that has not finished by then counts as failed, never as pending.
 const PEN_READ_TIMEOUT = "5 seconds";
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
@@ -199,7 +208,7 @@ export class HubOcx extends Context.Service<
      * False when `ssh -G` shows a jump chain or a proxy command other than Pen's pipe, or cannot
      * resolve the alias.
      */
-    readonly directAlias: (alias: string) => Effect.Effect<boolean>;
+    readonly directAlias: (alias: string) => Effect.Effect<boolean, HubOcxError>;
     /**
      * Identifies a Pen member's alias that Pen's own ssh config and known_hosts define, for a
      * person's consent to set it up as a Child; undefined for any other alias.
@@ -535,38 +544,54 @@ const make = Effect.gen(function* () {
    * through Pen's pipe and check Pen's own known_hosts under the alias itself. Pen is recognized
    * by its files, never by a pen-* name. A read that fails is an error, never "not a member".
    */
-  /**
-   * Pen's ssh config, or "" when there is none. Only a regular file is opened (opening a FIFO
-   * can block), at most PEN_CONFIG_MAX_BYTES is read, and the whole read has a deadline.
-   */
-  const readPenConfig = (alias: string, file: string) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const tooBig = (info: { readonly type: string; readonly size: bigint }) =>
-          info.type !== "File" || info.size > BigInt(PEN_CONFIG_MAX_BYTES);
-        const found = yield* fs.stat(file).pipe(Effect.option);
-        if (Option.isNone(found)) {
-          if (yield* fs.exists(file)) return yield* unreadable(alias);
-          return "";
-        }
-        if (tooBig(found.value)) return yield* unreadable(alias);
-        const handle = yield* fs.open(file, { flag: "r" });
-        if (tooBig(yield* handle.stat)) return yield* unreadable(alias);
-        const chunks: Uint8Array[] = [];
-        let size = 0;
-        while (size <= PEN_CONFIG_MAX_BYTES) {
-          const chunk = yield* handle.readAlloc(PEN_CONFIG_MAX_BYTES + 1 - size);
-          if (Option.isNone(chunk)) break;
-          chunks.push(chunk.value);
-          size += chunk.value.length;
-        }
-        if (size > PEN_CONFIG_MAX_BYTES) return yield* unreadable(alias);
-        return new TextDecoder().decode(Buffer.concat(chunks));
+  const penConfigFailed = (message: string) => new HubOcxError({ reason: "unreachable", message });
+  const configTooLarge = penConfigFailed(
+    `Pen's ssh config is larger than the ${PEN_CONFIG_MAX_BYTES / 1024 / 1024} MiB GOAT reads, so GOAT treats no pen-<name> alias as a Pen member.`,
+  );
+  const configNotRegular = penConfigFailed(
+    "Pen's ssh config is not a regular file, so GOAT did not read it.",
+  );
+  const configUnread = penConfigFailed("GOAT could not read Pen's ssh config in time.");
+  const penConfigFile = path.join(homeDirectory, ".ssh", "pen", "config");
+  /** Pen's ssh config, or "" when there is none, read through a non-blocking handle within a cap. */
+  const readPenConfigOnce = Effect.gen(function* () {
+    const found = yield* fs.stat(penConfigFile).pipe(Effect.option);
+    if (Option.isNone(found)) return (yield* fs.exists(penConfigFile)) ? yield* configUnread : "";
+    if (found.value.type !== "File") return yield* configNotRegular;
+    if (found.value.size > BigInt(PEN_CONFIG_MAX_BYTES)) return yield* configTooLarge;
+    return yield* Effect.acquireUseRelease(
+      Effect.tryPromise({
+        try: () => NodeFS.promises.open(penConfigFile, PEN_OPEN_FLAGS),
+        catch: () => configUnread,
       }),
-    ).pipe(
-      Effect.timeout(PEN_READ_TIMEOUT),
-      Effect.mapError(() => unreadable(alias)),
+      (handle) =>
+        Effect.gen(function* () {
+          const info = yield* Effect.tryPromise({
+            try: () => handle.stat({ bigint: true }),
+            catch: () => configUnread,
+          });
+          if (!info.isFile()) return yield* configNotRegular;
+          const chunks: Buffer[] = [];
+          let size = 0;
+          while (size <= PEN_CONFIG_MAX_BYTES) {
+            const chunk = Buffer.alloc(PEN_CONFIG_CHUNK);
+            const { bytesRead } = yield* Effect.tryPromise({
+              try: () => handle.read(chunk, 0, PEN_CONFIG_CHUNK, null),
+              catch: () => configUnread,
+            });
+            if (bytesRead === 0) break;
+            chunks.push(chunk.subarray(0, bytesRead));
+            size += bytesRead;
+          }
+          if (size > PEN_CONFIG_MAX_BYTES) return yield* configTooLarge;
+          return Buffer.concat(chunks).toString("utf8");
+        }),
+      (handle) => Effect.tryPromise(() => handle.close()).pipe(Effect.ignore),
     );
+  }).pipe(
+    Effect.timeout(PEN_READ_TIMEOUT),
+    Effect.mapError((error) => (error instanceof HubOcxError ? error : configUnread)),
+  );
   /** Whether a file exists, within the read deadline; a check that fails is a failed read. */
   const existsWithin = (alias: string, file: string) =>
     fs.exists(file).pipe(
@@ -574,10 +599,16 @@ const make = Effect.gen(function* () {
       Effect.mapError(() => unreadable(alias)),
     );
 
+  // A status pass reads every host in turn: they share one read in flight, and a failed read is
+  // reused for a while so a stalled config costs one deadline per pass, not one per alias.
+  const penConfig = yield* Effect.cachedWithTTL(readPenConfigOnce, (exit) =>
+    Exit.isSuccess(exit) ? 0 : "10 seconds",
+  );
+
   const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string) {
     if (!SAFE_ALIAS.test(alias)) return undefined;
     const directory = path.join(homeDirectory, ".ssh", "pen");
-    const config = yield* readPenConfig(alias, path.join(directory, "config"));
+    const config = yield* penConfig;
     if (!penConfigHosts(config).includes(alias)) return undefined;
     const ssh = yield* resolveSshCommand.pipe(Effect.mapError(() => unreadable(alias)));
     const output = yield* run(ssh, ["-G", alias], 10_000).pipe(
@@ -703,17 +734,17 @@ const make = Effect.gen(function* () {
       },
       Effect.orElseSucceed(() => undefined),
     ),
-    directAlias: Effect.fn("HubOcx.directAlias")(
-      function* (alias) {
-        if (!SAFE_ALIAS.test(alias)) return false;
-        const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
-        if (output.code !== 0 || output.timedOut) return false;
-        if (isPlainRoute(sshSettings(output.stdout))) return true;
-        // Pen's pipe is one relay hop of a few seconds, so a Pen member's alias counts as direct.
-        return (yield* penMember(alias)) !== undefined;
-      },
-      Effect.orElseSucceed(() => false),
-    ),
+    directAlias: Effect.fn("HubOcx.directAlias")(function* (alias) {
+      if (!SAFE_ALIAS.test(alias)) return false;
+      const output = yield* Effect.flatMap(resolveSshCommand, (ssh) =>
+        run(ssh, ["-G", alias], 10_000),
+      ).pipe(Effect.option);
+      if (Option.isNone(output) || output.value.code !== 0 || output.value.timedOut) return false;
+      if (isPlainRoute(sshSettings(output.value.stdout))) return true;
+      // Pen's pipe is one relay hop of a few seconds, so a Pen member's alias counts as direct.
+      // A failed read of Pen's files says why, so a join can name it.
+      return (yield* penMember(alias)) !== undefined;
+    }),
     penAliasRevision: Effect.fn("HubOcx.penAliasRevision")(function* (alias) {
       const member = yield* penMember(alias);
       if (member === undefined) return undefined;

@@ -1,4 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- mkfifo has no Effect equivalent.
+import * as NodeChildProcess from "node:child_process";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -156,7 +158,7 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
   /** Paths that exist besides the scratch home, such as ssh's global known_hosts. */
   existing?: ReadonlyArray<string>;
   /** How a stat of Pen's config behaves: it never answers, or reports a FIFO. */
-  configStat?: "stalls" | "fifo";
+  configStat?: "stalls" | "fifo" | "regular";
 }) {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-hub-pen-" });
@@ -221,7 +223,9 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
                   ? real.stat(path)
                   : machine.configStat === "stalls"
                     ? Effect.never
-                    : Effect.map(real.stat(path), (info) => ({ ...info, type: "FIFO" as const })),
+                    : machine.configStat === "regular"
+                      ? Effect.map(real.stat(`${path}.regular`), (info) => ({ ...info }))
+                      : Effect.map(real.stat(path), (info) => ({ ...info, type: "FIFO" as const })),
             })),
           ),
         ),
@@ -532,7 +536,7 @@ it.effect("a Pen alias on a port other than 22 has no revision, pin or direct ro
 );
 
 // The server holds every buffer to a limit, and no single read may hang it.
-it.effect("an oversized Pen config is a failed read, not a member", () =>
+it.effect("a Pen config above 64 KiB stays usable; one above the cap says so", () =>
   Effect.gen(function* () {
     const machine = {
       config: PEN_BLOCK("pen-box") + "#".repeat(70 * 1024),
@@ -540,11 +544,15 @@ it.effect("an oversized Pen config is a failed read, not a member", () =>
       keys: keyLines("node1", "AAAA1"),
       fingerprints: FINGERPRINTS,
     };
-    const { ocx, home } = yield* penHome(machine);
+    const { ocx, home, write } = yield* penHome(machine);
     machine.sshG = penSshG(home);
-    expect((yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip))._tag).toBe("HubOcxError");
+    expect(yield* ocx.penAliasRevision("pen-box")).toEqual(expect.any(String));
+    expect(yield* ocx.directAlias("pen-box")).toBe(true);
+    yield* write(PEN_BLOCK("pen-box") + "#".repeat(5 * 1024 * 1024));
+    const failed = yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip);
+    expect(failed.message).toContain("larger than");
+    expect((yield* ocx.directAlias("pen-box").pipe(Effect.flip)).message).toContain("larger than");
     expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
-    expect(yield* ocx.directAlias("pen-box")).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
@@ -573,10 +581,8 @@ it.effect("a read of Pen's config that never finishes fails after its deadline",
     const { ocx, home } = yield* penHome(machine);
     machine.sshG = penSshG(home);
     const read = yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip, Effect.forkChild);
-    const direct = yield* ocx.directAlias("pen-box").pipe(Effect.forkChild);
     yield* TestClock.adjust("6 seconds");
     expect((yield* Fiber.join(read))._tag).toBe("HubOcxError");
-    expect(yield* Fiber.join(direct)).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
@@ -596,5 +602,62 @@ it.effect("a Pen alias with a marker line in Pen's known_hosts is not trusted", 
     expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
     expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
     expect(yield* ocx.directAlias("pen-box")).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a Pen alias with a @revoked line in Pen's known_hosts is not trusted", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys:
+        keyLines("node1", "AAAA1") +
+        "# Host pen-box found: line 2 REVOKED\n@revoked pen-box ssh-ed25519 AAAAOLD\n",
+      fingerprints: FINGERPRINTS,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    expect(yield* ocx.directAlias("pen-box")).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// Opening a FIFO for reading waits for a writer; the open must not, whatever the first stat said.
+it.effect("a Pen config that turns into a FIFO after its stat fails at once", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      configStat: "regular" as const,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    const config = `${home}/.ssh/pen/config`;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.rename(config, `${config}.regular`);
+    NodeChildProcess.execFileSync("mkfifo", [config]);
+    expect((yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip))._tag).toBe("HubOcxError");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// A status pass reads every host in turn; one stalled config read must not cost a deadline each.
+it.effect("aliases read in turn share one deadline when Pen's config never answers", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      configStat: "stalls" as const,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    const pass = yield* Effect.forEach(["pen-a", "pen-b", "pen-c", "pen-d", "pen-e"], (alias) =>
+      ocx.penAliasRevision(alias).pipe(Effect.flip),
+    ).pipe(Effect.forkChild);
+    yield* TestClock.adjust("6 seconds");
+    const failures = yield* Fiber.join(pass);
+    expect(failures.map((failure) => failure._tag)).toEqual(Array(5).fill("HubOcxError"));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
