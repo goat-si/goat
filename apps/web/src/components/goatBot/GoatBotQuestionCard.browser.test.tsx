@@ -45,4 +45,12 @@ it("keeps only the picked row once the question is answered", async () => {
   expect(screen.container.textContent).not.toContain("Short summary");
   expect(screen.container.querySelectorAll("button")).toHaveLength(0);
   expect(screen.container.querySelector("input")).toBeNull();
+  await screen.rerender(
+    <GoatBotQuestionCard
+      row={{ ...answered, answerSending: true }}
+      body={answered.text}
+      onPick={() => {}}
+    />,
+  );
+  await expect.element(screen.getByText("Sending…")).toBeVisible();
 });

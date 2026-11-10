@@ -166,6 +166,8 @@ export type GoatBotRow =
       readonly answer?: string;
       /** Which of `choices` the answer is, when the person picked one. */
       readonly answerIndex?: number;
+      /** The picked answer is still on its way; the question shows that in place of the pick's own message. */
+      readonly answerSending?: boolean;
       /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
       readonly answerTaskId?: string;
       readonly memory?: MemoryReportReference;
@@ -557,12 +559,17 @@ export function buildGoatBotTimeline(input: {
           answered.text.trim() || (answered.attachments ?? []).map((file) => file.name).join(", ");
         const answerIndex =
           (answered.attachments ?? []).length === 0 ? (row.choices ?? []).indexOf(answer) : -1;
-        if (answerIndex >= 0) folded.add(answered.id);
+        // Only the person's next message after the question can be its pick.
+        const picked = answerIndex >= 0 && reply === nearestSend;
+        if (picked) folded.add(answered.id);
+        const sending =
+          picked && (answered.delivery.state === "queued" || answered.delivery.state === "sending");
         ordered[index] = {
           ...row,
           options: NO_OPTIONS,
           answer,
-          ...(answerIndex >= 0 ? { answerIndex } : {}),
+          ...(picked ? { answerIndex } : {}),
+          ...(sending ? { answerSending: true } : {}),
         };
       } else if (!decidedByCard && send !== undefined) {
         ordered[index] = { ...row, options: NO_OPTIONS };
@@ -574,7 +581,8 @@ export function buildGoatBotTimeline(input: {
   const shown = folded.size === 0 ? ordered : ordered.filter((row) => !folded.has(row.id));
 
   const rows: GoatBotRow[] = [];
-  const lastUserIndex = shown.findLastIndex((row) => row.kind === "user");
+  // The receipt belongs to the newest message sent, even when that message is a pick shown in its question.
+  const lastUserId = ordered.findLast((row) => row.kind === "user")?.id;
   const breaks = shown.map((row, index) => {
     const previous = index === 0 ? null : shown[index - 1]!;
     const newDay =
@@ -604,7 +612,7 @@ export function buildGoatBotTimeline(input: {
     const groupPosition = first ? (last ? "single" : "first") : last ? "last" : "middle";
     rows.push(
       row.kind === "user"
-        ? { ...row, firstInGroup: first, groupPosition, showReceipt: index === lastUserIndex }
+        ? { ...row, firstInGroup: first, groupPosition, showReceipt: row.id === lastUserId }
         : { ...row, firstInGroup: first, groupPosition },
     );
   }

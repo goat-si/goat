@@ -447,6 +447,37 @@ describe("a question the person answered", () => {
     expect(failed.filter((row) => row.kind === "user")).toHaveLength(1);
   });
 
+  it("shows a pick on its way in the question, and gives no older message the newest receipt", () => {
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([user("u0", "2026-10-12T12:00:00Z", "Ship it"), ...asked]),
+        pendingInputs: [pending("Release", "sending")],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(rows.find((row) => row.id === "b1")).toMatchObject({
+      answerIndex: 1,
+      answerSending: true,
+    });
+    expect(rows.filter((row) => row.kind === "user" && row.showReceipt)).toEqual([]);
+  });
+
+  it("keeps a later message that only matches a choice as the person's own message", () => {
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          ...asked,
+          user("u1", "2026-10-12T12:00:02Z", "Neither"),
+          user("u2", "2026-10-12T12:00:03Z", "Release"),
+        ]),
+        pendingInputs: [],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(rows.filter((row) => row.kind === "user").map((row) => row.id)).toEqual(["u1", "u2"]);
+    expect(rows.find((row) => row.id === "b1")).not.toHaveProperty("answerIndex");
+  });
+
   it("still shows the answer after a reload, once the task closed the question", () => {
     const proposal = {
       ...card("proposal", 2, "Working"),

@@ -37,7 +37,7 @@ export function GoatBotQuestionCard({
               type="button"
               disabled={onPick === undefined}
               onClick={() => send(option)}
-              className="flex min-h-9 items-center gap-2.5 rounded-lg px-1.5 py-1 text-start text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-60"
+              className="flex min-h-9 items-center gap-2.5 rounded-lg px-1.5 py-1 text-start text-sm outline-none hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60"
             >
               <span aria-hidden className="goat-choice-badge">
                 {goatBotChoiceLetter(index)}
@@ -45,7 +45,7 @@ export function GoatBotQuestionCard({
               <span className="min-w-0 break-words">{option}</span>
             </button>
           ))}
-          <div className="flex min-h-9 items-center gap-2.5 rounded-lg px-1.5 py-1 focus-within:bg-accent">
+          <div className="flex min-h-9 items-center gap-2.5 rounded-lg px-1.5 py-1 has-focus-visible:bg-accent has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-ring">
             <label htmlFor={otherId} aria-hidden className="goat-choice-badge">
               {goatBotChoiceLetter(row.options.length)}
             </label>
@@ -55,6 +55,10 @@ export function GoatBotQuestionCard({
               disabled={onPick === undefined}
               onChange={(event) => setOther(event.currentTarget.value)}
               onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.currentTarget.blur();
+                  return;
+                }
                 if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
                 event.preventDefault();
                 const answer = other.trim();
@@ -75,6 +79,9 @@ export function GoatBotQuestionCard({
           </span>
           <span className="sr-only">You answered:</span>
           <span className="min-w-0 break-words">{picked}</span>
+          {row.answerSending ? (
+            <span className="text-xs text-muted-foreground">Sending…</span>
+          ) : null}
         </div>
       ) : null}
     </div>
