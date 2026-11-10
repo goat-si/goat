@@ -1,7 +1,9 @@
 import {
   ThreadId,
+  type ServerSettings,
   type StorageCleanupReportEntry,
   type WorktreeCleanupPreview,
+  type WorktreeCleanupRules,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -15,9 +17,23 @@ interface WorktreePass {
   readonly kept: ReadonlyArray<string>;
 }
 
+/** Whether a removal checked under `before` must stop because a setting it relied on changed. */
+export const removalSettingsChanged = (
+  before: ServerSettings,
+  after: ServerSettings,
+  rules: WorktreeCleanupRules,
+  current: WorktreeCleanupRules,
+) =>
+  after.autoResumeLimitedThreads !== before.autoResumeLimitedThreads ||
+  after.snoozeLimitedThreads !== before.snoozeLimitedThreads ||
+  after.storageCleanup.worktreeCleanupPreview !== before.storageCleanup.worktreeCleanupPreview ||
+  (Object.keys(rules) as Array<keyof WorktreeCleanupRules>).some(
+    (key) => current[key] !== rules[key],
+  );
+
 /**
- * Runs one sweep's worktree work: snapshot housekeeping first, then, until a person saw or
- * confirmed the first-run preview, a dry pass that only marks what cleanup would remove.
+ * Runs one sweep's worktree work: snapshot housekeeping first, then removal. With the opt-in
+ * preview on, a dry pass only marks what cleanup would remove until a person saw or confirmed it.
  */
 export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeCleanupRun")(function* (
   requiresConfirmation: Effect.Effect<boolean>,
@@ -25,8 +41,9 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
   const previewState = yield* WorktreeCleanupPreviewState;
   const store = yield* WorktreeSnapshotStore;
   const sql = yield* SqlClient.SqlClient;
-  // Activation never reverts, so later sweeps skip the dry pass.
+  // Activation lasts until the preview is forgotten; later sweeps skip the dry pass.
   let activated = false;
+  let forgotten = 0;
   const housekeeping = Effect.fn("StorageCleanup.snapshotHousekeeping")(
     function* (nowMs: number, snapshotDays: number | null) {
       const deleted = yield* sql<{ threadId: string }>`
@@ -43,9 +60,10 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
       Effect.logWarning("worktree snapshot housekeeping failed", { cause }),
     ),
   );
-  return Effect.fn("StorageCleanup.runWorktreeCleanup")(function* <E, R>(input: {
+  const run = Effect.fn("StorageCleanup.runWorktreeCleanup")(function* <E, R>(input: {
     readonly nowMs: number;
     readonly snapshotDays: number | null;
+    readonly preview: boolean;
     readonly entries: StorageCleanupReportEntry[];
     readonly clean: (
       dryRun: boolean,
@@ -54,7 +72,8 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
   }) {
     yield* housekeeping(input.nowMs, input.snapshotDays);
     const none: WorktreeCleanupPreview | null = null;
-    if (activated) return { ...(yield* input.clean(false, input.entries)), preview: none };
+    if (activated || !input.preview)
+      return { ...(yield* input.clean(false, input.entries)), preview: none };
     const dryEntries: StorageCleanupReportEntry[] = [];
     const dry = yield* input.clean(true, dryEntries);
     const plannedCount = dryEntries.filter((entry) => entry.planned === true).length;
@@ -63,16 +82,30 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
       input.entries.push(...dryEntries);
       return { ...dry, preview: none };
     }
+    const asked = forgotten;
     const gate = yield* previewState.evaluate({
       nowMs: input.nowMs,
       plannedCount,
       requiresConfirmation: yield* requiresConfirmation,
     });
-    if (!gate.apply) {
+    // An approval forgotten while it was given authorizes nothing; the settings change sweeps again.
+    const forgottenMeanwhile = asked !== forgotten;
+    if (!gate.apply || forgottenMeanwhile) {
       input.entries.push(...dryEntries);
-      return { ...dry, preview: gate.preview };
+      return { ...dry, preview: forgottenMeanwhile ? none : gate.preview };
     }
     activated = true;
     return { ...(yield* input.clean(false, input.entries)), preview: none };
   });
+  const forgetPreview = Effect.sync(() => {
+    activated = false;
+    forgotten++;
+  }).pipe(Effect.andThen(previewState.reset));
+  // Turning the preview off forgets it, so turning it on again shows a new one. null is startup.
+  const forgetIfTurnedOff = (before: ServerSettings | null, after: ServerSettings) =>
+    !after.storageCleanup.worktreeCleanupPreview &&
+    (before === null || before.storageCleanup.worktreeCleanupPreview)
+      ? forgetPreview
+      : Effect.void;
+  return Object.assign(run, { forgetPreview, forgetIfTurnedOff });
 });
