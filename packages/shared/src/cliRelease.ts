@@ -14,7 +14,8 @@ export function cliNpmExecCommand(version: string): string {
   return `npm exec --yes --package=${cliNpmPackageUrl(version)} -- goat`;
 }
 
-// Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml.
+// Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml,
+// and with the SSH runner's host check in packages/ssh/src/tunnel.ts.
 // Node single-executables do not support darwin-x64 and segfault at startup.
 export const CLI_ARCHIVE_PLATFORM_KEYS = [
   "darwin-arm64",
