@@ -37,6 +37,7 @@ import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   canSendToGoatBot,
+  goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
   type GoatBotAvailability,
   type GoatBotRemoval,
@@ -314,7 +315,11 @@ export function GoatBotChatView({
             initialText={seed?.text ?? ""}
             disabled={!canSend}
             botName={title}
-            placeholder={canSend ? `Message ${title}` : `${title} isn't available`}
+            placeholder={
+              canSend
+                ? (goatBotOpenQuestionPlaceholder(rows) ?? `Message ${title}`)
+                : `${title} isn't available`
+            }
             attachmentSupport={attachmentSupport}
             onSend={onSend}
           />

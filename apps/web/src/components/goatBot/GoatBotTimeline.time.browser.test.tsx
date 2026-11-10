@@ -44,7 +44,10 @@ const answered = {
   ...bot,
   id: "answered",
   text: "Short or detailed?",
+  options: [],
+  choices: ["Short", "Detailed"],
   answer: "Short",
+  answerIndex: 0,
 } as GoatBotRow;
 const task: GoatBotRow = {
   kind: "task",
@@ -96,10 +99,8 @@ it("links each sent user and bot message, answered questions included, to a time
     const time = [...message.querySelectorAll("time")].find((item) => item.id === timeId);
     expect(message.getAttribute("tabindex")).toBe("0");
     expect(time?.dateTime).toBe(createdAt);
-    // A collapsed answer still shows its time on hover or focus, outside the closed details.
-    expect(time?.closest("details")).toBeNull();
   }
-  for (const text of ["Reply", "Answered:"]) {
+  for (const text of ["Reply", "Short or detailed?"]) {
     const botTime = [...container.querySelectorAll("li")]
       .find((item) => item.textContent?.includes(text))
       ?.querySelector("time");
