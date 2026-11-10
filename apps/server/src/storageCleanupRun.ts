@@ -88,12 +88,13 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
       plannedCount,
       requiresConfirmation: yield* requiresConfirmation,
     });
-    if (!gate.apply) {
+    // An approval forgotten while it was given authorizes nothing; the settings change sweeps again.
+    const forgottenMeanwhile = asked !== forgotten;
+    if (!gate.apply || forgottenMeanwhile) {
       input.entries.push(...dryEntries);
-      return { ...dry, preview: gate.preview };
+      return { ...dry, preview: forgottenMeanwhile ? none : gate.preview };
     }
-    // A preview forgotten during this approval must not stay approved for later sweeps.
-    activated = asked === forgotten;
+    activated = true;
     return { ...(yield* input.clean(false, input.entries)), preview: none };
   });
   const forgetPreview = Effect.sync(() => {
