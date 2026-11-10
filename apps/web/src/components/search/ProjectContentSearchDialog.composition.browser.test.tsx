@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -38,7 +38,7 @@ vi.mock("~/hooks/useActiveProjectTarget", () => ({
 }));
 vi.mock("~/hooks/useTheme", () => ({
   useRenderedAppearance: () => "light",
-  useTheme: () => ({ theme: "t3-chat", resolvedTheme: "light", appearanceMode: "light" }),
+  useTheme: () => ({ theme: "goat-chat", resolvedTheme: "light", appearanceMode: "light" }),
 }));
 vi.mock("~/state/session", async (original) => ({
   ...(await original<typeof import("~/state/session")>()),
