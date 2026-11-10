@@ -69,6 +69,10 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		cfg.SetRelays(list)
 	}
 	if len(cfg.RelayList()) == 0 {
+		if *foreground {
+			fmt.Fprintln(stderr, "pen: no relay configured; run pen up --relay https://<relay>")
+			return 0
+		}
 		return fail(stderr, errors.New("no relay configured; pass --relay https://<relay>"))
 	}
 	if *name != "" {
@@ -81,6 +85,14 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("invalid name %q (1-32 of a-z 0-9 - _ ., starting with a letter or digit)", cfg.Name))
 	}
 	if err := st.SaveConfig(cfg); err != nil {
+		return fail(stderr, err)
+	}
+	if err := daemon.CheckConfig(cfg); err != nil {
+		if *foreground {
+			// The service restarts a failed start, and nothing changes between restarts.
+			fmt.Fprintln(stderr, "pen:", err)
+			return 0
+		}
 		return fail(stderr, err)
 	}
 	if _, err := mesh.Load(st); errors.Is(err, os.ErrNotExist) {
