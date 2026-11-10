@@ -178,6 +178,9 @@ func (l *loginRun) run(ctx context.Context) error {
 			if err := startDaemon(l.st, l.noService, l.stderr); err != nil {
 				return err
 			}
+			if err := l.bindAgain(ctx, cur.MeshID); err != nil {
+				return err
+			}
 			return l.register(ctx, cur.MeshID)
 		}
 	}
@@ -188,11 +191,55 @@ func (l *loginRun) run(ctx context.Context) error {
 	return l.join(ctx)
 }
 
+// account is the binding this sign-in vouches for.
+func (l *loginRun) account() mesh.Account {
+	return mesh.Account{LoginURL: l.lc.URL, LoginKey: mesh.LoginKey(l.tok.LoginKey), Sub: l.tok.Account.Sub}
+}
+
+// bindAgain offers to bind a member's mesh again when it is unbound, bound to an older login key or
+// bound to another account (contract "Account join": the way back after an unbind or a rotation).
+func (l *loginRun) bindAgain(ctx context.Context, meshID string) error {
+	var ls daemon.LsReply
+	if err := daemon.Call(l.st, daemon.Request{Op: "ls"}, &ls); err != nil {
+		return err
+	}
+	want := l.account()
+	var q string
+	switch cur := ls.Account; {
+	case cur != nil && *cur == want:
+		return nil
+	case cur == nil:
+		q = fmt.Sprintf("Mesh %s is not bound to a Google account. Bind it to %s again?", meshID, l.tok.Account.Email)
+	case cur.Sub == want.Sub:
+		q = fmt.Sprintf("Mesh %s is bound to an older login key (%s). Bind it to the service's current key %s?", meshID, cur.LoginKey.Kid, want.LoginKey.Kid)
+	default:
+		q = fmt.Sprintf("Mesh %s is bound to another Google account (sub %s). Bind it to %s instead?", meshID, cur.Sub, l.tok.Account.Email)
+	}
+	if !confirm(l.stdout, l.yes, q) {
+		fmt.Fprintln(l.stdout, "the mesh's binding is unchanged")
+		return nil
+	}
+	acct := want
+	var r map[string]any
+	if err := daemon.Call(l.st, daemon.Request{Op: "login-bind", Account: &acct}, &r); err != nil {
+		return err
+	}
+	fmt.Fprintf(l.stdout, "mesh %s is bound to %s again\n", meshID, l.tok.Account.Email)
+	return nil
+}
+
 // foundAndBind binds this node's mesh (founding one if there is none) to the account.
 func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 	q := fmt.Sprintf("No mesh is registered for %s. Found a mesh with this machine and bind it to %s?", l.tok.Account.Email, l.tok.Account.Email)
-	if cur != nil && len(cur.View().Members) > 1 {
-		q = fmt.Sprintf("No mesh is registered for %s. Bind this machine's mesh %s (%d members) to %s?", l.tok.Account.Email, cur.MeshID, len(cur.View().Members), l.tok.Account.Email)
+	if cur != nil {
+		v := cur.View()
+		if n := len(v.Members); n > 1 {
+			fmt.Fprintf(l.stdout, "warning: mesh %s has %d other members; binding it lets every machine that signs in as %s join them\n", cur.MeshID, n-1, l.tok.Account.Email)
+			q = fmt.Sprintf("No mesh is registered for %s. Bind this machine's mesh %s (%d members) to %s?", l.tok.Account.Email, cur.MeshID, n, l.tok.Account.Email)
+		}
+		if v.Account != nil && v.Account.Sub != l.tok.Account.Sub {
+			fmt.Fprintf(l.stdout, "warning: mesh %s is bound to another Google account (sub %s); binding replaces it\n", cur.MeshID, v.Account.Sub)
+		}
 	}
 	if !confirm(l.stdout, l.yes, q) {
 		return errors.New("nothing changed")
@@ -205,11 +252,11 @@ func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 	if err := startDaemon(l.st, l.noService, l.stderr); err != nil {
 		return err
 	}
-	acct := &mesh.Account{LoginURL: l.lc.URL, LoginKey: mesh.LoginKey(l.tok.LoginKey), Sub: l.tok.Account.Sub}
+	acct := l.account()
 	var r struct {
 		Status daemon.Status `json:"status"`
 	}
-	if err := daemon.Call(l.st, daemon.Request{Op: "login-bind", Account: acct}, &r); err != nil {
+	if err := daemon.Call(l.st, daemon.Request{Op: "login-bind", Account: &acct}, &r); err != nil {
 		return err
 	}
 	if err := l.register(ctx, r.Status.MeshID); err != nil {
@@ -224,7 +271,11 @@ func (l *loginRun) register(ctx context.Context, meshID string) error {
 		if errors.Is(err, login.ErrOtherMesh) {
 			return fmt.Errorf("%w meanwhile; run pen login again", err)
 		}
-		return err
+		// The same node signing in again within a second gets a byte-identical assertion, which
+		// already registered it.
+		if !errors.Is(err, login.ErrAssertionUsed) {
+			return err
+		}
 	}
 	return l.saveLogin(meshID)
 }

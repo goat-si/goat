@@ -220,3 +220,50 @@ func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *test
 		t.Fatalf("registry lists %d nodes, want only a", len(nodes))
 	}
 }
+
+func lsOf(t *testing.T, st *state.Store) daemon.LsReply {
+	t.Helper()
+	var ls daemon.LsReply
+	if err := daemon.Call(st, daemon.Request{Op: "ls"}, &ls); err != nil {
+		t.Fatal(err)
+	}
+	return ls
+}
+
+func TestLoginOnAMemberBindsAgainAfterAnUnbindOrAKeyRotation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	loginSeams(t, ctx, rs)
+	args := []string{"--login-url", f.URL, "--relay", rs.URL, "--name", "a", "--yes", "--no-service"}
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin(args, &out, &errOut); code != 0 {
+		t.Fatalf("first login: %s", errOut.String())
+	}
+	if code := RunAccount([]string{"unbind"}, &out, &errOut); code != 0 || lsOf(t, a).Account != nil {
+		t.Fatalf("unbind: exit %d %s", code, errOut.String())
+	}
+	out.Reset()
+	if code := RunLogin(args, &out, &errOut); code != 0 {
+		t.Fatalf("login after unbind: %s", errOut.String())
+	}
+	if acct := lsOf(t, a).Account; acct == nil || acct.Sub != "1001" {
+		t.Fatalf("after pen login on the unbound member: account %+v; output:\n%s", acct, out.String())
+	}
+	rotated := f.Rotate()
+	out.Reset()
+	if code := RunLogin(args, &out, &errOut); code != 0 {
+		t.Fatalf("login after rotation: %s", errOut.String())
+	}
+	if acct := lsOf(t, a).Account; acct == nil || acct.LoginKey.Kid != rotated.Kid {
+		t.Fatalf("after a key rotation: account %+v, want key %s", acct, rotated.Kid)
+	}
+}
