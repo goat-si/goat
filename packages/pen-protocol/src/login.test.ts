@@ -7,6 +7,7 @@ import {
   forgetProofMessage,
   fromBase64url,
   pollProofMessage,
+  registerProofMessage,
   startProofMessage,
 } from "./login.ts";
 import { buildLoginVector } from "./loginVectors.ts";
@@ -35,6 +36,17 @@ describe("login vectors (CONTRACT Accounts v1.1)", () => {
       "pen-login/1 forgetaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
     expect(toHex(forget.slice(44))).toBe("0000000102030405");
+  });
+
+  it("the register proof message is the prefix, SHA-256 of the assertion body bytes, then the meshId as ASCII", async () => {
+    const body = fromBase64url(login.assertion.body);
+    const message = await registerProofMessage(body, login.register.meshId);
+    expect(toHex(message)).toBe(login.register.message);
+    expect(new TextDecoder().decode(message.slice(0, 20))).toBe("pen-login/1 register");
+    expect(toHex(message.slice(20, 52))).toBe(
+      toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", body))),
+    );
+    expect(new TextDecoder().decode(message.slice(52))).toBe(login.register.meshId);
   });
 
   it("each assertion check case gives its expected outcome", async () => {

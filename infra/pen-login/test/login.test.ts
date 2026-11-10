@@ -8,6 +8,7 @@ import {
   forgetProofMessage,
   fromBase64url,
   type LoginKey,
+  registerProofMessage,
 } from "@goat/pen-protocol/login";
 import { type FakeIssuer, type IdTokenOverrides, rsaKey, startFakeIssuer } from "./fakeIssuer.ts";
 import {
@@ -47,6 +48,7 @@ interface SignIn {
   readonly browser: Browser;
   /** The page the Google callback answered with. */
   readonly callback: Awaited<ReturnType<Browser["get"]>>;
+  readonly callbackUrl: string;
 }
 
 /** Starts a device and walks a browser through code entry and the Google round trip. */
@@ -70,8 +72,9 @@ async function signIn(
   issuer.next = overrides;
   const google = await fetch(sent.location ?? "", { redirect: "manual" });
   expect(google.status).toBe(302);
-  const callback = await browser.get(google.headers.get("location") ?? "");
-  return { machine, deviceCode, userCode, browser, callback };
+  const callbackUrl = google.headers.get("location") ?? "";
+  const callback = await browser.get(callbackUrl);
+  return { machine, deviceCode, userCode, browser, callback, callbackUrl };
 }
 
 async function approved(
@@ -95,6 +98,40 @@ async function approved(
 async function keys(service: Service): Promise<Array<LoginKey>> {
   const response = await fetch(`${service.url}/v1/keys`);
   return ((await response.json()) as { keys: Array<LoginKey> }).keys;
+}
+
+interface Minted {
+  readonly machine: Device;
+  readonly token: Record<string, unknown>;
+}
+
+/** Registers a minted assertion; proof null leaves the proof out, signer signs it with another key. */
+async function register(
+  service: Service,
+  flow: Minted,
+  meshId: string,
+  options: { signer?: Device; proof?: null } = {},
+) {
+  const assertion = flow.token.assertion as Assertion;
+  const message = await registerProofMessage(fromBase64url(assertion.body), meshId);
+  const signer = options.signer ?? flow.machine;
+  const body: Record<string, unknown> = { assertion, meshId };
+  if (options.proof !== null) body.proof = base64url(await signer.sign(message));
+  return api(service.url, "/v1/mesh/register", body);
+}
+
+/** Walks the reset pages for sub and confirms. */
+async function resetAccount(service: Service, issuer: FakeIssuer, sub: string) {
+  const browser = new Browser(service.url);
+  const page = await browser.get("/reset");
+  const sent = await browser.post("/reset", { csrf: page.csrf ?? "" });
+  expect(sent.status).toBe(303);
+  issuer.next = { sub };
+  const google = await fetch(sent.location ?? "", { redirect: "manual" });
+  const confirm = await browser.get(google.headers.get("location") ?? "");
+  expect(confirm.status).toBe(200);
+  const done = await browser.post("/reset/confirm", { csrf: confirm.csrf ?? "" });
+  expect(done.status).toBe(200);
 }
 
 /** The service's clock as of a token it answered: the minted assertion's iat. */
@@ -291,29 +328,102 @@ describe("pen-login contract (Accounts v1.1)", () => {
     expect(locked.location).toBeNull();
   });
 
-  it("an unknown kid refetches the JWKS at most once per 5 minutes", async () => {
+  it("an unknown kid does not refetch the JWKS within 5 minutes of the last fetch", async () => {
     await approved(service, issuer);
     const fetches = issuer.jwksFetches;
     const rotated = rsaKey("key-b");
     expect((await signIn(service, issuer, { signer: rotated })).callback.status).toBe(400);
     issuer.published.push(rotated);
     expect((await signIn(service, issuer, { signer: rotated })).callback.status).toBe(400);
-    expect(issuer.jwksFetches - fetches).toBeLessThanOrEqual(1);
+    expect(issuer.jwksFetches - fetches).toBe(0);
     issuer.published.pop();
+  });
+
+  it("a register without a proof, or with a proof by another key, is refused 400 and leaves the assertion usable", async () => {
+    const minted = await approved(service, issuer, { sub: "500000000000000000005" });
+    expect((await register(service, minted, MESH_A, { proof: null })).status).toBe(400);
+    expect((await register(service, minted, MESH_A, { signer: await device() })).status).toBe(400);
+    expect((await register(service, minted, MESH_A)).status).toBe(200);
+  });
+
+  it("a reset denies an approved device code kept unpolled and refuses an assertion kept unregistered", async () => {
+    const sub = "600000000000000000006";
+    const victim = await approved(service, issuer, { sub }, "victim");
+    expect((await register(service, victim, MESH_A)).status).toBe(200);
+    const keptCode = await signIn(service, issuer, { sub }, "kept-code");
+    const approve = await keptCode.browser.post("/device/confirm", {
+      csrf: keptCode.callback.csrf ?? "",
+      action: "approve",
+    });
+    expect(approve.status).toBe(200);
+    const keptAssertion = await approved(service, issuer, { sub }, "kept-assertion");
+
+    await resetAccount(service, issuer, sub);
+
+    expect(await poll(service.url, keptCode.machine, keptCode.deviceCode)).toEqual({
+      status: 403,
+      json: { status: "denied" },
+    });
+    expect((await register(service, keptAssertion, MESH_B)).status).toBe(409);
+    const fresh = await approved(service, issuer, { sub }, "after-reset");
+    expect(fresh.token.mesh).toBeNull();
+    expect((await register(service, fresh, MESH_B)).status).toBe(200);
+  });
+
+  it("replaying a callback URL, even when the provider would redeem its code again, shows the error page", async () => {
+    issuer.allowCodeReuse = true;
+    try {
+      const flow = await signIn(service, issuer);
+      expect(flow.callback.status).toBe(200);
+      const replay = await flow.browser.get(flow.callbackUrl);
+      expect(replay.status).toBe(400);
+      expect(replay.csrf).toBeNull();
+    } finally {
+      issuer.allowCodeReuse = false;
+    }
+  });
+
+  it("polls with unknown device codes count per source: the eleventh in a minute is 429", async () => {
+    const machine = await device();
+    const source = freshSource();
+    const statuses = [];
+    for (let i = 0; i < 11; i++) {
+      const code = base64url(crypto.getRandomValues(new Uint8Array(32)));
+      statuses.push((await poll(service.url, machine, code, source)).status);
+    }
+    expect(statuses.slice(0, 10).every((status) => status === 410)).toBe(true);
+    expect(statuses[10]).toBe(429);
+  });
+
+  it("two polls at once get one answer and one slow_down", async () => {
+    const machine = await device();
+    const started = await startDevice(service.url, machine);
+    const code = String(started.json.deviceCode);
+    const statuses = (
+      await Promise.all([poll(service.url, machine, code), poll(service.url, machine, code)])
+    ).map((r) => r.status);
+    expect(statuses.sort()).toEqual([428, 429]);
+  });
+
+  it("an account lists at most 64 nodes; the 65th registration is refused 409", async () => {
+    const sub = "700000000000000000007";
+    const statuses = [];
+    for (let i = 0; i < 65; i++) {
+      const minted = await approved(service, issuer, { sub }, `n${i}`);
+      statuses.push((await register(service, minted, MESH_A)).status);
+    }
+    expect(statuses.slice(0, 64).every((status) => status === 200)).toBe(true);
+    expect(statuses[64]).toBe(409);
+    const next = await approved(service, issuer, { sub }, "n65");
+    expect((next.token.mesh as { members: Array<unknown> }).members.length).toBe(64);
   });
 
   it("the registry keeps one meshId per sub, refuses another 409, lists members to the next login, and uses an assertion once", async () => {
     const sub = "200000000000000000002";
     const first = await approved(service, issuer, { sub });
-    const registered = await api(service.url, "/v1/mesh/register", {
-      assertion: first.token.assertion,
-      meshId: MESH_A,
-    });
+    const registered = await register(service, first, MESH_A);
     expect(registered.status).toBe(200);
-    const reused = await api(service.url, "/v1/mesh/register", {
-      assertion: first.token.assertion,
-      meshId: MESH_A,
-    });
+    const reused = await register(service, first, MESH_A);
     expect(reused.status).toBe(409);
 
     const second = await approved(service, issuer, { sub }, "box-2");
@@ -329,42 +439,18 @@ describe("pen-login contract (Accounts v1.1)", () => {
         },
       ],
     });
-    const otherMesh = await api(service.url, "/v1/mesh/register", {
-      assertion: second.token.assertion,
-      meshId: MESH_B,
-    });
+    const otherMesh = await register(service, second, MESH_B);
     expect(otherMesh.status).toBe(409);
   });
 
   it("forget needs a fresh proof by the node or another node of the same sub; stale or foreign proofs are refused", async () => {
     const sub = "300000000000000000003";
     const a = await approved(service, issuer, { sub }, "node-a");
-    expect(
-      (
-        await api(service.url, "/v1/mesh/register", {
-          assertion: a.token.assertion,
-          meshId: MESH_A,
-        })
-      ).status,
-    ).toBe(200);
+    expect((await register(service, a, MESH_A)).status).toBe(200);
     const b = await approved(service, issuer, { sub }, "node-b");
-    expect(
-      (
-        await api(service.url, "/v1/mesh/register", {
-          assertion: b.token.assertion,
-          meshId: MESH_A,
-        })
-      ).status,
-    ).toBe(200);
+    expect((await register(service, b, MESH_A)).status).toBe(200);
     const stranger = await approved(service, issuer, { sub: "300000000000000000099" }, "stranger");
-    expect(
-      (
-        await api(service.url, "/v1/mesh/register", {
-          assertion: stranger.token.assertion,
-          meshId: MESH_B,
-        })
-      ).status,
-    ).toBe(200);
+    expect((await register(service, stranger, MESH_B)).status).toBe(200);
     const aId = await nodeIdFromSignPub(fromBase64url(a.machine.signPub));
 
     const now = serviceSeconds(stranger.token) * 1000;
@@ -382,14 +468,7 @@ describe("pen-login contract (Accounts v1.1)", () => {
   it("a Google-authenticated reset with its own CSRF step clears the account, so the next login may bind another mesh", async () => {
     const sub = "400000000000000000004";
     const a = await approved(service, issuer, { sub });
-    expect(
-      (
-        await api(service.url, "/v1/mesh/register", {
-          assertion: a.token.assertion,
-          meshId: MESH_A,
-        })
-      ).status,
-    ).toBe(200);
+    expect((await register(service, a, MESH_A)).status).toBe(200);
 
     const browser = new Browser(service.url);
     const page = await browser.get("/reset");
@@ -406,14 +485,7 @@ describe("pen-login contract (Accounts v1.1)", () => {
 
     const b = await approved(service, issuer, { sub }, "box-2");
     expect(b.token.mesh).toBeNull();
-    expect(
-      (
-        await api(service.url, "/v1/mesh/register", {
-          assertion: b.token.assertion,
-          meshId: MESH_B,
-        })
-      ).status,
-    ).toBe(200);
+    expect((await register(service, b, MESH_B)).status).toBe(200);
   });
 
   it("per-source limits answer 429: device start past 10 a minute, pages past 20, register and forget past 30", async () => {
@@ -467,5 +539,79 @@ describe("pen-login contract (device codes that expire at once)", () => {
     });
     expect(page.status).toBe(410);
     expect(page.body).toMatch(/pen login/);
+  });
+});
+
+describe("pen-login contract (tight per-source caps and JWKS refresh on every use)", () => {
+  let issuer: FakeIssuer;
+  let service: Service;
+  beforeAll(async () => {
+    ({ issuer, service } = await boot({
+      SOURCE_SESSION_CAP: "3",
+      SOURCE_DEVICE_CAP: "3",
+      JWKS_TTL_MS: "0",
+      JWKS_REFETCH_MS: "0",
+    }));
+  });
+  afterAll(async () => {
+    await service?.stop();
+    await issuer?.close();
+  });
+
+  /** A fresh browser from source that submits a live code; returns the status of the code POST. */
+  async function submitFrom(source: string): Promise<number> {
+    const started = await startDevice(service.url, await device());
+    const browser = new Browser(service.url, source);
+    const entry = await browser.get("/device");
+    return (
+      await browser.post("/device", { code: String(started.json.userCode), csrf: entry.csrf ?? "" })
+    ).status;
+  }
+
+  it("page loads create no session rows; a source past its live-session cap gets 429 while another source still signs in", async () => {
+    const source = freshSource();
+    // 10 page loads, then 4 sign-ins of 2 pages each, stay under the 20 pages a minute limit.
+    for (let i = 0; i < 5; i++) {
+      expect((await new Browser(service.url, source).get("/device")).status).toBe(200);
+      expect((await new Browser(service.url, source).get("/reset")).status).toBe(200);
+    }
+    expect([await submitFrom(source), await submitFrom(source), await submitFrom(source)]).toEqual([
+      303, 303, 303,
+    ]);
+    expect(await submitFrom(source)).toBe(429);
+    expect(await submitFrom(freshSource())).toBe(303);
+  });
+
+  it("a source past its live-device cap gets 429 on device start while another source still starts", async () => {
+    const source = freshSource();
+    const statuses = [];
+    for (let i = 0; i < 4; i++)
+      statuses.push((await startDevice(service.url, await device(), source)).status);
+    expect(statuses).toEqual([200, 200, 200, 429]);
+    expect((await startDevice(service.url, await device(), freshSource())).status).toBe(200);
+  });
+
+  it("a rotated Google key verifies after exactly one JWKS fetch", async () => {
+    await approved(service, issuer);
+    const rotated = rsaKey("key-c");
+    issuer.published.push(rotated);
+    const fetches = issuer.jwksFetches;
+    expect((await signIn(service, issuer, { signer: rotated })).callback.status).toBe(200);
+    expect(issuer.jwksFetches - fetches).toBe(1);
+    issuer.published.pop();
+  });
+
+  it("a failed or unreadable JWKS refresh keeps serving the cached keys", async () => {
+    await approved(service, issuer);
+    try {
+      issuer.jwksOverride = { status: 500, body: "{}" };
+      expect((await signIn(service, issuer)).callback.status).toBe(200);
+      issuer.jwksOverride = { status: 200, body: "not json" };
+      expect((await signIn(service, issuer)).callback.status).toBe(200);
+      issuer.jwksOverride = null;
+      expect((await signIn(service, issuer)).callback.status).toBe(200);
+    } finally {
+      issuer.jwksOverride = null;
+    }
   });
 });

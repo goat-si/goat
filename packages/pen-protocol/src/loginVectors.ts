@@ -8,6 +8,7 @@ import {
   fromBase64url,
   loginKid,
   pollProofMessage,
+  registerProofMessage,
   signAssertion,
   startProofMessage,
 } from "./login.ts";
@@ -47,6 +48,8 @@ export async function buildLoginVector() {
     exp: IAT + 600,
   };
   const assertion = await signAssertion(body, loginKey);
+  const meshId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const registerMessage = await registerProofMessage(fromBase64url(assertion.body), meshId);
   const member = {
     iss: LOGIN_URL,
     sub: body.sub,
@@ -157,6 +160,11 @@ export async function buildLoginVector() {
       ts: FORGET_TS,
       message: toHex(forgetMessage),
       proof: base64url(await node.sign(forgetMessage)),
+    },
+    register: {
+      meshId,
+      message: toHex(registerMessage),
+      proof: base64url(await node.sign(registerMessage)),
     },
     assertion: {
       bodyJson: new TextDecoder().decode(fromBase64url(assertion.body)),

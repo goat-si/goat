@@ -7,12 +7,13 @@ import {
   forgetProofMessage,
   fromBase64url,
   pollProofMessage,
+  registerProofMessage,
   signAssertion,
   startProofMessage,
 } from "@goat/pen-protocol/login";
-import { type Context, deviceTtl, limited, POLL_INTERVAL_S } from "./context.ts";
+import { type Context, limited, POLL_INTERVAL_S } from "./context.ts";
 import { json, readJson } from "./http.ts";
-import { Caps, type DeviceRow } from "./store.ts";
+import { Caps, type DeviceRow, type RegisterError } from "./store.ts";
 
 const NAME = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const MESH_ID = /^[a-z2-7]{26}$/;
@@ -42,7 +43,7 @@ async function verifyEd25519(
   }
 }
 
-export async function codeHash(deviceCode: Uint8Array): Promise<string> {
+async function codeHash(deviceCode: Uint8Array): Promise<string> {
   return base64url(await sha256(deviceCode));
 }
 
@@ -79,9 +80,12 @@ export async function start(ctx: Context, request: Request): Promise<Response> {
   if (!(await verifyEd25519(signPub, proof, startProofMessage(signPub, noisePub, name)))) {
     return json({ error: "bad_proof" }, 400);
   }
-  if (ctx.store.pendingDevices(ctx.now) >= Caps.DEVICES) return json({ error: "busy" }, 503);
+  if (ctx.store.liveDevicesFrom(ctx.source, ctx.now) >= ctx.limits.sourceDevices) {
+    return json({ error: "too_many_devices" }, 429);
+  }
+  if (ctx.store.liveDevices(ctx.now) >= Caps.DEVICES) return json({ error: "busy" }, 503);
   const deviceCode = crypto.getRandomValues(new Uint8Array(32));
-  const ttl = deviceTtl(ctx.env);
+  const ttl = ctx.limits.deviceTtlMs;
   const row = {
     code_hash: await codeHash(deviceCode),
     sign_pub: base64url(signPub),
@@ -94,7 +98,7 @@ export async function start(ctx: Context, request: Request): Promise<Response> {
   };
   for (let attempt = 0; attempt < 5; attempt++) {
     const userCode = newUserCode();
-    if (ctx.store.insertDevice({ ...row, user_code: userCode })) {
+    if (ctx.store.insertDevice({ ...row, user_code: userCode }, ctx.source)) {
       return json({
         deviceCode: base64url(deviceCode),
         userCode: formatUserCode(userCode),
@@ -141,7 +145,7 @@ async function mint(
     },
     signer.key,
   );
-  ctx.store.insertAssertion(await assertionHash(assertion), sub, device.name, iat + 600);
+  ctx.store.insertAssertion(await assertionHash(assertion), sub, device.name, iat + 600, ctx.now);
   return json({
     assertion,
     account: { sub, email },
@@ -156,22 +160,30 @@ export async function token(ctx: Context, request: Request): Promise<Response> {
   const proof = bytesOf(body?.proof, 64);
   if (!deviceCode || !proof) return json({ status: "invalid" }, 400);
   const hash = await codeHash(deviceCode);
-  const device = ctx.store.deviceByHash(hash);
-  if (!device) return json({ status: "expired" }, 410);
-  if (!(await verifyEd25519(fromBase64url(device.sign_pub), proof, pollProofMessage(deviceCode)))) {
+  const known = ctx.store.deviceByHash(hash);
+  if (!known) {
+    if (limited(ctx, "tokenMiss")) return json({ status: "rate_limited" }, 429);
+    return json({ status: "expired" }, 410);
+  }
+  if (!(await verifyEd25519(fromBase64url(known.sign_pub), proof, pollProofMessage(deviceCode)))) {
     return json({ status: "invalid" }, 400);
   }
-  if (device.status === "consumed" || ctx.now >= device.expires_at)
-    return json({ status: "expired" }, 410);
-  if (device.last_poll_at !== 0 && ctx.now - device.last_poll_at < POLL_INTERVAL_S * 1000) {
-    return json({ status: "slow_down" }, 429);
+  // No await from here until the outcome is recorded.
+  const { outcome, device } = ctx.store.poll(hash, ctx.now, POLL_INTERVAL_S * 1000);
+  switch (outcome) {
+    case "expired":
+      return json({ status: "expired" }, 410);
+    case "slow_down":
+      return json({ status: "slow_down" }, 429);
+    case "denied":
+      return json({ status: "denied" }, 403);
+    case "pending":
+      return json({ status: "pending" }, 428);
+    case "approved":
+      return device?.sub && device.email
+        ? mint(ctx, device, device.sub, device.email)
+        : json({ status: "expired" }, 410);
   }
-  ctx.store.setPolled(hash, ctx.now);
-  if (device.status === "denied") return json({ status: "denied" }, 403);
-  if (device.status === "pending" || !device.sub || !device.email)
-    return json({ status: "pending" }, 428);
-  if (!ctx.store.consume(hash)) return json({ status: "expired" }, 410);
-  return mint(ctx, device, device.sub, device.email);
 }
 
 function assertionOf(value: unknown): Assertion | null {
@@ -180,13 +192,23 @@ function assertionOf(value: unknown): Assertion | null {
   return typeof body === "string" && typeof sig === "string" ? { body, sig } : null;
 }
 
+const REGISTER_STATUS: Record<RegisterError, number> = {
+  unknown_assertion: 400,
+  assertion_used: 409,
+  issued_before_reset: 409,
+  mesh_mismatch: 409,
+  account_full: 409,
+};
+
 export async function register(ctx: Context, request: Request): Promise<Response> {
   if (limited(ctx, "registry")) return json({ error: "rate_limited" }, 429);
   const body = await readJson(request);
   const assertion = assertionOf(body?.assertion);
   const meshId = body?.meshId;
-  if (!assertion || typeof meshId !== "string" || !MESH_ID.test(meshId))
+  const proof = bytesOf(body?.proof, 64);
+  if (!assertion || !proof || typeof meshId !== "string" || !MESH_ID.test(meshId)) {
     return json({ error: "bad_request" }, 400);
+  }
   const signer = await ctx.loginKey();
   const checked = await checkAssertion(assertion, {
     keys: [signer.public],
@@ -195,25 +217,21 @@ export async function register(ctx: Context, request: Request): Promise<Response
     skew: 0,
   });
   if (!checked.ok) return json({ error: checked.reason }, 400);
-  const hash = await assertionHash(assertion);
-  const issued = ctx.store.assertion(hash);
-  if (!issued) return json({ error: "unknown_assertion" }, 400);
-  if (issued.used) return json({ error: "assertion_used" }, 409);
-  const current = ctx.store.meshOf(checked.body.sub);
-  if (current !== null && current !== meshId)
-    return json({ error: "mesh_mismatch", meshId: current }, 409);
-  if (!ctx.store.markAssertionUsed(hash)) return json({ error: "assertion_used" }, 409);
-  ctx.store.bindMesh(checked.body.sub, meshId, ctx.now);
-  ctx.store.upsertNode(
-    {
-      node_id: await nodeIdFromSignPub(fromBase64url(checked.body.signPub)),
-      sub: checked.body.sub,
-      sign_pub: checked.body.signPub,
-      noise_pub: checked.body.noisePub,
-      name: issued.name,
-    },
-    ctx.now,
-  );
+  const bodyBytes = fromBase64url(assertion.body);
+  const signPub = fromBase64url(checked.body.signPub);
+  if (!(await verifyEd25519(signPub, proof, await registerProofMessage(bodyBytes, meshId)))) {
+    return json({ error: "bad_proof" }, 400);
+  }
+  const registration = {
+    hash: await assertionHash(assertion),
+    sub: checked.body.sub,
+    meshId,
+    nodeId: await nodeIdFromSignPub(signPub),
+    signPub: checked.body.signPub,
+    noisePub: checked.body.noisePub,
+  };
+  const result = ctx.store.register(registration, ctx.now);
+  if (!result.ok) return json({ error: result.error }, REGISTER_STATUS[result.error]);
   return json({ ok: true, meshId });
 }
 
@@ -238,9 +256,9 @@ export async function forget(ctx: Context, request: Request): Promise<Response> 
   if (Math.abs(ctx.now - ts) > 120_000) return json({ error: "stale" }, 400);
   if (!(await verifyEd25519(by, proof, forgetProofMessage(nodeId, ts))))
     return json({ error: "bad_proof" }, 400);
+  const self = (await nodeIdFromSignPub(by)) === nodeId;
   const target = ctx.store.node(nodeId);
   if (!target) return json({ ok: true, removed: false });
-  const self = (await nodeIdFromSignPub(by)) === nodeId;
   const sibling = ctx.store.nodeBySignPub(base64url(by))?.sub === target.sub;
   if (!self && !sibling) return json({ error: "forbidden" }, 403);
   ctx.store.deleteNode(nodeId);
