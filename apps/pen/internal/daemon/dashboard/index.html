@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>pen 대시보드 · pen dashboard</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="top" id="top" hidden>
+      <div class="brand"><strong>pen</strong></div>
+      <div class="hd-item" id="hd-mesh"></div>
+      <div class="hd-item" id="hd-account"></div>
+      <div class="hd-item" id="hd-lock"></div>
+      <div class="hd-item" id="hd-pending"></div>
+      <div class="hd-spacer"></div>
+      <div class="hd-item" id="hd-self"></div>
+      <button id="logout" class="btn ghost" type="button">로그아웃 · Log out</button>
+    </header>
+    <div id="notice" class="notice" role="status" hidden></div>
+
+    <div id="gate" class="gate" hidden>
+      <div class="gate-card">
+        <h1 id="gate-title"></h1>
+        <p id="gate-text"></p>
+        <pre class="cmd" id="gate-cmd"></pre>
+      </div>
+    </div>
+
+    <main id="app" hidden>
+      <section class="panel members" aria-labelledby="members-h">
+        <div class="panel-hd">
+          <h2 id="members-h">멤버 · Members <span class="count" id="member-count"></span></h2>
+        </div>
+        <div class="table-wrap">
+          <table class="grid-table" id="members">
+            <thead>
+              <tr>
+                <th>이름 · Name</th>
+                <th>지문 · Fingerprint</th>
+                <th>상태 · Status</th>
+                <th>가입 경로 · Via</th>
+                <th>승인 · Admitted by</th>
+                <th>가입 · Joined</th>
+                <th>릴레이 · Relay</th>
+                <th class="actions"><span class="sr">작업 · Actions</span></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="members-empty"></div>
+        <p class="foot" id="members-foot"></p>
+        <div class="err" id="members-err" hidden></div>
+      </section>
+
+      <aside class="side">
+        <section class="panel" aria-labelledby="relays-h">
+          <div class="panel-hd"><h2 id="relays-h">릴레이 · Relays</h2></div>
+          <ul class="rows" id="relays"></ul>
+          <form id="relay-add" class="inline-form" autocomplete="off">
+            <input
+              id="relay-url"
+              class="input mono"
+              type="url"
+              required
+              placeholder="https://relay.example"
+              aria-label="릴레이 URL · Relay URL"
+            />
+            <button class="btn" type="submit">추가 · Add</button>
+          </form>
+          <div class="err" id="relays-err" hidden></div>
+        </section>
+
+        <section class="panel" id="pending-panel" aria-labelledby="pending-h">
+          <div class="panel-hd"><h2 id="pending-h">승인 대기 · Pending approvals</h2></div>
+          <div id="pending"></div>
+          <div class="err" id="pending-err" hidden></div>
+        </section>
+
+        <section class="panel" aria-labelledby="add-h">
+          <div class="panel-hd"><h2 id="add-h">기기 추가 · Add a machine</h2></div>
+          <h3>초대로 · By invite</h3>
+          <form id="invite-form" class="inline-form">
+            <select id="invite-ttl" class="input" aria-label="유효 시간 · Valid for">
+              <option value="600000">10분 · 10 min</option>
+              <option value="3600000">1시간 · 1 hour</option>
+              <option value="86400000">24시간 · 24 hours</option>
+            </select>
+            <button class="btn" type="submit" id="invite-btn">초대 만들기 · Create invite</button>
+          </form>
+          <div id="invite-out"></div>
+          <div class="err" id="invite-err" hidden></div>
+          <h3>Google 로그인으로 · By Google sign-in</h3>
+          <div id="login-out"></div>
+        </section>
+      </aside>
+
+      <section class="panel events" aria-labelledby="events-h">
+        <div class="panel-hd"><h2 id="events-h">최근 기록 · Recent events</h2></div>
+        <div class="table-wrap">
+          <table class="grid-table" id="events">
+            <thead>
+              <tr>
+                <th>시각 · Time</th>
+                <th>기록 · Event</th>
+                <th>대상 · Subject</th>
+                <th>서명 · Signed by</th>
+                <th>비고 · Note</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="foot">
+          서명된 기록 중 최근 50개 (호스트 키 기록 제외) · The 50 newest signed records, host key
+          records left out.
+        </p>
+      </section>
+    </main>
+
+    <dialog id="dlg-approve" aria-labelledby="ap-h">
+      <form method="dialog" id="ap-form" autocomplete="off">
+        <h2 id="ap-h">기기 승인 · Approve a machine</h2>
+        <dl class="facts" id="ap-facts"></dl>
+        <p>
+          새 기기의 터미널에 표시된 지문 전체(4자리 10묶음)를 붙여 넣으세요. 이 페이지는 전체 지문을
+          보여 주지 않으므로, 일치하면 바로 그 기기를 승인한다는 뜻입니다.
+        </p>
+        <p class="en">
+          Paste the full fingerprint (10 groups of 4) that pen login printed on the new machine's
+          terminal. This page never shows it, so a match means you are approving the machine in
+          front of you.
+        </p>
+        <label class="field">
+          <span>전체 지문 · Full fingerprint</span>
+          <input
+            id="ap-fp"
+            class="input mono wide"
+            spellcheck="false"
+            placeholder="XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX"
+          />
+        </label>
+        <p class="check" id="ap-check"></p>
+        <p class="warn">
+          이 기기를 승인할까요? 메시의 모든 기기에 접근할 수 있게 됩니다.<br /><span
+            class="en"
+            id="ap-question"
+          ></span>
+        </p>
+        <div class="err" id="ap-err" hidden></div>
+        <div class="ok-box" id="ap-ok" hidden></div>
+        <div class="dlg-actions">
+          <button class="btn ghost" value="cancel" id="ap-cancel">취소 · Cancel</button>
+          <button class="btn primary" type="button" id="ap-go" disabled>승인 · Approve</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-revoke" aria-labelledby="rv-h">
+      <form method="dialog" id="rv-form" autocomplete="off">
+        <h2 id="rv-h"></h2>
+        <p id="rv-text"></p>
+        <label class="checkline">
+          <input type="checkbox" id="rv-compromised" />
+          <span
+            >유출됨 (--compromised): 이 기기가 승인한 모든 기기와 계정 연결까지 제거합니다. 잠금이
+            켜져 있었다면 그대로 유지됩니다.<br />
+            <span class="en"
+              >Compromised: also removes every machine it admitted and its account binding; the mesh
+              stays locked if it was.</span
+            ></span
+          >
+        </label>
+        <label class="field">
+          <span id="rv-label"></span>
+          <input id="rv-name" class="input mono" spellcheck="false" />
+        </label>
+        <div class="err" id="rv-err" hidden></div>
+        <div class="ok-box" id="rv-ok" hidden></div>
+        <div class="dlg-actions">
+          <button class="btn ghost" value="cancel" id="rv-cancel">취소 · Cancel</button>
+          <button class="btn danger" type="button" id="rv-go" disabled>제거 · Revoke</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-confirm" aria-labelledby="cf-h">
+      <form method="dialog">
+        <h2 id="cf-h"></h2>
+        <p id="cf-ko"></p>
+        <p class="en" id="cf-en"></p>
+        <div class="dlg-actions">
+          <button class="btn ghost" value="no">취소 · Cancel</button>
+          <button class="btn primary" value="yes" id="cf-yes"></button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

@@ -36,6 +36,7 @@ const usage = `usage: pen <command> [flags]
   pipe <node> <port>                      connect stdin/stdout to a member's local port
   forward <localPort> <node>:<port>       forward a local port to a member's port
   ssh-config [--write|--install|--uninstall]   ssh_config for pen-<name> hosts (--install puts it first in ~/.ssh/config)
+  dashboard [--no-open] [--stop]          open this node's local management page, or close it
   relay add|rm <url>, relay ls            change or list this node's relays
   relay serve [--listen :443] (--autocert <host> --cache <dir> | --cert f --key f | --plain) [--public-origin wss://host]
                                           run a relay
@@ -51,7 +52,7 @@ func main() {
 		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,
 		"ssh-config": cli.RunSSHConfig, "relay": cli.RunRelay,
 		"login": cli.RunLogin, "logout": cli.RunLogout, "lock": cli.RunLock, "approve": cli.RunApprove,
-		"deny": cli.RunDeny, "account": cli.RunAccount,
+		"deny": cli.RunDeny, "account": cli.RunAccount, "dashboard": cli.RunDashboard,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

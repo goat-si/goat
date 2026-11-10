@@ -91,6 +91,11 @@ type Daemon struct {
 	// sshUser is published in this node's hostkeys records.
 	sshUser string
 
+	// dash is the running dashboard (nil when none); dashClosed refuses new ones once Run ends.
+	dashMu     sync.Mutex
+	dash       *dashboard
+	dashClosed bool
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	exitErr  error
@@ -264,6 +269,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}()
 	started := d.now()
 	d.writeDaemonJSON(started)
+	// A redirect file left by a daemon that died holds a token nobody serves.
+	os.Remove(d.st.Path(DashboardFile))
 	d.spawn(func() { d.serveControl(ctx, ln) })
 	d.startUplinks()
 	d.spawn(func() { d.acceptLoop(ctx) })
@@ -278,6 +285,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	case <-d.stopCh:
 	}
+	d.stopDashboard(true)
 	d.stopUplinks("stopped")
 	cancel()
 	ln.Close()

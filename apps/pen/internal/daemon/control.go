@@ -236,6 +236,10 @@ func (d *Daemon) do(ctx context.Context, req Request) (any, error) {
 		return d.ls(), nil
 	case "relays":
 		return d.setRelays(req.Relays)
+	case "dashboard":
+		return d.openDashboard()
+	case "dashboard-stop":
+		return map[string]bool{"stopped": d.stopDashboard(false)}, nil
 	}
 	return nil, fmt.Errorf("unknown op %q", req.Op)
 }
