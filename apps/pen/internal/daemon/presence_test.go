@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
 )
 
@@ -55,8 +54,7 @@ func TestTheDashboardRefreshesPresenceAtMostEvery30sWhileItIsPolled(t *testing.T
 	a := founder(t, ctx, rs, "a", clk)
 	refreshed := make(chan struct{}, 4)
 	a.d.opt.PresenceDone = func() { refreshed <- struct{}{} }
-	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
-	_ = b
+	joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
 	d, tok := openDash(t, a)
 	bearer := d.login(tok)
 	want(t, "first state", d.get("/api/state", bearer), http.StatusOK)
@@ -73,5 +71,4 @@ func TestTheDashboardRefreshesPresenceAtMostEvery30sWhileItIsPolled(t *testing.T
 	clk.advance(31 * time.Second)
 	want(t, "state after 31 s", d.get("/api/state", bearer), http.StatusOK)
 	<-refreshed
-	_ = ident.B64
 }
