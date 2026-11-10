@@ -17,7 +17,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
-func TestUpForegroundAfterLeaveExitsZeroWithoutANewIdentityOrMesh(t *testing.T) {
+func TestUpAsTheServiceAfterLeaveExitsZeroWithoutANewIdentityOrMesh(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PEN_HOME", dir)
 	st, err := state.OpenDir(dir)
@@ -28,8 +28,11 @@ func TestUpForegroundAfterLeaveExitsZeroWithoutANewIdentityOrMesh(t *testing.T) 
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if code := RunUp([]string{"--foreground"}, &out, &errOut); code != 0 {
+	if code := RunUp([]string{"--foreground", "--service"}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d (%s); a service restart after leave must not loop", code, errOut.String())
+	}
+	if code := RunUp([]string{"--foreground"}, &out, &errOut); code == 0 {
+		t.Fatal("pen up --foreground after leave exited 0 for a person or another supervisor")
 	}
 	if _, err := st.LoadIdentity(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a new identity was created after leave: %v", err)
@@ -143,12 +146,38 @@ func TestUpAsTheServiceWithARefusedRelayListExitsZeroWithTheReason(t *testing.T)
 
 // A person or another supervisor running pen up --foreground must not read a refused start as success.
 func TestUpForegroundWithARefusedOrMissingRelayListFails(t *testing.T) {
+	t.Setenv("SYSTEMD_EXEC_PID", "")
+	t.Setenv("XPC_SERVICE_NAME", "")
 	for _, relay := range []string{"http://relay.example.com", ""} {
 		st := storeWithRelay(t, relay)
 		t.Setenv("PEN_HOME", st.Dir)
 		var out, errOut bytes.Buffer
 		if code := RunUp([]string{"--foreground"}, &out, &errOut); code == 0 {
 			t.Fatalf("relay %q: exit 0 (%q); want a failure", relay, errOut.String())
+		}
+	}
+}
+
+// A unit written before --service runs plain pen up --foreground. Started by systemd (which sets
+// SYSTEMD_EXEC_PID to the pid it started) or by launchd (XPC_SERVICE_NAME is the job's label), a
+// refused start still exits 0 so an upgraded machine does not restart it every 2 s; a shell that
+// only inherited systemd's variable does not count.
+func TestUpForegroundStartedByAServiceManagerExitsZeroOnARefusedRelayList(t *testing.T) {
+	for _, c := range []struct {
+		pid, label string
+		want       bool
+	}{
+		{strconv.Itoa(os.Getpid()), "", true},
+		{"", launchdLabel, true},
+		{strconv.Itoa(os.Getpid() + 1), "com.apple.Terminal", false},
+	} {
+		st := storeWithRelay(t, "http://relay.example.com")
+		t.Setenv("PEN_HOME", st.Dir)
+		t.Setenv("SYSTEMD_EXEC_PID", c.pid)
+		t.Setenv("XPC_SERVICE_NAME", c.label)
+		var out, errOut bytes.Buffer
+		if code := RunUp([]string{"--foreground"}, &out, &errOut); (code == 0) != c.want {
+			t.Fatalf("SYSTEMD_EXEC_PID=%q XPC_SERVICE_NAME=%q: exit %d, want exit 0 %v", c.pid, c.label, code, c.want)
 		}
 	}
 }
