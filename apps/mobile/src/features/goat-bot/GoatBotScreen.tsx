@@ -195,11 +195,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         <GoatBotUpdateLabel at={row.createdAt} name={botName} emoji={props.botEmoji} />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
-      {/* The shared rows fold a question once it is answered: the card settles to the answer. */}
       {row.options.length > 0 || row.answer !== undefined ? (
         <GoatBotQuestionCard
-          options={row.options}
-          answered={row.answer}
+          row={row}
           canAnswer={props.canSend}
           onPick={(answer) =>
             props.onSend(

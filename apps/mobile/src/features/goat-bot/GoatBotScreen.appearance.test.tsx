@@ -258,7 +258,7 @@ it("keeps answer chips and the send button off the retired blue message palette"
   appearance.mode = "dark";
   const rowView = await render(<GoatBotTimelineRow {...props} row={{ ...bot, tone: "reply" }} />);
   const chip = rowView.container.querySelector("button");
-  expect(chip?.textContent).toBe("Try again");
+  expect(chip?.getAttribute("aria-label")).toBe("A. Try again");
   expect(rowView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await rowView.unmount();
 
