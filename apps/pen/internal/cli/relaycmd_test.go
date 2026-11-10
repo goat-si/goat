@@ -44,6 +44,7 @@ func TestRelayServeFlagsAreValidatedWithoutACME(t *testing.T) {
 		"autocert off port 443":   {"--autocert", "a.sslip.io", "--cache", "/tmp/x", "--listen", ":8443"},
 		"zero socket cap":         {"--plain", "--listen", "127.0.0.1:0", "--max-sockets", "0"},
 		"negative per-IP cap":     {"--plain", "--listen", "127.0.0.1:0", "--max-per-ip", "-1"},
+		"zero queue budget":       {"--plain", "--listen", "127.0.0.1:0", "--max-queued-mib", "0"},
 		"zero unauth cap":         {"--plain", "--listen", "127.0.0.1:0", "--max-unauth-per-node", "0"},
 	}
 	for name, args := range bad {

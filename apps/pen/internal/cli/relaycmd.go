@@ -131,6 +131,7 @@ type serveConfig struct {
 	maxSockets   int
 	maxPerIP     int
 	maxUnauth    int
+	maxQueuedMiB int
 	// readTimeout and limits override the defaults in tests.
 	readTimeout time.Duration
 	limits      *relayserver.Limits
@@ -150,14 +151,15 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 	fs.IntVar(&c.maxSockets, "max-sockets", relayserver.DefaultMaxSockets, "most sockets the relay holds at once")
 	fs.IntVar(&c.maxPerIP, "max-per-ip", relayserver.DefaultMaxPerIP, "most sockets from one IPv4 address or IPv6 /64")
 	fs.IntVar(&c.maxUnauth, "max-unauth-per-node", relayserver.DefaultMaxUnauthPerNode, "most unauthenticated uplinks per node id (a newer one evicts the oldest)")
+	fs.IntVar(&c.maxQueuedMiB, "max-queued-mib", relayserver.DefaultMaxQueued>>20, "most MiB all sockets' outbound queues hold together; data past it ends its session 4408")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
 	if fs.NArg() != 0 {
 		return c, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
-	if c.maxSockets < 1 || c.maxPerIP < 1 || c.maxUnauth < 1 {
-		return c, errors.New("--max-sockets, --max-per-ip and --max-unauth-per-node must be at least 1")
+	if c.maxSockets < 1 || c.maxPerIP < 1 || c.maxUnauth < 1 || c.maxQueuedMiB < 1 {
+		return c, errors.New("--max-sockets, --max-per-ip, --max-unauth-per-node and --max-queued-mib must be at least 1")
 	}
 	modes := 0
 	for _, on := range []bool{c.autocertHost != "", c.certFile != "" || c.keyFile != "", c.plain} {
@@ -255,6 +257,7 @@ func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(add
 	rs := relayserver.New(limits)
 	rs.PublicOrigin = c.publicOrigin
 	rs.MaxSockets, rs.MaxPerIP, rs.MaxUnauthPerNode = c.maxSockets, c.maxPerIP, c.maxUnauth
+	rs.MaxQueued = c.maxQueuedMiB << 20
 	rs.Hooks = hooks
 	readTimeout := 30 * time.Second
 	if c.readTimeout > 0 {

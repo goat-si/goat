@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -88,6 +89,11 @@ type Server struct {
 	MaxSockets       int
 	MaxPerIP         int
 	MaxUnauthPerNode int
+	// MaxQueued caps the bytes all sockets' outbound queues hold together, so slow readers on many
+	// sockets cannot grow the process past its memory limit (0 means DefaultMaxQueued).
+	MaxQueued int
+
+	queued atomic.Int64
 
 	mu     sync.Mutex
 	rooms  map[string]*room
@@ -103,6 +109,7 @@ const (
 	DefaultMaxSockets       = 4096
 	DefaultMaxPerIP         = 64
 	DefaultMaxUnauthPerNode = 4
+	DefaultMaxQueued        = 192 << 20
 )
 
 func orDefault(v, d int) int {
@@ -151,6 +158,16 @@ func sourceKey(remoteAddr string) string {
 }
 
 var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
+
+// Queued is the bytes every socket's outbound queue holds now, per-item overhead included.
+func (s *Server) Queued() int64 { return s.queued.Load() }
+
+func (s *Server) maxQueued() int64 { return int64(orDefault(s.MaxQueued, DefaultMaxQueued)) }
+
+// fits reports whether n more bytes of session data may be queued without passing MaxQueued.
+// Control messages (pongs, acks, OPEN and CLOSE) are small and bounded per socket, so they are
+// counted but never refused.
+func (s *Server) fits(n int) bool { return s.queued.Load()+int64(n+itemOverhead) <= s.maxQueued() }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// With a public origin, the request's Host must name it: uplinks sign that origin, and a relay
@@ -211,7 +228,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
-	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout)
+	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, &s.queued)
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -664,6 +681,10 @@ func (rm *room) toClient(c *sock, payload []byte) {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
+	if !rm.srv.fits(len(payload)) {
+		rm.endSession(c, wire.CodeTimeout)
+		return
+	}
 	c.out.binary(payload)
 	c.sent += uint64(len(payload))
 }
@@ -692,7 +713,7 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	if qMine+cost > LightSession {
 		qLimit = SocketWindow - LightSession*others
 	}
-	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit {
+	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit || !rm.srv.fits(len(frame)) {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
@@ -798,14 +819,16 @@ type wsWriter interface {
 type outq struct {
 	ws      wsWriter
 	timeout time.Duration
-	mu      sync.Mutex
-	items   []outItem
-	bytes   int
-	bySID   map[uint32]int
-	pongs   int
-	done    bool
-	wake    chan struct{}
-	ended   chan struct{}
+	// total is the server-wide count of queued bytes this queue adds to (nil in unit tests).
+	total *atomic.Int64
+	mu    sync.Mutex
+	items []outItem
+	bytes int
+	bySID map[uint32]int
+	pongs int
+	done  bool
+	wake  chan struct{}
+	ended chan struct{}
 }
 
 type outItem struct {
@@ -820,10 +843,17 @@ type outItem struct {
 // more memory than the limit says.
 const itemOverhead = 64
 
-func newOutq(ws wsWriter, timeout time.Duration) *outq {
-	q := &outq{ws: ws, timeout: timeout, wake: make(chan struct{}, 1), ended: make(chan struct{})}
+func newOutq(ws wsWriter, timeout time.Duration, total *atomic.Int64) *outq {
+	q := &outq{ws: ws, timeout: timeout, total: total, wake: make(chan struct{}, 1), ended: make(chan struct{})}
 	go q.run()
 	return q
+}
+
+// count adds n bytes to the server-wide total.
+func (q *outq) count(n int) {
+	if q.total != nil && n != 0 {
+		q.total.Add(int64(n))
+	}
 }
 
 func (q *outq) push(it outItem) {
@@ -840,6 +870,8 @@ func (q *outq) push(it outItem) {
 		q.done = true
 	} else if q.bytes+len(it.data)+itemOverhead > SocketWindow+RelayHeadroom+queueSlack {
 		q.done = true
+		q.count(-q.bytes)
+		q.bytes = 0
 		q.items, q.bySID = nil, nil
 		q.mu.Unlock()
 		q.ws.CloseNow()
@@ -847,6 +879,7 @@ func (q *outq) push(it outItem) {
 	}
 	q.items = append(q.items, it)
 	q.bytes += len(it.data) + itemOverhead
+	q.count(len(it.data) + itemOverhead)
 	if it.sid != 0 {
 		if q.bySID == nil {
 			q.bySID = map[uint32]int{}
@@ -903,6 +936,7 @@ func (q *outq) run() {
 		it := q.items[0]
 		q.items = q.items[1:]
 		q.bytes -= len(it.data) + itemOverhead
+		q.count(-(len(it.data) + itemOverhead))
 		if it.sid != 0 {
 			if q.bySID[it.sid] -= len(it.data) + itemOverhead; q.bySID[it.sid] == 0 {
 				delete(q.bySID, it.sid)
@@ -937,6 +971,8 @@ func (q *outq) run() {
 		if err != nil {
 			q.ws.CloseNow()
 			q.mu.Lock()
+			q.count(-q.bytes)
+			q.bytes = 0
 			q.done, q.items, q.bySID = true, nil, nil
 			q.mu.Unlock()
 			return

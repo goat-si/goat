@@ -8,7 +8,7 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/pen-relay.env
-ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert ${PEN_RELAY_HOST} --cache /var/lib/pen-relay/acme
+ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert ${PEN_RELAY_HOST} --cache /var/lib/pen-relay/acme --max-queued-mib 192
 DynamicUser=yes
 StateDirectory=pen-relay
 StateDirectoryMode=0700
@@ -26,7 +26,6 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
-ProcSubset=pid
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
@@ -38,6 +37,8 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 UMask=0077
 LimitNOFILE=65536
+# Queued data is capped at 192 MiB (--max-queued-mib); the rest covers up to 4096 sockets' buffers,
+# goroutines and in-flight reads, and the Go runtime. Raise both together.
 MemoryMax=512M
 TasksMax=256
 Restart=on-failure
