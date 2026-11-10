@@ -58,12 +58,20 @@ func RunDashboard(args []string, stdout, stderr io.Writer) int {
 	if err := daemon.Call(st, daemon.Request{Op: "dashboard"}, &r); err != nil {
 		return fail(stderr, err)
 	}
-	fmt.Fprintf(stdout, "pen dashboard (this link works once, for 10 minutes, on this machine only):\n  %s\n", r.URL)
+	printLink := func() {
+		fmt.Fprintf(stdout, "pen dashboard (this link works once, for 10 minutes, on this machine only):\n  %s\n", r.URL)
+	}
 	if *noOpen {
+		printLink()
 		return 0
 	}
+	// The link holds the one-time token; printed only when no browser took it, so it stays out of
+	// the terminal's scrollback otherwise.
 	if err := openFile(r.File); err != nil {
+		printLink()
 		fmt.Fprintf(stdout, "open the link above in a browser on this machine (%v)\n", err)
+		return 0
 	}
+	fmt.Fprintln(stdout, "opened the dashboard in your browser; pen dashboard --stop closes it and ends every session")
 	return 0
 }
