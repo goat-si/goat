@@ -11,7 +11,7 @@ export function goatBotChoiceLetter(index: number): string {
 /** The composer's hint while a question in view still takes a pick; null otherwise. */
 export function goatBotOpenQuestionPlaceholder(rows: ReadonlyArray<GoatBotRow>): string | null {
   return rows.some((row) => row.kind === "bot" && row.options.length > 0)
-    ? "Answer the question, or ask something else"
+    ? "Answer, or ask something else"
     : null;
 }
 
