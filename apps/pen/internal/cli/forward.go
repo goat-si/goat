@@ -15,7 +15,9 @@ import (
 	"syscall"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/session"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/stream"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
@@ -60,6 +62,13 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	return runForward(ctx, ln, st, p, m, port, stdout, stderr, nil)
+}
+
+// runForward serves ln until ctx ends or m is revoked; connDone (may be nil) runs after each connection's last output.
+func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, m mesh.Member, port int, stdout, stderr io.Writer, connDone func()) int {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
 	defer stopWatch()
 	var mu sync.Mutex
@@ -93,6 +102,9 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 		go func() {
+			if connDone != nil {
+				defer connDone()
+			}
 			tc := c.(*net.TCPConn)
 			defer tc.Close()
 			sec, err := daemon.OpenTCP(ctx, p.relays, p.id, m, port)
@@ -113,7 +125,8 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 				delete(open, sec)
 				mu.Unlock()
 			}()
-			if err := stream.Splice(ctx, sec, tc, tc, tc.CloseWrite); err != nil && !wasRevoked.Load() {
+			lc := localConn{tc}
+			if err := stream.Splice(ctx, sec, lc, lc, lc.CloseWrite); err != nil && !wasRevoked.Load() && !clientGone(err) {
 				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
 			}
 		}()
