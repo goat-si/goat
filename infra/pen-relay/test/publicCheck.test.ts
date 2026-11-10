@@ -2,12 +2,20 @@
 // A deploy publishes infra/pen-relay/public as is, so a local test build (loopback relays) or an
 // install.sh whose version has no binaries must never go out.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 const script = NodePath.resolve(import.meta.dirname, "../scripts/check-public.ts");
+
+const archives = [
+  "pen-linux-amd64.gz",
+  "pen-linux-arm64.gz",
+  "pen-darwin-arm64.gz",
+  "pen-darwin-amd64.gz",
+];
 
 function publicDir(relays: string, version: string, withBinaries: boolean) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-public-"));
@@ -22,11 +30,14 @@ function publicDir(relays: string, version: string, withBinaries: boolean) {
     ].join("\n"),
   );
   if (withBinaries) {
-    NodeFS.mkdirSync(NodePath.join(dir, "dl", version), { recursive: true });
-    NodeFS.writeFileSync(
-      NodePath.join(dir, "dl", version, "SHA256SUMS"),
-      "x  pen-linux-amd64.gz\n",
-    );
+    const dl = NodePath.join(dir, "dl", version);
+    NodeFS.mkdirSync(dl, { recursive: true });
+    const sums = archives.map((name) => {
+      const body = Buffer.from(`binary ${name}`);
+      NodeFS.writeFileSync(NodePath.join(dl, name), body);
+      return `${NodeCrypto.createHash("sha256").update(body).digest("hex")}  ${name}\n`;
+    });
+    NodeFS.writeFileSync(NodePath.join(dl, "SHA256SUMS"), sums.join(""));
   }
   return dir;
 }
@@ -61,5 +72,26 @@ describe("pre-deploy check of public/", () => {
     const r = run(publicDir("https://a.example", "0.0.0-check", false));
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("0.0.0-check");
+  });
+
+  it("refuses a release whose archives are missing or do not match SHA256SUMS", () => {
+    const missing = publicDir("https://a.example", "1.2.3", true);
+    NodeFS.rmSync(NodePath.join(missing, "dl", "1.2.3", "pen-darwin-amd64.gz"));
+    const r1 = run(missing);
+    expect(r1.status).toBe(1);
+    expect(r1.stderr).toContain("pen-darwin-amd64.gz");
+
+    const changed = publicDir("https://a.example", "1.2.3", true);
+    NodeFS.writeFileSync(NodePath.join(changed, "dl", "1.2.3", "pen-linux-arm64.gz"), "other");
+    const r2 = run(changed);
+    expect(r2.status).toBe(1);
+    expect(r2.stderr).toContain("pen-linux-arm64.gz");
+
+    const unlisted = publicDir("https://a.example", "1.2.3", true);
+    const sums = NodePath.join(unlisted, "dl", "1.2.3", "SHA256SUMS");
+    NodeFS.writeFileSync(sums, NodeFS.readFileSync(sums, "utf8").split("\n").slice(1).join("\n"));
+    const r3 = run(unlisted);
+    expect(r3.status).toBe(1);
+    expect(r3.stderr).toContain("pen-linux-amd64.gz");
   });
 });
