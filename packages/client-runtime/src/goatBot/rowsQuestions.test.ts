@@ -463,6 +463,17 @@ describe("a question the person answered", () => {
       text: "You: Release",
       at: "2026-10-12T12:00:02Z",
     });
+    // Also when the bot said something else between the question and the pick.
+    const withStatus = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([...asked, bot("s1", "2026-10-12T12:00:01.500Z", "Still here")]),
+        pendingInputs: [pending("Release", "sending")],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(
+      goatBotConversationPreview({ rows: withStatus, lastVisitedAt: null, active: true }),
+    ).toMatchObject({ text: "You: Release", at: "2026-10-12T12:00:02Z" });
   });
 
   it("shows a pick sent to a task's open question inside it while the task has not seen it", () => {
@@ -487,6 +498,27 @@ describe("a question the person answered", () => {
       answerIndex: 1,
       answerSending: true,
     });
+    // Recorded but not yet seen by the task (its card is older than the pick): still the pick.
+    const unseen = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          notice("n1", "2026-10-12T12:00:00Z"),
+          ...asked,
+          user("u1", "2026-10-12T12:00:02Z", "Skip"),
+        ]),
+        pendingInputs: [],
+        readers: readers(
+          {
+            b1: routed,
+            u1: { tone: "reply", readAt: null, requestKey: "in-1", taskId: "proposal" },
+          },
+          { n1: { ...open, updatedAt: "2026-10-12T12:00:00Z" } },
+        ),
+        taskId: null,
+      }),
+    );
+    expect(unseen.filter((row) => row.kind === "user")).toEqual([]);
+    expect(unseen.find((row) => row.id === "b1")).toMatchObject({ answerIndex: 1 });
   });
 
   it("keeps a later message that only matches a choice as the person's own message", () => {

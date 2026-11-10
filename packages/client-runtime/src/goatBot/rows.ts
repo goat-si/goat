@@ -208,10 +208,16 @@ export function goatBotConversationPreview(input: {
 }): GoatBotConversationPreview | null {
   const last = input.rows.findLast((row) => row.kind !== "day" && row.kind !== "event");
   if (!last) return null;
-  // A pick shown inside its question is still the person's newest message.
+  // A pick shown inside its question is still the person's message, newest when nothing came after.
+  const lastAt = last.kind === "task" ? last.card.updatedAt : last.createdAt;
+  const newestPick = input.rows.findLast(
+    (row) => row.kind === "bot" && row.answerIndex !== undefined && row.answeredAt !== undefined,
+  );
   const picked =
-    last.kind === "bot" && last.answerIndex !== undefined && last.answeredAt !== undefined
-      ? { answer: last.answer ?? "", at: last.answeredAt }
+    newestPick?.kind === "bot" &&
+    newestPick.answeredAt !== undefined &&
+    Date.parse(newestPick.answeredAt) >= Date.parse(lastAt)
+      ? { answer: newestPick.answer ?? "", at: newestPick.answeredAt }
       : null;
   const visitedAt = input.lastVisitedAt
     ? Date.parse(input.lastVisitedAt)
@@ -232,7 +238,7 @@ export function goatBotConversationPreview(input: {
           : last.kind === "bot"
             ? goatBotPreviewText(last.text)
             : `${last.card.statusLabel}: ${last.card.title}`,
-    at: picked?.at ?? (last.kind === "task" ? last.card.updatedAt : last.createdAt),
+    at: picked?.at ?? lastAt,
     unread,
   };
 }
