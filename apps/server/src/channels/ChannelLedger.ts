@@ -395,7 +395,7 @@ export class ChannelLedger extends Context.Service<
     readonly approvalCodeForRequest: (
       requestId: string,
     ) => Effect.Effect<
-      { readonly code: string; readonly issuedAt: string } | undefined,
+      { readonly code: string; readonly issuedAt: string; readonly delivered: boolean } | undefined,
       ChannelLedgerError
     >;
     /** The request a code was issued for in this conversation, if any. */
@@ -1555,14 +1555,16 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(toLedgerError("issueApprovalCode"))),
 
     approvalCodeForRequest: (requestId) =>
-      sql<{ readonly value_json: string; readonly updated_at: string }>`
-        SELECT value_json, updated_at FROM channel_runtime_state
-        WHERE key = ${"approval-code-of:" + requestId}
+      sql<{ readonly value_json: string; readonly updated_at: string; readonly state: string }>`
+        SELECT code.value_json, code.updated_at, card.state FROM channel_runtime_state AS code
+        LEFT JOIN channel_outbox AS card ON card.cause_key = ${"approval:" + requestId}
+        WHERE code.key = ${"approval-code-of:" + requestId}
       `.pipe(
         Effect.map((rows) => {
           const row = rows[0];
           if (row === undefined) return undefined;
-          return { code: decodeApprovalOf(row.value_json).code, issuedAt: row.updated_at };
+          const { code } = decodeApprovalOf(row.value_json);
+          return { code, issuedAt: row.updated_at, delivered: row.state === "delivered" };
         }),
         Effect.mapError(toLedgerError("approvalCodeForRequest")),
       ),

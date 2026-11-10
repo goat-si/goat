@@ -103,10 +103,11 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
   running in GOAT on another machine. Subagents that run on another service
   are not counted.
 - When work needs an approval, GOAT Bot sends a card saying what the agent
-  wants to do. Tap Approve or Deny in GOAT. In Slack, tap the button or reply
-  with its number (`2` is the second choice), or reply "approve" or "deny".
-  The same number works in iMessage, which has no buttons. If several
-  approvals are waiting, add the card's code, such as "approve A2". Only
+  wants to do. Tap Deny or Approve in GOAT. In Slack, tap the button or reply
+  with the words the card shows, such as "deny A1", or just "approve" or
+  "deny". iMessage, which has no buttons, takes the same words. An approval
+  never takes a number. If several approvals are waiting, or the bot isn't
+  sure you saw the card, it asks which one by its code. Only
   people with the same access as whoever asked for the work can answer. An
   approval on another GOAT machine is sent there; if that machine can't take
   it, answer it in that thread.
@@ -154,7 +155,8 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
 
 GOAT can read direct text messages from allowed iMessage handles on the Mac running its server
 and reply in the same conversation. Group chats and attachments are not supported. An approval
-or question lists choices as `1.`, `2.`, and so on; reply with that number to choose it. Give the
+names the words to reply with; a question lists choices as `1.`, `2.`, and so on, and you reply
+with that number to choose it. Give the
 app that launches the server **Full Disk Access** to read Messages. macOS asks separately for
 **Automation** access when GOAT sends through Messages; Messages must be signed in.
 

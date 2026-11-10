@@ -134,7 +134,7 @@ export const approvalCard = (input: {
   };
 };
 
-/** The question asked when a bare "approve" could mean more than one card. */
+/** The question asked when a bare "approve" could mean more than one card, or one not yet shown. */
 export const whichApproval = (
   cards: ReadonlyArray<{ readonly card: OpenApprovalCard; readonly code: string }>,
   decision: ApprovalReply["decision"],
@@ -143,7 +143,9 @@ export const whichApproval = (
   const shown = cards.slice(0, 4);
   return {
     text:
-      "More than one approval is waiting. Which one?\n" +
+      (cards.length > 1
+        ? "More than one approval is waiting. Which one?\n"
+        : "Which approval do you mean?\n") +
       shown.map((entry) => "- " + entry.code + ": " + entry.card.task.title).join("\n"),
     options: shown.map((entry) => verb + " " + entry.code),
   };

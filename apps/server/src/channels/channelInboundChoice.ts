@@ -22,9 +22,9 @@ export const makeInboundChoices = (
   threads?: ThreadManagement.ThreadManagementService["Service"],
 ) => {
   /**
-   * The numbered list a Slack or iMessage reply of "2" refers to: the latest open approval
-   * card or question in this conversation. Cards that were never sent have no code and are
-   * skipped. Questions come from the recent tasks plus any older task still needing a person.
+   * The numbered list a Slack or iMessage reply of "2" refers to: the latest open question, or
+   * the latest approval card the person was shown, which takes no number. Cards not confirmed
+   * delivered are skipped. Questions come from the recent tasks plus any older task needing one.
    */
   const deliveredChoices = Effect.fn("channel.deliveredChoices")(function* (
     conversationId: ChannelConversationId,
@@ -54,13 +54,13 @@ export const makeInboundChoices = (
     const coded = yield* Effect.forEach(openApprovalCards(needing), (card) =>
       ledger.approvalCodeForRequest(card.approval.requestId).pipe(
         Effect.map((found): DeliveredChoices | undefined =>
-          found === undefined
+          found === undefined || !found.delivered
             ? undefined
             : {
                 at: found.issuedAt,
                 tie: approvalCodeOrder(found.code),
                 options: approvalChoiceLabels(found.code),
-                target: { type: "approval" },
+                target: { type: "approval", code: found.code },
               },
         ),
       ),
@@ -76,8 +76,9 @@ export const makeInboundChoices = (
 
   /**
    * A choice answered before the model runs. A number on Slack or iMessage selects the latest
-   * open list. A label equal to the only open question's option answers that question. An
-   * approval word is left for the approval parser, which already checks who may answer.
+   * open question's option; on an approval it is refused, since cards listed in either order
+   * once. A label equal to the only open question's option answers that question. An approval
+   * word is left for the approval parser, which already checks who may answer.
    */
   const inboundChoice = Effect.fn("channel.inboundChoice")(function* (
     message: ChannelInboundMessage,
@@ -89,16 +90,17 @@ export const makeInboundChoices = (
       const number = parseNumberedReply(message.text);
       if (number !== undefined) {
         const choices = yield* deliveredChoices(conversationId, tasks);
+        if (choices?.target.type === "approval") {
+          return { type: "approval-number" as const, code: choices.target.code };
+        }
         const label = choices === undefined ? undefined : choiceAt(choices, number);
         if (choices !== undefined && label !== undefined) {
-          return choices.target.type === "approval"
-            ? { type: "approval-label" as const, text: label }
-            : {
-                type: "question" as const,
-                taskId: choices.target.taskId,
-                questionId: choices.target.questionId,
-                answer: label,
-              };
+          return {
+            type: "question" as const,
+            taskId: choices.target.taskId,
+            questionId: choices.target.questionId,
+            answer: label,
+          };
         }
       }
     }

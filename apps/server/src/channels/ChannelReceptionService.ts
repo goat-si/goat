@@ -102,6 +102,7 @@ import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import * as ChannelRemoteRecall from "./channelRemoteRecall.ts";
 import {
   approvalCard,
+  approvalChoiceLabels,
   approvalReason,
   approvalSent,
   type ApprovalReply,
@@ -782,6 +783,7 @@ const make = Effect.gen(function* () {
             mentionActorId: tt.mentionFor(task.originAddress, task.requester.externalActorId),
             options: words.options,
             questionId: ChannelQuestionId.make(card.approval.requestId),
+            byWord: true,
           }),
         );
       }
@@ -835,14 +837,21 @@ const make = Effect.gen(function* () {
         });
       if (reply.code === undefined) {
         if (open.length === 0) return undefined;
-        if (open.length === 1) return yield* answer(open[0]!);
+        // A bare word answers the one card the person was shown. A card still queued, or one
+        // whose delivery is unknown, makes the word ambiguous, so it asks which by code.
+        const only = open.length === 1 ? open[0] : undefined;
+        const shown =
+          only === undefined
+            ? false
+            : (yield* ledger.approvalCodeForRequest(only.approval.requestId))?.delivered === true;
+        if (only !== undefined && shown) return yield* answer(only);
         const now = DateTime.formatIso(yield* DateTime.now);
         const coded = yield* Effect.forEach(open, (card) =>
           ledger
             .issueApprovalCode({ conversationId, requestId: card.approval.requestId, now })
             .pipe(Effect.map((code) => ({ card, code }))),
         );
-        return { ...whichApproval(coded, reply.decision), task: undefined };
+        return { ...whichApproval(coded, reply.decision), task: undefined, byWord: true };
       }
       const requestId = yield* ledger.approvalRequestForCode({ conversationId, code: reply.code });
       if (requestId === undefined) return undefined;
@@ -950,22 +959,37 @@ const make = Effect.gen(function* () {
       const tasks = yield* ledger.listConversationTasks(conversationId);
 
       // A number or an option label is decided here, before the model. A number on an approval
-      // card becomes that button's label ("Deny A1") so the approval parser and mayAnswerFor
-      // run unchanged. Agents and routines never answer approvals or questions.
+      // is refused with the card's words: cards once listed numbers in either order. Agents and
+      // routines never answer approvals or questions.
       const choice = routine
         ? undefined
         : (viewChoice ?? (yield* inboundChoice(message, conversationId, tasks)));
+      const numberRefused =
+        choice?.type === "approval-number"
+          ? {
+              text:
+                CHANNEL_COPY.approvalNotByNumber +
+                " Reply " +
+                approvalChoiceLabels(choice.code)
+                  .map((label) => '"' + label + '"')
+                  .join(" or ") +
+                ", or use its button.",
+              options: undefined,
+              task: undefined,
+            }
+          : undefined;
       const nativeAnswer =
         choice?.type === "native-question"
           ? yield* answerNativeQuestion(choice, yield* judgedNow, message, inputId, threads, ledger)
           : undefined;
       const approvalReply =
-        nativeAnswer !== undefined || choice?.type === "question"
+        numberRefused !== undefined || nativeAnswer !== undefined || choice?.type === "question"
           ? undefined
           : message.intent === "message" && requester.originKind !== "mcp" && !routine
             ? parseApprovalReply(choice?.type === "approval-label" ? choice.text : message.text)
             : undefined;
       const answer =
+        numberRefused ??
         nativeAnswer ??
         (approvalReply === undefined
           ? yield* botNotes.tabEdit(message, inputId, readAt, routine ? undefined : judgedNow)
@@ -993,6 +1017,7 @@ const make = Effect.gen(function* () {
               task: answer.task,
               mentionActorId: mention,
               options: answer.options,
+              byWord: "byWord" in answer && answer.byWord === true,
             }),
           ],
           now: DateTime.formatIso(yield* DateTime.now),

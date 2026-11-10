@@ -261,7 +261,7 @@ describe("GOAT Bot approval cards", () => {
       const card = resultsTo(harness.slackSent, "question")[0];
       assert.strictEqual(
         card?.message.text,
-        "deploy staging: the agent wants to run a command.\n1. Deny A1\n2. Approve A1",
+        'deploy staging: the agent wants to run a command.\nReply "Deny A1" or "Approve A1".',
       );
 
       yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U1" });

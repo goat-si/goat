@@ -1,7 +1,7 @@
 /**
- * Choices a person can answer without a model: the options on an approval card or an open
- * question. Slack and iMessage show them as `1. label`, `2. label`. A reply that is only a
- * number picks from the latest of those still open.
+ * Choices a person can answer without a model: an open question's options, which Slack and
+ * iMessage list as `1. label`, and approval cards, which name their words and take no number.
+ * A reply that is only a number picks from the latest of those still open.
  *
  * "Latest" is derived, not stored. An approval card's time is when its code was issued, which
  * is when the card is built. A question's time is `askedAt`. A higher approval code wins a tie
@@ -13,7 +13,7 @@
 import type { ChannelQuestionId, ChannelTaskId } from "@goat/contracts";
 
 export type DeliveredChoiceTarget =
-  | { readonly type: "approval" }
+  | { readonly type: "approval"; readonly code: string }
   | {
       readonly type: "question";
       readonly taskId: ChannelTaskId;
