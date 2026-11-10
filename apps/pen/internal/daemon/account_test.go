@@ -328,3 +328,37 @@ func TestRevokingARegisteredMemberForgetsItAtTheLoginService(t *testing.T) {
 		t.Fatalf("forgot %s, want %s", got, b.NodeID())
 	}
 }
+
+func TestALeavingMemberForgetsItselfAtTheLoginService(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	st := shortDir(t)
+	bid := identity(t, st, rs.URL, "b")
+	as := f.Issue(testSub, "me@example.com", bid.SignPub, bid.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, bid, "b", as, offeredBy(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only b is registered, so only b's own forget can succeed.
+	if err := login.New(f.URL).Register(ctx, as, out.MeshID); err != nil {
+		t.Fatal(err)
+	}
+	s, err := mesh.CheckJoined(st, bid, out.MeshID, out.Records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Save()
+	b := start(t, ctx, rs, st, nil)
+	var res struct{ Results []PushResult }
+	if err := Call(b.st, Request{Op: "leave"}, &res); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-f.Forgotten(); got != bid.NodeID() {
+		t.Fatalf("forgot %s, want the leaving node %s", got, bid.NodeID())
+	}
+}

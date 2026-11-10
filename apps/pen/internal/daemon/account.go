@@ -246,7 +246,8 @@ func (d *Daemon) forgetRevoked(old, v *mesh.View) {
 	}
 	var gone []string
 	for k, m := range v.Revoked {
-		if _, was := old.Revoked[k]; !was && m.NodeID != "" {
+		// This node's own revoke is a leave, which forgets it in line before the keys go.
+		if _, was := old.Revoked[k]; !was && m.NodeID != "" && m.NodeID != d.nodeID {
 			gone = append(gone, m.NodeID)
 		}
 	}

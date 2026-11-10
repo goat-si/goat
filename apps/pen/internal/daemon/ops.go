@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
+	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 )
 
@@ -57,6 +59,14 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 		return res, errors.New("no member took the leave; this node keeps running and pushes it when a member's uplink returns or at its 10-minute sync, or run pen leave again")
 	}
 	d.stopUplinks("left")
+	// The registry stops offering this node; the daemon stops right after, so this runs in line.
+	if b, ok := binding(d.view()); ok {
+		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := login.New(b.LoginURL).Forget(fctx, d.id, d.nodeID, d.now()); err != nil {
+			d.opt.Logf("login forget on leave: %v", err)
+		}
+		cancel()
+	}
 	unlock, err := d.st.Lock()
 	if err != nil {
 		return res, err

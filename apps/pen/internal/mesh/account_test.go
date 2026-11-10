@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
@@ -141,5 +142,38 @@ func TestAnAdmitViaGoogleShowsTheAccountAndRefusesALongEmail(t *testing.T) {
 	long := strings.Repeat("x", 250) + "@e.co"
 	if _, err := Sign(a, b.meshID, TypeAdmit, 9, []string{found.Hash}, 1, Fields{Card: b.card(detID(4), a, "d"), Via: ViaGoogle, Email: long, Assertion: hash}); err == nil {
 		t.Fatal("an email over 254 bytes was signed")
+	}
+}
+
+func TestAnAccountAdmitNamesAtMostEightHeadsKeepingTheSignersOwn(t *testing.T) {
+	a, x := detID(1), detID(40)
+	b, found := newMesh(t, a)
+	last := found
+	var members []*ident.Identity
+	for i := range 10 {
+		m := detID(byte(10 + i))
+		last = b.admit(a, m, last)
+		members = append(members, m)
+	}
+	for _, m := range members {
+		b.sign(m, TypeName, []*Record{last}, Fields{Subject: pub(m), Name: "n" + m.NodeID()[:4]})
+	}
+	s := NewStore(nil, b.meshID)
+	s.SetSelf(pub(a))
+	if _, err := s.Merge(b.recs); err != nil {
+		t.Fatal(err)
+	}
+	if h := len(s.heads()); h != 10 {
+		t.Fatalf("%d heads, want 10", h)
+	}
+	got, err := AdmitAccount(a, s, b.card(x, a, "x"), Claim{SignPub: pub(x), NoisePub: ident.B64.EncodeToString(x.NoisePub), Email: "x@example.com", Hash: HashOf([]byte("a"))}, time.UnixMilli(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(got.admit.B.Prev); n != 8 {
+		t.Fatalf("the admit names %d heads, want 8", n)
+	}
+	if got.admit.B.N != 12 || !isMember(s.View(), x) {
+		t.Fatalf("admit n %d, member %v; the signer's own chain must stay in its past", got.admit.B.N, isMember(s.View(), x))
 	}
 }
