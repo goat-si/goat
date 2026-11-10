@@ -187,74 +187,6 @@ export function GoatBotTimeline({
   }, [unread]);
 
   const time = (iso: string) => formatShortTimestamp(iso, timestampFormat);
-  return (
-    <div
-      ref={wrapperRef}
-      className="goat-timeline relative flex min-h-0 flex-1 flex-col"
-      data-at-top="true"
-      data-at-bottom="true"
-    >
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-stable"
-      >
-        <ol
-          ref={listRef}
-          aria-label={`Conversation with ${botName}`}
-          className="mx-auto flex w-full max-w-3xl flex-col px-4 py-4"
-        >
-          {rows.map((row, index) => {
-            const divider =
-              unread?.rowId === row.id ? (
-                <li
-                  ref={dividerRef}
-                  role="separator"
-                  aria-label="New messages"
-                  className="my-3 text-center text-xs text-muted-foreground"
-                >
-                  New
-                </li>
-              ) : null;
-            return (
-              <Fragment key={row.id}>
-                {divider}
-                {renderRow(row, index)}
-              </Fragment>
-            );
-          })}
-          {activity !== null ? (
-            <li className={cn("flex", rows.length > 0 && "mt-6")}>
-              <GoatBotActivityLine activity={activity} />
-            </li>
-          ) : null}
-        </ol>
-      </div>
-      {unread && above && !dismissed ? (
-        <div className="absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center rounded-full bg-primary">
-          <Button size="sm" onClick={() => dividerRef.current?.scrollIntoView({ block: "start" })}>
-            ↑ {unread.count} new messages
-          </Button>
-          <Button
-            size="icon-sm"
-            aria-label="Dismiss new messages"
-            onClick={() => setDismissed(true)}
-          >
-            ✕
-          </Button>
-        </div>
-      ) : null}
-      <div
-        aria-hidden="true"
-        className="goat-top-fade pointer-events-none absolute top-0 right-3 left-0 h-6 bg-linear-to-b from-background to-transparent"
-      />
-      <div
-        aria-hidden="true"
-        className="goat-bottom-fade pointer-events-none absolute right-3 bottom-0 left-0 h-6 bg-linear-to-t from-background to-transparent"
-      />
-    </div>
-  );
-
   function renderRow(row: GoatBotRow, index: number) {
     const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-4" : "mt-1.5");
     switch (row.kind) {
@@ -474,6 +406,79 @@ export function GoatBotTimeline({
         );
     }
   }
+
+  return (
+    <div
+      ref={wrapperRef}
+      className="goat-timeline relative flex min-h-0 flex-1 flex-col"
+      data-at-top="true"
+      data-at-bottom="true"
+    >
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-stable"
+      >
+        <ol
+          ref={listRef}
+          aria-label={`Conversation with ${botName}`}
+          className="mx-auto flex w-full max-w-3xl flex-col px-4 py-4"
+        >
+          {rows.map((row, index) => {
+            const divider =
+              unread?.rowId === row.id ? (
+                <li
+                  ref={dividerRef}
+                  role="separator"
+                  aria-label="New messages"
+                  className="my-3 text-center text-xs text-muted-foreground"
+                >
+                  New
+                </li>
+              ) : null;
+            const sendKey =
+              row.kind === "user"
+                ? (row.sendKey ??
+                  (row.requestKey === null ? undefined : sendKeyByRequest.get(row.requestKey)))
+                : undefined;
+            return (
+              <Fragment key={sendKey === undefined ? row.id : `send:${sendKey}`}>
+                {divider}
+                {renderRow(row, index)}
+              </Fragment>
+            );
+          })}
+          {activity !== null ? (
+            <li className={cn("flex", rows.length > 0 && "mt-6")}>
+              <GoatBotActivityLine activity={activity} />
+            </li>
+          ) : null}
+        </ol>
+      </div>
+      {unread && above && !dismissed ? (
+        <div className="absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center rounded-full bg-primary">
+          <Button size="sm" onClick={() => dividerRef.current?.scrollIntoView({ block: "start" })}>
+            ↑ {unread.count} new messages
+          </Button>
+          <Button
+            size="icon-sm"
+            aria-label="Dismiss new messages"
+            onClick={() => setDismissed(true)}
+          >
+            ✕
+          </Button>
+        </div>
+      ) : null}
+      <div
+        aria-hidden="true"
+        className="goat-top-fade pointer-events-none absolute top-0 right-3 left-0 h-6 bg-linear-to-b from-background to-transparent"
+      />
+      <div
+        aria-hidden="true"
+        className="goat-bottom-fade pointer-events-none absolute right-3 bottom-0 left-0 h-6 bg-linear-to-t from-background to-transparent"
+      />
+    </div>
+  );
 }
 
 /** True from when GOAT Bot starts reading until its reply lands or the limit passes. */
