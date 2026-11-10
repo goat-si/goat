@@ -324,6 +324,30 @@ export const CODEX_TEST_RUNTIME_POLICY = ProviderAdapter.ProviderAdapterV2Runtim
   cwd: "/workspace",
 });
 
+/** A thread goal with every field the adapter reads, as Codex reports it. */
+export function makeCodexThreadGoal(input: {
+  readonly threadId: string;
+  readonly status: "active" | "paused";
+  readonly objective?: string;
+}) {
+  return {
+    threadId: input.threadId,
+    objective: input.objective ?? "test",
+    status: input.status,
+    tokensUsed: 0,
+    timeUsedSeconds: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+/** The goal the adapter last published on a provider thread, which is what the UI reads. */
+export function lastPublishedGoal(events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) {
+  for (const event of [...events].reverse())
+    if (event.type === "provider_thread.updated") return event.providerThread.goal;
+  return undefined;
+}
+
 function makeCodexTestAppThread(input: {
   readonly threadId: ThreadId;
   readonly providerThread: OrchestrationV2ProviderThread;

@@ -283,6 +283,15 @@ const interceptSurvivor = Effect.fnUntraced(function* (
     return false;
   const entry = waiting.get(payload.threadId);
   if (entry === undefined) return false;
+  const goal =
+    "goal" in payload && typeof payload.goal === "object" && payload.goal !== null
+      ? payload.goal
+      : undefined;
+  const activeGoal = goal !== undefined && "status" in goal && goal.status === "active";
+  // A goal GOAT paused behind the survivor must still reach the goal handlers, which publish how
+  // the thread reads; only the signal for an active goal stays here.
+  if (method === "thread/goal/cleared" || (method === "thread/goal/updated" && !activeGoal))
+    return false;
   if (signal) {
     const turn =
       "turn" in payload && typeof payload.turn === "object" && payload.turn !== null
@@ -294,11 +303,6 @@ const interceptSurvivor = Effect.fnUntraced(function* (
         ? payload.status
         : undefined;
     const idle = status && "type" in status && status.type === "idle";
-    const goal =
-      "goal" in payload && typeof payload.goal === "object" && payload.goal !== null
-        ? payload.goal
-        : undefined;
-    const activeGoal = goal && "status" in goal && goal.status === "active";
     const next: SurvivorSignal | undefined =
       (method === "turn/completed" && turnId === entry.nativeTurnId) ||
       (method === "thread/status/changed" && idle)
