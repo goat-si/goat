@@ -445,7 +445,6 @@ export function buildGoatBotTimeline(input: {
         ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
       });
-      previousInputKey = null;
       continue;
     }
     if (item.type === "notification") {
