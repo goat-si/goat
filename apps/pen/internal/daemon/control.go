@@ -61,6 +61,10 @@ type LsReply struct {
 	// Unforgotten are revoked machines the login service still offers to new machines because it
 	// refused this node's forget (this node is not registered under the account).
 	Unforgotten []Unforgotten `json:"unforgotten,omitempty"`
+	// SaveError is the last failed save of the mesh ("" once one succeeds); Records counts the
+	// mesh's records, against the caps.
+	SaveError string `json:"saveError,omitempty"`
+	Records   int    `json:"records"`
 	// StateDir is this machine's state folder, filled in by the command line for its advice.
 	StateDir string `json:"-"`
 }
@@ -280,7 +284,12 @@ func (d *Daemon) ls() LsReply {
 	v := d.view()
 	s := d.uplinkState()
 	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked(),
-		Account: v.Account, Locked: v.Locked, Pending: len(d.pending.all(d.now()))}
+		Account: v.Account, Locked: v.Locked, Pending: len(d.pending.all(d.now())), Records: d.mesh().Len()}
+	d.mu.Lock()
+	if d.saveErr != nil {
+		out.SaveError = d.saveErr.Error()
+	}
+	d.mu.Unlock()
 	for _, f := range d.forgets.refusedList() {
 		u := Unforgotten{NodeID: f.NodeID, LoginURL: f.LoginURL}
 		if m, ok := v.RevokedByNodeID(f.NodeID); ok {

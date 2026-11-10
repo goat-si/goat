@@ -83,6 +83,10 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member, limit time.Duration) s
 			return "offline"
 		case wire.CodeNotAdmitted:
 			return "refused"
+		case wire.CodeCaps:
+			return "not taken: its mesh is full (4429)"
+		case wire.CodeNotKept:
+			return "not taken: it cannot write its state folder (4507)"
 		}
 		// A sleeping machine's uplink can stay registered at the relay, so its dials time out
 		// instead of closing 4404; a failed sync means it is not reachable now either way.

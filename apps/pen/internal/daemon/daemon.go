@@ -103,6 +103,8 @@ type Daemon struct {
 	acct       []*acctSlot
 	inviteWait map[string]chan mesh.Member
 	lastView   *mesh.View
+	// saveErr is the last mesh save's error (nil once a save succeeds), shown by pen ls.
+	saveErr error
 
 	khMu sync.Mutex
 	// sshUser is published in this node's hostkeys records.
@@ -529,12 +531,21 @@ func (d *Daemon) markSeen(noisePub []byte, online bool, via string) {
 	d.seen[m.SignPub] = s
 }
 
-// onMerged persists new records and publishes the new view.
-func (d *Daemon) onMerged(added []*mesh.Record) {
-	if err := d.mesh().Save(); err != nil {
-		d.opt.Logf("mesh save: %v", err)
+// onMerged persists new records and publishes the new view; a failed save fails the sync that
+// brought them, and pen ls shows it until a save succeeds.
+func (d *Daemon) onMerged(added []*mesh.Record) error {
+	err := d.mesh().Save()
+	d.mu.Lock()
+	d.saveErr = err
+	d.mu.Unlock()
+	if err != nil {
+		d.opt.Logf("mesh save: %v; records received are not kept, so syncs that bring them fail", err)
 	}
 	d.viewChanged()
+	if n := d.mesh().Len(); n >= mesh.MaxOrdinary {
+		d.opt.Logf("mesh holds %d records: new members, names, locks and bindings are refused (revokes until %d); start a new mesh", n, mesh.MaxRecords)
+	}
+	return err
 }
 
 // viewChanged closes sessions of keys that are no longer members, tells watchers, rewrites known_hosts.

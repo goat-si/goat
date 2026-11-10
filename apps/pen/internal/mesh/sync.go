@@ -2,10 +2,15 @@ package mesh
 
 import (
 	"context"
+	"errors"
+
+	"github.com/goat-si/goat/apps/pen/internal/relay"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
-// Merged is called with the records a sync stored.
-type Merged func(added []*Record)
+// Merged is called with the records a sync stored; an error (they could not be saved) fails the
+// sync, so the peer does not count them as taken.
+type Merged func(added []*Record) error
 
 // Version is what a v1.1 node announces in its sync hello.
 const Version = "1.1"
@@ -51,12 +56,17 @@ func (s *Store) take(l Link, m *Msg, onMerged Merged, received *int) error {
 	}
 	added, err := s.Merge(m.Records)
 	if len(added) > 0 && onMerged != nil {
-		onMerged(added)
+		if err := onMerged(added); err != nil {
+			l.Close(wire.CodeNotKept)
+			return &relay.CloseError{Code: wire.CodeNotKept}
+		}
 	}
-	if err != nil && err != ErrFull {
-		return err
+	// A record refused for the cap fails the sync, so the sender sees it was not taken.
+	if errors.Is(err, ErrFull) {
+		l.Close(wire.CodeCaps)
+		return &relay.CloseError{Code: wire.CodeCaps}
 	}
-	return nil
+	return err
 }
 
 // SyncInitiate runs the dialing side of a mesh session. It returns once the peer's done arrived,

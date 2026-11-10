@@ -11,6 +11,7 @@ import (
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
+	"github.com/goat-si/goat/apps/pen/internal/relay"
 )
 
 // pipeEnd is one end of an in-memory Link.
@@ -18,12 +19,13 @@ type pipeEnd struct {
 	in, out chan []byte
 	done    chan struct{}
 	once    *sync.Once
+	code    *uint16 // the close code, set once before done closes
 }
 
 func pipe() (*pipeEnd, *pipeEnd) {
 	a, b := make(chan []byte, 64), make(chan []byte, 64)
-	done, once := make(chan struct{}), &sync.Once{}
-	return &pipeEnd{in: a, out: b, done: done, once: once}, &pipeEnd{in: b, out: a, done: done, once: once}
+	done, once, code := make(chan struct{}), &sync.Once{}, new(uint16)
+	return &pipeEnd{in: a, out: b, done: done, once: once, code: code}, &pipeEnd{in: b, out: a, done: done, once: once, code: code}
 }
 
 func (p *pipeEnd) Send(b []byte) error {
@@ -45,14 +47,17 @@ func (p *pipeEnd) Recv(ctx context.Context) ([]byte, error) {
 			return b, nil
 		default:
 		}
+		if *p.code != 0 {
+			return nil, &relay.CloseError{Code: *p.code}
+		}
 		return nil, errors.New("closed")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
-func (p *pipeEnd) Close(uint16) error {
-	p.once.Do(func() { close(p.done) })
+func (p *pipeEnd) Close(code uint16) error {
+	p.once.Do(func() { *p.code = code; close(p.done) })
 	return nil
 }
 

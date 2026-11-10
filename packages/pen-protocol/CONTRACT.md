@@ -171,7 +171,8 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   key, the oldest dropped first; the pool is not persisted. A node's own records never enter the pool. A mesh holds at
   most 4096 records: a record that is not a `revoke` is refused once 3840 are stored, and a `revoke` once 4096 are
   stored, so a set full of other records can still revoke and every set fits a 4096-hash `have`. A node reloading its
-  own saved set applies no cap.
+  own saved set applies no cap. A node that refuses a received record for a cap closes that sync 4429 without its
+  `done`, and one that cannot save what it received closes it 4507, so the sender learns the records were not taken.
 
 ### View
 
@@ -451,7 +452,8 @@ mesh is unbound, or bound to an older login key, offers to bind it again (same q
 
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
 no live invite, refused card); 4402 relay protocol error; 4403 relay auth failed; 4404 node offline or port refused;
-4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps. 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
+4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps (also a mesh sync refused for the record
+cap); 4507 a mesh sync whose records the node could not save. 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
 or card that did not arrive within 10 s.
 
 ## Vectors
@@ -487,6 +489,8 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
   (else 4429), and past 8 pending sessions per node the address holding the most loses its oldest (4429). Go relay
   only; the Worker keeps the node-wide rule. No wire change.
+- v1.1 (2026-11-11): a mesh sync that brings a record the receiver refuses for its cap closes 4429, and one whose
+  records it cannot save closes 4507; before, both answered `done`. Older nodes still answer `done`.
 - v1.1 (2026-11-11): `refused` may carry `"notMember":true` from a node that is not a member of its own view; joiners
   try another node (Google join) or report that the invite was not used. Older joiners ignore the member. No vector.
 - v1.1 (2026-11-11): `pen relay serve` reads a message of up to 96 KiB per socket without a charge and larger ones

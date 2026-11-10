@@ -112,6 +112,12 @@ func printAccount(w io.Writer, ls daemon.LsReply) {
 	if ls.Locked {
 		fmt.Fprintf(w, "lock     on: new machines wait for pen approve (%d pending here)\n", ls.Pending)
 	}
+	if ls.SaveError != "" {
+		fmt.Fprintf(w, "state    cannot be written (%s): records other members send are not kept and their syncs fail; free disk space or fix the folder's permissions\n", safe(ls.SaveError))
+	}
+	if ls.Records >= mesh.MaxOrdinary {
+		fmt.Fprintf(w, "mesh     full: %d records (new members, names, locks and bindings stop at %d, revokes at %d); move to a new mesh\n", ls.Records, mesh.MaxOrdinary, mesh.MaxRecords)
+	}
 	for _, u := range ls.Unforgotten {
 		fmt.Fprintf(w, "login    still offers removed %s (%s) to new machines; this machine is not registered with the account, so run pen login here or reset the machine list at %s/reset\n",
 			orDash(u.Name), short(u.NodeID), u.LoginURL)
