@@ -66,6 +66,7 @@ func TestAnAdmitThatLostToARevokeOfItsSignerNeverCounts(t *testing.T) {
 	ax := b.admit(f, x, found)
 	ay := b.admit(x, y, ax)
 	want, _ := ident.B64.DecodeString(ay.Hash)
+	// Identities, nonces and record times are fixed here, so every run finds the same revoke.
 	var rv *Record
 	for at := int64(100); rv == nil && at < 356; at++ {
 		r, err := Sign(f, b.meshID, TypeRevoke, b.n[pub(f)]+1, []string{ax.Hash}, at, Fields{Subjects: []string{pub(x)}})

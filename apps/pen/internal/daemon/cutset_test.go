@@ -71,54 +71,36 @@ func TestFinishJoinFailsOnACutCopyFromAPlainlyRevokedMachineThatWonTheRevokeRace
 	x := joiner(t, ctx, rs, a.invite(t, time.Minute), "x")
 	aPub := ident.B64.EncodeToString(a.d.id.SignPub)
 	xPub := ident.B64.EncodeToString(x.d.id.SignPub)
-	var res struct{ Results []PushResult }
-	if err := Call(a.st, Request{Op: "revoke", Subject: xPub}, &res); err != nil {
-		t.Fatal(err)
-	}
-	var aRevokesX *mesh.Record
-	for _, r := range a.d.mesh().Records() {
-		if r.B.Type == mesh.TypeRevoke && r.B.By == aPub {
-			aRevokesX = r
-		}
-	}
-	bindTo(t, a, f, f.Key())
-	// x never hears of its revoke. It signs its revoke of a over its own heads, varying the time
-	// until the record sorts before a's revoke of x, as a stolen key can.
-	xs := x.d.mesh()
-	var n uint64
-	referenced := map[string]bool{}
-	for _, r := range xs.Records() {
-		if r.B.By == xPub {
-			n = max(n, r.B.N)
-		}
-		for _, p := range r.B.Prev {
-			referenced[p] = true
-		}
-	}
-	var heads []string
-	for _, r := range xs.Records() {
-		if !referenced[r.Hash] {
-			heads = append(heads, r.Hash)
-		}
-	}
-	sort.Strings(heads)
-	want, _ := ident.B64.DecodeString(aRevokesX.Hash)
-	var won *mesh.Record
-	// Each time sorts first with probability one half, so 256 tries fail only by 2^-256.
+	// a revokes x plainly, and x, which never hears of it, revokes a over the same heads, as a
+	// stolen key can. Both records are signed here, at varied times, until x's sorts first: each
+	// pair does with probability one half, so 64 pairs fail by 2^-64.
+	heads, aN, xN := headsOf(a.d.mesh()), counter(a.d.mesh(), aPub), counter(x.d.mesh(), xPub)
+	var aRevokesX, xRevokesA *mesh.Record
 	start := time.Now().UnixMilli()
-	for at := start; won == nil && at < start+256; at++ {
-		r, err := mesh.Sign(x.d.id, xs.MeshID, mesh.TypeRevoke, n+1, heads, at, mesh.Fields{Subjects: []string{aPub}})
+	for at := start; xRevokesA == nil && at < start+64; at++ {
+		ra, err := mesh.Sign(a.d.id, a.d.mesh().MeshID, mesh.TypeRevoke, aN+1, heads, at, mesh.Fields{Subjects: []string{xPub}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if h, _ := ident.B64.DecodeString(r.Hash); bytes.Compare(h, want) < 0 {
-			won = r
+		rx, err := mesh.Sign(x.d.id, x.d.mesh().MeshID, mesh.TypeRevoke, xN+1, heads, at, mesh.Fields{Subjects: []string{aPub}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ha, _ := ident.B64.DecodeString(ra.Hash)
+		hx, _ := ident.B64.DecodeString(rx.Hash)
+		if bytes.Compare(hx, ha) < 0 {
+			aRevokesX, xRevokesA = ra, rx
 		}
 	}
-	if won == nil {
-		t.Fatal("setup: no time in 256 tries made x's revoke sort before a's")
+	if xRevokesA == nil {
+		t.Fatal("setup: no pair in 64 made x's revoke sort before a's")
 	}
-	if _, err := xs.Merge([]*mesh.Record{won}); err != nil {
+	if _, err := a.d.mesh().Merge([]*mesh.Record{aRevokesX}); err != nil {
+		t.Fatal(err)
+	}
+	a.d.viewChanged()
+	bindTo(t, a, f, f.Key())
+	if _, err := x.d.mesh().Merge([]*mesh.Record{xRevokesA}); err != nil {
 		t.Fatal(err)
 	}
 	x.d.viewChanged()
@@ -142,4 +124,33 @@ func TestFinishJoinFailsOnACutCopyFromAPlainlyRevokedMachineThatWonTheRevokeRace
 	if err == nil || !strings.Contains(err.Error(), "a, listed for this account") || !strings.Contains(err.Error(), "again") {
 		t.Fatalf("FinishJoin on a plainly revoked machine's cut copy: %v, want a refusal naming a that says to try again", err)
 	}
+}
+
+// headsOf are the records of s that no other record names in its prev.
+func headsOf(s *mesh.Store) []string {
+	referenced := map[string]bool{}
+	for _, r := range s.Records() {
+		for _, p := range r.B.Prev {
+			referenced[p] = true
+		}
+	}
+	var heads []string
+	for _, r := range s.Records() {
+		if !referenced[r.Hash] {
+			heads = append(heads, r.Hash)
+		}
+	}
+	sort.Strings(heads)
+	return heads
+}
+
+// counter is the highest record counter by has signed in s.
+func counter(s *mesh.Store, by string) uint64 {
+	var n uint64
+	for _, r := range s.Records() {
+		if r.B.By == by {
+			n = max(n, r.B.N)
+		}
+	}
+	return n
 }
