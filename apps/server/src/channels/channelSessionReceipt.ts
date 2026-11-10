@@ -41,8 +41,8 @@ export const sessionFinalText = Effect.fn("channel.sessionFinalText")(function* 
     final.startsWith(line) &&
     (receipt.turn_item_id === turnItemId ||
       (receipt.run_id === runId &&
-        /[.!?…。！？]$/u.test(line) &&
-        (final.length === line.length || /\s/u.test(final.charAt(line.length)))));
+        (final === line ||
+          (/[.!?…。！？]$/u.test(line) && /\s/u.test(final.charAt(line.length))))));
   return repeats ? final.slice(line.length).trim() : final;
 });
 

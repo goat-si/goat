@@ -241,6 +241,8 @@ const NO_OPTIONS: ReadonlyArray<string> = [];
 
 interface GoatBotQuestionState {
   readonly revision: number;
+  /** When the task last changed; a question it closed was open until then. */
+  readonly updatedAt?: string;
   readonly askInChat?: boolean;
   readonly openQuestionIds?: ReadonlyArray<string>;
 }
@@ -254,6 +256,7 @@ const questionStateFromChip = (
     key: chip.taskId,
     state: {
       revision: chip.taskVersion,
+      updatedAt: chip.updatedAt,
       ...(chip.askInChat === true ? { askInChat: true } : {}),
       ...(chip.openQuestionIds === undefined ? {} : { openQuestionIds: chip.openQuestionIds }),
     },
@@ -553,15 +556,23 @@ export function buildGoatBotTimeline(input: {
         : nearestSend;
       const until = decidedByCard ? nearestQuestionByTask.get(taskId) : nearestQuestion;
       const reply = send !== undefined && (until === undefined || send < until) ? send : undefined;
-      const answered = reply === undefined ? undefined : ordered[reply];
+      // A question its task's card closed was open until that card changed; a message sent after
+      // that did not answer it.
+      const closedAt = decidedByCard ? questionState(taskId)?.updatedAt : undefined;
+      const candidate = reply === undefined ? undefined : ordered[reply];
+      const answered =
+        candidate !== undefined &&
+        closedAt !== undefined &&
+        Date.parse(candidate.createdAt) > Date.parse(closedAt)
+          ? undefined
+          : candidate;
       if (answered?.kind === "user") {
         const answer =
           answered.text.trim() || (answered.attachments ?? []).map((file) => file.name).join(", ");
         const answerIndex =
           (answered.attachments ?? []).length === 0 ? (row.choices ?? []).indexOf(answer) : -1;
-        // Only the person's next message after a question still open to it can be its pick; a
-        // question its task's card closed may have closed some other way.
-        const picked = answerIndex >= 0 && reply === nearestSend && !decidedByCard;
+        // Only the person's next message after the question can be its pick.
+        const picked = answerIndex >= 0 && reply === nearestSend;
         if (picked) folded.add(answered.id);
         const sending =
           picked && (answered.delivery.state === "queued" || answered.delivery.state === "sending");

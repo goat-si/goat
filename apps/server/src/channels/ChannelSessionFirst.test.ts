@@ -105,6 +105,7 @@ describe("session first receipts", () => {
 
   it.effect.each([
     { first: "Four.", final: "Four.", sent: ["Four."] },
+    { first: "42", final: "42", sent: ["42"] },
     { first: "Hi!", final: "Hi! What can I do for you?", sent: ["Hi!", "What can I do for you?"] },
     // Only a repeated whole sentence is dropped, never the start of a different one.
     {
