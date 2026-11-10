@@ -38,7 +38,7 @@ it("shows unread above the viewport, jumps to it, and dismisses the pill", async
   );
   const divider = screen.getByRole("separator", { name: "New messages" });
   await expect.element(divider).toBeInTheDocument();
-  const pill = screen.getByRole("button", { name: "↑ 40 new messages" });
+  const pill = screen.getByRole("button", { name: "40 new messages" });
   await expect.element(pill).toBeVisible();
   await userEvent.click(pill);
   const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div");
