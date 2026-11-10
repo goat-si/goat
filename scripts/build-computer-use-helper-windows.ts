@@ -37,13 +37,26 @@ import {
 } from "./lib/release-verify.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 
-export type HelperChannel = DesktopChannel;
+/** The channels a Windows helper is built for; a preview keeps nightly's helper identity. */
+export type HelperChannel = DesktopChannel | "preview";
 
 /** The packaged GOAT executable a release helper accepts as its parent (resolveDesktopProductName). */
 const CHANNEL_PARENTS: Record<HelperChannel, string> = {
   stable: "GOAT.exe",
   nightly: "GOAT (Nightly).exe",
+  preview: "GOAT.exe",
   dev: "GOAT.exe",
+};
+
+/**
+ * The helper identity the desktop app expects (computerUseHelperBundleIdForChannel). A preview
+ * app runs the nightly channel's helper, because isNightlyDesktopVersion covers previews.
+ */
+const HELPER_BUNDLE_IDS: Record<HelperChannel, string> = {
+  stable: computerUseHelperBundleIdForChannel("stable"),
+  nightly: computerUseHelperBundleIdForChannel("nightly"),
+  preview: computerUseHelperBundleIdForChannel("nightly"),
+  dev: computerUseHelperBundleIdForChannel("dev"),
 };
 
 /** The driver files the helper runs, staged as Cua ships them and pinned by SHA-256. */
@@ -56,8 +69,8 @@ export function renderWindowsBuildInfo(input: {
   readonly channel: HelperChannel;
   readonly version: string;
   readonly pins: ReadonlyArray<{ readonly file: string; readonly sha256: string }>;
-  /** Defaults to dev only; an unsigned release helper must opt in to serving any parent. */
-  readonly allowAnyParent?: boolean;
+  /** Whether the helper serves any parent; a signed helper checks its parent's publisher. */
+  readonly allowAnyParent: boolean;
 }): string {
   for (const pin of input.pins)
     if (!/^[0-9a-f]{64}$/u.test(pin.sha256) || !/^[\w.-]+$/u.test(pin.file))
@@ -85,15 +98,9 @@ export function renderWindowsBuildInfo(input: {
     "[assembly: AssemblyInformationalVersion(" + csharpString(input.version) + ")]",
     "namespace Goat.ComputerUse {",
     "  internal static class BuildInfo {",
-    "    public const string HelperId = " +
-      csharpString(computerUseHelperBundleIdForChannel(input.channel)) +
-      ";",
+    "    public const string HelperId = " + csharpString(HELPER_BUNDLE_IDS[input.channel]) + ";",
     "    public const string Version = " + csharpString(input.version) + ";",
-    // A dev helper serves an unpackaged Electron or a terminal; signed release helpers check
-    // their parent. An unsigned channel (dev, nightly, preview) has no signature to check.
-    "    public const bool AllowAnyParent = " +
-      ((input.allowAnyParent ?? input.channel === "dev") ? "true" : "false") +
-      ";",
+    "    public const bool AllowAnyParent = " + (input.allowAnyParent ? "true" : "false") + ";",
     "    public const string ParentExecutable = " +
       csharpString(CHANNEL_PARENTS[input.channel]) +
       ";",
@@ -107,10 +114,14 @@ export function renderWindowsBuildInfo(input: {
 }
 
 /**
- * A signed release helper verifies its parent by Authenticode publisher, so it must be signed
- * itself. An unsigned one has no signature to check, so it is allowed only when it serves any
- * parent: dev, nightly, or a stable helper a packaging job signs with Azure Trusted Signing
- * (--deferred-signing).
+ * How the helper this build produces is signed, and whether it serves any parent.
+ *
+ * A signed helper verifies its parent by Authenticode publisher, so it must not serve any parent.
+ * An unsigned one has no signature to check, so it serves any parent: nightly, preview, or a
+ * stable helper the packaging job signs (--deferred-signing) or leaves unsigned
+ * (--allow-any-parent). A release helper that would be signed and serve any parent is refused,
+ * because that is the one combination nobody means. A dev helper always serves any parent: it
+ * runs beside an unpackaged Electron, never beside an installed GOAT.exe.
  */
 export function windowsSigningPlan(input: {
   readonly channel: HelperChannel;
@@ -119,16 +130,26 @@ export function windowsSigningPlan(input: {
   readonly deferredSigning?: boolean;
   readonly allowAnyParent?: boolean;
 }):
-  | { readonly sign: false }
-  | { readonly sign: true; readonly args: ReadonlyArray<string> }
+  | { readonly sign: false; readonly allowAnyParent: boolean }
+  | { readonly sign: true; readonly args: ReadonlyArray<string>; readonly allowAnyParent: boolean }
   | { readonly error: string } {
   const thumbprint = input.thumbprint?.replaceAll(/\s/gu, "").toUpperCase();
+  const signedElsewhere = input.deferredSigning === true;
+  const devHelper = input.channel === "dev";
+  if (!devHelper && (thumbprint !== undefined || signedElsewhere) && input.allowAnyParent === true)
+    return {
+      error:
+        "A signed helper checks the publisher that started it, so it cannot serve any parent. " +
+        "Drop --allow-any-parent, or build a helper nothing will sign.",
+    };
+  const allowAnyParent = devHelper || (!thumbprint && !signedElsewhere);
   if (!thumbprint)
-    return input.channel === "dev" ||
+    return devHelper ||
       input.channel === "nightly" ||
+      input.channel === "preview" ||
       input.allowAnyParent ||
-      input.deferredSigning
-      ? { sign: false }
+      signedElsewhere
+      ? { sign: false, allowAnyParent }
       : {
           error:
             "A " +
@@ -139,6 +160,7 @@ export function windowsSigningPlan(input: {
     return { error: "--sign-thumbprint must be a 40 character SHA-1 thumbprint." };
   return {
     sign: true,
+    allowAnyParent,
     args: [
       "sign",
       "/sha1",
@@ -172,7 +194,7 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
       return yield* fail("The Windows helper builds on Windows only.");
     const signing = windowsSigningPlan({
       ...input,
-      allowAnyParent: input.allowAnyParent ?? input.channel === "dev",
+      allowAnyParent: input.allowAnyParent,
     });
     if ("error" in signing) return yield* fail(signing.error);
 
@@ -237,7 +259,7 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
         channel: input.channel,
         version: desktopPackageJson.version,
         pins,
-        ...(input.allowAnyParent === undefined ? {} : { allowAnyParent: input.allowAnyParent }),
+        allowAnyParent: signing.allowAnyParent,
       }),
     );
     const framework = path.join(
@@ -283,7 +305,9 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
 const command = Command.make(
   "build-computer-use-helper-windows",
   {
-    channel: Flag.Literals("channel", ["dev", "nightly", "stable"]).pipe(Flag.withDefault("dev")),
+    channel: Flag.Literals("channel", ["dev", "nightly", "preview", "stable"]).pipe(
+      Flag.withDefault("dev"),
+    ),
     arch: Flag.Literals("arch", ["x64", "arm64"]).pipe(Flag.withDefault("x64")),
     output: Flag.String("output").pipe(Flag.optional),
     signThumbprint: Flag.String("sign-thumbprint").pipe(
@@ -295,12 +319,14 @@ const command = Command.make(
       Flag.optional,
     ),
     deferredSigning: Flag.Boolean("deferred-signing").pipe(
-      Flag.withDescription("Build a stable helper that the packaging job signs."),
+      Flag.withDescription(
+        "Build a helper the packaging job signs, so it checks the publisher that started it.",
+      ),
       Flag.withDefault(false),
     ),
     allowAnyParent: Flag.Boolean("allow-any-parent").pipe(
       Flag.withDescription(
-        "Build an unsigned helper, which has no signature to check a parent against.",
+        "Build a helper nothing will sign, which has no publisher to check a parent against.",
       ),
       Flag.withDefault(false),
     ),
@@ -322,7 +348,13 @@ const command = Command.make(
         allowAnyParent,
       });
       yield* Effect.log(
-        "Built " + built.executable + (built.signed ? " (signed)." : " (unsigned dev build)."),
+        "Built " +
+          built.executable +
+          (built.signed
+            ? " (signed)."
+            : deferredSigning
+              ? " (unsigned; the packaging job signs it)."
+              : " (unsigned; it serves any parent)."),
       );
     }),
 );
