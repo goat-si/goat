@@ -323,6 +323,7 @@ export function GoatBotChatView({
               <GoatBotTimeline
                 rows={rows}
                 environmentId={environmentId}
+                onOpenHome={bot ? () => setPanelOpen(true) : undefined}
                 taskThreads={supportsTaskThreads}
                 retryEnvironmentId={supportsTaskRetry ? environmentId : null}
                 replyingSince={removed ? null : replyingSince}

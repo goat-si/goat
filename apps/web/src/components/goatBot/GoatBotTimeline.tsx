@@ -37,6 +37,7 @@ import {
   type GoatBotTimelineActivity,
 } from "./GoatBotMessageParts";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
+import { GoatBotEventText } from "./GoatBotEventText";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -53,6 +54,7 @@ export function GoatBotTimeline({
   onRetry,
   onDiscard,
   onPick,
+  onOpenHome,
   taskDetails = false,
   taskThreads = false,
   retryEnvironmentId = null,
@@ -67,6 +69,8 @@ export function GoatBotTimeline({
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
   readonly onRetry: (clientKey: string) => void;
+  /** Opens the bot's home, where a routine an event line names lives. */
+  readonly onOpenHome?: (() => void) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
@@ -192,7 +196,7 @@ export function GoatBotTimeline({
                     role="note"
                     className="my-3 text-center text-xs leading-4 text-muted-foreground"
                   >
-                    {row.text}
+                    <GoatBotEventText row={row} onOpenHome={onOpenHome} />
                   </li>
                 );
               case "user": {
