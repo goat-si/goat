@@ -1,5 +1,5 @@
 import { LEGACY_THEME_ID_ALIASES } from "@goat/contracts/legacyT3Names";
-import { mixOklab } from "./oklabMix";
+import { mixOklab } from "./oklabMix.ts";
 
 export { mixOklab };
 
