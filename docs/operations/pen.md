@@ -23,7 +23,9 @@ works as a cron or monitor probe. The check node's keys live in `relay-check/` u
 relay one small entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same).
 That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
 sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
-while one runs waits for it, within its own `--timeout`. Run it against both relays after every deploy:
+while one runs waits for it, within its own `--timeout`. Use the current `pen`: the check in pen 0.2.5 and 0.2.6
+sends 64 KiB from its client before its node answers, which a Go relay newer than 0.2.6 refuses (4408, a pending session
+sends one message); nodes of those versions are not affected. Run it against both relays after every deploy:
 
 ```sh
 pen relay check https://pen-relay.pos090001.workers.dev
