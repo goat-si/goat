@@ -23,9 +23,8 @@ works as a cron or monitor probe. The check node's keys live in `relay-check/` u
 relay one small entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same).
 That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
 sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
-while one runs waits for it, within its own `--timeout`. Use the current `pen`: the check in pen 0.2.5 and 0.2.6
-sends 64 KiB from its client before its node answers, which a Go relay newer than 0.2.6 refuses (4408, a pending session
-sends one message); nodes of those versions are not affected. Run it against both relays after every deploy:
+while one runs waits for it, within its own `--timeout`. Run the same build of `pen` as the relay (see
+"Deploy a new binary" under Seoul relay): a check from pen 0.2.5 or 0.2.6 fails 4408 against a newer Go relay. Run it against both relays after every deploy:
 
 ```sh
 pen relay check https://pen-relay.pos090001.workers.dev
@@ -188,7 +187,11 @@ Install on a new VM: put the binary at `/opt/pen-relay/pen` (0755), write `/etc/
 then `sudo systemctl daemon-reload && sudo systemctl enable --now pen-relay`. To keep an existing certificate, copy its
 cache into `/var/lib/private/pen-relay/acme` before the first start; systemd hands it to the service user.
 
-Deploy a new binary: copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen
+Deploy a new binary: first install the same build of `pen` on every machine that runs `pen relay check` against
+this relay (your own machine, and any cron job or monitor), before or together with the relay. A check from pen 0.2.5
+or 0.2.6 against a relay newer than 0.2.6 prints `ok: healthz …` and then `FAIL: client to node: closed 4408` and
+exits 1, although the relay works: that check sends 64 KiB before its node answers, which the relay now refuses.
+Nodes of those versions are not affected. Then copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen
 /opt/pen-relay/pen.prev`, `sudo install -m 0755 <new> /opt/pen-relay/pen`, `sudo systemctl restart pen-relay`, then
 `pen relay check https://158-180-76-7.sslip.io`. When the unit file changed too, copy it to
 `/etc/systemd/system/pen-relay.service` (keep the old one as `pen-relay.service.prev`) and run
