@@ -160,3 +160,38 @@ func TestForwardIsQuietWhenTheServiceClosesAfterTheLocalClientIsGone(t *testing.
 	close(closeNow)
 	assertQuiet(t, f)
 }
+
+func TestForwardStopsWhenThisNodeLeavesTheMesh(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := meshOfTwo(t, ctx, rs)
+	p, err := loadPeer(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Resolve(p.view.SortedMembers(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- runForward(ctx, ln, b, p, m, 9, io.Discard, &errOut, nil) }()
+	var res struct{ Results []daemon.PushResult }
+	if err := daemon.Call(b, daemon.Request{Op: "leave"}, &res); err != nil {
+		t.Fatal(err)
+	}
+	// A forward left running after pen leave would keep the port and a key the mesh refuses.
+	if got := <-code; got != 255 || !strings.Contains(errOut.String(), "left the mesh") {
+		t.Fatalf("forward exit %d, stderr %q; want 255 and a line saying this node left", got, errOut.String())
+	}
+	if c, err := net.Dial("tcp", ln.Addr().String()); err == nil {
+		c.Close()
+		t.Fatal("the forward still listens after this node left")
+	}
+}

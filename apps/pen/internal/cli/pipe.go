@@ -106,7 +106,8 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
+	self := p.id.NodeID()
+	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID, self)
 	defer stopWatch()
 	tr := newOpenTrace(stderr, "")
 	sec, err := daemon.OpenTCP(tr.context(ctx), p.relays, p.id, m, port)
@@ -114,11 +115,13 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		return die(openErr(err, m, port, false))
 	}
 	var wasRevoked atomic.Bool
+	selfRevoked := false
 	spliced := make(chan struct{})
 	defer close(spliced)
 	go func() {
 		select {
-		case <-revoked:
+		case who := <-revoked:
+			selfRevoked = who == self && who != m.NodeID
 			wasRevoked.Store(true)
 			sec.Close(wire.CodeNotAdmitted)
 		case <-spliced:
@@ -132,13 +135,17 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := stream.Splice(ctx, tr.link(sec), Stdin, stdout, closeOut); err != nil {
 		if wasRevoked.Load() {
-			return die(revokedErr(m))
+			return die(revokedNodeErr(m, selfRevoked))
 		}
 		return die(openErr(err, m, port, true))
 	}
 	return 0
 }
 
-func revokedErr(m mesh.Member) error {
+// revokedNodeErr names who left: the member at the other end, or this node itself.
+func revokedNodeErr(m mesh.Member, self bool) error {
+	if self {
+		return errors.New("this node left the mesh or was revoked; session closed")
+	}
 	return fmt.Errorf("%s (%s) was revoked from the mesh; session closed", m.Name, short(m.NodeID))
 }

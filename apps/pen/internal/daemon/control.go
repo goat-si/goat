@@ -452,9 +452,9 @@ func (cl *Client) Next(v any) error {
 // Close hangs up.
 func (cl *Client) Close() error { return cl.c.Close() }
 
-// WatchRevoked follows the daemon's view and closes the returned channel once nodeID is revoked.
+// WatchRevoked follows the daemon's view and sends the first of nodeIDs to be revoked.
 // Without a running daemon it returns a nil channel (which never fires); stop ends the watch.
-func WatchRevoked(st *state.Store, nodeID string) (revoked <-chan struct{}, stop func()) {
+func WatchRevoked(st *state.Store, nodeIDs ...string) (revoked <-chan string, stop func()) {
 	cl, err := Dial(st)
 	if err != nil {
 		return nil, func() {}
@@ -463,7 +463,7 @@ func WatchRevoked(st *state.Store, nodeID string) (revoked <-chan struct{}, stop
 		cl.Close()
 		return nil, func() {}
 	}
-	ch := make(chan struct{})
+	ch := make(chan string, 1)
 	go func() {
 		for {
 			var w WatchLine
@@ -471,8 +471,8 @@ func WatchRevoked(st *state.Store, nodeID string) (revoked <-chan struct{}, stop
 				return
 			}
 			for _, r := range w.Revoked {
-				if r.NodeID == nodeID {
-					close(ch)
+				if slices.Contains(nodeIDs, r.NodeID) {
+					ch <- r.NodeID
 					return
 				}
 			}
