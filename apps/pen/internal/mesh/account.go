@@ -86,6 +86,11 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 	if m.T != "assertion" || len(m.Assertion) == 0 {
 		return AccountResult{}, refuse(c, "expected an assertion")
 	}
+	// A machine that is not a member (revoked, or its admit never took effect) admits nobody; it
+	// still answers the check above, which only reads its records.
+	if _, member := a.Store.View().Members[ident.B64.EncodeToString(a.ID.SignPub)]; !member {
+		return AccountResult{}, refuse(c, "this machine is not a member of the mesh")
+	}
 	if a.Asserted != nil {
 		a.Asserted()
 	}

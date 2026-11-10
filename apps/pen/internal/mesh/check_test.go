@@ -1,6 +1,11 @@
 package mesh
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+
+	"github.com/goat-si/goat/apps/pen/internal/ident"
+)
 
 // The listed check's walk (contract "Account join"): from the joiner toward the founder through
 // the admits it was given, it takes the joiner at the first key the receiver's own view counts
@@ -48,6 +53,44 @@ func TestTheListedCheckStopsAtACurrentMemberAndAtARevokedAdmitter(t *testing.T) 
 		own, merged := c.build(b, found)
 		if got := admittedCleanly(Compute(b.meshID, merged), Compute(b.meshID, own), pub(j)); got != c.want {
 			t.Errorf("%s: the check took j %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// When x's admit of y and a plain revoke of x share their past and the revoke sorts first, replay
+// ignores the admit: y was never a member, no sync changes that, and a joiner y admits is refused
+// for good. y has to join again through a current member.
+func TestAnAdmitThatLostToARevokeOfItsSignerNeverCounts(t *testing.T) {
+	f, x, y, j := detID(1), detID(2), detID(3), detID(4)
+	b, found := newMesh(t, f)
+	ax := b.admit(f, x, found)
+	ay := b.admit(x, y, ax)
+	want, _ := ident.B64.DecodeString(ay.Hash)
+	var rv *Record
+	for at := int64(100); rv == nil && at < 356; at++ {
+		r, err := Sign(f, b.meshID, TypeRevoke, b.n[pub(f)]+1, []string{ax.Hash}, at, Fields{Subjects: []string{pub(x)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h, _ := ident.B64.DecodeString(r.Hash); bytes.Compare(h, want) < 0 {
+			rv = r
+		}
+	}
+	if rv == nil {
+		t.Fatal("setup: no time in 256 tries made the revoke sort before the admit")
+	}
+	aj := b.admit(y, j, ay)
+	own := Compute(b.meshID, []*Record{found, ax, rv})
+	for _, recs := range [][]*Record{
+		{found, ax, ay, rv, aj},
+		{aj, rv, ay, ax, found, rv, ay}, // another arrival order, with records seen twice
+	} {
+		v := Compute(b.meshID, recs)
+		if isMember(v, y) || isMember(v, j) {
+			t.Fatalf("y member %v, j member %v; the admit lost to the revoke", isMember(v, y), isMember(v, j))
+		}
+		if admittedCleanly(v, own, pub(j)) {
+			t.Fatal("the check took a joiner admitted by a machine that never became a member")
 		}
 	}
 }

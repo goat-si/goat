@@ -59,6 +59,7 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t%s\t-\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub), via(m))
 	}
 	tw.Flush()
+	printNotAMember(w, ls)
 	for _, m := range ls.Members {
 		if m.Via == mesh.ViaGoogle && time.Since(time.UnixMilli(m.Since)) < announceFor {
 			fmt.Fprintf(w, "%s joined via Google %s, fingerprint %s (%s)\n", m.Name, safe(m.Email), m.Fingerprint, ago(m.Since))
@@ -68,6 +69,23 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 
 // announceFor is how long pen ls announces a member admitted for a Google account.
 const announceFor = 7 * 24 * time.Hour
+
+// printNotAMember says when this machine's own key is not a member of the mesh it holds: it can
+// still reach members it knows, but admits nobody and no member serves it.
+func printNotAMember(w io.Writer, ls daemon.LsReply) {
+	for _, m := range ls.Members {
+		if m.Self || m.NodeID == ls.Self {
+			return
+		}
+	}
+	for _, m := range ls.Revoked {
+		if m.NodeID == ls.Self {
+			fmt.Fprintf(w, "this machine is not a member of mesh %s: it was revoked. To use it again, run pen leave here, then join with an invite or pen login through a current member.\n", ls.MeshID)
+			return
+		}
+	}
+	fmt.Fprintf(w, "this machine is not a member of mesh %s: the admit that added it never took effect (the machine that admitted it was revoked first). Run pen leave here, then join with an invite or pen login through a current member.\n", ls.MeshID)
+}
 
 func via(m mesh.Member) string {
 	switch {

@@ -162,3 +162,39 @@ func TestAListedNodeThatDoesNotAnswerTakesNoPartInTheJoin(t *testing.T) {
 		t.Fatalf("an offline listed node failed the join: %v", err)
 	}
 }
+
+// A machine that is not a member of its mesh (revoked, or its admit lost to a revoke of its
+// admitter) still runs and the registry may still offer it, but it can admit nobody: it refuses a
+// Google join at once, before signing an admit that would count nowhere.
+func TestAMachineThatIsNotAMemberRefusesAGoogleJoinWithoutSigningAnything(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	y := joiner(t, ctx, rs, a.invite(t, time.Minute), "y")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(y.id.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	// a pushes only to current members; y hears of its revoke through any member it syncs with.
+	if _, err := y.d.mesh().Merge(a.d.mesh().Records()); err != nil {
+		t.Fatal(err)
+	}
+	y.d.viewChanged()
+	if _, ok := y.d.view().Revoked[ident.B64.EncodeToString(y.id.SignPub)]; !ok {
+		t.Fatal("setup: y has not heard of its revoke")
+	}
+	before := y.d.mesh().Len()
+	j := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	// The registry still lists y; y.ls no longer counts it, so it is offered as the registry lists it.
+	if _, _, err := AccountJoin(ctx, []string{rs.URL}, j, "j", as, []login.OfferedMember{listedAs(y, "y")}); err == nil {
+		t.Fatal("a machine that is not a member admitted j")
+	}
+	if n := y.d.mesh().Len(); n != before {
+		t.Fatalf("y signed %d record(s) for a join it could not make", n-before)
+	}
+}

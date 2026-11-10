@@ -418,9 +418,14 @@ the joiner sent. A node that left, was revoked, or has not heard of the joiner y
 joiner's admits reach a member it still counts, and the joiner applies them like any sync. A node that still refuses
 holds a revoke along the joiner's admits (a revoked or stolen member can serve a cut copy and a stolen key can win a
 revoke race in the merged order, so the check decides on the node's own view), so the join fails with that node's name
-and nothing is installed. The walk fails closed in one honest case: a machine admitted by a since-revoked key before the
-revoke, whose admit this node has not received yet, admits the joiner; that join fails until the members have synced
-the admit, and the joiner's message says to try again. A refusal also stands when the check
+and nothing is installed. The walk refuses in two honest cases.
+If a machine Y admitted by a since-revoked key X admits the joiner and this node has not received X's admit of Y yet,
+the join succeeds once the members have synced that admit. If X's admit of Y and a plain revoke of X share their past
+and the revoke sorts first in the canonical order, replay ignores the admit: Y was never a member in any converged view,
+no sync changes that, and Y has to join again (invite, or sign-in through a current member) before machines can join
+through it. The joiner's message says to run `pen login` again and, if it keeps failing, to join the admitting machine
+again. A node that is not a member of its mesh (revoked, or its admit never took effect) refuses an `assertion` on kind
+0x04 (`refused`, 4401) before signing anything; it still answers a `check`. A refusal also stands when the check
 does not complete. A node older than the check (pen 0.2.6 and before) answers `refused` ("expected an assertion") and
 4401, so while such a node is the one refusing, a join fails in exactly the cases the check was added for; updating it,
 or joining by invite, is the way through. A listed node that does not answer (offline, out of session slots, slower than
