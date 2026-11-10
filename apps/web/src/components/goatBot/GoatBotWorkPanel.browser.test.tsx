@@ -138,7 +138,7 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   await expect.element(back).toHaveFocus();
   await expect
     .element(screen.getByRole("link", { name: "Go to thread" }))
-    .toHaveAttribute("href", expect.stringContaining("channel-worker"));
+    .toHaveAttribute("href", expect.stringContaining("task=task-a"));
   await expect.element(screen.getByText("Working")).toBeVisible();
   await expect.element(screen.getByRole("tab", { name: "Home" })).not.toBeInTheDocument();
   await userEvent.click(back);
@@ -167,6 +167,16 @@ it("closes the peek when the task leaves the bot's work", async () => {
   );
   await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  // The task coming back does not reopen a peek nobody asked for.
+  setup([], [], [runningTask]);
+  await screen.rerender(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+    />,
+  );
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
 });
 
 it("says the task list is loading, not empty, before the first read answers", async () => {

@@ -92,6 +92,7 @@ export function GoatBotWorkPanel({
         );
   // A task the list no longer has, once it has loaded, closes its peek.
   const peekGone = peek !== null && loaded && !failed && peeked === undefined;
+  if (peekGone) setPeek(null);
   if (peek !== null && peekRows !== undefined && !peekGone) {
     return (
       <GoatBotWorkPeek
@@ -102,7 +103,6 @@ export function GoatBotWorkPanel({
             ? ""
             : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
         }
-        worker={peeked?.worker ?? null}
         rows={peekRows(peek.taskId)}
         environmentId={environmentId}
         onRetry={onRetryInput}

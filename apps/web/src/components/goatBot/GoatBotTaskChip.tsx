@@ -168,6 +168,8 @@ function GoatBotTaskSummary({
 }
 
 function GoatBotTaskTarget({ target }: { readonly target: GoatBotCardTarget }) {
+  // An empty label means the card is shown where another control opens the work.
+  if (target.kind === "none" && target.label === "") return null;
   if (target.kind === "none") return <DisabledTarget label={target.label} />;
   return <GoatBotThreadTarget target={target} />;
 }

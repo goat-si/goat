@@ -1,5 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import type { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 
 import { ChevronLeftIcon } from "~/components/solar";
@@ -9,18 +9,18 @@ import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 
 const NO_RETRY = () => {};
+const NO_TARGET = { kind: "none", label: "" } as const;
 // Focus moves to Back when the peek opens, as the row that opened it is gone.
 const focusElement = (element: HTMLElement | null) => element?.focus();
 
 /**
  * A task's conversation read inside the bot's panel, so the bot's own chat stays beside it. One
- * button opens the thread: the task's worker thread when it runs here, else the task's own view.
+ * button opens the task's thread view, where its actions and worker live.
  */
 export function GoatBotWorkPeek({
   taskId,
   title,
   statusLabel,
-  worker,
   rows,
   environmentId,
   onRetry,
@@ -29,15 +29,16 @@ export function GoatBotWorkPeek({
   readonly taskId: ChannelTaskId;
   readonly title: string;
   readonly statusLabel: string;
-  readonly worker: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null;
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly environmentId: EnvironmentId;
   readonly onRetry?: ((clientKey: string) => void) | undefined;
   readonly onBack: () => void;
 }) {
   const member = useGoatBotMember();
-  // The task's card would add a second way to the thread; its status sits under the title.
-  const conversation = rows.filter((row) => row.kind !== "task");
+  // The task's card keeps its result here, without its own link: the one way on is below.
+  const conversation = rows.map((row) =>
+    row.kind === "task" ? { ...row, card: { ...row.card, target: NO_TARGET } } : row,
+  );
   return (
     <section aria-label={title} className="flex min-h-0 min-w-0 flex-1 flex-col text-sm">
       <div className="flex min-w-0 flex-col items-start px-3 pt-14 pb-2">
@@ -72,16 +73,7 @@ export function GoatBotWorkPeek({
       <div className="p-3">
         <Button
           className="w-full"
-          render={
-            worker === null ? (
-              <Link to="/bot" search={{ task: taskId, ...goatBotSearch(member) }} />
-            ) : (
-              <Link
-                to="/$environmentId/$threadId"
-                params={{ environmentId: worker.environmentId, threadId: worker.threadId }}
-              />
-            )
-          }
+          render={<Link to="/bot" search={{ task: taskId, ...goatBotSearch(member) }} />}
         >
           Go to thread
         </Button>
