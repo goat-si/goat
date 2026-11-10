@@ -5,6 +5,7 @@ import {
   modelSelection,
   CODEX_DRIVER,
   runtimePolicy,
+  ExclusiveCapabilities,
 } from "./ProviderSessionFixture.testkit.ts";
 export {
   modelSelection,
@@ -13,6 +14,7 @@ export {
   emptyState,
 } from "./ProviderSessionFixture.testkit.ts";
 import { registerExtensionSessionChecks } from "./ProviderExtensionSessionChecks.testkit.ts";
+import { registerDetachRequestCheck } from "./ProviderSessionDetachRequest.testkit.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
@@ -134,13 +136,6 @@ import {
   type TurnStartMemoryCase,
 } from "./ProviderSessionManager.memoryCases.testkit.ts";
 const CodexCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
-const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
-  ...CodexCapabilities,
-  sessions: {
-    ...CodexCapabilities.sessions,
-    supportsMultipleProviderThreadsPerSession: false,
-  },
-};
 export function makeThreadCreatedEvent(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;
@@ -776,7 +771,7 @@ function runBrowserAccessScenario(input: {
     return (yield* Ref.get(mcpConfigs))[0];
   });
 }
-function makePendingRuntimeRequestEvents(input: {
+export function makePendingRuntimeRequestEvents(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;
   readonly providerSessionId: ProviderSessionId;
@@ -3737,66 +3732,12 @@ it.effect.each(["manual_shutdown", "server_shutdown"] as const)(
     }),
 );
 
-it.effect(
-  "ProviderSessionManagerV2 cancels a pending approval when a detach releases its session",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const now = yield* DateTime.now;
-        const projectId = yield* idAllocator.allocate.project({
-          fixtureName: "provider-session-manager-detach-request",
-        });
-        const threadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-detach-request",
-          projectId,
-        });
-        const providerSessionId = yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-        });
-        const providerThread = makeProviderThread({
-          idAllocator,
-          threadId,
-          providerSessionId,
-          now,
-        });
-
-        yield* eventSink.write({
-          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-        });
-        const pendingRequest = yield* makePendingRuntimeRequestEvents({
-          idAllocator,
-          threadId,
-          providerSessionId,
-          providerThread,
-          now,
-        });
-        yield* eventSink.write({ events: pendingRequest.events });
-        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
-
-        yield* manager.detach({ providerSessionId, threadId, detail: "Workspace changed." });
-
-        assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
-        const projection = yield* projectionStore.getThreadProjection(threadId);
-        const request = projection.runtimeRequests.find(
-          (candidate) => candidate.id === pendingRequest.requestId,
-        );
-        assert.equal(request?.status, "cancelled");
-        assert.equal(request?.responseCapability.type, "not_resumable");
-      });
-
-      yield* effect.pipe(
-        Effect.provide(
-          layerTest({ state, idleTimeoutMs: 60_000, capabilities: ExclusiveCapabilities }),
-        ),
-      );
-    }),
-);
+registerDetachRequestCheck({
+  makeThreadCreatedEvent,
+  makeProviderThread,
+  makePendingRuntimeRequestEvents,
+  layerTest,
+});
 
 it.effect("ProviderSessionManagerV2 persists session-scoped runtime requests without a run", () =>
   Effect.gen(function* () {

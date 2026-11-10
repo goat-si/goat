@@ -1,4 +1,8 @@
-import { readToolSearchSetting, resolveAutoCompactWindow } from "./ClaudeCompactSettings.ts";
+import {
+  claudeCompactionOutcome,
+  readToolSearchSetting,
+  resolveAutoCompactWindow,
+} from "./ClaudeCompactSettings.ts";
 import { claimClaudeQuery } from "./ClaudeQueryClaim.ts";
 import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
@@ -16,7 +20,11 @@ export {
   ClaudeAppendSystemPromptMissingValueError,
   ClaudeSettingsLaunchArgError,
 } from "./ClaudeLaunchArgs.ts";
-import { claudeApprovalPresentation, permissionResultFromDecision } from "./ClaudeApproval.ts";
+import {
+  CLAUDE_MCP_ELICITATION_OPTIONS,
+  claudeApprovalPresentation,
+  permissionResultFromDecision,
+} from "./ClaudeApproval.ts";
 import * as Scope from "effect/Scope";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
@@ -3378,15 +3386,6 @@ export const awaitClaudeApprovalDecision = Effect.fn("awaitClaudeApprovalDecisio
   });
   return yield* Effect.raceFirst(Deferred.await(decision), cancellation);
 });
-
-// MCP servers such as Computer Use ask on every call and expect the client to
-// remember a session grant, as Codex does. The CLI drops a reply's `_meta.persist`.
-const CLAUDE_MCP_ELICITATION_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
-  { decision: "cancel", label: "Cancel" },
-  { decision: "decline", label: "Decline" },
-  { decision: "acceptForSession", label: "Always allow this session" },
-  { decision: "accept", label: "Approve" },
-];
 
 type ClaudeMcpElicitationContent = NonNullable<ElicitationResult["content"]>;
 
@@ -8494,18 +8493,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const now = yield* DateTime.now;
               context.compaction = {
                 ...context.compaction,
-                status:
-                  message.compact_result === "success"
-                    ? "completed"
-                    : failed
-                      ? "failed"
-                      : "interrupted",
-                title:
-                  message.compact_result === "success"
-                    ? "Context compacted"
-                    : failed
-                      ? "Context compaction failed"
-                      : "Context compaction stopped",
+                ...claudeCompactionOutcome(message.compact_result === "success", failed),
                 ...(failed && message.compact_error ? { summary: message.compact_error } : {}),
                 completedAt: now,
                 updatedAt: now,

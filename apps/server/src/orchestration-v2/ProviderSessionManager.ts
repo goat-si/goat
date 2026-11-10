@@ -1,3 +1,4 @@
+import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
 import { sessionScopedRuntimeRequestThreadId } from "./sessionScopedRuntimeRequestThreadId.ts";
 import { goatMcpServersFor, nativeSubagentLimiter } from "./goatSessionConfig.ts";
 import { repairSchedule } from "../retryJitter.ts";
@@ -974,16 +975,6 @@ export const layerWithOptions = (
         });
       });
 
-      // A detach removes its thread before releasing, but that thread's records still need releasing.
-      const releasedThreadIds = (input: {
-        readonly entry: LiveSessionEntry;
-        readonly detachedThreadId?: ThreadId;
-      }) => {
-        const threadIds = new Set(input.entry.attachedThreadIds);
-        if (input.detachedThreadId !== undefined) threadIds.add(input.detachedThreadId);
-        return threadIds;
-      };
-
       const writeReleasedRuntimeRequestEvents = Effect.fn(
         "ProviderSessionManager.writeReleasedRuntimeRequestEvents",
       )(function* (input: {
@@ -1342,10 +1333,7 @@ export const layerWithOptions = (
               onNone: () => Effect.void,
               onSome: (entry) =>
                 Effect.gen(function* () {
-                  const detachedThread =
-                    input.detachedThreadId === undefined
-                      ? {}
-                      : { detachedThreadId: input.detachedThreadId };
+                  const detachedThread = detachedThreadField(input.detachedThreadId);
                   const releasedBackgroundTasks = yield* readReleasedBackgroundTasks({
                     entry,
                     reason: input.reason,

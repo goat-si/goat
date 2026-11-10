@@ -267,6 +267,8 @@ describe("SSH forward readiness", () => {
         const ensure = yield* Effect.forkChild(manager.ensureEnvironment(uploadTarget));
         yield* advance(Duration.seconds(60));
         const environment = yield* Fiber.join(ensure);
+        if ("type" in environment)
+          assert.fail("expected a ready environment, not a pending runtime");
         assert.equal(environment.httpBaseUrl, `http://127.0.0.1:${LOCAL_PORT}/`);
       }).pipe(Effect.provide(layer), Effect.scoped);
     }),
