@@ -837,13 +837,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @utility goat-composer-field {
-  min-height: 44px;
-  border-radius: 22px;
+  min-height: 48px;
+  border-radius: 24px;
   background: var(--goat-composer-fill);
-  box-shadow: inset 0 0 0 0.5px var(--goat-hairline);
+  box-shadow:
+    inset 0 0 0 1px var(--goat-hairline),
+    0 1px 3px rgb(0 0 0 / 4%);
 
   &:focus-within {
-    box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 32%, transparent);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in oklab, var(--foreground) 24%, transparent),
+      0 1px 3px rgb(0 0 0 / 4%);
   }
 }
 
@@ -1260,7 +1264,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   /* Ink on paper in light; dark raises it to a gray pill below. */
   --goat-person-message: var(--foreground);
   --goat-person-message-foreground: var(--background);
-  --goat-composer-fill: #f3f3f3;
+  /* A raised field on the canvas, as in Grok: white with a hairline in light. */
+  --goat-composer-fill: #ffffff;
   --goat-hairline: rgb(0 0 0 / 8%);
   --radius: 0.5rem;
   /* Neutral grays without a cool cast and an ink primary, after the ChatGPT
@@ -1350,7 +1355,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   @variant dark {
     color-scheme: dark;
     --blue: #339cff;
-    --goat-composer-fill: #262626;
+    --goat-composer-fill: #1f1f1f;
     --goat-hairline: rgb(255 255 255 / 10%);
     /* In dark the person's pill is a raised gray, as in Grok, rather than a white slab. */
     --goat-person-message: #3a3a3a;
