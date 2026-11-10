@@ -172,11 +172,11 @@ func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) erro
 	up := relay.NewUplink(relayURL, id)
 	ready := make(chan struct{})
 	var once sync.Once
-	up.OnState = func(on bool) {
-		if on {
-			once.Do(func() { close(ready) })
-		}
-	}
+	// The relay confirms nothing on authentication, and an earlier uplink of this node (a check
+	// that has not gone yet) may still hold its room. The uplink pings right after its answer and
+	// the relay handles a socket's messages in order, so the first pong means this uplink is the
+	// node's; a session opened before that could land on the earlier one.
+	up.OnPong = func(time.Duration) { once.Do(func() { close(ready) }) }
 	uctx, stop := context.WithCancel(ctx)
 	defer stop()
 	start := time.Now()

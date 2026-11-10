@@ -26,6 +26,8 @@ type Server struct {
 	// them before the relay serves (the relaytest command's flags); tests use HoldForwarding and
 	// HoldPongs instead.
 	ForwardDelay, PongDelay time.Duration
+	// nodeDelay holds the next binary message any uplink sends this long (DelayNextNodeMessage).
+	nodeDelay atomic.Int64
 
 	forward, pongs gate
 
@@ -77,6 +79,11 @@ func (s *Server) HoldForwarding() (release func()) { return s.forward.hold() }
 // client messages are still forwarded.
 func (s *Server) HoldPongs() (release func()) { return s.pongs.hold() }
 
+// DelayNextNodeMessage makes the relay take d longer to handle the next binary message an uplink
+// sends (an authentication answer, typically), as a busy relay would. A gate cannot stand in: the
+// code under test may rightly wait for that message's effect before doing anything else.
+func (s *Server) DelayNextNodeMessage(d time.Duration) { s.nodeDelay.Store(int64(d)) }
+
 // New starts a relay with the contract limits on 127.0.0.1.
 func New() *Server {
 	s := NewUnstarted()
@@ -114,6 +121,10 @@ func NewWithLimits(l relayserver.Limits) *Server {
 		OnBadAck: func() { s.BadAcks.Add(1) },
 		OnMessage: func(nodeID, role string, text bool) {
 			switch {
+			case role == "node" && !text:
+				if d := s.nodeDelay.Swap(0); d > 0 {
+					time.Sleep(time.Duration(d))
+				}
 			case role == "node" && text:
 				select {
 				case s.chanOf(s.uplinkPings, nodeID) <- struct{}{}:
