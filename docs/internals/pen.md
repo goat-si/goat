@@ -111,8 +111,8 @@ the same daemon operation as the CLI.
   passes it, as root passes 0600 on unix, so no peer check is added.
 - **Task Scheduler's restart on failure ignores exit codes.** It restarts only a task that failed to launch, so the
   task runs `pen up --supervise`, which restarts a daemon that exited non-zero. `pen down` writes a `down` record
-  that every supervisor checks before it starts the daemon, waits for the supervisor's lock to come free and
-  repeats nothing; `pen up` removes the record and repeats `schtasks /Run` until the daemon answers, because
+  that every supervisor checks before it starts the daemon, then waits for the supervisor's lock to come free;
+  `pen up` removes the record and repeats `schtasks /Run` until the daemon answers, because
   Task Scheduler can still count the old run as running and drop the new one (IgnoreNew). The record outlives a
   sign-in on purpose: a sign-in cannot be told apart from a supervisor that was starting during `pen down`. The task uses the user's
   interactive token, which needs no admin rights and means Pen runs only while that user is signed in; S4U or a
