@@ -2,6 +2,7 @@ package relayserver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,25 +10,42 @@ import (
 	"github.com/coder/websocket"
 )
 
-// stalledWS blocks every write until release closes; it records aborts and queued texts.
+// stalledWS blocks every write until release closes or, as a real socket does, until it is
+// closed; it records aborts.
 type stalledWS struct {
 	release chan struct{}
 	mu      sync.Mutex
 	aborted bool
+	gone    chan struct{}
+}
+
+func (w *stalledWS) closed() chan struct{} {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.gone == nil {
+		w.gone = make(chan struct{})
+	}
+	return w.gone
 }
 
 func (w *stalledWS) Write(ctx context.Context, _ websocket.MessageType, _ []byte) error {
 	select {
 	case <-w.release:
 		return nil
+	case <-w.closed():
+		return errors.New("closed")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 func (w *stalledWS) Close(websocket.StatusCode, string) error { return nil }
 func (w *stalledWS) CloseNow() error {
+	gone := w.closed()
 	w.mu.Lock()
-	w.aborted = true
+	if !w.aborted {
+		w.aborted = true
+		close(gone)
+	}
 	w.mu.Unlock()
 	return nil
 }
@@ -63,12 +81,39 @@ func TestQueuedPongsAreCapped(t *testing.T) {
 	q.mu.Lock()
 	held := 0
 	for _, it := range q.ring {
-		if it.pong {
+		if it.is(itemPong) {
 			held++
 		}
 	}
 	q.mu.Unlock()
 	if held > maxQueuedPongs {
 		t.Fatalf("%d pongs queued behind a stalled write, want at most %d", held, maxQueuedPongs)
+	}
+}
+
+// fastWS takes every write and close at once.
+type fastWS struct{}
+
+func (fastWS) Write(context.Context, websocket.MessageType, []byte) error { return nil }
+func (fastWS) Close(websocket.StatusCode, string) error                   { return nil }
+func (fastWS) CloseNow() error                                            { return nil }
+
+// A closed socket's close timer holds its queue and connection: it must be stopped once the writer
+// has ended, or every closed socket stays in memory for the write timeout (session churn kept
+// gigabytes that way).
+func TestAClosedQueueStopsItsCloseTimerWhenTheWriterEnds(t *testing.T) {
+	q := newOutq(fastWS{}, time.Hour, nil)
+	q.close(1000)
+	q.mu.Lock()
+	timer := q.closeTimer
+	q.mu.Unlock()
+	q.wait()
+	if timer != nil && timer.Stop() {
+		t.Fatal("the close timer of an ended queue was still pending")
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closeTimer != nil {
+		t.Fatal("an ended queue still holds its close timer")
 	}
 }

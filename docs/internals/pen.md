@@ -65,8 +65,20 @@ that already announced does not block the mesh; a member that never announced st
 - **A served copy can be cut.** The member that admits a new machine chooses which records to send. A revoked
   or stolen machine that the registry still lists could send its own admit and its revokes of the honest
   members. The joiner therefore also syncs with every node the registry listed that its copy does not count
-  as a member, and a refusal from one of them fails the join (`FinishJoin` in `apps/pen/internal/daemon/account.go`).
-  This helps only while an honest listed node is online.
+  as a member (`FinishJoin` in `apps/pen/internal/daemon/account.go`). One that refuses it is asked to check
+  the joiner's records against its own view (`serveCheck` in `apps/pen/internal/mesh/check.go`); the join
+  fails only if it still refuses, which it does when the joiner's admits pass a key its own view revoked
+  (plainly or as compromised) before reaching one it counts as a current member. Two honest cases refuse too:
+  a machine admitted by a since-revoked key that this node has not heard of yet, which passes once the members
+  sync, and a machine whose admit lost to a concurrent revoke of its admitter in the canonical order, which was
+  never a member anywhere and must join again (`admittedCleanly` and its tests in `mesh/check_test.go`). Such a
+  machine admits nobody: the Google join (after its refresh), the invite (before it is used) and `pen approve` all
+  check `mesh.IsMember` before signing, and the refusal carries `notMember` so a Google joiner tries the next
+  listed machine. The check and the signature (and the invite's burn, or queueing a request) hold the mesh
+  store's lock together (`Store.AppendAsMember`, `Store.DoAsMember`), so a revoke merged in between still stops
+  them. `pen ls` on such a machine says it is not a member and how to start over. This protects a join only while an honest listed node answers: a listed node that is offline,
+  out of session slots or slower than the 30 s push timeout takes no part, and one older than the check
+  (pen 0.2.6 and before) still refuses every joiner it does not know.
 - **The registry is not the mesh.** Any node with a valid sign-in for the account registers, even one a locked
   mesh only queued, and any registered node can remove the others from the account's list. One phished
   sign-in can therefore make the service offer new machines only the attacker's node. Members and invites

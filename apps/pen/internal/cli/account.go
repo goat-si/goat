@@ -104,7 +104,7 @@ func RunApprove(args []string, stdout, stderr io.Writer) int {
 	if err := daemon.Call(st, daemon.Request{Op: "approve", Subject: arg}, &r); err != nil {
 		return fail(stderr, err)
 	}
-	fmt.Fprintf(stdout, "approved %s (%s, %s), fingerprint %s; told:\n", r.Member.Name, short(r.Member.NodeID), r.Member.Email, fingerprintOf(r.Member.NoisePub))
+	fmt.Fprintf(stdout, "approved %s (%s, %s), fingerprint %s; told:\n", r.Member.Name, short(r.Member.NodeID), safe(r.Member.Email), fingerprintOf(r.Member.NoisePub))
 	printResults(stdout, r.Results)
 	return 0
 }

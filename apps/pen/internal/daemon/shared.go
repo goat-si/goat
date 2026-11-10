@@ -120,10 +120,9 @@ func (d *Daemon) setRelays(list []string) (Status, error) {
 	d.cfgMu.Lock()
 	changed := !slices.Equal(d.cfg.RelayList(), list)
 	d.cfg.SetRelays(list)
-	cfg := d.cfg
 	d.cfgMu.Unlock()
 	if changed {
-		if err := d.saveConfig(cfg); err != nil {
+		if err := d.saveConfig(); err != nil {
 			return Status{}, err
 		}
 		d.startUplinks()

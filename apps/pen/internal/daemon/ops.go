@@ -11,7 +11,6 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
-	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 func (d *Daemon) selfKey() string { return ident.B64.EncodeToString(d.id.SignPub) }
@@ -171,9 +170,8 @@ func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) er
 		d.cfg.SetRelays(relays)
 	}
 	d.cfg.Name = name
-	cfg := d.cfg
 	d.cfgMu.Unlock()
-	if err := d.saveConfig(cfg); err != nil {
+	if err := d.saveConfig(); err != nil {
 		return err
 	}
 	if changed {
@@ -196,9 +194,8 @@ func (d *Daemon) rename(ctx context.Context, name string) error {
 	}
 	d.cfgMu.Lock()
 	d.cfg.Name = name
-	cfg := d.cfg
 	d.cfgMu.Unlock()
-	if err := d.saveConfig(cfg); err != nil {
+	if err := d.saveConfig(); err != nil {
 		return err
 	}
 	d.viewChanged()
@@ -206,9 +203,15 @@ func (d *Daemon) rename(ctx context.Context, name string) error {
 	return nil
 }
 
-// saveConfig writes the daemon's config, keeping the download relay pen relay download may have
-// set on disk since the daemon loaded it.
-func (d *Daemon) saveConfig(cfg state.Config) error {
+// saveConfig writes the daemon's current config, keeping the download relay pen relay download
+// may have set on disk since the daemon loaded it. One save at a time runs from its snapshot to
+// its write, so an older snapshot never replaces a newer one.
+func (d *Daemon) saveConfig() error {
+	d.cfgSave.Lock()
+	defer d.cfgSave.Unlock()
+	d.cfgMu.Lock()
+	cfg := d.cfg
+	d.cfgMu.Unlock()
 	if disk, err := d.st.LoadConfig(); err == nil && disk.DownloadRelay != "" {
 		cfg.DownloadRelay = disk.DownloadRelay
 	}

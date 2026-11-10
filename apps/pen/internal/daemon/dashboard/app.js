@@ -368,6 +368,17 @@
     const foot = [
       "릴레이 열은 이 데몬이 본 세션(메시 동기화, 받은 세션)만 보여 줍니다. 이 기기 CLI의 pen pipe, pen forward 세션은 나오지 않습니다. · The relay column shows only sessions this daemon sees (mesh sync and sessions it accepts); pen pipe and pen forward from this machine's CLI are not shown.",
     ];
+    if (s.full) {
+      foot.unshift(
+        "메시가 가득 찼습니다: 새 기기, 이름, 잠금, 계정 연결이 거부됩니다(제거는 계속 됩니다). 새 메시로 옮기세요. · The mesh is full: new machines, names, locks and bindings are refused (revokes still work). Move to a new mesh.",
+      );
+    }
+    if (s.saveError) {
+      foot.unshift(
+        "이 기기의 상태 폴더에 쓸 수 없어 다른 멤버가 보낸 기록을 보관하지 못합니다. 디스크 공간이나 폴더 권한을 확인하세요. · This machine cannot write its state folder, so records other members send are not kept: " +
+          s.saveError,
+      );
+    }
     if (offline) {
       foot.unshift(
         "오프라인 멤버: 릴레이는 아무것도 보관하지 않습니다. 기기가 돌아오면 다시 동기화합니다. · Offline members: the relay holds nothing; a member rejoins and syncs when it comes back.",

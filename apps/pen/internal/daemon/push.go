@@ -32,6 +32,16 @@ func (d *Daemon) pushAll(ctx context.Context) []PushResult {
 }
 
 func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult {
+	limit := pushTimeout
+	if d.opt.PushTimeout > 0 {
+		limit = d.opt.PushTimeout
+	}
+	return d.pushWithin(ctx, members, limit)
+}
+
+// pushWithin pushes to members, each within limit; a push that runs out of limit marks its member
+// offline, while one that ctx ends leaves it as it was.
+func (d *Daemon) pushWithin(ctx context.Context, members []mesh.Member, limit time.Duration) []PushResult {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var out []PushResult
@@ -42,7 +52,7 @@ func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res := d.push(ctx, m)
+			res := d.push(ctx, m, limit)
 			mu.Lock()
 			out = append(out, PushResult{NodeID: m.NodeID, Name: m.Name, Result: res})
 			mu.Unlock()
@@ -53,12 +63,8 @@ func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult
 	return out
 }
 
-func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
+func (d *Daemon) push(ctx context.Context, m mesh.Member, limit time.Duration) string {
 	caller := ctx
-	limit := pushTimeout
-	if d.opt.PushTimeout > 0 {
-		limit = d.opt.PushTimeout
-	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	noise, err := ident.DecodeKey(m.NoisePub)
@@ -77,6 +83,10 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 			return "offline"
 		case wire.CodeNotAdmitted:
 			return "refused"
+		case wire.CodeCaps:
+			return "not taken: its mesh is full (4429)"
+		case wire.CodeNotKept:
+			return "not taken: it cannot write its state folder (4507)"
 		}
 		// A sleeping machine's uplink can stay registered at the relay, so its dials time out
 		// instead of closing 4404; a failed sync means it is not reachable now either way.
@@ -171,6 +181,9 @@ func Join(ctx context.Context, st *state.Store, id *ident.Identity, tok mesh.Tok
 
 func joinError(err error) error {
 	var refused *mesh.RefusedError
+	if errors.As(err, &refused) && refused.NotMember {
+		return errors.New("the inviting machine is no longer a member of its mesh, so it cannot add this one; the invite was not used. Ask a current member for a new invite")
+	}
 	if errors.As(err, &refused) {
 		return err
 	}

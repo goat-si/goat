@@ -36,6 +36,24 @@ func startUplink(t *testing.T, ctx context.Context, rs *relaytest.Server, id *id
 	return u, ev, done
 }
 
+// answer opens a session the way the contract orders it: the client's first message (at most
+// 4096 bytes; a relay may end a session that sends more before its node answers), then the node's.
+func answer(t *testing.T, ctx context.Context, c, n relay.Conn) {
+	t.Helper()
+	if err := c.Send(make([]byte, 4096)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.Recv(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Send([]byte("answer")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Recv(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newID(t *testing.T) *ident.Identity {
 	id, err := ident.Generate(nil)
 	if err != nil {
@@ -60,6 +78,7 @@ func TestClientSessionCarriesMessagesAndCloseCodesBothWays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	answer(t, ctx, c, n)
 	big := bytes.Repeat([]byte{7}, 300<<10)
 	for i := 0; i < 4; i++ {
 		if err := c.Send(big); err != nil {
@@ -132,9 +151,11 @@ func TestUplinkAckCountsEveryRelayMessageIncludingTheChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := u.Accept(ctx); err != nil {
+	n, err := u.Accept(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
+	answer(t, ctx, c, n)
 	if err := c.Send(make([]byte, 64<<10)); err != nil {
 		t.Fatal(err)
 	}
@@ -142,8 +163,8 @@ func TestUplinkAckCountsEveryRelayMessageIncludingTheChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// challenge (32) + OPEN frame (5) + DATA frame (5 + 64 KiB)
-	if want := uint64(32 + 5 + 5 + 64<<10); got != want {
+	// challenge (32) + OPEN frame (5) + the first message's DATA frame (5 + 4096) + DATA frame (5 + 64 KiB)
+	if want := uint64(32 + 5 + 5 + 4096 + 5 + 64<<10); got != want {
 		t.Fatalf("first ack a:%d, want a:%d", got, want)
 	}
 }

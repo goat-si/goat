@@ -132,7 +132,7 @@ func (d *Daemon) serveTCP(ctx context.Context, sec *session.Secure) {
 func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure, l *live) {
 	ctx, cancel := context.WithTimeout(ctx, meshSessionTimeout)
 	defer cancel()
-	merged := func(added []*mesh.Record) {
+	merged := func(added []*mesh.Record) error {
 		// Records on this session that remove its own peer: keep it open until our done so the
 		// peer learns its push was taken. Every other session of a revoked key closes at once.
 		if d.carriesPeerRevoke(sec.RemoteStatic, added) {
@@ -140,7 +140,7 @@ func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure, l *live) {
 			l.deferred = true
 			d.mu.Unlock()
 		}
-		d.onMerged(added)
+		return d.onMerged(added)
 	}
 	if err := mesh.SyncRespondAs(ctx, sec, d.mesh(), merged, d.helloFrom(sec.RemoteStatic), d.announce()); err != nil {
 		if relay.CodeOf(err) == 0 {

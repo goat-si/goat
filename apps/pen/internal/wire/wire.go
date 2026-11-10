@@ -21,6 +21,9 @@ const (
 	CodeTimeout       uint16 = 4408
 	CodeReplaced      uint16 = 4409
 	CodeCaps          uint16 = 4429
+	// CodeNotKept closes a mesh sync whose records the member could not keep (its state folder
+	// cannot be written).
+	CodeNotKept uint16 = 4507
 )
 
 // Mux frame types on the uplink.

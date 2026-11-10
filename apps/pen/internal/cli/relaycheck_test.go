@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -90,21 +91,40 @@ func TestRelayCheckFailsWhenTheCertificateExpiresSoon(t *testing.T) {
 // Two checks from one machine at once (two cron jobs, or a person and a probe) share the check node;
 // the second must wait for the first instead of replacing its uplink (4409) and failing both.
 func TestOverlappingRelayChecksFromOneMachineBothPass(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	t.Setenv("PEN_HOME", t.TempDir())
 	rs := relaytest.New()
 	defer rs.Close()
+	id, release, err := checkIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	waiting := make(chan struct{}, 2)
+	beforeCheckHold = func() { waiting <- struct{}{} }
+	defer func() { beforeCheckHold = func() {} }()
+	// The first check stalls mid-session, holding the check node, until forwarding resumes.
+	resume := rs.HoldForwarding()
+	defer resume()
 	type result struct {
 		code     int
 		out, err string
 	}
 	results := make(chan result, 2)
-	for range 2 {
-		go func() {
-			var out, errOut bytes.Buffer
-			code := RunRelay([]string{"check", rs.URL}, &out, &errOut)
-			results <- result{code, out.String(), errOut.String()}
-		}()
+	check := func() {
+		var out, errOut bytes.Buffer
+		code := RunRelay([]string{"check", rs.URL}, &out, &errOut)
+		results <- result{code, out.String(), errOut.String()}
 	}
+	go check()
+	<-waiting
+	if err := rs.NextClientMessage(ctx, id.NodeID()); err != nil {
+		t.Fatal(err)
+	}
+	go check()
+	<-waiting
+	resume()
 	for range 2 {
 		if r := <-results; r.code != 0 {
 			t.Fatalf("one of two overlapping checks: exit %d\n%s%s", r.code, r.out, r.err)

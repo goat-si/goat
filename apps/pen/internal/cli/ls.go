@@ -59,6 +59,7 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t%s\t-\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub), via(m))
 	}
 	tw.Flush()
+	printNotAMember(w, ls)
 	for _, m := range ls.Members {
 		if m.Via == mesh.ViaGoogle && time.Since(time.UnixMilli(m.Since)) < announceFor {
 			fmt.Fprintf(w, "%s joined via Google %s, fingerprint %s (%s)\n", m.Name, safe(m.Email), m.Fingerprint, ago(m.Since))
@@ -68,6 +69,28 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 
 // announceFor is how long pen ls announces a member admitted for a Google account.
 const announceFor = 7 * 24 * time.Hour
+
+// printNotAMember says when this machine's own key is not a member of the mesh it holds: it can
+// still reach members it knows, but admits nobody and no member serves it.
+func printNotAMember(w io.Writer, ls daemon.LsReply) {
+	for _, m := range ls.Members {
+		if m.Self || m.NodeID == ls.Self {
+			return
+		}
+	}
+	why := "the admit that added it never took effect (the machine that admitted it was revoked first)"
+	for _, m := range ls.Revoked {
+		if m.NodeID == ls.Self {
+			why = "it was revoked"
+		}
+	}
+	dir := ls.StateDir
+	if dir == "" {
+		dir = "the state folder (~/.pen, or PEN_HOME)"
+	}
+	// pen leave would need a member to take its revoke; this needs none.
+	fmt.Fprintf(w, "this machine is not a member of mesh %s: %s. To use it again: pen down, remove %s, then join with an invite or pen login through a current member.\n", ls.MeshID, why, dir)
+}
 
 func via(m mesh.Member) string {
 	switch {
@@ -88,6 +111,12 @@ func printAccount(w io.Writer, ls daemon.LsReply) {
 	}
 	if ls.Locked {
 		fmt.Fprintf(w, "lock     on: new machines wait for pen approve (%d pending here)\n", ls.Pending)
+	}
+	if ls.SaveError != "" {
+		fmt.Fprintf(w, "state    cannot be written (%s): records other members send are not kept and their syncs fail; free disk space or fix the folder's permissions\n", safe(ls.SaveError))
+	}
+	if ls.Records >= mesh.MaxOrdinary {
+		fmt.Fprintf(w, "mesh     full: %d records (new members, names, locks and bindings stop at %d, revokes at %d); move to a new mesh\n", ls.Records, mesh.MaxOrdinary, mesh.MaxRecords)
 	}
 	for _, u := range ls.Unforgotten {
 		fmt.Fprintf(w, "login    still offers removed %s (%s) to new machines; this machine is not registered with the account, so run pen login here or reset the machine list at %s/reset\n",
@@ -137,6 +166,7 @@ func RunLs(args []string, stdout, stderr io.Writer) int {
 	} else if err != nil {
 		return fail(stderr, err)
 	}
+	ls.StateDir = st.Dir
 	if !*watch {
 		if *asJSON {
 			b, _ := json.MarshalIndent(ls, "", "  ")

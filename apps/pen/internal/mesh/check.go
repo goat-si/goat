@@ -70,17 +70,24 @@ func serveCheck(ctx context.Context, c *Lines, remoteStatic []byte, a AccountAdm
 	}
 }
 
-// admittedCleanly reports whether k is a member of v whose admit, and each admit before it back to
-// the founder, was signed by a key own does not count as revoked. Which of two keys revoking each
-// other wins depends on the canonical order (a stolen key can grind it), so v alone cannot settle
-// a set a revoked member served; own can.
+// admittedCleanly reports whether k is a member of v admitted through keys own trusts. Walking
+// from k toward the founder through the admits in v, it accepts at the first key own counts as a
+// current member and refuses at the first key own revoked, plainly or as compromised: an admit by
+// a revoked key own does not already count looks the same as one signed after the revoke, and
+// which of two keys revoking each other wins in v depends on the canonical order (a stolen key can
+// grind it). Keys own never heard of are walked through, so the walk must still end at a current
+// member; one admitted by a revoked key before its revoke fails until own has synced its admit.
 func admittedCleanly(v, own *View, k string) bool {
 	m, ok := v.Members[k]
 	if !ok {
 		return false
 	}
-	for steps := 0; m.AdmittedBy != ""; steps++ {
-		if _, gone := own.Revoked[m.AdmittedBy]; gone || steps > len(v.Members)+len(v.Revoked) {
+	for range len(v.Members) + len(v.Revoked) + 1 {
+		key := m.SignPub
+		if _, member := own.Members[key]; member {
+			return true
+		}
+		if _, revoked := own.Revoked[key]; revoked || m.AdmittedBy == "" {
 			return false
 		}
 		next, ok := v.Members[m.AdmittedBy]
@@ -92,7 +99,7 @@ func admittedCleanly(v, own *View, k string) bool {
 		}
 		m = next
 	}
-	return true
+	return false
 }
 
 // CheckWith runs the joiner side of a check over a confirmed kind 0x04 session: it sends the

@@ -4,7 +4,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/pen up --foreground
+ExecStart=%h/.local/bin/pen up --foreground --service
 Restart=on-failure
 RestartSec=2
 
