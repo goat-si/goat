@@ -70,9 +70,7 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 		}
 		return "error: " + err.Error()
 	}
-	sec, err := OpenAny(ctx, d.relays(), m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
-		return session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, d.id, nil, session.Payload{V: 1, Stream: "mesh"})
-	})
+	sec, err := openMember(ctx, d.relays(), d.id, m.NodeID, noise, session.Payload{V: 1, Stream: "mesh"})
 	if err != nil {
 		return res(err)
 	}
@@ -87,9 +85,10 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 // DialRetries is how often a join retries a relay 4404 (the inviter's uplink may be registering).
 var DialRetries = []time.Duration{300 * time.Millisecond, time.Second, 2 * time.Second}
 
-// OpenAny reaches nodeID through the first of relays to answer (DialRace) and runs handshake on it.
-// A relay can answer pong for a stale uplink, so when the handshake fails there it falls back to the
-// remaining relays; 4401 and 4400 are the node's answer and end the attempt.
+// OpenAny reaches nodeID through the first of relays to answer (DialRace) and runs handshake on it,
+// for kinds 0x03 and 0x04 (kind 0x01 races the handshake itself, OpenSession). A relay can answer
+// pong for a stale uplink, so when the handshake fails there it falls back to the remaining relays;
+// 4401 and 4400 are the node's answer and end the attempt.
 func OpenAny(ctx context.Context, relays []string, nodeID string, handshake func(relay.Conn) (*session.Secure, error)) (*session.Secure, error) {
 	left := append([]string(nil), relays...)
 	var last error
@@ -121,9 +120,7 @@ func OpenTCP(ctx context.Context, relays []string, id *ident.Identity, m mesh.Me
 	if err != nil {
 		return nil, err
 	}
-	return OpenAny(ctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
-		return session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "tcp", Port: port})
-	})
+	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "tcp", Port: port})
 }
 
 // Join runs the joiner side of tok against its relay and returns the verified set (not yet saved).

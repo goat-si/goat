@@ -343,9 +343,7 @@ func SyncApproved(ctx context.Context, relays []string, id *ident.Identity, memb
 	if err != nil {
 		return nil, err
 	}
-	sec, err := OpenAny(ctx, relays, member.NodeID, func(conn relay.Conn) (*session.Secure, error) {
-		return session.Initiate(ctx, conn, session.KindSession, member.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "mesh"})
-	})
+	sec, err := openMember(ctx, relays, id, member.NodeID, noise, session.Payload{V: 1, Stream: "mesh"})
 	if relay.CodeOf(err) == wire.CodeNotAdmitted {
 		return nil, ErrNotApproved
 	}
@@ -388,9 +386,7 @@ func syncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.
 			defer wg.Done()
 			pctx, cancel := context.WithTimeout(ctx, pushTimeout)
 			defer cancel()
-			sec, err := OpenAny(pctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
-				return session.Initiate(pctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "mesh"})
-			})
+			sec, err := openMember(pctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "mesh"})
 			if err == nil {
 				defer sec.Close(wire.CodeNormal)
 				err = mesh.SyncInitiate(pctx, sec, s, nil, nil)
