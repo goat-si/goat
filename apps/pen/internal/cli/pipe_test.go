@@ -170,3 +170,36 @@ func TestPipeTraceOnPinnedRelaysNamesTheWinnerAndTheFirstByte(t *testing.T) {
 		}
 	}
 }
+
+// ssh on Windows runs ProxyCommand without a shell, so the state directory comes as --home.
+func TestPipeHomeFlagPicksTheStateDirectoryOverPEN_HOME(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := meshOfTwo(t, ctx, rs)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		c.Write([]byte("SSH-2.0-test\r\n"))
+		io.Copy(io.Discard, c)
+		c.Close()
+	}()
+	t.Setenv("PEN_HOME", t.TempDir()) // an empty state directory: pipe would fail from here
+	Stdin = strings.NewReader("")
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if code := RunPipe([]string{"--home", b.Dir, "a", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)}, &out, &errOut); code != 0 {
+		t.Fatalf("pipe exit %d: %s", code, errOut.String())
+	}
+	if out.String() != "SSH-2.0-test\r\n" {
+		t.Fatalf("pipe output %q", out.String())
+	}
+}

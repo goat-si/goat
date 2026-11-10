@@ -63,20 +63,13 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// pipeCommand is the shell-quoted ProxyCommand prefix for this binary and state directory.
+// pipeCommand is the ProxyCommand up to and including "pipe" for this binary and state directory.
 func pipeCommand() (string, error) {
-	exe, err := os.Executable()
+	exe, err := exePath()
 	if err != nil {
 		return "", err
 	}
-	if p, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = p
-	}
-	cmd := shellQuote(exe)
-	if h := os.Getenv("PEN_HOME"); h != "" {
-		cmd = "env PEN_HOME=" + shellQuote(h) + " " + cmd
-	}
-	return cmd, nil
+	return proxyPrefix(exe, os.Getenv("PEN_HOME")), nil
 }
 
 func hostsOf(v *mesh.View) []sshHost {
@@ -121,22 +114,22 @@ type sshHost struct{ Name, User string }
 const controlSocketMax = 104
 
 // sshConfigText is one Host block per member name plus a pen-* fallback for names added later.
-// cmd is already shell-quoted. Each host reuses one connection for 10 minutes (ControlMaster), so
-// only the first ssh to a member pays the relay and key exchange round trips; control sockets live
-// in controlDir, and are left out when their path would not fit a unix socket address
-// (ssh -o ControlPath=none opens a fresh connection).
+// cmd is the quoted command through "pipe". Each host reuses one connection for 10 minutes
+// (ControlMaster), so only the first ssh to a member pays the relay and key exchange round trips;
+// control sockets live in controlDir, and are left out when their path would not fit a unix socket
+// address (ssh -o ControlPath=none opens a fresh connection) or the ssh has no ControlMaster (Windows).
 func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 	var b strings.Builder
 	b.WriteString("# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n")
 	controlPrefix := filepath.Join(controlDir, "cm-")
-	reuse := len(controlPrefix)+40+17 < controlSocketMax
+	reuse := connectionReuse && len(controlPrefix)+40+17 < controlSocketMax
 	block := func(pattern, user string) {
 		fmt.Fprintf(&b, "Host %s\n", pattern)
 		if user != "" {
 			fmt.Fprintf(&b, "    User %s\n", user)
 		}
-		fmt.Fprintf(&b, "    ProxyCommand %s pipe %%n 22\n", strings.ReplaceAll(cmd, "%", "%%"))
-		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(knownHosts))
+		fmt.Fprintf(&b, "    ProxyCommand %s %%n 22\n", strings.ReplaceAll(cmd, "%", "%%"))
+		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(configPath(knownHosts)))
 		b.WriteString("    StrictHostKeyChecking yes\n")
 		if !reuse {
 			return
@@ -161,12 +154,15 @@ func sshDir() string {
 }
 
 // includeLine quotes the path; Include takes no % tokens, so none are escaped.
-func includeLine(dir string) string { return "Include \"" + filepath.Join(dir, "pen", "config") + "\"" }
+func includeLine(dir string) string {
+	return "Include \"" + configPath(filepath.Join(dir, "pen", "config")) + "\""
+}
 
-// ownInclude reports how many leading bytes of a config are pen's Include line, quoted or (older builds) not.
+// ownInclude reports how many leading bytes of a config are pen's Include line: today's, or an older
+// build's (unquoted, or with native Windows separators).
 func ownInclude(dir string, cfg []byte) int {
 	path := filepath.Join(dir, "pen", "config")
-	for _, line := range []string{includeLine(dir), "Include " + path} {
+	for _, line := range []string{includeLine(dir), "Include \"" + path + "\"", "Include " + path} {
 		if p := []byte(line + "\n"); bytes.HasPrefix(cfg, p) {
 			return len(p)
 		}

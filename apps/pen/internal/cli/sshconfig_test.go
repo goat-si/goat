@@ -22,7 +22,7 @@ func TestSSHConfigInstallThenUninstallRestoresTheUserConfig(t *testing.T) {
 		t.Fatalf("install exit %d: %s", code, errOut.String())
 	}
 	installed, _ := os.ReadFile(cfg)
-	if !bytes.HasPrefix(installed, []byte("Include \""+filepath.Join(dir, "pen", "config")+"\"\n")) {
+	if !bytes.HasPrefix(installed, []byte(includeLine(dir)+"\n")) {
 		t.Fatalf("Include is not the first line:\n%s", installed)
 	}
 	if code := RunSSHConfig([]string{"--install"}, &out, &errOut); code != 0 {
