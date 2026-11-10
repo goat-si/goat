@@ -38,7 +38,10 @@ wins over the code; user workflows are in [Pen](../user/pen.md) and procedures i
   closes the older one 4409, and a node that gets 4409 stops instead of reconnecting
   ([contract](../../packages/pen-protocol/CONTRACT.md#relay)). Two machines sharing an identity, such as boxes
   made from an image that contained `~/.pen`, therefore knock each other offline. Never bake `~/.pen`
-  into an image; join each machine on its first boot.
+  into an image; join each machine on its first boot. A startup guard cannot catch a clone by
+  `/etc/machine-id`: boxes.dev forks the whole VM, so a box made from the template keeps its machine id
+  and even its boot id (checked 2026-11-10). Detecting a clone needs a value the platform makes unique per
+  box.
 
 ## Revocation and compromise
 
