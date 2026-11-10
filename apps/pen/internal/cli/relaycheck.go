@@ -11,12 +11,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
@@ -109,9 +111,25 @@ func checkHealth(ctx context.Context, relayURL string, stdout io.Writer) (time.T
 	return resp.TLS.PeerCertificates[0].NotAfter, nil
 }
 
-// checkRoundTrip uplinks a throwaway node, opens a client session to it and moves 64 KiB each way.
+// checkIdentity is the node the check uplinks as: one per machine, kept in relay-check/ under the
+// state directory and never the machine's own node (its uplink would replace the real one, 4409).
+// Relays keep a little state per node id, so a fresh identity per run would pile it up.
+func checkIdentity() (*ident.Identity, error) {
+	dir, err := state.Dir()
+	if err != nil {
+		return nil, err
+	}
+	st, err := state.OpenDir(filepath.Join(dir, "relay-check"))
+	if err != nil {
+		return nil, err
+	}
+	id, _, err := st.EnsureIdentity()
+	return id, err
+}
+
+// checkRoundTrip uplinks the check node, opens a client session to it and moves 64 KiB each way.
 func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) error {
-	id, err := ident.Generate(rand.Reader)
+	id, err := checkIdentity()
 	if err != nil {
 		return err
 	}
@@ -130,11 +148,30 @@ func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) erro
 	select {
 	case <-ready:
 	case <-ctx.Done():
-		return errors.New("a new node could not authenticate its uplink in time")
+		return errors.New("the check node could not authenticate its uplink in time")
 	}
 	uplinked := time.Since(start)
 
 	start = time.Now()
+	// Sends on a relay socket are not bound by a context, so the session runs aside and --timeout
+	// still ends the check when a relay stops reading.
+	done := make(chan error, 1)
+	go func() { done <- checkSession(ctx, relayURL, id, up) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return err
+		}
+	case <-ctx.Done():
+		return errors.New("the relay stopped moving data before --timeout")
+	}
+	fmt.Fprintf(stdout, "ok: the check node uplinked in %d ms; 64 KiB each way through the relay in %d ms\n",
+		uplinked.Milliseconds(), time.Since(start).Milliseconds())
+	return nil
+}
+
+// checkSession opens a client session to the check node and moves 64 KiB each way.
+func checkSession(ctx context.Context, relayURL string, id *ident.Identity, up *relay.Uplink) error {
 	client, err := relay.Dial(ctx, relayURL, id.NodeID())
 	if err != nil {
 		return fmt.Errorf("client dial: %w", err)
@@ -157,8 +194,6 @@ func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) erro
 	if err := exchange(ctx, node, client); err != nil {
 		return fmt.Errorf("node to client: %w", err)
 	}
-	fmt.Fprintf(stdout, "ok: a new node uplinked in %d ms; 64 KiB each way through the relay in %d ms\n",
-		uplinked.Milliseconds(), time.Since(start).Milliseconds())
 	return nil
 }
 

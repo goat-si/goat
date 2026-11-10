@@ -20,13 +20,14 @@ import (
 )
 
 func TestRelayCheckMovesBytesBothWaysThroughAWorkingRelay(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
 	rs := relaytest.New()
 	defer rs.Close()
 	var out, errOut bytes.Buffer
 	if code := RunRelay([]string{"check", rs.URL}, &out, &errOut); code != 0 {
 		t.Fatalf("check of a working relay: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
-	for _, want := range []string{"ok: healthz", "ok: a new node", "64 KiB each way"} {
+	for _, want := range []string{"ok: healthz", "ok: the check node", "64 KiB each way"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
 		}
@@ -34,6 +35,7 @@ func TestRelayCheckMovesBytesBothWaysThroughAWorkingRelay(t *testing.T) {
 }
 
 func TestRelayCheckFailsWhenTheRelayIsDown(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
 	rs := relaytest.New()
 	url := rs.URL
 	rs.Close()
@@ -46,6 +48,7 @@ func TestRelayCheckFailsWhenTheRelayIsDown(t *testing.T) {
 // The served certificate's expiry is the operator's renewal alarm: autocert retries a failed renewal
 // silently, so the check fails while there is still time to act.
 func TestRelayCheckFailsWhenTheCertificateExpiresSoon(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
