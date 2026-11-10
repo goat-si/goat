@@ -24,13 +24,14 @@ ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert
 #   130 KiB, so about 360 KiB per connection, 360 MiB at 1024.
 # - The binary, slab and other kernel memory: about 32 MiB.
 # 384 + 360 + 32 = 776 MiB, with MemoryMax=1G leaving about 250 MiB of headroom. Measured on the
-# relay of commit 7496c8239b (linux x86_64 under other load, 2026-11-11, these flags, TLS, sources
-# on loopback addresses): 400 uplinks with 600 clients from 10 addresses that never read, each sent
-# 320 KiB, peaked at 308 MiB (Go 218, kernel sockets 75); 856 uplinks, 64 partly sent 1 MiB
-# messages and 96 non-reading clients from 12 addresses filling the queue budget peaked at 395 MiB
-# (Go 359); 960 non-reading clients from 64 addresses each sent up to 4 MiB peaked at 408 MiB
-# (Go 341, sockets 56). No run reached MemoryMax. Not measured on arm64 (the Seoul VM). Change the
-# flags, GOMEMLIMIT and MemoryMax together.
+# relay of commit ea40402a01 (no eviction: data that does not fit ends only its session; linux
+# x86_64, load about 1.5 on 16 cores, 2026-11-11, these flags, TLS, sources on loopback addresses):
+# 400 uplinks with 600 clients from 10 addresses that never read, each sent 320 KiB, peaked at
+# 303 MiB (Go 210, kernel sockets 75); 856 uplinks, 64 partly sent 1 MiB messages and 96 non-reading
+# clients from 12 addresses filling the queue budget peaked at 374 MiB (Go 356); 960 non-reading
+# clients from 64 addresses each sent up to 4 MiB peaked at 376 MiB (Go 352, sockets 15). No run
+# reached MemoryMax. Not measured on arm64 (the Seoul VM). Change the flags, GOMEMLIMIT and
+# MemoryMax together.
 Environment=GOMEMLIMIT=384MiB
 DynamicUser=yes
 StateDirectory=pen-relay
