@@ -20,8 +20,12 @@ compression check runs in `scripts/smoke.ts` against the deployed Worker.
 
 ## Deploy
 
-`pnpm run deploy` publishes to workers.dev on the account in `wrangler.jsonc` (log in with
-`wrangler login` first). Then run `node scripts/smoke.ts <url>`: it checks `/healthz` and that the
+`pnpm run deploy` is the only supported way to publish (to workers.dev on the account in `wrangler.jsonc`;
+log in with `wrangler login` first): it runs `scripts/check-public.ts`, which refuses a test build of
+`public/install.sh` and a release whose four archives are missing or do not match `SHA256SUMS`, and a plain
+`wrangler deploy` skips that. `public/dl/` is gitignored, so in a fresh checkout run
+`apps/pen/scripts/build.sh <version> <relays>` first (docs/operations/pen.md, "Release the node").
+Then run `node scripts/smoke.ts <url>`: it checks `/healthz` and that the
 101 carries no `Sec-WebSocket-Extensions` when the dialer offers none (Pen dialers never offer compression;
 the static-asset router accepts it from clients that do), moves 1 MiB each way between a fresh node and a client with
 SHA-256 comparison, and prints close latency.

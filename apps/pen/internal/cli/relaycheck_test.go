@@ -86,3 +86,41 @@ func TestRelayCheckFailsWhenTheCertificateExpiresSoon(t *testing.T) {
 		t.Fatalf("same relay with a 3-day threshold: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
 }
+
+// Two checks from one machine at once (two cron jobs, or a person and a probe) share the check node;
+// the second must wait for the first instead of replacing its uplink (4409) and failing both.
+func TestOverlappingRelayChecksFromOneMachineBothPass(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
+	rs := relaytest.New()
+	defer rs.Close()
+	type result struct {
+		code     int
+		out, err string
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			var out, errOut bytes.Buffer
+			code := RunRelay([]string{"check", rs.URL}, &out, &errOut)
+			results <- result{code, out.String(), errOut.String()}
+		}()
+	}
+	for range 2 {
+		if r := <-results; r.code != 0 {
+			t.Fatalf("one of two overlapping checks: exit %d\n%s%s", r.code, r.out, r.err)
+		}
+	}
+}
+
+// A relay that accepts the sockets but stops forwarding ends the check at --timeout with a reason.
+func TestRelayCheckGivesUpAtItsTimeoutWhenTheRelayStopsForwarding(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
+	rs := relaytest.New()
+	defer rs.Close()
+	release := rs.HoldForwarding()
+	defer release()
+	var out, errOut bytes.Buffer
+	if code := RunRelay([]string{"check", "--timeout", "2s", rs.URL}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "before --timeout") {
+		t.Fatalf("check through a relay that holds every message: exit %d\n%s%s", code, out.String(), errOut.String())
+	}
+}

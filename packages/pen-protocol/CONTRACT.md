@@ -249,11 +249,18 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   `wss://<host>`, `--cert`/`--key` and a TLS terminator in front of `--plain` need `--public-origin wss://host`, and a
   request whose Host does not name that origin gets HTTP 421 before any upgrade. `--plain` without a public origin
   listens on loopback only (tests and local relays), where the origin follows the request. Beyond the contract it caps all
-  sockets (4096, `--max-sockets`) and one IPv4 address's or IPv6 /64's sockets (64, `--max-per-ip`) with HTTP 429;
-  past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It
+  connections (4096, `--max-sockets`) and one IPv4 address's or IPv6 /64's connections (64, `--max-per-ip`), counted
+  from accept: one past a cap is closed before any request is read (HTTP 429 when a cap is reached between accept and
+  upgrade). Past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It caps the memory that queued and partly read messages hold, each counted at its allocation size plus 128
+  bytes: all of it (192 MiB, `--max-queued-mib`) and one source address's part (16 MiB,
+  `--max-queued-per-source-mib`, the same IPv4 address or IPv6 /64). Data that would pass either ends the session whose
+  socket would hold it 4408: a client that stops reading ends its own session, and a socket whose message being read
+  would pass it closes 4408. So a full relay ends the sessions of the source that holds the memory, and sessions from
+  other sources go on until enough sources fill the total. Each connection gets fixed 64 KiB kernel send and receive
+  buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
-  handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, counting 64
-  bytes per message on top of its size, so a client flooding empty DATA ends only its own session 4408. Session ids are never
+  handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
+  flooding empty DATA ends only its own session 4408. Session ids are never
   reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
 
 ## Accounts (v1.1)
@@ -297,7 +304,9 @@ Device flow (RFC 8628 shaped):
 Assertion: `{"body":"<base64url>","sig":"<base64url>"}`, body an I-JSON object
 `{"v":1,"iss":L,"kid","sub","email","signPub","noisePub","iat","exp"}` (seconds; exp = iat + 600), sig = Ed25519 by the
 login key over `"pen-login/1 assertion" || SHA-256(body)`. `sub` and `email` hold no C0 control character or DEL
-(members print them); an assertion that does is malformed, and so are `admit` and `account` records that carry one.
+(members print them); an assertion that does is malformed, and a node never signs an `admit` or `account` record that
+carries one. Such a record from a node before 0.2.6 is stored and applied like any other, so every node computes the
+same view; members print its text with control characters replaced.
 
 Registry (Durable Object, SQLite): account `sub` -> one meshId and the nodes registered under it; nothing else long-lived.
 The registry is not the mesh: any node with a valid sign-in registers, even one a locked mesh only queued, and any
@@ -372,9 +381,18 @@ The joining side: `pen login` shows the returned email and, when the registry of
 fingerprints, and asks before founding or joining (`--yes` skips the question for scripts; `install.sh --login` does not
 pass it). After joining it syncs with at least two members, or warns that only one was reachable, checks that it is still
 a member after those syncs, and only then serves `tcp` streams and registers. It also syncs with every node the registry
-offered that its copy of the mesh does not count as a member; one that refuses it (4401) holds records the admitting
-member left out (a revoked or stolen member can serve a cut copy), so the join fails with that node's name and nothing
-is installed. When its assertion has expired by then
+offered that its copy of the mesh does not count as a member. One that refuses it (4401) is asked again with a check on
+kind 0x04: the first line is `{"t":"check","assertion":{...}}` instead of `assertion`. The node runs the assertion
+checks above (a lock does not matter here) and then a sync as on kind 0x01, with the joiner as initiator, except that it
+sends its own records and `done` only after the joiner's `done`, and only if, with the joiner's records merged into a
+scratch copy of its own set, the joiner is a member whose admit and every admit before it back to the founder were signed
+by keys its own view does not count as revoked; otherwise it sends `refused` and closes 4401. It stores nothing the
+joiner sent. A node that already left the mesh, or has not heard of the joiner yet, so passes it its records, and the
+joiner applies them like any sync. A node that still refuses holds records the admitting member left out (a revoked or
+stolen member can serve a cut copy, and a stolen key can win a revoke race in the merged order, so the check does not
+rely on that order), so the join fails with that node's name and nothing is installed. A refusal also stands when the
+check does not complete; a node older than the check answers `refused` ("expected an assertion") and 4401, as before.
+When its assertion has expired by then
 (a slow approval), it stays a member and says registration waits for the next `pen login`. `pen login` on a member whose
 mesh is unbound, or bound to an older login key, offers to bind it again (same question).
 
@@ -407,7 +425,15 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   sessions keep the ping race. Clients only; no wire change, and v1.0 and v1.1 responders answer both alike.
 - v1.1 (2026-11-10): a version 1 token's relay URL obeys the version 2 scheme rule, and one sync session carries at most
   4352 records. Both tighten what a node accepts; an honest peer never sent either.
-- v1.1 (2026-11-11): assertion `sub` and `email` and the matching record fields refuse control characters; a member
+- v1.1 (2026-11-11): assertion `sub` and `email` refuse control characters and nodes no longer sign records carrying
+  them (stored ones still apply, as older nodes apply them); a member
   syncs with reachable members before deciding an account join; a joiner also checks the registry's other nodes; a key
   already revoked can be revoked again as compromised. The registry's trust limit and the kind 0x04 slot timing are
   stated. Vectors: two new login check cases.
+- v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
+  messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so a
+  full relay ends the sessions of the source holding the memory. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): kind 0x04 `check`: a Google joiner that a listed node refused asks it to check the joiner's
+  records against its own, so a node that left or has not heard of the joiner no longer fails the join while a cut copy
+  served by a revoked member still does. Nodes before this answer the check as an unexpected first line (4401), which
+  the joiner counts as the refusal it was. No account-stream messages are in the shared vectors.

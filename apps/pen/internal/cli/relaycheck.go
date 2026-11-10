@@ -28,8 +28,8 @@ const (
 	checkChunks = 16
 )
 
-// runRelayCheck proves a relay end to end: /healthz answers, its certificate has time left, and a
-// throwaway node can uplink and exchange bytes with a client through it.
+// runRelayCheck proves a relay end to end: /healthz answers, its certificate has time left, and the
+// machine's check node can uplink and exchange bytes with a client through it.
 func runRelayCheck(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("relay check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -113,34 +113,70 @@ func checkHealth(ctx context.Context, relayURL string, stdout io.Writer) (time.T
 
 // checkIdentity is the node the check uplinks as: one per machine, kept in relay-check/ under the
 // state directory and never the machine's own node (its uplink would replace the real one, 4409).
-// Relays keep a little state per node id, so a fresh identity per run would pile it up.
-func checkIdentity() (*ident.Identity, error) {
+// Relays keep a little state per node id, so a fresh identity per run would pile it up. The
+// returned release ends this check's hold on the node: a second check on the machine waits for it,
+// since its uplink would replace this one's.
+func checkIdentity(ctx context.Context) (*ident.Identity, func(), error) {
 	dir, err := state.Dir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	st, err := state.OpenDir(filepath.Join(dir, "relay-check"))
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("the check keeps its node in %s, which must be writable: %w", filepath.Join(dir, "relay-check"), err)
+	}
+	// Its own lock file: the store's lock guards single writes and is taken inside EnsureIdentity.
+	hold, err := state.OpenDir(filepath.Join(dir, "relay-check", "hold"))
+	if err != nil {
+		return nil, nil, err
+	}
+	type locked struct {
+		release func()
+		err     error
+	}
+	got := make(chan locked, 1)
+	go func() {
+		release, err := hold.Lock()
+		got <- locked{release, err}
+	}()
+	var l locked
+	select {
+	case l = <-got:
+	case <-ctx.Done():
+		// Release the lock if it still arrives, so the waiting goroutine does not keep it.
+		go func() {
+			if l := <-got; l.err == nil {
+				l.release()
+			}
+		}()
+		return nil, nil, errors.New("another pen relay check on this machine held the check node until --timeout")
+	}
+	if l.err != nil {
+		return nil, nil, l.err
 	}
 	id, _, err := st.EnsureIdentity()
-	return id, err
+	if err != nil {
+		l.release()
+		return nil, nil, err
+	}
+	return id, l.release, nil
 }
 
 // checkRoundTrip uplinks the check node, opens a client session to it and moves 64 KiB each way.
 func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) error {
-	id, err := checkIdentity()
+	id, release, err := checkIdentity(ctx)
 	if err != nil {
 		return err
 	}
+	defer release()
 	up := relay.NewUplink(relayURL, id)
 	ready := make(chan struct{})
 	var once sync.Once
-	up.OnState = func(on bool) {
-		if on {
-			once.Do(func() { close(ready) })
-		}
-	}
+	// The relay confirms nothing on authentication, and an earlier uplink of this node (a check
+	// that has not gone yet) may still hold its room. The uplink pings right after its answer and
+	// the relay handles a socket's messages in order, so the first pong means this uplink is the
+	// node's; a session opened before that could land on the earlier one.
+	up.OnPong = func(time.Duration) { once.Do(func() { close(ready) }) }
 	uctx, stop := context.WithCancel(ctx)
 	defer stop()
 	start := time.Now()

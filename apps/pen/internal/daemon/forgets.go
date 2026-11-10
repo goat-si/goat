@@ -27,6 +27,13 @@ type PendingForget struct {
 	LoginURL string `json:"loginUrl"`
 }
 
+// savedForget is a forgets.json entry; Refused keeps the 403 notice across restarts (older pen
+// ignores the field).
+type savedForget struct {
+	PendingForget
+	Refused bool `json:"refused,omitempty"`
+}
+
 type forgetBook struct {
 	st   *state.Store
 	mu   sync.Mutex
@@ -38,9 +45,16 @@ type forgetBook struct {
 }
 
 func loadForgets(st *state.Store) (*forgetBook, error) {
-	b := &forgetBook{st: st, kick: make(chan struct{}, 1)}
-	if _, err := st.ReadJSON(ForgetsFile, &b.list); err != nil {
+	b := &forgetBook{st: st, kick: make(chan struct{}, 1), refused: map[PendingForget]bool{}}
+	var saved []savedForget
+	if _, err := st.ReadJSON(ForgetsFile, &saved); err != nil {
 		return nil, err
+	}
+	for _, s := range saved {
+		b.list = append(b.list, s.PendingForget)
+		if s.Refused {
+			b.refused[s.PendingForget] = true
+		}
 	}
 	return b, nil
 }
@@ -51,9 +65,9 @@ func (b *forgetBook) saveLocked() error {
 		return err
 	}
 	defer unlock()
-	list := b.list
-	if list == nil {
-		list = []PendingForget{}
+	list := []savedForget{}
+	for _, f := range b.list {
+		list = append(list, savedForget{PendingForget: f, Refused: b.refused[f]})
 	}
 	return b.st.WriteJSON(ForgetsFile, list, 0o600)
 }
@@ -93,14 +107,15 @@ func (b *forgetBook) done(f PendingForget) {
 func (b *forgetBook) markRefused(f PendingForget, refused bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.refused == nil {
-		b.refused = map[PendingForget]bool{}
+	if b.refused[f] == refused {
+		return
 	}
 	if refused {
 		b.refused[f] = true
 	} else {
 		delete(b.refused, f)
 	}
+	b.saveLocked()
 }
 
 func (b *forgetBook) refusedList() []PendingForget {

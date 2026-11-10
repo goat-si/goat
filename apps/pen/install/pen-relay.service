@@ -8,7 +8,25 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/pen-relay.env
-ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert ${PEN_RELAY_HOST} --cache /var/lib/pen-relay/acme --max-queued-mib 192
+ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert ${PEN_RELAY_HOST} --cache /var/lib/pen-relay/acme --max-sockets 1024 --max-per-ip 64 --max-queued-mib 128 --max-queued-per-source-mib 16
+# Memory, with every term (the four flags above, the Go relay's fixed kernel buffers):
+# - Go, bounded by GOMEMLIMIT=224MiB (the collector's target for all memory Go maps):
+#   queued and partly read messages at their allocation size, at most 128 MiB (--max-queued-mib;
+#   one IPv4 address or IPv6 /64 holds at most 16 MiB of it); per connection, counted from accept,
+#   about 48 KiB of TLS and bufio buffers, timers and goroutine stacks (27 KiB measured idle over
+#   3000 TLS sockets), so 48 MiB at 1024 connections (--max-sockets); about 10 MiB of runtime.
+#   Live memory stays near 186 MiB, under the limit with room for the collector.
+# - Kernel, outside GOMEMLIMIT but inside MemoryMax under cgroup v2: each connection's send and
+#   receive buffers are fixed at 64 KiB (Linux doubles them); a send queue may pass its buffer by
+#   about one segment (228 KiB measured per client that stops reading), the receive side stays near
+#   130 KiB, so at most about 360 KiB per connection, 360 MiB at 1024.
+# - The binary, slab and other kernel memory: about 32 MiB.
+# 224 + 360 + 32 = 616 MiB under MemoryMax=768M. Measured (linux x86_64, 2026-11-11, these values):
+# 400 idle TLS uplinks plus 600 clients from 10 addresses that never read, each sent 320 KiB,
+# peaked at 296 MiB (Go 203 MiB, kernel sockets 82 MiB); 850 idle uplinks, 64 partly read 1 MiB
+# messages and clients from 12 addresses holding the 128 MiB budget peaked at 216 MiB. Change the
+# flags, GOMEMLIMIT and MemoryMax together.
+Environment=GOMEMLIMIT=224MiB
 DynamicUser=yes
 StateDirectory=pen-relay
 StateDirectoryMode=0700
@@ -26,6 +44,8 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
+# ProcSubset=pid is off: Go reads /proc/sys/net/core/somaxconn for its listen backlog and without
+# it falls back to 128, too few when every node reconnects at once after a restart.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
@@ -36,10 +56,8 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 UMask=0077
-LimitNOFILE=65536
-# Queued data is capped at 192 MiB (--max-queued-mib); the rest covers up to 4096 sockets' buffers,
-# goroutines and in-flight reads, and the Go runtime. Raise both together.
-MemoryMax=512M
+LimitNOFILE=4096
+MemoryMax=768M
 TasksMax=256
 Restart=on-failure
 RestartSec=2
