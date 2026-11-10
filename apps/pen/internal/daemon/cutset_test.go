@@ -104,7 +104,9 @@ func TestFinishJoinFailsOnACutCopyFromAPlainlyRevokedMachineThatWonTheRevokeRace
 	sort.Strings(heads)
 	want, _ := ident.B64.DecodeString(aRevokesX.Hash)
 	var won *mesh.Record
-	for at := time.Now().UnixMilli(); won == nil; at++ {
+	// Each time sorts first with probability one half, so 256 tries fail only by 2^-256.
+	start := time.Now().UnixMilli()
+	for at := start; won == nil && at < start+256; at++ {
 		r, err := mesh.Sign(x.d.id, xs.MeshID, mesh.TypeRevoke, n+1, heads, at, mesh.Fields{Subjects: []string{aPub}})
 		if err != nil {
 			t.Fatal(err)
@@ -112,6 +114,9 @@ func TestFinishJoinFailsOnACutCopyFromAPlainlyRevokedMachineThatWonTheRevokeRace
 		if h, _ := ident.B64.DecodeString(r.Hash); bytes.Compare(h, want) < 0 {
 			won = r
 		}
+	}
+	if won == nil {
+		t.Fatal("setup: no time in 256 tries made x's revoke sort before a's")
 	}
 	if _, err := xs.Merge([]*mesh.Record{won}); err != nil {
 		t.Fatal(err)
