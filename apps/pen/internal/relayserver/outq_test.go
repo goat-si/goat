@@ -90,3 +90,30 @@ func TestQueuedPongsAreCapped(t *testing.T) {
 		t.Fatalf("%d pongs queued behind a stalled write, want at most %d", held, maxQueuedPongs)
 	}
 }
+
+// fastWS takes every write and close at once.
+type fastWS struct{}
+
+func (fastWS) Write(context.Context, websocket.MessageType, []byte) error { return nil }
+func (fastWS) Close(websocket.StatusCode, string) error                  { return nil }
+func (fastWS) CloseNow() error                                           { return nil }
+
+// A closed socket's close timer holds its queue and connection: it must be stopped once the writer
+// has ended, or every closed socket stays in memory for the write timeout (session churn kept
+// gigabytes that way).
+func TestAClosedQueueStopsItsCloseTimerWhenTheWriterEnds(t *testing.T) {
+	q := newOutq(fastWS{}, time.Hour, nil)
+	q.close(1000)
+	q.mu.Lock()
+	timer := q.closeTimer
+	q.mu.Unlock()
+	q.wait()
+	if timer != nil && timer.Stop() {
+		t.Fatal("the close timer of an ended queue was still pending")
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closeTimer != nil {
+		t.Fatal("an ended queue still holds its close timer")
+	}
+}

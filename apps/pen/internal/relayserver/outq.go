@@ -207,11 +207,14 @@ type outq struct {
 	// what session frames hold here, reserved or queued, at most sessionFrameRoom.
 	reserved     int
 	sessionBytes int
-	bySID        map[uint32]int
-	pongs        int
-	done         bool
-	wake         chan struct{}
-	ended        chan struct{}
+	// closeTimer bounds the closing write; writerDone is set when run returns.
+	closeTimer *time.Timer
+	writerDone bool
+	bySID      map[uint32]int
+	pongs      int
+	done       bool
+	wake       chan struct{}
+	ended      chan struct{}
 }
 
 type outItem struct {
@@ -465,13 +468,24 @@ func (q *outq) pushReserved(b []byte, n int) {
 // close queues the close frame; a writer still busy after the write timeout is aborted.
 func (q *outq) close(code uint16) {
 	q.push(outItem{close: code})
-	time.AfterFunc(q.timeout, func() {
+	t := time.AfterFunc(q.timeout, func() {
 		select {
 		case <-q.ended:
 		default:
 			q.ws.CloseNow()
 		}
 	})
+	// The timer's function holds the queue and its socket: stop it once the writer has ended, or
+	// every closed socket stays in memory for the write timeout.
+	q.mu.Lock()
+	ended := q.writerDone
+	if !ended {
+		q.closeTimer = t
+	}
+	q.mu.Unlock()
+	if ended {
+		t.Stop()
+	}
 }
 func (q *outq) wait() { <-q.ended }
 
@@ -485,6 +499,16 @@ func (q *outq) written() {
 
 func (q *outq) run() {
 	defer close(q.ended)
+	defer func() {
+		q.mu.Lock()
+		q.writerDone = true
+		t := q.closeTimer
+		q.closeTimer = nil
+		q.mu.Unlock()
+		if t != nil {
+			t.Stop()
+		}
+	}()
 	ctx := context.Background()
 	for {
 		q.mu.Lock()
