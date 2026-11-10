@@ -482,3 +482,24 @@ it.effect(
       expect(yield* ocx.penAliasRevision("pen-box")).toEqual(expect.any(String));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+// ssh -G prints GlobalKnownHostsFile="/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2" like the
+// default pair, so when a file of that one name exists the setting is ambiguous.
+it.effect(
+  "a Pen alias is not trusted when the default global setting could name one spaced file",
+  () =>
+    Effect.gen(function* () {
+      const machine = {
+        config: PEN_BLOCK("pen-box"),
+        sshG: (_: string) => "",
+        keys: keyLines("node1", "AAAA1"),
+        fingerprints: FINGERPRINTS,
+        existing: ["/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2"],
+      };
+      const { ocx, home } = yield* penHome(machine);
+      machine.sshG = penSshG(home);
+      expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+      expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+      expect(yield* ocx.directAlias("pen-box")).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
