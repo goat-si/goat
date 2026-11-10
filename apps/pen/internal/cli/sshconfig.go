@@ -37,7 +37,7 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 	if st, err := openState(); err == nil {
 		v, _ = localView(st)
 	}
-	text := sshConfigText(cmd, knownHostsPath(), hostsOf(v))
+	text := sshConfigText(cmd, knownHostsPath(), filepath.Join(dir, "pen"), hostsOf(v))
 	if !*write && !*install {
 		fmt.Fprint(stdout, text)
 		return 0
@@ -102,7 +102,7 @@ func refreshSSHConfig(v *mesh.View) error {
 	if err != nil {
 		return err
 	}
-	_, err = writeSSHConfig(dir, sshConfigText(cmd, knownHostsPath(), hostsOf(v)))
+	_, err = writeSSHConfig(dir, sshConfigText(cmd, knownHostsPath(), filepath.Join(dir, "pen"), hostsOf(v)))
 	return err
 }
 
@@ -113,11 +113,13 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 func sshArg(s string) string { return `"` + strings.ReplaceAll(s, "%", "%%") + `"` }
 
 // sshConfigText is one Host block per member name plus a pen-* fallback for names added later.
-// cmd is already shell-quoted.
+// cmd is already shell-quoted. Each host reuses one connection for 10 minutes (ControlMaster), so
+// only the first ssh to a member pays the relay and key exchange round trips; control sockets live
+// in controlDir (ssh -o ControlMaster=no opens a fresh connection).
 // sshHost is one member's concrete Host block; User is empty when the member did not publish one.
 type sshHost struct{ Name, User string }
 
-func sshConfigText(cmd, knownHosts string, hosts []sshHost) string {
+func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 	var b strings.Builder
 	b.WriteString("# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n")
 	block := func(pattern, user string) {
@@ -128,6 +130,9 @@ func sshConfigText(cmd, knownHosts string, hosts []sshHost) string {
 		fmt.Fprintf(&b, "    ProxyCommand %s pipe %%n 22\n", strings.ReplaceAll(cmd, "%", "%%"))
 		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(knownHosts))
 		b.WriteString("    StrictHostKeyChecking yes\n")
+		b.WriteString("    ControlMaster auto\n")
+		fmt.Fprintf(&b, "    ControlPath %s\n", strings.TrimSuffix(sshArg(filepath.Join(controlDir, "cm-")), `"`)+`%C"`)
+		b.WriteString("    ControlPersist 10m\n")
 	}
 	for _, h := range hosts {
 		block("pen-"+h.Name, h.User)
