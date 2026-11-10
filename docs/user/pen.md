@@ -163,10 +163,12 @@ members; they are not reachable from the new one.
 Each machine keeps a connection to every relay in its list and uses whichever answers first, so one
 relay going down does not cut the mesh. An install gets the relays the release lists, and invites
 carry the inviting machine's list: `pen join` replaces the joining machine's list with it, whether Pen is running
-or not. `pen up --relay <url>` replaces the list, also on a running machine. `pen login --relay <url>` takes effect
-only when the sign-in starts Pen; on a machine where Pen already runs, the sign-in uses those relays to join but Pen
-keeps its own list afterwards. After signing in, check `pen relay ls` and add the mesh's relays with `pen relay add`
-(and `pen relay rm` the ones you do not want), so the other machines can reach this one. `pen relay ls` shows the list; `pen relay add <url>` and
+or not. `pen up --relay <url>` replaces the list, also on a running machine. `pen login --relay <url>` saves that list for this machine before
+the sign-in starts, and Pen uses it afterwards whether it was running or not, with one exception: a machine where
+Pen runs in a mesh of its own and that joins the account's mesh keeps the relays it was using and saves them back.
+If the sign-in does not finish, the saved list takes effect the next time Pen starts or `pen up` runs. In every case, check
+`pen relay ls` after signing in and use `pen relay add` or `pen relay rm` to match the mesh, so the other machines
+can reach this one. `pen relay ls` shows the list; `pen relay add <url>` and
 `pen relay rm <url>` change it. Relays must use `https`.
 
 A relay run with `pen relay serve` keeps at most 16 MiB of undelivered data for each internet
