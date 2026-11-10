@@ -16,7 +16,10 @@ const CLIENT = {
   },
 };
 
-function sandbox(existingSecrets: string[]) {
+function sandbox(
+  existingSecrets: string[],
+  opts: { deployExit?: number; listError?: string } = {},
+) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-deploy-"));
   NodeFS.chmodSync(dir, 0o700);
   const sent = NodePath.join(dir, "sent.json");
@@ -27,8 +30,9 @@ function sandbox(existingSecrets: string[]) {
       "#!/usr/bin/env node",
       "const fs = require('node:fs');",
       "const a = process.argv.slice(2);",
+      `if (a[0] === 'secret' && a[1] === 'list' && ${JSON.stringify(opts.listError ?? "")}) { console.error(${JSON.stringify(opts.listError ?? "")}); process.exit(1); }`,
       `if (a[0] === 'secret' && a[1] === 'list') { console.log(JSON.stringify(${JSON.stringify(existingSecrets.map((name) => ({ name })))})); process.exit(0); }`,
-      `if (a[0] === 'deploy') { fs.copyFileSync(a[a.indexOf('--secrets-file') + 1], ${JSON.stringify(sent)}); process.exit(0); }`,
+      `if (a[0] === 'deploy') { fs.copyFileSync(a[a.indexOf('--secrets-file') + 1], ${JSON.stringify(sent)}); process.exit(${opts.deployExit ?? 0}); }`,
       "process.exit(3);",
     ].join("\n"),
     { mode: 0o755 },
@@ -123,6 +127,46 @@ describe("deploy:secrets and the login key", () => {
       const inRepo = NodePath.resolve(import.meta.dirname, "login-key-should-not-exist");
       expect(s.run("--signing-key-file", inRepo).status).toBe(1);
       expect(NodeFS.existsSync(inRepo)).toBe(false);
+      expect(s.uploaded()).toBeUndefined();
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  it("refuses a key file reached through a symlink into the repository", () => {
+    const s = sandbox([]);
+    const target = NodePath.resolve(import.meta.dirname, "../node_modules/.pen-deploy-test");
+    try {
+      NodeFS.mkdirSync(target, { recursive: true, mode: 0o700 });
+      NodeFS.chmodSync(target, 0o700);
+      const link = NodePath.join(s.dir, "link");
+      NodeFS.symlinkSync(target, link);
+      expect(s.run("--signing-key-file", NodePath.join(link, "login-key")).status).toBe(1);
+      expect(NodeFS.existsSync(NodePath.join(target, "login-key"))).toBe(false);
+    } finally {
+      NodeFS.rmSync(target, { recursive: true, force: true });
+      s.cleanup();
+    }
+  });
+
+  it("says nothing was sent when wrangler deploy fails", () => {
+    const s = sandbox(["LOGIN_SIGNING_KEY"], { deployExit: 1 });
+    try {
+      const r = s.run();
+      expect(r.status).toBe(1);
+      expect(r.out).not.toContain("secrets sent");
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  it("treats only a missing Worker as having no secrets, not any 'not found' error", () => {
+    const s = sandbox([], { listError: "✘ [ERROR] Authentication error: account not found" });
+    try {
+      const keyFile = NodePath.join(s.dir, "login-key");
+      const r = s.run("--signing-key-file", keyFile);
+      expect(r.status).toBe(1);
+      expect(NodeFS.existsSync(keyFile)).toBe(false);
       expect(s.uploaded()).toBeUndefined();
     } finally {
       s.cleanup();

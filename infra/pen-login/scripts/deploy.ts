@@ -57,7 +57,9 @@ const list = NodeChildProcess.spawnSync(wrangler, ["secret", "list", "--format",
 let existing: string[] = [];
 if (list.status === 0) {
   existing = (JSON.parse(list.stdout) as { name: string }[]).map((s) => s.name);
-} else if (!/not found|10007/i.test(list.stdout + list.stderr)) {
+} else if (!/\b10007\b|Worker .*does not exist/i.test(list.stdout + list.stderr)) {
+  // Only a Worker that does not exist yet (Cloudflare error 10007) has no secrets; any other failure
+  // (sign-in, account, network) must not read as "no LOGIN_SIGNING_KEY", which would create one.
   fail(`wrangler secret list failed (exit ${list.status}); is wrangler signed in?`);
 }
 
@@ -85,15 +87,17 @@ if (existing.includes("LOGIN_SIGNING_KEY")) {
 /** Reads the seed kept at path, or creates it there; the directory must be private and outside the repository. */
 async function keyFromFile(path: string): Promise<string> {
   const parent = NodePath.dirname(path);
-  const fromRepo = NodePath.relative(REPO, path);
-  if (!fromRepo.startsWith("..") && !NodePath.isAbsolute(fromRepo)) {
-    fail(`${path} is inside the repository; keep the login key outside it`);
-  }
   let mode: number;
+  let realParent: string;
   try {
     mode = NodeFS.statSync(parent).mode & 0o777;
+    realParent = NodeFS.realpathSync(parent);
   } catch {
     fail(`${parent} does not exist`);
+  }
+  const fromRepo = NodePath.relative(NodeFS.realpathSync(REPO), realParent);
+  if (!fromRepo.startsWith("..") && !NodePath.isAbsolute(fromRepo)) {
+    fail(`${path} is inside the repository (${realParent}); keep the login key outside it`);
   }
   if (mode & 0o077)
     fail(`${parent} is open to other users (mode ${mode.toString(8)}); use a 0700 directory`);
@@ -110,6 +114,11 @@ async function keyFromFile(path: string): Promise<string> {
 }
 
 const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-login-"));
+const removeSecrets = () => NodeFS.rmSync(dir, { recursive: true, force: true });
+// Ctrl-C reaches wrangler too; keep this process alive until it returns, so the secrets file goes.
+const interrupted = () => {};
+process.on("SIGINT", interrupted);
+process.on("SIGTERM", interrupted);
 let status: number | null = 1;
 try {
   const file = NodePath.join(dir, "secrets.json");
@@ -118,9 +127,14 @@ try {
     stdio: "inherit",
   }).status;
 } finally {
-  NodeFS.rmSync(dir, { recursive: true, force: true });
+  removeSecrets();
+}
+if (status !== 0) {
+  fail(
+    `wrangler deploy failed (exit ${status}); check pnpm exec wrangler secret list, then run this again (a key file it created is reused)`,
+  );
 }
 console.log(
   `deploy: secrets sent: ${Object.keys(secrets).join(", ")}${secrets.LOGIN_SIGNING_KEY ? "" : " (LOGIN_SIGNING_KEY kept)"}`,
 );
-process.exit(status ?? 1);
+process.exit(0);
