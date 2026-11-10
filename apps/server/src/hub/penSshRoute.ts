@@ -1,14 +1,27 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a stable hash of SSH settings and public host keys.
 import * as NodeCrypto from "node:crypto";
 
-/** Settings `ssh -G` prints, keyed by lowercase option name. */
+/** Settings `ssh -G` prints, keyed by lowercase option name, each value exactly as printed. */
 export const sshSettings = (output: string): ReadonlyMap<string, string> =>
   new Map(
     output.split(/\r?\n/u).map((line) => {
-      const [key = "", ...value] = line.trim().split(/\s+/u);
-      return [key.toLowerCase(), value.join(" ")] as const;
+      const [, key = "", value = ""] = /^\s*(\S+)(?: (.*))?$/u.exec(line) ?? [];
+      return [key.toLowerCase(), value] as const;
     }),
   );
+
+// OpenSSH's built-in GlobalKnownHostsFile, as ssh -G prints it.
+const DEFAULT_GLOBAL_KNOWN_HOSTS = ["/etc/ssh/ssh_known_hosts", "/etc/ssh/ssh_known_hosts2"];
+
+/**
+ * The global known_hosts files ssh reads for an alias, when they are certain: ssh's default list
+ * or none. ssh -G prints a custom setting unquoted, so its files cannot be named exactly.
+ */
+export const penGlobalFiles = (settings: ReadonlyMap<string, string>) => {
+  const value = settings.get("globalknownhostsfile");
+  if (value === undefined || value === "none") return [];
+  return value === DEFAULT_GLOBAL_KNOWN_HOSTS.join(" ") ? DEFAULT_GLOBAL_KNOWN_HOSTS : undefined;
+};
 
 const unset = (value: string | undefined) =>
   value === undefined || value === "" || value === "none";
@@ -23,21 +36,22 @@ const PEN_PIPE = new RegExp(
 const penRoute = (settings: ReadonlyMap<string, string>) =>
   unset(settings.get("proxyjump")) && PEN_PIPE.test(settings.get("proxycommand") ?? "");
 
-/**
- * A jump chain is what missed OpenCodex's 15-second link admission window. Pen's pipe is one relay
- * hop that connects in a few seconds, so an alias `pen ssh-config` wrote counts as direct.
- */
-export const isDirectRoute = (settings: ReadonlyMap<string, string>) =>
-  penRoute(settings) || (unset(settings.get("proxyjump")) && unset(settings.get("proxycommand")));
+/** No jump chain or proxy command: a jump chain is what missed OpenCodex's link admission window. */
+export const isPlainRoute = (settings: ReadonlyMap<string, string>) =>
+  unset(settings.get("proxyjump")) && unset(settings.get("proxycommand"));
 
 /**
- * The known_hosts file Pen keeps for a Pen alias. ssh already holds every connection to that
- * alias to it (StrictHostKeyChecking yes), so its key is the alias's pin.
+ * The known_hosts file a Pen alias names, when ssh holds every connection to it strictly to that
+ * file's key: StrictHostKeyChecking yes and no KnownHostsCommand.
  */
 export const penKnownHostsFile = (settings: ReadonlyMap<string, string>) => {
   const file = settings.get("userknownhostsfile");
+  const strict =
+    settings.get("stricthostkeychecking") === "true" && unset(settings.get("knownhostscommand"));
   // ssh -G separates several files with spaces; a path with one is not a single file.
-  return penRoute(settings) && file !== undefined && /^\/\S+$/u.test(file) ? file : undefined;
+  return penRoute(settings) && strict && file !== undefined && /^\/\S+$/u.test(file)
+    ? file
+    : undefined;
 };
 
 /** The one fingerprint of `keyType` in `ssh-keygen -l -F` output; several name no key. */
@@ -57,12 +71,23 @@ export const penConfigHosts = (config: string) =>
     .filter((alias): alias is string => alias !== undefined && !alias.includes("*"));
 
 // The settings that decide which machine an alias reaches and which key ssh accepts for it.
-const BOUND = ["hostname", "user", "port", "proxycommand", "proxyjump", "hostkeyalias"] as const;
+const BOUND = [
+  "hostname",
+  "user",
+  "port",
+  "proxycommand",
+  "proxyjump",
+  "hostkeyalias",
+  "stricthostkeychecking",
+  "knownhostscommand",
+  "globalknownhostsfile",
+] as const;
 
 /**
- * Identifies a Pen member's alias for consent: its effective settings and the known_hosts lines Pen
- * recorded for it, whose host names carry the member's node id. A changed key, a member that later
- * takes the same name, or changed settings is another host. Undefined when Pen recorded no key.
+ * Identifies a Pen member's alias for consent: its effective settings and Pen's known_hosts lines
+ * for it, which carry the member's node id and host keys. Another key, member or setting is another
+ * host; only a clone holding the member's Pen identity and sshd keys yields the same value.
+ * Undefined when Pen recorded no key.
  */
 export const penRevision = (settings: ReadonlyMap<string, string>, keygen: string) => {
   const knownHostsFile = penKnownHostsFile(settings);

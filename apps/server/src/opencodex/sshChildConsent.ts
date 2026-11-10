@@ -12,14 +12,14 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import type * as SessionStore from "../auth/SessionStore.ts";
-import { SAFE_ALIAS } from "../hub/HubOcx.ts";
+import { type HubOcxError, SAFE_ALIAS } from "../hub/HubOcx.ts";
 import type { HubPerson } from "../hub/HubMembership.ts";
-import type { SshAliasRevision } from "../sshRemote/SshAliasEvents.ts";
 import { authorizeSshHost, type SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
 
 /**
@@ -55,7 +55,10 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
   readonly directory: string;
   readonly file: string;
   readonly sessions: SessionStore.SessionStore["Service"];
-  readonly revision: SshAliasRevision;
+  /** A failure leaves a grant in place; only a different answer voids it. */
+  readonly revision: (
+    alias: string,
+  ) => Effect.Effect<string | undefined, PlatformError.PlatformError | HubOcxError>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const stored = yield* fs.readFileString(options.file).pipe(
@@ -63,6 +66,8 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
     Effect.orElseSucceed((): Readonly<Record<string, SshChildGrant>> => ({})),
   );
   const grants = yield* Ref.make<Readonly<Record<string, SshChildGrant>>>(stored);
+  // Memory dropped a grant the file still holds; the next write or flush catches the file up.
+  const unsaved = yield* Ref.make(false);
   const writing = yield* Semaphore.make(1);
   const persist = Effect.fn("SshChildConsent.persist")(function* (
     next: Readonly<Record<string, SshChildGrant>>,
@@ -84,9 +89,19 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
         if (grantId !== undefined && current[alias]?.grantId !== grantId) return;
         const { [alias]: _gone, ...rest } = current;
         yield* Ref.set(grants, rest);
+        yield* Ref.set(unsaved, true);
         yield* persist(rest);
+        yield* Ref.set(unsaved, false);
       }),
     );
+  /** Saves a removal whose write failed, so a restart cannot bring the grant back. */
+  const flush = writing.withPermits(1)(
+    Effect.gen(function* () {
+      if (!(yield* Ref.get(unsaved))) return;
+      yield* persist(yield* Ref.get(grants));
+      yield* Ref.set(unsaved, false);
+    }),
+  );
   /** Expiry counts: listActive still lists a connected session past it, this does not. */
   const scopesOf = (sessionId: AuthSessionId) =>
     options.sessions
@@ -132,6 +147,7 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
       Effect.gen(function* () {
         const next = { ...(yield* Ref.get(grants)), [alias]: grant };
         yield* persist(next);
+        yield* Ref.set(unsaved, false);
         yield* Ref.set(grants, next);
       }),
     );
@@ -186,6 +202,9 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
     confirm,
     /** Durable before it returns; a failure means the grant may still be on disk. */
     forget: (alias: string) => drop(alias),
+    /** Drops this grant only, never one given after the caller read it, and saves the removal. */
+    retire: (alias: string, grantId: string) => drop(alias, grantId),
+    flush,
     held: (alias: string) => Ref.get(grants).pipe(Effect.map((current) => current[alias])),
   };
 });
