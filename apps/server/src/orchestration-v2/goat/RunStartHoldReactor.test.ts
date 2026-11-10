@@ -152,7 +152,7 @@ const heldThread = (name: string) =>
         Effect.map(Option.getOrThrow),
       );
     const startReactor = RunStartHoldReactor.make.pipe(
-      Effect.flatMap((reactor) => reactor.start),
+      Effect.tap((reactor) => reactor.start),
       Effect.provide(Layer.merge(survivors, NodeServices.layer)),
     );
     return { orchestrator, threadId, bindings, stopFenced, send, runReaches, startReactor };
@@ -215,5 +215,23 @@ it.layer(layerTest)("RunStartHoldReactor", (it) => {
           });
         }),
       ),
+  );
+
+  it.effect("after the shown turn stops, reconciling names the turn that still holds the run", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const held = yield* heldThread("next-turn");
+        yield* Ref.set(held.stopFenced, ["first-turn", "second-turn"]);
+        const reactor = yield* held.startReactor;
+        yield* held.send("waits-for-two");
+        const first = yield* held.runReaches((run) => run.startHold !== undefined);
+        assert.strictEqual(first.startHold?.nativeTurnId, "first-turn");
+        // The fence of the first turn goes without any run event, as after a stop.
+        yield* Ref.set(held.stopFenced, ["second-turn"]);
+        yield* reactor.reconcileThread(held.threadId);
+        const next = yield* held.runReaches((run) => run.startHold?.nativeTurnId === "second-turn");
+        assert.strictEqual(next.id, first.id);
+      }),
+    ),
   );
 });

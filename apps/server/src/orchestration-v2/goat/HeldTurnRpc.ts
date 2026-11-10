@@ -21,11 +21,14 @@ import {
 } from "../../provider/CodexHeldTurnStop.ts";
 import { CodexSurvivors } from "../../provider/CodexSurvivors.ts";
 import * as Orchestrator from "../Orchestrator.ts";
+import { RunStartHolds } from "./RunStartHoldReactor.ts";
 
 const isDetachedError = Schema.is(CodexDetachedAppServerError);
 
 export const heldTurnRpcHandlers = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
+  // Absent only where the reactor is not running; then no hold is recorded either.
+  const holds = yield* Effect.serviceOption(RunStartHolds);
   // Without Codex process tracking, no Codex turn can hold a start.
   const survivors = yield* Effect.serviceOption(CodexSurvivors);
   const detached = yield* Effect.serviceOption(Detached.CodexDetachedAppServers);
@@ -50,6 +53,10 @@ export const heldTurnRpcHandlers = Effect.gen(function* () {
             stop: (record, turn) => stopTurnOnRecord(detached.value, record, turn),
           })
       ).pipe(
+        // The banner names the turn the next stop must target, so it follows every attempt.
+        Effect.ensuring(
+          Option.isSome(holds) ? holds.value.reconcileThread(input.threadId) : Effect.void,
+        ),
         Effect.map((outcome) => ({ outcome })),
         Effect.mapError(
           (cause) =>

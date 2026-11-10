@@ -26,6 +26,8 @@ const heldStart = (
     readonly turnId: string;
     readonly survivorTurn?: boolean;
     readonly ownedByRun?: boolean;
+    /** Another native thread of this GOAT thread with its own goal block. */
+    readonly otherGoal?: boolean;
   },
 ) =>
   Effect.gen(function* () {
@@ -33,10 +35,9 @@ const heldStart = (
     const threadId = ThreadId.make(`held-${name}`);
     const turn = { threadId, nativeThreadId: "native-thread", nativeTurnId: "goal-turn" };
     const obligations = yield* Ref.make([turn]);
-    // The second block guards another native thread whose goal this stop never checks.
     const goalBlocks = yield* Ref.make([
       { threadId, nativeThreadId: "native-thread" },
-      { threadId, nativeThreadId: "other-native-thread" },
+      ...(options.otherGoal === true ? [{ threadId, nativeThreadId: "other-native-thread" }] : []),
     ]);
     const goalBlocksAtWake = yield* Ref.make<number | undefined>(undefined);
     /** Set when the start guard stopped holding the thread while its goal block still stood. */
@@ -150,14 +151,13 @@ it.effect("stopping the shown turn releases its stop fence and goal block in one
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
 
-it.effect("the goal block of another native thread stays when the shown turn stops", () =>
+it.effect("a goal block on another native thread refuses the stop before anything stops", () =>
   Effect.gen(function* () {
-    const held = yield* heldStart("other-goal", { confirmed: true, turnId: "goal-turn" });
-    assert.strictEqual(held.outcome, "stopped");
-    assert.deepStrictEqual(
-      (yield* Ref.get(held.goalBlocks)).map((block) => block.nativeThreadId),
-      ["other-native-thread"],
+    // Admission would still refuse the message, so ending the turn could not release it.
+    const exit = yield* Effect.exit(
+      heldStart("other-goal", { confirmed: true, turnId: "goal-turn", otherGoal: true }),
     );
+    assert.isTrue(Exit.isFailure(exit));
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
 
@@ -187,7 +187,7 @@ it.effect("a stop Codex has not confirmed keeps the message waiting behind the t
     const held = yield* heldStart("unconfirmed", { confirmed: false, turnId: "goal-turn" });
     assert.strictEqual(held.outcome, "stopping");
     assert.lengthOf(yield* Ref.get(held.obligations), 1);
-    assert.lengthOf(yield* Ref.get(held.goalBlocks), 2);
+    assert.lengthOf(yield* Ref.get(held.goalBlocks), 1);
     assert.isTrue(Option.isNone(yield* held.claim));
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );

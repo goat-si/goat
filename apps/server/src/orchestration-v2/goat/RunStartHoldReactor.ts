@@ -12,6 +12,7 @@ import {
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -118,19 +119,30 @@ export const make = Effect.gen(function* () {
     run.status !== "starting" && run.startHold === undefined
       ? Effect.void
       : threadHolds(survivors).pipe(Effect.flatMap((holds) => update(run, holds)));
+  const reconcile = (threadId: ThreadId, holds: ReadonlyMap<ThreadId, ThreadHold>) =>
+    orchestrator
+      .getThreadRecords(threadId, ["runs"], { runStatuses: ["starting"] })
+      .pipe(Effect.flatMap(({ runs }) => Effect.forEach(runs, (run) => update(run, holds))));
   const reconcileHeld = Effect.gen(function* () {
     const holds = yield* threadHolds(survivors);
-    for (const threadId of holds.keys()) {
-      const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"], {
-        runStatuses: ["starting"],
-      });
-      for (const run of runs) yield* update(run, holds);
-    }
+    for (const threadId of holds.keys()) yield* reconcile(threadId, holds);
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("Could not record why held runs are waiting to start", { cause }),
     ),
   );
+  /** A fence can change with no run event, as when a person stops the turn that held a run. */
+  const reconcileThread = (threadId: ThreadId) =>
+    threadHolds(survivors).pipe(
+      Effect.flatMap((holds) => reconcile(threadId, holds)),
+      Effect.asVoid,
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not record why a thread's runs are waiting to start", {
+          threadId,
+          cause,
+        }),
+      ),
+    );
   /**
    * Follows run events, then marks runs a hold already covered; returns once both are in place,
    * so no run can start waiting between the two unseen.
@@ -160,12 +172,19 @@ export const make = Effect.gen(function* () {
     yield* Deferred.await(updated);
     yield* reconcileHeld;
   });
-  return { start };
+  return { start, reconcileThread };
 });
 
-export const layer = Layer.effectDiscard(
+export class RunStartHolds extends Context.Service<
+  RunStartHolds,
+  { readonly reconcileThread: (threadId: ThreadId) => Effect.Effect<void> }
+>()("goat/orchestration-v2/goat/RunStartHoldReactor/RunStartHolds") {}
+
+export const layer = Layer.effect(
+  RunStartHolds,
   Effect.gen(function* () {
     const reactor = yield* make;
     yield* forkParked(Effect.scoped(reactor.start.pipe(Effect.andThen(Effect.never))));
+    return RunStartHolds.of({ reconcileThread: reactor.reconcileThread });
   }),
 );

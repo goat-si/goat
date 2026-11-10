@@ -4156,7 +4156,8 @@ export type OrchestrationV2StopHeldTurnInput = typeof OrchestrationV2StopHeldTur
 
 export const OrchestrationV2StopHeldTurnResult = Schema.Struct({
   /**
-   * `stopped`: the turn ended, so the waiting message starts. `stopping`: Codex took the stop but
+   * `stopped`: the turn ended; the message starts unless another Codex turn still holds the
+   * thread, which the thread then names. `stopping`: Codex took the stop but
    * has not reported the end yet; the message starts when it does. `none`: that turn no longer
    * holds the thread as a turn no run owns, so nothing was stopped.
    */

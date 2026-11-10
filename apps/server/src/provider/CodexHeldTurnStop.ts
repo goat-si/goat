@@ -47,7 +47,7 @@ export const nativeTurnOwnedByRun = (
 export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function* <E, F>(input: {
   readonly survivors: Pick<
     CodexSurvivors["Service"],
-    "list" | "getStopObligations" | "clearStopObligation"
+    "list" | "getStopObligations" | "getGoalBlocks" | "clearStopObligation"
   >;
   /** True when a run owns the turn; such a turn stops with its run, never from here. */
   readonly ownedByRun: (nativeTurnId: string) => Effect.Effect<boolean, F>;
@@ -73,6 +73,16 @@ export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function
   // A turn that survived a restart, or any other run's turn, stops with its run.
   if (held === undefined || survivorTurn || (yield* input.ownedByRun(input.nativeTurnId)))
     return "none" satisfies Outcome;
+  // Admission would still refuse the message for that goal, so this stop could not release it.
+  if (
+    (yield* input.survivors.getGoalBlocks(input.threadId)).some(
+      ({ block }) => block.nativeThreadId !== held.block.nativeThreadId,
+    )
+  )
+    return yield* new CodexDetachedAppServerError({
+      detail:
+        "Another Codex goal on this thread also holds it, so stopping this turn would not let the message start.",
+    });
   if (!(yield* input.stop(held.record, held.block))) return "stopping" satisfies Outcome;
   yield* input.release(held.record, held.block);
   yield* input.survivors.clearStopObligation(held.record, held.block);
