@@ -3698,6 +3698,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getNativeChildWork: "orchestration.getNativeChildWork",
   stopWorkflow: "orchestration.stopWorkflow",
   forceStopThread: "orchestration.forceStopThread",
+  stopHeldTurn: "orchestration.stopHeldTurn",
   getTurnItem: "orchestration.getTurnItem",
   launchThread: "orchestration.launchThread",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
@@ -4146,6 +4147,38 @@ export class OrchestrationV2ForceStopThreadError extends Schema.TaggedError<Orch
   }
 }
 
+/** Stops the Codex turn no run owns that holds the thread's next start; it must be the one shown. */
+export const OrchestrationV2StopHeldTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  nativeTurnId: TrimmedNonEmptyString,
+});
+export type OrchestrationV2StopHeldTurnInput = typeof OrchestrationV2StopHeldTurnInput.Type;
+
+export const OrchestrationV2StopHeldTurnResult = Schema.Struct({
+  /**
+   * `stopped`: the turn ended; the message starts unless another Codex turn still holds the
+   * thread, which the thread then names. `stopping`: Codex took the stop but
+   * has not reported the end yet; the message starts when it does. `none`: that turn no longer
+   * holds the thread as a turn no run owns, so nothing was stopped.
+   */
+  outcome: Schema.Literals(["stopped", "stopping", "none"]),
+});
+export type OrchestrationV2StopHeldTurnResult = typeof OrchestrationV2StopHeldTurnResult.Type;
+
+export class OrchestrationV2StopHeldTurnError extends Schema.TaggedError<OrchestrationV2StopHeldTurnError>()(
+  "OrchestrationV2StopHeldTurnError",
+  {
+    threadId: ThreadId,
+    /** Why, in words a person can act on. */
+    detail: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.detail ?? "Could not stop the Codex turn this message waits for.";
+  }
+}
+
 export const OrchestrationV2GetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   scriptPath: TrimmedNonEmptyString,
@@ -4382,6 +4415,10 @@ export const OrchestrationV2RpcSchemas = {
   forceStopThread: {
     input: OrchestrationV2ForceStopThreadInput,
     output: OrchestrationV2ForceStopThreadResult,
+  },
+  stopHeldTurn: {
+    input: OrchestrationV2StopHeldTurnInput,
+    output: OrchestrationV2StopHeldTurnResult,
   },
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,

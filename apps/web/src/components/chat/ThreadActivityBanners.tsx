@@ -8,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
+  HELD_TURN_STOP_NOTE,
   presentPendingBackgroundWork,
   presentProviderGoal,
   type RunStartHoldPresentation,
@@ -133,6 +134,10 @@ export function goalBannerItem(input: {
 export function startHoldBannerItem(input: {
   readonly threadId: ThreadId;
   readonly hold: RunStartHoldPresentation;
+  /** Offered for a turn no run owns; a turn from before the restart stops with its own run. */
+  readonly canStop: boolean;
+  readonly stopping: boolean;
+  readonly onStop: () => void;
 }): ComposerBannerStackItem {
   return {
     id: `start-hold:${input.threadId}`,
@@ -141,6 +146,19 @@ export function startHoldBannerItem(input: {
     icon: <ClockIcon />,
     title: input.hold.title,
     description: input.hold.description,
+    actions:
+      input.canStop && input.hold.reason === "unowned_turn" && input.hold.nativeTurnId ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button size="xs" variant="ghost" disabled={input.stopping} onClick={input.onStop}>
+                {input.stopping ? "Stopping..." : "Stop that turn"}
+              </Button>
+            }
+          />
+          <TooltipPopup side="top">{HELD_TURN_STOP_NOTE}</TooltipPopup>
+        </Tooltip>
+      ) : undefined,
   };
 }
 

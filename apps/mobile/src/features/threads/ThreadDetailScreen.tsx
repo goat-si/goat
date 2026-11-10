@@ -536,7 +536,10 @@ function ThreadDetailBody(
   const unsettleThread = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: false });
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
-  const { runStop: anyRunStop, startHold } = useRunStopAndStartHold(props.selectedThreadDetailRef);
+  const { runStop: anyRunStop, startHold } = useRunStopAndStartHold(
+    props.selectedThreadDetailRef,
+    props.environmentId,
+  );
   // A background Stop matters only while that work is still pending.
   const runStop =
     anyRunStop?.background && props.selectedThread.pendingBackgroundTasks.length === 0

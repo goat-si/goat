@@ -281,6 +281,7 @@ import {
   OrchestrationV2GetNativeChildWorkError,
   OrchestrationV2StopWorkflowError,
   OrchestrationV2ForceStopThreadError,
+  OrchestrationV2StopHeldTurnError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2CommandOutputError,
@@ -2152,6 +2153,12 @@ const WsOrchestrationV2ForceStopThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS
   error: Schema.Union([OrchestrationV2ForceStopThreadError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationV2StopHeldTurnRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.stopHeldTurn, {
+  payload: OrchestrationV2RpcSchemas.stopHeldTurn.input,
+  success: OrchestrationV2RpcSchemas.stopHeldTurn.output,
+  error: Schema.Union([OrchestrationV2StopHeldTurnError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2GetWorkflowScriptRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
   {
@@ -2731,6 +2738,7 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetNativeChildWorkRpc,
   WsOrchestrationV2StopWorkflowRpc,
   WsOrchestrationV2ForceStopThreadRpc,
+  WsOrchestrationV2StopHeldTurnRpc,
   WsOrchestrationV2GetTurnItemRpc,
   WsOrchestrationV2GetTurnDiffRpc,
   WsOrchestrationV2GetFullThreadDiffRpc,
