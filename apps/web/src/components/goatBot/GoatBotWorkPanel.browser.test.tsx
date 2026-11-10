@@ -49,6 +49,8 @@ vi.mock("~/state/server", () => ({
   },
 }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
+vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
+vi.mock("./GoatBotComputer", () => ({ GoatBotComputer: () => <p>Machine list</p> }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
 }));
@@ -109,8 +111,20 @@ it("shows the empty state for each work tab", async () => {
   await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   await expect.element(screen.getByText("Files need a newer GOAT server.")).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Computer" }));
-  await expect.element(screen.getByText("No work running")).toBeVisible();
+});
+
+it("lists the machines running work under Tasks only while work runs", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await expect.element(screen.getByRole("heading", { name: "Machines" })).toBeVisible();
+  await expect.element(screen.getByText("Machine list")).toBeVisible();
+  setup([]);
+  await screen.rerender(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await expect.element(screen.getByText("Machine list")).not.toBeInTheDocument();
 });
 
 it("says the task list is loading, not empty, before the first read answers", async () => {

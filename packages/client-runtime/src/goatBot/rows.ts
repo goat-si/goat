@@ -445,14 +445,14 @@ export function buildGoatBotTimeline(input: {
         ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
       });
-      previousInputKey = null;
+      // The conversation is now about what this reply answered; a later reply about it needs no quote.
+      previousInputKey = presentation?.replyToKey ?? null;
       continue;
     }
     if (item.type === "notification") {
       if (item.source.kind === "goat_bot_event" && item.ledgerTask === undefined) {
         // Event lines describe the bot: the main chat shows them, a single task's view does not.
         if (input.taskId == null) {
-          previousInputKey = null;
           committed.push({
             kind: "event",
             id: item.id,
@@ -467,7 +467,6 @@ export function buildGoatBotTimeline(input: {
       if (input.taskId != null && card.key !== input.taskId) continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
-        previousInputKey = null;
         cardIndexByKey.set(card.key, committed.length);
         committed.push({ kind: "task", id: item.id, createdAt: itemCreatedAt(item), card });
         continue;

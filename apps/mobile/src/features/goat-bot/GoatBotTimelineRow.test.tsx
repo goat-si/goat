@@ -53,7 +53,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 import { GoatBotTimelineRow } from "./GoatBotScreen";
-import { GoatBotActivityLine } from "./GoatBotMessageParts";
+import { GoatBotActivityLine, goatBotTime } from "./GoatBotMessageParts";
 
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -149,14 +149,13 @@ it("offers retry only for a recoverable failure", async () => {
   expect(view.container.textContent).toContain("Retry");
 });
 
-it("heads only the first bot message of a group with the bot's name and marks updates", async () => {
+it("labels the first of the bot's unprompted updates and leaves its replies unheaded", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(h, <GoatBotTimelineRow {...props} row={bot({ proactive: true })} />);
   await view.render();
   expect(view.container.textContent).toContain("GOAT Bot · Update");
   await view.rerender(<GoatBotTimelineRow {...props} row={bot({ proactive: false })} />);
-  expect(view.container.textContent).toMatch(/^GOAT Bot · \d/);
-  expect(view.container.textContent).not.toContain("GOAT Bot · Update");
+  expect(view.container.textContent).not.toContain("GOAT Bot");
   await view.rerender(
     <GoatBotTimelineRow
       {...props}
@@ -164,6 +163,22 @@ it("heads only the first bot message of a group with the bot's name and marks up
     />,
   );
   expect(view.container.textContent).not.toContain("GOAT Bot");
+});
+
+it("shows the time under the last reply of a bot group, answered questions included", async () => {
+  const time = goatBotTime("2026-10-12T09:40:00Z");
+  h = createNativeMemoryHarness();
+  view = renderNative(h, <GoatBotTimelineRow {...props} row={bot()} />);
+  await view.render();
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(
+    <GoatBotTimelineRow {...props} row={bot({ answer: "Short", options: [] } as never)} />,
+  );
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(
+    <GoatBotTimelineRow {...props} row={bot({ firstInGroup: true, groupPosition: "first" })} />,
+  );
+  expect(view.container.textContent).not.toContain(time);
 });
 
 it("names a member bot on its update and leaves a reply unlabeled", async () => {
@@ -179,6 +194,36 @@ it("names a member bot on its update and leaves a reply unlabeled", async () => 
     <GoatBotTimelineRow {...props} botName="Scout" row={bot({ proactive: false })} />,
   );
   expect(view.container.textContent).not.toContain("· Update");
+});
+
+it("ends a bot group with its time when the group's last row is a task card", async () => {
+  const time = goatBotTime("2026-10-12T09:41:00Z");
+  h = createNativeMemoryHarness();
+  const task = (groupPosition: "last" | "middle"): GoatBotRow => ({
+    kind: "task",
+    id: "card",
+    createdAt: "2026-10-12T09:41:00Z",
+    firstInGroup: false,
+    groupPosition,
+    card: {
+      key: "task-1",
+      revision: 1,
+      updatedAt: "2026-10-12T09:41:00Z",
+      title: "Check disks",
+      statusLabel: "Running",
+      tone: "active",
+      sourceLabel: null,
+      summary: null,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  });
+  view = renderNative(h, <GoatBotTimelineRow {...props} row={task("last")} />);
+  await view.render();
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(<GoatBotTimelineRow {...props} row={task("middle")} />);
+  expect(view.container.textContent).not.toContain(time);
 });
 
 it("opens the task represented by a task row", async () => {

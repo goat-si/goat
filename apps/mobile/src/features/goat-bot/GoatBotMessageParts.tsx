@@ -29,7 +29,7 @@ export function goatBotTime(iso: string): string {
 
 /** A new speaker or a pause opens a group with more air; messages inside a group stay close. */
 export const goatBotRowGap = (position: GoatBotGroupPosition) =>
-  position === "single" || position === "first" ? 18 : 6;
+  position === "single" || position === "first" ? 16 : 6;
 
 /** The bot's small avatar: its chosen emoji, else the goat mark on the neutral avatar circle. */
 function GoatBotAvatar(props: { readonly emoji?: string | null | undefined }) {
@@ -55,25 +55,32 @@ function GoatBotAvatar(props: { readonly emoji?: string | null | undefined }) {
   );
 }
 
-/** Opens each run of bot messages, so the speaker and the time read without relying on colour. */
-export function GoatBotGroupHeader(props: {
+/** Opens a run of messages the bot sent on its own, so an update never reads as a reply. */
+export function GoatBotUpdateLabel(props: {
   readonly at: string;
   readonly name: string;
   readonly emoji?: string | null | undefined;
-  readonly update?: boolean;
 }) {
   const caption = useScaledTextRole("label");
   const time = goatBotTime(props.at);
   return (
-    <View className="flex-row items-center gap-2">
+    <View className="flex-row items-center gap-2" style={{ marginLeft: 14 }}>
       <GoatBotAvatar emoji={props.emoji} />
-      <Text style={caption}>
-        <Text className="font-semibold text-foreground">{props.name}</Text>
-        <Text className="text-foreground-muted">
-          {props.update ? " · Update" : ""}
-          {time ? ` · ${time}` : ""}
-        </Text>
+      <Text className="text-foreground-muted" style={caption}>
+        {`${props.name} · Update${time ? ` · ${time}` : ""}`}
       </Text>
+    </View>
+  );
+}
+
+/** The bot's words: a tailless soft card on the left, the person's pill without its contrast. */
+export function GoatBotCard(props: { readonly children: ReactNode }) {
+  return (
+    <View
+      className="self-start bg-goat-bot-message"
+      style={{ borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9, maxWidth: "88%" }}
+    >
+      {props.children}
     </View>
   );
 }
@@ -82,7 +89,7 @@ export function GoatBotGroupHeader(props: {
 export function GoatBotPersonPill(props: { readonly children: ReactNode }) {
   return (
     <View
-      className="bg-prominent-action"
+      className="bg-goat-person-message"
       style={{ borderRadius: 20, paddingHorizontal: 14, paddingVertical: 9, maxWidth: "80%" }}
     >
       {props.children}
@@ -98,7 +105,7 @@ export function GoatBotReplyQuote(props: { readonly text: string }) {
       numberOfLines={2}
       accessibilityLabel={`In reply to: ${props.text}`}
       className="border-l-2 border-border pl-2 text-foreground-muted"
-      style={label}
+      style={{ ...label, marginLeft: 14 }}
     >
       {props.text}
     </Text>
@@ -106,6 +113,25 @@ export function GoatBotReplyQuote(props: { readonly text: string }) {
 }
 
 type GoatBotUserRow = Extract<GoatBotRow, { kind: "user" }>;
+
+/** The time under the last message of a bot group, like the person's; phones have no hover. */
+export function GoatBotBotCaption(props: {
+  readonly at: string;
+  readonly groupPosition: GoatBotGroupPosition;
+}) {
+  const caption = useScaledTextRole("caption");
+  const time = goatBotTime(props.at);
+  if (!time || (props.groupPosition !== "last" && props.groupPosition !== "single")) return null;
+  return (
+    <Text
+      className="text-foreground-muted"
+      style={{ ...caption, marginLeft: 14 }}
+      accessibilityLabel={`Sent at ${time}`}
+    >
+      {time}
+    </Text>
+  );
+}
 
 /**
  * The line under a person's message. Waiting, sending and failed sends say so; otherwise the last
@@ -261,8 +287,8 @@ export function GoatBotActivityLine(props: {
 }
 
 /**
- * A bot question that offers answers: its words and the answers in one bordered card. Once a
- * person answered, the card settles to one line naming the answer, which opens to the question.
+ * A bot question that offers answers: its words in the bot's card with the answers as pills
+ * below. Once answered, it settles to one line naming the answer, which opens to the question.
  */
 export function GoatBotQuestionCard(props: {
   readonly children: ReactNode;
@@ -277,8 +303,8 @@ export function GoatBotQuestionCard(props: {
     return <GoatBotAnsweredQuestion answer={answered}>{props.children}</GoatBotAnsweredQuestion>;
   }
   return (
-    <View accessibilityLabel="Question" className="gap-3 rounded-xl border border-border p-3">
-      {props.children}
+    <View accessibilityLabel="Question" className="gap-2">
+      <GoatBotCard>{props.children}</GoatBotCard>
       <View accessibilityLabel="Suggested answers" className="flex-row flex-wrap gap-2">
         {props.options.map((answer) => (
           <Pressable
@@ -304,14 +330,15 @@ function GoatBotAnsweredQuestion(props: { readonly answer: string; readonly chil
   const label = useScaledTextRole("label");
   const [open, setOpen] = useState(false);
   return (
-    <View className="rounded-xl border border-border">
+    <View className="self-start bg-goat-bot-message" style={{ borderRadius: 18, maxWidth: "88%" }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Answered: ${props.answer}`}
         accessibilityHint={open ? "Hides the question" : "Shows the question"}
         accessibilityState={{ expanded: open }}
         onPress={() => setOpen((value) => !value)}
-        className="min-h-[44px] flex-row items-center gap-2 px-3 py-2"
+        className="min-h-[44px] flex-row items-center gap-2 py-2"
+        style={{ paddingHorizontal: 14 }}
       >
         <SymbolView name="checkmark" size={14} tintColorClassName="accent-icon-muted" />
         <Text numberOfLines={1} className="shrink text-foreground" style={label}>
@@ -326,7 +353,9 @@ function GoatBotAnsweredQuestion(props: { readonly answer: string; readonly chil
           />
         </View>
       </Pressable>
-      {open ? <View className="border-t border-border px-3 py-3">{props.children}</View> : null}
+      {open ? (
+        <View style={{ paddingHorizontal: 14, paddingBottom: 10 }}>{props.children}</View>
+      ) : null}
     </View>
   );
 }

@@ -297,6 +297,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   /* The person's messages in GOAT Bot's conversation; mobile keeps the same values. */
   --color-goat-person-message: var(--goat-person-message);
   --color-goat-person-message-foreground: var(--goat-person-message-foreground);
+  /* The bot's replies: a soft neutral card that tints whichever theme it sits on. */
+  --color-goat-bot-message: color-mix(in oklab, var(--foreground) 6%, transparent);
   --color-channel-dev: var(--channel-dev);
   --color-channel-nightly: var(--channel-nightly);
   --color-error-foreground: var(--error-foreground);
@@ -774,15 +776,26 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   }
 }
 
-/* A bot reply: unboxed prose at a reading measure; code and tables take the column. */
+/* A bot reply's text; goat-bot-card boxes it. */
 @utility goat-bot-prose {
   font-size: 1rem;
-  line-height: 1.625rem;
+  line-height: 1.5rem;
   overflow-wrap: break-word;
   white-space: pre-wrap;
 
   @media (max-width: 640px) {
     font-size: 1.0625rem;
+  }
+}
+
+/* A bot reply: a tailless gray card, the person's pill mirrored without its contrast. */
+@utility goat-bot-card {
+  padding: 8px 14px;
+  border-radius: 16px;
+  background: var(--color-goat-bot-message);
+
+  @media (forced-colors: active) {
+    border: 1px solid CanvasText;
   }
 }
 
@@ -798,6 +811,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   font-weight: 600;
   background: color-mix(in oklab, var(--background) 72%, transparent);
   box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+
+/* With the bot's face inside, the capsule hugs it like a chip: 28px tall, round on the left. */
+.goat-name-capsule:has(> .goat-name-avatar) {
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
 }
 
 @utility goat-message-row {
@@ -818,13 +837,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @utility goat-composer-field {
-  min-height: 44px;
-  border-radius: 22px;
+  min-height: 48px;
+  border-radius: 24px;
   background: var(--goat-composer-fill);
-  box-shadow: inset 0 0 0 0.5px var(--goat-hairline);
+  box-shadow:
+    inset 0 0 0 1px var(--goat-hairline),
+    0 1px 3px rgb(0 0 0 / 4%);
 
   &:focus-within {
-    box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 32%, transparent);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in oklab, var(--foreground) 24%, transparent),
+      0 1px 3px rgb(0 0 0 / 4%);
   }
 }
 
@@ -1238,10 +1261,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 :root {
   color-scheme: light;
-  /* Ink on paper in light, paper on ink in dark: the same pair inverts with the theme. */
+  /* Ink on paper in light; dark raises it to a gray pill below. */
   --goat-person-message: var(--foreground);
   --goat-person-message-foreground: var(--background);
-  --goat-composer-fill: #f3f3f3;
+  /* A raised field on the canvas, as in Grok: white with a hairline in light. */
+  --goat-composer-fill: #ffffff;
   --goat-hairline: rgb(0 0 0 / 8%);
   --radius: 0.5rem;
   /* Neutral grays without a cool cast and an ink primary, after the ChatGPT
@@ -1331,8 +1355,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   @variant dark {
     color-scheme: dark;
     --blue: #339cff;
-    --goat-composer-fill: #262626;
+    --goat-composer-fill: #1f1f1f;
     --goat-hairline: rgb(255 255 255 / 10%);
+    /* In dark the person's pill is a raised gray, as in Grok, rather than a white slab. */
+    --goat-person-message: #3a3a3a;
+    --goat-person-message-foreground: var(--foreground);
     /* A near-black (not black) canvas with surfaces a visible step lighter.
        Muted text is sized for its common 60-80% alpha uses
        (text-muted-foreground/70) to stay readable; the floors are asserted in

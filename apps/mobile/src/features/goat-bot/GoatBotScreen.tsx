@@ -42,7 +42,9 @@ import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
   GoatBotActivityLine,
-  GoatBotGroupHeader,
+  GoatBotBotCaption,
+  GoatBotCard,
+  GoatBotUpdateLabel,
   GoatBotPersonCaption,
   GoatBotPersonPill,
   GoatBotQuestionCard,
@@ -110,9 +112,6 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     const onSelectTask = props.onSelectTask;
     return (
       <View className="gap-1.5" style={{ marginTop }}>
-        {row.firstInGroup ? (
-          <GoatBotGroupHeader at={row.createdAt} name={botName} emoji={props.botEmoji} />
-        ) : null}
         <GoatBotTaskRow
           card={row.card}
           onSelectThread={props.onSelectThread}
@@ -120,6 +119,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
             onSelectTask ? () => onSelectTask(ChannelTaskId.make(row.card.key)) : undefined
           }
         />
+        <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
       </View>
     );
   }
@@ -133,7 +133,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               <Text
                 selectable
                 accessibilityLabel={time ? `You, ${time}: ${row.text}` : `You: ${row.text}`}
-                className="text-prominent-action-foreground"
+                className="text-goat-person-message-foreground"
                 style={bodyText}
               >
                 {row.text}
@@ -143,7 +143,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               <Text
                 key={file.id}
                 numberOfLines={1}
-                className="text-prominent-action-foreground"
+                className="text-goat-person-message-foreground"
                 style={{ opacity: 0.85, ...bodyText }}
               >
                 {(file.type === "image" ? "Photo · " : "File · ") + file.name}
@@ -185,13 +185,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   );
   return (
     <View className="gap-1.5" style={{ marginTop }}>
-      {row.firstInGroup ? (
-        <GoatBotGroupHeader
-          at={row.createdAt}
-          name={botName}
-          emoji={props.botEmoji}
-          update={row.proactive}
-        />
+      {row.firstInGroup && row.proactive ? (
+        <GoatBotUpdateLabel at={row.createdAt} name={botName} emoji={props.botEmoji} />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
       {/* The shared rows fold a question once it is answered: the card settles to the answer. */}
@@ -210,8 +205,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
           {prose}
         </GoatBotQuestionCard>
       ) : (
-        prose
+        <GoatBotCard>{prose}</GoatBotCard>
       )}
+      <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
     </View>
   );
 });
@@ -390,6 +386,7 @@ export function GoatBotScreen(props: {
           }
           turnsWaiting={session.turnsWaiting}
           botName={title}
+          botAvatar={botEmoji}
           main={props.main ?? null}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
