@@ -54,10 +54,11 @@ export const LEGACY_WORKTREE_RULES = {
   worktreeKeepRecent: null,
   worktreeSnapshotChanges: false,
 } as const;
-// Removal is approved; preview behavior is covered by storageCleanupRun.test.ts.
-const approvedPreview = Layer.succeed(WorktreeCleanupPreviewState, {
-  evaluate: () => Effect.succeed({ apply: true, preview: null }),
-  respond: () => Effect.void,
+// The preview is off by default, so cleanup must never consult it; storageCleanupRun.test.ts covers it on.
+const unusedPreview = Layer.succeed(WorktreeCleanupPreviewState, {
+  evaluate: () => Effect.die("cleanup consulted the preview while it is off"),
+  respond: () => Effect.die("cleanup answered a preview while it is off"),
+  reset: Effect.void,
 });
 export const cleanupFixture = (
   storageCleanup: StorageCleanupSettings = {
@@ -106,7 +107,7 @@ export const cleanupFixture = (
     const activated = yield* Deferred.make<void>();
     const cleanupLayer = StorageCleanup.layer.pipe(
       Layer.provide(AuxiliarySqlite.layer),
-      Layer.provide(Layer.merge(WorktreeSnapshotStoreLive.layer, approvedPreview)),
+      Layer.provide(Layer.merge(WorktreeSnapshotStoreLive.layer, unusedPreview)),
       Layer.provide(NodeCrypto.layer),
     );
     const context = yield* Layer.build(cleanupLayer).pipe(

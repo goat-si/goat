@@ -34,6 +34,7 @@ const setup = (gate: ReadonlyArray<{ readonly apply: boolean }>) => {
     evaluate: [] as number[],
     expire: [] as number[],
     purge: 0,
+    reset: 0,
     passes: [] as boolean[],
   };
   let next = 0;
@@ -46,6 +47,7 @@ const setup = (gate: ReadonlyArray<{ readonly apply: boolean }>) => {
           return { apply, preview: apply ? null : preview };
         }),
       respond: () => Effect.void,
+      reset: Effect.sync(() => void calls.reset++),
     }),
     Layer.succeed(WorktreeSnapshotStore, {
       capture: () => Effect.die("unused"),
@@ -133,6 +135,22 @@ describe("worktree cleanup preview gate", () => {
       });
       expect(result.preview).toBeNull();
       expect(calls.evaluate).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("asks for a new preview when the preview is turned off and on again", () => {
+    const { calls, layer, clean } = setup([{ apply: true }, { apply: false }]);
+    return Effect.gen(function* () {
+      const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
+      const sweep = (nowMs: number, on: boolean) =>
+        run({ nowMs, snapshotDays: null, preview: on, entries: [], clean });
+      yield* sweep(0, true);
+      yield* sweep(1, false);
+      const again = yield* sweep(2, true);
+      expect(calls.passes).toEqual([true, false, false, true]);
+      expect(calls.evaluate).toEqual([1, 1]);
+      expect(calls.reset).toBe(1);
+      expect(again.preview).toEqual(preview);
     }).pipe(Effect.provide(layer));
   });
 });

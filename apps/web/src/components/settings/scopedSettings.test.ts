@@ -146,6 +146,19 @@ describe("scoped settings targets", () => {
 });
 
 describe("scoped settings writes", () => {
+  it("leaves the worktree policy alone when a server-only storage setting changes", () => {
+    const disabled = environment("Server", { settings: { worktreeCleanup: { mode: "off" } } });
+    const plan = planScopedSettingsPatch(all, [disabled], {
+      storageCleanup: { worktreeCleanupPreview: true, worktreeSnapshotDays: 9 },
+    });
+    const next = applyServerSettingsPatch(
+      disabled.serverConfig!.settings,
+      plan.serverWrites[0]!.patch,
+    );
+    expect(next.worktreeCleanup).toEqual({ mode: "off" });
+    expect(next.storageCleanup.worktreeCleanupPreview).toBe(true);
+  });
+
   it("edits the effective machine policy without changing other machines' rules", () => {
     const custom = environment("Laptop", {
       settings: {
