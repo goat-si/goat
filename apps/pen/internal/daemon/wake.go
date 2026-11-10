@@ -27,6 +27,7 @@ func (d *Daemon) wakeLoop(ctx context.Context) {
 		}
 		now := d.now()
 		wall := now.Round(0).Sub(last.Round(0))
+		// A forward wall-clock step over 10 s (an NTP correction) looks the same and costs one redial.
 		if slept := wall - d.opt.Since(last); slept > wakeJump {
 			d.opt.Logf("woke after about %v asleep; redialing the relays", slept.Round(time.Second))
 			d.redialUplinks()

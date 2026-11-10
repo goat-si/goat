@@ -225,8 +225,8 @@ func (s *Server) NextUplink(ctx context.Context, nodeID string) error {
 	}
 }
 
-// NextUplinkPing returns once an uplink of nodeID sent a ping (text) that no earlier call
-// returned for.
+// NextUplinkPing returns once an uplink of nodeID sent a text message (a ping, or an ack after
+// 64 KiB of traffic) that no earlier call returned for.
 func (s *Server) NextUplinkPing(ctx context.Context, nodeID string) error {
 	select {
 	case <-s.chanOf(s.uplinkPings, nodeID):

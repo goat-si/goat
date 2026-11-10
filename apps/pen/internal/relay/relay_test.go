@@ -449,3 +449,31 @@ func TestAnUplinkThatHearsNothingForTwoPingIntervalsRedials(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAQuietUplinkWhoseRelayAnswersPingsStaysUp(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	id := newID(t)
+	u := relay.NewUplink(rs.URL, id)
+	u.MinBackoff = time.Millisecond
+	u.PingInterval = 50 * time.Millisecond
+	ev := make(upEvents, 16)
+	u.OnState = func(up bool) { ev <- up }
+	go u.Run(ctx)
+	if !<-ev {
+		t.Fatal("uplink did not come up")
+	}
+	// Six pings span three silence deadlines; only pongs arrive in between.
+	for range 6 {
+		if err := rs.NextUplinkPing(ctx, id.NodeID()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case up := <-ev:
+		t.Fatalf("a quiet uplink whose relay answers every ping changed state (up=%v)", up)
+	default:
+	}
+}
