@@ -114,6 +114,25 @@ export function GoatBotReplyQuote(props: { readonly text: string }) {
 
 type GoatBotUserRow = Extract<GoatBotRow, { kind: "user" }>;
 
+/** The time under the last message of a bot group, like the person's; phones have no hover. */
+export function GoatBotBotCaption(props: {
+  readonly at: string;
+  readonly groupPosition: GoatBotGroupPosition;
+}) {
+  const caption = useScaledTextRole("caption");
+  const time = goatBotTime(props.at);
+  if (!time || (props.groupPosition !== "last" && props.groupPosition !== "single")) return null;
+  return (
+    <Text
+      className="text-foreground-muted"
+      style={{ ...caption, marginLeft: 14 }}
+      accessibilityLabel={`Sent at ${time}`}
+    >
+      {time}
+    </Text>
+  );
+}
+
 /**
  * The line under a person's message. Waiting, sending and failed sends say so; otherwise the last
  * message of a group shows its time. Sent, delivered and read states stay quiet.

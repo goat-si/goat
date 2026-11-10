@@ -42,6 +42,7 @@ import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
   GoatBotActivityLine,
+  GoatBotBotCaption,
   GoatBotCard,
   GoatBotUpdateLabel,
   GoatBotPersonCaption,
@@ -205,6 +206,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       ) : (
         <GoatBotCard>{prose}</GoatBotCard>
       )}
+      <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
     </View>
   );
 });
