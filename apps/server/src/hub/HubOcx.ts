@@ -553,17 +553,15 @@ const make = Effect.gen(function* () {
       ["", "none", undefined].includes(settings.get("hostkeyalias"));
     if (!keyedByAlias || penKnownHostsFile(settings) !== knownHosts) return undefined;
     // ssh also accepts a key a global known_hosts file holds for the alias, so there must be none.
-    const globalSetting = settings.get("globalknownhostsfile") ?? "";
-    const globals = globalSetting.split(" ").filter((file) => file !== "");
-    // ssh -G prints a relative path as written and a path with spaces unquoted: neither names one
-    // file this check could read, so such a setting is not trusted.
-    if (globals.some((file) => !file.startsWith("/"))) return undefined;
-    if (
-      globals.length > 1 &&
-      (yield* fs.exists(globalSetting).pipe(Effect.orElseSucceed(() => true)))
-    )
-      return undefined;
-    for (const file of globals) {
+    // ssh -G prints the files unquoted, so one with spaces is some run of these words; every run
+    // that exists is checked. A relative word cannot be resolved, and too many words is not
+    // checked at all: either way the alias is not trusted.
+    const words = (settings.get("globalknownhostsfile") ?? "").split(" ").filter((w) => w !== "");
+    if (words.length > 8 || words.some((word) => !word.startsWith("/"))) return undefined;
+    const runs = words.flatMap((_, start) =>
+      words.slice(start).map((__, length) => words.slice(start, start + length + 1).join(" ")),
+    );
+    for (const file of runs) {
       if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => true)))) continue;
       const found = yield* run("ssh-keygen", ["-F", alias, "-f", file], 10_000).pipe(
         Effect.mapError(() => unreadable(alias)),
