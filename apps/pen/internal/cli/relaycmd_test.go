@@ -45,6 +45,7 @@ func TestRelayServeFlagsAreValidatedWithoutACME(t *testing.T) {
 		"zero socket cap":         {"--plain", "--listen", "127.0.0.1:0", "--max-sockets", "0"},
 		"negative per-IP cap":     {"--plain", "--listen", "127.0.0.1:0", "--max-per-ip", "-1"},
 		"zero queue budget":       {"--plain", "--listen", "127.0.0.1:0", "--max-queued-mib", "0"},
+		"zero source share":       {"--plain", "--listen", "127.0.0.1:0", "--max-queued-per-source-mib", "0"},
 		"zero unauth cap":         {"--plain", "--listen", "127.0.0.1:0", "--max-unauth-per-node", "0"},
 	}
 	for name, args := range bad {
@@ -223,8 +224,38 @@ func TestRelayServeCapFlagsReachTheRelay(t *testing.T) {
 	if got := dialUplink(); got != http.StatusSwitchingProtocols {
 		t.Fatalf("first socket got %d", got)
 	}
-	if got := dialUplink(); got != http.StatusTooManyRequests {
-		t.Fatalf("second socket from 127.0.0.1 with --max-per-ip 1 got %d, want 429", got)
+	id, _ := ident.Generate(nil)
+	if ws, _, err := websocket.Dial(ctx, "ws://"+ln.Addr().String()+"/v1/node/"+id.NodeID(), nil); err == nil {
+		ws.CloseNow()
+		t.Fatal("a second socket from 127.0.0.1 with --max-per-ip 1 was served")
+	}
+}
+
+// A connection holds memory from accept on, while it sends its TLS handshake and headers, so the
+// caps count it from there: a source whose connections have sent nothing yet still uses its share.
+func TestConnectionsCountTowardTheCapsBeforeTheirRequestArrives(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	c, err := parseServe([]string{"--plain", "--listen", ln.Addr().String(), "--max-per-ip", "1"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go serveOn(ctx, c, ln, nil, relayserver.Hooks{})
+	silent, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	id, _ := ident.Generate(nil)
+	ws, _, err := websocket.Dial(ctx, "ws://"+ln.Addr().String()+"/v1/node/"+id.NodeID(), nil)
+	if err == nil {
+		ws.CloseNow()
+		t.Fatal("a second connection from 127.0.0.1 with --max-per-ip 1 was served while the first had sent nothing")
 	}
 }
 

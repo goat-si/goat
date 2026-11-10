@@ -132,6 +132,7 @@ type serveConfig struct {
 	maxPerIP     int
 	maxUnauth    int
 	maxQueuedMiB int
+	maxShareMiB  int
 	// readTimeout and limits override the defaults in tests.
 	readTimeout time.Duration
 	limits      *relayserver.Limits
@@ -151,15 +152,16 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 	fs.IntVar(&c.maxSockets, "max-sockets", relayserver.DefaultMaxSockets, "most sockets the relay holds at once")
 	fs.IntVar(&c.maxPerIP, "max-per-ip", relayserver.DefaultMaxPerIP, "most sockets from one IPv4 address or IPv6 /64")
 	fs.IntVar(&c.maxUnauth, "max-unauth-per-node", relayserver.DefaultMaxUnauthPerNode, "most unauthenticated uplinks per node id (a newer one evicts the oldest)")
-	fs.IntVar(&c.maxQueuedMiB, "max-queued-mib", relayserver.DefaultMaxQueued>>20, "most MiB all sockets' outbound queues hold together; data past it ends its session 4408")
+	fs.IntVar(&c.maxQueuedMiB, "max-queued-mib", relayserver.DefaultMaxQueued>>20, "most MiB all sockets' queued and partly read messages hold together; data past it ends its session 4408")
+	fs.IntVar(&c.maxShareMiB, "max-queued-per-source-mib", relayserver.DefaultMaxQueuedPerSource>>20, "most of --max-queued-mib one IPv4 address's or IPv6 /64's sockets hold; data past it ends the session that holds it 4408")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
 	if fs.NArg() != 0 {
 		return c, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
-	if c.maxSockets < 1 || c.maxPerIP < 1 || c.maxUnauth < 1 || c.maxQueuedMiB < 1 {
-		return c, errors.New("--max-sockets, --max-per-ip, --max-unauth-per-node and --max-queued-mib must be at least 1")
+	if c.maxSockets < 1 || c.maxPerIP < 1 || c.maxUnauth < 1 || c.maxQueuedMiB < 1 || c.maxShareMiB < 1 {
+		return c, errors.New("--max-sockets, --max-per-ip, --max-unauth-per-node, --max-queued-mib and --max-queued-per-source-mib must be at least 1")
 	}
 	modes := 0
 	for _, on := range []bool{c.autocertHost != "", c.certFile != "" || c.keyFile != "", c.plain} {
@@ -258,6 +260,7 @@ func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(add
 	rs.PublicOrigin = c.publicOrigin
 	rs.MaxSockets, rs.MaxPerIP, rs.MaxUnauthPerNode = c.maxSockets, c.maxPerIP, c.maxUnauth
 	rs.MaxQueued = c.maxQueuedMiB << 20
+	rs.MaxQueuedPerSource = c.maxShareMiB << 20
 	rs.Hooks = hooks
 	readTimeout := 30 * time.Second
 	if c.readTimeout > 0 {
@@ -265,7 +268,8 @@ func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(add
 	}
 	// The timeouts bound plain requests; the relay clears them on a socket it upgrades.
 	srv := &http.Server{Handler: rs, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout,
-		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: relayserver.MaxHeaderBytes}
+	ln = rs.Listen(ln)
 	switch {
 	case c.autocertHost != "":
 		if err := prepareCache(c.cacheDir); err != nil {
