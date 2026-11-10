@@ -679,8 +679,10 @@ export function useMobileGoatBotSession(
         readers: goatBotItemReaders,
         knownTaskIds,
         ...(taskId === undefined ? {} : { taskId }),
+        // Work cards leave the chat only where the bot's work list can open every task.
+        conversationOnly: supportsTaskThreads,
       }),
-    [visibleTurnItems, pendingInputs, taskId, knownTaskIds],
+    [visibleTurnItems, pendingInputs, taskId, knownTaskIds, supportsTaskThreads],
   );
   const replyingSince = useMemo(
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
