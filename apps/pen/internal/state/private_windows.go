@@ -19,9 +19,11 @@ func tokenUser() (*windows.SID, error) {
 }
 
 // restrict replaces the DACL of p with one protected ACE for this process's user, inherited by new
-// files and folders when inherit is set. Mode bits do not protect anything on Windows.
+// files and folders when inherit is set. Mode bits do not protect anything on Windows. An owner-only
+// DACL is kept only when it is protected: one that merely inherits the user's ACE would take whatever a
+// later change to the parent grants.
 func restrict(p string, inherit bool) error {
-	if ok, err := ownerOnly(p, inherit); err == nil && ok {
+	if ok, err := ownerOnly(p, inherit, true); err == nil && ok {
 		return nil
 	}
 	sid, err := tokenUser()
@@ -58,12 +60,18 @@ func RestrictDir(d string) error { return restrictDir(d) }
 func RestrictFile(p string) error { return restrict(p, false) }
 
 // OwnerOnly reports whether every ACE of p allows the current user and nobody else.
-func OwnerOnly(p string) (bool, error) { return ownerOnly(p, false) }
+func OwnerOnly(p string) (bool, error) { return ownerOnly(p, false, false) }
 
-func ownerOnly(p string, inherit bool) (bool, error) {
+func ownerOnly(p string, inherit, protected bool) (bool, error) {
 	sd, err := windows.GetNamedSecurityInfo(p, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return false, err
+	}
+	if protected {
+		control, _, err := sd.Control()
+		if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+			return false, err
+		}
 	}
 	dacl, _, err := sd.DACL()
 	if err != nil || dacl == nil {

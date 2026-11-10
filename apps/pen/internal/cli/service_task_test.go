@@ -236,7 +236,7 @@ func TestSupervisorRestartsACrashedDaemonUntilItExitsCleanly(t *testing.T) {
 		i++
 		clock = clock.Add(r.took)
 		return r.code
-	}, func(d time.Duration) { waits = append(waits, d); clock = clock.Add(d) },
+	}, func() bool { return false }, func(d time.Duration) { waits = append(waits, d); clock = clock.Add(d) },
 		func() time.Time { return clock }, func(string, ...any) {})
 	if code != 0 || i != len(runs) {
 		t.Fatalf("supervisor returned %d after %d runs", code, i)
@@ -248,6 +248,75 @@ func TestSupervisorRestartsACrashedDaemonUntilItExitsCleanly(t *testing.T) {
 	for k := range want {
 		if waits[k] != want[k] {
 			t.Fatalf("waits %v, want %v", waits, want)
+		}
+	}
+}
+
+// pen down marks the stop before it asks the daemon; a daemon that crashes instead of stopping must not
+// come back, whether the supervisor notices before or after its wait.
+func TestSupervisorDoesNotRestartADaemonAfterPenDown(t *testing.T) {
+	for _, markAt := range []string{"exit", "wait"} {
+		down := false
+		runs := 0
+		code := superviseLoop(func() int {
+			runs++
+			if markAt == "exit" {
+				down = true
+			}
+			return 2
+		}, func() bool { return down }, func(time.Duration) {
+			if markAt == "wait" {
+				down = true
+			}
+		}, time.Now, func(string, ...any) {})
+		if code != 0 || runs != 1 {
+			t.Fatalf("down marked at %s: supervisor returned %d after %d runs, want 0 after 1", markAt, code, runs)
+		}
+	}
+}
+
+// pen down returns only once the supervisor has ended, so the next pen up's /Run is not dropped; a
+// supervisor that outlives the graceful stop is ended with /End, and one that survives that is an error.
+func TestDownOnWindowsWaitsForTheSupervisorAndEndsOneThatStays(t *testing.T) {
+	for _, endWorks := range []bool{true, false} {
+		var release func()
+		st, calls := windowsHome(t, func(verb string, _ []string) error {
+			switch verb {
+			case "/Query":
+				return nil
+			case "/End":
+				if endWorks {
+					release()
+					return nil
+				}
+				return errors.New("access denied")
+			}
+			return nil
+		})
+		r, err := state.TryLock(st.Path(supervisorLock)) // a supervisor that does not end by itself
+		if err != nil {
+			t.Fatal(err)
+		}
+		release = r
+		old := supervisorWait
+		supervisorWait = 0
+		var out, errOut bytes.Buffer
+		code := RunDown(nil, &out, &errOut)
+		supervisorWait = old
+		if !endWorks {
+			release()
+		}
+		if want := "schtasks /End /TN " + taskName(testAccount); !strings.Contains(strings.Join(*calls, "\n"), want) {
+			t.Fatalf("calls %q lack %q", *calls, want)
+		}
+		if endWorks && code != 0 {
+			t.Fatalf("pen down exit %d after /End ended the supervisor: %s", code, errOut.String())
+		}
+		if !endWorks && (code == 0 || !strings.Contains(errOut.String(), "did not stop")) {
+			t.Fatalf("pen down exit %d (%s) with a supervisor still running", code, errOut.String())
+		}
+		if _, err := os.Stat(st.Path(downMarker)); err != nil {
+			t.Fatalf("pen down left no down marker: %v", err)
 		}
 	}
 }
