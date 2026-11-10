@@ -106,10 +106,15 @@ func TestLoginFoundsAndBindsThenAMachineJoinsAndALockedMeshQueuesUntilApproved(t
 	done := make(chan int, 1)
 	var cErr strings.Builder
 	go func() { done <- RunLogin(flags("c"), pw, &cErr); pw.Close() }()
-	fp := ""
+	// The request queues on whichever member won the dial race; approve it there.
+	fp, queuedOn := "", ""
 	sc := bufio.NewScanner(pr)
 	for sc.Scan() {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "this machine's fingerprint: "); ok {
+		line := strings.TrimSpace(sc.Text())
+		if m := regexp.MustCompile(`is queued on (\S+)$`).FindStringSubmatch(line); m != nil {
+			queuedOn = m[1]
+		}
+		if v, ok := strings.CutPrefix(line, "this machine's fingerprint: "); ok {
 			fp = v
 			break
 		}
@@ -118,7 +123,11 @@ func TestLoginFoundsAndBindsThenAMachineJoinsAndALockedMeshQueuesUntilApproved(t
 		t.Fatalf("c was not queued: %s", cErr.String())
 	}
 	go io.Copy(io.Discard, pr)
-	t.Setenv("PEN_HOME", a.Dir)
+	approver := map[string]*state.Store{"a": a, "b": b}[queuedOn]
+	if approver == nil {
+		t.Fatalf("queued on %q, want a or b", queuedOn)
+	}
+	t.Setenv("PEN_HOME", approver.Dir)
 	out.Reset()
 	if code := RunApprove([]string{fp}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "approved c") {
 		t.Fatalf("approve: exit %d: %s%s", code, out.String(), errOut.String())
