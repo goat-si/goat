@@ -29,7 +29,14 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
 import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
-import { fingerprintOfType, isDirectRoute, penKnownHostsFile, sshSettings } from "./penSshRoute.ts";
+import {
+  fingerprintOfType,
+  isDirectRoute,
+  penConfigHosts,
+  penKnownHostsFile,
+  penRevision,
+  sshSettings,
+} from "./penSshRoute.ts";
 
 const MAX_BYTES = 256 * 1024;
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
@@ -188,6 +195,11 @@ export class HubOcx extends Context.Service<
      * resolve the alias.
      */
     readonly directAlias: (alias: string) => Effect.Effect<boolean>;
+    /**
+     * Identifies a Pen member's alias that Pen's own ssh config and known_hosts define, for a
+     * person's consent to set it up as a Child; undefined for any other alias.
+     */
+    readonly penAliasRevision: (alias: string) => Effect.Effect<string | undefined>;
     /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
@@ -601,6 +613,24 @@ const make = Effect.gen(function* () {
         return isDirectRoute(sshSettings(output.stdout));
       },
       Effect.orElseSucceed(() => false),
+    ),
+    penAliasRevision: Effect.fn("HubOcx.penAliasRevision")(
+      function* (alias) {
+        if (!SAFE_ALIAS.test(alias)) return undefined;
+        const directory = path.join(homeDirectory, ".ssh", "pen");
+        // Only a Host block Pen wrote names a member; a hand-made pen-* alias elsewhere does not.
+        const config = yield* fs.readFileString(path.join(directory, "config"));
+        if (!penConfigHosts(config).includes(alias)) return undefined;
+        const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
+        if (output.code !== 0 || output.timedOut) return undefined;
+        const settings = sshSettings(output.stdout);
+        const knownHosts = path.join(directory, "known_hosts");
+        if (penKnownHostsFile(settings) !== knownHosts) return undefined;
+        const keys = yield* run("ssh-keygen", ["-F", alias, "-f", knownHosts], 10_000);
+        return keys.code === 0 && !keys.timedOut ? penRevision(settings, keys.stdout) : undefined;
+      },
+      // Unreadable is not proof of the same member, so consent given for it does not hold.
+      Effect.orElseSucceed(() => undefined),
     ),
     runningTurns: Effect.fn("HubOcx.runningTurns")(
       function* (alias, scope) {
