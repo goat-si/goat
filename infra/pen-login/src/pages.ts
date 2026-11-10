@@ -136,8 +136,12 @@ ${row("time", { ko: "요청 시각", en: "Requested at" }, view.time)}
 <button type="submit" name="action" value="approve">추가 · <span lang="en">Add machine</span></button>
 <button type="submit" name="action" value="deny" class="quiet">내가 시작하지 않았습니다 · <span lang="en">I didn't start this</span></button></form>`;
     case "done":
-      return `${heading({ ko: "기기를 추가했습니다", en: "Machine added" })}
-${lines({ ko: `${view.name} 의 터미널로 돌아가세요. 나머지는 그곳에서 끝납니다.`, en: `Go back to the terminal on ${view.name}. pen login finishes there.` })}`;
+      // The service cannot see the mesh's lock state, so it confirms the sign-in, not the join.
+      return `${heading({ ko: "로그인을 확인했습니다", en: "Sign-in confirmed" })}
+${lines({
+  ko: `${view.name} 의 터미널로 돌아가세요. 메시에 합류했는지는 그곳에 표시됩니다. 메시에 잠금이 켜져 있으면 기존 기기에서 pen approve 로 승인해야 들어갑니다.`,
+  en: `Go back to the terminal on ${view.name}; it shows whether the machine joined. If the mesh is locked, approve it on an existing machine with pen approve.`,
+})}`;
     case "denied":
       return `${heading({ ko: "요청을 거부했습니다", en: "Request denied" })}
 ${lines({ ko: "기기는 추가되지 않았습니다. 다른 사람이 시작한 요청이었다면 이 창을 닫으면 됩니다.", en: "The machine was not added. If someone else started this request, you can close this page." })}`;
