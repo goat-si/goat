@@ -147,3 +147,20 @@ func (d *Daemon) setRelays(list []string) (Status, error) {
 	}
 	return d.status(), nil
 }
+
+// ConfigError is a config.json the daemon cannot start with. Starting again cannot fix it, so a
+// service must not be restarted for it.
+type ConfigError struct{ Reason string }
+
+func (e *ConfigError) Error() string { return e.Reason }
+
+// CheckConfig is the daemon's start check of config.json.
+func CheckConfig(cfg state.Config) error {
+	if cfg.Relay == "" {
+		return &ConfigError{"no relay configured; run pen up --relay URL"}
+	}
+	if err := ValidRelays(cfg.RelayList()); err != nil {
+		return &ConfigError{fmt.Sprintf("the relays in config.json cannot be used (%v); replace them with pen up --relay <https URL> (repeat --relay for more; pen relay ls lists them)", err)}
+	}
+	return nil
+}

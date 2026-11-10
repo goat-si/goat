@@ -30,15 +30,18 @@ A node keeps its state under `PEN_HOME` (default `~/.pen`, 0700, or an owner-onl
 with), `versions.json` (each member's last announced protocol version), `forgets.json` (pending registry removals),
 `daemon.json` and `daemon.lock` (the running daemon), `state.lock`, `daemon.log` (capped at 4 MiB with
 `daemon.log.1`), `dashboard.html` while a dashboard link is unused, `relay-check/` (the keys `pen relay check`
-uses), the `left` marker after `pen leave`, and the control socket `control.sock`. Outside it, `pen ssh-config`
-writes `~/.ssh/pen/config` and an `Include` line in `~/.ssh/config`, and a service is
+uses), `joined.json` (a mesh `pen login` joined, until the running daemon adopts it), the `left` marker after
+`pen leave`, and the control socket `control.sock`. Outside it, `pen ssh-config` writes `~/.ssh/pen/config` and an
+`Include` line in `~/.ssh/config`, the daemon keeps members' SSH host keys in `~/.ssh/pen/known_hosts`, and a
+service is
 `~/.config/systemd/user/pen.service`, `~/Library/LaunchAgents/si.goat.pen.plist` or the Task Scheduler task
 `pen-<user>-<hash>`. `pen leave` deletes the keys and
 `mesh.json`.
 
 ## Checks
 
-goat-ci's `test-pen` task runs whenever a pull request changes one of the four directories, and in every full run:
+goat-ci's `test-pen` task runs whenever a pull request changes one of the four directories above or the files that
+define the task (`.github/workflows/goat-ci.yml`, `.github/scripts/goat-ci-scope.cjs`), and in every full run:
 `gofmt`, `go vet` and `go test -race` for `apps/pen`, `apps/pen/scripts/installcheck.sh`, `threenode.sh` and
 `loginnode.sh` against local relays and a fake login service, and the `@goat/pen-protocol`, `@goat/pen-relay` and
 `@goat/pen-login` suites (the Worker suites start `wrangler dev`). `test-pen-windows` runs `go vet`, `go test` and

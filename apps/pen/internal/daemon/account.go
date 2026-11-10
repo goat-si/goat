@@ -426,16 +426,18 @@ func syncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.
 // FinishJoin syncs a freshly joined set with every reachable member, as a joiner must before it
 // serves tcp streams, and reports how many took part. It fails when a member refuses this node
 // (4401: it holds a revoke the admitting member had not heard of) or the synced view no longer
-// makes it a member.
-func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store, listed []login.OfferedMember) (taken, others int, err error) {
+// makes it a member. as is the joiner's assertion (nil for an invite join).
+func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store, listed []login.OfferedMember, as *login.Assertion) (taken, others int, err error) {
 	taken, refused, others := syncWith(ctx, relays, id, s)
 	if refused > 0 {
 		return taken, others, fmt.Errorf("%d member(s) refuse this machine (revoked, or they have not heard of its admission yet); nothing was changed here, run pen login again later", refused)
 	}
 	// The admitting member chose which records to serve. Every machine the login service lists but
-	// the served view does not call a member is asked too: one that refuses this machine holds records
-	// the admitting member left out (a revoke of it, typically), so this copy cannot be trusted.
-	if names := refusedByListed(ctx, relays, id, s, listed); len(names) > 0 {
+	// the served view does not call a member is asked too. One that refuses this machine is asked
+	// again with the assertion to check these records against its own; if it still refuses, it
+	// holds records the admitting member left out (a revoke of it, typically), so this copy cannot
+	// be trusted. One that takes them hands over its records, which may still revoke this machine.
+	if names := refusedByListed(ctx, relays, id, s, listed, as); len(names) > 0 {
 		return taken, others, fmt.Errorf("%s, listed for this account but not a member in the copy of the mesh this machine was given, refuse(s) this machine: the member that admitted it may be revoked or stolen and served a partial mesh. Nothing was changed here; check pen ls on a machine you trust, revoke a stolen one with pen revoke --compromised, and reset the account's machine list on the sign-in page", strings.Join(names, ", "))
 	}
 	if _, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]; !ok {
@@ -445,8 +447,18 @@ func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mes
 }
 
 // refusedByListed syncs with each listed machine that s does not count as a member and names those
-// that refuse this node (4401). One that accepts merges its records into s.
-func refusedByListed(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store, listed []login.OfferedMember) []string {
+// that refuse this node (4401), after a check with the assertion when there is one. One that
+// accepts merges its records into s.
+func refusedByListed(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store, listed []login.OfferedMember, as *login.Assertion) []string {
+	var raw json.RawMessage
+	if as != nil {
+		b, err := json.Marshal(as)
+		if err != nil {
+			return []string{err.Error()}
+		}
+		raw = b
+	}
+	self := s.View().Members[ident.B64.EncodeToString(id.SignPub)].Name
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var names []string
@@ -472,7 +484,13 @@ func refusedByListed(ctx context.Context, relays []string, id *ident.Identity, s
 				defer sec.Close(wire.CodeNormal)
 				err = mesh.SyncInitiate(pctx, sec, s, nil, nil)
 			}
-			if relay.CodeOf(err) == wire.CodeNotAdmitted {
+			// A refusal stands unless the check completes: a member that times out, is older than
+			// the check or breaks the session leaves it in place.
+			refused := relay.CodeOf(err) == wire.CodeNotAdmitted
+			if refused && raw != nil {
+				refused = checkListed(pctx, relays, id, m, noise, self, s, raw) != nil
+			}
+			if refused {
 				mu.Lock()
 				names = append(names, m.Name)
 				mu.Unlock()
@@ -482,4 +500,16 @@ func refusedByListed(ctx context.Context, relays []string, id *ident.Identity, s
 	wg.Wait()
 	sort.Strings(names)
 	return names
+}
+
+// checkListed asks m over kind 0x04 whether the records s holds make this node a member there.
+func checkListed(ctx context.Context, relays []string, id *ident.Identity, m login.OfferedMember, noise []byte, name string, s *mesh.Store, raw json.RawMessage) error {
+	sec, err := OpenAny(ctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, conn, session.KindAccount, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "account", Name: name})
+	})
+	if err != nil {
+		return err
+	}
+	defer sec.Close(wire.CodeNormal)
+	return mesh.CheckWith(ctx, sec, s, raw)
 }

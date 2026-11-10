@@ -44,7 +44,7 @@ func TestTinyQueuedItemsCountTowardTheQueueLimitSoMemoryStaysBounded(t *testing.
 	aborted := ws.aborted
 	ws.mu.Unlock()
 	q.mu.Lock()
-	held := len(q.items)
+	held := q.n
 	q.mu.Unlock()
 	if !aborted || held > limit/32 {
 		t.Fatalf("%d one-byte items queued without an abort", held)
@@ -62,7 +62,7 @@ func TestQueuedPongsAreCapped(t *testing.T) {
 	// Count pongs only: the stalled binary item may or may not have left the queue yet.
 	q.mu.Lock()
 	held := 0
-	for _, it := range q.items {
+	for _, it := range q.ring {
 		if it.pong {
 			held++
 		}

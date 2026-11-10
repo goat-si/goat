@@ -145,7 +145,11 @@ func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) er
 	if err := store.Save(); err != nil {
 		return err
 	}
-	// The old mesh's invites go; new ones persist in offers.json as before.
+	// The old mesh's invites go; new ones persist in offers.json as before. The old book is retired
+	// first, so a prune or invite still holding it cannot write them back.
+	if old := d.inviteBook(); old != nil {
+		old.Retire()
+	}
 	if err := os.Remove(d.st.Path("offers.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

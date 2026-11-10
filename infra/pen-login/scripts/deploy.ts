@@ -102,6 +102,13 @@ async function keyFromFile(path: string): Promise<string> {
   if (mode & 0o077)
     fail(`${parent} is open to other users (mode ${mode.toString(8)}); use a 0700 directory`);
   if (NodeFS.existsSync(path)) {
+    // The file itself may be a symlink: what is read is where it points.
+    const fromRepoFile = NodePath.relative(NodeFS.realpathSync(REPO), NodeFS.realpathSync(path));
+    if (!fromRepoFile.startsWith("..") && !NodePath.isAbsolute(fromRepoFile)) {
+      fail(
+        `${path} points inside the repository (${NodeFS.realpathSync(path)}); keep the login key outside it`,
+      );
+    }
     const seed = NodeFS.readFileSync(path, "utf8").trim();
     if (!/^[A-Za-z0-9_-]{43}$/.test(seed) || Buffer.from(seed, "base64url").length !== 32) {
       fail(`${path} does not hold a base64url 32-byte seed`);
@@ -115,10 +122,11 @@ async function keyFromFile(path: string): Promise<string> {
 
 const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-login-"));
 const removeSecrets = () => NodeFS.rmSync(dir, { recursive: true, force: true });
-// Ctrl-C reaches wrangler too; keep this process alive until it returns, so the secrets file goes.
+// Ctrl-C, a closed terminal or a kill reaches wrangler too; keep this process alive until it
+// returns, so the secrets file goes.
 const interrupted = () => {};
-process.on("SIGINT", interrupted);
-process.on("SIGTERM", interrupted);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const)
+  process.on(signal, interrupted);
 let status: number | null = 1;
 try {
   const file = NodePath.join(dir, "secrets.json");
@@ -130,6 +138,17 @@ try {
   removeSecrets();
 }
 if (status !== 0) {
+  // wrangler can fail after the new version, secrets included, is already live.
+  const after = NodeChildProcess.spawnSync(wrangler, ["secret", "list", "--format", "json"], {
+    encoding: "utf8",
+  });
+  const now =
+    after.status === 0 ? (JSON.parse(after.stdout) as { name: string }[]).map((s) => s.name) : [];
+  if (secrets.LOGIN_SIGNING_KEY && now.includes("LOGIN_SIGNING_KEY")) {
+    fail(
+      `wrangler deploy failed (exit ${status}) after the Worker took the secrets: LOGIN_SIGNING_KEY is set, from ${keyFile}. Check pnpm exec wrangler deployments list; to deploy again, run this without --signing-key-file`,
+    );
+  }
   fail(
     `wrangler deploy failed (exit ${status}); check pnpm exec wrangler secret list, then run this again (a key file it created is reused)`,
   );

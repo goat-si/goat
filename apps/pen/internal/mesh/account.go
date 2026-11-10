@@ -77,6 +77,12 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 	if err != nil {
 		return AccountResult{}, err
 	}
+	if m.T == "check" && len(m.Assertion) > 0 {
+		if a.Asserted != nil {
+			a.Asserted()
+		}
+		return AccountResult{}, serveCheck(ctx, c, remoteStatic, a, m.Assertion)
+	}
 	if m.T != "assertion" || len(m.Assertion) == 0 {
 		return AccountResult{}, refuse(c, "expected an assertion")
 	}

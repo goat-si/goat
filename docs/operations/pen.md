@@ -19,9 +19,11 @@ every Pen suite, and `test-pen-windows` the Go suite and install check on Window
 uplinks and exchanges 64 KiB each way with a client through the relay, with timings. It exits 1 on any failure or
 when `--timeout` (30 s) runs out, including a certificate that expires within 14 days (`--min-cert-days`), so it
 works as a cron or monitor probe. The check node's keys live in `relay-check/` under the state directory
-(`~/.pen`), separate from the machine's own node, so repeated checks reuse one node id and leave each relay one small
-entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same). Run it against
-both relays after every deploy:
+(`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id and leave each
+relay one small entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same).
+That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
+sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
+while one runs waits for it, within its own `--timeout`. Run it against both relays after every deploy:
 
 ```sh
 pen relay check https://pen-relay.pos090001.workers.dev
@@ -46,9 +48,12 @@ and restarting it with `pen down` and `pen up`. `apps/pen/scripts/installcheck.p
 
 ## pen-relay Worker
 
-Deploy: in `infra/pen-relay`, `pnpm run deploy` after a `build.sh`. It first runs `scripts/check-public.ts`, which
-refuses a `public/install.sh` whose relays are loopback or plain http (a local test build) or whose version has no
-`dl/<version>/SHA256SUMS`. Then `node scripts/smoke.ts https://pen-relay.pos090001.workers.dev`: it checks `/healthz`, that the upgrade
+Deploy: in `infra/pen-relay`, `pnpm run deploy` after a `build.sh`; it is the only supported deploy command, since a
+plain `wrangler deploy` publishes `public/` unchecked. `public/dl/` is gitignored, so a fresh checkout has no
+release to publish until `build.sh` runs (and copies of older releases are added, see above). The deploy first runs
+`scripts/check-public.ts`, which refuses a `public/install.sh` whose relays are loopback or plain http (a local test
+build), or whose version lacks one of the four archives in `dl/<version>/` or has one that does not match
+`SHA256SUMS`. Then `node scripts/smoke.ts https://pen-relay.pos090001.workers.dev`: it checks `/healthz`, that the upgrade
 offers no compression, moves 1 MiB each way between a fresh node and a client, and prints close latency. Check one
 served build with `curl -fsS .../dl/<version>/SHA256SUMS` against the local file.
 
@@ -79,17 +84,33 @@ Rotate the Google client secret: add a new secret to the OAuth client in the Goo
 file, run `deploy:secrets <client file>` (the Worker keeps its login key), check one sign-in, then disable the old
 secret in the console. Sign-ins in flight during the deploy fail once; nothing else changes.
 
-Moving the service: `deploy:secrets` with `--signing-key-file` pointing at the kept file restores the same key, and
-the Durable Object's data moves with the Worker, so bound meshes notice nothing.
+Moving the service to another Worker name, host or Cloudflare account costs every bound mesh a sign-in. A new Worker
+starts with an empty `Login` Durable Object (no account registry), its assertions carry its own origin as `iss`,
+and every member accepts only assertions whose `iss` is the login URL its mesh is bound to. Steps:
+
+1. Add `https://<new host>/v1/auth/google/callback` to the Google OAuth client's redirect URIs and set `CALLBACK`
+   in `infra/pen-login/scripts/deploy.ts` to it (the script refuses a client file without it).
+2. Point `wrangler.jsonc` at the new name or account and run `deploy:secrets` with `--signing-key-file` naming the
+   kept key file, so `/v1/keys` on the new host shows the same `kid`.
+3. On one member of each bound mesh the person runs `pen login --login-url https://<new host>` (or sets
+   `PEN_LOGIN`). The new registry has no mesh, so it asks `No mesh is registered for <email>. Bind this
+   machine's mesh <id> (<n> members) to <email>?` (on a mesh of one machine: `No mesh is registered for <email>.
+   Found a mesh with this machine and bind it to <email>?`, which binds the existing mesh); yes binds the mesh to
+   the new URL and registers this
+   machine. The other members take the binding at their next sync. Every member must have announced pen 1.1.
+4. New machines reach the new service only with `--login-url` or `PEN_LOGIN` until a release changes
+   `login.DefaultURL` in `apps/pen/internal/login/login.go`.
+5. Delete the old Worker once every mesh moved; until then it keeps signing in machines for meshes still bound to it.
 
 Recovering a deleted Worker: the same command restores the key, but the account registry was in the deleted
 `Login` Durable Object, so every account starts with no registered mesh. Until one member of a mesh signs in again, a
 new machine that signs in gets no mesh offer and `pen login` offers to found a new mesh, which would then take the
-account's registration. So before reopening sign-ins, ask each person to run `pen login` on one existing member: with
-no mesh registered it asks `No mesh is registered for <email>. Bind this machine's mesh <id> (N members)?`, and yes
-registers that mesh again. If a new machine already founded a second mesh, its members get `pen leave first`: reset
-the account at `/reset` on the sign-in page, run `pen login` on an existing member first, then on the stray machine run
-`pen leave` and `pen login` to join the real mesh.
+account's registration. Pen has no switch that closes sign-ins, so ask each person right away to run `pen login` on
+one existing member: with no mesh registered it asks `No mesh is registered for <email>. Bind this machine's mesh
+<id> (<n> members) to <email>?`, and yes registers that mesh again. If a new machine already founded a second mesh,
+`pen login` on the existing members says `pen leave first` (the account is registered with the stray mesh): reset
+the account at `/reset` on the sign-in page, run `pen login` on an existing member first, then on the stray machine
+run `pen leave` and `pen login` to join the real mesh.
 
 ### Rotate the login key and rebind
 
@@ -99,13 +120,14 @@ bound to, so each mesh moves to the new key when one of its members signs in aga
 
 1. In `infra/pen-login` of the deployed commit, on the operator machine: `pnpm exec wrangler whoami` lists only the
    Pen account, and `curl -s https://pen-login.pos090001.workers.dev/v1/keys` shows the old `kid`.
-2. `pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`. That publishes a version without the key, so sign-ins fail
-   until the next step; run it at once.
-3. Move the old key file aside first (`mv ~/.pen-secrets/login-signing-key ~/.pen-secrets/login-signing-key.<old kid>`):
+2. Move the old key file aside (`mv ~/.pen-secrets/login-signing-key ~/.pen-secrets/login-signing-key.<old kid>`):
    with a file at that path, `deploy:secrets` restores the key it holds instead of making a new one.
+3. `pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`. That publishes a version without the key, so every sign-in
+   fails from here until step 4 deploys; run step 4 at once.
 4. `pnpm run deploy:secrets ~/.pen-secrets/google-oauth-client.json --signing-key-file ~/.pen-secrets/login-signing-key`
    (the directory must be 0700). It creates the key there and prints `login key kid <new> from <path>`; a printed
-   `<old>` means it restored the old key, so stop and check step 3. Copy the new file somewhere offline.
+   `<old>` means it restored the old key: the Worker runs with the old key again, so check step 2 and repeat from
+   step 2. Copy the new file somewhere offline.
 5. `curl -s .../v1/keys` now shows `<new>`.
 
 While a mesh is still bound to the old key, members, invites, `pen pipe`, `pen forward` and SSH keep working, and
@@ -126,8 +148,12 @@ For the operator's own mesh (mac-studio, `PEN_HOME=~/goat-research/pen-boxes-tes
 
 The VM (`clisu-oracle`, Ubuntu on arm64) runs `/opt/pen-relay/pen relay serve` under the system unit
 `apps/pen/install/pen-relay.service`, installed as `/etc/systemd/system/pen-relay.service`. It runs as a dynamic
-user with a read-only system, no access to home directories and a 512 MiB memory ceiling
-(`systemd-analyze security pen-relay` rates it 1.6). `/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
+user with a read-only system and no access to home directories (`systemd-analyze security pen-relay` rates it 1.6).
+Its memory ceiling is 768 MiB with `GOMEMLIMIT=224MiB`, sized for the caps the unit passes: 1024 connections, 64 per
+source address, 128 MiB of queued data with 16 MiB per source. The unit's comment carries the arithmetic and the
+measurement; change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections and
+ends the sessions of whichever source fills its share (4408 in the nodes' logs); it does not run out of memory.
+`/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
 (the VCN's private address behind the public `158.180.76.7`) and `PEN_RELAY_HOST=158-180-76-7.sslip.io`. The
 Let's Encrypt account and certificate are cached in `/var/lib/pen-relay/acme` (systemd keeps it in
 `/var/lib/private/pen-relay`).
@@ -138,7 +164,9 @@ cache into `/var/lib/private/pen-relay/acme` before the first start; systemd han
 
 Deploy a new binary: copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen
 /opt/pen-relay/pen.prev`, `sudo install -m 0755 <new> /opt/pen-relay/pen`, `sudo systemctl restart pen-relay`, then
-`pen relay check https://158-180-76-7.sslip.io`. Rollback installs `pen.prev` the same way. Logs:
+`pen relay check https://158-180-76-7.sslip.io`. When the unit file changed too, copy it to
+`/etc/systemd/system/pen-relay.service` (keep the old one as `pen-relay.service.prev`) and run
+`sudo systemctl daemon-reload` before the restart. Rollback installs `pen.prev` the same way. Logs:
 `journalctl -u pen-relay`; TLS handshake errors from scanners are normal there.
 
 Certificates: `autocert` renews a certificate when a third of its lifetime is left (30 days for Let's Encrypt's
@@ -151,7 +179,8 @@ fails until issuance succeeds. A failed first issuance does the same and the pro
 
 ## Incidents
 
-**A member was lost or stolen.** On any other member: `pen revoke <member> --compromised` (this also works for a
+**A member was lost or stolen.** On any other member: `pen revoke <member> --compromised` (by node id or fingerprint
+when a replacement joined under the stolen machine's name; the command refuses such a name and lists both; this also works for a
 machine that already left or was revoked plainly, and revokes every machine it admitted), then `pen lock on`. If the
 mesh is bound to a Google account, change that account's password and reset its machine list from the reset link on
 `https://pen-login.pos090001.workers.dev/device`. The revoke goes to every online member at once and reaches the others

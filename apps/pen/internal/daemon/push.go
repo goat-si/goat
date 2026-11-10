@@ -54,13 +54,23 @@ func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult
 }
 
 func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
-	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	caller := ctx
+	limit := pushTimeout
+	if d.opt.PushTimeout > 0 {
+		limit = d.opt.PushTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	noise, err := ident.DecodeKey(m.NoisePub)
 	if err != nil {
 		return "error: bad member key"
 	}
 	res := func(err error) string {
+		// The caller ran out of time (the 5 s refresh before a Google admit): a slow member is
+		// not an absent one.
+		if caller.Err() != nil {
+			return "error: " + err.Error()
+		}
 		switch relay.CodeOf(err) {
 		case wire.CodeOffline:
 			d.markSeen(noise, false, "")

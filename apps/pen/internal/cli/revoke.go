@@ -3,8 +3,10 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
 )
 
 func printResults(w io.Writer, rs []daemon.PushResult) {
@@ -36,16 +38,17 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 	if err := daemon.Call(st, daemon.Request{Op: "ls"}, &ls); err != nil {
 		return fail(stderr, err)
 	}
-	m, err := Resolve(lsMembers(ls), pos[0])
-	if err != nil && *compromised {
-		// A machine found stolen after it left or was revoked: revoking it as compromised still
-		// removes the keys it admitted and the records it signed.
-		if r, rerr := Resolve(ls.Revoked, pos[0]); rerr == nil {
-			m, err = r, nil
-		}
+	var m mesh.Member
+	if *compromised {
+		m, err = resolveCompromised(ls, pos[0])
+	} else {
+		m, err = Resolve(lsMembers(ls), pos[0])
 	}
 	if err != nil {
 		return fail(stderr, err)
+	}
+	if *compromised {
+		fmt.Fprintf(stdout, "revoking as compromised: %s\n", describe(m, stateOf(ls, m)))
 	}
 	var res struct{ Results []daemon.PushResult }
 	if err := daemon.Call(st, daemon.Request{Op: "revoke", Subject: m.SignPub, Compromised: *compromised}, &res); err != nil {
@@ -57,4 +60,57 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, next)
 	}
 	return 0
+}
+
+// resolveCompromised finds the machine to revoke as compromised among current members and the
+// machines that left or were revoked: a stolen machine may be found after it left. A name both a
+// departed and a current machine carry is refused, since a replacement may join under the old
+// name; the node id or fingerprint then picks one.
+func resolveCompromised(ls daemon.LsReply, arg string) (mesh.Member, error) {
+	all := append(lsMembers(ls), ls.Revoked...)
+	if fp := normalFingerprint(arg); len(fp) == 40 {
+		for _, m := range all {
+			if normalFingerprint(fingerprintOf(m.NoisePub)) == fp {
+				return m, nil
+			}
+		}
+		return mesh.Member{}, fmt.Errorf("no machine has fingerprint %s", arg)
+	}
+	q := strings.ToLower(strings.TrimPrefix(arg, "pen-"))
+	var named []mesh.Member
+	for _, m := range all {
+		if m.NodeID == q {
+			return m, nil
+		}
+		if m.Name == q || m.Name == strings.ToLower(arg) {
+			named = append(named, m)
+		}
+	}
+	if len(named) > 1 {
+		lines := make([]string, len(named))
+		for i, m := range named {
+			lines[i] = "  " + describe(m, stateOf(ls, m))
+		}
+		return mesh.Member{}, fmt.Errorf("%d machines are named %q:\n%s\nname the stolen one by its node id or fingerprint: pen revoke --compromised <node id>", len(named), arg, strings.Join(lines, "\n"))
+	}
+	return Resolve(all, arg)
+}
+
+// stateOf says whether m is a current member or one that left or was revoked.
+func stateOf(ls daemon.LsReply, m mesh.Member) string {
+	for _, x := range ls.Members {
+		if x.SignPub == m.SignPub {
+			return "current member"
+		}
+	}
+	return "left or revoked"
+}
+
+func describe(m mesh.Member, state string) string {
+	return fmt.Sprintf("%s, node id %s, fingerprint %s, %s", m.Name, m.NodeID, fingerprintOf(m.NoisePub), state)
+}
+
+// normalFingerprint drops spaces and case so a fingerprint can be pasted as pen ls prints it.
+func normalFingerprint(s string) string {
+	return strings.ToUpper(strings.Join(strings.Fields(s), ""))
 }
