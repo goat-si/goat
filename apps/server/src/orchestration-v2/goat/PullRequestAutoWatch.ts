@@ -38,12 +38,6 @@ export function newPullRequestWatch(
       conflicting: ended.conflicting,
     }),
     ...(ended?.owedChecks !== undefined && { owedChecks: ended.owedChecks }),
-    ...(ended?.awaitingApproval !== undefined && {
-      awaitingApproval: ended.awaitingApproval,
-    }),
-    ...(ended?.approvalAnnounced !== undefined && {
-      approvalAnnounced: ended.approvalAnnounced,
-    }),
     ...(ended?.checksAwaitedSince !== undefined && {
       checksAwaitedSince: ended.checksAwaitedSince,
     }),

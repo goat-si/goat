@@ -342,9 +342,7 @@ review is terminal. An open or unsynced link keeps it active.
 GOAT automatically watches open pull requests that a thread creates or its agent links, unless you
 turn off automatic watching. Automatic watches can wake the agent without keeping the thread in
 **Working**. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
-with `goat_call {path:"pull_request.watch"}` and keep the thread working between wakes. A wake comes
-when a check fails or waits for a maintainer's approval, the required checks pass, someone else
-comments or reviews, or the branch starts to conflict.
+with `goat_call {path:"pull_request.watch"}` and keep the thread working between wakes.
 
 The server checks every two minutes. By default, failed checks, passing required checks, and other
 people's comments or reviews wake the agent. Your own comments do not. Bot comments are ignored

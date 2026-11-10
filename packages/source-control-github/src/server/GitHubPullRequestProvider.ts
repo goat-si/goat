@@ -190,7 +190,6 @@ function withWorkflowApprovals(
             status: "action-required" as const,
             description: "GitHub could not determine whether workflows are awaiting approval.",
             url: null,
-            placeholder: true,
           },
         ]
       : []),
