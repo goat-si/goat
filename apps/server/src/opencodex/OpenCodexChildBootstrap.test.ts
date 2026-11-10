@@ -431,6 +431,23 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
         expect(yield* restarted.bootstrap.sshOptIn("pen-box")).toBe(false);
       }),
   );
+  it.effect(
+    "a removal that could not be saved is saved once storage works, even after the alias returns",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+        home.machine.penRevisions.delete("pen-box");
+        yield* fs.chmod(home.stateDir, 0o500);
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+        yield* fs.chmod(home.stateDir, 0o700);
+        home.machine.penRevisions.set("pen-box", "pen:node1");
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+        const restarted = yield* build(home.baseDir, home.machine, home.calls);
+        expect(yield* restarted.bootstrap.sshOptIn("pen-box")).toBe(false);
+      }),
+  );
 
   it.effect("an opted-in SSH host joins on the person's consent now and after setups, once", () =>
     Effect.gen(function* () {

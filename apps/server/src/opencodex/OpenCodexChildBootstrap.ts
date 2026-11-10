@@ -754,6 +754,8 @@ const make = Effect.gen(function* () {
   )(function* (alias) {
     if (!SAFE_ALIAS.test(alias) || hasCloudMachineAliasPrefix(alias) || !(yield* hubEnabled))
       return undefined;
+    // A removal an earlier read could not save is saved first, whatever this read finds.
+    yield* consents.flush.pipe(Effect.ignore({ log: true }));
     // Read first: the alias read below waits, and a grant given meanwhile is not this read's to end.
     const before = yield* consents.held(alias);
     const read = yield* aliasRevision(alias).pipe(Effect.option);
@@ -761,9 +763,8 @@ const make = Effect.gen(function* () {
     // same name coming back later needs a person again.
     if (Option.isNone(read)) return undefined;
     if (read.value === undefined) {
-      yield* (before === undefined ? consents.flush : consents.retire(alias, before.grantId)).pipe(
-        Effect.ignore({ log: true }),
-      );
+      if (before !== undefined)
+        yield* consents.retire(alias, before.grantId).pipe(Effect.ignore({ log: true }));
       return undefined;
     }
     if ((yield* consents.held(alias)) === undefined) return false;
