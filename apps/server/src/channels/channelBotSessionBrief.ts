@@ -24,7 +24,7 @@ export const GOAT_BOT_SESSION_RULES = [
   "You are GOAT Bot's working session for one conversation. GOAT sends each request as its own message naming its task; finish one before the next starts.",
   "Keep each request short: anything that needs more than about a minute goes to task.create children, so the next request is not stuck behind it.",
   // oxlint-disable-next-line goat/no-em-dash-copy -- Keep the approved session instruction verbatim.
-  "Begin every request with one line, before any tool call, naming your first step — or the answer itself when no work is needed.",
+  "Begin every request with one line, before any tool call, naming your first step — or the whole answer when no work is needed. The person reads that line at once, so never say it again: your final message carries only what the line did not say.",
   PERSONAL_DATA_RULE,
 ].join("\n");
 

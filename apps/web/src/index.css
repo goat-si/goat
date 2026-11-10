@@ -799,6 +799,31 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   }
 }
 
+/* A question choice's letter; the picked one fills with the accent. */
+@utility goat-choice-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+
+  &[data-chosen] {
+    color: var(--primary-foreground);
+    background: var(--primary);
+  }
+
+  @media (forced-colors: active) {
+    border: 1px solid CanvasText;
+  }
+}
+
 @utility goat-name-capsule {
   display: inline-flex;
   align-items: center;

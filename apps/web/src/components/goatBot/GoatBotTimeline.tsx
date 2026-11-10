@@ -8,12 +8,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  CircleAlertIcon,
-  MessageCircleQuestionIcon,
-} from "~/components/solar";
+import { CircleAlertIcon } from "~/components/solar";
 import {
   createContext,
   type UIEvent,
@@ -33,7 +28,6 @@ import { observeResize } from "~/lib/observeResize";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
-import { Button } from "../ui/button";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import {
   GoatBotActivityLine,
@@ -42,6 +36,7 @@ import {
   GoatBotSentAttachments,
   type GoatBotTimelineActivity,
 } from "./GoatBotMessageParts";
+import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -296,11 +291,6 @@ export function GoatBotTimeline({
                       aria-label="Failed"
                       className="mt-0.5 size-4 shrink-0 text-destructive-foreground"
                     />
-                  ) : row.tone === "question" ? (
-                    <MessageCircleQuestionIcon
-                      aria-label="Question"
-                      className="mt-0.5 size-4 shrink-0 text-warning-foreground"
-                    />
                   ) : null;
                 const body = (
                   <>
@@ -347,51 +337,15 @@ export function GoatBotTimeline({
                         <span className="block truncate">{row.replyTo}</span>
                       </blockquote>
                     ) : null}
-                    {row.answer !== undefined ? (
+                    {(row.choices ?? row.options).length > 0 ? (
                       <div className="flex w-full min-w-0 items-end gap-2">
-                        <details className="group w-fit max-w-[min(100%,34rem)] rounded-2xl bg-goat-bot-message">
-                          <summary className="flex min-h-10 cursor-default list-none items-center gap-2 rounded-2xl px-3.5 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
-                            <CheckIcon
-                              aria-hidden
-                              className="size-4 shrink-0 text-muted-foreground"
-                            />
-                            <span className="shrink-0 text-muted-foreground">Answered:</span>
-                            <span className="min-w-0 truncate font-medium">{row.answer}</span>
-                            <ChevronRightIcon
-                              aria-hidden
-                              className="ms-auto size-4 shrink-0 text-muted-foreground group-open:rotate-90"
-                            />
-                          </summary>
-                          <div className="goat-bot-prose flex gap-2 px-3.5 pb-3">{body}</div>
-                        </details>
+                        <GoatBotQuestionCard row={row} body={body} onPick={onPick} />
                         <GoatBotMessageTime
                           id={timeId}
                           createdAt={row.createdAt}
                           time={time(row.createdAt)}
                         />
                       </div>
-                    ) : row.options.length > 0 ? (
-                      <>
-                        {card}
-                        <div
-                          role="group"
-                          aria-label="Suggested answers"
-                          className="mt-2 flex max-w-[min(100%,34rem)] flex-wrap gap-2"
-                        >
-                          {row.options.map((option) => (
-                            <Button
-                              key={option}
-                              variant="outline"
-                              size="sm"
-                              disabled={onPick === undefined}
-                              onClick={() => onPick?.(option, row.answerTaskId)}
-                              className="max-w-full"
-                            >
-                              <span className="truncate">{option}</span>
-                            </Button>
-                          ))}
-                        </div>
-                      </>
                     ) : (
                       card
                     )}

@@ -17,22 +17,33 @@ export const sealedSessionLine = (text: string, streaming: boolean) => {
 export const sessionFinalText = Effect.fn("channel.sessionFinalText")(function* (
   sql: SqlClient.SqlClient,
   taskId: ChannelTaskId,
+  runId: string,
   turnItemId: string | undefined,
   text: string,
 ) {
   const rows = yield* sql<{
     readonly source: string;
+    readonly run_id: string | null;
     readonly turn_item_id: string | null;
     readonly text: string;
   }>`
-    SELECT source, turn_item_id, text FROM channel_session_receipts WHERE task_id = ${taskId}`;
+    SELECT source, run_id, turn_item_id, text FROM channel_session_receipts WHERE task_id = ${taskId}`;
   const receipt = rows[0];
-  return receipt?.source === "session" &&
+  const final = text.trim();
+  const line = receipt?.text.trim() ?? "";
+  // The person already read the session's first line, so a final message that opens with it,
+  // in the same item or a later one of the same run, sends only what follows. A later item
+  // repeats the line only when the line is a whole sentence and the answer goes on after it.
+  const repeats =
+    receipt?.source === "session" &&
     turnItemId !== undefined &&
-    receipt.turn_item_id === turnItemId &&
-    text.startsWith(receipt.text)
-    ? text.slice(receipt.text.length).trim()
-    : text.trim();
+    line !== "" &&
+    final.startsWith(line) &&
+    (receipt.turn_item_id === turnItemId ||
+      (receipt.run_id === runId &&
+        (final === line ||
+          (/[.!?…。！？]$/u.test(line) && /\s/u.test(final.charAt(line.length))))));
+  return repeats ? final.slice(line.length).trim() : final;
 });
 
 /** Whether the input still holds a session claim with no committed receipt; unreadable counts as pending. */
