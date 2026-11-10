@@ -194,6 +194,9 @@ func New(opt Options) (*Daemon, error) {
 	if cfg.Relay == "" {
 		return nil, errors.New("no relay configured; run pen up --relay URL")
 	}
+	if err := ValidRelays(cfg.RelayList()); err != nil {
+		return nil, fmt.Errorf("the relays in config.json cannot be used (%v); replace them with pen up --relay <https URL> (repeat --relay for more; pen relay ls lists them)", err)
+	}
 	store, err := mesh.Load(st)
 	if err != nil {
 		return nil, fmt.Errorf("mesh: %w", err)
