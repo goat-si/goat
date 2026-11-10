@@ -393,14 +393,20 @@ a member after those syncs, and only then serves `tcp` streams and registers. It
 offered that its copy of the mesh does not count as a member. One that refuses it (4401) is asked again with a check on
 kind 0x04: the first line is `{"t":"check","assertion":{...}}` instead of `assertion`. The node runs the assertion
 checks above (a lock does not matter here) and then a sync as on kind 0x01, with the joiner as initiator, except that it
-sends its own records and `done` only after the joiner's `done`, and only if, with the joiner's records merged into a
-scratch copy of its own set, the joiner is a member whose admit and every admit before it back to the founder were signed
-by keys its own view does not count as revoked; otherwise it sends `refused` and closes 4401. It stores nothing the
-joiner sent. A node that already left the mesh, or has not heard of the joiner yet, so passes it its records, and the
-joiner applies them like any sync. A node that still refuses holds records the admitting member left out (a revoked or
-stolen member can serve a cut copy, and a stolen key can win a revoke race in the merged order, so the check does not
-rely on that order), so the join fails with that node's name and nothing is installed. A refusal also stands when the
-check does not complete; a node older than the check answers `refused` ("expected an assertion") and 4401, as before.
+sends its own records and `done` only after the joiner's `done`, and only if both hold in a scratch copy of its own set
+with the joiner's records merged in: the joiner is a member, and walking the admits back from the joiner's (each
+member's `admittedBy`), the walk reaches a key this node's own view counts as a current member, or the founder, before
+it reaches a key this node's own view revoked as compromised (directly or as an admit of such a key). Keys its own view
+revoked plainly, or does not know, are walked past, since a plain revoke keeps what the key admitted. Otherwise it sends
+`refused` and closes 4401. It stores nothing the joiner sent. A node that left or was revoked plainly, or has not heard
+of the joiner yet, so passes it its records, and the joiner applies them like any sync. A node that still refuses holds
+records the admitting member left out, typically a compromised revoke along the joiner's admits (a revoked or stolen
+member can serve a cut copy, and a stolen key can win a revoke race in the merged order, so the check decides on the
+node's own view), so the join fails with that node's name and nothing is installed. A refusal also stands when the check
+does not complete. A node older than the check (pen 0.2.6 and before) answers `refused` ("expected an assertion") and
+4401, so while such a node is the one refusing, a join fails in exactly the cases the check was added for; updating it,
+or joining by invite, is the way through. A listed node that does not answer (offline, out of session slots, slower than
+the 30 s push timeout) takes no part, so the cut-copy protection holds only while an honest listed node answers.
 When its assertion has expired by then
 (a slow approval), it stays a member and says registration waits for the next `pen login`. `pen login` on a member whose
 mesh is unbound, or bound to an older login key, offers to bind it again (same question).

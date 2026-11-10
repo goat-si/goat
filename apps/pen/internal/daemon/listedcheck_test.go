@@ -94,3 +94,71 @@ func TestAListedMemberNobodyHeardOfYetDoesNotFailAGoogleJoin(t *testing.T) {
 		t.Fatal("the joiner does not know y after the join")
 	}
 }
+
+// b was admitted by x, and x was later revoked plainly, so b is still a member. y, revoked plainly
+// itself and still running, knows both and refuses j, whom b admitted, on kind 0x01; the check
+// must still take j, since y trusts b.
+func TestAListedNodeTakesAJoinerWhoseAdmitterWasItselfAdmittedByAPlainlyRevokedKey(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	x := joiner(t, ctx, rs, a.invite(t, time.Minute), "x")
+	b := joiner(t, ctx, rs, x.invite(t, time.Minute), "b")
+	y := joiner(t, ctx, rs, a.invite(t, time.Minute), "y")
+	var r map[string]any
+	for _, gone := range []*node{x, y} {
+		if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(gone.id.SignPub)}, &r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	j := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, j, "j", as, offeredBy(t, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := mesh.CheckJoined(nil, j, out.MeshID, out.Records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := []login.OfferedMember{listedAs(a, "a"), listedAs(b, "b"), listedAs(y, "y")}
+	if _, _, err := FinishJoin(ctx, []string{rs.URL}, j, s, listed, as); err != nil {
+		t.Fatalf("the join failed although y trusts the member that admitted j: %v", err)
+	}
+}
+
+// The listed check counts only a refusal: a listed node that does not answer (here offline, 4404)
+// takes no part, and the join goes on. The protection against a cut copy holds only while an honest
+// listed node answers.
+func TestAListedNodeThatDoesNotAnswerTakesNoPartInTheJoin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	y := joiner(t, ctx, rs, a.invite(t, time.Minute), "y")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(y.id.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, y)
+	j := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, j, "j", as, offeredBy(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := mesh.CheckJoined(nil, j, out.MeshID, out.Records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := FinishJoin(ctx, []string{rs.URL}, j, s, []login.OfferedMember{listedAs(a, "a"), listedAs(y, "y")}, as); err != nil {
+		t.Fatalf("an offline listed node failed the join: %v", err)
+	}
+}

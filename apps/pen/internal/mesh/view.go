@@ -31,6 +31,8 @@ type View struct {
 	Members map[string]Member
 	// Revoked are revoked keys; a key that was once a member keeps its last member entry.
 	Revoked map[string]Member
+	// Compromised are the revoked keys revoked as compromised, directly or as admits of such a key.
+	Compromised map[string]bool
 	// Order is the canonical replay order (record hashes); Effective marks records that took effect.
 	Order     []string
 	Effective map[string]bool
@@ -181,6 +183,7 @@ func Compute(meshID string, recs []*Record) *View {
 	// compromised are keys revoked as compromised, directly or as admits of such a key; their
 	// account and lock records lose effect.
 	compromised := map[string]bool{}
+	v.Compromised = compromised
 	var accounts, locksOn, locksOff []int
 
 	revoke := func(k string) {

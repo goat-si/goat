@@ -44,6 +44,9 @@ folder holds, so a deploy from another checkout drops older releases: copy the p
 downloads the version it was built for unless `PEN_VERSION` names another.
 Upgrade a running node by replacing its
 `~/.local/bin/pen` (or rerunning `install.sh`) and restarting it with `pen down` and `pen up`.
+A node on pen 0.2.6 or older does not know the Google join's check: while it is listed for the account and refuses a
+new machine it has not heard of (it left, or has not synced yet), that machine's `pen login` fails naming it.
+Upgrade it, or add the machine with an invite.
 
 ## pen-relay Worker
 
