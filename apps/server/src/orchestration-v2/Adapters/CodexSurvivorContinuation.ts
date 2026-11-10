@@ -579,6 +579,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
     input.client.request("thread/items/list", page);
   const read = Effect.gen(function* () {
     let goalActive = false;
+    let goalStopped = false;
     const first = yield* findSurvivorTurn({ threadId, turnId, readTurns, allowConflicts: true });
     let ended = first.turn.status !== "inProgress";
     const conflicted = new Set<string>();
@@ -627,6 +628,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
             ),
           );
         if (paused) continue;
+        goalStopped = true;
         yield* entry.gate.withPermits(1)(
           interruptSurvivor({
             binding: entry.binding,
@@ -651,14 +653,14 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
       readItems,
       allowConflicts: true,
     });
-    return { result, goalActive };
+    return { result, goalStopped };
   }).pipe(
     Effect.raceFirst(
       Deferred.await(entry.lost).pipe(Effect.andThen(Effect.fail(new SurvivorSessionLost({})))),
     ),
   );
   yield* Effect.gen(function* () {
-    const { result, goalActive } = yield* read;
+    const { result, goalStopped } = yield* read;
     for (const item of result.items) {
       yield* input.emitCompletedItem({
         threadId,
@@ -684,7 +686,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
           input.context,
           status,
           result.turn.error?.message,
-          goalActive && status === "interrupted"
+          goalStopped && status === "interrupted"
             ? "Codex started a goal on this thread while GOAT was waiting; the turn that ran across the restart was stopped."
             : undefined,
         );
