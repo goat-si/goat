@@ -346,7 +346,7 @@ export function GoatBotTimeline({
                         environmentId={environmentId}
                       />
                     ) : null}
-                    {row.text.trim().length > 0 || retryable ? (
+                    {(row.reply ?? row.text).trim().length > 0 || retryable ? (
                       <div className="flex w-full items-center justify-end gap-2">
                         {!failed ? (
                           <GoatBotMessageTime
@@ -366,9 +366,9 @@ export function GoatBotTimeline({
                             <span className="sr-only">Retry</span>
                           </button>
                         ) : null}
-                        {row.text.trim().length > 0 ? (
+                        {(row.reply ?? row.text).trim().length > 0 ? (
                           <div className="goat-person-pill w-fit max-w-[min(80%,34rem)]">
-                            {row.text}
+                            {row.reply ?? row.text}
                           </div>
                         ) : null}
                       </div>

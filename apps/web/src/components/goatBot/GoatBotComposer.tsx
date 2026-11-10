@@ -13,6 +13,7 @@ import {
 
 import { cn } from "~/lib/utils";
 import { ComposerAttachAction } from "../chat/ComposerAttachAction";
+import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import {
   releaseGoatBotAttachments,
@@ -162,11 +163,17 @@ export function GoatBotComposer({
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
       <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
         {replyTo !== null ? (
-          <div className="mx-2 mt-1 flex min-w-0 items-center gap-2 rounded-md border border-border px-2 text-xs text-muted-foreground">
+          <div className="mx-2 mt-1 flex min-w-0 items-center gap-1 rounded-md border border-border ps-2 text-xs text-muted-foreground">
             <span className="min-w-0 flex-1 truncate">{replyTo}</span>
-            <button type="button" aria-label="Clear reply" onClick={onClearReply}>
-              <XIcon className="size-3" />
-            </button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Clear reply"
+              onClick={onClearReply}
+            >
+              <XIcon />
+            </Button>
           </div>
         ) : null}
         {attachments.length > 0 ? (

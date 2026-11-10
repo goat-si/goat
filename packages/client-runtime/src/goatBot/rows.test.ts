@@ -950,5 +950,7 @@ it("splits a quoted user reply into its quote and message", () => {
     pendingInputs: [],
     readers: readers(),
   });
-  expect(content(rows)).toMatchObject([{ kind: "user", quote: "first\nsecond", text: "answer" }]);
+  expect(content(rows)).toMatchObject([
+    { kind: "user", quote: "first\nsecond", reply: "answer", text: "> first\n> second\n\nanswer" },
+  ]);
 });

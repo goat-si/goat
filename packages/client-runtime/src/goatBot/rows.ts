@@ -11,6 +11,12 @@ import * as DateTime from "effect/DateTime";
 import { parseGoatBotQuote } from "./quote.ts";
 import { goatBotPreviewText } from "./previewText.ts";
 
+/** The quote and the person's words of a reply; nothing for a message that quotes nothing. */
+const quotedParts = (text: string): { readonly quote?: string; readonly reply?: string } => {
+  const parsed = parseGoatBotQuote(text);
+  return parsed.quote === undefined ? {} : { quote: parsed.quote, reply: parsed.text };
+};
+
 /**
  * GOAT Bot's messenger timeline. Only conversation survives: the user's
  * messages, the bot's replies and one card per piece of work. Tool calls,
@@ -151,7 +157,12 @@ export type GoatBotRow =
        */
       readonly requestKey: string | null;
       readonly text: string;
+      /**
+       * A reply's quoted source and the person's own words after it. `text` stays whole, so a
+       * client that does not draw the quote still shows what was sent.
+       */
       readonly quote?: string;
+      readonly reply?: string;
       readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel>;
       readonly createdAt: string;
       readonly delivery: GoatBotDelivery;
@@ -253,7 +264,7 @@ export function goatBotConversationPreview(input: {
       picked !== null
         ? `You: ${goatBotPreviewText(picked.answer)}`
         : last.kind === "user"
-          ? `You: ${goatBotPreviewText(last.text) || (last.attachments ?? []).map((file) => file.name).join(", ")}`
+          ? `You: ${goatBotPreviewText(last.reply ?? last.text) || (last.attachments ?? []).map((file) => file.name).join(", ")}`
           : last.kind === "bot"
             ? goatBotPreviewText(last.text)
             : `${last.card.statusLabel}: ${last.card.title}`,
@@ -490,7 +501,8 @@ export function buildGoatBotTimeline(input: {
         id: item.id,
         sendKey: null,
         requestKey: presentation?.requestKey ?? null,
-        ...parseGoatBotQuote(item.text),
+        text: item.text,
+        ...quotedParts(item.text),
         ...attachmentLabels(item.attachments),
         createdAt: itemCreatedAt(item),
         delivery: presentation?.readAt
@@ -607,7 +619,8 @@ export function buildGoatBotTimeline(input: {
         id: `pending:${entry.clientKey}`,
         sendKey: entry.clientKey,
         requestKey: entry.requestKey,
-        ...parseGoatBotQuote(entry.text),
+        text: entry.text,
+        ...quotedParts(entry.text),
         ...attachmentLabels(entry.attachments),
         createdAt: entry.createdAt,
         delivery:
