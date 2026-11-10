@@ -6,6 +6,7 @@ import {
   goatBotStampParts,
   goatBotReceiptLabel,
   goatBotRejectionText,
+  goatBotReplyParts,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
@@ -44,6 +45,7 @@ import {
 } from "./GoatBotMessageParts";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
 import { GoatBotEventText } from "./GoatBotEventText";
+import { GoatBotReplyCards } from "./GoatBotReplyCards";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -411,26 +413,37 @@ export function GoatBotTimeline({
                       className="mt-0.5 size-4 shrink-0 text-destructive-foreground"
                     />
                   ) : null;
+                const memory = row.memory ? (
+                  <MemorySettingsEntry
+                    environmentId={row.memory.environmentId}
+                    reference={row.memory}
+                    label="View memory details"
+                  />
+                ) : null;
                 const body = (
                   <>
                     {toneIcon}
                     <div className="min-w-0 flex-1">
                       <GoatBotLinkedText text={row.text} environmentId={environmentId} />
-                      {row.memory ? (
-                        <MemorySettingsEntry
-                          environmentId={row.memory.environmentId}
-                          reference={row.memory}
-                          label="View memory details"
-                        />
-                      ) : null}
+                      {memory}
                     </div>
                   </>
                 );
+                // An answer with a table reads as cards: its text, each table, and the rest.
+                const parts = toneIcon === null ? goatBotReplyParts(row.text) : [];
                 const card = (
                   <div className="flex w-full min-w-0 items-end gap-2">
-                    <div className="goat-bot-prose goat-bot-card flex w-fit max-w-[min(100%,34rem)] min-w-0 gap-2">
-                      {body}
-                    </div>
+                    {parts.some((part) => part.kind === "table") ? (
+                      <GoatBotReplyCards
+                        parts={parts}
+                        environmentId={environmentId}
+                        trail={memory}
+                      />
+                    ) : (
+                      <div className="goat-bot-prose goat-bot-card flex w-fit max-w-[min(100%,34rem)] min-w-0 gap-2">
+                        {body}
+                      </div>
+                    )}
                     <GoatBotMessageTime
                       id={timeId}
                       createdAt={row.createdAt}

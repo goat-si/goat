@@ -107,6 +107,35 @@ it("opens thread links in the environment whose history is shown", async () => {
   await expect.element(screen.getByText("CJK 렌더링")).toBeVisible();
   expect(screen.container.querySelector(".chat-markdown a")).toBeNull();
 });
+
+it("draws an answer's table on its own card between the text around it", async () => {
+  const text = [
+    "요금제를 비교했어요.",
+    "",
+    "| Plan | Price |",
+    "| --- | --- |",
+    "| Basic | $5 |",
+    "| Pro | $20 |",
+    "",
+    "Pro adds sync.",
+  ].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[bot("table", text)]}
+    />,
+  );
+  await expect.element(screen.getByRole("table")).toBeVisible();
+  const cards = [...screen.container.querySelectorAll(".goat-bot-card")];
+  expect(cards.map((card) => card.textContent?.includes("Basic"))).toEqual([false, true, false]);
+  expect(cards[0]?.textContent).toBe("요금제를 비교했어요.");
+  expect(cards[2]?.textContent).toBe("Pro adds sync.");
+  const copy = screen.getByRole("button", { name: "Copy table" });
+  expect(cards[1]?.contains(copy.element())).toBe(true);
+  expect(screen.getByRole("button").all()).toHaveLength(1);
+});
+
 it("names the conversation and an update after the renamed main bot", async () => {
   const main = { botId: "main", role: "main", name: "Goaty" } as BotProfile;
   await using screen = await render(
