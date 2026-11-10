@@ -84,9 +84,10 @@ const BOUND = [
 ] as const;
 
 /**
- * Identifies a Pen member's alias for consent: its effective settings and the known_hosts lines Pen
- * recorded for it, whose host names carry the member's node id. A changed key, a member that later
- * takes the same name, or changed settings is another host. Undefined when Pen recorded no key.
+ * Identifies a Pen member's alias for consent: its effective settings and Pen's known_hosts lines
+ * for it, which carry the member's node id and host keys. Another key, member or setting is another
+ * host; only a clone holding the member's Pen identity and sshd keys yields the same value.
+ * Undefined when Pen recorded no key.
  */
 export const penRevision = (settings: ReadonlyMap<string, string>, keygen: string) => {
   const knownHostsFile = penKnownHostsFile(settings);

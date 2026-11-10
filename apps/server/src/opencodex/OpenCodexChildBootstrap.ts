@@ -759,8 +759,8 @@ const make = Effect.gen(function* () {
     // Read first: the alias read below waits, and a grant given meanwhile is not this read's to end.
     const before = yield* consents.held(alias);
     const read = yield* aliasRevision(alias).pipe(Effect.option);
-    // Unreadable proves nothing, so the grant stays; a read that finds no alias ends it, so the
-    // same name coming back later needs a person again.
+    // Unreadable proves nothing, so the grant stays. A read that sees the alias gone ends it, so
+    // the name needs a person again; one gone and back between two reads, unchanged, keeps it.
     if (Option.isNone(read)) return undefined;
     if (read.value === undefined) {
       if (before !== undefined)
