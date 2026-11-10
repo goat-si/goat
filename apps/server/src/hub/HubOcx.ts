@@ -548,9 +548,11 @@ const make = Effect.gen(function* () {
     if (output.code !== 0 || output.timedOut) return yield* unreadable(alias);
     const settings = sshSettings(output.stdout);
     const knownHosts = path.join(directory, "known_hosts");
-    // ssh checks the key under HostKeyAlias or HostName when they differ from the alias.
+    // ssh checks the key under HostKeyAlias or HostName when they differ from the alias, and
+    // under [alias]:port on a port other than 22. Pen's own config sets none of them.
     const keyedByAlias =
       settings.get("hostname") === alias &&
+      settings.get("port") === "22" &&
       ["", "none", undefined].includes(settings.get("hostkeyalias"));
     if (!keyedByAlias || penKnownHostsFile(settings) !== knownHosts) return undefined;
     // ssh also accepts a key its global known_hosts holds for the alias, so there must be none.

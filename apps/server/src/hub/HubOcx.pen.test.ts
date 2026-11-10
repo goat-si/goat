@@ -503,3 +503,20 @@ it.effect(
       expect(yield* ocx.directAlias("pen-box")).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+// On another port ssh checks the key under [alias]:port, not the entry Pen recorded for the alias.
+it.effect("a Pen alias on a port other than 22 has no revision, pin or direct route", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      fingerprints: FINGERPRINTS,
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home, { port: "2222" });
+    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    expect(yield* ocx.directAlias("pen-box")).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
