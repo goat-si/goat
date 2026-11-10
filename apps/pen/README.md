@@ -42,6 +42,13 @@ for 24 hours). `pen account unbind` turns Google sign-in off for the mesh, and `
 account's list without leaving the mesh. The login service is trusted to say which Google account a machine belongs to;
 lock mode means a member decides instead.
 
+## Dashboard
+
+`pen dashboard` opens a management page served by the running node on 127.0.0.1: members, relays, pending approvals,
+invites and recent mesh records. Its link works once, within 10 minutes, and only on this machine; run the command again
+for a new one. Approving a request there takes the full fingerprint read on the new machine's terminal, and revoking takes
+the member's name. `pen dashboard --stop` closes the page and ends every session.
+
 ## Running without a service
 
 `pen up`, `pen join` and `pen login` install a systemd user service or a launchd agent where they can. With
