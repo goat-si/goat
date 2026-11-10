@@ -304,7 +304,9 @@ Device flow (RFC 8628 shaped):
 Assertion: `{"body":"<base64url>","sig":"<base64url>"}`, body an I-JSON object
 `{"v":1,"iss":L,"kid","sub","email","signPub","noisePub","iat","exp"}` (seconds; exp = iat + 600), sig = Ed25519 by the
 login key over `"pen-login/1 assertion" || SHA-256(body)`. `sub` and `email` hold no C0 control character or DEL
-(members print them); an assertion that does is malformed, and so are `admit` and `account` records that carry one.
+(members print them); an assertion that does is malformed, and a node never signs an `admit` or `account` record that
+carries one. Such a record from a node before 0.2.6 is stored and applied like any other, so every node computes the
+same view; members print its text with control characters replaced.
 
 Registry (Durable Object, SQLite): account `sub` -> one meshId and the nodes registered under it; nothing else long-lived.
 The registry is not the mesh: any node with a valid sign-in registers, even one a locked mesh only queued, and any
@@ -423,7 +425,8 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   sessions keep the ping race. Clients only; no wire change, and v1.0 and v1.1 responders answer both alike.
 - v1.1 (2026-11-10): a version 1 token's relay URL obeys the version 2 scheme rule, and one sync session carries at most
   4352 records. Both tighten what a node accepts; an honest peer never sent either.
-- v1.1 (2026-11-11): assertion `sub` and `email` and the matching record fields refuse control characters; a member
+- v1.1 (2026-11-11): assertion `sub` and `email` refuse control characters and nodes no longer sign records carrying
+  them (stored ones still apply, as older nodes apply them); a member
   syncs with reachable members before deciding an account join; a joiner also checks the registry's other nodes; a key
   already revoked can be revoked again as compromised. The registry's trust limit and the kind 0x04 slot timing are
   stated. Vectors: two new login check cases.

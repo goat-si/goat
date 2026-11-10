@@ -9,6 +9,7 @@ import (
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 // rawRecord signs an arbitrary body as by, for record shapes Sign cannot make.
@@ -259,5 +260,47 @@ func TestASignerRevokedOnlyAsAnAdmitOfACompromisedKeyLosesItsBindingButNotItsLoc
 	}
 	if v.Account != nil || !v.Locked {
 		t.Fatalf("after c was revoked as compromised: d's account %+v, locked %v; want unbound and still locked", v.Account, v.Locked)
+	}
+}
+
+// A node before 0.2.6 signs and applies an admit whose email carries a control character. Newer
+// nodes refuse to sign one but store and apply it the same, so every node keeps computing the
+// same view, and a reload keeps it; pen ls prints it with the character replaced.
+func TestAStoredAdmitWithAControlCharacterInItsEmailIsAppliedAndSurvivesAReload(t *testing.T) {
+	a, c := detID(1), detID(2)
+	b, found := newMesh(t, a)
+	email := "c\x1b[2J@e.co"
+	h := bodyHead{V: 1, Mesh: b.meshID, Type: TypeAdmit, By: pub(a), N: 2, Prev: []string{found.Hash}, At: 1}
+	body, err := json.Marshal(struct {
+		bodyHead
+		Card      *Card  `json:"card"`
+		Via       string `json:"via"`
+		Email     string `json:"email"`
+		Assertion string `json:"assertion"`
+	}{h, b.card(c, a, "c"), ViaGoogle, email, HashOf([]byte("assertion"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := &Record{Body: body, Sig: ed25519.Sign(a.SignPriv, digest(recordPrefix, body))}
+	if err := old.Verify(); err != nil {
+		t.Fatalf("a record a 0.2.5 node signs and applies: %v", err)
+	}
+	st, err := state.OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(st, b.meshID)
+	if _, err := s.Merge([]*Record{found, old}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := again.View().Members[pub(c)]; !ok || m.Email != email {
+		t.Fatalf("after a reload c is %+v (%v), want the member a 0.2.5 node sees", m, ok)
 	}
 }
