@@ -95,8 +95,8 @@ func TestQueuedPongsAreCapped(t *testing.T) {
 type fastWS struct{}
 
 func (fastWS) Write(context.Context, websocket.MessageType, []byte) error { return nil }
-func (fastWS) Close(websocket.StatusCode, string) error                  { return nil }
-func (fastWS) CloseNow() error                                           { return nil }
+func (fastWS) Close(websocket.StatusCode, string) error                   { return nil }
+func (fastWS) CloseNow() error                                            { return nil }
 
 // A closed socket's close timer holds its queue and connection: it must be stopped once the writer
 // has ended, or every closed socket stays in memory for the write timeout (session churn kept
