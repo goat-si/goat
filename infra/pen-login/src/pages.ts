@@ -4,7 +4,7 @@ const STYLE = `
 :root{color-scheme:light dark;--fg:#1b1d21;--muted:#5b616b;--line:#d9dce1;--bg:#f7f7f5;--card:#fff;--accent:#1b1d21;--accent-fg:#fff;--warn-bg:#fff4e5;--warn-line:#f0c48a;--bad:#a1281e}
 @media (prefers-color-scheme:dark){:root{--fg:#ecedef;--muted:#a3a8b1;--line:#363a41;--bg:#141518;--card:#1c1e22;--accent:#ecedef;--accent-fg:#141518;--warn-bg:#2d2416;--warn-line:#6b5225;--bad:#f08a80}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif;word-break:keep-all;overflow-wrap:anywhere}
 main{max-width:30rem;margin:12vh auto 4rem;padding:0 1.25rem}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.75rem}
 h1{font-size:1.25rem;margin:0 0 .25rem}
