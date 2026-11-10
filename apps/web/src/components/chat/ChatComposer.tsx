@@ -121,8 +121,8 @@ import {
 } from "./ComposerBannerStack";
 import {
   attachmentsToReleaseOnUploadCapabilityLoss,
+  composerAttachmentBlockReason,
   composerOtherFilesForPresentation,
-  fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   isPreviewableComposerVideo,
   shouldHandleComposerAttachmentPaste,
@@ -133,7 +133,6 @@ import {
   startAttachmentUpload,
   useAttachmentUploadStore,
 } from "../../lib/attachmentUploadQueue";
-import { attachmentUploadBlockReason } from "../../lib/attachmentUploadState";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
@@ -817,30 +816,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     supportsAttachmentUploads,
     maxFileAttachmentBytes,
   });
-  const fileCapabilityBlockReason = fileAttachmentCapabilityBlockReason({
-    files: composerFiles,
+  const attachmentBlockReason = composerAttachmentBlockReason({
+    answersQuestion: Boolean(questionAttachmentTarget),
+    supportsQuestionAttachments,
+    attachmentCount: composerImages.length + composerFiles.length,
+    attachmentIds: [...composerImages, ...composerFiles].map((attachment) => attachment.id),
+    composerFiles,
     attachmentUploadsCapabilityKnown,
     supportsAttachmentUploads,
     maxFileAttachmentBytes,
+    needsReattachFileCount,
+    pendingApprovals,
+    heldRequestIds,
+    uploadsByImageId,
+    environmentId,
   });
-  const attachmentBlockReason =
-    (questionAttachmentTarget &&
-    !supportsQuestionAttachments &&
-    (composerImages.length > 0 || composerFiles.length > 0)
-      ? "Update this server to send files with question answers"
-      : null) ??
-    fileCapabilityBlockReason ??
-    (supportsAttachmentUploads
-      ? needsReattachFileCount > 0
-        ? needsReattachFileCount === 1
-          ? "Attach the interrupted file again or remove it"
-          : "Attach the interrupted files again or remove them"
-        : attachmentUploadBlockReason({
-            imageIds: [...composerImages, ...composerFiles].map((attachment) => attachment.id),
-            uploadsByImageId,
-            environmentId,
-          })
-      : null);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);

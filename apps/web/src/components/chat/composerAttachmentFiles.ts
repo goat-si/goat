@@ -9,6 +9,10 @@ import {
 } from "@goat/client-runtime/state/attachments";
 
 import type { ComposerFileAttachment, ComposerImageAttachment } from "../../composerDraftStore";
+import {
+  attachmentUploadBlockReason,
+  type AttachmentUploadState,
+} from "../../lib/attachmentUploadState";
 import { isHeicImageFile } from "../../lib/imageCompression";
 import { isVideoAttachment, videoMimeType } from "../../types";
 import { isSvgAttachment } from "@goat/shared/image";
@@ -160,6 +164,54 @@ export function attachmentsToReleaseOnUploadCapabilityLoss(
   return attachments.filter(
     (attachment) => !(attachment.type === "file" && attachment.uploadedAttachmentId !== undefined),
   );
+}
+
+/**
+ * Answers and approval redirects cannot be corrected once they go out, so they wait for their
+ * uploads. A plain send starts the turn and lets `prepareTurnAttachments` wait for them instead.
+ */
+export function composerAttachmentBlockReason(input: {
+  readonly answersQuestion: boolean;
+  readonly supportsQuestionAttachments: boolean;
+  readonly attachmentCount: number;
+  readonly composerFiles: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
+  readonly attachmentUploadsCapabilityKnown: boolean;
+  readonly supportsAttachmentUploads: boolean;
+  readonly maxFileAttachmentBytes: number | null;
+  readonly needsReattachFileCount: number;
+  readonly pendingApprovals: ReadonlyArray<{ readonly requestId: string }>;
+  readonly heldRequestIds: ReadonlySet<string>;
+  readonly attachmentIds: ReadonlyArray<string>;
+  readonly uploadsByImageId: Readonly<Record<string, AttachmentUploadState>>;
+  readonly environmentId: EnvironmentId;
+}): string | null {
+  if (input.answersQuestion && !input.supportsQuestionAttachments && input.attachmentCount > 0) {
+    return "Update this server to send files with question answers";
+  }
+  const fileReason = fileAttachmentCapabilityBlockReason({
+    files: input.composerFiles,
+    attachmentUploadsCapabilityKnown: input.attachmentUploadsCapabilityKnown,
+    supportsAttachmentUploads: input.supportsAttachmentUploads,
+    maxFileAttachmentBytes: input.maxFileAttachmentBytes,
+  });
+  if (fileReason !== null) return fileReason;
+  if (!input.supportsAttachmentUploads) return null;
+  if (input.needsReattachFileCount > 0) {
+    return input.needsReattachFileCount === 1
+      ? "Attach the interrupted file again or remove it"
+      : "Attach the interrupted files again or remove them";
+  }
+  if (
+    !input.answersQuestion &&
+    !input.pendingApprovals.some((approval) => !input.heldRequestIds.has(approval.requestId))
+  ) {
+    return null;
+  }
+  return attachmentUploadBlockReason({
+    imageIds: input.attachmentIds,
+    uploadsByImageId: input.uploadsByImageId,
+    environmentId: input.environmentId,
+  });
 }
 
 export function shouldHandleComposerAttachmentPaste(input: {
