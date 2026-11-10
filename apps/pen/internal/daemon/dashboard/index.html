@@ -16,8 +16,10 @@
       <div class="hd-item" id="hd-lock"></div>
       <div class="hd-item" id="hd-pending"></div>
       <div class="hd-spacer"></div>
-      <div class="hd-item" id="hd-self"></div>
-      <button id="logout" class="btn ghost" type="button">로그아웃 · Log out</button>
+      <div class="hd-item">
+        <span class="hd-item" id="hd-self"></span>
+        <button id="logout" class="btn ghost" type="button">로그아웃 · Log out</button>
+      </div>
     </header>
     <div id="notice" class="notice" role="status" hidden></div>
 
@@ -41,8 +43,7 @@
                 <th>이름 · Name</th>
                 <th>지문 · Fingerprint</th>
                 <th>상태 · Status</th>
-                <th>가입 경로 · Via</th>
-                <th>승인 · Admitted by</th>
+                <th>가입 경로, 승인 · Via, admitted by</th>
                 <th>가입 · Joined</th>
                 <th>릴레이 · Relay</th>
                 <th class="actions"><span class="sr">작업 · Actions</span></th>
@@ -144,7 +145,7 @@
           />
         </label>
         <p class="check" id="ap-check"></p>
-        <p class="warn">
+        <p class="warn-box">
           이 기기를 승인할까요? 메시의 모든 기기에 접근할 수 있게 됩니다.<br /><span
             class="en"
             id="ap-question"

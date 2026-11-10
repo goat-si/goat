@@ -185,18 +185,22 @@
   }
   function notice(kind) {
     const n = $("notice");
-    const app = $("app");
+    const parts = [$("app"), $("top")];
     if (!kind) {
       n.hidden = true;
-      app.inert = false;
-      app.classList.remove("stale");
+      for (const p of parts) {
+        p.inert = false;
+        p.classList.remove("stale");
+      }
       return;
     }
     const [title, body] = GATES[kind];
     n.replaceChildren(h("strong", null, title), " ", h("span", null, body));
     n.hidden = false;
-    app.inert = true;
-    app.classList.add("stale");
+    for (const p of parts) {
+      p.inert = true;
+      p.classList.add("stale");
+    }
   }
 
   async function poll() {
@@ -377,7 +381,13 @@
     const fpCell = h(
       "td",
       { class: "fp" },
-      mono({ class: open ? "fp-full" : "" }, open ? m.fingerprint : shortFP(m.fingerprint)),
+      open
+        ? mono(
+            { class: "fp-full", title: m.fingerprint },
+            h("span", null, groups(m.fingerprint).slice(0, 5).join(" ")),
+            h("span", null, groups(m.fingerprint).slice(5).join(" ")),
+          )
+        : mono(shortFP(m.fingerprint)),
       " ",
       h(
         "button",
@@ -399,7 +409,9 @@
     else if (m.online)
       status = [
         badge("ok", bi("온라인", "online")),
-        m.lastSeen ? muted(" " + ago(m.lastSeen)) : "",
+        m.lastSeen
+          ? h("div", { class: "muted sub", title: stamp(m.lastSeen) }, ago(m.lastSeen))
+          : "",
       ];
     else if (m.lastSeen)
       status = [
@@ -413,8 +425,15 @@
     else status = [badge("neutral", bi("아직 안 보임", "not seen yet"))];
     let via;
     if (!m.admittedBy) via = bi("창립", "founder");
-    else if (m.via === "google") via = ["Google", h("div", { class: "muted sub" }, m.email || "")];
-    else via = bi("초대", "invite");
+    else {
+      const by = m.admittedByName || m.admittedBy.slice(0, 8);
+      via = [
+        m.via === "google"
+          ? ["Google", h("div", { class: "muted sub" }, m.email || "")]
+          : bi("초대", "invite"),
+        h("div", { class: "muted sub" }, bi("승인", "by"), " " + by),
+      ];
+    }
     const joined =
       m.since > 1e11
         ? h("span", { title: stamp(m.since) }, stamp(m.since).slice(0, 10))
@@ -425,11 +444,11 @@
         ? mono({ title: m.relay }, hostOf(m.relay))
         : muted("—");
     const action = m.self
-      ? muted(bi("이 기기", "this machine"))
+      ? ""
       : h(
           "button",
           { class: "btn small danger-ghost", type: "button", onclick: () => openRevoke(m) },
-          "제거… · Revoke…",
+          "제거 · Revoke",
         );
     return h(
       "tr",
@@ -443,7 +462,6 @@
       fpCell,
       h("td", null, status),
       h("td", null, via),
-      h("td", null, m.admittedBy ? m.admittedByName || mono(m.admittedBy.slice(0, 8)) : muted("—")),
       h("td", null, joined),
       h("td", null, relay),
       h("td", { class: "actions" }, action),
@@ -497,7 +515,7 @@
         box.append(
           h(
             "p",
-            { class: "warn" },
+            { class: "warn-box" },
             h("strong", null, "다음 단계 · Next steps"),
             h("br"),
             h("span", { class: "en" }, r.next),
@@ -578,7 +596,7 @@
       );
       return h(
         "li",
-        { class: "row" },
+        { class: "row stack" },
         h("div", { class: "row-main" }, mono({ class: "url", title: r.url }, r.url), note),
         h("div", { class: "row-side" }, uplinkBadge(r.uplink), " ", rtt, " ", rm),
       );
@@ -641,7 +659,7 @@
         s.pending.map((p) =>
           h(
             "li",
-            { class: "row" },
+            { class: "row stack" },
             h(
               "div",
               { class: "row-main" },
