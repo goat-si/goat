@@ -479,3 +479,25 @@ it.effect(
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+// ssh -G prints GlobalKnownHostsFile="/x /y" /z as three words; the file ssh reads may be any run.
+it.effect("a Pen alias is not trusted when a global known_hosts path with spaces names it", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+      fingerprints: FINGERPRINTS,
+      globalKeys: "pen-box ssh-ed25519 AAAAOTHER\n",
+    };
+    const { ocx, home } = yield* penHome(machine);
+    const fs = yield* FileSystem.FileSystem;
+    const grouped = `${home}/a ${home}/global_known_hosts`;
+    yield* fs.makeDirectory(grouped.slice(0, grouped.lastIndexOf("/")), { recursive: true });
+    yield* fs.writeFileString(grouped, "");
+    machine.sshG = penSshG(home, { globalknownhostsfile: `${grouped} ${home}/c` });
+    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+    expect(yield* ocx.directAlias("pen-box")).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
