@@ -26,7 +26,7 @@ const task = (id: string, first: boolean, groupPosition: "single" | "first" | "m
     groupPosition,
   }) as unknown as GoatBotRow;
 const day = (id: string) => ({ kind: "day", id, at }) as GoatBotRow;
-const hideTasks = (row: Exclude<GoatBotRow, { kind: "day" }>) => row.kind === "task";
+const hideTasks = (row: Exclude<GoatBotRow, { kind: "day" }>) => (row.kind === "task" ? null : row);
 const shape = (rows: GoatBotRow[]) =>
   rows.map((row) => (row.kind === "day" ? row.id : `${row.id}:${row.groupPosition}`));
 
@@ -53,6 +53,6 @@ describe("goatBotChatRows", () => {
 
   it("leaves the timeline as it was when nothing is hidden", () => {
     const rows = [day("d1"), bot("a", true, "first"), bot("b", false, "last")];
-    expect(goatBotChatRows(rows, () => false)).toEqual(rows);
+    expect(goatBotChatRows(rows, (row) => row)).toEqual(rows);
   });
 });

@@ -509,6 +509,64 @@ it("keeps the main chat a plain conversation where the bot's home lists its work
   }
 });
 
+it("says what finished work found as the bot's reply, and nothing while work runs", async () => {
+  screenSession.supportsTaskThreads = true;
+  const taskRow = (
+    id: string,
+    tone: "success" | "danger" | "active",
+    summary: string | null,
+    groupPosition: "first" | "middle" | "last",
+  ): GoatBotRow => ({
+    kind: "task",
+    id,
+    createdAt: "2026-10-12T09:40:00Z",
+    firstInGroup: groupPosition === "first",
+    groupPosition,
+    card: {
+      key: id,
+      revision: 3,
+      updatedAt: "2026-10-12T09:45:00Z",
+      title: `Work ${id}`,
+      statusLabel: tone === "danger" ? "Failed" : tone === "success" ? "Done" : "Running",
+      tone,
+      sourceLabel: null,
+      summary,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  });
+  screenSession.rows = [
+    taskRow("done", "success", "The docs README covers setup and release.", "first"),
+    taskRow("broken", "danger", null, "middle"),
+    taskRow("running", "active", null, "last"),
+  ];
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    expect(
+      ((list.props?.data ?? []) as GoatBotRow[]).map((row) =>
+        row.kind === "bot"
+          ? [row.id, row.tone, row.text, row.createdAt, row.groupPosition]
+          : row.id,
+      ),
+    ).toEqual([
+      [
+        "done",
+        "reply",
+        "The docs README covers setup and release.",
+        "2026-10-12T09:45:00Z",
+        "first",
+      ],
+      ["broken", "failure", "Failed: Work broken", "2026-10-12T09:45:00Z", "last"],
+    ]);
+    expect(view.container.textContent).not.toContain("Work running");
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+    screenSession.supportsTaskThreads = false;
+  }
+});
+
 it("shows a task chip in the task header only when one exists", async () => {
   const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
   screenSession.supportsTaskThreads = true;
