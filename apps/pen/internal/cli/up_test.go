@@ -134,3 +134,27 @@ func TestUpForegroundWithARefusedRelayListExitsZeroWithTheReason(t *testing.T) {
 		t.Fatalf("exit %d: %q; want 0 and the refusal", code, errOut.String())
 	}
 }
+
+// A person's pen up ends a pen down even when Pen then runs without the service, so a later sign-in
+// starts the task again.
+func TestUpClearsTheDownRecordAlsoWithoutTheService(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st := tmpStore(t)
+	t.Setenv("PEN_TEST_MAIN", "1")
+	t.Setenv("PEN_HOME", st.Dir)
+	t.Setenv("PEN_HOSTKEYS", "none")
+	t.Setenv("PEN_SSH_DIR", filepath.Join(st.Dir, "ssh"))
+	if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := RunUp([]string{"--no-service", "--relay", rs.URL, "--name", "t"}, &out, &errOut)
+	t.Cleanup(func() { RunDown(nil, io.Discard, io.Discard) })
+	if code != 0 {
+		t.Fatalf("pen up exit %d: %s", code, errOut.String())
+	}
+	if _, err := os.Stat(st.Path(downMarker)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the down record survived pen up: %v", err)
+	}
+}

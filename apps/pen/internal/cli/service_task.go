@@ -176,22 +176,28 @@ func stopTask(st *state.Store) error {
 	return nil
 }
 
-// stopDaemon asks a running daemon to stop and reports whether none runs afterwards.
+// stopDaemon asks a running daemon to stop and reports whether none runs afterwards: daemon.lock, which a
+// daemon holds while it runs, must come free.
 func stopDaemon(st *state.Store) bool {
 	var s daemon.Status
-	if daemon.Call(st, daemon.Request{Op: "status"}, &s) != nil {
-		return true
+	if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
+		// A daemon that is already shutting down (pen leave) may close the socket before it answers.
+		daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
+		waitExit(s.PID, downWait)
 	}
-	// A daemon that is already shutting down (pen leave) may close the socket before it answers.
-	daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
-	return waitExit(s.PID, downWait)
+	return lockFree(st.Path("daemon.lock"), downWait)
 }
 
 // supervisorGone reports whether no supervisor holds its lock, waiting up to d for it to end.
 func supervisorGone(st *state.Store, d time.Duration) bool {
+	return lockFree(st.Path(supervisorLock), d)
+}
+
+// lockFree reports whether nobody holds the lock at path, waiting up to d for it to come free.
+func lockFree(path string, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for {
-		release, err := state.TryLock(st.Path(supervisorLock))
+		release, err := state.TryLock(path)
 		if err == nil {
 			release()
 			return true
@@ -235,6 +241,10 @@ func runSupervised(st *state.Store, stderr io.Writer) int {
 		return 1
 	}
 	defer release()
+	if err := killChildrenWithMe(); err != nil {
+		logger.Printf("pen supervisor: %v", err)
+		return 1
+	}
 	stopRequested := func() bool {
 		_, err := os.Stat(st.Path(downMarker))
 		return err == nil

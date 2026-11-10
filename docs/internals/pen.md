@@ -112,6 +112,7 @@ the same daemon operation as the CLI.
 - **Task Scheduler's restart on failure ignores exit codes.** It restarts only a task that failed to launch, so the
   task runs `pen up --supervise`, which restarts a daemon that exited non-zero. `pen down` writes a `down` record
   that every supervisor checks before it starts the daemon, then waits for the supervisor's lock to come free;
+  the supervisor sits in a kill-on-close job, so `schtasks /End` also ends a daemon it was still starting.
   `pen up` removes the record and repeats `schtasks /Run` until the daemon answers, because
   Task Scheduler can still count the old run as running and drop the new one (IgnoreNew). The record outlives a
   sign-in on purpose: a sign-in cannot be told apart from a supervisor that was starting during `pen down`. The task uses the user's

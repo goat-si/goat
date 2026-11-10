@@ -50,6 +50,9 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		}
 	} else if err := clearLeft(st); err != nil {
 		return fail(stderr, err)
+	} else if err := os.Remove(st.Path(downMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// A person starting Pen ends a pen down, also when Pen then runs without the service.
+		return fail(stderr, err)
 	}
 	id, _, err := st.EnsureIdentity()
 	if err != nil {
