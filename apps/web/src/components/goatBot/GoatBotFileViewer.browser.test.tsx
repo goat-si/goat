@@ -171,3 +171,43 @@ it("a file that finishes reading after the viewer closed makes no URL", async ()
   expect(create).not.toHaveBeenCalled();
   create.mockRestore();
 });
+
+it("a file opened right after another one closed waits for that read instead of finding the server busy", async () => {
+  setup();
+  // The server reads one file per connection at a time and answers busy to a second.
+  let inFlight = 0;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const serve = state.read.getMockImplementation();
+  state.read.mockImplementation(async (request: { input: ChannelReadBotArtifactInput }) => {
+    if (inFlight > 0)
+      return {
+        _tag: "Success",
+        value: { status: "busy", relativePath: request.input.relativePath },
+      };
+    inFlight += 1;
+    await gate;
+    inFlight -= 1;
+    return serve?.(request);
+  });
+  const first = await render(
+    <GoatBotFileViewer
+      environmentId={environmentId}
+      file={fileFor("chart.png")}
+      onClose={() => {}}
+    />,
+  );
+  await vi.waitFor(() => expect(inFlight).toBe(1));
+  await first[Symbol.asyncDispose]();
+  await using second = await render(
+    <GoatBotFileViewer
+      environmentId={environmentId}
+      file={fileFor("notes/report.txt")}
+      onClose={() => {}}
+    />,
+  );
+  release();
+  await expect.element(second.getByText("Weekly report")).toBeVisible();
+});
