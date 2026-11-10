@@ -1,3 +1,15 @@
+import {
+  RECONNECT_ATTEMPTS,
+  RECONNECT_DELAY,
+  RECONCILE_TIMEOUT,
+  RECONNECT_WAIT,
+  LOST_BACKGROUND,
+  INVENTORY_TIMEOUT,
+  ACTIVE_CHECK_TIMEOUT,
+  CLEAR_PROMPT_REJECTIONS,
+} from "./connectionConstants.ts";
+import { turnPromptId, steerPromptId } from "./promptIds.ts";
+import { modelRef, malformedModel, sameModel } from "./modelRef.ts";
 import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal } from "./nativeGoal.ts";
@@ -31,7 +43,6 @@ import {
   Location,
   Model,
   Permission,
-  Provider,
   Session,
   SessionMessage,
   Skill,
@@ -57,6 +68,7 @@ import {
   type OrchestrationV2UserInputQuestion,
   type MessageId,
   type ModelSelection,
+  type PlanId,
   type ProviderInstanceId,
   type RunId,
   type RuntimeRequestId,
@@ -95,7 +107,7 @@ import {
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import * as KeyedLock from "@goat/shared/KeyedLock";
-import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
+import { modelSelectionsEqual } from "@goat/shared/model";
 import { causeErrorTag } from "@goat/shared/observability";
 import { compareSemverVersions } from "@goat/shared/semver";
 
@@ -126,6 +138,12 @@ import {
 } from "../toolItems.ts";
 import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
 import { openCodeLiveWork } from "../liveWork.ts";
+import {
+  isNativeTodoList,
+  todoSteps,
+  turnTokenUsage,
+  type NativeTodoList,
+} from "./todoProjection.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -179,8 +197,8 @@ const OpenCode2ProviderCapabilities = {
     approvalsCanOriginateFromSubagents: true,
   },
   planning: {
-    emitsPlanUpdated: false,
-    emitsTodoList: false,
+    emitsPlanUpdated: true,
+    emitsTodoList: true,
     emitsProposedPlan: false,
     supportsStructuredQuestions: true,
     planDeltasHaveItemIds: false,
@@ -232,7 +250,7 @@ interface TurnOwner {
   readonly runtimePolicy: Pick<ProviderAdapter.ProviderAdapterV2RuntimePolicy, "cwd">;
 }
 
-interface ActiveTurn {
+export interface ActiveTurn {
   readonly input: TurnOwner;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
@@ -257,6 +275,7 @@ interface ActiveTurn {
   before: string | null | undefined;
   compaction: { readonly nativeId: string; readonly startedAt: DateTime.Utc } | undefined;
   compactions: number;
+  todoPlanId: PlanId | undefined;
   retry:
     | {
         readonly retry: OrchestrationV2ProviderRetry;
@@ -401,23 +420,6 @@ const DECLINED = "The user declined this request.";
 const INTERRUPT_TIMEOUT = "10 seconds";
 const INSTRUCTIONS_KEY = "goat";
 const MEMORY_INSTRUCTIONS_KEY = "goat_memory";
-const RECONNECT_ATTEMPTS = 5;
-const RECONNECT_DELAY = "2 seconds";
-const RECONCILE_TIMEOUT = "15 seconds";
-const RECONNECT_WAIT = "30 seconds";
-const LOST_BACKGROUND =
-  "GOAT lost its connection to OpenCode while this subagent ran, so its result is not shown.";
-const INVENTORY_TIMEOUT = "5 seconds";
-const ACTIVE_CHECK_TIMEOUT = "5 seconds";
-// Other failures may still have admitted the prompt.
-const CLEAR_PROMPT_REJECTIONS: ReadonlySet<string> = new Set([
-  "InvalidRequestError",
-  "ConflictError",
-  "UnauthorizedError",
-  "CommandNotFoundError",
-  "SkillNotFoundError",
-]);
-
 export const OPENCODE_2_STILL_STOPPING =
   "OpenCode is still stopping the previous turn. Send the message again in a moment.";
 const REQUEST_REPLY_TIMEOUT = "10 seconds";
@@ -432,60 +434,7 @@ const deliver = <E>(answer: Effect.Effect<void, E>) =>
 
 type ModelRef = ReturnType<typeof Model.Ref.make>;
 
-// msg_ IDs cannot cross sessions; include session identity because GOAT IDs repeat across environments.
-// Pre-acknowledgement IDs also establish fork/rollback boundaries.
-const turnPromptId = (sessionId: string, attemptId: string) =>
-  SessionMessage.ID.make(`msg_t3_turn_${sessionId}:${attemptId}`);
-const steerPromptId = (sessionId: string, messageId: string) =>
-  SessionMessage.ID.make(`msg_t3_steer_${sessionId}:${messageId}`);
-
 const isProviderAdapterError = Schema.is(ProviderAdapter.ProviderAdapterV2Error);
-
-const modelRef = (selection: ProviderAdapter.ProviderAdapterV2TurnInput["modelSelection"]) => {
-  const parsed = OpenCodeRuntime.parseOpenCodeModelSlug(selection.model);
-  if (parsed === null) return undefined;
-  const variant = getModelSelectionStringOptionValue(selection, "variant");
-  return Model.Ref.make({
-    providerID: Provider.ID.make(parsed.providerID),
-    id: Model.ID.make(parsed.modelID),
-    ...(variant === undefined ? {} : { variant: Model.VariantID.make(variant) }),
-  });
-};
-const malformedModel = (model: string) =>
-  `OpenCode model '${model}' must use provider/model format`;
-const sameModel = (left: ModelRef, right: ModelRef | undefined) =>
-  left.providerID === right?.providerID &&
-  left.id === right?.id &&
-  (left.variant ?? "default") === (right?.variant ?? "default");
-
-const turnTokenUsage = (turn: ActiveTurn, status: OrchestrationV2ProviderTurn["status"]) => {
-  // A step whose start was missed, in a reconnect gap or as an unreadable event, ran on an unreported model.
-  const models =
-    turn.models.size === 0 || turn.missedEvents || turn.steps > turn.startedSteps
-      ? {}
-      : { models: [...turn.models] };
-  return turn.steps === 0
-    ? {
-        usageScope: "main_agent" as const,
-        usageStatus: "unavailable" as const,
-        hasSubagents: turn.usedSubagents,
-        ...models,
-      }
-    : {
-        ...models,
-        usageScope: "main_agent" as const,
-        usageStatus:
-          status === "completed" && !turn.missedEvents && turn.steps >= turn.startedSteps
-            ? ("complete" as const)
-            : ("partial" as const),
-        inputTokens: turn.usage.input,
-        cachedInputTokens: turn.usage.cached,
-        cacheCreationTokens: turn.usage.cacheWrite,
-        outputTokens: turn.usage.output,
-        reasoningTokens: turn.usage.reasoning,
-        hasSubagents: turn.usedSubagents,
-      };
-};
 
 export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: ProviderInstanceId) {
   const server = yield* OpenCode2Server.OpenCode2Server;
@@ -873,6 +822,50 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
     });
 
+    // Todo updates share the provider event span.
+    const emitTodo = Effect.fnUntraced(function* (
+      state: ThreadState,
+      turn: ActiveTurn,
+      todos: typeof NativeTodoList.Type.todos,
+    ) {
+      turn.todoPlanId ??= yield* idAllocator.allocate.plan({
+        threadId: turn.input.threadId,
+        ...(turn.input.runId === null ? {} : { runId: turn.input.runId }),
+        driver,
+      });
+      const nativeId = `${state.sessionId}:todo:${turn.providerTurn.id}`;
+      const now = yield* DateTime.now;
+      const startedAt = turn.startedAt.get(nativeId) ?? now;
+      turn.startedAt.set(nativeId, startedAt);
+      const steps = todoSteps(todos, nativeId);
+      const base = itemBase(state, turn, nativeId, "completed", startedAt, now, now);
+      yield* emitNode(state, turn, nativeId, "todo_list", "completed", startedAt, now);
+      yield* emit({
+        type: "plan.updated",
+        driver,
+        plan: {
+          id: turn.todoPlanId,
+          threadId: turn.input.threadId,
+          runId: turn.input.runId,
+          nodeId: base.nodeId,
+          kind: "todo_list",
+          status: steps.every((step) => step.status === "completed") ? "completed" : "active",
+          steps,
+        },
+      });
+      yield* emit({
+        type: "turn_item.updated",
+        driver,
+        turnItem: {
+          ...base,
+          type: "todo_list",
+          title: "Todo list",
+          planId: turn.todoPlanId,
+          steps,
+        },
+      });
+    });
+
     const emitTool = Effect.fnUntraced(function* (
       state: ThreadState,
       turn: ActiveTurn,
@@ -882,6 +875,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     ) {
       const tool = turn.tools.get(id);
       if (tool === undefined) return;
+      if (tool.name === "todowrite") {
+        if (status === "running") return;
+        if (status === "completed" && isNativeTodoList(result?.metadata)) {
+          const projected = yield* emitTodo(state, turn, result.metadata.todos).pipe(
+            Effect.as(true),
+            Effect.catchTags({
+              IdAllocatorV2AllocationError: (error) =>
+                Effect.logWarning("Could not allocate an OpenCode todo list.", error).pipe(
+                  Effect.as(false),
+                ),
+            }),
+          );
+          if (projected) return;
+        }
+      }
       const updatedAt = yield* DateTime.now;
       const startedAt = turn.startedAt.get(id) ?? updatedAt;
       const completedAt = status === "running" ? null : updatedAt;
@@ -1044,6 +1052,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       before: undefined,
       compaction: undefined,
       compactions: 0,
+      todoPlanId: undefined,
       retry: undefined,
       interrupted: false,
       unsent: false,
