@@ -73,8 +73,13 @@ func (s *Store) SetSelf(signPub string) {
 
 // Load reads mesh.json, re-verifying every record; os.ErrNotExist when there is no mesh.
 func Load(st *state.Store) (*Store, error) {
+	return LoadFile(st, "mesh.json")
+}
+
+// LoadFile reads a saved set from name in st; the store saves to mesh.json.
+func LoadFile(st *state.Store, name string) (*Store, error) {
 	var f storeFile
-	ok, err := st.ReadJSON("mesh.json", &f)
+	ok, err := st.ReadJSON(name, &f)
 	if err != nil {
 		return nil, err
 	}
@@ -320,16 +325,21 @@ func (s *Store) Save() error {
 	if s.st == nil {
 		return nil
 	}
+	return s.SaveFile(s.st, "mesh.json")
+}
+
+// SaveFile writes the set to name in st under the state lock.
+func (s *Store) SaveFile(st *state.Store, name string) error {
 	s.mu.Lock()
 	// The pool is not persisted (contract "Records").
 	f := storeFile{MeshID: s.MeshID, Records: CanonicalOrder(s.all()), SelfN: s.selfN, Pool: []*Record{}}
 	s.mu.Unlock()
-	unlock, err := s.st.Lock()
+	unlock, err := st.Lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	return s.st.WriteJSON("mesh.json", f, 0o600)
+	return st.WriteJSON(name, f, 0o600)
 }
 
 func (s *Store) all() []*Record {

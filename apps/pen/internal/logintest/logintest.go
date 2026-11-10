@@ -57,6 +57,7 @@ type Server struct {
 	used     map[string]bool
 	names    map[string]string // assertion hash -> device name
 	started  chan Device
+	forgot   chan string
 	http     *httptest.Server
 }
 
@@ -65,7 +66,7 @@ func New() *Server {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	return &Server{MinPoll: 2 * time.Second, Now: time.Now, keys: []ed25519.PrivateKey{priv},
 		devices: map[string]*device{}, byUser: map[string]*device{}, registry: map[string]*entry{},
-		used: map[string]bool{}, names: map[string]string{}, started: make(chan Device, 64)}
+		used: map[string]bool{}, names: map[string]string{}, started: make(chan Device, 64), forgot: make(chan string, 64)}
 }
 
 // Start serves on 127.0.0.1 and sets URL.
@@ -83,6 +84,9 @@ func (s *Server) Close() {
 
 // Started delivers each device flow as it starts.
 func (s *Server) Started() <-chan Device { return s.started }
+
+// Forgotten delivers the nodeId of each node a forget removed.
+func (s *Server) Forgotten() <-chan string { return s.forgot }
 
 // Key is the current login key.
 func (s *Server) Key() login.Key {
@@ -385,6 +389,10 @@ func (s *Server) forget(w http.ResponseWriter, r interface{ Read([]byte) (int, e
 			return
 		}
 		delete(e.nodes, in.NodeID)
+		select {
+		case s.forgot <- in.NodeID:
+		default:
+		}
 	}
 	reply(w, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -68,11 +68,18 @@ func identity(t *testing.T, st *state.Store, relayURL, name string) *ident.Ident
 
 func start(t *testing.T, ctx context.Context, rs *relaytest.Server, st *state.Store, clk *clock) *node {
 	t.Helper()
+	return startWith(t, ctx, rs, st, func(o *Options) {
+		if clk != nil {
+			o.Now = clk.now
+		}
+	})
+}
+
+func startWith(t *testing.T, ctx context.Context, rs *relaytest.Server, st *state.Store, set func(*Options)) *node {
+	t.Helper()
 	ready := make(chan struct{})
 	opt := Options{Store: st, HostKeyGlob: "none", KnownHosts: "none", Ready: func() { close(ready) }, Logf: t.Logf}
-	if clk != nil {
-		opt.Now = clk.now
-	}
+	set(&opt)
 	d, err := New(opt)
 	if err != nil {
 		t.Fatal(err)

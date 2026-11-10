@@ -94,6 +94,39 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 	if err != nil {
 		return err
 	}
+	return d.replaceMesh(store, tok.Relays, name)
+}
+
+// JoinedFile is where pen login leaves a mesh it joined for a running daemon to adopt.
+const JoinedFile = "joined.json"
+
+// adopt replaces a solo mesh with the set pen login joined (joined.json).
+func (d *Daemon) adopt(ctx context.Context) error {
+	store, err := mesh.LoadFile(d.st, JoinedFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return errors.New("no joined mesh to adopt")
+	}
+	if err != nil {
+		return err
+	}
+	store.SetSelf(d.selfKey())
+	self, ok := store.View().Members[d.selfKey()]
+	if !ok {
+		return errors.New("the joined mesh does not make this node a member")
+	}
+	if cur := d.view(); cur.MeshID != store.MeshID && len(cur.Members) > 1 {
+		return fmt.Errorf("this node is already in a mesh with %d members; pen leave first", len(cur.Members))
+	}
+	if err := d.replaceMesh(store, nil, self.Name); err != nil {
+		return err
+	}
+	os.Remove(d.st.Path(JoinedFile))
+	d.spawn(func() { d.pushAll(d.runCtx) })
+	return nil
+}
+
+// replaceMesh makes store this node's mesh; relays (when set) replace the relay list.
+func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
@@ -114,8 +147,10 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 		return err
 	}
 	d.cfgMu.Lock()
-	changed := !slices.Equal(d.cfg.RelayList(), tok.Relays)
-	d.cfg.SetRelays(tok.Relays)
+	changed := relays != nil && !slices.Equal(d.cfg.RelayList(), relays)
+	if changed {
+		d.cfg.SetRelays(relays)
+	}
 	d.cfg.Name = name
 	cfg := d.cfg
 	d.cfgMu.Unlock()

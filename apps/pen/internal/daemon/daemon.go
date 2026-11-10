@@ -36,6 +36,8 @@ type Options struct {
 	SSHUser string
 	// OnView runs after known_hosts is rewritten for a new view (pen keeps its ssh config current there).
 	OnView func(*mesh.View) error
+	// AccountWait bounds the wait for an account joiner's assertion and card (10 s).
+	AccountWait time.Duration
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time
@@ -54,6 +56,7 @@ type Daemon struct {
 	meshMu  sync.RWMutex
 	store   *mesh.Store
 	invites *mesh.Invites
+	pending *pendingBook
 
 	// accept receives the sessions of every uplink; slots holds one uplink per relay.
 	accept chan relay.Conn
@@ -68,7 +71,9 @@ type Daemon struct {
 	watchers map[chan []byte]struct{}
 	seen     map[string]seenInfo
 	// versions is what each peer (by Noise key) announced in its last sync hello.
-	versions   map[string]string
+	versions map[string]string
+	// acct are the running kind 0x04 sessions, oldest first.
+	acct       []*acctSlot
 	inviteWait map[string]chan mesh.Member
 	lastView   *mesh.View
 
@@ -161,8 +166,12 @@ func New(opt Options) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	pending, err := loadPending(st)
+	if err != nil {
+		return nil, err
+	}
 	d := &Daemon{
-		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites,
+		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
 		versions: map[string]string{}, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
@@ -447,6 +456,7 @@ func (d *Daemon) viewChanged() {
 		d.mu.Unlock()
 		return
 	}
+	old := d.lastView
 	d.lastView = v
 	var doomed []*live
 	for k, l := range d.sessions {
@@ -472,6 +482,7 @@ func (d *Daemon) viewChanged() {
 	for _, l := range doomed {
 		l.sec.Close(4401)
 	}
+	d.forgetRevoked(old, v)
 	d.writeKnownHosts()
 }
 

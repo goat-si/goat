@@ -56,12 +56,29 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 			return nil, errNotAdmitted
 		}
 		return session.JoinPSK(inv.Secret, d.nodeID, d.id.NoisePub)
+	case session.KindAccount:
+		if p.Stream != "account" || !ident.ValidName(p.Name) {
+			return nil, errNotAdmitted
+		}
+		return nil, nil
 	}
 	return nil, errNotAdmitted
 }
 
 func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
-	sec, err := session.Respond(ctx, c, d.id, d.nodeID, d.admit)
+	var slot *acctSlot
+	admit := func(kind byte, remote []byte, p session.Payload) ([]byte, error) {
+		psk, err := d.admit(kind, remote, p)
+		if err != nil || kind != session.KindAccount {
+			return psk, err
+		}
+		slot, err = d.reserveAccount(c)
+		return nil, err
+	}
+	sec, err := session.Respond(ctx, c, d.id, d.nodeID, admit)
+	if slot != nil {
+		defer d.releaseAccount(slot)
+	}
 	if err != nil {
 		return
 	}
@@ -83,6 +100,8 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		}
 	case "join":
 		d.serveJoin(ctx, sec)
+	case "account":
+		d.serveAccount(ctx, sec, slot)
 	default:
 		sec.Close(wire.CodeNotAdmitted)
 	}
