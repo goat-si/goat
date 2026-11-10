@@ -144,7 +144,8 @@ describe("selectTasks", () => {
           task !== "test-memory-growth" &&
           task !== "test-ingest" &&
           task !== "test-windows" &&
-          task !== "smoke-linux-computer-use",
+          task !== "smoke-linux-computer-use" &&
+          task !== "test-pen",
       ),
     );
   });
@@ -438,8 +439,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists twenty jobs for a full run including package suites, relay, Windows, the Linux smoke and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 20);
+  it("lists twenty-one jobs for a full run including package suites, relay, Windows, the Linux smoke, Pen and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 21);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
@@ -756,5 +757,101 @@ describe("relay workspace coverage", () => {
       workflow.indexOf("node infra/relay/scripts/test-postgres.ts check") <
         workflow.indexOf("- name: Test relay"),
     );
+  });
+});
+
+describe("pen suites", () => {
+  const env = {
+    GITHUB_EVENT_NAME: "pull_request",
+    GITHUB_REPOSITORY: "goat-si/goat",
+    PR_NUMBER: "1",
+    GITHUB_TOKEN: "t",
+  };
+  const labels = (names) => async () => ({
+    ok: true,
+    json: async () => names.map((name) => ({ name })),
+  });
+  const quick = (files, names = []) =>
+    planRun({
+      env,
+      payload: { pull_request: { labels: [], draft: false } },
+      root,
+      fetchImpl: labels(names),
+      files,
+    });
+  const penFiles = [
+    "apps/pen/internal/mesh/join.go",
+    "apps/pen/install/install.sh",
+    "packages/pen-protocol/src/login.ts",
+    "infra/pen-relay/src/room.ts",
+    "infra/pen-login/src/api.ts",
+  ];
+
+  it("selects test-pen on a hosted runner for a change under any Pen directory", async () => {
+    for (const file of penFiles) {
+      const result = await quick([file]);
+      assert.equal(result.reasons.get("test-pen"), file, file);
+      assert.deepEqual(
+        matrixFor(result.tasks, result.server).include.find((e) => e.task === "test-pen"),
+        { task: "test-pen", title: "test-pen", runner: "hosted" },
+      );
+    }
+  });
+
+  it("leaves Pen's own test files to test-pen instead of test-changed", async () => {
+    const result = await quick([
+      "infra/pen-login/test/login.test.ts",
+      "packages/pen-protocol/src/login.test.ts",
+    ]);
+    assert.ok(result.tasks.includes("test-pen"));
+    assert.ok(!result.tasks.includes("test-changed"));
+    assert.deepEqual(result.changedTests.vitest, []);
+  });
+
+  it("runs test-pen, not everything, for a Pen change under ci:affected", () => {
+    for (const file of penFiles) {
+      const result = select(file);
+      assert.equal(result.full, false, file);
+      assert.ok(result.tasks.includes("test-pen"), file);
+      assert.ok(!result.tasks.includes("test-packages"), file);
+    }
+  });
+
+  it("is in the full run and leaves no Pen package to test-packages", async () => {
+    assert.ok(laneRun("all").tasks.includes("test-pen"));
+    const suites = packageSuites(root);
+    for (const name of ["@goat/pen-protocol", "@goat/pen-relay", "@goat/pen-login"])
+      assert.ok(!suites.includes(name), name);
+  });
+
+  it("does not run for unrelated changes", async () => {
+    assert.ok(
+      !(await quick(["apps/server/src/channels/ChannelDispatcher.ts"])).tasks.includes("test-pen"),
+    );
+    assert.ok(!(await quick(["docs/user/pen.md"])).tasks.includes("test-pen"));
+    assert.ok(!tasksFor("packages/shared/src/format.ts").includes("test-pen"));
+  });
+
+  it("runs every Pen suite in the workflow step", () => {
+    const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+    const steps = [
+      ...workflow.matchAll(
+        /- name: ([^\n]+)\n\s+if: matrix\.task == 'test-pen'\n([\s\S]*?)(?=\n\s*- name:)/g,
+      ),
+    ]
+      .map((m) => m[2])
+      .join("\n");
+    for (const needle of [
+      "-l apps/pen",
+      "vet ./...",
+      "test -race -count=1 ./...",
+      "scripts/installcheck.sh",
+      "scripts/threenode.sh",
+      "scripts/loginnode.sh",
+      "--filter @goat/pen-protocol",
+      "--filter @goat/pen-relay",
+      "--filter @goat/pen-login",
+    ])
+      assert.ok(steps.includes(needle), needle);
   });
 });
