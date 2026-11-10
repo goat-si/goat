@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
@@ -85,13 +86,24 @@ func MatchPending(ps []Pending, arg string) (Pending, error) {
 	return Pending{}, fmt.Errorf("no pending request matches %q", arg)
 }
 
-func (d *Daemon) downloadRelay() string {
-	d.cfgMu.Lock()
-	defer d.cfgMu.Unlock()
-	if d.cfg.DownloadRelay != "" {
-		return d.cfg.DownloadRelay
+// DownloadRelayOf is where invitees fetch install.sh: the configured download relay, else the
+// release Worker (a self-hosted pen relay serve does not serve install.sh).
+func DownloadRelayOf(cfg state.Config) string {
+	if cfg.DownloadRelay != "" {
+		return cfg.DownloadRelay
 	}
 	return DefaultDownloadRelay
+}
+
+// downloadRelay reads config.json, where pen relay download may have changed it since start.
+func (d *Daemon) downloadRelay() string {
+	cfg, err := d.st.LoadConfig()
+	if err != nil {
+		d.cfgMu.Lock()
+		cfg = d.cfg
+		d.cfgMu.Unlock()
+	}
+	return DownloadRelayOf(cfg)
 }
 
 // setRelays saves a new relay list and reconnects the uplinks (op "relays").
@@ -106,7 +118,7 @@ func (d *Daemon) setRelays(list []string) (Status, error) {
 	cfg := d.cfg
 	d.cfgMu.Unlock()
 	if changed {
-		if err := d.st.SaveConfig(cfg); err != nil {
+		if err := d.saveConfig(cfg); err != nil {
 			return Status{}, err
 		}
 		d.startUplinks()

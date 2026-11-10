@@ -21,7 +21,6 @@ import (
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 	"github.com/goat-si/goat/apps/pen/internal/relayserver"
-	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
@@ -342,7 +341,7 @@ func runRelayDownload(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, downloadRelay(cfg))
+		fmt.Fprintln(stdout, daemon.DownloadRelayOf(cfg))
 		return 0
 	}
 	u := strings.TrimRight(args[0], "/")
@@ -354,17 +353,6 @@ func runRelayDownload(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	return 0
-}
-
-// downloadRelay is where invitees fetch install.sh: the configured download relay, else the first relay.
-func downloadRelay(cfg state.Config) string {
-	if cfg.DownloadRelay != "" {
-		return cfg.DownloadRelay
-	}
-	if l := cfg.RelayList(); len(l) > 0 {
-		return l[0]
-	}
-	return ""
 }
 
 // downloadOrigin accepts an https origin (http only for a loopback host) with no user, path, query

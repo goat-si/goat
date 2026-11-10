@@ -378,6 +378,39 @@ func TestDashboardLockAndRelaysUseTheDaemonOps(t *testing.T) {
 	want(t, "an invite for a week", d.post("/api/invite", bearer, map[string]int64{"ttlMs": (7 * 24 * time.Hour).Milliseconds()}), http.StatusBadRequest)
 }
 
+// pen relay download writes config.json while the daemon runs; the dashboard must use it and keep it.
+func TestDashboardUsesADownloadRelaySetWhileRunningAndKeepsItOnARelayChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs, rs2 := relaytest.New(), relaytest.New()
+	defer rs.Close()
+	defer rs2.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	cfg, err := a.st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DownloadRelay = "https://dl.example"
+	if err := a.st.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	d, tok := openDash(t, a)
+	bearer := d.login(tok)
+	if s := d.state(bearer); s.LoginCommand != LoginCommand("https://dl.example") {
+		t.Fatalf("login command %q ignores the download relay set while running", s.LoginCommand)
+	}
+	want(t, "two relays", d.post("/api/relays", bearer, map[string][]string{"relays": {rs.URL, rs2.URL}}), http.StatusOK)
+	if cfg, err := a.st.LoadConfig(); err != nil || cfg.DownloadRelay != "https://dl.example" {
+		t.Fatalf("after a relays change: %+v %v", cfg, err)
+	}
+	r := d.post("/api/invite", bearer, map[string]int64{"ttlMs": time.Minute.Milliseconds()})
+	var inv InviteReply
+	r.json(t, &inv)
+	if !strings.HasPrefix(inv.Command, "curl -fsSL https://dl.example/install.sh ") {
+		t.Fatalf("invite command %q", inv.Command)
+	}
+}
+
 func TestDashboardStateListsEventsFromRecords(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
