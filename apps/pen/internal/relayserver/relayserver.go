@@ -103,11 +103,6 @@ type Server struct {
 	// DefaultMaxReading); one source holds at most an eighth of it.
 	MaxReading int
 
-	// clock replaces time.Now in tests; beforeEnd runs between choosing a stalled queue and
-	// ending it (tests).
-	clock     func() time.Time
-	beforeEnd func(*outq)
-
 	queued, reading atomic.Int64
 
 	mu     sync.Mutex
@@ -191,59 +186,11 @@ func (s *Server) maxReading() int64 { return int64(orDefault(s.MaxReading, Defau
 // Reading is what messages being read hold past their sockets' read allowance now.
 func (s *Server) Reading() int64 { return s.reading.Load() }
 
-func (s *Server) now() time.Time {
-	if s.clock != nil {
-		return s.clock()
-	}
-	return time.Now()
-}
-
-// endStalled ends the stalled queue a full relay gives up first (rank.endsBefore): among the
-// queues of within when a source's share is full, else among those of dest's source and of every
-// source holding more than it, so a source never ends a smaller one's queues. It reports whether
-// it ended one; it ends none when self ranks first or nothing is stalled.
-func (s *Server) endStalled(within, dest *source, self *outq) bool {
-	for {
-		s.mu.Lock()
-		now := s.now()
-		var victim *outq
-		var worst rank
-		consider := func(src *source) {
-			for q := range src.queues {
-				if r, ok := q.rank(now); ok && (victim == nil || r.endsBefore(worst)) {
-					victim, worst = q, r
-				}
-			}
-		}
-		if within != nil {
-			consider(within)
-		} else {
-			held := dest.held.Load()
-			for _, src := range s.shares {
-				if src == dest || src.held.Load() > held {
-					consider(src)
-				}
-			}
-		}
-		s.mu.Unlock()
-		if victim == nil || victim == self {
-			return false
-		}
-		if s.beforeEnd != nil {
-			s.beforeEnd(victim)
-		}
-		if victim.endIfStalled() {
-			return true
-		}
-		// It drained since it was ranked: rank again without it.
-	}
-}
-
 // shareLocked is ip's part of the budget, held once more.
 func (s *Server) shareLocked(ip string) *source {
 	src := s.shares[ip]
 	if src == nil {
-		src = &source{queues: map[*outq]struct{}{}}
+		src = &source{}
 		s.shares[ip] = src
 	}
 	src.refs++
@@ -309,7 +256,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
-	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget, role == "node")
+	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget)
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -536,7 +483,7 @@ type sock struct {
 	// client
 	sid     uint32
 	pending bool
-	// pendingSent is what the client sent toward the node before the node answered.
+	// pendingSent counts the messages the client sent before the node answered.
 	pendingSent int
 	upEnd       uint64
 	upUnacked   uint64
@@ -818,10 +765,10 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	if qMine+cost > LightSession {
 		qLimit = SocketWindow - LightSession*others
 	}
-	// Until the node answers, a client may only send its first message (contract "Sessions"), so
-	// the eight pending sessions a node may have hold little of its source share.
+	// Until the node answers, a client may send one message of at most 4096 bytes, its first
+	// (contract "Sessions"): the eight pending sessions a node may have hold little of its share.
 	if c.pending {
-		if c.pendingSent += len(payload); c.pendingSent > FirstMessageMax {
+		if c.pendingSent++; c.pendingSent > 1 || len(payload) > FirstMessageMax {
 			rm.endSession(c, wire.CodeTimeout)
 			return
 		}

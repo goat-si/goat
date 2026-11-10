@@ -79,7 +79,7 @@ func (w *countingWS) Write(ctx context.Context, typ websocket.MessageType, p []b
 func TestADrainedQueueKeepsNoSentPayloadAlive(t *testing.T) {
 	ws := &countingWS{stalledWS: stalledWS{release: make(chan struct{})}, wrote: make(chan struct{})}
 	defer close(ws.release)
-	q := newOutq(ws, time.Hour, testBudget(New(DefaultLimits()), "192.0.2.1"), false)
+	q := newOutq(ws, time.Hour, testBudget(New(DefaultLimits()), "192.0.2.1"))
 	const items = 64
 	for range items {
 		q.binary(make([]byte, 32<<10))

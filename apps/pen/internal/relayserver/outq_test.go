@@ -53,7 +53,7 @@ func (w *stalledWS) CloseNow() error {
 func TestTinyQueuedItemsCountTowardTheQueueLimitSoMemoryStaysBounded(t *testing.T) {
 	ws := &stalledWS{release: make(chan struct{})}
 	defer close(ws.release)
-	q := newOutq(ws, time.Hour, nil, false)
+	q := newOutq(ws, time.Hour, nil)
 	limit := SocketWindow + RelayHeadroom + queueSlack
 	for range limit / 32 {
 		q.binary([]byte{0})
@@ -72,7 +72,7 @@ func TestTinyQueuedItemsCountTowardTheQueueLimitSoMemoryStaysBounded(t *testing.
 func TestQueuedPongsAreCapped(t *testing.T) {
 	ws := &stalledWS{release: make(chan struct{})}
 	defer close(ws.release)
-	q := newOutq(ws, time.Hour, nil, false)
+	q := newOutq(ws, time.Hour, nil)
 	q.binary([]byte{1}) // the writer stalls on this one
 	for range 100 {
 		q.text("pong")
@@ -81,7 +81,7 @@ func TestQueuedPongsAreCapped(t *testing.T) {
 	q.mu.Lock()
 	held := 0
 	for _, it := range q.ring {
-		if it.pong {
+		if it.is(itemPong) {
 			held++
 		}
 	}
