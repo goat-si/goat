@@ -138,19 +138,22 @@ describe("worktree cleanup preview gate", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("asks for a new preview when the preview is turned off and on again", () => {
-    const { calls, layer, clean } = setup([{ apply: true }, { apply: false }]);
-    return Effect.gen(function* () {
-      const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
-      const sweep = (nowMs: number, on: boolean) =>
-        run({ nowMs, snapshotDays: null, preview: on, entries: [], clean });
-      yield* sweep(0, true);
-      yield* sweep(1, false);
-      const again = yield* sweep(2, true);
-      expect(calls.passes).toEqual([true, false, false, true]);
-      expect(calls.evaluate).toEqual([1, 1]);
-      expect(calls.reset).toBe(1);
-      expect(again.preview).toEqual(preview);
-    }).pipe(Effect.provide(layer));
-  });
+  it.effect(
+    "asks for a new preview once the preview is forgotten, even if no sweep saw it off",
+    () => {
+      const { calls, layer, clean } = setup([{ apply: true }, { apply: false }]);
+      return Effect.gen(function* () {
+        const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
+        const sweep = (nowMs: number) =>
+          run({ nowMs, snapshotDays: null, preview: true, entries: [], clean });
+        yield* sweep(0);
+        yield* run.forgetPreview;
+        const again = yield* sweep(1);
+        expect(calls.passes).toEqual([true, false, true]);
+        expect(calls.evaluate).toEqual([1, 1]);
+        expect(calls.reset).toBe(1);
+        expect(again.preview).toEqual(preview);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
