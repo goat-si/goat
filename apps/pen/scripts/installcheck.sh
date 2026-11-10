@@ -1,6 +1,6 @@
 #!/bin/sh
-# install.sh check against the relay stand-in serving build.sh output: install + up on one home,
-# install --join on another, then a corrupted SHA256SUMS must stop the install.
+# install.sh check against the relay stand-in serving build.sh output: a bare install only installs,
+# install --up founds on one home, install --join joins another, then a corrupted SHA256SUMS must stop the install.
 #   apps/pen/scripts/installcheck.sh   (runs build.sh into a scratch copy of public/)
 set -eu
 
@@ -9,7 +9,7 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d /tmp/peni.XXXXXX)"
 relay_pid=""
 cleanup() {
-	for n in a b; do
+	for n in z a b; do
 		[ -x "$work/$n/.local/bin/pen" ] && HOME="$work/$n" PEN_HOME="$work/$n/.pen" "$work/$n/.local/bin/pen" down >/dev/null 2>&1 || true
 	done
 	if [ -n "$relay_pid" ]; then
@@ -47,7 +47,18 @@ pen() {
 	HOME="$work/$n" PEN_HOME="$work/$n/.pen" "$work/$n/.local/bin/pen" "$@"
 }
 
-inst a --name a
+inst z >"$work/z.out"
+grep -q "Next: .*pen login" "$work/z.out" || { echo "FAIL: a bare install did not say what to run next:"; cat "$work/z.out"; exit 1; }
+[ ! -e "$work/z/.pen/mesh.json" ] || { echo "FAIL: a bare install founded a mesh"; exit 1; }
+[ ! -e "$work/z/.pen/control.sock" ] || { echo "FAIL: a bare install started a daemon"; exit 1; }
+if pen z ls 2>"$work/z.err"; then
+	echo "FAIL: pen ls answered after a bare install"
+	exit 1
+fi
+grep -q "no mesh here yet; run pen login" "$work/z.err" || { echo "FAIL: pen ls after a bare install said:"; cat "$work/z.err"; exit 1; }
+echo "ok: a bare install.sh installs pen and founds nothing"
+
+inst a --name a --up
 pen a version
 inst b --name b --join "$(pen a invite --auto)"
 members="$(pen a ls --json | grep -c '"fingerprint"')"

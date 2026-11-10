@@ -3,6 +3,18 @@
 `pen` gives each machine a key-derived name and an end-to-end encrypted byte pipe to every other member of its mesh,
 through relays that see only ciphertext. The wire rules are in [CONTRACT.md](../../packages/pen-protocol/CONTRACT.md).
 
+## Install
+
+```sh
+curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh                        # install only
+curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --join <token>   # install and join by invite
+curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --login          # install and sign in with Google
+curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --up             # install and start a new mesh
+```
+
+A bare install puts `pen` in `~/.local/bin` and prints the next commands; it starts no mesh. `--name <name>` names the
+machine for `--join`, `--login` or `--up`.
+
 ## Join a machine
 
 On a member: `pen invite --auto` prints a single-use token. On the new machine:

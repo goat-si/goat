@@ -103,7 +103,7 @@ func knownHostsPath() string {
 func localView(st *state.Store) (*mesh.View, error) {
 	s, err := mesh.Load(st)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, errors.New("no mesh here yet; run pen up or pen join")
+		return nil, errors.New("no mesh here yet; run pen login, pen join <token>, or pen up")
 	}
 	if err != nil {
 		return nil, err

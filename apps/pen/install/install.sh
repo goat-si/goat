@@ -1,14 +1,17 @@
 #!/bin/sh
-# pen installer: downloads the pen binary for this machine from the relay, verifies it and starts it.
-#   curl -fsSL <relay>/install.sh | sh
-#   curl -fsSL <relay>/install.sh | sh -s -- --join <token>
-#   curl -fsSL <relay>/install.sh | sh -s -- --login     (sign in with Google; add --yes for scripts)
+# pen installer: downloads the pen binary for this machine from the relay and verifies it.
+#   curl -fsSL <relay>/install.sh | sh                        (install only; prints what to run next)
+#   curl -fsSL <relay>/install.sh | sh -s -- --join <token>   (then join the mesh the token invites to)
+#   curl -fsSL <relay>/install.sh | sh -s -- --login          (then sign in with Google; add --yes for scripts)
+#   curl -fsSL <relay>/install.sh | sh -s -- --up             (then start a new mesh on this machine)
+# --name N names this machine for --join, --login or --up; --relay URL is the download relay and the first relay.
 set -eu
 
 PEN_RELAY="${PEN_RELAY:-__PEN_RELAY__}"
 VERSION="${PEN_VERSION:-__PEN_VERSION__}"
 JOIN=""
 LOGIN=""
+UP=""
 NAME=""
 NO_SERVICE=""
 YES=""
@@ -20,6 +23,7 @@ while [ $# -gt 0 ]; do
 	--name) NAME="$2"; shift 2 ;;
 	--no-service) NO_SERVICE="--no-service"; shift ;;
 	--relay) PEN_RELAY="$2"; shift 2 ;;
+	--up) UP=1; shift ;;
 	--yes) YES="--yes"; shift ;;
 	*) echo "install.sh: unknown argument $1" >&2; exit 2 ;;
 	esac
@@ -62,9 +66,13 @@ gunzip -c "$tmp/$file" >"$tmp/pen"
 chmod 0755 "$tmp/pen"
 mv "$tmp/pen" "$HOME/.local/bin/pen"
 echo "installed $HOME/.local/bin/pen ($VERSION)"
+pen="pen"
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) ;;
-*) echo "add $HOME/.local/bin to your PATH to run pen directly" ;;
+*)
+	echo "add $HOME/.local/bin to your PATH to run pen directly"
+	pen="$HOME/.local/bin/pen"
+	;;
 esac
 
 if [ -n "$JOIN" ]; then
@@ -84,8 +92,11 @@ if [ -n "$LOGIN" ]; then
 	fi
 	exec "$HOME/.local/bin/pen" "$@"
 fi
-if [ -n "$NAME" ]; then
-	exec "$HOME/.local/bin/pen" up --relay "$PEN_RELAY" --name "$NAME" $NO_SERVICE
+if [ -n "$UP" ]; then
+	if [ -n "$NAME" ]; then
+		exec "$HOME/.local/bin/pen" up --relay "$PEN_RELAY" --name "$NAME" $NO_SERVICE
+	fi
+	exec "$HOME/.local/bin/pen" up --relay "$PEN_RELAY" $NO_SERVICE
 fi
-exec "$HOME/.local/bin/pen" up --relay "$PEN_RELAY" $NO_SERVICE
+echo "Next: $pen login --relay $PEN_RELAY (sign in with Google), $pen join <token> (an invite), or $pen up --relay $PEN_RELAY (start a new mesh on this machine)."
 
