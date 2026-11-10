@@ -154,8 +154,8 @@ it under 4 MiB, with the previous part in `daemon.log.1`.
 
 On Windows the service is a task in Task Scheduler that starts Pen when you sign in to Windows; it needs no
 administrator rights. Pen does not run before you sign in: after a restart it starts at your sign-in.
-`pen down` stops it until your next sign-in or `pen up`, `pen leave` removes the task, and if Pen stops
-unexpectedly it starts again within seconds. Its state is in `%USERPROFILE%\.pen`, which only your account can
+`pen down` stops it until you run `pen up` again (it does not start at sign-in in between), `pen leave`
+removes the task, and if Pen stops unexpectedly it starts again within seconds. Its state is in `%USERPROFILE%\.pen`, which only your account can
 read. A `--no-service` Pen started from an SSH session can end when that session closes.
 
 ## Cloud boxes and images

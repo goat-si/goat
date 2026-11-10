@@ -104,11 +104,43 @@ func startTask(st *state.Store) error {
 	if err := os.Remove(st.Path(downMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return run("schtasks", "/Run", "/TN", name)
+	// A supervisor that pen down just ended can still count as running for Task Scheduler, which then
+	// drops this /Run (IgnoreNew); another /Run is harmless, since a second supervisor would find the
+	// lock held and exit, so repeat it until the daemon answers.
+	deadline := time.Now().Add(readyTimeout)
+	for {
+		if err := run("schtasks", "/Run", "/TN", name); err != nil {
+			return err
+		}
+		if answers(st, runRetry) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the pen task %s did not start the daemon within %v", name, readyTimeout)
+		}
+	}
 }
 
-// downMarker tells the supervisor that pen down stopped the daemon, so an exit of any status ends it
-// instead of a restart. pen up and the next supervisor start remove it.
+// runRetry is how long pen up waits for the daemon before it repeats schtasks /Run (a seam for tests).
+var runRetry = 2 * time.Second
+
+// answers reports whether the daemon answers on the control socket within d.
+func answers(st *state.Store, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		var s daemon.Status
+		if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// downMarker records pen down: a supervisor checks it before each start of the daemon and ends instead,
+// so nothing starts Pen again, at a sign-in either, until pen up removes it.
 const downMarker = "down"
 
 // supervisorLock is held by the running supervisor; pen down waits for it to come free.
@@ -117,35 +149,42 @@ const supervisorLock = "supervisor.lock"
 // supervisorWait bounds how long pen down waits for the supervisor to end (a seam for tests).
 var supervisorWait = downWait
 
-// stopTask stops the daemon through its control socket and waits until the supervisor, and so the task,
-// has ended: an immediate pen up's schtasks /Run would otherwise meet the old run and be dropped
-// (IgnoreNew). The task stays registered and starts again at the next logon. schtasks /End is the
-// fallback for a daemon or supervisor that does not end.
+// stopTask records pen down, stops the daemon through its control socket and waits until the
+// supervisor has ended; schtasks /End is the fallback for one that does not. A daemon a supervisor
+// started just before it saw the record is stopped last. The task stays registered.
 func stopTask(st *state.Store) error {
 	if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
 		return err
 	}
+	stopDaemon(st)
+	if !supervisorGone(st, supervisorWait) {
+		name, err := accountTaskName()
+		if err != nil {
+			return err
+		}
+		endErr := run("schtasks", "/End", "/TN", name)
+		if !supervisorGone(st, 0) {
+			if endErr != nil {
+				return fmt.Errorf("the pen task %s did not stop: %w", name, endErr)
+			}
+			return fmt.Errorf("the pen task %s did not stop", name)
+		}
+	}
+	if !stopDaemon(st) {
+		return errors.New("the pen daemon did not stop")
+	}
+	return nil
+}
+
+// stopDaemon asks a running daemon to stop and reports whether none runs afterwards.
+func stopDaemon(st *state.Store) bool {
 	var s daemon.Status
-	if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
-		// A daemon that is already shutting down (pen leave) may close the socket before it answers.
-		daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
-		waitExit(s.PID, downWait)
+	if daemon.Call(st, daemon.Request{Op: "status"}, &s) != nil {
+		return true
 	}
-	if supervisorGone(st, supervisorWait) {
-		return nil
-	}
-	name, err := accountTaskName()
-	if err != nil {
-		return err
-	}
-	endErr := run("schtasks", "/End", "/TN", name)
-	if supervisorGone(st, 0) {
-		return nil
-	}
-	if endErr != nil {
-		return fmt.Errorf("the pen task %s did not stop: %w", name, endErr)
-	}
-	return fmt.Errorf("the pen task %s did not stop", name)
+	// A daemon that is already shutting down (pen leave) may close the socket before it answers.
+	daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
+	return waitExit(s.PID, downWait)
 }
 
 // supervisorGone reports whether no supervisor holds its lock, waiting up to d for it to end.
@@ -196,9 +235,6 @@ func runSupervised(st *state.Store, stderr io.Writer) int {
 		return 1
 	}
 	defer release()
-	if err := os.Remove(st.Path(downMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		logger.Printf("pen supervisor: %v", err)
-	}
 	stopRequested := func() bool {
 		_, err := os.Stat(st.Path(downMarker))
 		return err == nil
@@ -227,15 +263,18 @@ func runSupervised(st *state.Store, stderr io.Writer) int {
 
 const restartFirst, restartMax = 2 * time.Second, time.Minute
 
-// superviseLoop runs the daemon until it exits 0 (pen down, pen leave, the left marker) or pen down asked
-// for the stop (stopRequested). After any other exit it waits 2 s, doubling up to 1 min while the daemon
-// keeps failing fast, as systemd's Restart=on-failure and launchd's KeepAlive do on unix.
+// superviseLoop runs the daemon until it exits 0 (pen down, pen leave, the left marker) or pen down is
+// recorded (stopRequested, checked before every start). After any other exit it waits 2 s, doubling up
+// to 1 min while the daemon keeps failing fast, as systemd's Restart=on-failure and launchd's KeepAlive do.
 func superviseLoop(run func() int, stopRequested func() bool, wait func(time.Duration), now func() time.Time, logf func(string, ...any)) int {
 	backoff := restartFirst
 	for {
+		if stopRequested() {
+			return 0
+		}
 		began := now()
 		code := run()
-		if code == 0 || stopRequested() {
+		if code == 0 {
 			return 0
 		}
 		if now().Sub(began) >= restartMax {
@@ -243,9 +282,6 @@ func superviseLoop(run func() int, stopRequested func() bool, wait func(time.Dur
 		}
 		logf("pen daemon exited with status %d; starting it again in %v", code, backoff)
 		wait(backoff)
-		if stopRequested() {
-			return 0
-		}
 		backoff = min(2*backoff, restartMax)
 	}
 }

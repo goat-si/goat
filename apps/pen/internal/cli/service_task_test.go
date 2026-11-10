@@ -275,6 +275,79 @@ func TestSupervisorDoesNotRestartADaemonAfterPenDown(t *testing.T) {
 	}
 }
 
+// A supervisor that starts after pen down (a sign-in, or one that was just starting) starts nothing until
+// pen up removes the record.
+func TestSupervisorStartsNoDaemonWhilePenDownIsRecorded(t *testing.T) {
+	runs := 0
+	code := superviseLoop(func() int { runs++; return 0 }, func() bool { return true },
+		func(time.Duration) {}, time.Now, func(string, ...any) {})
+	if code != 0 || runs != 0 {
+		t.Fatalf("supervisor returned %d after %d runs, want 0 runs", code, runs)
+	}
+}
+
+// Task Scheduler can still count a just-ended supervisor as running and drop pen up's /Run (IgnoreNew);
+// pen up runs the task again until the daemon answers.
+func TestUpOnWindowsRunsTheTaskAgainWhenTheFirstRunIsDropped(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	var st *state.Store
+	runsSeen := 0
+	st, calls := windowsHome(t, func(verb string, _ []string) error {
+		switch verb {
+		case "/Query":
+			return errors.New("not registered")
+		case "/Run":
+			runsSeen++
+			if runsSeen == 2 {
+				if err := startDetached(st); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		return nil
+	})
+	old := runRetry
+	runRetry = 300 * time.Millisecond
+	defer func() { runRetry = old }()
+	var out, errOut bytes.Buffer
+	code := RunUp([]string{"--relay", rs.URL, "--name", "a"}, &out, &errOut)
+	t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+	if code != 0 || runsSeen != 2 {
+		t.Fatalf("pen up exit %d after %d /Run calls (%q): %s", code, runsSeen, *calls, errOut.String())
+	}
+}
+
+// A daemon that outlives its supervisor (started just before the supervisor saw pen down, then the
+// supervisor was ended with /End) is stopped too.
+func TestDownOnWindowsStopsADaemonThatOutlivedItsSupervisor(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	var release func()
+	st, _ := windowsHome(t, func(verb string, _ []string) error {
+		if verb == "/End" {
+			release()
+		}
+		return nil
+	})
+	s := runningNode(t, st, rs)
+	r, err := state.TryLock(st.Path(supervisorLock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release = r
+	old := supervisorWait
+	supervisorWait = 0
+	defer func() { supervisorWait = old }()
+	var out, errOut bytes.Buffer
+	if code := RunDown(nil, &out, &errOut); code != 0 {
+		t.Fatalf("pen down exit %d: %s", code, errOut.String())
+	}
+	if running(s.PID) {
+		t.Fatalf("daemon %d still runs after pen down", s.PID)
+	}
+}
+
 // pen down returns only once the supervisor has ended, so the next pen up's /Run is not dropped; a
 // supervisor that outlives the graceful stop is ended with /End, and one that survives that is an error.
 func TestDownOnWindowsWaitsForTheSupervisorAndEndsOneThatStays(t *testing.T) {
