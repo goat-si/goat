@@ -203,11 +203,15 @@ type outq struct {
 	charged        int
 	writing        int
 	writingCharged int
-	bySID          map[uint32]int
-	pongs          int
-	done           bool
-	wake           chan struct{}
-	ended          chan struct{}
+	// reserved is charged room for session frames (OPEN, CLOSE) not queued yet; sessionBytes is
+	// what session frames hold here, reserved or queued, at most sessionFrameRoom.
+	reserved     int
+	sessionBytes int
+	bySID        map[uint32]int
+	pongs        int
+	done         bool
+	wake         chan struct{}
+	ended        chan struct{}
 }
 
 type outItem struct {
@@ -223,6 +227,7 @@ const (
 	itemText uint8 = 1 << iota
 	itemPong
 	itemCharged
+	itemSession
 )
 
 func (it outItem) is(f uint8) bool { return it.flags&f != 0 }
@@ -369,6 +374,9 @@ func (q *outq) pop() outItem {
 		q.charged -= c
 		q.writingCharged = c
 	}
+	if it.is(itemSession) {
+		q.sessionBytes -= c
+	}
 	if it.sid != 0 {
 		if q.bySID[it.sid] -= c; q.bySID[it.sid] == 0 {
 			delete(q.bySID, it.sid)
@@ -383,11 +391,11 @@ func (q *outq) pop() outItem {
 	return it
 }
 
-// dropLocked ends the queue and gives back what its queued items cost.
+// dropLocked ends the queue and gives back what its queued items cost and what it reserved.
 func (q *outq) dropLocked() {
 	q.done = true
-	q.budget.release(q.charged)
-	q.bytes, q.charged = 0, 0
+	q.budget.release(q.charged + q.reserved)
+	q.bytes, q.charged, q.reserved, q.sessionBytes = 0, 0, 0, 0
 	q.ring, q.head, q.n, q.bySID = nil, 0, 0, nil
 }
 
@@ -395,7 +403,63 @@ func (q *outq) dropLocked() {
 func (q *outq) queued(sid uint32) (mine, total int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.bySID[sid], q.bytes + q.writing
+	return q.bySID[sid], q.bytes + q.writing + q.reserved
+}
+
+// sessionFrameCost is what one OPEN or CLOSE frame costs in a queue.
+var sessionFrameCost = itemOverhead + allocSize(wire.HeaderLen+2)
+
+// sessionFrameRoom bounds the session frames one uplink queue holds (about 960 sessions' OPEN and
+// CLOSE), so clients that open and close faster than the node reads take at most this much of its
+// window from the data of other sessions.
+const sessionFrameRoom = 256 << 10
+
+// reserve charges n bytes of room for frames queued later, within the window and the budget; it
+// reports false, charging nothing, when they do not fit.
+func (q *outq) reserve(n int) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.done || q.sessionBytes+n > sessionFrameRoom || q.bytes+q.writing+q.reserved+n > SocketWindow {
+		return false
+	}
+	if !q.budget.try(n) {
+		return false
+	}
+	q.reserved += n
+	q.sessionBytes += n
+	return true
+}
+
+// unreserve gives back n bytes reserve set aside that will not be used.
+func (q *outq) unreserve(n int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.done {
+		return
+	}
+	q.reserved -= n
+	q.sessionBytes -= n
+	q.budget.release(n)
+}
+
+// pushReserved queues b using n bytes reserve set aside.
+func (q *outq) pushReserved(b []byte, n int) {
+	it := outItem{data: own(b, 0), flags: itemCharged | itemSession}
+	q.mu.Lock()
+	if q.done {
+		// dropLocked gave the reservation back.
+		q.mu.Unlock()
+		return
+	}
+	q.reserved -= n
+	q.mu.Unlock()
+	if d := cost(it) - n; d < 0 {
+		q.budget.release(-d)
+	} else if d > 0 {
+		// Never: own sizes 7 bytes by allocSize. Charge it anyway rather than hold it uncounted.
+		q.budget.try(d)
+	}
+	q.push(it)
 }
 
 // close queues the close frame; a writer still busy after the write timeout is aborted.

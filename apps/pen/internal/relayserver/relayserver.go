@@ -485,8 +485,12 @@ type sock struct {
 	pending bool
 	// pendingSent counts the messages the client sent before the node answered.
 	pendingSent int
-	upEnd       uint64
-	upUnacked   uint64
+	// held is the uplink whose queue holds this client's CLOSE reservation (nil once it is sent);
+	// closeWire, on an uplink, is the wire bytes of the CLOSE frames reserved there.
+	held      *sock
+	closeWire uint64
+	upEnd     uint64
+	upUnacked uint64
 }
 
 // room is one node's uplink and its sessions.
@@ -537,25 +541,20 @@ func (rm *room) acceptClient(k *sock) bool {
 		k.out.close(wire.CodeOffline)
 		return false
 	}
+	// Admission pays: the session's OPEN and its CLOSE are reserved on the uplink's queue now, so
+	// a CLOSE always fits and control frames never end an uplink. A node that cannot take more
+	// refuses the new client 4429 and queues nothing.
+	up := rm.uplink
+	if up.sent-up.acked+up.closeWire+sessionFrameWire > SocketWindow+RelayHeadroom || !up.out.reserve(2*sessionFrameCost) {
+		k.closed = true
+		k.out.close(wire.CodeCaps)
+		return false
+	}
+	k.held = up
+	up.closeWire += closeFrameWire
 	k.sid = rm.srv.nextSid(rm.nodeID)
 	k.pending = true
-	var pending []*sock
-	for _, c := range rm.clients {
-		if c.pending {
-			pending = append(pending, c)
-		}
-	}
-	for len(pending) >= PendingMax {
-		oldest := pending[0]
-		at := 0
-		for i, c := range pending {
-			if c.sid < oldest.sid {
-				oldest, at = c, i
-			}
-		}
-		rm.endSession(oldest, wire.CodeCaps)
-		pending = append(pending[:at], pending[at+1:]...)
-	}
+	rm.makePendingRoom(k.ip)
 	rm.clients[k.sid] = k
 	k.deadline = time.AfterFunc(rm.srv.Limits.PendingTimeout, func() {
 		rm.mu.Lock()
@@ -565,10 +564,54 @@ func (rm *room) acceptClient(k *sock) bool {
 		}
 	})
 	rm.armIdle(k)
-	if rm.uplink != nil {
-		rm.sendRelayFrame(wire.Frame{Type: wire.FrameOpen, SID: k.sid})
-	}
+	open := wire.Frame{Type: wire.FrameOpen, SID: k.sid}.Encode()
+	up.out.pushReserved(open, sessionFrameCost)
+	up.sent += uint64(len(open))
 	return true
+}
+
+// Wire bytes of a session's OPEN and CLOSE frames toward the uplink.
+const (
+	closeFrameWire   = wire.HeaderLen + 2
+	sessionFrameWire = wire.HeaderLen + closeFrameWire
+)
+
+// PendingPerSource is how many pending sessions one source address may hold per node (Go relay).
+const PendingPerSource = 2
+
+// makePendingRoom makes room for a pending session from ip: past PendingPerSource the source's own
+// oldest pending session ends 4429, and past PendingMax the oldest pending session of the source
+// holding the most ends 4429, so one source cannot displace another's pending sessions.
+func (rm *room) makePendingRoom(ip string) {
+	for {
+		bySource := map[string][]*sock{}
+		total := 0
+		for _, c := range rm.clients {
+			if c.pending {
+				bySource[c.ip] = append(bySource[c.ip], c)
+				total++
+			}
+		}
+		victims := bySource[ip]
+		if len(victims) < PendingPerSource {
+			if total < PendingMax {
+				return
+			}
+			victims = nil
+			for _, list := range bySource {
+				if len(list) > len(victims) {
+					victims = list
+				}
+			}
+		}
+		oldest := victims[0]
+		for _, c := range victims {
+			if c.sid < oldest.sid {
+				oldest = c
+			}
+		}
+		rm.endSession(oldest, wire.CodeCaps)
+	}
 }
 
 func (k *sock) readLoop() {
@@ -710,6 +753,12 @@ func (rm *room) onUplinkFrame(k *sock, b []byte) {
 	}
 	if c := rm.clients[f.SID]; c != nil {
 		rm.closeSock(c, sendable(f.CloseCode()))
+		// The node closed it, so no CLOSE goes back: give the reservation back.
+		if c.held == k {
+			c.held = nil
+			k.out.unreserve(sessionFrameCost)
+			k.closeWire -= closeFrameWire
+		}
 	}
 }
 
@@ -783,23 +832,25 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	c.upUnacked = mine
 }
 
-// sendRelayFrame sends OPEN or CLOSE, which may use RelayHeadroom past the window.
-func (rm *room) sendRelayFrame(f wire.Frame) {
-	up := rm.uplink
-	b := f.Encode()
-	if up.sent-up.acked+uint64(len(b)) > SocketWindow+RelayHeadroom {
-		rm.dropUplink(up, wire.CodeTimeout)
+// sendClose tells the node a client session ended, from the reservation made when it was
+// admitted, so it always fits.
+func (rm *room) sendClose(c *sock, code uint16) {
+	up := c.held
+	c.held = nil
+	if up == nil || up != rm.uplink {
 		return
 	}
-	up.out.binary(b)
-	up.sent += uint64(len(b))
+	f := wire.CloseFrame(c.sid, code).Encode()
+	up.out.pushReserved(f, sessionFrameCost)
+	up.sent += uint64(len(f))
+	up.closeWire -= closeFrameWire
 }
 
 // endSession closes a client with code and tells the node.
 func (rm *room) endSession(c *sock, code uint16) {
 	rm.closeSock(c, code)
 	if rm.uplink != nil {
-		rm.sendRelayFrame(wire.CloseFrame(c.sid, code))
+		rm.sendClose(c, code)
 	}
 }
 
@@ -855,7 +906,7 @@ func (rm *room) peerGone(k *sock, code uint16) {
 		code = 1000
 	}
 	if rm.uplink != nil {
-		rm.sendRelayFrame(wire.CloseFrame(k.sid, code))
+		rm.sendClose(k, code)
 	}
 }
 
