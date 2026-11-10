@@ -731,3 +731,51 @@ func TestACompromisedRevokeThatDropsTheBindingStillForgetsTheKey(t *testing.T) {
 		t.Fatalf("forgets %+v; want the compromised laptop forgotten at %s", got, bound.LoginURL)
 	}
 }
+
+// Q4: a request queued under one login service is not approved after the mesh is rebound to
+// another with the same key and account, and an entry queued by an older pen (no issuer or key) is
+// refused with what to do; nothing is signed in either case.
+func TestApproveComparesIssuerAccountAndKeyWithTheBindingAtSigning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	var lr map[string]any
+	if err := Call(a.st, Request{Op: "lock", On: true}, &lr); err != nil {
+		t.Fatal(err)
+	}
+	queue := func() string {
+		b := newcomer(t)
+		as := f.Issue(testSub, "me@example.com", b.SignPub, b.NoisePub, time.Now())
+		out, _, err := AccountJoin(ctx, []string{rs.URL}, b, "b", as, offeredBy(t, a))
+		if err != nil || out.QueuedID == "" {
+			t.Fatalf("queue: %+v %v", out, err)
+		}
+		return ident.Fingerprint(b.NoisePub)
+	}
+	old := queue()
+	a.d.pending.mu.Lock()
+	for i := range a.d.pending.list {
+		a.d.pending.list[i].Issuer, a.d.pending.list[i].Kid = "", ""
+	}
+	a.d.pending.mu.Unlock()
+	var ar ApproveResult
+	if err := Call(a.st, Request{Op: "approve", Subject: old}, &ar); err == nil || !strings.Contains(err.Error(), "pen login again") {
+		t.Fatalf("approving an entry without issuer and key: %v", err)
+	}
+	fresh := queue()
+	var r map[string]any
+	rebound := &mesh.Account{LoginURL: "https://other-login.example", LoginKey: mesh.LoginKey(f.Key()), Sub: testSub}
+	if err := Call(a.st, Request{Op: "login-bind", Account: rebound}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if err := Call(a.st, Request{Op: "approve", Subject: fresh}, &ar); err == nil {
+		t.Fatal("a request queued under another login service was approved")
+	}
+	if n := len(a.ls(t).Members); n != 1 {
+		t.Fatalf("%d members: something was admitted", n)
+	}
+}
