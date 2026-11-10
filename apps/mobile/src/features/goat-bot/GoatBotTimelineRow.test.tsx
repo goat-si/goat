@@ -53,7 +53,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 import { GoatBotTimelineRow } from "./GoatBotScreen";
-import { GoatBotActivityLine } from "./GoatBotMessageParts";
+import { GoatBotActivityLine, goatBotTime } from "./GoatBotMessageParts";
 
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -163,6 +163,22 @@ it("labels the first of the bot's unprompted updates and leaves its replies unhe
     />,
   );
   expect(view.container.textContent).not.toContain("GOAT Bot");
+});
+
+it("shows the time under the last reply of a bot group, answered questions included", async () => {
+  const time = goatBotTime("2026-10-12T09:40:00Z");
+  h = createNativeMemoryHarness();
+  view = renderNative(h, <GoatBotTimelineRow {...props} row={bot()} />);
+  await view.render();
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(
+    <GoatBotTimelineRow {...props} row={bot({ answer: "Short", options: [] } as never)} />,
+  );
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(
+    <GoatBotTimelineRow {...props} row={bot({ firstInGroup: true, groupPosition: "first" })} />,
+  );
+  expect(view.container.textContent).not.toContain(time);
 });
 
 it("names a member bot on its update and leaves a reply unlabeled", async () => {
