@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/relayserver"
 )
@@ -20,10 +21,16 @@ type Server struct {
 
 	// BadAcks counts sockets closed 4402 for an ack that decreased or exceeded what was sent.
 	BadAcks atomic.Int64
+	// ClientMessages counts binary messages client sockets sent through this relay.
+	ClientMessages atomic.Int64
+	// ForwardDelay holds each binary client message this long before the relay forwards it to the
+	// node; PongDelay does the same for client text (ping), so the relay answers pong late.
+	ForwardDelay, PongDelay atomic.Int64
 
-	mu     sync.Mutex
-	online map[string]chan struct{}
-	acks   map[string]chan uint64
+	mu      sync.Mutex
+	online  map[string]chan struct{}
+	acks    map[string]chan uint64
+	uplinks map[string]chan struct{}
 }
 
 // New starts a relay with the contract limits on 127.0.0.1.
@@ -39,7 +46,8 @@ func NewUnstarted() *Server { return NewWithLimits(relayserver.DefaultLimits()) 
 
 // NewWithLimits builds an unstarted relay with custom timeouts.
 func NewWithLimits(l relayserver.Limits) *Server {
-	s := &Server{Relay: relayserver.New(l), online: map[string]chan struct{}{}, acks: map[string]chan uint64{}}
+	s := &Server{Relay: relayserver.New(l), online: map[string]chan struct{}{}, acks: map[string]chan uint64{},
+		uplinks: map[string]chan struct{}{}}
 	s.Relay.Hooks = relayserver.Hooks{
 		OnUplink: func(nodeID string) {
 			s.mu.Lock()
@@ -48,6 +56,10 @@ func NewWithLimits(l relayserver.Limits) *Server {
 				delete(s.online, nodeID)
 			}
 			s.mu.Unlock()
+			select {
+			case s.uplinkChan(nodeID) <- struct{}{}:
+			default:
+			}
 		},
 		OnAck: func(nodeID string, n uint64) {
 			select {
@@ -56,6 +68,17 @@ func NewWithLimits(l relayserver.Limits) *Server {
 			}
 		},
 		OnBadAck: func() { s.BadAcks.Add(1) },
+		OnClientMessage: func(_ string, text bool) {
+			delay := &s.ForwardDelay
+			if text {
+				delay = &s.PongDelay
+			} else {
+				s.ClientMessages.Add(1)
+			}
+			if d := time.Duration(delay.Load()); d > 0 {
+				time.Sleep(d)
+			}
+		},
 	}
 	return s
 }
@@ -124,5 +147,27 @@ func (s *Server) NextUplinkAck(ctx context.Context, nodeID string) (uint64, erro
 		return n, nil
 	case <-ctx.Done():
 		return 0, ctx.Err()
+	}
+}
+
+func (s *Server) uplinkChan(nodeID string) chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch := s.uplinks[nodeID]
+	if ch == nil {
+		ch = make(chan struct{}, 64)
+		s.uplinks[nodeID] = ch
+	}
+	return ch
+}
+
+// NextUplink returns once an uplink of nodeID authenticated that no earlier call returned for,
+// counting from the relay's start.
+func (s *Server) NextUplink(ctx context.Context, nodeID string) error {
+	select {
+	case <-s.uplinkChan(nodeID):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

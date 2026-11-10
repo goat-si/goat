@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -316,5 +318,38 @@ func TestDialRaceGivesUpAtItsOwnDeadlineWhenARelayNeverAnswers(t *testing.T) {
 	racer := relay.Racer{Timeout: 200 * time.Millisecond}
 	if _, _, err := racer.Dial(context.Background(), []string{"http://" + ln.Addr().String()}, id.NodeID()); err == nil {
 		t.Fatal("a relay that never answered won the race")
+	}
+}
+
+func TestRaceTraceShowsTheWinnersStagesAndTheOfflineRelays4404(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	offline, online := relaytest.New(), relaytest.New()
+	defer offline.Close()
+	defer online.Close()
+	id := newID(t)
+	startUplink(t, ctx, online, id)
+	var mu sync.Mutex
+	events := map[string][]string{}
+	settled := make(chan struct{})
+	racer := relay.Racer{
+		Trace: func(event, url string, _ time.Duration) {
+			mu.Lock()
+			events[url] = append(events[url], event)
+			mu.Unlock()
+		},
+		Settled: func([]string) { close(settled) },
+	}
+	if _, used, err := racer.Dial(ctx, []string{offline.URL, online.URL}, id.NodeID()); err != nil || used != online.URL {
+		t.Fatalf("used %q, %v; want the online relay", used, err)
+	}
+	<-settled
+	mu.Lock()
+	defer mu.Unlock()
+	if got := events[online.URL]; !slices.Equal(got, []string{"ws", "pong", "winner"}) {
+		t.Fatalf("online relay trace %v, want ws pong winner", got)
+	}
+	if got := events[offline.URL]; !slices.Contains(got, "closed 4404") || slices.Contains(got, "winner") {
+		t.Fatalf("offline relay trace %v, want closed 4404 and no win", got)
 	}
 }
