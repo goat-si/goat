@@ -41,9 +41,18 @@ it("shows unread above the viewport, jumps to it, and dismisses the pill", async
   const pill = screen.getByRole("button", { name: "↑ 40 new messages" });
   await expect.element(pill).toBeVisible();
   await userEvent.click(pill);
-  await expect.element(divider).toBeVisible();
   const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div");
   if (!scroll) throw new Error("missing scroller");
+  await vi.waitFor(() => {
+    const marker = screen.container.querySelector<HTMLElement>('[aria-label="New messages"]');
+    if (!marker) throw new Error("missing divider");
+    expect(marker.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      scroll.getBoundingClientRect().top - 1,
+    );
+    expect(marker.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      scroll.getBoundingClientRect().bottom,
+    );
+  });
   scroll.scrollTop = scroll.scrollHeight;
   await expect.element(pill).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Dismiss new messages" }));
