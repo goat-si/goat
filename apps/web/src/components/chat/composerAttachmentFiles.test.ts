@@ -10,56 +10,12 @@ import type { ComposerFileAttachment, ComposerImageAttachment } from "../../comp
 import {
   attachmentsToReleaseOnUploadCapabilityLoss,
   classifyComposerAttachmentFile,
-  composerAttachmentBlockReason,
   composerFileAttachmentMimeType,
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   normalizeComposerImageFileMimeType,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
-
-describe("composerAttachmentBlockReason", () => {
-  const environmentId = EnvironmentId.make("environment-1");
-  const uploading = { "image-1": { status: "uploading" as const, environmentId, progress: 0.4 } };
-  const base = {
-    answersQuestion: false,
-    supportsQuestionAttachments: true,
-    attachmentCount: 1,
-    attachmentIds: ["image-1"],
-    composerFiles: [],
-    attachmentUploadsCapabilityKnown: true,
-    supportsAttachmentUploads: true,
-    maxFileAttachmentBytes: null,
-    needsReattachFileCount: 0,
-    pendingApprovals: [],
-    heldRequestIds: new Set<string>(),
-    uploadsByImageId: uploading,
-    environmentId,
-  };
-
-  it("leaves a plain send usable while its attachment uploads", () => {
-    expect(composerAttachmentBlockReason(base)).toBeNull();
-  });
-
-  it("waits for the upload before an answer or an approval redirect", () => {
-    expect(composerAttachmentBlockReason({ ...base, answersQuestion: true })).toBe(
-      "Attachment still uploading",
-    );
-    expect(
-      composerAttachmentBlockReason({
-        ...base,
-        pendingApprovals: [{ requestId: "approval-1" }],
-      }),
-    ).toBe("Attachment still uploading");
-    expect(
-      composerAttachmentBlockReason({
-        ...base,
-        pendingApprovals: [{ requestId: "approval-1" }],
-        heldRequestIds: new Set(["approval-1"]),
-      }),
-    ).toBeNull();
-  });
-});
 
 describe("composer attachment files", () => {
   it("keeps previewable images providers cannot accept on the file path", () => {

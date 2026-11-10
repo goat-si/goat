@@ -1249,8 +1249,7 @@ export function useComposerSend(input: ComposerSendInput) {
         ? attachmentCapabilitiesBeforeUpload.supportsAttachmentUploads
         : readEnvironmentPresentation(environmentId)?.serverConfig?.environment.capabilities
             .attachmentUploads === true;
-    // Uploads finish after the message shows as sending; the turn starts once they land.
-    if (turnUsesAttachmentUploads) {
+    if (turnUsesAttachmentUploads && composerAttachmentsSnapshot.length > 0) {
       for (const attachment of composerAttachmentsSnapshot) {
         const upload =
           readAttachmentUpload(attachment.id)?.status === "failed"
@@ -1261,6 +1260,18 @@ export function useComposerSend(input: ComposerSendInput) {
           image: attachment,
           draftTarget: composerDraftTarget,
         });
+      }
+      await awaitAttachmentUploads(composerAttachmentsSnapshot.map((attachment) => attachment.id));
+      const attachmentCapabilitiesAfterUpload = readLiveAttachmentCapabilities();
+      if (attachmentCapabilitiesAfterUpload.fileBlockReason !== null) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, attachmentCapabilitiesAfterUpload.fileBlockReason);
+        return;
+      }
+      if (getUploadedAttachments({ environmentId, images: composerAttachmentsSnapshot }) === null) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, "Retry or remove failed uploads before sending.");
+        return;
       }
     }
 
@@ -1305,27 +1316,6 @@ export function useComposerSend(input: ComposerSendInput) {
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
       return;
-    }
-    // Declining is irreversible, so a redirect waits for its uploads instead of failing after.
-    if (
-      turnUsesAttachmentUploads &&
-      composerAttachmentsSnapshot.length > 0 &&
-      (sendCtx?.shownPendingApprovalIds.length ?? 0) > 0
-    ) {
-      await awaitAttachmentUploads(composerAttachmentsSnapshot.map((attachment) => attachment.id));
-      const uploadBlockReason =
-        readLiveAttachmentCapabilities().fileBlockReason ??
-        (getUploadedAttachments({ environmentId, images: composerAttachmentsSnapshot }) === null
-          ? "Retry or remove failed uploads before sending."
-          : null);
-      if (uploadBlockReason !== null) {
-        sendInFlightRef.current = false;
-        setThreadError(threadIdForSend, uploadBlockReason);
-        setDockedDraftHeroThreadKey((currentThreadKey) =>
-          currentThreadKey === activeThreadKey ? null : currentThreadKey,
-        );
-        return;
-      }
     }
     // A message sent while approvals are pending redirects the agent. They are declined only
     // here, after everything above has accepted the send, so local commands and rejected
