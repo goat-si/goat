@@ -328,6 +328,15 @@ it("explains why nothing is selected when no conversation matches the window", a
   expect(pageText()).toContain("No conversations were found in this window.");
 });
 
+it("shows the paths of selected folders that are not repositories", async () => {
+  using _now = setup();
+  state.candidates = [{ ...candidate("/scratch/notes"), git: null }];
+  await using _screen = await mountImport();
+
+  expect(pageText()).toContain("1 of 1 selected");
+  await vi.waitFor(() => expect(pageText()).toContain("/scratch/notes"));
+});
+
 it("ticks the recent projects of a computer added after the selection changed", async () => {
   using _now = setup();
   await using _screen = await mountImport();

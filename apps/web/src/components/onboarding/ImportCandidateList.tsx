@@ -54,7 +54,7 @@ export function ImportCandidateList({
         />
       ))}
       {other.length > 0 ? (
-        <Collapsible>
+        <Collapsible defaultOpen={otherSelected > 0}>
           <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40">
             <Checkbox
               checked={otherSelected === other.length}

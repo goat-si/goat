@@ -27,6 +27,7 @@ const AgentMessage = Schema.Struct({
 });
 const decodeUserMessage = Schema.decodeUnknownOption(Schema.fromJsonString(UserMessage));
 const decodeAgentMessage = Schema.decodeUnknownOption(Schema.fromJsonString(AgentMessage));
+const UNSUPPORTED_MESSAGE = new Error("Codex history holds a message shape GOAT cannot read");
 
 export interface CodexHistoryMessage {
   readonly role: "user" | "assistant";
@@ -119,11 +120,12 @@ function toMs(value: unknown, fallback: number): number {
   return Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS ? ms : fallback;
 }
 
-function messageText(itemType: unknown, itemJson: unknown): string {
-  if (typeof itemJson !== "string") return "";
+/** Text of a message, "" for one without text, or undefined for a shape this reader does not know. */
+function messageText(itemType: unknown, itemJson: unknown): string | undefined {
+  if (typeof itemJson !== "string") return undefined;
   if (itemType === "userMessage") {
     const decoded = decodeUserMessage(itemJson);
-    if (Option.isNone(decoded)) return "";
+    if (Option.isNone(decoded)) return undefined;
     return decoded.value.content
       .filter(
         (block) =>
@@ -138,9 +140,9 @@ function messageText(itemType: unknown, itemJson: unknown): string {
   }
   if (itemType === "agentMessage") {
     const decoded = decodeAgentMessage(itemJson);
-    return Option.isSome(decoded) ? decoded.value.text.trim() : "";
+    return Option.isSome(decoded) ? decoded.value.text.trim() : undefined;
   }
-  return "";
+  return undefined;
 }
 
 interface HistoryRow {
@@ -192,6 +194,13 @@ export function openCodexThreadHistory(
     );
     return {
       read: (threadId) => {
+        // One read transaction keeps the size checks and the fetched rows on the same snapshot
+        // while Codex keeps writing.
+        try {
+          database.exec("BEGIN");
+        } catch (cause) {
+          return { _tag: "Failed" as const, cause };
+        }
         try {
           const total = Number(
             (count.get(threadId) as { readonly count?: unknown } | undefined)?.count ?? 0,
@@ -209,10 +218,14 @@ export function openCodexThreadHistory(
             MAX_CODEX_HISTORY_MESSAGES,
           ) as unknown as ReadonlyArray<HistoryRow>;
           let bytes = bytesBeforeRows;
+          const texts = rows.toReversed().map((row) => messageText(row.item_type, row.item_json));
+          if (texts.includes(undefined)) {
+            return { _tag: "Failed" as const, cause: UNSUPPORTED_MESSAGE };
+          }
           const parsed = rows
             .toReversed()
             .flatMap((row, index): Array<CodexHistoryMessage & { readonly ordinal: number }> => {
-              const text = messageText(row.item_type, row.item_json);
+              const text = texts[index] ?? "";
               if (text.length === 0) return [];
               const ordinal = Number(row.rollout_ordinal);
               return [
@@ -241,6 +254,9 @@ export function openCodexThreadHistory(
             const first = firstUser.get(threadId) as HistoryRow | undefined;
             if (first === undefined) return { _tag: "Empty" as const };
             const firstText = messageText(first.item_type, first.item_json);
+            if (firstText === undefined) {
+              return { _tag: "Failed" as const, cause: UNSUPPORTED_MESSAGE };
+            }
             if (firstText.length > 0) {
               bytes += Number(first.bytes ?? 0);
               retained = [
@@ -269,6 +285,12 @@ export function openCodexThreadHistory(
           };
         } catch (cause) {
           return { _tag: "Failed" as const, cause };
+        } finally {
+          try {
+            database.exec("COMMIT");
+          } catch {
+            // A failed COMMIT of a read-only transaction leaves nothing to undo.
+          }
         }
       },
       close: () => database.close(),

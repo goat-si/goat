@@ -711,6 +711,40 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex thread history", (it) =>
     }),
   );
 
+  it.effect("refuses a thread whose history holds a message shape it cannot read", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+      const home = yield* makeTempDir("goat-codex-history-shape-");
+      const threadId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      yield* writeCodexHistory({
+        homePath: home,
+        threads: [
+          { id: threadId, messages: [{ role: "user", text: "Hello", createdAtMs: nowMs }] },
+        ],
+      });
+      const database = new NodeSqlite.DatabaseSync(path.join(home, "thread_history_1.sqlite"));
+      database
+        .prepare(
+          "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          threadId,
+          "turn-1",
+          "item-1",
+          1,
+          nowMs,
+          JSON.stringify({ type: "agentMessage", id: "item-1", content: [{ text: "Hi" }] }),
+          "agentMessage",
+        );
+      database.close();
+
+      const reader = openCodexThreadHistory(home);
+      expect(reader?.read(threadId)._tag).toBe("Failed");
+      reader?.close();
+    }),
+  );
+
   it.effect("keeps the first user message and drops older messages", () =>
     Effect.gen(function* () {
       const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
