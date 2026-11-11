@@ -9,6 +9,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
@@ -130,6 +131,28 @@ describe("absolute receipt delivery deadlines", () => {
       );
       yield* ledger.expireReceipts({ owner, now: yield* nowIso });
       assert.strictEqual(yield* ledger.getDeliveryState(id), "failed");
+    }).pipe(Effect.provide(layer(() => Effect.die("must not send")))),
+  );
+
+  it.effect("the hand-over refuses an expired receipt whose row lost or changed its input id", () =>
+    Effect.gen(function* () {
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const sql = yield* SqlClient.SqlClient;
+      // No writer makes these shapes; the deadline follows the cause key regardless.
+      for (const [key, inputId] of [
+        ["expired-null-input", null],
+        ["expired-other-input", "input:someone-else"],
+      ] as const) {
+        const id = yield* receipt(key);
+        yield* sql`UPDATE channel_outbox SET input_id = ${inputId}, state = 'delivering',
+          attempts = 1 WHERE delivery_id = ${id}`;
+      }
+      yield* TestClock.setTime(60_000);
+      const now = yield* nowIso;
+      for (const key of ["expired-null-input", "expired-other-input"]) {
+        const deliveryId = deliveryIdFor("reply:input:" + key);
+        assert.isFalse(yield* ledger.markSending({ owner, deliveryId, attempt: 1, now }));
+      }
     }).pipe(Effect.provide(layer(() => Effect.die("must not send")))),
   );
 
