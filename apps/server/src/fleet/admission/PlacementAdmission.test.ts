@@ -180,6 +180,34 @@ describe("placement admission on the target", () => {
       }).pipe(Effect.provide(admission(1))),
   );
 
+  it.effect.each([
+    ["the daily prune", Reservations.RETAIN_MS + 1],
+    ["a clock far ahead", 40 * 24 * 60 * 60 * 1000],
+  ] as const)(
+    "a counted row pruned by %s while its run is live: the run still counts, the key reads expired, a new key is full",
+    ([, after]) =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        const first = yield* makeLauncher();
+        const started = yield* place(key("a"), first);
+        assert.strictEqual(started._tag, "Started");
+        const store = yield* Reservations.PlacementReservations;
+        assert.strictEqual((yield* store.prune(T0 + after)).deleted, 1);
+        assert.isNull(yield* store.get(placementCommandId(key("a"))));
+        assert.strictEqual(yield* runningCount, 1);
+        const other = yield* makeLauncher();
+        assert.deepStrictEqual(yield* place(key("a"), other), {
+          _tag: "Refused",
+          refusal: "expired",
+        });
+        assert.deepStrictEqual(yield* place({ ...key("b"), issuedAt: T0 + 1 }, other), {
+          _tag: "Refused",
+          refusal: "full",
+        });
+        assert.strictEqual(yield* Ref.get(other.calls), 0);
+      }).pipe(Effect.provide(admission(1))),
+  );
+
   it.effect("simultaneous duplicates start exactly one launch", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(T0);

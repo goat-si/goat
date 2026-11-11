@@ -577,8 +577,18 @@ const cells: ReadonlyArray<Cell> = [
     cell(
       "clock far behind",
       state,
-      "nothing is pruned",
-      writes(pruneAt(T0 - DAY), 0, unchanged(state)),
+      "nothing is pruned, so retained rows reach the bound: a new key is refused, a known key answers",
+      Effect.gen(function* () {
+        yield* writes(pruneAt(T0 - DAY), 0, unchanged(state));
+        yield* fillPlacer;
+        const stale = { ...K, ownerKey: "goal:g:new", issuedAt: T0 - DAY };
+        yield* answers(
+          admit({ key: stale, commandId: "placement:new", now: T0 - DAY }),
+          "Refused:placer_bound",
+          unchanged(state),
+        );
+        yield* answers(admit({ now: T0 - DAY }), "Known", unchanged(state));
+      }),
     ),
   ),
   cell(

@@ -797,15 +797,20 @@ const make = Effect.gen(function* () {
                   " is not listed there; nothing else is launched for it.",
               );
             pinned = claim.targetHost;
-            // The pin outranks placement, so it must also pass the caller's allowlist.
-            if (request.allowedHosts !== undefined && !request.allowedHosts.includes(pinned))
-              return refused(
-                "not_allowed",
-                "An earlier attempt of this move was placed on " +
-                  pinned +
-                  ", which the caller's goatclaw profile does not allow; nothing is launched.",
-              );
           }
+          // The pin outranks placement, so it must also pass the caller's allowlist as it is now. A
+          // placed attempt keeps its claim, so its outcome stays unknown rather than read as free.
+          if (
+            pinned !== null &&
+            request.allowedHosts !== undefined &&
+            !request.allowedHosts.includes(pinned)
+          )
+            return refused(
+              "not_allowed",
+              "An earlier attempt of this move was placed on " +
+                pinned +
+                ", which the caller's goatclaw profile does not allow; nothing is launched.",
+            );
 
           const cap = request.maxAttempts ?? MAX_ATTEMPTS_PER_WORKER;
           if (request.attempt >= cap) {

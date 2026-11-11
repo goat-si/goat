@@ -214,3 +214,37 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "with placement, a pinned retry obeys the current allowlist: a removed target receives nothing and the attempt stays unknown",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = newWorld();
+        world.reachable.B = true;
+        world.reachable.C = true;
+        const filename = yield* databaseFile;
+        yield* placed(
+          world,
+          filename,
+          Effect.gen(function* () {
+            yield* loseA(world);
+            world.loseNextLaunchResponse = true;
+            expect((yield* reschedule({ targetHost: "B" }))._tag).toBe("Unconfirmed");
+            const sent = world.launches.length;
+            const calls = world.calls.length;
+            // The owner's profile no longer allows B.
+            const refused = yield* reschedule({ targetHost: null, allowedHosts: ["C"] });
+            expect(refused._tag).toBe("Refused");
+            expect(world.launches.length).toBe(sent);
+            expect(world.calls.length).toBe(calls);
+            // B allowed again: the same key goes back and its outcome is read, nothing new starts.
+            expect((yield* reschedule({ targetHost: null, allowedHosts: ["B"] }))._tag).toBe(
+              "Rescheduled",
+            );
+            expect(world.launches.length).toBe(sent);
+          }),
+        );
+      }),
+    ),
+);
