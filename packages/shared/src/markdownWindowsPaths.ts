@@ -34,7 +34,10 @@ function keepWindowsPathEscape(this: EscapeCompileContext) {
   const text = this.stack.at(-1)?.children?.at(-1);
   if (text?.type !== "text" || text.value === undefined) return;
   let scan = wordScans.get(text);
-  if (!scan) wordScans.set(text, (scan = { scannedTo: 0, wordStart: 0 }));
+  // A node another extension shortened since the last escape is rescanned from its start.
+  if (!scan || scan.scannedTo > text.value.length) {
+    wordScans.set(text, (scan = { scannedTo: 0, wordStart: 0 }));
+  }
   WHITESPACE.lastIndex = scan.scannedTo;
   while (WHITESPACE.exec(text.value)) scan.wordStart = WHITESPACE.lastIndex;
   // A prose path cannot cross whitespace, so preceding words cannot affect this escape.
