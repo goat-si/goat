@@ -1152,6 +1152,14 @@ export function extractMcpToolCallIdentity(
   for (const candidate of candidates) {
     const trimmed = candidate.trim();
     const qualified = /^mcp__(.+?)__(.+)$/i.exec(trimmed);
+    if (
+      qualified?.[1] &&
+      qualified[2] &&
+      /^editor_goat_[0-9a-f]{8}$/.test(qualified[1]) &&
+      GOAT_MCP_TOOL_NAMES.has(qualified[2])
+    ) {
+      return { server: "goat", tool: qualified[2] };
+    }
     if (qualified?.[1] && qualified[2] && !/^goat$/i.test(qualified[1]))
       return { server: qualified[1], tool: qualified[2] };
     // The server key and the tool prefix are both "goat", so "goat_thread_send"
