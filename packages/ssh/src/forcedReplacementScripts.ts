@@ -40,26 +40,24 @@ export const REMOTE_FORCED_STOP_SCRIPT = `if [ "$FORCE_STOP" = 1 ]; then
   forced_start="$(forced_start_of "$FORCE_PID")"
   [ -n "$forced_start" ] && [ "$forced_start" = "$FORCE_START" ] || forced_refused "its start time differs from the approved one"
   server_owns_listener "$FORCE_PID" "$FORCE_PORT" || forced_refused "it does not listen on port $FORCE_PORT"
-  # Descendants are recorded with their start times now; afterwards only those still matching
-  # are signalled, so a reused PID never is.
-  forced_children="$(ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$FORCE_PID" '
-    { parent[$1] = $2 }
-    END { for (pid in parent) { up = parent[pid]; for (depth = 0; depth < 32 && up != ""; depth++) { if (up == root) { print pid; break } up = parent[up] } } }')" || forced_children=
-  forced_records=
-  for forced_child in $forced_children; do
-    valid_positive "$forced_child" || continue
-    forced_child_start="$(forced_start_of "$forced_child")"
-    if [ -n "$forced_child_start" ]; then forced_records="$forced_records$forced_child $forced_child_start
-"; fi
-  done
+  # Signals $2 only while it is alive, this user's and started at $3, as read just before the signal.
+  forced_signal_same() {
+    server_alive "$2" && [ "$(server_uid "$2" | tr -d ' ')" = "$(id -u)" ] &&
+      [ "$(forced_start_of "$2")" = "$3" ] && kill "-$1" "$2" 2>/dev/null
+  }
+  # One process table read binds each descendant to its owner and start time, so a PID that is
+  # reused afterwards never matches its record.
+  forced_records="$(LC_ALL=C TZ=UTC ps -A -o pid= -o ppid= -o uid= -o lstart= 2>/dev/null | awk -v root="$FORCE_PID" -v me="$(id -u)" '
+    { parent[$1] = $2; owner[$1] = $3; start = $4; for (i = 5; i <= NF; i++) start = start " " $i; started[$1] = start }
+    END { for (pid in parent) { if (owner[pid] != me) continue; up = parent[pid]; for (depth = 0; depth < 32 && up != ""; depth++) { if (up == root) { print pid " " started[pid]; break } up = parent[up] } } }')" || forced_records=
   printf 'Stopping GOAT PID %s (started %s, port %s) for an approved forced update.\\n' "$FORCE_PID" "$FORCE_START" "$FORCE_PORT" >>"$LOG_FILE" 2>/dev/null || :
-  kill -TERM "$FORCE_PID" 2>/dev/null || :
+  forced_signal_same TERM "$FORCE_PID" "$FORCE_START" || :
   forced_waited=0
   while server_alive "$FORCE_PID" && [ "$forced_waited" -lt "$DRAIN_GRACE_SECONDS" ]; do
     sleep 1; forced_waited=$((forced_waited + 1))
   done
   if server_alive "$FORCE_PID"; then
-    if [ "$(forced_start_of "$FORCE_PID")" = "$FORCE_START" ]; then kill -KILL "$FORCE_PID" 2>/dev/null || :; fi
+    forced_signal_same KILL "$FORCE_PID" "$FORCE_START" || :
     forced_waited=0
     while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1; forced_waited=$((forced_waited + 1)); done
     if server_alive "$FORCE_PID" && [ "$(forced_start_of "$FORCE_PID")" = "$FORCE_START" ]; then
@@ -67,12 +65,9 @@ export const REMOTE_FORCED_STOP_SCRIPT = `if [ "$FORCE_STOP" = 1 ]; then
     fi
   fi
   forced_signal_children() {
-    printf '%s' "$forced_records" | while read -r forced_child forced_child_start; do
-      [ -n "$forced_child" ] && server_alive "$forced_child" || continue
-      [ "$(forced_start_of "$forced_child")" = "$forced_child_start" ] || continue
-      [ "$(server_uid "$forced_child" | tr -d ' ')" = "$(id -u)" ] || continue
-      kill "-$1" "$forced_child" 2>/dev/null || :
-      printf '%s\\n' "$forced_child"
+    printf '%s\\n' "$forced_records" | while read -r forced_child forced_child_start; do
+      valid_positive "$forced_child" || continue
+      if forced_signal_same "$1" "$forced_child" "$forced_child_start"; then printf '%s\\n' "$forced_child"; fi
     done || :
   }
   forced_signalled="$(forced_signal_children TERM)" || forced_signalled=

@@ -226,3 +226,39 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement descendants",
+  () => {
+    it.live("a process listed as a child before its start time was read is never signalled", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        const bystander = yield* f.realSpawner.spawn(
+          ChildProcess.make(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"]),
+        );
+        const bystanderPid = Number(bystander.pid);
+        // A tree read alone names the bystander as the runtime's child, as when that child exits
+        // and its PID is reused before a separate start-time read.
+        const bin = `${f.test}/reused-bin`;
+        yield* f.fs.makeDirectory(bin);
+        yield* f.fs.writeFileString(
+          `${bin}/ps`,
+          `#!/bin/sh
+if [ "$*" = "-A -o pid= -o ppid=" ]; then /bin/ps "$@"; echo "${bystanderPid} ${f.pid}"; exit 0; fi
+exec "$HOME/.test/identity-bin/ps" "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/ps`, 0o700);
+        f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+        });
+        assert.isTrue(Result.isSuccess(result));
+        assert.isFalse(isAlive(f.pid));
+        assert.isTrue(isAlive(bystanderPid));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
