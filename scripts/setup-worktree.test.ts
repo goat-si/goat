@@ -67,6 +67,11 @@ it("reads the vite-plus release the workspace catalog pins, and nothing else", (
     pinnedVitePlusVersion("catalog:\n  vite-plus: ^1.4.0\noverrides:\n  vite-plus: 2.0.0\n"),
   );
   assert.isUndefined(pinnedVitePlusVersion("overrides:\n  vite-plus: 2.0.0\n"));
+  // Comments on the heading and between entries are ordinary YAML.
+  assert.equal(
+    pinnedVitePlusVersion("catalog: # shared pins\n  vite: 1.0.0\n# tooling\n  vite-plus: 1.4.0\n"),
+    "1.4.0",
+  );
 });
 
 it("recognizes only missing corepack pnpm launchers", () => {
@@ -85,7 +90,7 @@ function setupFixture(
   pnpmOutput: string,
   trailingLines = 0,
   npx: "installer" | "runs-node" | "hangs" = "installer",
-  vpRunsWrongNode = false,
+  vp: "absent" | "wrong-node" | "partial-result" = "absent",
 ) {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-setup-contract-"));
   const scripts = NodePath.join(root, "scripts");
@@ -123,11 +128,11 @@ function setupFixture(
     );
   }
   const npxBody = npx === "runs-node" ? nodeRunner : npx === "hangs" ? hangingRunner : "";
-  if (vpRunsWrongNode) {
+  if (vp !== "absent") {
     // Stands in for a global vp whose env exec starts setup under a Node that is still not the pin.
     NodeFS.writeFileSync(
       NodePath.join(bin, "vp"),
-      `#!/bin/sh\nprintf '%s\\n' 'vp' >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then "$SETUP_TEST_NODE" "$7"; code=$?; ls .goat | tr '\\n' ' ' >> "$SETUP_TEST_LOG.markers"; exit $code; fi\nexit 0\n`,
+      `#!/bin/sh\nprintf '%s\\n' 'vp' >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${vp === "wrong-node" ? `"$SETUP_TEST_NODE" "$7"; code=$?; ls .goat | tr '\\n' ' ' >> "$SETUP_TEST_LOG.markers"; exit $code` : `printf 'fai' > ".goat/setup-rerun-$GOAT_SETUP_PINNED_NODE"; exit 1`}; fi\nexit 0\n`,
       { mode: 0o755 },
     );
   }
@@ -236,7 +241,13 @@ describe("worktree setup contract", () => {
     "tries npx for the pinned Node when vp ran setup under a Node that is still not the pin",
     () => {
       const [major = 0] = process.versions.node.split(".").map(Number);
-      const fixture = setupFixture(`${major + 1}.0.0`, "unexpected install", 0, "runs-node", true);
+      const fixture = setupFixture(
+        `${major + 1}.0.0`,
+        "unexpected install",
+        0,
+        "runs-node",
+        "wrong-node",
+      );
       try {
         const result = fixture.run();
         assert.equal(result.status, 0, result.stderr);
@@ -317,6 +328,38 @@ describe("worktree setup contract", () => {
           "npx",
           "pnpm",
         ]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a rerun whose outcome is unreadable ends setup as failed and no other runner is tried",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(
+        `${major + 1}.0.0`,
+        "unexpected install",
+        0,
+        "runs-node",
+        "partial-result",
+      );
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 1, result.stderr);
+        const state = NodePath.join(fixture.root, ".goat");
+        assert.include(
+          NodeFS.readFileSync(NodePath.join(state, "setup-failed"), "utf8"),
+          "Setup under vp ended without finishing.",
+        );
+        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
+        assert.deepEqual(
+          NodeFS.readdirSync(state).filter((name) => name.startsWith("setup-rerun-")),
+          [],
+        );
+        // npx could have supplied Node, but a rerun that may have installed is never retried.
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["vp"]);
       } finally {
         fixture.cleanup();
       }

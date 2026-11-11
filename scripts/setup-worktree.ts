@@ -51,10 +51,10 @@ export function pinnedNodeRunners(input: {
 export function pinnedVitePlusVersion(workspaceYaml: string): string | undefined {
   // Only the catalog pins a release; an override of the same name must not stand in for it.
   const lines = workspaceYaml.split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trimEnd() === "catalog:");
+  const start = lines.findIndex((line) => /^catalog:\s*(#.*)?$/.test(line));
   if (start === -1) return undefined;
   for (const line of lines.slice(start + 1)) {
-    if (line.trim() !== "" && !/^\s/.test(line)) break;
+    if (line.trim() !== "" && !/^\s/.test(line) && !line.startsWith("#")) break;
     const pin = /^ {2}vite-plus: ["']?(\d+\.\d+\.\d+)["']?\s*(?:#.*)?$/.exec(line)?.[1];
     if (pin !== undefined) return pin;
   }
@@ -177,7 +177,9 @@ async function main(): Promise<void> {
           : rerunFoundUnsupportedNode
             ? "unsupported-node\n"
             : `failed\n${failureDetail}\n`;
-      NodeFS.writeFileSync(rerunFile, outcome);
+      // Renamed into place, so the starter never reads a half-written outcome.
+      NodeFS.writeFileSync(`${rerunFile}.tmp`, outcome);
+      NodeFS.renameSync(`${rerunFile}.tmp`, rerunFile);
       return;
     }
     if (code === 0) NodeFS.writeFileSync(doneMarker, "");
@@ -250,6 +252,7 @@ async function main(): Promise<void> {
         ? NodeFS.readFileSync(requestFile, "utf8")
         : "requested\n";
       NodeFS.rmSync(requestFile, { force: true });
+      NodeFS.rmSync(`${requestFile}.tmp`, { force: true });
       const tail = rerunOutput.trimEnd().split("\n").slice(-10).join("\n") || "no output";
       if (cancelSignal) {
         failureDetail = `Cancelled by ${cancelSignal}.`;
@@ -264,8 +267,10 @@ async function main(): Promise<void> {
         failureDetail = outcome.slice("failed\n".length).trimEnd();
         process.exit(status || 1);
       }
-      if (outcome === "started\n") {
-        // Killed or crashed mid-setup. Its output has closed, so nothing it started still writes.
+      if (outcome !== "requested\n" && outcome !== "unsupported-node\n") {
+        // It started and never said how it ended: killed, crashed, or its outcome was not
+        // written. Whatever it left running is stopped before the end marker is published.
+        signalProcessGroup(rerun, "SIGKILL");
         failureDetail = `Setup under ${runner.tool} ended without finishing.\n${tail}`;
         process.exit(status || 1);
       }
