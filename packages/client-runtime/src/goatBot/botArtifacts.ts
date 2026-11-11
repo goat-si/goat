@@ -124,12 +124,12 @@ function normalizedAbsolute(path: string, windows: boolean): string | null {
  * Library files a reply names in inline code, in order, each once.
  * Rule: a relative path names a file only when it is exactly the listed path; an absolute path
  * only when, normalized, it is `root` + "/" + the listed path; without `root` (an older server),
- * absolute paths name nothing.
+ * absolute paths name nothing, and a caller that passes none gets that rule too.
  */
 export function goatBotReplyFiles<File extends { readonly relativePath: string }>(
   text: string,
   files: ReadonlyArray<File>,
-  root: string | undefined,
+  root?: string,
 ): ReadonlyArray<File> {
   const windows = root !== undefined && (root.includes("\\") || /^[A-Za-z]:/.test(root));
   const folder = root === undefined ? null : normalizedAbsolute(root, windows);
