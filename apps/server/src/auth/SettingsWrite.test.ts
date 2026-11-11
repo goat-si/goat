@@ -225,3 +225,45 @@ it.effect(
       );
     }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
 );
+
+it.effect.each([false, true])(
+  "a person's settings write cannot set the Pen trust root, which only its confirmation writes (provider mutation=%s)",
+  (mixed) =>
+    Effect.gen(function* () {
+      const watch = yield* Runtime.watcher;
+      const runtime = yield* Runtime.open({ fs: watch.fs });
+      yield* runtime.settings.start;
+      yield* runtime.settings.updateSettings({
+        hub: { enabled: true, connectDevicesHubProxy: true },
+      });
+      const session = yield* runtime.sessions
+        .issue({ scopes: ["settings:write", "providers:manage"] })
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
+      yield* Effect.gen(function* () {
+        const write = yield* Write.make(session);
+        const result = yield* write({
+          patch: {
+            pen: {
+              executablePath: "/usr/local/bin/pen",
+              stateDir: "/Users/someone/.pen",
+              meshId: "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+              nodeId: "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+            },
+          },
+          ...(mixed ? { providerInstanceMutation: mutation } : {}),
+        }).pipe(Effect.result);
+        expect(result).toMatchObject({ _tag: "Failure" });
+        const settings = yield* runtime.settings.getSettings;
+        expect(settings.pen).toBeNull();
+        expect(settings.providerInstances[mutation.instanceId]).toBeUndefined();
+      }).pipe(
+        Effect.provide(
+          Routes.layer.pipe(
+            Layer.provide(Routes.layerState),
+            Layer.provide(Environment.layerIdentity),
+          ),
+        ),
+        Effect.provideContext(runtime.context),
+      );
+    }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
+);

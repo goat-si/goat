@@ -7,7 +7,8 @@
     "./identity": "./src/identity.ts",
     "./login": "./src/login.ts",
     "./service": "./src/service.ts",
-    "./ready": "./src/ready.ts"
+    "./ready": "./src/ready.ts",
+    "./vectors/service.json": "./vectors/service.json"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",

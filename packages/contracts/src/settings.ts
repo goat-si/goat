@@ -2,6 +2,7 @@ import { GoatSettingsFields, GoatSettingsPatchFields } from "./goatSettingsField
 import { StandingInstructions } from "./standingInstructions.ts";
 import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
 import { SpeechSettingsFields, SpeechSettingsPatchFields } from "./speech.ts";
+import { PenTrustRoot } from "./penSettings.ts";
 import {
   SidebarProjectSortOrder,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
@@ -1382,6 +1383,8 @@ export const ServerSettings = Schema.Struct({
   goatclaw: GoatclawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   hub: HubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   fleet: FleetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /** The pinned Pen trust root; null until a person confirms Pen on this machine. */
+  pen: Schema.NullOr(PenTrustRoot).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
   guestSharingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
@@ -1830,6 +1833,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   fleet: Schema.optionalKey(FleetSettings),
   goatclaw: Schema.optionalKey(GoatclawSettingsPatch),
   hub: Schema.optionalKey(HubSettingsPatch),
+  pen: Schema.optionalKey(Schema.NullOr(PenTrustRoot)),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({

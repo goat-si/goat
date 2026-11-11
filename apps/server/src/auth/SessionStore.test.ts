@@ -36,7 +36,7 @@ const layerFailingSessionLookupRepository = Layer.succeed(AuthSessions.AuthSessi
   revokeAllExcept: () => Effect.fail(repositoryFailure),
   setLastConnectedAt: () => Effect.void,
   setClientConnection: () => Effect.void,
-  listPenBoundIds: () => Effect.succeed([]),
+  listPenBound: () => Effect.succeed([]),
   countActivePenBound: () => Effect.succeed({ member: 0, total: 0 }),
   deleteInactivePenBound: () => Effect.succeed(0),
 });

@@ -123,6 +123,14 @@ export const PenBoundSessionsInput = Schema.Struct({
 });
 export type PenBoundSessionsInput = typeof PenBoundSessionsInput.Type;
 
+export const PenBoundSession = Schema.Struct({
+  sessionId: AuthSessionId,
+  nodeId: Schema.String,
+  signPub: Schema.String,
+  noisePub: Schema.String,
+});
+export type PenBoundSession = typeof PenBoundSession.Type;
+
 export class AuthSessionRepository extends Context.Service<
   AuthSessionRepository,
   {
@@ -153,10 +161,10 @@ export class AuthSessionRepository extends Context.Service<
     readonly setClientConnection: (
       input: SetAuthSessionClientConnectionInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
-    /** Unrevoked Pen-bound sessions, of one member when nodeId is set, expired ones included. */
-    readonly listPenBoundIds: (
+    /** Unrevoked Pen-bound sessions with their member, of one member when nodeId is set. */
+    readonly listPenBound: (
       input: PenBoundSessionsInput,
-    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    ) => Effect.Effect<ReadonlyArray<PenBoundSession>, AuthSessionRepositoryError>;
     /** Active (unrevoked, unexpired) Pen-bound sessions: of nodeId and in total. */
     readonly countActivePenBound: (input: {
       readonly now: DateTime.Utc;
@@ -459,12 +467,16 @@ export const make = Effect.gen(function* () {
       `,
   });
 
-  const penBoundIdRows = SqlSchema.findAll({
+  const penBoundRows = SqlSchema.findAll({
     Request: PenBoundSessionsInput,
-    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    Result: PenBoundSession,
     execute: ({ nodeId }) =>
       sql`
-        SELECT session_id AS "sessionId"
+        SELECT
+          session_id AS "sessionId",
+          pen_node_id AS "nodeId",
+          pen_sign_pub AS "signPub",
+          pen_noise_pub AS "noisePub"
         FROM auth_sessions
         WHERE pen_node_id IS NOT NULL
           AND revoked_at IS NULL
@@ -504,11 +516,8 @@ export const make = Effect.gen(function* () {
       `AuthSessionRepository.${operation}:query`,
       `AuthSessionRepository.${operation}:decodeRows`,
     );
-  const listPenBoundIds: AuthSessionRepository["Service"]["listPenBoundIds"] = (input) =>
-    penBoundIdRows(input).pipe(
-      Effect.mapError(penError("listPenBoundIds")),
-      Effect.map((rows) => rows.map((row) => row.sessionId)),
-    );
+  const listPenBound: AuthSessionRepository["Service"]["listPenBound"] = (input) =>
+    penBoundRows(input).pipe(Effect.mapError(penError("listPenBound")));
   const countActivePenBound: AuthSessionRepository["Service"]["countActivePenBound"] = (input) =>
     penBoundCountRows(input).pipe(
       Effect.mapError(penError("countActivePenBound")),
@@ -667,7 +676,7 @@ export const make = Effect.gen(function* () {
     );
 
   return {
-    listPenBoundIds,
+    listPenBound,
     countActivePenBound,
     deleteInactivePenBound,
     create,
