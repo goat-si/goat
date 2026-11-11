@@ -188,6 +188,8 @@ export interface ReadinessFacts {
   readonly capture: "uniform" | "varied" | "noWindow" | "failed" | "unproven";
   /** A real AT-SPI read of the captured window's app: windows found, none, or no answer. */
   readonly tree: "ready" | "empty" | "unavailable";
+  /** gdbus, which finds the accessibility bus, is not installed. */
+  readonly gdbusMissing?: boolean;
   readonly uinputWritable: boolean;
   /** Why a window capture here would not be the window's own pixels (#1328). */
   readonly captureRefused: string | undefined;
@@ -201,6 +203,9 @@ export interface ReadinessFacts {
 
 const LISTING_REFUSED =
   "Cua Driver cannot read this Wayland desktop's screen layout, so it does not list windows for agents here. Use an X11 or XWayland session.";
+
+const GDBUS_MISSING =
+  "gdbus is not installed, so GOAT cannot find the accessibility bus and app controls cannot be read. Install it: libglib2.0-bin on Debian and Ubuntu, glib2 on Fedora and Arch.";
 
 // GOAT's driver turns AT-SPI on (org.a11y.Status IsEnabled), but Chromium, Electron and other
 // apps read that switch only when they start.
@@ -233,9 +238,11 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   if (facts.listingRefused) reasons.push(LISTING_REFUSED);
   else if (tree === "unavailable")
     reasons.push(
-      facts.driver.atspi && facts.capture === "noWindow"
-        ? "No window is open to read app controls from, so AT-SPI is not proven yet. Open any app window."
-        : "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
+      facts.gdbusMissing === true
+        ? GDBUS_MISSING
+        : facts.driver.atspi && facts.capture === "noWindow"
+          ? "No window is open to read app controls from, so AT-SPI is not proven yet. Open any app window."
+          : "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
     );
   if (tree === "empty") reasons.push(EMPTY_TREE);
   const capture =

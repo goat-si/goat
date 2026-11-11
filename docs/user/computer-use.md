@@ -377,8 +377,9 @@ On Linux, what agents can do depends on the session:
   command. The command does nothing while display 99 is running; if another
   program holds that number, use another number in all three places.
 
-App controls need AT-SPI (the `at-spi2-core` package) and one D-Bus session
-bus that GOAT and the apps share; without them agents can still take
+App controls need AT-SPI (the `at-spi2-core` package), the `gdbus` command
+(`libglib2.0-bin` on Debian and Ubuntu), and one D-Bus session bus that GOAT
+and the apps share; without them agents can still take
 screenshots and use the mouse and keyboard. GOAT turns accessibility on when
 computer use starts, but Chrome and Electron apps such as VS Code read that
 setting only when they open, so quit and reopen apps that were already open.

@@ -432,13 +432,33 @@ node scripts/computer-use-linux-smoke.ts --helper apps/server/.computer-use-help
 ```
 
 The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), the `xcompmgr` compositing
-manager (`--compositor <path>`), `dbus-daemon`, at-spi2-core, python3 with GTK 3 introspection
-and `xdotool`. On Ubuntu: `sudo apt-get install -y xvfb xcompmgr xdotool at-spi2-core gir1.2-gtk-3.0`.
+manager (`--compositor <path>`), `dbus-daemon`, at-spi2-core, `gdbus` (GLib's tools), python3 with
+GTK 3 introspection and `xdotool`. On Debian and Ubuntu: `sudo apt-get install -y xvfb xcompmgr
+xdotool at-spi2-core libglib2.0-bin python3-gi gir1.2-gtk-3.0`. Hosted Ubuntu runners ship
+`gdbus`, so the CI check cannot catch a missing one.
 Without a writable `/dev/uinput` and an X server that accepts new input devices, which Xvfb is
 not, background keys and pixel clicks are refused with `backgroundUnavailable`; AT-SPI clicks and
 value writes still run in the background.
 goat-ci runs this check as `smoke-linux-computer-use` on a hosted Ubuntu runner, in full runs and
 on pull requests that change the Linux helper or its build and smoke scripts.
+
+#### On a standalone Linux server
+
+A server that is not the desktop app runs the helper bundle itself. Point
+`GOAT_COMPUTER_USE_HELPER` at the built `goat-computer-use.mjs`; the server runs that file with
+its own Node, so the `goat-computer-use` launcher is only for the check above. Install the bundle
+in a folder only the server's user or root can write, as
+[Linux computer use helper signing](./release.md#linux-computer-use-helper-signing) explains.
+
+The desktop comes from the server's environment: `DISPLAY`, whose cookie GOAT reads from
+`XAUTHORITY`, the X server's own auth file or `~/.Xauthority`, and `DBUS_SESSION_BUS_ADDRESS`,
+falling back to `$XDG_RUNTIME_DIR/bus`. A session started over SSH usually names neither, so start
+the server where the desktop runs, or give it a virtual one. Screenshots need a compositor on that
+display, and app controls need the packages above.
+
+Turn it on from a connected client in Settings, or with
+`goat_computer_use_update {enabled:true}` from an outside MCP client whose token carries
+`settings:write`.
 
 ### Windows installer prerequisites
 
