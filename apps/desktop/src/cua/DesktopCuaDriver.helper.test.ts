@@ -354,9 +354,8 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           assert.equal(after?.helper, "unauthenticated");
           assert.isTrue(
             (after?.reasons ?? []).some((reason) =>
-              how === "absent"
-                ? (platform === "darwin" ? /does not include/ : /could not be found/).test(reason)
-                : /cannot be used/.test(reason),
+              // A packaged build of either platform reports a missing helper as not included.
+              how === "absent" ? /does not include/.test(reason) : /cannot be used/.test(reason),
             ),
           );
         }),

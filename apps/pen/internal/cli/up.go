@@ -28,9 +28,10 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&relayURLs, "relay", "relay URL (https://...); repeat for several relays")
 	name := fs.String("name", "", "this node's name")
 	foreground := fs.Bool("foreground", false, "run the daemon in this process")
-	service := fs.Bool("service", false, "internal: for the systemd and launchd service; a start it refuses exits 0, so the caller cannot tell it failed")
-	noService := fs.Bool("no-service", false, "never install a systemd or launchd service")
+	service := fs.Bool("service", false, "internal: for the systemd and launchd service and the Windows task's daemon; a start it refuses exits 0, so the caller cannot tell it failed")
+	noService := fs.Bool("no-service", false, "never install a service (systemd, launchd or a Windows logon task)")
 	spawnDaemon := fs.Bool("spawn-daemon", false, "internal: start the daemon detached, print its pid and exit")
+	supervise := fs.Bool("supervise", false, "internal: the Windows logon task's action; runs the daemon and restarts it after a crash")
 	if _, err := parse(fs, args); err != nil {
 		return 2
 	}
@@ -41,25 +42,48 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if *spawnDaemon {
 		return spawnDetached(st, stdout, stderr)
 	}
+	if !*foreground && !*supervise && taskTurnApplies() {
+		// Before ending a pen down or answering from a running daemon: a pen down holding the turn
+		// finishes first, and the service start below runs in this turn.
+		release, err := taskTurn(st, "pen up", stderr)
+		if err != nil {
+			return fail(stderr, err)
+		}
+		defer release()
+	}
 	// refused ends a start pen up cannot make: the service exits 0, since its manager restarts
-	// only a failure and nothing changes between restarts; everyone else sees the failure.
-	asService := *service || startedByService()
+	// only a failure and nothing changes between restarts; everyone else sees the failure. The
+	// Windows task's supervisor is a service start too.
+	asService := *service || *supervise || startedByService()
+	// The start this service start serves: the supervisor reads the id pen up wrote before it checks
+	// anything, and hands it to the daemon it runs.
+	req := os.Getenv("PEN_START_REQUEST")
+	if *supervise {
+		req = startRequestOf(st)
+	}
 	refused := func(err error) int {
-		if *foreground && asService {
-			fmt.Fprintln(stderr, "pen:", err)
+		if (*foreground || *supervise) && asService {
+			noteRefused(st, req, *supervise, err, stderr)
 			return 0
 		}
 		return fail(stderr, err)
 	}
-	if *foreground {
+	if *foreground || *supervise {
 		// A service manager restarting the daemon after pen leave must not mint a new node.
 		if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
 			return refused(errors.New("this node left its mesh; run pen up or pen join to start again"))
 		}
-	} else if err := clearLeft(st); err != nil {
+	} else if err := os.Remove(st.Path(downMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// A person starting Pen ends a pen down, also when Pen then runs without the service.
 		return fail(stderr, err)
 	}
-	id, _, err := st.EnsureIdentity()
+	// A person's pen up starts the node again: the left marker goes in the same state-lock hold that
+	// makes the identity, so a resumed pen leave (FinishLeave) cannot delete the new node's files.
+	leftMarker := daemon.LeftMarker
+	if *foreground || *supervise {
+		leftMarker = "" // a service start refuses on the marker above and never clears it
+	}
+	id, _, err := st.EnsureIdentityClearing(leftMarker)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -81,16 +105,19 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 
+	if *supervise {
+		return runSupervised(st, stderr, req)
+	}
 	if *foreground {
 		return runForeground(st, stderr)
 	}
 	var s daemon.Status
-	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err == nil {
+	if err := daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout); err == nil {
 		if s.Name != cfg.Name {
-			daemon.Call(st, daemon.Request{Op: "name", Name: cfg.Name}, &s)
+			daemon.CallWithin(st, daemon.Request{Op: "name", Name: cfg.Name}, &s, opTimeout)
 		}
 		if s.Uplink == "replaced" || !sameRelays(s.Relays, cfg.RelayList()) {
-			daemon.Call(st, daemon.Request{Op: "reconnect"}, &s)
+			daemon.CallWithin(st, daemon.Request{Op: "reconnect"}, &s, opTimeout)
 		}
 		printStatus(stdout, s)
 		return 0
@@ -104,7 +131,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+	if err := daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout); err != nil {
 		return fail(stderr, err)
 	}
 	printStatus(stdout, s)
@@ -116,14 +143,6 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 // before --service run plain --foreground and must not restart a refused start either.
 func startedByService() bool {
 	return os.Getenv("SYSTEMD_EXEC_PID") == strconv.Itoa(os.Getpid()) || os.Getenv("XPC_SERVICE_NAME") == launchdLabel
-}
-
-// clearLeft removes the leave marker: pen up and pen join, run by a person, start the node again.
-func clearLeft(st *state.Store) error {
-	if err := os.Remove(st.Path(daemon.LeftMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
 }
 
 func printStatus(w io.Writer, s daemon.Status) {
@@ -139,14 +158,10 @@ func runForeground(st *state.Store, stderr io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	opt := daemonOptions(st)
-	if fd := os.Getenv("PEN_READY_FD"); fd != "" {
-		n, _ := strconv.Atoi(fd)
-		ready := os.NewFile(uintptr(n), "ready")
+	if ready := readyFile(); ready != nil {
 		opt.Ready = func() {
-			if ready != nil {
-				ready.WriteString("ready\n")
-				ready.Close()
-			}
+			ready.WriteString("ready\n")
+			ready.Close()
 		}
 	}
 	d, err := daemon.New(opt)
@@ -159,9 +174,18 @@ func runForeground(st *state.Store, stderr io.Writer) int {
 	return 0
 }
 
+// readyFile is the ready pipe the starting pen up handed down (fd 3, or a handle on Windows).
+func readyFile() *os.File {
+	n, err := strconv.ParseUint(os.Getenv("PEN_READY_FD"), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return os.NewFile(uintptr(n), "ready")
+}
+
 // startDetached starts the daemon through "pen up --spawn-daemon", which exits once the daemon runs, so the
 // daemon is owned by init from the start and a kill of this command's process tree does not reach it.
-// The ready pipe on fd 3 passes through to the daemon.
+// The ready pipe passes through to the daemon.
 func startDetached(st *state.Store) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -177,12 +201,16 @@ func startDetached(st *state.Store) error {
 		return err
 	}
 	defer r.Close()
-	cmd := exec.Command(exe, "up", "--spawn-daemon")
-	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
-	cmd.ExtraFiles = []*os.File{w}
-	cmd.Stderr = logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	out, err := cmd.Output()
+	var out []byte
+	err = startDetachedCmd(func() *exec.Cmd {
+		cmd := exec.Command(exe, "up", "--spawn-daemon")
+		cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir)
+		cmd.Stderr = logf
+		return cmd
+	}, w, func(cmd *exec.Cmd) (err error) {
+		out, err = cmd.Output()
+		return err
+	})
 	w.Close()
 	if err != nil {
 		return fmt.Errorf("could not start the daemon (%v); see %s", err, st.Path("daemon.log"))
@@ -216,12 +244,18 @@ func spawnDetached(st *state.Store, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	defer logf.Close()
-	cmd := exec.Command(exe, "up", "--foreground")
-	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
-	cmd.ExtraFiles = []*os.File{os.NewFile(3, "ready")}
-	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
+	ready := readyFile()
+	if ready == nil {
+		return fail(stderr, errors.New("--spawn-daemon needs the ready pipe pen up passes"))
+	}
+	var cmd *exec.Cmd
+	err = startDetachedCmd(func() *exec.Cmd {
+		cmd = exec.Command(exe, "up", "--foreground")
+		cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir)
+		cmd.Stdout, cmd.Stderr = logf, logf
+		return cmd
+	}, ready, (*exec.Cmd).Start)
+	if err != nil {
 		return fail(stderr, err)
 	}
 	fmt.Fprintln(stdout, cmd.Process.Pid)
@@ -236,7 +270,7 @@ func waitControl(st *state.Store) error {
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		var s daemon.Status
-		if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err == nil {
+		if err := daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout); err == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {

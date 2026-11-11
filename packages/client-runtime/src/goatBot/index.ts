@@ -20,3 +20,7 @@ export * from "./botNotes.ts";
 export * from "./diagnostics.ts";
 export * from "./botArtifacts.ts";
 export * from "./retry.ts";
+export * from "./botColor.ts";
+export * from "./unread.ts";
+export * from "./changeRequestLinks.ts";
+export * from "./quote.ts";

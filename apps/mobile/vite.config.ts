@@ -54,9 +54,14 @@ const reactTests = [
   "src/features/goat-bot/GoatBotShimmerText.test.tsx",
   "src/features/goat-bot/useMobileGoatBotFace.motion.test.tsx",
   "src/features/goat-bot/MobileBotWork.test.tsx",
+  "src/features/goat-bot/MobileBotTaskList.test.tsx",
+  "src/features/goat-bot/MobileBotWork.home.test.tsx",
   "src/features/goat-bot/MobileBotMemory.test.tsx",
   "src/features/goat-bot/MobileBotLibrary.test.tsx",
   "src/features/goat-bot/MobileBotComputer.test.tsx",
+  "src/features/goat-bot/useGoatBotVisitSnapshot.test.tsx",
+  "src/features/goat-bot/GoatBotRouteScreen.test.tsx",
+  "src/features/goat-bot/GoatBotModelPill.test.tsx",
   "src/features/goat-bot/GoatBotScreen.notes.test.tsx",
   "src/features/goat-bot/MobileBotCheckInForm.test.tsx",
   "src/features/goat-bot/MobileBotStatusCard.test.tsx",
@@ -124,6 +129,8 @@ const devCompiledSources = [
   "/features/files/FileSourceSurface.tsx",
   "/lib/useNotificationPermissionStatus.ts",
   "/features/connection/ConnectionsNewRouteScreen.tsx",
+  "/features/goat-bot/GoatBotModelPill.tsx",
+  "/features/goat-bot/MobileBotWork.tsx",
 ];
 const require = NodeModule.createRequire(import.meta.url);
 const babel: {

@@ -1,6 +1,8 @@
 import {
   GOAT_BOT_READING_LIMIT_MS,
   goatBotActivity,
+  goatBotFirstUnread,
+  goatBotPreviewText,
   goatBotStampParts,
   goatBotReceiptLabel,
   goatBotRejectionText,
@@ -8,11 +10,12 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { CircleAlertIcon } from "~/components/solar";
+import { ArrowUpLeftIcon, CopyIcon, CircleAlertIcon, XIcon } from "~/components/solar";
 import {
   createContext,
   type UIEvent,
   useContext,
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -20,6 +23,9 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { goatBotSearch, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -37,6 +43,7 @@ import {
   type GoatBotTimelineActivity,
 } from "./GoatBotMessageParts";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
+import { GoatBotEventText } from "./GoatBotEventText";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -46,18 +53,32 @@ const FOLLOW_THRESHOLD_PX = 48;
 /** What the acknowledged work is doing, from the bot conversation's session; null elsewhere. */
 export const GoatBotActivityContext = createContext<GoatBotTimelineActivity | null>(null);
 
+/** The "New" line above the first message the person has not read. */
+interface UnreadDivider {
+  readonly kind: "unread";
+  readonly id: "unread";
+  readonly firstInGroup: true;
+}
+const UNREAD_DIVIDER: UnreadDivider = { kind: "unread", id: "unread", firstInGroup: true };
+const UNREAD_JUMP_MARGIN_PX = 24;
+
 export function GoatBotTimeline({
   rows,
+  unreadSince,
   environmentId = null,
   replyingSince = null,
   onRetry,
   onDiscard,
   onPick,
+  onOpenHome,
+  onReply,
   taskDetails = false,
   taskThreads = false,
   retryEnvironmentId = null,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
+  /** When the person last read this chat, read once at open; newer rows get a "New" divider. */
+  readonly unreadSince?: string | null | undefined;
   readonly taskDetails?: boolean;
   /** Task chips become task-thread pills; the caller knows whether the server supports them. */
   readonly taskThreads?: boolean;
@@ -66,11 +87,16 @@ export function GoatBotTimeline({
   /** The environment whose history these rows show; links in bot text resolve there. */
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
+  readonly onReply?: ((text: string) => void) | undefined;
   readonly onRetry: (clientKey: string) => void;
+  /** Opens the bot's home, where a routine an event line names lives. */
+  readonly onOpenHome?: (() => void) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
 }) {
+  const { copyToClipboard } = useCopyToClipboard();
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const member = useGoatBotMember();
   const botName = useGoatBotName();
@@ -106,6 +132,8 @@ export function GoatBotTimeline({
   const listRef = useRef<HTMLOListElement>(null);
   const timePrefix = useId();
   const followingRef = useRef(true);
+  // Where the transcript was last scrolled, by the reader or by following.
+  const lastScrollTopRef = useRef(0);
   const [nowMs] = useState(() => Date.now());
   const replying = useReplying(replyingSince);
   const working = useContext(GoatBotActivityContext);
@@ -124,15 +152,25 @@ export function GoatBotTimeline({
   });
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
-    followingRef.current =
-      element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
+    const top = element.scrollTop;
+    // Only moving up stops following. A scroll event the timeline's own move left behind can
+    // arrive after a message grew, far from the new bottom, without the reader moving at all.
+    if (element.scrollHeight - top - element.clientHeight < FOLLOW_THRESHOLD_PX) {
+      followingRef.current = true;
+    } else if (top < lastScrollTopRef.current) {
+      followingRef.current = false;
+    }
+    lastScrollTopRef.current = top;
     updateEdges();
   };
   // Messages finish laying out after they render (Markdown, highlighting, images), and the
   // column can get its height after mounting; a reader following the newest message stays there.
   const followResize = useStableCallback(() => {
     const scroll = scrollRef.current;
-    if (scroll !== null && followingRef.current) scroll.scrollTop = scroll.scrollHeight;
+    if (scroll !== null && followingRef.current) {
+      scroll.scrollTop = scroll.scrollHeight;
+      lastScrollTopRef.current = scroll.scrollTop;
+    }
     updateEdges();
   });
   useLayoutEffect(() => {
@@ -148,9 +186,47 @@ export function GoatBotTimeline({
     const element = scrollRef.current;
     if (element !== null && (rows.length > 0 || activityText !== null) && followingRef.current) {
       element.scrollTop = element.scrollHeight;
+      lastScrollTopRef.current = element.scrollTop;
     }
     updateEdges();
   }, [rows, activityText, updateEdges]);
+
+  // The divider's place is decided once, from the first rows and the visit before this open.
+  const [unread, setUnread] = useState<ReturnType<typeof goatBotFirstUnread> | undefined>();
+  if (unread === undefined && unreadSince !== undefined && rows.length > 0) {
+    setUnread(goatBotFirstUnread(rows, unreadSince));
+  }
+  const dividerRef = useRef<HTMLLIElement>(null);
+  const [dividerAbove, setDividerAbove] = useState(false);
+  const [pillDismissed, setPillDismissed] = useState(false);
+  // oxlint-disable-next-line goat/react-effect-budget -- The pill shows while the divider is scrolled above the transcript's viewport.
+  useEffect(() => {
+    const divider = dividerRef.current;
+    const root = scrollRef.current;
+    if (!unread || divider === null || root === null) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry === undefined) return;
+        setDividerAbove(
+          !entry.isIntersecting && entry.boundingClientRect.bottom < (entry.rootBounds?.top ?? 0),
+        );
+      },
+      { root },
+    );
+    observer.observe(divider);
+    return () => observer.disconnect();
+  }, [unread]);
+  const unreadAt = unread ? rows.findIndex((row) => row.id === unread.rowId) : -1;
+  // Scrolls the transcript alone; scrollIntoView would also shift the page and hide the header.
+  const jumpToUnread = () => {
+    const divider = dividerRef.current;
+    const root = scrollRef.current;
+    if (divider === null || root === null) return;
+    const offset = divider.getBoundingClientRect().top - root.getBoundingClientRect().top;
+    root.scrollTo({ top: root.scrollTop + offset - UNREAD_JUMP_MARGIN_PX });
+  };
+  const shownRows: ReadonlyArray<GoatBotRow | UnreadDivider> =
+    unreadAt < 0 ? rows : [...rows.slice(0, unreadAt), UNREAD_DIVIDER, ...rows.slice(unreadAt)];
 
   const time = (iso: string) => formatShortTimestamp(iso, timestampFormat);
   return (
@@ -170,9 +246,21 @@ export function GoatBotTimeline({
           aria-label={`Conversation with ${botName}`}
           className="mx-auto flex w-full max-w-3xl flex-col px-4 py-4"
         >
-          {rows.map((row, index) => {
+          {shownRows.map((row, index) => {
             const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-4" : "mt-1.5");
             switch (row.kind) {
+              case "unread":
+                return (
+                  <li
+                    key={row.id}
+                    ref={dividerRef}
+                    role="separator"
+                    aria-label="New messages"
+                    className="mt-4 flex items-center gap-3 text-xs leading-4 text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border"
+                  >
+                    New
+                  </li>
+                );
               case "day": {
                 const stamp = goatBotStampParts(row.at, nowMs, time);
                 return (
@@ -192,7 +280,7 @@ export function GoatBotTimeline({
                     role="note"
                     className="my-3 text-center text-xs leading-4 text-muted-foreground"
                   >
-                    {row.text}
+                    <GoatBotEventText row={row} onOpenHome={onOpenHome} />
                   </li>
                 );
               case "user": {
@@ -220,13 +308,46 @@ export function GoatBotTimeline({
                     )}
                   >
                     <span className="sr-only">You</span>
+                    {row.quote
+                      ? (() => {
+                          const prefix = normalize(row.quote).slice(0, 60);
+                          const source =
+                            prefix &&
+                            rows.find(
+                              (candidate) =>
+                                candidate.kind === "bot" &&
+                                normalize(candidate.text).startsWith(prefix),
+                            );
+                          const style =
+                            "max-w-[min(80%,34rem)] truncate rounded-md border border-border px-2 py-1 text-xs text-muted-foreground";
+                          return source ? (
+                            <button
+                              type="button"
+                              className={style}
+                              onClick={() => {
+                                const element = Array.from(
+                                  listRef.current?.querySelectorAll<HTMLElement>(
+                                    "[data-bot-row]",
+                                  ) ?? [],
+                                ).find((node) => node.dataset.botRow === source.id);
+                                element?.scrollIntoView({ block: "center" });
+                                element?.focus({ preventScroll: true });
+                              }}
+                            >
+                              {goatBotPreviewText(row.quote)}
+                            </button>
+                          ) : (
+                            <span className={style}>{goatBotPreviewText(row.quote)}</span>
+                          );
+                        })()
+                      : null}
                     {row.attachments && row.attachments.length > 0 ? (
                       <GoatBotSentAttachments
                         attachments={row.attachments}
                         environmentId={environmentId}
                       />
                     ) : null}
-                    {row.text.trim().length > 0 || retryable ? (
+                    {(row.reply ?? row.text).trim().length > 0 || retryable ? (
                       <div className="flex w-full items-center justify-end gap-2">
                         {!failed ? (
                           <GoatBotMessageTime
@@ -246,9 +367,9 @@ export function GoatBotTimeline({
                             <span className="sr-only">Retry</span>
                           </button>
                         ) : null}
-                        {row.text.trim().length > 0 ? (
+                        {(row.reply ?? row.text).trim().length > 0 ? (
                           <div className="goat-person-pill w-fit max-w-[min(80%,34rem)]">
-                            {row.text}
+                            {row.reply ?? row.text}
                           </div>
                         ) : null}
                       </div>
@@ -320,6 +441,7 @@ export function GoatBotTimeline({
                 return (
                   <li
                     key={row.id}
+                    data-bot-row={row.id}
                     tabIndex={0}
                     aria-describedby={timeId}
                     className={cn(
@@ -335,18 +457,56 @@ export function GoatBotTimeline({
                         <span className="block truncate">{row.replyTo}</span>
                       </blockquote>
                     ) : null}
-                    {(row.choices ?? row.options).length > 0 ? (
-                      <div className="flex w-full min-w-0 items-end gap-2">
-                        <GoatBotQuestionCard row={row} body={body} onPick={onPick} />
-                        <GoatBotMessageTime
-                          id={timeId}
-                          createdAt={row.createdAt}
-                          time={time(row.createdAt)}
-                        />
+                    <div className="flex w-full items-end gap-1">
+                      {(row.choices ?? row.options).length > 0 ? (
+                        <div className="flex w-full min-w-0 items-end gap-2">
+                          <GoatBotQuestionCard row={row} body={body} onPick={onPick} />
+                          <GoatBotMessageTime
+                            id={timeId}
+                            createdAt={row.createdAt}
+                            time={time(row.createdAt)}
+                          />
+                        </div>
+                      ) : (
+                        card
+                      )}
+                      <div className="flex shrink-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 pointer-coarse:opacity-100">
+                        {onReply ? (
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  aria-label="Reply"
+                                  onClick={() => onReply(row.text)}
+                                />
+                              }
+                            >
+                              <ArrowUpLeftIcon className="size-4" />
+                            </TooltipTrigger>
+                            <TooltipPopup>Reply</TooltipPopup>
+                          </Tooltip>
+                        ) : null}
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label="Copy"
+                                onClick={() => copyToClipboard(row.text, undefined)}
+                              />
+                            }
+                          >
+                            <CopyIcon className="size-4" />
+                          </TooltipTrigger>
+                          <TooltipPopup>Copy</TooltipPopup>
+                        </Tooltip>
                       </div>
-                    ) : (
-                      card
-                    )}
+                    </div>
                   </li>
                 );
               }
@@ -410,6 +570,20 @@ export function GoatBotTimeline({
           ) : null}
         </ol>
       </div>
+      {unread && dividerAbove && !pillDismissed ? (
+        <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm ring-2 ring-background">
+          <Button size="sm" onClick={jumpToUnread}>
+            {unread.count === 1 ? "1 new message" : `${unread.count} new messages`}
+          </Button>
+          <Button
+            size="icon-sm"
+            aria-label="Dismiss new messages"
+            onClick={() => setPillDismissed(true)}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      ) : null}
       <div
         aria-hidden="true"
         className="goat-top-fade pointer-events-none absolute top-0 right-3 left-0 h-6 bg-linear-to-b from-background to-transparent"

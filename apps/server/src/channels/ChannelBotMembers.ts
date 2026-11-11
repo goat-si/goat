@@ -36,6 +36,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
+import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
+import { recordMemberGreeting } from "./channelMemberGreeting.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { botProfileKey } from "./channelBotLedger.ts";
@@ -109,6 +111,7 @@ const make = Effect.gen(function* () {
   const permit = yield* Semaphore.make(1);
   const serial = <A, E, R>(effect: Effect.Effect<A, E, R>) => permit.withPermits(1)(effect);
   const events = yield* ChannelBotEvents.ChannelBotEvents;
+  const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   // Edits queue their lines in commit order, so two quick renames read in the order they landed.
   const profileEdits = yield* Semaphore.make(1);
   const now = Effect.map(DateTime.now, DateTime.formatIso);
@@ -152,6 +155,15 @@ const make = Effect.gen(function* () {
       },
       now: yield* now,
     });
+    // The timeline takes records only once the thread is the bot's. A greeting that fails, or a
+    // creation interrupted just before it, leaves the bot without one; creating still succeeds.
+    yield* recordMemberGreeting(timeline.record, {
+      ownerId,
+      threadId: ids.threadId,
+      bot: record,
+    }).pipe(
+      Effect.catchCause((cause) => Effect.logWarning("member greeting not recorded", { cause })),
+    );
   });
 
   /**
@@ -283,6 +295,7 @@ const make = Effect.gen(function* () {
               sessionThreadId: memberBotLaunchIdsFor(owner.ownerId, botId).threadId,
               createdAt: at,
               updatedAt: at,
+              ...(input.color === undefined ? {} : { color: input.color }),
             };
             yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
               (${botProfileKey(owner.ownerId, botId)}, ${ChannelBotProfiles.encodeProfile(created)}, ${at})`;

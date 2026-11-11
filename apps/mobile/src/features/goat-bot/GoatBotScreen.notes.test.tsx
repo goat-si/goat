@@ -70,31 +70,23 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
+vi.mock("./GoatBotModelPill", () => ({ GoatBotModelPill: () => null }));
+// The header chip opens the home; it renders as a button here.
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("./GoatBotFace", () => ({
-  GoatBotHeaderFace: () => null,
+  GoatBotHeaderFace: (props: { title: string; onPress?: () => void }) =>
+    props.onPress ? (
+      <button aria-label={`Open ${props.title} home`} onClick={props.onPress}>
+        {props.title}
+      </button>
+    ) : null,
   GoatBotFaceAvatar: () => null,
   GoatBotProgressFace: () => null,
 }));
 vi.mock("./GoatBotShimmerText", () => ({ GoatBotShimmerText: () => null }));
-// Work sits in the iOS header's trailing items; they render as buttons here.
-vi.mock("../../native/StackHeader", () => ({
-  NativeStackScreenOptions: ({
-    options,
-  }: {
-    options: {
-      unstable_headerRightItems: () => {
-        label: string;
-        accessibilityLabel: string;
-        onPress: () => void;
-      }[];
-    };
-  }) =>
-    options.unstable_headerRightItems().map((item) => (
-      <button key={item.label} aria-label={item.accessibilityLabel} onClick={item.onPress}>
-        {item.label}
-      </button>
-    )),
-}));
+vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -190,9 +182,12 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
 // A member's model menu reads server config and native menus this test does not load.
-vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
+// The home sheet's peek reads thread detail, which needs the native runtime.
+vi.mock("./MobileBotPeek", () => ({ MobileBotPeek: () => null }));
+vi.mock("./MobileBotComputer", () => ({ MobileBotComputer: () => null }));
+vi.mock("./MobileBotLibrary", () => ({ MobileBotLibrary: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: string | null) =>
     atom === "notes"
@@ -249,8 +244,8 @@ async function press(container: HTMLElement, label: string) {
   await act(async () => button?.click());
 }
 async function openMemory(container: HTMLElement) {
-  await press(container, "Open GOAT Bot work");
-  await press(container, "Memory");
+  await press(container, "Open GOAT Bot home");
+  await press(container, "Library");
 }
 const composer = (container: HTMLElement) =>
   container.querySelector<HTMLTextAreaElement>('[aria-label="Message GOAT Bot"]')!;
@@ -325,7 +320,7 @@ const taskRow = (revision: number): GoatBotRow => {
   };
 };
 
-it("the open Memory tab reads the notes again after the answer and after the task finishes", async () => {
+it("the open notes in Library read again after the answer and after the task finishes", async () => {
   setup();
   const view = await render();
   await openMemory(view.container);

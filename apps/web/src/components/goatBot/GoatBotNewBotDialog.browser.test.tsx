@@ -63,24 +63,30 @@ it("creates a bot with its model and keeps one request id when a save is retried
     updatedAt: "2026-11-07T00:00:00.000Z",
   });
   const onCreated = vi.fn();
+  const pending: Array<string | null> = [];
   await using _screen = await render(
     <GoatBotNewBotDialog
       environmentId={EnvironmentId.make("env-1")}
       canSubmit
       onCreated={onCreated}
+      onPending={(name) => pending.push(name)}
       onClose={() => undefined}
     />,
     { router: false }, // The dialog uses no links or navigation.
   );
-  await expect.element(page.getByText("Same as GOAT Bot")).toBeVisible();
   await userEvent.fill(page.getByRole("textbox", { name: "Name" }), "Research");
   await userEvent.fill(page.getByRole("textbox", { name: "Avatar" }), "🔎");
+  // Purpose and model wait under More, so a bot needs only a name and a look.
+  expect(page.getByRole("textbox", { name: "Purpose" }).query()).toBeNull();
+  await userEvent.click(page.getByRole("button", { name: "More" }));
+  await expect.element(page.getByText("Same as GOAT Bot")).toBeVisible();
   await userEvent.fill(page.getByRole("textbox", { name: "Purpose" }), "Find sources");
   await userEvent.click(page.getByRole("button", { name: "New bot model: gpt-main" }));
-  await userEvent.click(page.getByRole("button", { name: "Save" }));
+  await userEvent.click(page.getByRole("button", { name: "Create" }));
   await expect.element(page.getByRole("alert")).toHaveTextContent("Connection lost");
-  await userEvent.click(page.getByRole("button", { name: "Save" }));
+  await userEvent.click(page.getByRole("button", { name: "Create" }));
   await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(created.bot));
+  expect(pending).toEqual(["Research", null, "Research", null]);
   expect(server.inputs).toHaveLength(2);
   expect(server.inputs[0]).toMatchObject({
     name: "Research",

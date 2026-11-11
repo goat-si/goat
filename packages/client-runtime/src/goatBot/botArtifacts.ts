@@ -8,6 +8,8 @@ import {
 import * as Base64 from "effect/encoding/Base64";
 import * as Result from "effect/Result";
 
+import { goatBotDayLabel } from "./labels.ts";
+
 export type BotArtifactRead =
   | {
       readonly status: "ok";
@@ -91,6 +93,39 @@ export async function readWholeBotArtifact(
 
 export const botArtifactName = (relativePath: string) =>
   relativePath.split("/").at(-1) ?? relativePath;
+
+const TEXT_TYPES = new Set(["application/json", "text/csv"]);
+/** Larger text stays a download: decoding and rendering it would stall the chat. */
+export const BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES = 1024 * 1024;
+
+/** How the Library shows a file: rendered markdown, plain text, an image, or a download. */
+export function botArtifactViewKind(
+  mimeType: string,
+  relativePath: string,
+  size = 0,
+): "markdown" | "text" | "image" | "download" {
+  const type = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (type.startsWith("image/")) return "image";
+  if (size > BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES) return "download";
+  if (type === "text/markdown" || /\.(md|markdown)$/i.test(relativePath)) return "markdown";
+  if (type.startsWith("text/") || TEXT_TYPES.has(type)) return "text";
+  return "download";
+}
+
+/** Newest-first Library files under one heading per local calendar day, order kept. */
+export function goatBotArtifactDays<File extends { readonly modifiedAt: string }>(
+  files: ReadonlyArray<File>,
+  nowMs: number,
+): ReadonlyArray<{ readonly label: string; readonly files: ReadonlyArray<File> }> {
+  const days: Array<{ label: string; files: File[] }> = [];
+  for (const file of files) {
+    const label = goatBotDayLabel(file.modifiedAt, nowMs);
+    const last = days.at(-1);
+    if (last?.label === label) last.files.push(file);
+    else days.push({ label, files: [file] });
+  }
+  return days;
+}
 
 export function botArtifactSizeLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

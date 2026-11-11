@@ -120,6 +120,17 @@ export const readProfileRecord = (sql: SqlClient.SqlClient, ownerId: string, bot
   );
 
 const isGatewayError = Schema.is(ChannelGatewayError);
+
+/** A color edit: a value sets it, null removes it, and leaving it out keeps the stored one. */
+const withColor = <T extends { readonly color?: string }>(
+  profile: T,
+  color: string | null | undefined,
+): T => {
+  if (color === undefined) return profile;
+  if (color !== null) return { ...profile, color };
+  const { color: _cleared, ...rest } = profile;
+  return rest as T;
+};
 const persistenceFailed = Effect.mapError((cause: unknown) =>
   isGatewayError(cause) ? cause : new ChannelGatewayError({ reason: "persistence_failed" }),
 );
@@ -225,7 +236,11 @@ const make = Effect.gen(function* () {
             return yield* new ChannelGatewayError({ reason: "not_found" });
           }
           // The main bot's model is the GOAT Bot model setting, which modelFor reads instead.
-          if (input.defaultModelSelection !== undefined && record.role === "main") {
+          // Its look stays the theme's: a color sent for it is refused.
+          if (
+            record.role === "main" &&
+            (input.defaultModelSelection !== undefined || (input.color ?? null) !== null)
+          ) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
           }
           const changes = {
@@ -237,14 +252,17 @@ const make = Effect.gen(function* () {
               : { defaultModelSelection: input.defaultModelSelection }),
             updatedAt: now,
           };
-          const next: ProfileRecord = { ...record, ...changes };
+          const next: ProfileRecord =
+            record.role === "member"
+              ? withColor({ ...record, ...changes }, input.color)
+              : { ...record, ...changes };
           yield* sql`UPDATE channel_runtime_state
             SET value_json = ${encodeProfile(next)}, updated_at = ${now}
             WHERE key = ${prefix + encodeURIComponent(input.botId)}`;
           const changed = (["name", "purpose"] as const).filter(
             (field) => input[field] !== undefined && input[field] !== record[field],
           );
-          return { bot: { ...listed, ...changes }, changed };
+          return { bot: withColor({ ...listed, ...changes }, input.color), changed };
         }),
       )
       .pipe(

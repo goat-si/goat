@@ -468,6 +468,14 @@ export const ChannelBotRef = Schema.Struct({
 });
 export type ChannelBotRef = typeof ChannelBotRef.Type;
 
+/** The routine or task an event line is about, so a client can open it from the line. */
+export const GoatBotEventSubject = Schema.Struct({
+  kind: Schema.Literals(["routine", "task"]),
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+});
+export type GoatBotEventSubject = typeof GoatBotEventSubject.Type;
+
 /**
  * One entry the gateway writes to the GOAT bot timeline without a provider run. `recordKey`
  * derives stable message and item ids, so retried deliveries update instead of duplicating.
@@ -491,6 +499,7 @@ export const ChannelTimelineRecord = Schema.Struct({
     Schema.Struct({
       type: Schema.Literal("event"),
       text: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+      subject: Schema.optionalKey(GoatBotEventSubject),
     }),
   ]),
 });

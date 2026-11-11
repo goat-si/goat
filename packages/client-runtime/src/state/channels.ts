@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { botRowListedUntil, botRowRetiresAt } from "../goatBot/taskVisibility.ts";
+import { sameBotColor } from "../goatBot/botColor.ts";
 import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
 import {
   createEnvironmentRpcCommand,
@@ -368,23 +369,35 @@ export interface BotProfileValues {
   readonly name: string;
   readonly avatar: string | null;
   readonly purpose: string;
+  /** A member's accent; null is the theme's neutral. Absent where the server cannot store one. */
+  readonly color?: string | null;
 }
 
-/** What to send for a bot's profile: every field when creating, else only what changed, trimmed as stored. */
+/**
+ * What to send for a bot's profile: every field when creating, else only what changed, trimmed as
+ * stored. A color goes only where the form offers one: a chosen one on create, a change on edit.
+ */
 export function botProfileChanges(
   mode: "edit" | "create",
   initial: BotProfileValues,
-  draft: { readonly name: string; readonly avatar: string; readonly purpose: string },
+  draft: {
+    readonly name: string;
+    readonly avatar: string;
+    readonly purpose: string;
+    readonly color?: string | null;
+  },
 ): Partial<BotProfileValues> {
   const next = {
     name: draft.name.trim(),
     avatar: draft.avatar.trim() === "" ? null : draft.avatar.trim(),
     purpose: draft.purpose.trim(),
   };
-  if (mode === "create") return next;
+  const color = draft.color;
+  if (mode === "create") return color == null ? next : { ...next, color };
   return {
     ...(next.name === initial.name ? {} : { name: next.name }),
     ...(next.avatar === initial.avatar ? {} : { avatar: next.avatar }),
     ...(next.purpose === initial.purpose ? {} : { purpose: next.purpose }),
+    ...(color === undefined || sameBotColor(color, initial.color) ? {} : { color }),
   };
 }

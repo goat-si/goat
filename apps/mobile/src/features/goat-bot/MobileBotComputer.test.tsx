@@ -112,3 +112,12 @@ it("a member's tab lists only that bot's work", async () => {
     input: expect.objectContaining({ botId: "research" }),
   });
 });
+
+it("reads the machines again when the bot's work changes while Home is open", async () => {
+  await render({ workKey: "t1:running" });
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  await render({ workKey: "t1:running" });
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  await render({ workKey: "t1:completed" });
+  expect(state.refresh).toHaveBeenCalledTimes(2);
+});

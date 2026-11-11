@@ -11,7 +11,7 @@ through relays, which forward it without being able to read it.
 
 ## Before you start
 
-- Pen runs on macOS and Linux (x86-64 and ARM). Windows machines cannot join a mesh.
+- Pen runs on macOS, Linux and Windows 10 or 11 (x86-64 and ARM).
 - Every member trusts every other member fully: a member can open any port that listens on
   `127.0.0.1` of another member, as if it were local. Add only machines you control, and remove a
   machine you no longer trust (see [Remove a machine](#remove-a-machine)).
@@ -36,6 +36,15 @@ To install and connect in one step, add one of these after `sh -s --`:
 | `--name <name>`  | Name this machine (with any of the three above).                |
 
 For example: `curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --login`.
+
+On Windows, run this in PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://pen-relay.pos090001.workers.dev/install.ps1)))
+```
+
+This puts `pen.exe` in `%LOCALAPPDATA%\Programs\pen` and adds that folder to your PATH for new terminals. The
+same options go after the last parenthesis, for example `... install.ps1))) --login`.
 
 ## Sign in with Google
 
@@ -79,6 +88,7 @@ works once within 10 minutes. On the new machine:
 curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --join <token>
 ```
 
+`pen invite` without `--auto` also prints the line for a new Windows machine, to run in PowerShell.
 The token is a secret until it is used: anyone holding it can join in its place.
 
 ## Use your machines from GOAT
@@ -90,7 +100,14 @@ current as machines join or leave. GOAT finds these hosts like any other SSH hos
 `pen-<name>`. `pen ssh-config --uninstall` removes them.
 
 An SSH connection stays open for 10 minutes after you close it, so the next `ssh pen-<name>` starts
-almost at once. `ssh -o ControlPath=none pen-<name>` opens a separate connection.
+almost at once. `ssh -o ControlPath=none pen-<name>` opens a separate connection. Windows's ssh cannot keep a
+connection open this way, so from Windows every `ssh pen-<name>` connects anew.
+
+To reach a Windows member over SSH, turn on OpenSSH Server there (Settings, System, Optional features). Pen
+then publishes its host keys and your login name. When your Windows account is an administrator, OpenSSH
+reads the keys allowed to log in from `C:\ProgramData\ssh\administrators_authorized_keys`, not from
+`.ssh\authorized_keys` in your profile. For a domain or work account, Pen publishes no login name: use
+`ssh <user>@pen-<name>`. Without OpenSSH Server, `pen forward` still reaches the machine's other ports.
 
 To reach another port, `pen forward 8080 <member>:8080` listens on this machine's port 8080 and
 connects each connection to port 8080 on the member.
@@ -197,6 +214,12 @@ until the machine restarts; run `pen up` again afterwards. `pen down` stops it.
 Pen writes its log to `~/.pen/daemon.log` (on Linux with a service, to the user journal) and keeps
 it under 4 MiB, with the previous part in `daemon.log.1`.
 
+On Windows the service is a task in Task Scheduler that starts Pen when you sign in to Windows; it needs no
+administrator rights. Pen does not run before you sign in: after a restart it starts at your sign-in.
+`pen down` stops it until you run `pen up` again (it does not start at sign-in in between), `pen leave`
+removes the task, and if Pen stops unexpectedly it starts again within seconds. Its state is in `%USERPROFILE%\.pen`, which only your account can
+read. A `--no-service` Pen started from an SSH session can end when that session closes.
+
 ## Cloud boxes and images
 
 Install and join each box on its first boot with `--login --yes` or `--join`. Never copy `~/.pen`
@@ -224,7 +247,7 @@ the same keys.
 ## Not supported
 
 - Direct connections between machines: all traffic goes through a relay.
-- Windows machines as members.
+- Running Pen on Windows before anyone signs in: it runs as the signed-in user.
 - Managing Pen from GOAT's settings; use the `pen` command or its dashboard.
 - Signing in with a Google account the Pen sign-in service does not allow yet. While the service is
   in testing, only listed accounts can sign in; invites work for everyone.

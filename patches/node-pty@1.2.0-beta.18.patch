@@ -1,7 +1,8 @@
 diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
+index 66da02aab71d768441fe919b6bd7f86b808ae7c7..b7775234458a7d70d5b087502a6b2cfe0a271b98 100644
 --- a/lib/windowsConoutConnection.js
 +++ b/lib/windowsConoutConnection.js
-@@ -63,7 +63,11 @@
+@@ -63,7 +63,11 @@ var ConoutConnection = /** @class */ (function () {
              conoutPipeName: _conoutPipeName
          };
          var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');
@@ -15,13 +16,15 @@ diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
              switch (message) {
                  case 1 /* ConoutWorkerMessage.READY */:
 diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
+index 81d885b51f22f2e1d3b05798b6b4b20a41a777a1..f0a713bd4d28ae572fa9ecd6b3c65aa58d77cff1 100644
 --- a/lib/windowsPtyAgent.js
 +++ b/lib/windowsPtyAgent.js
-@@ -218,13 +218,31 @@
+@@ -227,15 +227,33 @@ var WindowsPtyAgent = /** @class */ (function () {
              return Promise.resolve([]);
          }
          return new Promise(function (resolve) {
 -            var agent = (0, child_process_1.fork)(path.join(__dirname, 'conpty_console_list_agent'), [_this._innerPid.toString()]);
+-            agent.on('message', function (message) {
 +            // Node's watch mode sends its own messages over the helper's IPC channel.
 +            var agentEnv = Object.assign({}, process.env);
 +            delete agentEnv.WATCH_REPORT_DEPENDENCIES;
@@ -29,13 +32,12 @@ diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
 +            var finish = function (list) {
 +                if (settled) return;
 +                settled = true;
-+                clearTimeout(timeout);
+                 clearTimeout(timeout);
+-                resolve(message.consoleProcessList);
 +                resolve(list);
 +            };
 +            var agent = (0, child_process_1.fork)(path.join(__dirname, 'conpty_console_list_agent'), [_this._innerPid.toString()], { env: agentEnv, execArgv: [], windowsHide: true });
-             agent.on('message', function (message) {
--                clearTimeout(timeout);
--                resolve(message.consoleProcessList);
++            agent.on('message', function (message) {
 +                if (!message || !Array.isArray(message.consoleProcessList)) {
 +                    return;
 +                }
@@ -53,3 +55,5 @@ diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
 -                resolve([_this._innerPid]);
 +                finish([_this._innerPid]);
              }, 5000);
+         });
+     };

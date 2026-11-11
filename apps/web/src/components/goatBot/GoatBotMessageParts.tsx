@@ -1,10 +1,13 @@
 import type { GoatBotActivity, GoatBotAttachmentLabel } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
+import { useState } from "react";
 
 import { useAssetUrlState } from "~/assets/assetUrls";
 import { BellIcon, PaperclipIcon } from "~/components/solar";
+import { cn } from "~/lib/utils";
 
 import { GoatBotFace } from "./GoatBotFace";
+import { useGoatBotName } from "./goatBotMemberContext";
 
 /** The activity line also names the followed work. */
 export type GoatBotTimelineActivity = GoatBotActivity & {
@@ -94,24 +97,40 @@ function GoatBotSentFile({ name }: { readonly name: string }) {
 
 /**
  * One line for what GOAT Bot is doing: its still face and the step it is on, then the work it
- * follows. Nothing here moves; a new step replaces the text.
+ * follows. Nothing here moves; a new step replaces the text. The line opens to its full text. The
+ * live status says only what changes for the person: reading, needing them, or working.
  */
 export function GoatBotActivityLine({ activity }: { readonly activity: GoatBotTimelineActivity }) {
-  const waiting = activity.state === "working" && activity.text.startsWith("Waiting");
+  const botName = useGoatBotName();
+  const [open, setOpen] = useState(false);
+  const waiting =
+    activity.state === "working" &&
+    (activity.text.startsWith("Waiting") || activity.text.startsWith("Paused"));
   const title =
     activity.state === "working" && activity.title !== activity.text ? activity.title : undefined;
+  const announcement =
+    activity.state === "reading" || waiting ? activity.text : `${botName} is working`;
   return (
     <div className="flex min-h-8 max-w-[44rem] min-w-0 items-center gap-2 ps-1 text-sm leading-5 text-muted-foreground">
       <GoatBotFace
         state={activity.state === "reading" ? "reading" : waiting ? "waiting" : "working"}
         className="size-5 shrink-0 text-foreground"
       />
-      <p className="min-w-0 truncate">
-        <span role="status" aria-live="polite" aria-atomic="true">
-          {activity.text}
-        </span>
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {announcement}
+      </span>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className={cn(
+          "min-w-0 rounded-sm text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          open ? "break-words" : "truncate",
+        )}
+      >
+        {activity.text}
         {title === undefined ? null : <span className="opacity-70">{" · " + title}</span>}
-      </p>
+      </button>
     </div>
   );
 }

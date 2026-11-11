@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
@@ -418,12 +419,19 @@ namespace Goat.ComputerUse
                 string expected = System.IO.Path.Combine(install, expectedParentName);
                 if (!string.Equals(System.IO.Path.GetFullPath(parentPath), expected, StringComparison.OrdinalIgnoreCase))
                     return "The helper was not started by " + expected + ".";
-                string ownSigner = Signer(helperPath);
-                string parentSigner = Signer(parentPath);
-                if (ownSigner == null) return "This helper is not signed, so it cannot verify who started it.";
-                if (parentSigner != ownSigner) return "The process that started the helper is not signed by the same publisher.";
-                if (!Authenticode.Verify(helperPath) || !Authenticode.Verify(parentPath))
-                    return "The helper or the process that started it fails Authenticode verification.";
+                using (var ownSigner = Signer(helperPath))
+                {
+                    if (ownSigner == null) return "This helper is not signed, so it cannot verify who started it.";
+                    if (!Authenticode.Verify(helperPath) || !Authenticode.Verify(parentPath))
+                        return "The helper or the process that started it fails Authenticode verification.";
+                    using (var parentSigner = Signer(parentPath))
+                    {
+                        if (parentSigner == null || !SigningIdentity.SamePublisher(
+                            ownSigner.Subject, ownSigner.Thumbprint, SigningOids(ownSigner),
+                            parentSigner.Subject, parentSigner.Thumbprint, SigningOids(parentSigner)))
+                            return "The process that started the helper is not signed by the same publisher.";
+                    }
+                }
                 return null;
             }
             finally
@@ -432,10 +440,22 @@ namespace Goat.ComputerUse
             }
         }
 
-        static string Signer(string path)
+        static X509Certificate2 Signer(string path)
         {
-            try { return new X509Certificate2(X509Certificate.CreateFromSignedFile(path)).Thumbprint; }
-            catch (System.Security.Cryptography.CryptographicException) { return null; }
+            try { return new X509Certificate2(X509Certificate.CreateFromSignedFile(path)); }
+            catch (CryptographicException) { return null; }
+        }
+
+        static string[] SigningOids(X509Certificate2 certificate)
+        {
+            var oids = new List<string>();
+            foreach (X509Extension extension in certificate.Extensions)
+            {
+                var eku = extension as X509EnhancedKeyUsageExtension;
+                if (eku == null) continue;
+                foreach (Oid oid in eku.EnhancedKeyUsages) oids.Add(oid.Value);
+            }
+            return oids.ToArray();
         }
     }
 }

@@ -167,6 +167,119 @@ func TestRelayServeWithCertAndKeyBindsUplinksToItsPublicOrigin(t *testing.T) {
 	}
 }
 
+func TestRelayAddKeepsConcurrentOfflineAdd(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PEN_HOME", dir)
+	st, err := state.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := state.Config{Name: "a"}
+	c.SetRelays([]string{"https://a.example"})
+	if err := st.SaveConfig(c); err != nil {
+		t.Fatal(err)
+	}
+	afterRelayConfigRead = func() {
+		afterRelayConfigRead = nil
+		var out, errOut bytes.Buffer
+		if code := RunRelay([]string{"add", "https://c.example"}, &out, &errOut); code != 0 {
+			t.Fatalf("second add: %d %s", code, errOut.String())
+		}
+	}
+	t.Cleanup(func() { afterRelayConfigRead = nil })
+	var out, errOut bytes.Buffer
+	if code := RunRelay([]string{"add", "https://b.example"}, &out, &errOut); code != 0 {
+		t.Fatalf("first add: %d %s", code, errOut.String())
+	}
+	got, err := st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list := strings.Join(got.RelayList(), ","); list != "https://a.example,https://c.example,https://b.example" {
+		t.Fatalf("relays after both adds: %s", list)
+	}
+}
+
+func TestRelayEditChecksLockedConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name, verb, url, message string
+		initial, updated, want   []string
+		code                     int
+	}{
+		{"already added", "add", "https://b.example", "already a relay", []string{"https://a.example"}, []string{"https://a.example", "https://b.example"}, []string{"https://a.example", "https://b.example"}, 0},
+		{"already removed", "rm", "https://b.example", "not one of this node's relays", []string{"https://a.example", "https://b.example"}, []string{"https://a.example"}, []string{"https://a.example"}, 1},
+		{"last relay", "rm", "https://b.example", "needs at least one relay", []string{"https://a.example", "https://b.example"}, []string{"https://b.example"}, []string{"https://b.example"}, 1},
+		{"invalid duplicate origin", "add", "wss://B.example:443", "", []string{"https://a.example"}, []string{"https://a.example", "https://b.example"}, []string{"https://a.example", "https://b.example"}, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PEN_HOME", dir)
+			st, err := state.OpenDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := state.Config{Name: "a"}
+			c.SetRelays(tt.initial)
+			if err := st.SaveConfig(c); err != nil {
+				t.Fatal(err)
+			}
+			afterRelayConfigRead = func() {
+				if err := st.UpdateConfig(func(c *state.Config) { c.SetRelays(tt.updated) }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() { afterRelayConfigRead = nil })
+			var out, errOut bytes.Buffer
+			if code := RunRelay([]string{tt.verb, tt.url}, &out, &errOut); code != tt.code {
+				t.Fatalf("exit %d, want %d: %s", code, tt.code, errOut.String())
+			}
+			if !strings.Contains(out.String()+errOut.String(), tt.message) {
+				t.Fatalf("output: %s %s", &out, &errOut)
+			}
+			got, err := st.LoadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got.RelayList(), ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("relays: %v, want %v", got.RelayList(), tt.want)
+			}
+		})
+	}
+}
+
+// An offline edit that changes nothing (already a relay, not a relay, the last one, invalid) leaves
+// config.json exactly as it was, including fields this binary does not know.
+func TestARefusedOfflineRelayEditLeavesTheConfigUntouched(t *testing.T) {
+	for _, args := range [][]string{
+		{"add", "https://a.example"},
+		{"rm", "https://x.example"},
+		{"rm", "https://a.example"},
+		{"add", "wss://A.example:443"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PEN_HOME", dir)
+			st, err := state.OpenDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte(`{"name":"a","relays":["https://a.example"],"relay":"https://a.example","future":1}`)
+			if err := os.WriteFile(st.Path("config.json"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			RunRelay(args, &out, &errOut)
+			got, err := os.ReadFile(st.Path("config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, raw) {
+				t.Fatalf("config.json rewritten: %s", got)
+			}
+		})
+	}
+}
+
 func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PEN_HOME", dir)
@@ -300,15 +413,15 @@ func TestAutocertCacheIsAPrivateDirectory(t *testing.T) {
 	if err := prepareCache(loose); err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(loose); fi.Mode().Perm() != 0o700 {
-		t.Fatalf("cache mode %v, want 0700", fi.Mode().Perm())
+	if private, err := state.OwnerOnly(loose); err != nil || !private {
+		t.Fatalf("cache is not private to its owner: %v", err)
 	}
 	fresh := filepath.Join(t.TempDir(), "new", "acme")
 	if err := prepareCache(fresh); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(fresh); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Fatalf("new cache: %v %v", fi, err)
+	if private, err := state.OwnerOnly(fresh); err != nil || !private {
+		t.Fatalf("new cache is not private to its owner: %v", err)
 	}
 	file := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(file, nil, 0o600)

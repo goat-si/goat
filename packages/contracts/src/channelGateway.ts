@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { BotId, BotProfile, BotRole } from "./botProfile.ts";
+import { BotColor, BotId, BotProfile, BotRole } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
@@ -132,6 +132,8 @@ export const ChannelOutboundMessage = Schema.Struct({
   inReplyToInputId: Schema.optional(ChannelInputId),
   taskId: Schema.optional(ChannelTaskId),
   taskVersion: Schema.optional(PositiveInt),
+  /** The attempt of the task this message speaks for; servers before it omit it. */
+  taskGeneration: Schema.optional(PositiveInt),
   chip: Schema.optional(ChannelTaskChip),
   /** The original requester to tag, such as a Slack user id. */
   mentionActorId: Schema.optional(TrimmedNonEmptyString),
@@ -298,6 +300,17 @@ export type ChannelGetBotStatusInput = typeof ChannelGetBotStatusInput.Type;
 export const ChannelGetBotStatusResult = Schema.Struct({
   bot: Schema.NullOr(ChannelBotRef),
   waitingCount: NonNegativeInt,
+  /**
+   * The newest message in the bot's conversation, shortened, for a roster row. Absent from
+   * servers before it existed and while the conversation is empty.
+   */
+  latest: Schema.optionalKey(
+    Schema.Struct({
+      text: Schema.String,
+      at: IsoDateTime,
+      author: Schema.Literals(["bot", "person"]),
+    }),
+  ),
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 
@@ -322,9 +335,9 @@ export const ChannelBotListResult = Schema.Struct({ bots: Schema.Array(ChannelBo
 export type ChannelBotListResult = typeof ChannelBotListResult.Type;
 
 /**
- * Changes only the keys sent. A null avatar returns the bot to its default face. A member's model
- * takes effect on its next turn, and null returns it to the main bot's; the main bot's model is a
- * setting, so a model sent for it is refused. Servers with `goatBotMemberModelEdit` read it.
+ * Changes only the keys sent; null clears an avatar, a member's model or its color. The main bot
+ * refuses a model (a setting) and a color. A model needs `goatBotMemberModelEdit`, a color
+ * `goatBotProfileColor`; older servers drop either key.
  */
 export const ChannelUpdateBotInput = Schema.Struct({
   botId: BotId,
@@ -332,6 +345,7 @@ export const ChannelUpdateBotInput = Schema.Struct({
   avatar: Schema.optionalKey(BotProfile.fields.avatar),
   purpose: Schema.optionalKey(BotProfile.fields.purpose),
   defaultModelSelection: Schema.optionalKey(BotProfile.fields.defaultModelSelection),
+  color: Schema.optionalKey(Schema.NullOr(BotColor)),
 });
 export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
 
@@ -342,6 +356,8 @@ export const ChannelCreateBotInput = Schema.Struct({
   avatar: BotProfile.fields.avatar,
   purpose: BotProfile.fields.purpose,
   defaultModelSelection: BotProfile.fields.defaultModelSelection,
+  /** Read by servers with `goatBotProfileColor`; absent leaves the bot neutral. */
+  color: Schema.optionalKey(BotColor),
 });
 export type ChannelCreateBotInput = typeof ChannelCreateBotInput.Type;
 export const ChannelSetBotHiddenInput = Schema.Struct({ botId: BotId, hidden: Schema.Boolean });

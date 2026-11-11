@@ -1,5 +1,6 @@
 import {
   goatBotAvatarEmoji,
+  goatBotChoiceLetter,
   goatBotReceiptLabel,
   goatBotRejectionText,
   type GoatBotActivity,
@@ -7,11 +8,10 @@ import {
   type GoatBotGroupPosition,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import { useState, type ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { useEffect, type ReactNode } from "react";
+import { AccessibilityInfo, Platform, Pressable, Text, View } from "react-native";
 
 import { GoatWordmark } from "../../components/GoatWordmark";
-import { SymbolView } from "../../components/ui/AppSymbol";
 import { GoatBotProgressFace } from "./GoatBotFace";
 import { GoatBotShimmerText } from "./GoatBotShimmerText";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -207,14 +207,26 @@ export function GoatBotActivityLine(props: {
   const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
+  // Screen readers hear when the bot starts or reads, not each working step, and what it waits on:
+  // the live part says only that, and a working step is plain text beside it.
+  const status = waits
+    ? `${props.botName}: ${activity.text}`
+    : `${props.botName} is ${face === "reading" ? "reading" : "working"}`;
+  const waitStatus = waits ? status : null;
+  // oxlint-disable-next-line goat/react-effect-budget -- iOS has no live regions; VoiceOver hears each new wait from here.
+  useEffect(() => {
+    if (waitStatus !== null && Platform.OS === "ios")
+      AccessibilityInfo.announceForAccessibility(waitStatus);
+  }, [waitStatus]);
   return (
     <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
-      <GoatBotProgressFace state={face} emoji={props.emoji} inView={props.inView} />
+      <View accessible accessibilityLiveRegion="polite" accessibilityLabel={status}>
+        <GoatBotProgressFace state={face} emoji={props.emoji} inView={props.inView} />
+      </View>
       <View
         accessible
         accessibilityRole="text"
-        accessibilityLiveRegion="polite"
-        accessibilityLabel={`${props.botName}: ${activity.text}`}
+        accessibilityLabel={activity.text}
         className="min-w-0 flex-1"
       >
         {waits ? (
@@ -229,75 +241,91 @@ export function GoatBotActivityLine(props: {
   );
 }
 
-/**
- * A bot question that offers answers: its words in the bot's card with the answers as pills
- * below. Once answered, it settles to one line naming the answer, which opens to the question.
- */
-export function GoatBotQuestionCard(props: {
-  readonly children: ReactNode;
-  readonly options: ReadonlyArray<string>;
-  readonly canAnswer: boolean;
-  readonly onPick: (answer: string) => void;
-  /** The answer the person sent; absent while the question is open. */
-  readonly answered?: string | null | undefined;
-}) {
-  const answered = props.answered ?? null;
-  if (answered !== null) {
-    return <GoatBotAnsweredQuestion answer={answered}>{props.children}</GoatBotAnsweredQuestion>;
-  }
+/** A round letter for one choice; filled in the person's colours once it is their answer. */
+function GoatBotChoiceBadge(props: { readonly letter: string; readonly chosen?: boolean }) {
   return (
-    <View accessibilityLabel="Question" className="gap-2">
-      <GoatBotCard>{props.children}</GoatBotCard>
-      <View accessibilityLabel="Suggested answers" className="flex-row flex-wrap gap-2">
-        {props.options.map((answer) => (
-          <Pressable
-            key={answer}
-            accessibilityRole="button"
-            disabled={!props.canAnswer}
-            onPress={() => props.onPick(answer)}
-            // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
-            className="min-h-[44px] max-w-full justify-center rounded-full border border-border px-3 py-2"
-          >
-            <Text numberOfLines={2} className="text-sm text-foreground">
-              {answer}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      className={
+        props.chosen
+          ? "h-[26px] w-[26px] items-center justify-center rounded-full bg-goat-person-message"
+          : "h-[26px] w-[26px] items-center justify-center rounded-full border border-foreground-muted"
+      }
+    >
+      <Text
+        className={
+          props.chosen
+            ? "text-xs font-semibold text-goat-person-message-foreground"
+            : "text-xs font-semibold text-foreground-muted"
+        }
+      >
+        {props.letter}
+      </Text>
     </View>
   );
 }
 
-/** The settled question, like web's answered summary: one line, opened only when asked. */
-function GoatBotAnsweredQuestion(props: { readonly answer: string; readonly children: ReactNode }) {
+/**
+ * A bot question with choices: one card, the question and its lettered choices. Once answered it
+ * keeps the question, dimmed, and only the picked choice; a typed answer stays the person's own
+ * message, so the card keeps just the question.
+ */
+export function GoatBotQuestionCard(props: {
+  readonly children: ReactNode;
+  readonly row: Extract<GoatBotRow, { kind: "bot" }>;
+  readonly canAnswer: boolean;
+  readonly onPick: (answer: string) => void;
+}) {
+  const { row } = props;
   const label = useScaledTextRole("label");
-  const [open, setOpen] = useState(false);
+  const open = row.options.length > 0;
+  const choices = row.choices ?? row.options;
+  const picked = row.answerIndex === undefined ? undefined : choices[row.answerIndex];
   return (
-    <View className="self-start bg-goat-bot-message" style={{ borderRadius: 18, maxWidth: "88%" }}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Answered: ${props.answer}`}
-        accessibilityHint={open ? "Hides the question" : "Shows the question"}
-        accessibilityState={{ expanded: open }}
-        onPress={() => setOpen((value) => !value)}
-        className="min-h-[44px] flex-row items-center gap-2 py-2"
-        style={{ paddingHorizontal: 14 }}
-      >
-        <SymbolView name="checkmark" size={14} tintColorClassName="accent-icon-muted" />
-        <Text numberOfLines={1} className="shrink text-foreground" style={label}>
-          <Text className="text-foreground-muted">Answered: </Text>
-          <Text className="font-medium">{props.answer}</Text>
-        </Text>
-        <View className="ml-auto">
-          <SymbolView
-            name={open ? "chevron.down" : "chevron.right"}
-            size={12}
-            tintColorClassName="accent-icon-muted"
-          />
-        </View>
-      </Pressable>
+    <View
+      className="self-start bg-goat-bot-message"
+      style={{ borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9, maxWidth: "88%" }}
+    >
+      <View style={open ? undefined : { opacity: 0.6 }}>{props.children}</View>
       {open ? (
-        <View style={{ paddingHorizontal: 14, paddingBottom: 10 }}>{props.children}</View>
+        <View accessibilityLabel="Choices" className="mt-1.5" style={{ marginHorizontal: -6 }}>
+          {row.options.map((option, index) => (
+            <Pressable
+              key={option}
+              accessibilityRole="button"
+              accessibilityLabel={`${goatBotChoiceLetter(index)}. ${option}`}
+              accessibilityState={{ disabled: !props.canAnswer }}
+              disabled={!props.canAnswer}
+              onPress={() => props.onPick(option)}
+              // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
+              className="min-h-[44px] flex-row items-center gap-2.5 rounded-xl px-1.5 py-1.5"
+              style={props.canAnswer ? undefined : { opacity: 0.5 }}
+            >
+              <GoatBotChoiceBadge letter={goatBotChoiceLetter(index)} />
+              <Text className="shrink text-foreground" style={label}>
+                {option}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : picked !== undefined && row.answerIndex !== undefined ? (
+        <View
+          accessible
+          accessibilityLabel={`You answered ${goatBotChoiceLetter(row.answerIndex)}: ${picked}${
+            row.answerSending ? ", sending" : ""
+          }`}
+          className="mt-1.5 min-h-[44px] flex-row items-center gap-2.5"
+          style={{ marginHorizontal: -6, paddingHorizontal: 6 }}
+        >
+          <GoatBotChoiceBadge letter={goatBotChoiceLetter(row.answerIndex)} chosen />
+          <Text className="shrink text-foreground" style={label}>
+            {picked}
+          </Text>
+          {row.answerSending ? (
+            <Text className="text-xs text-foreground-muted">Sending…</Text>
+          ) : null}
+        </View>
       ) : null}
     </View>
   );

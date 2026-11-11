@@ -758,8 +758,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 @utility goat-person-pill {
   padding: 9px 16px;
   border-radius: 20px;
-  background: var(--color-goat-person-message);
-  color: var(--color-goat-person-message-foreground);
+  /* A colored member sets the accent on its chat root; every other bot keeps the neutral pill. */
+  background: var(--goat-bot-accent, var(--color-goat-person-message));
+  color: var(--goat-bot-accent-foreground, var(--color-goat-person-message-foreground));
   font-size: 1rem;
   line-height: 1.375rem;
   /* break-word, unlike anywhere, keeps whole words in the min-content width, so short
@@ -773,6 +774,31 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
   @media (max-width: 640px) {
     font-size: 1.0625rem;
+  }
+}
+
+/* Send in a member bot's chat: neutral until there is something to send, then the accent. */
+@utility goat-bot-send {
+  background: var(--color-goat-person-message);
+  color: var(--color-goat-person-message-foreground);
+  transition: background-color 120ms ease-out;
+
+  &[data-accent="true"] {
+    background: var(--goat-bot-accent, var(--color-goat-person-message));
+    color: var(--goat-bot-accent-foreground, var(--color-goat-person-message-foreground));
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+
+  @media (forced-colors: active) {
+    transition: none;
+
+    &[data-accent="true"] {
+      background: Highlight;
+      color: HighlightText;
+    }
   }
 }
 

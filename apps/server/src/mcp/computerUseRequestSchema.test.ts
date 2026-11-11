@@ -1,4 +1,3 @@
-import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
@@ -11,6 +10,7 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const thread: McpInvocationScope = {
   environmentId: EnvironmentId.make("schema-environment"),
@@ -102,7 +102,7 @@ it.effect(
           Layer.mock(Settings.ServerSettingsService)({
             getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, agentToolListing: "full" }),
           }),
-          NodeHttpServer.layerTest,
+          layerTestLoopback,
         ),
       ),
     );

@@ -45,6 +45,7 @@ const bridge = vi.hoisted(() => ({
   projectRevision: 0,
   projectListeners: new Set<() => void>(),
   navigations: [] as unknown[],
+  announcements: [] as string[],
   focus: new Map<() => void | (() => void), void | (() => void)>(),
   active: new Set<(state: string) => void>(),
   confirmations: [] as Array<() => void>,
@@ -119,6 +120,10 @@ vi.mock("react-native", async () => {
     FlatList,
     ScrollView: View,
     KeyboardAvoidingView: View,
+    useWindowDimensions: () => ({ width: 393, height: 852 }),
+    AccessibilityInfo: {
+      announceForAccessibility: (message: string) => bridge.announcements.push(message),
+    },
     Platform: {
       get OS() {
         return bridge.platform;
@@ -658,6 +663,7 @@ export function createNativeMemoryHarness() {
     memory,
     updateSettings,
     navigations: bridge.navigations,
+    announcements: bridge.announcements,
     focus: () => {
       for (const [callback, cleanup] of bridge.focus) {
         cleanup?.();
@@ -704,6 +710,7 @@ export function createNativeMemoryHarness() {
   bridge.beforeSecureWrite = null;
   bridge.projects.length = 0;
   bridge.navigations.length = 0;
+  bridge.announcements.length = 0;
   bridge.confirmations.length = 0;
   registry.mount(configs(nativeEnv));
   registry.mount(grants(nativeEnv));

@@ -14,7 +14,6 @@ import {
   ProviderDriverKind,
 } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
@@ -47,6 +46,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ConnectRuntime from "../auth/ConnectHubRuntime.testkit.ts";
 import * as SettingsRpc from "../auth/SettingsRpc.ts";
 import * as Routes from "../provider/CodexRouteService.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 const decodePersistedSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeGoatclaw = Schema.decodeEffect(GoatclawSettings);
 const decodeListInput = Schema.decodeEffect(AgentWorkspaceListInput);
@@ -904,10 +904,7 @@ it.effect("#2059 lists workspace and terminal tools only for explicitly granted 
       expect(withheld).not.toContain(`goat_${name}`);
       expect(offered).toContain(`goat_${name}`);
     }
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer)),
-  ),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(layerTestLoopback, NodeServices.layer))),
 );
 
 it.effect("#2059 human input during idle inspection keeps the PTY alive without a lock cycle", () =>
