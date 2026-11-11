@@ -77,6 +77,10 @@ interface Fixture {
   duringBackgroundProbe: Effect.Effect<void>;
   /** Catalog models a freshly started process still does not list, as with a project's own catalog. */
   readonly freshProcessLacks: Array<string>;
+  /** The process cannot answer for its model list, as a runtime without model/list. */
+  listingUnavailable: boolean;
+  /** Runs while the process is asked for its models, before it answers. */
+  duringModelStatus: Effect.Effect<void>;
 }
 
 const makeFixture = Effect.gen(function* () {
@@ -93,6 +97,8 @@ const makeFixture = Effect.gen(function* () {
     backgroundWork: false,
     duringBackgroundProbe: Effect.void,
     freshProcessLacks: [],
+    listingUnavailable: false,
+    duringModelStatus: Effect.void,
   };
   fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
   return fixture;
@@ -145,12 +151,18 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
         holdsLiveWork: ({ pastPinCeiling }) =>
           pastPinCeiling ? fixture.liveWork.confirm : Effect.succeed(fixture.liveWork.held),
         modelStatus: (model) =>
-          Effect.succeed(
-            !fixture.catalog.includes(model) || known.has(model)
-              ? "ready"
-              : offeredAtStart.has(model)
-                ? "missing"
-                : "predated",
+          Effect.suspend(() => fixture.duringModelStatus).pipe(
+            Effect.andThen(
+              Effect.sync(() =>
+                !fixture.catalog.includes(model) || known.has(model)
+                  ? "ready"
+                  : fixture.listingUnavailable
+                    ? "unconfirmed"
+                    : offeredAtStart.has(model)
+                      ? "missing"
+                      : "predated",
+              ),
+            ),
           ),
         ensureThread: () => unused("ensureThread"),
         resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
@@ -723,6 +735,46 @@ it.effect("a start that fails after its open stops holding the process at once",
       fixture.catalog.push(addedModel);
       yield* open(threadB, addedModel);
       assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("an idle deadline that falls during the model check does not close the process", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open, runTurn } = yield* sharedSession;
+      yield* finishTurn(fixture, runTurn, threadA);
+      yield* TestClock.adjust("29 minutes");
+      const checking = yield* Deferred.make<void>();
+      const answer = yield* Deferred.make<void>();
+      fixture.duringModelStatus = Deferred.succeed(checking, undefined).pipe(
+        Effect.andThen(Deferred.await(answer)),
+      );
+      const opening = yield* open(threadB).pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(checking);
+      // The idle deadline armed when thread A's turn ended passes while the process is asked.
+      yield* TestClock.adjust("2 minutes");
+      fixture.duringModelStatus = Effect.void;
+      yield* Deferred.succeed(answer, undefined);
+      assert.isTrue(Exit.isSuccess(yield* Fiber.join(opening)));
+      assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("a process that cannot list its models still runs the turn and is never restarted", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open, runTurn } = yield* sharedSession;
+      yield* finishTurn(fixture, runTurn, threadA);
+      fixture.listingUnavailable = true;
+      fixture.catalog.push(addedModel);
+      yield* open(threadB, addedModel);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+      assert.strictEqual(yield* Queue.size(fixture.closed), 0);
     }).pipe(Effect.provide(layer(fixture)));
   }),
 );

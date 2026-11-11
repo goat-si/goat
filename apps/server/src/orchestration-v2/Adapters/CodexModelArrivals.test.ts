@@ -168,3 +168,18 @@ it.effect("a hidden model the serving process still runs is ready", () =>
     assert.strictEqual(yield* modelStatus(hidden), "ready");
   }),
 );
+
+it.effect("a cached-only answer never asks the process", () =>
+  Effect.gen(function* () {
+    const { modelStatus, lists } = yield* arrivals({
+      atOpen: [model(known)],
+      now: [model(known), model(added)],
+      served: [[known]],
+    });
+    assert.strictEqual(yield* modelStatus(added, { cachedOnly: true }), "unconfirmed");
+    assert.strictEqual(yield* lists, 0);
+    assert.strictEqual(yield* modelStatus(added), "predated");
+    assert.strictEqual(yield* modelStatus(added, { cachedOnly: true }), "predated");
+    assert.strictEqual(yield* lists, 1);
+  }),
+);

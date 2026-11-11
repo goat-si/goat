@@ -20,15 +20,13 @@ export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRes
   {
     runningTurns: Schema.Number,
     model: Schema.optional(Schema.String),
-    modelStatus: Schema.optional(Schema.Literals(["predated", "missing", "unconfirmed"])),
+    modelStatus: Schema.optional(Schema.Literals(["predated", "missing"])),
   },
 ) {
   override get message(): string {
     switch (this.model === undefined ? undefined : this.modelStatus) {
       case "missing":
         return `This provider's process does not know ${this.model}, and a restart would not help: GOAT's model list either lacks it or already had it when that process started. Pick another model, or check this project's provider configuration for its model catalog.`;
-      case "unconfirmed":
-        return `GOAT could not confirm that this provider's process can run ${this.model}: it did not answer for its model list, or GOAT has no model list from the provider yet. Once the work still running on it finishes, sending again starts a new process. Try again shortly or pick another model.`;
       case "predated":
         return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes, sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
     }
@@ -82,13 +80,14 @@ export interface RetirableSession {
   >;
 }
 
-type ModelRefusal = Exclude<ProviderAdapter.ProviderModelStatus, "ready">;
+/** An unconfirmed model never refuses or restarts: when GOAT cannot ask, the turn runs as before. */
+type ModelRefusal = Exclude<ProviderAdapter.ProviderModelStatus, "ready" | "unconfirmed">;
 
 /** A model state refuses the turn without marking the session; nothing is drained for it. */
 export type Retirement = "current" | "released" | "retiring" | ModelRefusal;
 
 const isModelRefusal = (retired: Retirement): retired is ModelRefusal =>
-  retired === "predated" || retired === "missing" || retired === "unconfirmed";
+  retired === "predated" || retired === "missing";
 
 /** A retiring session still takes turns from threads with a turn running on it; a model state refuses this turn. */
 export const refuses = (retired: Retirement, threadHasRunningTurn: boolean) =>
@@ -121,7 +120,8 @@ export const refuseUnready = Effect.fnUntraced(function* <E>(
 ) {
   if (model === undefined || runtime.modelStatus === undefined) return;
   const status = yield* runtime.modelStatus(model);
-  if (status !== "ready") return yield* Effect.fail(refuse(restartRequired(status, 0, model)));
+  if (status === "predated" || status === "missing")
+    return yield* Effect.fail(refuse(restartRequired(status, 0, model)));
 });
 
 /**
@@ -193,9 +193,10 @@ export const make = <
         const turnOpens = new Map(entry.turnOpens).set(turn.threadId, runId);
         return new Map(current).set(key, { ...entry, turnOpens });
       });
-    const releaseIdle = Effect.fnUntraced(function* (
-      busy: "retiring" | "predated" | "unconfirmed",
-    ) {
+    // The model check below waits on the process; an idle deadline must not fall inside it.
+    if (turn !== undefined)
+      yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
+    const releaseIdle = Effect.fnUntraced(function* (busy: "retiring" | "predated") {
       const latest = yield* read;
       if (latest === undefined) return "released" as Retirement;
       if (latest.busyTurns.size > 0) return busy;
@@ -239,7 +240,7 @@ export const make = <
     if (stale) return yield* releaseIdle("retiring");
     if (model === undefined || marked.runtime.modelStatus === undefined) return "current";
     const status = yield* marked.runtime.modelStatus(model);
-    if (status === "ready") return "current";
+    if (status === "ready" || status === "unconfirmed") return "current";
     return status === "missing" ? status : yield* releaseIdle(status);
   });
 

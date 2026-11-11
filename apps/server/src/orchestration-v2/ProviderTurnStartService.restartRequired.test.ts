@@ -49,3 +49,13 @@ effectIt.effect(
       );
     }),
 );
+
+effectIt.effect("a goal pause opens its session without the new-turn model check", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({ text: "/goal pause" });
+
+    yield* harness.start.pipe(Effect.exit);
+
+    expect(harness.open).toHaveBeenCalledWith(expect.objectContaining({ startsTurn: false }));
+  }),
+);

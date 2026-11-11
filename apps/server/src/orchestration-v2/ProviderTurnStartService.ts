@@ -1,4 +1,5 @@
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
+import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 export { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 import { isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.ts";
@@ -769,7 +770,8 @@ export const layer: Layer.Layer<
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           runId: run.id,
-          startsTurn: input.reattach !== true,
+          startsTurn:
+            input.reattach !== true && !(yield* startsNoModelTurn(codexSurvivors, run, message)),
           ...(run.delegatedTaskId === undefined ? {} : { delegatedTaskId: run.delegatedTaskId }),
           threadId: projection.thread.id,
           providerSessionId,

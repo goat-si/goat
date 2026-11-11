@@ -76,6 +76,7 @@ export const makeCodexModelArrivals = <E>(input: {
 }) => {
   const atStart = offeredFromCatalog(input.atStart);
   let served: ReadonlySet<string> | undefined;
+  let warned = false;
   const lists = Effect.fn("CodexModelArrivals.lists")(function* (model: string) {
     if (served?.has(model)) return true;
     // Codex can still learn models online, so a miss is asked again.
@@ -83,15 +84,28 @@ export const makeCodexModelArrivals = <E>(input: {
     // Exact: a provider's own catalog matches slugs exactly, and GOAT cannot see which catalog it uses.
     return served.has(model);
   });
-  return Effect.fn("CodexModelArrivals.modelStatus")(function* (model: string) {
+  return Effect.fn("CodexModelArrivals.modelStatus")(function* (
+    model: string,
+    options?: { readonly cachedOnly?: boolean },
+  ) {
     const offered = yield* input.offered;
     const entry = offered.find((candidate) => candidate.slug === model);
     if (entry?.isCustom === true) return "ready" as ProviderModelStatus;
-    const listed = yield* lists(model).pipe(
-      Effect.timeoutOption("10 seconds"),
-      Effect.orElseSucceed(() => Option.none<boolean>()),
-    );
-    if (Option.isNone(listed)) return "unconfirmed";
+    const listed =
+      options?.cachedOnly === true
+        ? Option.fromNullishOr(served?.has(model))
+        : yield* lists(model).pipe(
+            Effect.timeoutOption("10 seconds"),
+            Effect.orElseSucceed(() => Option.none<boolean>()),
+          );
+    if (Option.isNone(listed)) {
+      if (!warned && options?.cachedOnly !== true)
+        yield* Effect.logWarning("Codex did not list its models; its turns run unchecked", {
+          model,
+        });
+      warned ||= options?.cachedOnly !== true;
+      return "unconfirmed";
+    }
     if (listed.value) return "ready";
     // A pending or failed probe publishes no catalog, so GOAT cannot tell what a new process knows.
     if (entry === undefined)
