@@ -1,4 +1,5 @@
 import { connectDesktopPage, withTabSetupCleanup } from "./TabSetupCleanup.ts";
+import { desktopReattachment } from "./DesktopReattachment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import * as ServerBrowserLimits from "./serverBrowserLimits.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
@@ -2595,15 +2596,19 @@ const make = Effect.gen(function* () {
     );
   }
 
-  yield* desktopChannel.detached.pipe(
-    Stream.runForEach((key) =>
-      Effect.sync(() => {
-        const tab = tabs.get(tabKey(key.threadId, key.tabId));
-        if (tab?.desktop) dropTab(tab, false);
-      }),
-    ),
-    Effect.forkScoped,
-  );
+  const reattachment = desktopReattachment({
+    channel: desktopChannel,
+    manager,
+    ensure: ensureTab,
+    hasTab: (key) => tabs.has(tabKey(key.threadId, key.tabId)),
+    drop: (key) => {
+      const tab = tabs.get(tabKey(key.threadId, key.tabId));
+      if (!tab?.desktop) return false;
+      dropTab(tab, false);
+      return true;
+    },
+  });
+  yield* desktopChannel.detached.pipe(Stream.runForEach(reattachment.detached), Effect.forkScoped);
   // An older desktop app ignores serverRendered and hosts the tab itself, with its own sign-ins.
   yield* desktopChannel.attached.pipe(
     Stream.runForEach((key) =>
@@ -2621,19 +2626,7 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
   // Reconnect returned pages immediately so all clients keep receiving URL and title changes.
-  yield* desktopChannel.attached.pipe(
-    Stream.runForEach((key) =>
-      Effect.gen(function* () {
-        if (tabs.has(tabKey(key.threadId, key.tabId))) return;
-        const { sessions } = yield* manager.list({ threadId: ThreadId.make(key.threadId) });
-        const snapshot = sessions.find(
-          (session) => session.tabId === key.tabId && session.runtime === "server",
-        );
-        if (snapshot) yield* Effect.promise(() => ensureTab(snapshot).catch(constVoid));
-      }).pipe(Effect.ignore),
-    ),
-    Effect.forkScoped,
-  );
+  yield* desktopChannel.attached.pipe(Stream.runForEach(reattachment.attached), Effect.forkScoped);
   yield* capacity.closeIdle.pipe(
     Effect.repeat(Schedule.spaced(ServerBrowserLimits.IDLE_SWEEP_INTERVAL)),
     Effect.forkScoped,
