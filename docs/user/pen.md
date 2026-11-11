@@ -102,7 +102,7 @@ Run `pen ssh-config --install` on the machine where GOAT runs. It adds an SSH ho
 `pen-<name>` for every member, with the member's login user and host keys, and keeps the list
 current as machines join or leave. GOAT finds these hosts like any other SSH host, so you can
 [open projects and start work](./remote-access.md#desktop-managed-ssh) on a member by choosing
-`pen-<name>`. `pen ssh-config --uninstall` removes them.
+`pen-<name>`. `pen ssh-config --uninstall` removes them. Each member also gets `pen-<nodeId>` (the full id is in `pen ls --json`), which reaches exactly that machine and never shares a connection with another ssh (unless a member is named with that id; that alias keeps its old meaning).
 
 Pen's hosts set no key to log in with, and a `pen-<name>` host does not take the `IdentityFile` of another host
 you set up for the same machine. If you log in to a member with a key that is not one of ssh's defaults, add a
