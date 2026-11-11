@@ -59,3 +59,24 @@ effectIt.effect("a goal pause opens its session without the new-turn model check
     expect(harness.open).toHaveBeenCalledWith(expect.objectContaining({ startsTurn: false }));
   }),
 );
+
+effectIt.effect(
+  "a restart continuation skips the model check only when the adapter can adopt the survivor",
+  () =>
+    Effect.gen(function* () {
+      // With cancelled background work the continuation sends a restart note as a new native turn.
+      for (const cancelledWork of [false, true]) {
+        const harness = makeLocalCommandHarness({
+          text: "Continue",
+          previousTurn: { runStatus: "interrupted", turnStatus: "interrupted" },
+          restartContinuation: { cancelledWork },
+        });
+
+        yield* harness.start.pipe(Effect.exit);
+
+        expect(harness.open).toHaveBeenCalledWith(
+          expect.objectContaining({ startsTurn: cancelledWork }),
+        );
+      }
+    }),
+);

@@ -8,9 +8,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 /**
- * Whether a turn start opens its session without starting a model turn, so the new-turn model
- * check would only get in its way: adopting a Codex turn that survived a restart (the adapter
- * adopts it instead of submitting), or a goal command that only reads, pauses or clears the goal.
+ * Whether a turn start opens without starting a model turn: a Codex survivor adoption (the adapter
+ * checks the model itself if no survivor is left), or a goal read, pause or clear. A continuation
+ * carrying a restart note reaches the adapter as a new turn, which never adopts.
  */
 export const startsNoModelTurn = Effect.fn("TurnModelGate.startsNoModelTurn")(function* (
   survivors: Option.Option<{
@@ -25,9 +25,10 @@ export const startsNoModelTurn = Effect.fn("TurnModelGate.startsNoModelTurn")(fu
     readonly restartContinuationOfRunId?: RunId | undefined;
   },
   message: { readonly text: string; readonly attachments?: ReadonlyArray<unknown> } | undefined,
+  noteContinuation: boolean,
 ) {
   if (run.restartContinuationOfRunId !== undefined) {
-    if (Option.isNone(survivors)) return false;
+    if (noteContinuation || Option.isNone(survivors)) return false;
     const binding = yield* survivors.value.get(run.modelSelection.instanceId, run.threadId);
     return binding?.sourceRunId === run.restartContinuationOfRunId;
   }

@@ -5,6 +5,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import type { ProviderModelStatus } from "@goat/provider-core/server/ProviderAdapter";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -13,6 +14,9 @@ import type * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 
 const offeredFromCatalog = (models: ReadonlyArray<ServerProviderModel>) =>
   new Set(models.flatMap((model) => (model.isCustom ? [] : [model.slug])));
+
+/** A process that did not answer is not asked again this soon, so one turn waits at most once. */
+const UNANSWERED_QUIET_MS = 60_000;
 
 /** Whether this open reconnects a process kept from an earlier GOAT run, as the client factory does. */
 export const reconnectsKeptProcess = Effect.fn("CodexModelArrivals.reconnectsKeptProcess")(
@@ -76,6 +80,7 @@ export const makeCodexModelArrivals = <E>(input: {
 }) => {
   const atStart = offeredFromCatalog(input.atStart);
   let served: ReadonlySet<string> | undefined;
+  let unansweredAtMs: number | undefined;
   let warned = false;
   const lists = Effect.fn("CodexModelArrivals.lists")(function* (model: string) {
     if (served?.has(model)) return true;
@@ -91,14 +96,22 @@ export const makeCodexModelArrivals = <E>(input: {
     const offered = yield* input.offered;
     const entry = offered.find((candidate) => candidate.slug === model);
     if (entry?.isCustom === true) return "ready" as ProviderModelStatus;
+    const quiet =
+      unansweredAtMs !== undefined &&
+      (yield* Clock.currentTimeMillis) - unansweredAtMs < UNANSWERED_QUIET_MS;
     const listed =
       options?.cachedOnly === true
         ? Option.fromNullishOr(served?.has(model))
-        : yield* lists(model).pipe(
-            Effect.timeoutOption("10 seconds"),
-            Effect.orElseSucceed(() => Option.none<boolean>()),
-          );
+        : quiet
+          ? served?.has(model) === true
+            ? Option.some(true)
+            : Option.none<boolean>()
+          : yield* lists(model).pipe(
+              Effect.timeoutOption("10 seconds"),
+              Effect.orElseSucceed(() => Option.none<boolean>()),
+            );
     if (Option.isNone(listed)) {
+      if (options?.cachedOnly !== true && !quiet) unansweredAtMs = yield* Clock.currentTimeMillis;
       if (!warned && options?.cachedOnly !== true)
         yield* Effect.logWarning("Codex did not list its models; its turns run unchecked", {
           model,

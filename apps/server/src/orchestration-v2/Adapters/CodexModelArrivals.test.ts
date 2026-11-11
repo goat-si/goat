@@ -138,17 +138,28 @@ it.effect("a process that cannot list its models is unconfirmed for every offere
   }),
 );
 
-it.effect("a process that does not answer its model list is unconfirmed", () =>
-  Effect.gen(function* () {
-    const modelStatus = makeCodexModelArrivals({
-      atStart: [model(known)],
-      offered: Effect.succeed([model(known), model(added)]),
-      listServed: Effect.never,
-    });
-    const answer = yield* modelStatus(added).pipe(Effect.forkChild);
-    yield* TestClock.adjust("10 seconds");
-    assert.strictEqual(yield* Fiber.join(answer), "unconfirmed");
-  }),
+it.effect(
+  "a process that does not answer its model list is unconfirmed and asked again later",
+  () =>
+    Effect.gen(function* () {
+      const lists = yield* Ref.make(0);
+      const modelStatus = makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known), model(added)]),
+        listServed: Ref.update(lists, (count) => count + 1).pipe(Effect.andThen(Effect.never)),
+      });
+      const answer = yield* modelStatus(added).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      assert.strictEqual(yield* Fiber.join(answer), "unconfirmed");
+      // The open that asked checks again before its turn; that check must not wait once more.
+      assert.strictEqual(yield* modelStatus(added), "unconfirmed");
+      assert.strictEqual(yield* Ref.get(lists), 1);
+      yield* TestClock.adjust("1 minute");
+      const later = yield* modelStatus(added).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      assert.strictEqual(yield* Fiber.join(later), "unconfirmed");
+      assert.strictEqual(yield* Ref.get(lists), 2);
+    }),
 );
 
 it.effect("a hidden model the serving process still runs is ready", () =>

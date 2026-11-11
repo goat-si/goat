@@ -21,13 +21,13 @@ const run = (input: { readonly restartContinuationOfRunId?: RunId }) => ({
 it.effect("adopting a Codex turn that survived a restart opens without the model check", () =>
   Effect.gen(function* () {
     const continuation = run({ restartContinuationOfRunId: survivedRun });
-    assert.isTrue(yield* startsNoModelTurn(survivors(survivedRun), continuation, undefined));
+    assert.isTrue(yield* startsNoModelTurn(survivors(survivedRun), continuation, undefined, false));
     // Without a binding for that run there is nothing to adopt, so a native turn will be sent.
     assert.isFalse(
-      yield* startsNoModelTurn(survivors(RunId.make("other")), continuation, undefined),
+      yield* startsNoModelTurn(survivors(RunId.make("other")), continuation, undefined, false),
     );
-    assert.isFalse(yield* startsNoModelTurn(survivors(undefined), continuation, undefined));
-    assert.isFalse(yield* startsNoModelTurn(Option.none(), continuation, undefined));
+    assert.isFalse(yield* startsNoModelTurn(survivors(undefined), continuation, undefined, false));
+    assert.isFalse(yield* startsNoModelTurn(Option.none(), continuation, undefined, false));
   }),
 );
 
@@ -35,8 +35,8 @@ it.effect("goal commands that only read or change the goal skip the model check"
   Effect.gen(function* () {
     const plain = run({});
     for (const text of ["/goal", "/goal pause", "/goal clear"])
-      assert.isTrue(yield* startsNoModelTurn(Option.none(), plain, { text }), text);
+      assert.isTrue(yield* startsNoModelTurn(Option.none(), plain, { text }, false), text);
     for (const text of ["/goal ship the release", "/goal resume", "hi"])
-      assert.isFalse(yield* startsNoModelTurn(Option.none(), plain, { text }), text);
+      assert.isFalse(yield* startsNoModelTurn(Option.none(), plain, { text }, false), text);
   }),
 );

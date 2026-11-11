@@ -185,13 +185,15 @@ export const make = <
     // Turn starts and ends replace the entry, so every decision reads it again after a yield.
     const read = Ref.get(input.sessions).pipe(Effect.map((current) => current.get(key)));
     const runId = turn?.id;
-    // Held until the start attempt registers its turn or exits; its own lifecycle ends it.
+    // Held until the start attempt registers its turn or exits; its own lifecycle ends it. The
+    // same update moves the idle generation, so an idle release already under way keeps the entry.
     if (turn !== undefined && runId !== undefined)
       yield* Ref.update(input.sessions, (current) => {
         const entry = current.get(key);
         if (entry === undefined) return current;
         const turnOpens = new Map(entry.turnOpens).set(turn.threadId, runId);
-        return new Map(current).set(key, { ...entry, turnOpens });
+        const idleGeneration = entry.idleGeneration + 1;
+        return new Map(current).set(key, { ...entry, turnOpens, idleGeneration });
       });
     // The model check below waits on the process; an idle deadline must not fall inside it.
     if (turn !== undefined)

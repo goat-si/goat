@@ -42,6 +42,7 @@ import {
   layerTestStores,
 } from "./ProviderSessionManager.persistence.testkit.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { makeCodexModelArrivals } from "./Adapters/CodexModelArrivals.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
@@ -81,6 +82,10 @@ interface Fixture {
   listingUnavailable: boolean;
   /** Runs while the process is asked for its models, before it answers. */
   duringModelStatus: Effect.Effect<void>;
+  /** When set, processes answer with Codex's real model check over this listing of theirs. */
+  listServed: Effect.Effect<ReadonlyArray<string>> | undefined;
+  /** Runs before the manager stops a session's armed idle timer to re-arm it. */
+  beforeIdleInterrupt: Effect.Effect<void>;
 }
 
 const makeFixture = Effect.gen(function* () {
@@ -99,6 +104,8 @@ const makeFixture = Effect.gen(function* () {
     freshProcessLacks: [],
     listingUnavailable: false,
     duringModelStatus: Effect.void,
+    listServed: undefined,
+    beforeIdleInterrupt: Effect.void,
   };
   fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
   return fixture;
@@ -127,6 +134,16 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
           fixture.catalog.filter((model) => !fixture.freshProcessLacks.includes(model)),
       );
       fixture.keptProcessKnows = undefined;
+      const catalogModels = () =>
+        fixture.catalog.map((slug) => ({ slug, name: slug, isCustom: false, capabilities: null }));
+      const arrivals =
+        fixture.listServed === undefined
+          ? undefined
+          : makeCodexModelArrivals({
+              atStart: catalogModels(),
+              offered: Effect.sync(catalogModels),
+              listServed: Effect.suspend(() => fixture.listServed ?? Effect.succeed([])),
+            });
       return {
         instanceId,
         driver,
@@ -150,7 +167,8 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
         ),
         holdsLiveWork: ({ pastPinCeiling }) =>
           pastPinCeiling ? fixture.liveWork.confirm : Effect.succeed(fixture.liveWork.held),
-        modelStatus: (model) =>
+        modelStatus: (model, options) =>
+          arrivals?.(model, options) ??
           Effect.suspend(() => fixture.duringModelStatus).pipe(
             Effect.andThen(
               Effect.sync(() =>
@@ -238,7 +256,9 @@ const layer = (fixture: Fixture) => {
     layerTestEventSink,
     IdAllocator.layer,
     layerTestStores,
-    ProviderSessionManager.layer.pipe(
+    ProviderSessionManager.layerWithOptions({
+      beforeIdleFiberInterrupt: Effect.suspend(() => fixture.beforeIdleInterrupt),
+    }).pipe(
       Layer.provide(
         Layer.mergeAll(
           adapters,
@@ -775,6 +795,57 @@ it.effect("a process that cannot list its models still runs the turn and is neve
       yield* open(threadB, addedModel);
       assert.strictEqual(yield* Ref.get(fixture.opens), 1);
       assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect(
+  "an idle release already under way when a turn reserves the process leaves it running",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      yield* Effect.gen(function* () {
+        const { open, runTurn } = yield* sharedSession;
+        yield* finishTurn(fixture, runTurn, threadA);
+        yield* TestClock.adjust("29 minutes");
+        const reserved = yield* Deferred.make<void>();
+        const rearm = yield* Deferred.make<void>();
+        // Thread B's start has reserved the process; its re-arm has not yet stopped the old timer.
+        fixture.beforeIdleInterrupt = Effect.suspend(() => {
+          fixture.beforeIdleInterrupt = Effect.void;
+          return Deferred.succeed(reserved, undefined).pipe(Effect.andThen(Deferred.await(rearm)));
+        });
+        const opening = yield* open(threadB).pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(reserved);
+        yield* TestClock.adjust("2 minutes");
+        yield* Deferred.succeed(rearm, undefined);
+        assert.isTrue(Exit.isSuccess(yield* Fiber.join(opening)));
+        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+      }).pipe(Effect.provide(layer(fixture)));
+    }),
+);
+
+it.effect("a turn on a process that does not answer its model list waits for one listing", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    const listings = yield* Ref.make(0);
+    const asked = yield* Deferred.make<void>();
+    fixture.listServed = Effect.sync(() => fixture.catalog);
+    yield* Effect.gen(function* () {
+      const { open, runTurn } = yield* sharedSession;
+      yield* finishTurn(fixture, runTurn, threadA);
+      fixture.catalog.push(addedModel);
+      fixture.listServed = Ref.update(listings, (count) => count + 1).pipe(
+        Effect.andThen(Deferred.succeed(asked, undefined)),
+        Effect.andThen(Effect.never),
+      );
+      const opening = yield* open(threadB, addedModel).pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(asked);
+      yield* TestClock.adjust("10 seconds");
+      assert.strictEqual(yield* Ref.get(listings), 1);
+      assert.isTrue(Exit.isSuccess(yield* Fiber.join(opening)));
+      assert.strictEqual(yield* Ref.get(fixture.opens), 1);
     }).pipe(Effect.provide(layer(fixture)));
   }),
 );

@@ -73,6 +73,7 @@ import {
   makeCodexModelArrivals,
   reconnectsKeptProcess,
 } from "./CodexModelArrivals.ts";
+import { refuseUnready } from "../ProviderSessionRetirement.ts";
 export {
   CodexAppServerClientFactory,
   layerAppServerClientFactory,
@@ -1574,7 +1575,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
         const { offeredModels } = adapterOptions;
         // A kept process read its catalog in an earlier GOAT run, so what GOAT offers now says nothing.
-        const offeredAtStart =
+        const atStart =
           offeredModels === undefined
             ? undefined
             : (yield* reconnectsKeptProcess({
@@ -7278,6 +7279,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             Effect.mapError(mcpAppsError("Codex MCP resource read failed.")),
           ),
         };
+        const listServed = ensureInitialized.pipe(
+          Effect.andThen(listCodexModelSlugs((params) => client.request("model/list", params))),
+        );
+        const modelStatus =
+          offeredModels === undefined || atStart === undefined
+            ? undefined
+            : makeCodexModelArrivals({ atStart, offered: offeredModels, listServed });
 
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
@@ -7287,19 +7295,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           events: Stream.fromEffectRepeat(Queue.take(events)),
           canReuseContextUsage: canReuseCodexContextUsage,
           reopenAfterClose: true,
-          ...(offeredModels === undefined || offeredAtStart === undefined
-            ? {}
-            : {
-                modelStatus: makeCodexModelArrivals({
-                  atStart: offeredAtStart,
-                  offered: offeredModels,
-                  listServed: ensureInitialized.pipe(
-                    Effect.andThen(
-                      listCodexModelSlugs((params) => client.request("model/list", params)),
-                    ),
-                  ),
-                }),
-              }),
+          ...(modelStatus === undefined ? {} : { modelStatus }),
           ...makeCodexLiveWork({
             client,
             activeTurns: Ref.get(activeTurns),
@@ -7550,6 +7546,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       })
                     )
                       return;
+                    // The open skipped the model check for an adoption; with no survivor, check here.
+                    if (turnInput.restartContinuationOfRunId !== undefined && modelStatus)
+                      yield* refuseUnready(
+                        { modelStatus },
+                        turnInput.modelSelection.model,
+                        (no) => no,
+                      );
                     yield* startNativeTurn(turnInput, yield* toCodexInput(turnInput), true);
                   }).pipe(
                     Effect.mapError(
