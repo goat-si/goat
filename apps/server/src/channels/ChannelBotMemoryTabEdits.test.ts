@@ -209,6 +209,78 @@ describe("Memory tab requests to change or forget a note", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect(
+    "Ask to forget a correction keeps a newer note that reads like the one it replaced",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* writeNotes(
+          NOTES_HEADER +
+            line("Use pnpm", "a") +
+            "\n" +
+            line("Use npm", "b", "Use pnpm") +
+            "\n" +
+            line("Use pnpm", "c") +
+            "\n",
+        );
+        yield* send(goatBotForgetNoteMessage("Use npm"), "tab-forget");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + line("Use pnpm", "c") + "\n");
+        assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "Ask to forget the end of a correction chain removes the chain and nothing else",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const korean = line("Reply in Korean.", "k") + "\n";
+        // Saved after the chain with the words of its middle note, so it is a note of its own.
+        const tuesday = line("Release on Tuesday.", "d") + "\n";
+        yield* writeNotes(
+          NOTES_HEADER +
+            line("Release on Monday.", "a") +
+            "\n" +
+            korean +
+            line("Release on Tuesday.", "b", "Release on Monday.") +
+            "\n" +
+            line("Release on Wednesday.", "c", "Release on Tuesday.") +
+            "\n" +
+            tuesday,
+        );
+        yield* send(goatBotForgetNoteMessage("Release on Wednesday."), "tab-forget");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + korean + tuesday);
+        assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "Ask to forget refuses when removing the note would change what another replaces",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        // A hand edit put a note above the header. Without that note the header starts the file
+        // again, so its wording stops being a note and the correction below would replace nothing.
+        const headerWords = NOTES_HEADER.split("\n")[2] ?? "";
+        const text =
+          line(fridays, "a") +
+          "\n" +
+          NOTES_HEADER +
+          line("Keep notes short.", "c", headerWords) +
+          "\n";
+        yield* writeNotes(text);
+        yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
+        assert.strictEqual(yield* readNotes, text);
+        assert.include(yield* replies, CHANNEL_COPY.noteForgetWouldRebind);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   // Two current notes whose words differ only in spacing count as the same words.
   const alike = () =>
     NOTES_HEADER +

@@ -20,7 +20,7 @@ import type * as ChannelLedger from "./ChannelLedger.ts";
 import { NOTES_HEADER } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeChannelBotNoteWriter, type NoteWriterHooks } from "./channelBotNoteTabEdits.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { CHANNEL_COPY, notesAlikeAnswer } from "./channelCopy.ts";
 import { inputIdFor } from "./channelIds.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -381,6 +381,60 @@ describe("Memory tab note edits", () => {
       );
     }).pipe(Effect.scoped, Effect.provide(services));
   });
+
+  it.effect(
+    "a change reads the file again before it appends and starts over once if it moved",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        const text = NOTES_HEADER + line(fridays, "a") + "\n";
+        yield* fs.writeFileString(files.notes, text);
+        // Between the read and the append someone saves the same words again, so an append from the
+        // first read would replace their note instead of the one the person saw.
+        const hand = line(fridays, "hand") + "\n";
+        let edits = 0;
+        const beforeCompare = Effect.suspend(() =>
+          edits++ === 0
+            ? fs.writeFileString(files.notes, hand, { flag: "a" }).pipe(Effect.orDie)
+            : Effect.void,
+        );
+        const writer = yield* makeChannelBotNoteWriter(fs, files, noOpenTasks, { beforeCompare });
+        const answer = yield* writer.tabEdit(
+          { intent: "message", text: goatBotChangeNoteMessage(fridays, "I deploy on Mondays.") },
+          "input-1",
+          "2026-11-07",
+          Effect.succeed(person()),
+        );
+        assert.strictEqual(yield* fs.readFileString(files.notes), text + hand);
+        assert.strictEqual(answer?.text, notesAlikeAnswer(fridays, 2));
+      }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
+  it.effect("a change leaves the file untouched when it moves before the append, twice", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      const text = NOTES_HEADER + line(fridays, "a") + "\n";
+      yield* fs.writeFileString(files.notes, text);
+      let edits = 0;
+      const hand = (n: number) => line("Hand edit " + n + ".", "hand-" + n) + "\n";
+      const beforeCompare = Effect.suspend(() =>
+        fs.writeFileString(files.notes, hand(++edits), { flag: "a" }).pipe(Effect.orDie),
+      );
+      const writer = yield* makeChannelBotNoteWriter(fs, files, noOpenTasks, { beforeCompare });
+      const answer = yield* writer.tabEdit(
+        { intent: "message", text: goatBotChangeNoteMessage(fridays, "I deploy on Mondays.") },
+        "input-1",
+        "2026-11-07",
+        Effect.succeed(person()),
+      );
+      assert.strictEqual(yield* fs.readFileString(files.notes), text + hand(1) + hand(2));
+      assert.strictEqual(answer?.text, CHANNEL_COPY.noteEditFailed);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
 
   it.effect("a forget says so when the note came back right after the rename", () =>
     Effect.gen(function* () {

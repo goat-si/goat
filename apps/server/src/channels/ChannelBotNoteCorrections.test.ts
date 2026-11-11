@@ -15,7 +15,8 @@ import {
   channelBotFilesFor,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
+import { CHANNEL_COPY, notesAlikeNotSaved } from "./channelCopy.ts";
 import { inputIdFor } from "./channelIds.ts";
 import {
   botMessages,
@@ -101,6 +102,39 @@ describe("GOAT Bot note corrections through reception", () => {
       const saved = yield* fs.readFileString(files.notes);
       assert.include(saved, "I deploy on Mondays.");
       assert.notInclude(saved, "(replaces:");
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+
+  it.effect("a correction naming words two current notes share saves nothing and says so", () => {
+    const { harness } = harnessFor((text) =>
+      text.includes("vp")
+        ? { remember: "Use vp.", rememberQuote: "Actually use vp", replacesNote: "Use pnpm" }
+        : text.includes("English")
+          ? {
+              remember: "Reply in English.",
+              rememberQuote: "Actually reply in English",
+              replacesNote: "Reply in Korean.",
+            }
+          : {},
+    );
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* notesFiles;
+      yield* appendChannelBotNote(fs, files, "Use pnpm", "2026-11-01T10:00:00Z", "a");
+      yield* appendChannelBotNote(fs, files, "Reply in Korean.", "2026-11-01T10:00:00Z", "k");
+      yield* appendChannelBotNote(fs, files, "Use  pnpm", "2026-11-02T10:00:00Z", "b");
+      const before = yield* fs.readFileString(files.notes);
+      yield* send("Actually use vp", "alike");
+      assert.strictEqual(yield* fs.readFileString(files.notes), before);
+      const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
+      assert.include(texts, notesAlikeNotSaved("Use pnpm", 2));
+      assert.notInclude(texts, "Got it.");
+      // Words one current note reads still name it.
+      yield* send("Actually reply in English", "unique");
+      const lines = parseChannelBotNoteLines(yield* fs.readFileString(files.notes));
+      assert.isDefined(lines.find((line) => line.text === "Reply in Korean.")?.replacedBy);
+      assert.strictEqual(lines.at(-1)?.text, "Reply in English.");
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
