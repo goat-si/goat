@@ -1,11 +1,26 @@
-export type GoatBotReplyPart =
+import type { Nodes, Root } from "mdast";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
+
+export type GoatBotReplyPart = (
   | { readonly kind: "prose"; readonly text: string }
   | {
       readonly kind: "table";
       /** The table exactly as written, to draw and to copy. */
       readonly markdown: string;
       readonly columns: number;
-    };
+    }
+) & {
+  /** Link reference definitions written in another part that this one refers to. */
+  readonly definitions?: string;
+};
+
+/** What a part draws: its own Markdown, then the definitions it carries from elsewhere. */
+export const goatBotReplyPartSource = (part: GoatBotReplyPart): string => {
+  const own = part.kind === "table" ? part.markdown : part.text;
+  return part.definitions === undefined ? own : own + "\n\n" + part.definitions;
+};
 
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
@@ -52,16 +67,19 @@ function isDelimiterRow(line: string): boolean {
 
 /**
  * Splits a bot reply at its tables so each can stand in its own card: a header row and a delimiter
- * row with as many cells, indented at most three spaces and outside any list, quote, HTML or code
- * block, then rows up to a blank line or another block. A reply with link reference definitions
- * outside code stays whole. One pass over the lines.
+ * row with as many cells, at most three spaces in and outside any list, quote, HTML or code block,
+ * then rows up to a blank line or another block. Definitions go to the parts that use them.
  */
 export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
   const whole = [{ kind: "prose" as const, text }];
   if (!text.includes("|")) return whole;
   const lines = text.split("\n");
   const parts: GoatBotReplyPart[] = [];
+  // Each part's first and last line, for placing the reply's definitions.
+  const spans: Array<readonly [number, number]> = [];
+  let definitionLines = 0;
   let prose: string[] = [];
+  let proseFrom = 0;
   let fence: string | null = null;
   // The list item or quote above, if any, after which an indented line may belong to it: a quote
   // ends at a blank line, a list item takes later lines indented as far as its text.
@@ -74,7 +92,8 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
   // Whether the paragraph run since the last blank line holds a list item, quote, HTML, code or
   // indented line, which could carry a table below it as a continuation.
   let held = false;
-  const keep = (line: string, code = false) => {
+  const keep = (line: string, index: number, code = false) => {
+    if (prose.length === 0) proseFrom = index;
     prose.push(line);
     held = line.trim() === "" ? false : held || code || /^\s/.test(line) || OTHER_BLOCK.test(line);
   };
@@ -85,7 +104,10 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
       .join("\n")
       .replace(/^(?:[ \t]*\n)+/, "")
       .trimEnd();
-    if (joined.trim() !== "") parts.push({ kind: "prose", text: joined });
+    if (joined.trim() !== "") {
+      parts.push({ kind: "prose", text: joined });
+      spans.push([proseFrom, proseFrom + prose.length - 1]);
+    }
     prose = [];
   };
   for (let index = 0; index < lines.length; index += 1) {
@@ -95,24 +117,24 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
       if (closer !== undefined && closer[0] === fence[0] && closer.length >= fence.length) {
         fence = null;
       }
-      keep(line, true);
+      keep(line, index, true);
       continue;
     }
     if (rawEnd !== null) {
       if (rawEnd.test(line)) rawEnd = null;
-      keep(line, true);
+      keep(line, index, true);
       continue;
     }
     const opener = FENCE_OPEN.exec(line)?.[1];
     if (opener !== undefined) {
       fence = opener;
-      keep(line, true);
+      keep(line, index, true);
       continue;
     }
     const raw = RAW_HTML.find(([start]) => start.test(line));
     if (raw !== undefined) {
       if (!raw[1].test(line.replace(raw[0], ""))) rawEnd = raw[1];
-      keep(line, true);
+      keep(line, index, true);
       continue;
     }
     if (line.trim() !== "") {
@@ -131,7 +153,11 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
       indentedCode =
         /^(?: {4}|\t)/.test(line) && container === null && (indentedCode || afterBlank);
     }
-    if (!indentedCode && DEFINITION_START.test(line)) return whole;
+    if (!indentedCode && DEFINITION_START.test(line)) {
+      definitionLines += 1;
+      keep(line, index);
+      continue;
+    }
     if (CONTAINER.test(line)) {
       const item = LIST_ITEM.exec(line);
       const indented = /^[ \t]/.test(line);
@@ -161,7 +187,7 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
       cellCount(delimiter) !== columns ||
       held
     ) {
-      keep(line);
+      keep(line, index);
       continue;
     }
     let end = index + 2;
@@ -172,11 +198,139 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
     }
     flushProse();
     parts.push({ kind: "table", markdown: lines.slice(index, end).join("\n"), columns });
+    spans.push([index, end - 1]);
     held = false;
     index = end - 1;
   }
   flushProse();
-  return parts.length === 0 ? [{ kind: "prose", text }] : parts;
+  if (parts.length === 0) return [{ kind: "prose", text }];
+  if (definitionLines === 0) return parts;
+  if (
+    parts.length === 1 ||
+    text.length > MAX_CARRIED_TEXT ||
+    parts.length > MAX_CARRIED_PARTS ||
+    definitionLines > MAX_CARRIED_DEFINITIONS
+  )
+    return whole;
+  return carryDefinitions(text, parts, spans) ?? whole;
+}
+
+// Carrying parses the reply and each part on every streamed chunk; past these a reply with
+// definitions stays one bubble, which keeps that under about 10 ms on a desktop.
+const MAX_CARRIED_TEXT = 16_000;
+const MAX_CARRIED_PARTS = 24;
+const MAX_CARRIED_DEFINITIONS = 24;
+
+// The chat's Markdown grammar, so a definition is found where the renderer finds it.
+const parser = unified().use(remarkParse).use(remarkGfm).freeze();
+
+interface Destination {
+  readonly url: string;
+  readonly title: string | null;
+}
+
+/** What each reference in a document points at, in order; null where it resolves to nothing. */
+function referenceDestinations(tree: Root): ReadonlyArray<Destination | null> {
+  const defined = new Map<string, Destination>();
+  const references: string[] = [];
+  const walk = (nodes: ReadonlyArray<Nodes>) => {
+    for (const node of nodes) {
+      if (node.type === "definition") {
+        if (!defined.has(node.identifier))
+          defined.set(node.identifier, { url: node.url, title: node.title ?? null });
+        continue;
+      }
+      if (node.type === "linkReference" || node.type === "imageReference")
+        references.push(node.identifier);
+      if ("children" in node) walk(node.children);
+    }
+  };
+  walk(tree.children);
+  return references.map((identifier) => defined.get(identifier) ?? null);
+}
+
+const sameDestinations = (
+  a: ReadonlyArray<Destination | null>,
+  b: ReadonlyArray<Destination | null>,
+) =>
+  a.length === b.length &&
+  a.every((x, i) => {
+    const y = b[i];
+    return x === null || y === undefined || y === null
+      ? x === y
+      : x.url === y.url && x.title === y.title;
+  });
+
+/**
+ * Gives each part the reply's definitions written in another part that it refers to, or null when
+ * that cannot keep every link exactly where the whole reply sends it. Only definitions at the top
+ * level, each once, wholly inside a prose part qualify; footnotes keep the reply whole. The parts
+ * are parsed again and their references must point where the whole reply's did, in order.
+ */
+function carryDefinitions(
+  text: string,
+  parts: ReadonlyArray<GoatBotReplyPart>,
+  spans: ReadonlyArray<readonly [number, number]>,
+): GoatBotReplyPart[] | null {
+  const tree = parser.parse(text);
+  const definitions: Array<{ identifier: string; source: string; part: number }> = [];
+  let footnotes = false;
+  const nestedDefinition = (nodes: ReadonlyArray<Nodes>, top: boolean): boolean =>
+    nodes.some((node) => {
+      if (node.type === "footnoteDefinition" || node.type === "footnoteReference") footnotes = true;
+      if (node.type === "definition" && !top) return true;
+      return "children" in node && nestedDefinition(node.children, false);
+    });
+  if (nestedDefinition(tree.children, true) || footnotes) return null;
+  for (const node of tree.children) {
+    if (node.type !== "definition") continue;
+    const start = node.position?.start;
+    const end = node.position?.end;
+    if (start?.offset === undefined || end?.offset === undefined) return null;
+    if (definitions.some((each) => each.identifier === node.identifier)) return null;
+    const part = spans.findIndex(([from, to]) => from <= start.line - 1 && end.line - 1 <= to);
+    if (part < 0 || parts[part]?.kind !== "prose") return null;
+    definitions.push({
+      identifier: node.identifier,
+      source: text.slice(start.offset, end.offset),
+      part,
+    });
+  }
+  // Which part each reference sits in, read from this one parse of the whole reply.
+  const partOf = (line: number) =>
+    spans.findIndex(([from, to]) => from <= line - 1 && line - 1 <= to);
+  const used = parts.map(() => new Set<string>());
+  const collect = (nodes: ReadonlyArray<Nodes>) => {
+    for (const node of nodes) {
+      if (node.type === "definition") continue;
+      if (node.type === "linkReference" || node.type === "imageReference") {
+        const line = node.position?.start.line;
+        if (line !== undefined) used[partOf(line)]?.add(node.identifier);
+      }
+      if ("children" in node) collect(node.children);
+    }
+  };
+  collect(tree.children);
+  const carried = parts.map((part, index) => {
+    const kept = definitions.filter(
+      (each) => each.part !== index && used[index]?.has(each.identifier) === true,
+    );
+    return kept.length === 0
+      ? part
+      : { ...part, definitions: kept.map((each) => each.source).join("\n\n") };
+  });
+  const whole = referenceDestinations(tree);
+  const split = carried.flatMap((part) =>
+    referenceDestinations(parser.parse(goatBotReplyPartSource(part))),
+  );
+  if (!sameDestinations(whole, split)) return null;
+  // A stretch of nothing but definitions draws nothing, so it gets no card of its own.
+  const drawn = new Set<number>();
+  for (const node of tree.children) {
+    const line = node.position?.start.line;
+    if (node.type !== "definition" && line !== undefined) drawn.add(partOf(line));
+  }
+  return carried.filter((part, index) => part.kind !== "prose" || drawn.has(index));
 }
 
 /** A key for each part: where it starts in the reply, which stays put while the reply streams on. */
