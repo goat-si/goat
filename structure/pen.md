@@ -2,7 +2,9 @@
 
 Pen is a mesh of machines that reach each other's loopback ports through relays, outside the GOAT server. GOAT
 consumes it only through OpenSSH: `pen ssh-config --install` writes `Host pen-<name>` entries that
-[SSH](ssh.md) discovers like any other alias. Decisions and traps are in
+[SSH](ssh.md) discovers like any other alias. Contract v1.2 adds service streams (a program registers a name over
+the control socket and learns, through a loopback proof, which member calls) and the exact
+`pen pipe --node --noise` form; no GOAT code uses them yet. Decisions and traps are in
 [docs/internals/pen.md](../docs/internals/pen.md); the normative wire rules are
 `packages/pen-protocol/CONTRACT.md`, which wins over every implementation.
 

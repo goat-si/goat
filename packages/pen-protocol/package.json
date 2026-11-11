@@ -5,7 +5,9 @@
   "exports": {
     "./wire": "./src/wire.ts",
     "./identity": "./src/identity.ts",
-    "./login": "./src/login.ts"
+    "./login": "./src/login.ts",
+    "./service": "./src/service.ts",
+    "./ready": "./src/ready.ts"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",

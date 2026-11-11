@@ -61,6 +61,21 @@ func Resolve(members []mesh.Member, arg string) (mesh.Member, error) {
 	return mesh.Member{}, ambiguous(arg, byPrefix)
 }
 
+// ResolveExact finds the member whose node id is exactly nodeID, and only if its Noise key is noise.
+// It never falls back to a name or a prefix, so a departed node's id used as a name cannot redirect it.
+func ResolveExact(members []mesh.Member, nodeID, noise string) (mesh.Member, error) {
+	for _, m := range members {
+		if m.NodeID != nodeID {
+			continue
+		}
+		if m.NoisePub != noise {
+			return mesh.Member{}, fmt.Errorf("node %s has a different Noise key in this machine's view than --noise", nodeID)
+		}
+		return m, nil
+	}
+	return mesh.Member{}, fmt.Errorf("node %s is not a member", nodeID)
+}
+
 func ambiguous(arg string, ms []mesh.Member) error {
 	var c []string
 	for _, m := range ms {

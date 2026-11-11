@@ -152,6 +152,15 @@ func OpenTCP(ctx context.Context, relays []string, id *ident.Identity, m mesh.Me
 	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "tcp", Port: port})
 }
 
+// OpenService opens a kind 0x01 service stream for name on member m and returns the confirmed session.
+func OpenService(ctx context.Context, relays []string, id *ident.Identity, m mesh.Member, name string) (*session.Secure, error) {
+	noise, err := ident.DecodeKey(m.NoisePub)
+	if err != nil {
+		return nil, err
+	}
+	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "service", Name: name})
+}
+
 // Join runs the joiner side of tok against its relay and returns the verified set (not yet saved).
 func Join(ctx context.Context, st *state.Store, id *ident.Identity, tok mesh.Token, name string) (*mesh.Store, error) {
 	nodeID := tok.NodeID()

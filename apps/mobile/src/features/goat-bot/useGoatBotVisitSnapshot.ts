@@ -31,6 +31,16 @@ export interface GoatBotVisitSnapshot {
   readonly readUpTo: string | null;
   /** The newest message there was when the visit began: later ones are read as they arrive. */
   readonly newestAtOpen: string | null;
+  /**
+   * Moments in this visit when the person could not see the chat (iOS inactive): what arrived
+   * after the newest message they had seen, up to the newest that came while away.
+   */
+  readonly away?: ReadonlyArray<GoatBotAwayInterval>;
+}
+
+export interface GoatBotAwayInterval {
+  readonly after: string | null;
+  readonly upTo: string | null;
 }
 
 /**
@@ -60,16 +70,33 @@ export function useGoatBotVisitSnapshot(input: {
     input.focused && focus.focused && input.conversation !== null
       ? `${input.conversation}:${focus.visit}`
       : null;
-  const [snapshot, setSnapshot] = useState<GoatBotVisitSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<(GoatBotVisitSnapshot & { paused: boolean }) | null>(
+    null,
+  );
+  const reading = input.reading !== false;
   if (key !== null && snapshot?.key !== key && input.loaded) {
-    setSnapshot({ key, readUpTo: input.lastVisitedAt, newestAtOpen: input.newestAt });
-  } else if (
-    key !== null &&
-    snapshot?.key === key &&
-    input.reading === false &&
-    snapshot.newestAtOpen !== input.newestAt
-  ) {
-    setSnapshot({ ...snapshot, newestAtOpen: input.newestAt });
+    setSnapshot({
+      key,
+      readUpTo: input.lastVisitedAt,
+      newestAtOpen: input.newestAt,
+      away: [],
+      paused: false,
+    });
+  } else if (key !== null && snapshot?.key === key) {
+    // Stepping away starts an interval after the newest message seen; it grows while away.
+    const away = snapshot.away ?? [];
+    const last = away.at(-1);
+    if (!reading && !snapshot.paused) {
+      setSnapshot({
+        ...snapshot,
+        paused: true,
+        away: [...away, { after: input.newestAt, upTo: input.newestAt }],
+      });
+    } else if (!reading && last !== undefined && last.upTo !== input.newestAt) {
+      setSnapshot({ ...snapshot, away: [...away.slice(0, -1), { ...last, upTo: input.newestAt }] });
+    } else if (reading && snapshot.paused) {
+      setSnapshot({ ...snapshot, paused: false });
+    }
   }
   return key !== null && snapshot?.key === key ? snapshot : null;
 }
