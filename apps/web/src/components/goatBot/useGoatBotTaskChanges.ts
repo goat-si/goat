@@ -8,17 +8,21 @@ import { useEnvironment } from "~/state/environments";
 
 const NO_CHANGES = Atom.make(AsyncResult.initial<{ readonly revision: number }, never>(false));
 
-/** Shares the server's signal per environment; older servers refresh when the user returns. */
+/**
+ * Shares the server's signal per environment. Older servers, and a stream the server refused or
+ * lost, read again when the person returns to the window instead.
+ */
 export function useGoatBotTaskChanges(environmentId: EnvironmentId): string {
   const environment = useEnvironment(environmentId);
   const supported = environment?.serverConfig?.environment.capabilities.goatBotTaskChanges === true;
   const result = useAtomValue(
     supported ? channelEnvironment.taskChanges({ environmentId, input: {} }) : NO_CHANGES,
   );
+  const streaming = supported && !AsyncResult.isFailure(result);
   const [visits, setVisits] = useState(0);
-  // oxlint-disable-next-line goat/react-effect-budget -- Older servers have no task change stream.
+  // oxlint-disable-next-line goat/react-effect-budget -- Without a task change stream, a return to the window is the signal.
   useEffect(() => {
-    if (supported) return;
+    if (streaming) return;
     const onFocus = () => setVisits((n) => n + 1);
     const onVisibility = () => {
       if (document.visibilityState === "visible") onFocus();
@@ -29,8 +33,8 @@ export function useGoatBotTaskChanges(environmentId: EnvironmentId): string {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [supported]);
+  }, [streaming]);
   // The stream opens at revision 0, the state the first read already shows; only later ones change.
   const revision = Option.getOrNull(AsyncResult.value(result))?.revision ?? 0;
-  return supported ? `stream:${revision}` : `visit:${visits}`;
+  return streaming ? `stream:${revision}` : `visit:${visits}`;
 }

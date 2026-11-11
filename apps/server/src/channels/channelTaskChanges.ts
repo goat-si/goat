@@ -1,3 +1,4 @@
+import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -29,10 +30,50 @@ export interface ChannelTaskChanges {
  * revision when it closes, so a steady stream of changes still reports once per window.
  */
 export const TASK_CHANGES_COALESCE = Duration.millis(250);
+/** Change streams one server holds open, across every connection. */
+const MAX_TASK_CHANGE_STREAMS = 512;
+/** Change streams one connection holds open; a client shares one per server. */
+export const MAX_TASK_CHANGE_STREAMS_PER_CONNECTION = 4;
+
+class TaskChangeStreamLimitError extends Data.TaggedError("TaskChangeStreamLimitError")<{
+  readonly message: string;
+  readonly limit: number;
+}> {}
+
+/**
+ * Admits at most `limit` open streams. One over it ends as a defect, as RpcInFlightLimit does for
+ * requests, so the RPC's error contract stays as it is; the client then reads on open and focus.
+ */
+export const makeStreamLimit = (limit: number, holder: string) => {
+  let open = 0;
+  return <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+    Stream.unwrap(
+      Effect.acquireRelease(
+        Effect.suspend(() =>
+          open >= limit
+            ? Effect.die(
+                new TaskChangeStreamLimitError({
+                  message: holder + " already has " + limit + " task change streams open.",
+                  limit,
+                }),
+              )
+            : Effect.sync(() => {
+                open += 1;
+              }),
+        ),
+        () =>
+          Effect.sync(() => {
+            open -= 1;
+          }),
+      ).pipe(Effect.as(stream)),
+    );
+};
 
 export const makeChannelTaskChanges = Effect.fn("makeChannelTaskChanges")(function* (
   sql: SqlClient.SqlClient,
+  maxStreams: number = MAX_TASK_CHANGE_STREAMS,
 ) {
+  const limited = makeStreamLimit(maxStreams, "This server");
   // One mark per subscriber, held only for its owner: a change sets it, and changes while it is
   // set add nothing, so a slow subscriber holds one pending "read again" and never misses it.
   const marks = new Map<string, Set<Queue.Queue<void>>>();
@@ -65,12 +106,14 @@ export const makeChannelTaskChanges = Effect.fn("makeChannelTaskChanges")(functi
     announce,
     // Subscribed before revision 0 goes out, so nothing announced after a client saw 0 is missed.
     revisions: (ownerId) =>
-      Stream.unwrap(
-        Effect.map(subscribe(ownerId), (mark) =>
-          Stream.fromEffectRepeat(windowClosed(mark)).pipe(
-            Stream.scan(
-              () => 0,
-              (revision) => revision + 1,
+      limited(
+        Stream.unwrap(
+          Effect.map(subscribe(ownerId), (mark) =>
+            Stream.fromEffectRepeat(windowClosed(mark)).pipe(
+              Stream.scan(
+                () => 0,
+                (revision) => revision + 1,
+              ),
             ),
           ),
         ),
