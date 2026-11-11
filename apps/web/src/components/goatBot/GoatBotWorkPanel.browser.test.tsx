@@ -128,7 +128,11 @@ it.each(["main", "member"] as const)(
       environmentId: EnvironmentId.make("env"),
     } as BotProfile;
     const panel = (
-      <GoatBotWorkPanel environmentId={bot.environmentId} threadId={ThreadId.make("bot")} />
+      <GoatBotWorkPanel
+        environmentId={bot.environmentId}
+        threadId={ThreadId.make("bot")}
+        onOpenFile={() => {}}
+      />
     );
     await using screen = await render(
       role === "main" ? (
@@ -152,7 +156,11 @@ it("does not offer profile editing without permission", async () => {
   } as BotProfile;
   await using screen = await render(
     <GoatBotMainProfileContext value={bot}>
-      <GoatBotWorkPanel environmentId={bot.environmentId} threadId={ThreadId.make("bot")} />
+      <GoatBotWorkPanel
+        environmentId={bot.environmentId}
+        threadId={ThreadId.make("bot")}
+        onOpenFile={() => {}}
+      />
     </GoatBotMainProfileContext>,
   );
   expect(screen.container.querySelector("button[aria-label='Edit bot']")).toBeNull();
