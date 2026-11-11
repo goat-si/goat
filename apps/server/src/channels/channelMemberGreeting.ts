@@ -8,7 +8,7 @@ import { GOAT_CONNECTION_ID } from "./ChannelGateway.ts";
 const PURPOSE_SHOWN = 300;
 
 /** What a new member says first, from its own name and purpose; no model is asked. */
-export function memberGreetingText(bot: Pick<BotProfile, "name" | "purpose">): string {
+function memberGreetingText(bot: Pick<BotProfile, "name" | "purpose">): string {
   const purpose = bot.purpose.trim();
   const shown = purpose.length > PURPOSE_SHOWN ? purpose.slice(0, PURPOSE_SHOWN) + "…" : purpose;
   return purpose === ""
