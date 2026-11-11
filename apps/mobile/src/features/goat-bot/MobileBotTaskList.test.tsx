@@ -48,7 +48,7 @@ function TaskList(props: Parameters<typeof mobileBotTaskListItems>[0]) {
   return (
     <>
       {mobileBotTaskListItems(props).map((item) => (
-        <div key={item.key}>{item.node}</div>
+        <div key={item.key}>{item.render()}</div>
       ))}
     </>
   );

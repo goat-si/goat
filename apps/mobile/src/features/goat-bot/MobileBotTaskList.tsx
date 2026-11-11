@@ -22,7 +22,8 @@ type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
 /** One entry of the bot's Home list, which mounts only the entries near the screen. */
 export interface MobileBotHomeItem {
   readonly key: string;
-  readonly node: ReactNode;
+  /** Builds the entry when the list mounts it, so off-screen entries cost nothing. */
+  readonly render: () => ReactNode;
 }
 
 /** The words a task row says and VoiceOver reads: title, status, then unread and pinned. */
@@ -68,7 +69,7 @@ export function mobileBotTaskListItems(props: {
       : [
           {
             key: "tasks-empty",
-            node: (
+            render: () => (
               <MobileBotPanelEmpty
                 title="No tasks yet"
                 next={`Ask ${props.botName} in chat to start work.`}
@@ -92,7 +93,7 @@ export function mobileBotTaskListItems(props: {
     ]);
   const label = (key: string, text: string): MobileBotHomeItem => ({
     key,
-    node: <Text className="pt-2 font-semibold text-foreground">{text}</Text>,
+    render: () => <Text className="pt-2 font-semibold text-foreground">{text}</Text>,
   });
   const items: MobileBotHomeItem[] = [];
   for (const [section, tasks] of [
@@ -104,7 +105,7 @@ export function mobileBotTaskListItems(props: {
     for (const { row, threads } of tasks) {
       items.push({
         key: `task:${row.task.taskId}`,
-        node: (
+        render: () => (
           <View>
             <Pressable
               accessibilityRole="button"
@@ -136,42 +137,47 @@ export function mobileBotTaskListItems(props: {
                 </Text>
               </View>
             </Pressable>
-            {threads.map((thread) => {
-              const coding = props.rows.find(
-                (candidate) =>
-                  candidate.kind === "coding" &&
-                  candidate.environmentId === thread.environmentId &&
-                  candidate.threadId === thread.threadId,
-              );
-              const title = coding?.kind === "coding" ? coding.title || "GOAT thread" : null;
-              return (
-                <Pressable
-                  key={thread.environmentId + ":" + thread.threadId}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    title === null ? "Work thread: " + row.task.title : "GOAT thread: " + title
-                  }
-                  className="ml-4 min-h-[44px] justify-center"
-                  onPress={() =>
-                    props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
-                  }
-                >
-                  <Text numberOfLines={1} className="text-foreground-muted">
-                    {title ?? "Work thread"}
-                  </Text>
-                </Pressable>
-              );
-            })}
           </View>
         ),
       });
+      // Each work thread is an entry of its own, so a task with many threads mounts only those in view.
+      for (const thread of threads) {
+        items.push({
+          key: `task:${row.task.taskId}:thread:${thread.environmentId}:${thread.threadId}`,
+          render: () => {
+            const coding = props.rows.find(
+              (candidate) =>
+                candidate.kind === "coding" &&
+                candidate.environmentId === thread.environmentId &&
+                candidate.threadId === thread.threadId,
+            );
+            const title = coding?.kind === "coding" ? coding.title || "GOAT thread" : null;
+            return (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  title === null ? "Work thread: " + row.task.title : "GOAT thread: " + title
+                }
+                className="ml-4 min-h-[44px] justify-center"
+                onPress={() =>
+                  props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
+                }
+              >
+                <Text numberOfLines={1} className="text-foreground-muted">
+                  {title ?? "Work thread"}
+                </Text>
+              </Pressable>
+            );
+          },
+        });
+      }
     }
   }
   if (others.length > 0) items.push(label("section:other", "Other threads"));
   for (const row of others) {
     items.push({
       key: `thread:${row.environmentId}:${row.threadId}`,
-      node: (
+      render: () => (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={"GOAT thread: " + (row.title || "GOAT thread")}
@@ -189,7 +195,7 @@ export function mobileBotTaskListItems(props: {
   for (const card of earlier) {
     items.push({
       key: `earlier:${card.key}`,
-      node: (
+      render: () => (
         <GoatBotTaskRow
           card={card}
           onSelectThread={(thread) =>

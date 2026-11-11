@@ -13,6 +13,9 @@ const forward = (props: Props) => ({
   "aria-hidden": props.accessibilityElementsHidden === true ? true : undefined,
 });
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
+}));
 vi.mock("react-native", () => ({
   Platform: nativePlatform,
   Switch: () => null,
@@ -25,9 +28,12 @@ vi.mock("react-native", () => ({
     } & Record<string, unknown>,
   ) => (
     <div {...forward(props as Props)}>
-      {props.data.map((item, index) => (
-        <div key={item.key}>{props.renderItem({ item, index })}</div>
-      ))}
+      {/* Entries listed in state.hidden are off screen: a virtualized list unmounts them. */}
+      {props.data.map((item, index) =>
+        state.hidden.includes(item.key) ? null : (
+          <div key={item.key}>{props.renderItem({ item, index })}</div>
+        ),
+      )}
     </div>
   ),
   // Android's system back and an iOS swipe-down both reach the sheet as onRequestClose.
@@ -62,6 +68,7 @@ const state = vi.hoisted(() => ({
   openTask: vi.fn(),
   openThread: vi.fn(),
   workRevision: null as string | null,
+  hidden: [] as string[],
   machinesKey: undefined as string | undefined,
 }));
 vi.mock("@effect/atom-react", () => ({
@@ -159,7 +166,19 @@ vi.mock("./MobileBotMemory", () => ({
     <button onClick={() => props.onDraft?.("Remember this")}>Draft a note</button>
   ),
 }));
-vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => <p>check-in form</p> }));
+vi.mock("./MobileBotCheckInForm", () => ({
+  MobileBotCheckInForm: (props: {
+    draft?: { timeOfDay: string };
+    onDraftChange?: (draft: { timeOfDay: string }) => void;
+  }) => (
+    <button
+      aria-label="check-in form"
+      onClick={() => props.onDraftChange?.({ ...props.draft, timeOfDay: "07:30" })}
+    >
+      {`check-in form ${props.draft?.timeOfDay ?? ""}`}
+    </button>
+  ),
+}));
 vi.mock("./goatBotHomeMode", () => ({
   pickMobileGoatBotEnvironment: () => ({
     environmentId: "env",
@@ -242,6 +261,7 @@ afterEach(async () => {
     messages: [],
     life: [],
     workRevision: null,
+    hidden: [],
     machinesKey: undefined,
   });
   state.draft.mockClear();
@@ -525,4 +545,18 @@ it("reads the machines again when the bot's work changes outside its listed task
   state.workRevision = "task-9:2";
   await open();
   expect(state.machinesKey).not.toBe(listed);
+});
+
+it("keeps a check-in being edited when its entry scrolls away and back", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  await open();
+  await press("check-in form");
+  expect(container.textContent).toContain("check-in form 07:30");
+  const routines = ["routines", "routines-label"];
+  state.hidden = routines;
+  await open();
+  expect(container.textContent).not.toContain("check-in form");
+  state.hidden = [];
+  await open();
+  expect(container.textContent).toContain("check-in form 07:30");
 });

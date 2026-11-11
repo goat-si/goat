@@ -2,8 +2,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
-  CHECK_IN_DEFAULT_TIME,
-  CHECK_IN_DEFAULT_WEEKDAYS,
   checkInRoutineInput,
   findCheckInRoutine,
   WEEKDAY_LABELS,
@@ -19,6 +17,7 @@ import { Platform, Pressable, Text, View } from "react-native";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useThreadShell } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
+import { MOBILE_CHECK_IN_DRAFT, type MobileCheckInDraft } from "./mobileCheckInDraft";
 
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
@@ -28,14 +27,19 @@ export function MobileBotCheckInForm(props: {
   readonly botThreadId: ThreadId;
   readonly tasks: readonly Pick<ScheduledTask, "id" | "title" | "threadId">[];
   readonly botName?: string;
+  readonly draft: MobileCheckInDraft;
+  readonly onDraftChange: (draft: MobileCheckInDraft) => void;
 }) {
   const bot = useThreadShell(scopeThreadRef(props.environmentId, props.botThreadId));
   const canCreate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(props.environmentId),
   );
-  const [open, setOpen] = useState(false);
-  const [timeOfDay, setTimeOfDay] = useState(CHECK_IN_DEFAULT_TIME);
-  const [weekdays, setWeekdays] = useState<readonly number[]>(CHECK_IN_DEFAULT_WEEKDAYS);
+  const { draft, onDraftChange } = props;
+  const { open, timeOfDay, weekdays } = draft;
+  const setOpen = (value: boolean) =>
+    onDraftChange(value ? { ...draft, open: true } : MOBILE_CHECK_IN_DRAFT);
+  const setTimeOfDay = (value: string) => onDraftChange({ ...draft, timeOfDay: value });
+  const setWeekdays = (value: readonly number[]) => onDraftChange({ ...draft, weekdays: value });
   const [pickingTime, setPickingTime] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
