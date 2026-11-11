@@ -259,6 +259,9 @@ speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
 download, select, or remove models from **Manage voice models** in the same menu.
 Connections through a hub do not currently support this option.
+Model speed figures are CPU and GPU reference measurements, not timings from your
+environment. When acceleration is automatic, both are shown because transcription
+may fall back to the CPU.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.
 
