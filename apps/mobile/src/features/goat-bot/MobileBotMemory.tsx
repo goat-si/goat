@@ -13,6 +13,7 @@ import type { ChannelBotNote, EnvironmentId } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
+import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
@@ -28,8 +29,8 @@ export function MobileBotMemory(props: {
   /** Fills the chat's message box; false when it was refused and nothing changed. */
   readonly onDraft?: ((text: string) => boolean) | undefined;
   /**
-   * New wordings being written, by note; kept by the home so they outlive the sheet closing while
-   * the person deals with a message already in the box.
+   * New wordings being written, by the note's text; kept by the home so they outlive the sheet
+   * closing while the person deals with a message already in the box, and a new read of the file.
    */
   readonly wordings: Readonly<Record<string, string>>;
   readonly onWordingChange: (note: string, wording: string | null) => void;
@@ -104,6 +105,14 @@ function MobileNoteList(props: {
   const view = goatBotNotesView({ notes: props.notes, truncated: props.truncated });
   const [showReplaced, setShowReplaced] = useState(false);
   const now = useNowMinuteMs();
+  // A wording follows its note's text across reads; one whose note is gone is shown on its own.
+  const editing = new Set<string>();
+  const lost = Object.entries(props.wordings).filter(
+    ([text, wording]) =>
+      !view.current.some((note) => note.text === text) &&
+      wording.trim() !== "" &&
+      wording.trim() !== text.trim(),
+  );
   return (
     <View className="gap-1">
       {props.truncated ? (
@@ -122,20 +131,48 @@ function MobileNoteList(props: {
         <Text className="text-foreground-muted">No current notes.</Text>
       ) : (
         view.current.map((note) => {
-          // An index is a line's place in this read only, so a new read starts every row over.
-          const key = JSON.stringify([props.revision, note.index]);
+          // An index is a line's place in this read only, so a new read starts every row over;
+          // the first row with a note's text takes its wording.
+          const first = !editing.has(note.text);
+          editing.add(note.text);
           return (
             <MobileNoteRow
-              key={key}
+              key={JSON.stringify([props.revision, note.index])}
               note={note}
               source={goatBotNoteSourceLabel(note.source, { now })}
               onDraft={props.onDraft}
-              wording={props.wordings[key] ?? null}
-              onWordingChange={(wording) => props.onWordingChange(key, wording)}
+              wording={first ? (props.wordings[note.text] ?? null) : null}
+              onWordingChange={(wording) => props.onWordingChange(note.text, wording)}
             />
           );
         })
       )}
+      {lost.map(([text, wording]) => (
+        <View key={text} className="gap-1 border-b border-border py-2">
+          <Text className="text-foreground-muted">
+            “{text}” changed while you wrote. Your new wording:
+          </Text>
+          <Text selectable className="text-foreground">
+            {wording}
+          </Text>
+          <View className="flex-row flex-wrap gap-x-4">
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void tryCopyTextWithHaptic(wording, { target: "new wording" })}
+              className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
+            >
+              <Text className="text-foreground">Copy</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => props.onWordingChange(text, null)}
+              className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
+            >
+              <Text className="text-foreground">Discard</Text>
+            </Pressable>
+          </View>
+        </View>
+      ))}
       {view.replaced.length > 0 ? (
         <Pressable
           accessibilityRole="button"
