@@ -61,14 +61,20 @@ two generations. Reads change nothing, so a reception retried after a crash read
   them itself, before the model and without a task
   ([`channelBotNoteTabEdits.ts`](../../apps/server/src/channels/channelBotNoteTabEdits.ts)), so
   changing those sentences changes the server's contract too. A change appends the new note with a
-  replaces marker; a forget rewrites `memory.md` without the note, the notes it replaced and quotes
-  of them. The quoted words address a note only when exactly one current note reads them, spacing
-  collapsed; otherwise nothing changes and the person is asked which note they mean. Lines are
-  never moved or reordered to pick one: a correction binds to the nearest earlier note in force
-  with its replaces text, so moving a line changes what other corrections replace. Both run under
-  the lock reception saves notes with, but notes-change workers edit the file by hand outside it,
-  so a write racing a forget can be lost or bring removed words back; the forget reads the file
-  once more and says so when it sees that.
+  replaces marker; a forget rewrites `memory.md` without the note and the notes it replaced,
+  followed through the parser's bindings and never by text, since a later note may read like one
+  it replaced. Words address a note only when exactly one current note reads them, spacing
+  collapsed (`currentNoteNamedBy` in
+  [`channelBotNoteLines.ts`](../../apps/server/src/channels/channelBotNoteLines.ts)), and a
+  model's correction goes through the same rule; otherwise nothing is saved and the reply says so.
+  Lines are never moved or reordered to pick one: a correction binds to the nearest earlier note in
+  force with its replaces text, so moving a line changes what other corrections replace, and a
+  forget that would change any other binding is refused. Both run under the lock reception saves
+  notes with, but notes-change workers and people edit the file by hand outside it, and there is
+  no protocol for editors outside GOAT beyond compare and retry: a change reads the file again
+  right before it appends and a forget right before its rename, each starting over once when the
+  file moved. A write between that compare and the write can still rebind a change, be lost, or
+  bring removed words back; the forget reads the file once more and says so when it sees that.
 - **Work.** A `work` read matches the owner's 200 most recently updated tasks by task id, a
   linked pull request (by repository and number when the question names a repository), or shared
   words, and returns each task's request, result, machine, open questions and pull requests with

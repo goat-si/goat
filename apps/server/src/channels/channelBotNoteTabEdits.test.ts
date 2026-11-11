@@ -300,12 +300,14 @@ describe("Memory tab note edits", () => {
             ]),
         };
         const writer = yield* makeChannelBotNoteWriter(fs, files, busy);
-        assert.strictEqual(
-          yield* writer.save(fridays, "2026-11-07", "input-1"),
-          CHANNEL_COPY.noteEditBusy,
-        );
+        assert.deepStrictEqual(yield* writer.save(fridays, "2026-11-07", "input-1"), {
+          notice: CHANNEL_COPY.noteEditBusy,
+          held: true,
+        });
         // A restart re-runs an input whose note was saved before the grant opened.
-        assert.isUndefined(yield* writer.save("Staging is staging-02.", "2026-11-07", "input-2"));
+        assert.isUndefined(
+          (yield* writer.save("Staging is staging-02.", "2026-11-07", "input-2")).notice,
+        );
         assert.strictEqual(yield* fs.readFileString(files.notes), text);
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -338,7 +340,9 @@ describe("Memory tab note edits", () => {
       };
       const writer = yield* makeChannelBotNoteWriter(fs, files, busy);
       yield* real.writeFileString(files.notes, saved);
-      assert.isUndefined(yield* writer.save("Staging is staging-02.", "2026-11-07", "input-2"));
+      assert.isUndefined(
+        (yield* writer.save("Staging is staging-02.", "2026-11-07", "input-2")).notice,
+      );
       yield* real.writeFileString(files.notes, saved);
       assert.deepStrictEqual(
         yield* writer.saveIf(
