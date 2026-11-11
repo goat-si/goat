@@ -11,12 +11,13 @@ it("forgets a create when its environment leaves the app, so its answer opens no
   const keptAnswer = Promise.withResolvers<object>();
   const openRemoved = vi.fn();
   const keptOpened = Promise.withResolvers<void>();
-  startNewBot(removed, [], () => removedAnswer.promise as never, openRemoved);
+  startNewBot(removed, [], () => removedAnswer.promise as never, openRemoved, {});
   startNewBot(
     kept,
     [],
     () => keptAnswer.promise as never,
     () => keptOpened.resolve(),
+    {},
   );
   forgetNewBotEnvironment(removed);
   expect(newBotSlot(removed).operation).toBeNull();

@@ -32,7 +32,11 @@ interface Slot {
 
 const EMPTY: Slot = { operation: null, created: [] };
 const slots = new Map<EnvironmentId, Slot>();
-const intents = new Map<EnvironmentId, OpenIfStillHere>();
+// The pending open of each environment's create, with the roster mount that made it.
+const intents = new Map<
+  EnvironmentId,
+  { readonly open: OpenIfStillHere; readonly owner: object }
+>();
 const listeners = new Set<() => void>();
 
 function set(environmentId: EnvironmentId, next: Slot) {
@@ -62,13 +66,14 @@ async function run(environmentId: EnvironmentId, create: CreateNewBot) {
   const slot = slotOf(environmentId);
   if (slot.operation !== sent) return;
   if (typeof result === "string") {
+    intents.delete(environmentId);
     set(environmentId, {
       ...slot,
       operation: { phase: "failed", clientRequestId, name, failure: result },
     });
     return;
   }
-  const open = intents.get(environmentId);
+  const open = intents.get(environmentId)?.open;
   intents.delete(environmentId);
   // A retry can return a bot already deleted elsewhere: nothing opens; the list shows it there.
   if (result.state === "deleted") {
@@ -91,10 +96,11 @@ export function startNewBot(
   members: ReadonlyArray<Pick<BotProfile, "name">>,
   create: CreateNewBot,
   open: OpenIfStillHere,
+  owner: object,
 ): boolean {
   const slot = slotOf(environmentId);
   if (slot.operation !== null) return false;
-  intents.set(environmentId, open);
+  intents.set(environmentId, { open, owner });
   // Bots created a moment ago may not be in the list yet; their names are taken too.
   set(environmentId, {
     ...slot,
@@ -113,11 +119,12 @@ export function retryNewBot(
   environmentId: EnvironmentId,
   create: CreateNewBot,
   open: OpenIfStillHere,
+  owner: object,
 ): void {
   const slot = slotOf(environmentId);
   const failed = slot.operation;
   if (failed?.phase !== "failed") return;
-  intents.set(environmentId, open);
+  intents.set(environmentId, { open, owner });
   set(environmentId, {
     ...slot,
     operation: { phase: "creating", clientRequestId: failed.clientRequestId, name: failed.name },
@@ -134,8 +141,9 @@ export function dismissNewBot(environmentId: EnvironmentId): void {
 }
 
 /** The roster that tapped has gone: its create answers into the list, opening nothing. */
-export function forgetNewBotIntent(environmentId: EnvironmentId, open: OpenIfStillHere): void {
-  if (intents.get(environmentId) === open) intents.delete(environmentId);
+export function forgetNewBotIntentsOf(owner: object): void {
+  for (const [environmentId, intent] of intents)
+    if (intent.owner === owner) intents.delete(environmentId);
 }
 
 /** Removes a created bot's row before the list has it. */

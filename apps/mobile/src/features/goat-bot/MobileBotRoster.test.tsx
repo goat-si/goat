@@ -414,6 +414,35 @@ it("opens nothing once the tapped roster has gone, is off screen, or shows anoth
   await moved.unmount();
 });
 
+it("opens nothing while the roster shows its own Edit sheet or action menu, nor later when it closes", async () => {
+  const other = {
+    kind: "member",
+    profile: { ...member, role: "member", defaultModelSelection: null },
+  };
+  // Edit on another bot is open when the answer lands.
+  const editing = await newBotRoster();
+  await editing.tap();
+  await act(async () =>
+    (state.members as { onLongPressBot: (entry: object) => void }).onLongPressBot(other),
+  );
+  await act(async () => choose("Edit"));
+  expect(state.sheet?.mode).toBe("edit");
+  await editing.answer(stored("research", "New bot"));
+  await act(async () => state.sheet?.onClose());
+  expect(editing.opened).not.toHaveBeenCalled();
+  await editing.unmount();
+  // The row's action menu is up when the answer lands.
+  const menu = await newBotRoster();
+  await menu.tap();
+  await act(async () =>
+    (state.members as { onLongPressBot: (entry: object) => void }).onLongPressBot(other),
+  );
+  await menu.answer(stored("research", "New bot"));
+  await act(async () => choose("Cancel"));
+  expect(menu.opened).not.toHaveBeenCalled();
+  await menu.unmount();
+});
+
 it("says why a create failed; Retry sends the same request and name, and Dismiss lets a later tap start anew", async () => {
   const view = await newBotRoster();
   await view.tap();

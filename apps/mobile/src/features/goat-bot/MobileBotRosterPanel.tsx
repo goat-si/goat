@@ -9,13 +9,13 @@ import {
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelTaskId } from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
-import { Alert, AppState, Pressable, Text, View } from "react-native";
+import { Alert, type AlertButton, AppState, Pressable, Text, View } from "react-native";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import {
   dismissCreatedBot,
   dismissNewBot,
-  forgetNewBotIntent,
+  forgetNewBotIntentsOf,
   newBotSlot,
   retryNewBot,
   settleListedNewBots,
@@ -42,6 +42,27 @@ export function MobileBotRoster(props: {
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [editing, setEditing] = useState<BotProfile | null>(null);
+  // A row's action menu is a native alert: open from the long press until a choice or dismissal.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = (
+    title: string,
+    message: string | undefined,
+    buttons: ReadonlyArray<AlertButton>,
+  ) => {
+    setMenuOpen(true);
+    Alert.alert(
+      title,
+      message,
+      buttons.map((button) => ({
+        ...button,
+        onPress: () => {
+          setMenuOpen(false);
+          button.onPress?.();
+        },
+      })),
+      { cancelable: true, onDismiss: () => setMenuOpen(false) },
+    );
+  };
   const environmentId = roster.environmentId;
   const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
   const operation = slot.operation;
@@ -49,44 +70,40 @@ export function MobileBotRoster(props: {
     manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
   const { onOpenBot } = props;
   const navigation = useNavigation();
-  // This roster mount as it is now: whether it is mounted and on screen, and its environment. A
-  // create's answer reads it then; the open belongs to the mount that was tapped.
+  // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, and
+  // its environment. A create's answer reads it then; the open belongs to the mount that was tapped.
   const visible = props.visible !== false;
-  const mount = useRef({ mounted: true, visible, environmentId });
-  const issued = useRef(new Map<OpenIfStillHere, NonNullable<typeof environmentId>>());
-  // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this mount's committed visibility and environment.
+  const presenting = editing !== null || menuOpen;
+  const mount = useRef({ mounted: true, visible, presenting, environmentId });
+  // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this mount's committed state.
   useLayoutEffect(() => {
-    mount.current = { mounted: true, visible, environmentId };
-  }, [visible, environmentId]);
+    mount.current = { mounted: true, visible, presenting, environmentId };
+  }, [visible, presenting, environmentId]);
   // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers.
   useEffect(() => {
-    const live = mount.current;
-    const opens = issued.current;
+    const owner = mount;
     return () => {
-      mount.current = { ...live, mounted: false };
-      for (const [open, sentTo] of opens) forgetNewBotIntent(sentTo, open);
-      opens.clear();
+      owner.current = { ...owner.current, mounted: false };
+      forgetNewBotIntentsOf(owner);
     };
   }, []);
-  // The new chat opens only if, when the create answers: the app is in front, this roster is still
-  // mounted and on screen, the focused route at every level reads as at the tap, and the roster
-  // still shows the environment the create was sent to. Read then; nothing watches.
+  // The new chat opens only if, when the create answers: the app is in front; this roster is still
+  // mounted, on screen and presenting nothing of its own; the focused route at every level reads as
+  // at the tap; and the roster still shows the environment the create was sent to. Read then.
   const openIfStillHere = (): OpenIfStillHere => {
     const tapped = whereNow(navigation);
-    const open: OpenIfStillHere = (bot, sentTo) => {
-      issued.current.delete(open);
+    return (bot, sentTo) => {
       const now = mount.current;
       if (
         AppState.currentState === "active" &&
         now.mounted &&
         now.visible &&
+        !now.presenting &&
         whereNow(navigation) === tapped &&
         now.environmentId === sentTo
       )
         onOpenBot({ kind: "member", profile: bot });
     };
-    if (environmentId !== null) issued.current.set(open, environmentId);
-    return open;
   };
   const listed = roster.listedBots;
   const refreshBots = roster.refreshBots;
@@ -111,11 +128,11 @@ export function MobileBotRoster(props: {
     const edit = { text: "Edit", onPress: () => setEditing(bot) };
     const cancel = { text: "Cancel", style: "cancel" as const };
     if (entry.kind === "main") {
-      if (manage.canEdit) Alert.alert(bot.name, undefined, [edit, cancel]);
+      if (manage.canEdit) menu(bot.name, undefined, [edit, cancel]);
       return;
     }
     if (!manage.canManage) return;
-    Alert.alert(bot.name, undefined, [
+    menu(bot.name, undefined, [
       ...(manage.canEdit ? [edit] : []),
       {
         text: bot.hidden === true ? "Show" : "Hide",
@@ -125,7 +142,7 @@ export function MobileBotRoster(props: {
         text: "Delete",
         style: "destructive",
         onPress: () =>
-          Alert.alert(`Delete ${bot.name}?`, "Its conversation is archived; you can restore it.", [
+          menu(`Delete ${bot.name}?`, "Its conversation is archived; you can restore it.", [
             cancel,
             { text: "Delete", style: "destructive", onPress: () => void manage.remove(bot) },
           ]),
@@ -164,12 +181,12 @@ export function MobileBotRoster(props: {
                 canCreate: manage.canCreate && listed !== null && operation === null,
                 onNewBot: () => {
                   if (environmentId !== null && listed !== null)
-                    startNewBot(environmentId, listed, create, openIfStillHere());
+                    startNewBot(environmentId, listed, create, openIfStillHere(), mount);
                 },
                 onLongPressBot: askAbout,
                 canRestore: manage.canManage,
                 onRestoreDeleted: (bot) =>
-                  Alert.alert(`Restore ${bot.name}?`, "Its conversation comes back.", [
+                  menu(`Restore ${bot.name}?`, "Its conversation comes back.", [
                     { text: "Cancel", style: "cancel" },
                     { text: "Restore", onPress: () => void manage.restore(bot) },
                   ]),
@@ -188,7 +205,7 @@ export function MobileBotRoster(props: {
             <MobileNewBotStatus
               operation={operation}
               created={created}
-              onRetry={() => retryNewBot(environmentId, create, openIfStillHere())}
+              onRetry={() => retryNewBot(environmentId, create, openIfStillHere(), mount)}
               onDismiss={() => dismissNewBot(environmentId)}
               onOpen={(bot) => onOpenBot({ kind: "member", profile: bot })}
               onDismissCreated={(bot) => dismissCreatedBot(environmentId, bot.botId)}
