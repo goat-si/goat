@@ -148,6 +148,49 @@ sees a missing or wrong server id, a network error or a timeout stops for good, 
 the port after the dashboard stops would otherwise be trusted by the open tab. Every action goes through
 the same daemon operation as the CLI.
 
+## Local stream completion
+
+[Decision Log]
+
+- Purpose and intent: a relay cutting a stream must not look like a complete reply to a local service or client.
+- Existing implementation and constraints: TCP close alone produces EOF; the peer's encrypted FIN and delivery of
+  all preceding DATA determine completion (`apps/pen/internal/stream/stream.go`).
+- Main alternatives considered: close normally on every error, or reset on every error.
+- Chosen approach: `serveTCP` and `pen forward` reset on a splice error unless the peer's entire stream was delivered.
+- Why this approach: ordinary close hides truncation, while unconditional reset can discard a completed response
+  when only the outgoing direction failed.
+- Benefits, tradeoffs and impact: partial replies fail visibly; stopping a forward or daemon can reset ongoing
+  connections. `pen pipe` already reports failure through its exit status.
+
+## Node session limits
+
+[Decision Log]
+
+- Purpose and intent: bound node resources even when a relay ignores its admission limits.
+- Existing implementation and constraints: the relay admits 8 pending plus 32 active sessions per node; a node
+  cannot rely on an untrusted relay to enforce those limits (`apps/pen/internal/relay/uplink.go`).
+- Main alternatives considered: rely only on relay caps, or reproduce the relay's pending/active accounting.
+- Chosen approach: each node uplink holds at most 64 live sessions and refuses further OPENs with CLOSE 4429.
+- Why this approach: a local bound above the compliant relay's total protects the node without duplicating
+  relay admission policy or changing wire formats.
+- Benefits, tradeoffs and impact: sessions are bounded per uplink, rather than across all configured relays;
+  ending a session frees its slot. A compliant relay stays below the bound.
+
+## SSH fallback names
+
+[Decision Log]
+
+- Purpose and intent: a typed SSH alias must not execute a shell command or select another Pen state directory.
+- Existing implementation and constraints: Unix OpenSSH expands `%n` before executing ProxyCommand in a shell;
+  older clients accept shell metacharacters. GOAT's route trust and consent checks depend on exact member blocks.
+- Main alternatives considered: rewrite all host blocks, or guard only the wildcard fallback.
+- Chosen approach: the Unix fallback quotes `%n` and excludes names containing a single quote; `pen pipe` accepts
+  flags only before the node (`apps/pen/internal/cli/sshconfig_unix.go`, `apps/pen/internal/cli/pipe.go`).
+- Why this approach: member names are already validated, so preserving their blocks keeps existing consent valid;
+  stopping flag parsing at the node also protects Win32-OpenSSH, which invokes ProxyCommand without a shell.
+- Benefits, tradeoffs and impact: `--home` must precede the node. Existing installations need their generated
+  config refreshed with `pen ssh-config --install`, or by the daemon when the member list changes.
+
 ## Windows
 
 - **Go's monotonic clock counts sleep on Windows.** It reads the interrupt time, so wall minus monotonic never
