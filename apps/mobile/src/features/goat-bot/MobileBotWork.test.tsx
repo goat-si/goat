@@ -187,6 +187,19 @@ vi.mock("../../state/query", () => ({
 // The task card's renderer pulls in the native Markdown view, which cannot load under Vitest.
 vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../settings/appearance/useScaledTextRole", () => ({ useScaledTextRole: () => ({}) }));
+vi.mock("../../state/use-thread-detail", () => ({
+  useThreadDetail: () => ({ data: { _tag: "None" }, status: "empty", error: { _tag: "None" } }),
+  useThreadVisibleTurnItems: () => [],
+}));
+vi.mock("./GoatBotMarkdown", () => ({
+  GoatBotMarkdown: (props: { text: string }) => <span>{props.text}</span>,
+}));
+vi.mock("../../components/ui/Button", () => ({
+  Button: (props: { label: string; onPress: () => void }) => (
+    <button onClick={props.onPress}>{props.label}</button>
+  ),
+}));
 import { MobileBotWork } from "./MobileBotWork";
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
@@ -249,7 +262,7 @@ it("distinguishes task and routine loading, empty, offline, and retry states", a
   expect(container.textContent).not.toContain("No tasks yet");
   await press("Couldn't load tasks");
   expect(state.task.refresh).toHaveBeenCalledOnce();
-  await press("Routines");
+  // Routines sit on Home with machines and work.
   expect(container.textContent).toContain("Loading routines");
   Object.assign(state.routines, { isPending: false, isSuccess: true, data: { tasks: [] } });
   await render();
@@ -293,7 +306,7 @@ it("shows empty routines when live data is available while the subscription wait
   Object.assign(state.routines, { data: { tasks: [] }, isPending: true, isSuccess: false });
   await render();
   await press("Work");
-  await press("Routines");
+  // Routines sit on Home with machines and work.
   expect(container.textContent).toContain("set up a routine");
   expect(container.textContent).not.toContain("Loading routines");
 });
@@ -324,12 +337,14 @@ it("keeps known tasks in view while they refresh and after a refresh fails", asy
   expect(state.task.refresh).toHaveBeenCalledOnce();
 });
 
-it("exposes work tabs as buttons and updates their selected state", async () => {
+it("shows two tabs, Home and Library, and updates their selected state", async () => {
   reset();
   await render();
   await press("Work");
   const buttons = [...container.querySelectorAll("button")];
-  const tabs = ["Tasks", "Routines", "Memory", "Library"].map((name) =>
+  for (const gone of ["Tasks", "Routines", "Memory"])
+    expect(buttons.some((button) => button.textContent === gone)).toBe(false);
+  const tabs = ["Home", "Library"].map((name) =>
     buttons.find((button) => button.textContent === name),
   );
   expect(tabs.every((tab) => tab !== undefined)).toBe(true);
@@ -364,7 +379,7 @@ it("a refused pause keeps the routine's stored state and shows why", async () =>
   state.setEnabled.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Denied"))));
   await render();
   await press("Work");
-  await press("Routines");
+  // Routines sit on Home with machines and work.
   expect(container.textContent).toContain("Daily at 09:00 · Not scheduled");
   const toggle = container.querySelector<HTMLInputElement>('[aria-label="Pause Daily digest"]');
   await act(async () => toggle?.click());
@@ -464,7 +479,7 @@ it("offers Run now only for a routine whose last run failed, one run per tap", a
   state.runNow.mockResolvedValue(AsyncResult.success({ task: routine("failed", "failed") }));
   await render();
   await press("Work");
-  await press("Routines");
+  // Routines sit on Home with machines and work.
   const runButtons = [...container.querySelectorAll("button")].filter(
     (button) => button.textContent === "Run now",
   );

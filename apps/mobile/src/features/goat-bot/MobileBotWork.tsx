@@ -6,13 +6,12 @@ import {
   groupBotWork,
   isRetryableTaskStatus,
   presentTaskStatus,
-  resolveRemoteBotWork,
   retryRefusalText,
   taskAttemptLabel,
   type GoatBotTaskCard,
   type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
-import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
+import { botRoutineRows } from "@goat/client-runtime/scheduledTasks";
 import {
   isAtomCommandInterrupted,
   runAtomCommand,
@@ -21,16 +20,13 @@ import {
 import type {
   BotId,
   BotProfile,
-  BotRemoteWork,
   ChannelTaskId,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { Atom } from "effect/reactivity";
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
-import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { useNowMinuteMs } from "../../lib/clock";
 import { uuidv4 } from "../../lib/uuid";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
@@ -42,7 +38,6 @@ import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
-import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { MobileBotLibrary } from "./MobileBotLibrary";
@@ -54,45 +49,13 @@ import {
   goatBotMemberModelHeaderKey,
 } from "./goatBotMemberModelHeader";
 import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
-import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 import { MobileBotTaskList } from "./MobileBotTaskList";
+import { MobileBotPeek } from "./MobileBotPeek";
+import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
+import { MobileBotRoutines } from "./MobileBotRoutines";
 
-// The machines running work show under Tasks, so four short labels fit one row as text.
-const tabs = ["Tasks", "Routines", "Memory", "Library"] as const;
-
-const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("mobile-goat-bot-remote-work:none"));
-
-/** A thread the bot launched on another machine: openable while this phone is connected there. */
-function MobileBotRemoteWork(props: {
-  readonly item: BotRemoteWork;
-  readonly onOpenThread: (thread: {
-    readonly environmentId: EnvironmentId;
-    readonly id: ThreadId;
-  }) => void;
-}) {
-  const { item } = props;
-  const openable = useAtomValue(
-    item.environmentId === undefined
-      ? NOT_OPENABLE
-      : channelEnvironment.remoteWorkOpenable(item.environmentId),
-  );
-  const target = resolveRemoteBotWork(
-    item,
-    (environmentId) => environmentId === item.environmentId && openable,
-  );
-  if (target.kind === "unavailable")
-    return <Text className="text-foreground-muted">{target.host} · Unavailable</Text>;
-  const { ref } = target;
-  return (
-    <Pressable
-      accessibilityRole="button"
-      className="min-h-[44px] justify-center"
-      onPress={() => props.onOpenThread({ environmentId: ref.environmentId, id: ref.threadId })}
-    >
-      <Text className="text-foreground underline">Open work thread on {target.host}</Text>
-    </Pressable>
-  );
-}
+// Home is one scroll of machines, work and routines; Library holds files and notes.
+const tabs = ["Home", "Library"] as const;
 
 export function MobileBotWork(props: {
   readonly taskId?: ChannelTaskId;
@@ -150,9 +113,12 @@ export function MobileBotWork(props: {
       : null,
   );
   const rows = threads.data?.rows ?? [];
+  // The task this sheet peeks at; its child work loads like a task screen's.
+  const [peekTaskId, setPeekTaskId] = useState<ChannelTaskId | null>(null);
+  const childTaskId = props.taskId ?? peekTaskId;
   const children = useEnvironmentQuery(
-    environmentId && enabled && props.taskId
-      ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [props.taskId] } })
+    environmentId && enabled && childTaskId
+      ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [childTaskId] } })
       : null,
   );
   const routines = useEnvironmentQuery(
@@ -167,7 +133,16 @@ export function MobileBotWork(props: {
     (entry) => entry.row.task.taskId === props.taskId,
   );
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<(typeof tabs)[number]>("Tasks");
+  const [tab, setTab] = useState<(typeof tabs)[number]>("Home");
+  const peekEntry =
+    peekTaskId === null
+      ? null
+      : ([...work.inProgress, ...work.done].find((entry) => entry.row.task.taskId === peekTaskId) ??
+        null);
+  const closeSheet = () => {
+    setPeekTaskId(null);
+    setOpen(false);
+  };
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (!environmentId || !enabled) return;
     const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateTaskView, {
@@ -332,12 +307,12 @@ export function MobileBotWork(props: {
         visible={open}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setOpen(false)}
+        onRequestClose={closeSheet}
       >
         <View className="flex-1 bg-screen px-4 pt-4">
           <Pressable
             accessibilityRole="button"
-            onPress={() => setOpen(false)}
+            onPress={closeSheet}
             className="min-h-[44px] self-start justify-center px-2"
           >
             <Text className="text-foreground">Close</Text>
@@ -346,10 +321,15 @@ export function MobileBotWork(props: {
               room for the list. */}
           {/* The keyboard insets the list, so a note's wording field and its buttons can scroll
               above it, and a tap on a button lands while the keyboard is up. */}
+          {/* A peek covers Home without unmounting it, so Back returns to the same place. */}
           <ScrollView
+            testID="goat-bot-home-scroll"
             stickyHeaderIndices={[1]}
             automaticallyAdjustKeyboardInsets
             keyboardShouldPersistTaps="handled"
+            pointerEvents={peekEntry ? "none" : "auto"}
+            accessibilityElementsHidden={peekEntry !== null}
+            importantForAccessibility={peekEntry ? "no-hide-descendants" : "auto"}
           >
             <View>
               <View className="items-center gap-2 pt-2 pb-4">
@@ -407,252 +387,140 @@ export function MobileBotWork(props: {
                 ))}
               </ScrollView>
             </View>
-            <View>
-              {tab === "Tasks" &&
-              goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0 ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setOpen(false)}
-                  className="min-h-[44px] justify-center"
-                >
-                  <Text className="text-foreground">
-                    {goatBotWaitingInChatText(botName)}. Open the chat
-                  </Text>
-                </Pressable>
-              ) : null}
-              {tab === "Tasks" && enabled && threads.error ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={threads.refresh}
-                  className="min-h-[44px] justify-center"
-                >
-                  <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
-                </Pressable>
-              ) : null}
-              {/* Known tasks stay listed through a refresh and a failed one; only a read that
-                  succeeded with nothing in it says there are no tasks. Tasks the chat shows are
-                  listed from the conversation even before the list loads or when it fails. */}
-              {tab === "Tasks" ? (
-                !enabled ? (
-                  <Text className="text-foreground-muted">
-                    Tasks are unavailable while {botName} is offline or unsupported.
-                  </Text>
-                ) : threads.data === null && (props.chatTasks ?? []).length === 0 ? (
-                  threads.error ? null : (
-                    <Text className="text-foreground-muted">Loading tasks…</Text>
-                  )
-                ) : (
-                  <>
-                    {threads.data === null && !threads.error ? (
-                      <Text className="text-foreground-muted">Loading tasks…</Text>
-                    ) : null}
-                    <MobileBotTaskList
-                      botName={botName}
-                      work={work}
-                      rows={rows}
-                      chatTasks={props.chatTasks ?? []}
-                      onOpenTask={(id) => {
-                        setOpen(false);
-                        props.onOpenTask(id);
-                      }}
-                      onOpenThread={(thread) => {
-                        setOpen(false);
-                        props.onOpenThread(thread);
-                      }}
-                      onUpdate={(input) => void update(input)}
-                      failed={threads.error !== null && threads.error !== undefined}
-                    />
-                  </>
-                )
-              ) : null}
-              {tab === "Routines" &&
-              selected?.connected &&
-              routines.data &&
-              environmentId &&
-              home.botRef ? (
-                <MobileBotCheckInForm
-                  environmentId={environmentId}
-                  botThreadId={home.botRef.threadId}
-                  tasks={routines.data.tasks}
-                  botName={botName}
-                />
-              ) : null}
-              {tab === "Routines" ? (
-                !selected?.connected ? (
-                  <Text className="text-foreground-muted">
-                    Routines are unavailable while {botName} is offline.
-                  </Text>
-                ) : routines.error ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={routines.refresh}
-                    className="min-h-[44px] justify-center"
-                  >
-                    <Text className="text-danger-foreground">
-                      Couldn't load routines. Try again
-                    </Text>
-                  </Pressable>
-                ) : !routines.data ? (
-                  <Text className="text-foreground-muted">Loading routines…</Text>
-                ) : boundRoutines.length && environmentId ? (
-                  boundRoutines.map((routine) => (
-                    <MobileRoutineRow
-                      key={routine.id}
-                      environmentId={environmentId}
-                      row={routine}
-                    />
-                  ))
-                ) : (
-                  <MobileBotPanelEmpty
-                    title="No routines yet"
-                    next={`Ask ${botName} in chat to set up a routine.`}
-                  />
-                )
-              ) : null}
-              {tab === "Memory" ? (
-                <MobileBotMemory
-                  environmentId={environmentId}
-                  connected={selected?.connected === true}
-                  supported={capabilities?.goatBotNotes === true}
-                  member={member !== null}
-                  botName={botName}
-                  onDraft={
-                    props.onDraft
-                      ? (text) => {
-                          setOpen(false);
-                          props.onDraft?.(text);
-                        }
-                      : undefined
-                  }
-                  refreshKey={props.notesRefreshKey}
-                />
-              ) : null}
-              {tab === "Library" ? (
-                <MobileBotLibrary
-                  environmentId={environmentId}
-                  connected={selected?.connected === true}
-                  botName={botName}
-                  supported={capabilities?.goatBotLibrary === true}
-                />
-              ) : null}
-              {tab === "Tasks" && work.inProgress.length > 0 ? (
-                <View className="mt-6 gap-1">
-                  <Text className="text-xs font-medium text-foreground-muted">Machines</Text>
+            <View className="gap-2">
+              {tab === "Home" ? (
+                <>
+                  <Text className="mt-2 text-xs font-medium text-foreground-muted">Machines</Text>
                   <MobileBotComputer
                     environmentId={environmentId}
                     connected={selected?.connected === true}
                     botId={member?.botId ?? null}
                     botName={botName}
                   />
-                </View>
-              ) : null}
+                  <Text className="mt-4 text-xs font-medium text-foreground-muted">Work</Text>
+                  {goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={closeSheet}
+                      className="min-h-[44px] justify-center"
+                    >
+                      <Text className="text-foreground">
+                        {goatBotWaitingInChatText(botName)}. Open the chat
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  {enabled && threads.error ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={threads.refresh}
+                      className="min-h-[44px] justify-center"
+                    >
+                      <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
+                    </Pressable>
+                  ) : null}
+                  {/* Known tasks stay listed through a refresh and a failed one; only a read that
+                      succeeded with nothing in it says there are no tasks. */}
+                  {!enabled ? (
+                    <Text className="text-foreground-muted">
+                      Tasks are unavailable while {botName} is offline or unsupported.
+                    </Text>
+                  ) : threads.data === null && (props.chatTasks ?? []).length === 0 ? (
+                    threads.error ? null : (
+                      <Text className="text-foreground-muted">Loading tasks…</Text>
+                    )
+                  ) : (
+                    <>
+                      {/* Tasks the chat shows are listed from the conversation even before the
+                          list loads or when it fails. */}
+                      {threads.data === null && !threads.error ? (
+                        <Text className="text-foreground-muted">Loading tasks…</Text>
+                      ) : null}
+                      <MobileBotTaskList
+                        botName={botName}
+                        work={work}
+                        rows={rows}
+                        chatTasks={props.chatTasks ?? []}
+                        onPeekTask={setPeekTaskId}
+                        onOpenTask={(id) => {
+                          closeSheet();
+                          props.onOpenTask(id);
+                        }}
+                        onOpenThread={(thread) => {
+                          closeSheet();
+                          props.onOpenThread(thread);
+                        }}
+                        onUpdate={(input) => void update(input)}
+                        failed={threads.error !== null && threads.error !== undefined}
+                      />
+                    </>
+                  )}
+                  <Text className="mt-4 text-xs font-medium text-foreground-muted">Routines</Text>
+                  <MobileBotRoutines
+                    environmentId={environmentId}
+                    connected={selected?.connected === true}
+                    botThreadId={home.botRef?.threadId ?? null}
+                    botName={botName}
+                    tasks={routines.data?.tasks ?? null}
+                    error={Boolean(routines.error)}
+                    onRetry={routines.refresh}
+                    rows={boundRoutines}
+                  />
+                </>
+              ) : (
+                <>
+                  <MobileBotLibrary
+                    environmentId={environmentId}
+                    connected={selected?.connected === true}
+                    botName={botName}
+                    supported={capabilities?.goatBotLibrary === true}
+                  />
+                  <Text className="mt-4 text-xs font-medium text-foreground-muted">Notes</Text>
+                  <MobileBotMemory
+                    environmentId={environmentId}
+                    connected={selected?.connected === true}
+                    supported={capabilities?.goatBotNotes === true}
+                    member={member !== null}
+                    botName={botName}
+                    onDraft={
+                      props.onDraft
+                        ? (text) => {
+                            closeSheet();
+                            props.onDraft?.(text);
+                          }
+                        : undefined
+                    }
+                    refreshKey={props.notesRefreshKey}
+                  />
+                </>
+              )}
             </View>
           </ScrollView>
+          {peekEntry ? (
+            <View className="absolute inset-0 bg-screen px-4 pt-14">
+              <MobileBotPeek
+                key={peekEntry.row.task.taskId}
+                entry={peekEntry}
+                rows={rows}
+                connected={selected?.connected === true}
+                machineLabel={selected?.label ?? botName}
+                onBack={() => setPeekTaskId(null)}
+                onOpenThread={(thread) => {
+                  closeSheet();
+                  props.onOpenThread(thread);
+                }}
+                onOpenTask={(id) => {
+                  closeSheet();
+                  props.onOpenTask(id);
+                }}
+              />
+            </View>
+          ) : null}
         </View>
       </Modal>
     </>
   );
 }
 
-function MobileRoutineRow(props: {
-  readonly environmentId: EnvironmentId;
-  readonly row: BotRoutineRow;
-}) {
-  const { environmentId, row } = props;
-  const canOperate = useAtomValue(
-    serverEnvironment.setScheduledTaskEnabled.permissionAtom(environmentId),
-  );
-  const canRunNow = useAtomValue(
-    serverEnvironment.runScheduledTaskNow.permissionAtom(environmentId),
-  );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const runAgain = async () => {
-    if (running) return;
-    setRunning(true);
-    setRunError(null);
-    const result = await runAtomCommand(
-      appAtomRegistry,
-      serverEnvironment.runScheduledTaskNow,
-      { environmentId, input: { id: row.id } },
-      { label: "GOAT Bot routine run now", reportFailure: false },
-    );
-    setRunning(false);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const failure = squashAtomCommandFailure(result);
-      setRunError(failure instanceof Error ? failure.message : String(failure));
-    }
-  };
-  const toggle = async (enabled: boolean) => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    const result = await runAtomCommand(
-      appAtomRegistry,
-      serverEnvironment.setScheduledTaskEnabled,
-      { environmentId, input: { id: row.id, enabled } },
-      { label: "GOAT Bot routine enabled", reportFailure: false },
-    );
-    setBusy(false);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : String(failure));
-    }
-  };
-  return (
-    <View className="gap-1 border-b border-border py-2">
-      <View className="flex-row items-center gap-3">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded }}
-          onPress={() => setExpanded((value) => !value)}
-          className="min-h-[44px] flex-1 justify-center"
-        >
-          <Text className="font-semibold text-foreground">{row.title}</Text>
-          <Text className="text-foreground-muted">
-            {row.scheduleText} · {row.nextText}
-          </Text>
-          <Text className={row.lastFailed ? "text-danger-foreground" : "text-foreground-muted"}>
-            {row.lastText}
-          </Text>
-        </Pressable>
-        <ThemedSwitch
-          accessibilityLabel={`${row.enabled ? "Pause" : "Resume"} ${row.title}`}
-          disabled={busy || !canOperate}
-          value={row.enabled}
-          onValueChange={(enabled) => void toggle(enabled)}
-        />
-      </View>
-      {expanded ? <Text className="text-foreground-muted">{row.prompt}</Text> : null}
-      {row.lastFailed && canRunNow ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: running }}
-          disabled={running}
-          onPress={() => void runAgain()}
-          className="min-h-[44px] self-start justify-center"
-        >
-          <Text className="text-foreground">Run now</Text>
-        </Pressable>
-      ) : null}
-      {error !== null ? (
-        <Text accessibilityRole="alert" className="text-danger-foreground">
-          Couldn't {row.enabled ? "pause" : "resume"} this routine: {error}
-        </Text>
-      ) : null}
-      {runError !== null ? (
-        <Text accessibilityRole="alert" className="text-danger-foreground">
-          Couldn't run this routine: {runError}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-/** Runs failed or stopped work again; each tap is its own request and the server may refuse. */
 function MobileTaskRetry(props: {
   readonly environmentId: EnvironmentId;
   readonly taskId: ChannelTaskId;

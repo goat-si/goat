@@ -96,6 +96,7 @@ afterEach(async () => {
 async function show(props: Partial<Parameters<typeof MobileBotTaskList>[0]> = {}) {
   const calls = {
     open: vi.fn(),
+    peek: vi.fn(),
     thread: vi.fn(),
     update: vi.fn<(input: ChannelUpdateTaskViewInput) => void>(),
   };
@@ -108,6 +109,7 @@ async function show(props: Partial<Parameters<typeof MobileBotTaskList>[0]> = {}
         rows={[]}
         chatTasks={[]}
         onOpenTask={calls.open}
+        onPeekTask={calls.peek}
         onOpenThread={calls.thread}
         onUpdate={calls.update}
         {...props}
@@ -143,8 +145,10 @@ it("lists a task with its status, unread and pinned state, and the actions the b
     [{ taskId: "task-1", pinned: false }],
     [{ taskId: "task-1", done: true }],
   ]);
+  // A listed task opens its peek on the bot's home, not its conversation.
   await act(async () => (row as HTMLButtonElement).click());
-  expect(calls.open).toHaveBeenCalledWith("task-1");
+  expect(calls.peek).toHaveBeenCalledWith("task-1");
+  expect(calls.open).not.toHaveBeenCalled();
 });
 
 it("lists coding threads no task owns under Other threads, even when there are no tasks", async () => {
@@ -169,6 +173,7 @@ it("keeps a task the conversation shows but the server no longer lists, opening 
     ).click(),
   );
   expect(calls.open).toHaveBeenCalledWith("task-old");
+  expect(calls.peek).not.toHaveBeenCalled();
 });
 
 it("lists a conversation card only once when the server still lists its task", async () => {
