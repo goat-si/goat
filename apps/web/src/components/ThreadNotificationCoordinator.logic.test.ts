@@ -3,6 +3,7 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  approvalHandoffsShownBy,
   createApprovalNotificationGate,
   feedOwnedApprovalThreads,
   createThreadNotificationGate,
@@ -212,5 +213,18 @@ describe("which approvals the decision feed announces", () => {
       true,
     );
     expect([...owned]).toEqual([]);
+  });
+  it("names every approval handoff a parent's notification stands for, including nested subagents", () => {
+    const threads = [
+      shell("root", null),
+      shell("mid", handoff("mid-a"), "root"),
+      shell("leaf", handoff("leaf-a"), "mid"),
+      shell("other", handoff("other-a")),
+    ];
+    expect([...approvalHandoffsShownBy(threads, ThreadId.make("root"))].sort()).toEqual([
+      "leaf-a",
+      "mid-a",
+    ]);
+    expect([...approvalHandoffsShownBy(threads, ThreadId.make("other"))]).toEqual(["other-a"]);
   });
 });

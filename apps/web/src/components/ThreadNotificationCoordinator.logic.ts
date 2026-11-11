@@ -118,3 +118,26 @@ export function feedOwnedApprovalThreads(
   }
   return owned;
 }
+
+/** The approval handoffs a thread's shell notification stands for: its own and its subagents'. */
+export function approvalHandoffsShownBy(
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  threadId: ThreadId,
+): ReadonlyArray<string> {
+  const byId = new Map(threads.map((thread) => [thread.id, thread] as const));
+  return threads.flatMap((thread) => {
+    const request = thread.pendingRuntimeRequest;
+    if (request?.handoff?.kind !== "approval") return [];
+    const seen = new Set<ThreadId>();
+    let current: OrchestrationV2ThreadShell | undefined = thread;
+    while (current !== undefined && !seen.has(current.id)) {
+      if (current.id === threadId) return [String(request.id)];
+      seen.add(current.id);
+      current =
+        current.lineage.relationshipToParent === "subagent" && current.lineage.parentThreadId
+          ? byId.get(current.lineage.parentThreadId)
+          : undefined;
+    }
+    return [];
+  });
+}

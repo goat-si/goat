@@ -47,6 +47,7 @@ import {
   type SidebarThreadStatus,
 } from "./Sidebar.logic";
 import {
+  approvalHandoffsShownBy,
   createApprovalNotificationGate,
   feedOwnedApprovalThreads,
   createThreadNotificationGate,
@@ -71,6 +72,7 @@ interface WatchedEnvironment {
   feedReady: boolean;
   /** Server time of the first shell snapshot: approvals older than it were open before watching. */
   baselineMs: number | null;
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly gate: ReturnType<typeof createThreadNotificationGate<ThreadId>>;
   readonly approvals: ReturnType<typeof createApprovalNotificationGate<string>>;
 }
@@ -418,6 +420,7 @@ export function startThreadNotifications(
     const next = new Map<ThreadId, NotificationState>();
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     // Approval handoffs notify from the decision feed, one per approval; the shell stays quiet.
+    entry.threads = threads;
     const feedOwned = feedOwnedApprovalThreads(threads, entry.feedReady);
     entry.baselineMs ??= threads.reduce(
       (latest, raw) => Math.max(latest, DateTime.toEpochMillis(raw.updatedAt)),
@@ -492,13 +495,14 @@ export function startThreadNotifications(
       reconnecting: false,
       feedReady: false,
       baselineMs: null,
+      threads: [],
       unsubscribe: () => {},
       gate: createThreadNotificationGate<ThreadId>((threadId, kind) => {
         const state = entry.previous.get(threadId);
         if (!state) return;
-        // An approval the shell announced is not announced again by the feed.
-        const request = state.raw.pendingRuntimeRequest;
-        if (request?.handoff !== undefined) entry.approvals.remember(request.id);
+        // Approvals the shell announced, its subagents' included, are not announced again by the feed.
+        for (const id of approvalHandoffsShownBy(entry.threads, threadId))
+          entry.approvals.remember(id);
         present(environmentId, state, kind);
       }),
       approvals: createApprovalNotificationGate<string>((handoffId) => {
