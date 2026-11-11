@@ -1685,6 +1685,7 @@ const make = Effect.gen(function* () {
         mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
         options: "options" in base ? base.options : undefined,
         questionId: "questionId" in base ? base.questionId : undefined,
+        interim: "interim" in base,
       });
       const deliveries =
         goatOutcome && bot !== undefined
