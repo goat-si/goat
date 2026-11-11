@@ -6,7 +6,7 @@
  * thread still counts somewhere on it.
  */
 
-export const MAX_GRAPH_MACHINES = 12;
+export const MAX_GRAPH_MACHINES = 40;
 export const MAX_GRAPH_AGENTS = 6;
 /**
  * Node radii, touch margins and the one-line label box below each machine in the compact graph.
@@ -195,9 +195,16 @@ export function layoutFleet(
     inner,
     outer,
     machines: nodes.map((machine, index): FleetLayoutMachine => {
-      const angle = angles[index] ?? 0;
-      const x = round(center.x + inner.rx * Math.cos(angle));
-      const y = round(center.y + inner.ry * Math.sin(angle));
+      const many = !compact && nodes.length > 12;
+      const ring = Math.floor(index / 10);
+      const ringCount = Math.min(10, nodes.length - ring * 10);
+      const angle = many
+        ? (machineAngles(ringCount, false)[index % 10] ?? 0)
+        : (angles[index] ?? 0);
+      const rx = many ? 85 + ring * 70 : inner.rx;
+      const ry = many ? 85 + ring * 70 : inner.ry;
+      const x = round(center.x + rx * Math.cos(angle));
+      const y = round(center.y + ry * Math.sin(angle));
       const edge = orbitEdge(center, { x, y });
       if (machine === null) {
         return { id: null, x, y, angle, edge, aggregate: folded, agents: [] };

@@ -414,7 +414,9 @@ export const FleetGraph = memo(function FleetGraph(props: {
   const { snapshot, connections, currentMachineId, selectedMachineId, onSelectMachine, heat } =
     props;
   const slow = props.slowMachineIds;
-  const [wrapperRef, width] = useElementWidth();
+  const [wrapperRef, wrapperWidth] = useElementWidth();
+  const manyMachines = snapshot.machines.length > 12;
+  const width = wrapperWidth > 0 && manyMachines ? Math.max(800, wrapperWidth) : wrapperWidth;
   const svgRef = useRef<SVGSVGElement>(null);
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const paint = useHeatPaint();
@@ -424,7 +426,11 @@ export const FleetGraph = memo(function FleetGraph(props: {
   usePauseWhileHidden(svgRef);
   const { offsets, press, move, release } = usePullableNodes(svgRef, width, reduced);
   // Below 340 the orbits cannot keep labels apart; see ORBIT_GAP in fleetLayout.
-  const height = width < 640 ? 360 : Math.max(340, Math.min(420, Math.round(width * 0.42)));
+  const height = manyMachines
+    ? 800
+    : width < 640
+      ? 360
+      : Math.max(340, Math.min(420, Math.round(width * 0.42)));
   const layout = width > 0 ? layoutFleet(snapshot.machines, width, height) : null;
   const machinesById = new Map(snapshot.machines.map((machine) => [machine.id, machine]));
   // Where every node is drawn this frame: its orbit spot plus any pull.
@@ -476,228 +482,242 @@ export const FleetGraph = memo(function FleetGraph(props: {
   });
 
   return (
-    <div ref={wrapperRef} className="fleet-graph relative w-full">
-      {layout === null ? (
-        <div style={{ height }} />
-      ) : (
-        <>
-          {heatSpots.length > 0 ? <HeatLayer spots={heatSpots} paint={paint} /> : null}
-          <svg
-            ref={svgRef}
-            viewBox={"0 0 " + width + " " + height}
-            className="relative block h-auto w-full select-none"
-            role="group"
-            aria-label={
-              snapshot.totals.machines +
-              " machines, " +
-              snapshot.totals.running +
-              " running, " +
-              snapshot.totals.attention +
-              " need you"
-            }
-          >
-            <HeatDefs paint={paint} />
-            <HaloDefs info={infoHalo} primary={primaryHalo} />
-            <ellipse
-              cx={layout.center.x}
-              cy={layout.center.y}
-              rx={layout.inner.rx}
-              ry={layout.inner.ry}
-              fill="none"
-              className={cn("pointer-events-none stroke-foreground/15", !reduced && "fleet-orbit")}
-              strokeDasharray="6 8"
-              strokeLinecap="round"
-            />
+    <div ref={wrapperRef} className="fleet-graph w-full overflow-x-auto">
+      <div className="relative" style={{ width: manyMachines ? width : "100%" }}>
+        {layout === null ? (
+          <div style={{ height }} />
+        ) : (
+          <>
+            {heatSpots.length > 0 ? <HeatLayer spots={heatSpots} paint={paint} /> : null}
+            <svg
+              ref={svgRef}
+              viewBox={"0 0 " + width + " " + height}
+              className="relative block h-auto w-full select-none"
+              role="group"
+              aria-label={
+                snapshot.totals.machines +
+                " machines, " +
+                snapshot.totals.running +
+                " running, " +
+                snapshot.totals.attention +
+                " need you"
+              }
+            >
+              <HeatDefs paint={paint} />
+              <HaloDefs info={infoHalo} primary={primaryHalo} />
+              <ellipse
+                cx={layout.center.x}
+                cy={layout.center.y}
+                rx={layout.inner.rx}
+                ry={layout.inner.ry}
+                fill="none"
+                className={cn(
+                  "pointer-events-none stroke-foreground/15",
+                  !reduced && "fleet-orbit",
+                )}
+                strokeDasharray="6 8"
+                strokeLinecap="round"
+              />
 
-            {placed.map((entry) => {
-              const machine = entry.layout.id === null ? null : machinesById.get(entry.layout.id)!;
-              const work = machine ?? entry.layout.aggregate!;
-              const busy = work.running + work.attention > 0;
-              const link =
-                machine === null
-                  ? null
-                  : fleetConnectionVisual(
-                      (connections.get(machine.id) ?? UNKNOWN_FLEET_CONNECTION).state,
-                    ).edge;
-              return (
-                <g key={"edge:" + (entry.layout.id ?? "more")}>
-                  {link === null ? (
-                    <path
-                      d={entry.edge}
-                      fill="none"
-                      className={busy ? "stroke-info/40" : "stroke-border"}
-                      strokeWidth={busy ? 1.6 : 1.2}
-                      strokeDasharray={machine?.kind === "environment" || busy ? undefined : "3 5"}
-                    />
-                  ) : (
-                    <path
-                      d={entry.edge}
-                      fill="none"
-                      className={cn(
-                        link.className,
-                        link.animated && !reduced && !slow?.has(machine!.id) && "fleet-flow",
-                      )}
-                      strokeWidth={1.4}
-                      strokeDasharray={link.dash}
-                    />
-                  )}
-                  {busy && !reduced ? (
-                    <path
-                      d={entry.edge}
-                      fill="none"
-                      className="fleet-flow stroke-info"
-                      strokeWidth={1.6}
-                      strokeDasharray="2 12"
-                    />
-                  ) : null}
-                  {entry.agents.map((agent) => {
-                    const data = machine?.agents.find((item) => item.key === agent.layout.key);
-                    const agentWork = data ?? agent.layout.aggregate!;
-                    const agentBusy = agentWork.running + agentWork.attention > 0;
-                    return (
-                      <line
-                        key={"link:" + agent.key}
-                        x1={entry.at.x}
-                        y1={entry.at.y}
-                        x2={agent.at.x}
-                        y2={agent.at.y}
-                        className={agentBusy ? "stroke-info/60" : "stroke-border"}
-                        strokeDasharray={agentBusy ? undefined : "2 4"}
-                      />
-                    );
-                  })}
-                </g>
-              );
-            })}
-
-            {reduced
-              ? null
-              : snapshot.threads
-                  .filter((thread) => thread.state === "running")
-                  .slice(0, MAX_PARTICLES)
-                  .map((thread, index) => (
-                    <Particle
-                      key={thread.key}
-                      thread={thread}
-                      index={index}
-                      entry={placedById.get(thread.machineId)}
-                    />
-                  ))}
-
-            {placed.flatMap((entry) =>
-              entry.agents.map((agent) => {
+              {placed.map((entry) => {
                 const machine =
-                  entry.layout.id === null ? undefined : machinesById.get(entry.layout.id);
-                const data = machine?.agents.find((item) => item.key === agent.layout.key);
-                const work = data ?? agent.layout.aggregate!;
-                const label = data ? data.label : agent.layout.aggregate!.count + " more";
-                const labelY = agent.layout.labelBelow ? AGENT_RADIUS + 13 : -(AGENT_RADIUS + 7);
+                  entry.layout.id === null ? null : machinesById.get(entry.layout.id)!;
+                const work = machine ?? entry.layout.aggregate!;
+                const busy = work.running + work.attention > 0;
+                const link =
+                  machine === null
+                    ? null
+                    : fleetConnectionVisual(
+                        (connections.get(machine.id) ?? UNKNOWN_FLEET_CONNECTION).state,
+                      ).edge;
                 return (
-                  <g
-                    key={agent.key}
-                    transform={"translate(" + agent.at.x + " " + agent.at.y + ")"}
-                    className="cursor-grab touch-none active:cursor-grabbing"
-                    {...nodeHandlers(agent.key)}
-                  >
-                    <title>{label + " · " + workSummary(work)}</title>
-                    {work.attention > 0 ? (
-                      <circle
-                        r={AGENT_RADIUS + 6}
+                  <g key={"edge:" + (entry.layout.id ?? "more")}>
+                    {link === null ? (
+                      <path
+                        d={entry.edge}
                         fill="none"
-                        className={cn("stroke-warning", !reduced && "fleet-ring")}
-                        strokeWidth={1.5}
+                        className={busy ? "stroke-info/40" : "stroke-border"}
+                        strokeWidth={busy ? 1.6 : 1.2}
+                        strokeDasharray={
+                          machine?.kind === "environment" || busy ? undefined : "3 5"
+                        }
+                      />
+                    ) : (
+                      <path
+                        d={entry.edge}
+                        fill="none"
+                        className={cn(
+                          link.className,
+                          link.animated && !reduced && !slow?.has(machine!.id) && "fleet-flow",
+                        )}
+                        strokeWidth={1.4}
+                        strokeDasharray={link.dash}
+                      />
+                    )}
+                    {busy && !reduced ? (
+                      <path
+                        d={entry.edge}
+                        fill="none"
+                        className="fleet-flow stroke-info"
+                        strokeWidth={1.6}
+                        strokeDasharray="2 12"
                       />
                     ) : null}
-                    <circle
-                      r={AGENT_RADIUS}
-                      className={cn(
-                        "fill-background",
-                        work.attention > 0
-                          ? "stroke-warning"
-                          : work.running > 0
-                            ? "stroke-info"
-                            : "stroke-muted-foreground",
-                      )}
-                      strokeWidth={1.4}
-                      strokeDasharray={
-                        work.reported > 0 && work.running + work.attention === 0 ? "2 3" : undefined
-                      }
-                    />
-                    {(data?.driver
-                      ? renderProviderGlyph({ driverKind: data.driver, x: -7, y: -7, size: 14 })
-                      : null) ?? (
-                      <text
-                        y={3.5}
-                        textAnchor="middle"
-                        className="fill-foreground text-4xs font-semibold"
-                      >
-                        {data
-                          ? data.driver
-                            ? providerInstanceInitials(data.label)
-                            : "?"
-                          : "+" + agent.layout.aggregate!.count}
-                      </text>
-                    )}
-                    <text y={labelY} textAnchor="middle" className="fill-muted-foreground text-4xs">
-                      {truncate(label, 18)}
-                    </text>
+                    {entry.agents.map((agent) => {
+                      const data = machine?.agents.find((item) => item.key === agent.layout.key);
+                      const agentWork = data ?? agent.layout.aggregate!;
+                      const agentBusy = agentWork.running + agentWork.attention > 0;
+                      return (
+                        <line
+                          key={"link:" + agent.key}
+                          x1={entry.at.x}
+                          y1={entry.at.y}
+                          x2={agent.at.x}
+                          y2={agent.at.y}
+                          className={agentBusy ? "stroke-info/60" : "stroke-border"}
+                          strokeDasharray={agentBusy ? undefined : "2 4"}
+                        />
+                      );
+                    })}
                   </g>
                 );
-              }),
-            )}
+              })}
 
-            {placed.map((entry) =>
-              entry.layout.id === null ? (
-                <AggregateNode
-                  key="machine:more"
-                  at={entry.at}
-                  node={entry.layout}
-                  handlers={nodeHandlers(machineKey("more"))}
-                />
-              ) : (
-                <MachineNode
-                  key={"machine:" + entry.layout.id}
-                  at={entry.at}
-                  halo={infoHalo}
-                  machine={machinesById.get(entry.layout.id)!}
-                  connection={connections.get(entry.layout.id) ?? UNKNOWN_FLEET_CONNECTION}
-                  slow={slow?.has(entry.layout.id) === true}
-                  heat={heat?.get(entry.layout.id) ?? NO_FLEET_HEAT}
-                  current={currentMachineId === entry.layout.id}
-                  selected={selectedMachineId === entry.layout.id}
-                  reduced={reduced}
-                  onSelect={onSelectMachine}
-                  handlers={nodeHandlers(machineKey(entry.layout.id), () =>
-                    onSelectMachine(entry.layout.id!),
-                  )}
-                />
-              ),
-            )}
+              {reduced
+                ? null
+                : snapshot.threads
+                    .filter((thread) => thread.state === "running")
+                    .slice(0, MAX_PARTICLES)
+                    .map((thread, index) => (
+                      <Particle
+                        key={thread.key}
+                        thread={thread}
+                        index={index}
+                        entry={placedById.get(thread.machineId)}
+                      />
+                    ))}
 
-            <g transform={"translate(" + layout.center.x + " " + layout.center.y + ")"}>
-              {live > 0 && !reduced ? (
-                <circle r={36} className="fleet-breathe" fill={"url(#" + primaryHalo + ")"} />
-              ) : null}
-              <circle
-                r={29}
-                fill="none"
-                className={cn("stroke-primary/50", !reduced && "fleet-spin")}
-                strokeDasharray="3 7"
-              />
-              <circle r={22} className="fill-primary" />
-              <GoatWordmark
-                x={-12}
-                y={-12}
-                width={24}
-                height={24}
-                role="img"
-                aria-label="GOAT"
-                className="text-primary-foreground"
-              />
-            </g>
-          </svg>
-        </>
-      )}
+              {placed.flatMap((entry) =>
+                entry.agents.map((agent) => {
+                  const machine =
+                    entry.layout.id === null ? undefined : machinesById.get(entry.layout.id);
+                  const data = machine?.agents.find((item) => item.key === agent.layout.key);
+                  const work = data ?? agent.layout.aggregate!;
+                  const label = data ? data.label : agent.layout.aggregate!.count + " more";
+                  const labelY = agent.layout.labelBelow ? AGENT_RADIUS + 13 : -(AGENT_RADIUS + 7);
+                  return (
+                    <g
+                      key={agent.key}
+                      transform={"translate(" + agent.at.x + " " + agent.at.y + ")"}
+                      className="cursor-grab touch-none active:cursor-grabbing"
+                      {...nodeHandlers(agent.key)}
+                    >
+                      <title>{label + " · " + workSummary(work)}</title>
+                      {work.attention > 0 ? (
+                        <circle
+                          r={AGENT_RADIUS + 6}
+                          fill="none"
+                          className={cn("stroke-warning", !reduced && "fleet-ring")}
+                          strokeWidth={1.5}
+                        />
+                      ) : null}
+                      <circle
+                        r={AGENT_RADIUS}
+                        className={cn(
+                          "fill-background",
+                          work.attention > 0
+                            ? "stroke-warning"
+                            : work.running > 0
+                              ? "stroke-info"
+                              : "stroke-muted-foreground",
+                        )}
+                        strokeWidth={1.4}
+                        strokeDasharray={
+                          work.reported > 0 && work.running + work.attention === 0
+                            ? "2 3"
+                            : undefined
+                        }
+                      />
+                      {(data?.driver
+                        ? renderProviderGlyph({ driverKind: data.driver, x: -7, y: -7, size: 14 })
+                        : null) ?? (
+                        <text
+                          y={3.5}
+                          textAnchor="middle"
+                          className="fill-foreground text-4xs font-semibold"
+                        >
+                          {data
+                            ? data.driver
+                              ? providerInstanceInitials(data.label)
+                              : "?"
+                            : "+" + agent.layout.aggregate!.count}
+                        </text>
+                      )}
+                      <text
+                        y={labelY}
+                        textAnchor="middle"
+                        className="fill-muted-foreground text-4xs"
+                      >
+                        {truncate(label, 18)}
+                      </text>
+                    </g>
+                  );
+                }),
+              )}
+
+              {placed.map((entry) =>
+                entry.layout.id === null ? (
+                  <AggregateNode
+                    key="machine:more"
+                    at={entry.at}
+                    node={entry.layout}
+                    handlers={nodeHandlers(machineKey("more"))}
+                  />
+                ) : (
+                  <MachineNode
+                    key={"machine:" + entry.layout.id}
+                    at={entry.at}
+                    halo={infoHalo}
+                    machine={machinesById.get(entry.layout.id)!}
+                    connection={connections.get(entry.layout.id) ?? UNKNOWN_FLEET_CONNECTION}
+                    slow={slow?.has(entry.layout.id) === true}
+                    heat={heat?.get(entry.layout.id) ?? NO_FLEET_HEAT}
+                    current={currentMachineId === entry.layout.id}
+                    selected={selectedMachineId === entry.layout.id}
+                    reduced={reduced}
+                    onSelect={onSelectMachine}
+                    handlers={nodeHandlers(machineKey(entry.layout.id), () =>
+                      onSelectMachine(entry.layout.id!),
+                    )}
+                  />
+                ),
+              )}
+
+              <g transform={"translate(" + layout.center.x + " " + layout.center.y + ")"}>
+                {live > 0 && !reduced ? (
+                  <circle r={36} className="fleet-breathe" fill={"url(#" + primaryHalo + ")"} />
+                ) : null}
+                <circle
+                  r={29}
+                  fill="none"
+                  className={cn("stroke-primary/50", !reduced && "fleet-spin")}
+                  strokeDasharray="3 7"
+                />
+                <circle r={22} className="fill-primary" />
+                <GoatWordmark
+                  x={-12}
+                  y={-12}
+                  width={24}
+                  height={24}
+                  role="img"
+                  aria-label="GOAT"
+                  className="text-primary-foreground"
+                />
+              </g>
+            </svg>
+          </>
+        )}
+      </div>
     </div>
   );
 });

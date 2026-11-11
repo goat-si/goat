@@ -25,6 +25,24 @@ function machine(id: string, work = idle, agents = 0): LayoutMachineInput {
 }
 
 describe("layoutFleet", () => {
+  it("draws 13, 20 and 40 machines separately without overlapping nodes around the hub", () => {
+    for (const count of [13, 20, 40]) {
+      const layout = layoutFleet(
+        Array.from({ length: count }, (_, i) => machine("m" + i)),
+        800,
+        800,
+      );
+      expect(layout.machines).toHaveLength(count);
+      expect(layout.center).toEqual({ x: 400, y: 400 });
+      expect(layout.machines.every((node) => node.id !== null)).toBe(true);
+      for (const [index, node] of layout.machines.entries()) {
+        expect(Math.hypot(node.x - 400, node.y - 400)).toBeGreaterThanOrEqual(50);
+        for (const other of layout.machines.slice(index + 1)) {
+          expect(Math.hypot(node.x - other.x, node.y - other.y)).toBeGreaterThanOrEqual(36);
+        }
+      }
+    }
+  });
   it("prioritizes answering live work, then answering idle, then away, then reported hosts", () => {
     const machines = [
       { ...machine("reported", { ...idle, reported: 4 }), answering: false, environmentId: null },
@@ -63,24 +81,24 @@ describe("layoutFleet", () => {
   });
 
   it("folds extra machines into one node that keeps their work, showing busy ones first", () => {
-    const machines = Array.from({ length: 20 }, (_, index) =>
-      machine("m" + index, index === 19 ? { running: 2, attention: 1, reported: 0 } : idle),
+    const machines = Array.from({ length: 48 }, (_, index) =>
+      machine("m" + index, index === 47 ? { running: 2, attention: 1, reported: 0 } : idle),
     );
     machines[15] = machine("m15", { running: 0, attention: 0, reported: 3 });
     const layout = layoutFleet(machines, 1000, 560);
     expect(layout.machines).toHaveLength(MAX_GRAPH_MACHINES);
-    expect(layout.machines.map((node) => node.id)).toContain("m19");
+    expect(layout.machines.map((node) => node.id)).toContain("m47");
     const folded = layout.machines.at(-1)!;
     expect(folded.id).toBeNull();
-    expect(folded.aggregate).toEqual({ count: 9, running: 0, attention: 0, reported: 3 });
+    expect(folded.aggregate).toEqual({ count: 9, running: 0, attention: 0, reported: 0 });
 
-    const allBusy = Array.from({ length: 14 }, (_, index) =>
+    const allBusy = Array.from({ length: 42 }, (_, index) =>
       machine("m" + index, { running: 1, attention: index % 2, reported: 0 }),
     );
     const busyLayout = layoutFleet(allBusy, 1000, 560);
     const shown = busyLayout.machines.filter((node) => node.id !== null).length;
-    expect(shown + busyLayout.machines.at(-1)!.aggregate!.count).toBe(14);
-    // m11, m12 and m13 fold; m11 and m13 each need the user.
+    expect(shown + busyLayout.machines.at(-1)!.aggregate!.count).toBe(42);
+    // m39, m40 and m41 fold; m39 and m41 each need the user.
     expect(busyLayout.machines.at(-1)!.aggregate).toMatchObject({ running: 3, attention: 2 });
   });
 
