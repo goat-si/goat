@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { verifiedAnswerClaim } from "./channelPersonMessage.ts";
+import { answerVerdict } from "./channelPersonMessage.ts";
 import {
   botMessages,
   goatInput,
@@ -102,53 +102,117 @@ describe("which person message answered a task's question", () => {
   });
 });
 
-describe("the reference the server stands behind", () => {
+describe("what the server decided about an answer sent from a card", () => {
+  it.effect("takes it only for its own task, owner, conversation and an answer it accepts", () => {
+    const harness = makeHarness({ projects: 2 });
+    return Effect.gen(function* () {
+      const { task, questionId, options } = yield* askedTask;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const stored = yield* ledger.getTask(task.taskId);
+      const requester = (yield* ledger.getInput(task.originInputId))?.requester;
+      const message = {
+        intent: "answer" as const,
+        taskId: task.taskId,
+        questionId,
+        connectionId: "goat",
+        text: options[0]!,
+      };
+      const verdict = (overrides: Partial<Parameters<typeof answerVerdict>[0]> = {}) =>
+        answerVerdict({
+          message,
+          requester,
+          conversationId: task.conversationId,
+          task: stored,
+          ...overrides,
+        });
+      assert.deepStrictEqual(verdict(), { answersQuestionId: questionId });
+      // Refused: another task's question, another owner, another conversation, a skill
+      // proposal answered with something it does not take.
+      for (const refused of [
+        verdict({ message: { ...message, questionId: "other" as ChannelQuestionId } }),
+        verdict({ requester: { ...requester!, ownerId: "environment:stranger" } }),
+        verdict({ conversationId: "conversation:elsewhere" }),
+        verdict({
+          message: { ...message, text: "maybe" },
+          task: stored && {
+            ...stored,
+            task: {
+              ...stored.task,
+              skillProposal: {} as NonNullable<(typeof stored)["task"]["skillProposal"]>,
+            },
+          },
+        }),
+      ])
+        assert.deepStrictEqual(refused, { answersQuestionId: null });
+      // An ordinary message is no answer at all.
+      assert.deepStrictEqual(verdict({ message: { ...message, intent: "message" } }), {});
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  /** The person's message as stored now: its verdict, task and read time. */
+  const stored = (key: string) =>
+    Effect.map(personMessage(key), (item) => {
+      const channel = item?.type === "user_message" ? item.channel : undefined;
+      return {
+        answersQuestionId: channel?.answersQuestionId,
+        taskId: channel?.taskId,
+        read: channel?.readAt !== undefined,
+      };
+    });
+
+  it.effect.each([
+    { label: "a pick", typed: false },
+    { label: "typed words", typed: true },
+  ])(
+    "records $label sent to a question closed elsewhere as refused, on both revisions",
+    ({ typed }) => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        const { gateway, runtime, task, questionId, options } = yield* askedTask;
+        yield* gateway.ingest(answer(options[0]!, "first", task.taskId, questionId), rpcContext);
+        yield* runtime.drain;
+        const text = typed ? "Use the docs repo" : options[0]!;
+        const late = yield* gateway.ingest(
+          answer(text, "late", task.taskId, questionId),
+          rpcContext,
+        );
+        const accepted = yield* stored("late");
+        assert.deepStrictEqual(accepted, {
+          answersQuestionId: null,
+          taskId: task.taskId,
+          read: false,
+        });
+        yield* runtime.drain;
+        assert.deepStrictEqual(yield* stored("late"), { ...accepted, read: true });
+        // The refusal answers that message.
+        const records = yield* botMessages;
+        assert.isTrue(
+          records.turnItems.some(
+            (item) =>
+              item.type === "assistant_message" && item.channel?.inReplyToInputId === late.inputId,
+          ),
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect(
-    "names a question only for its own task, owner and conversation while it is open",
+    "keeps on the read revision what acceptance decided, even after the question closed",
     () => {
       const harness = makeHarness({ projects: 2 });
       return Effect.gen(function* () {
         const { gateway, runtime, task, questionId, options } = yield* askedTask;
-        const ledger = yield* ChannelLedger.ChannelLedger;
-        const stored = yield* ledger.getTask(task.taskId);
-        const asked = yield* ledger.getInput(task.originInputId);
-        const requester = asked?.requester;
-        const message = {
-          intent: "answer" as const,
+        yield* gateway.ingest(answer(options[0]!, "one", task.taskId, questionId), rpcContext);
+        yield* gateway.ingest(answer(options[0]!, "two", task.taskId, questionId), rpcContext);
+        const accepted = yield* stored("two");
+        assert.deepStrictEqual(accepted, {
+          answersQuestionId: questionId,
           taskId: task.taskId,
-          questionId,
-          connectionId: "goat",
-        };
-        const claim = (overrides: Partial<Parameters<typeof verifiedAnswerClaim>[0]> = {}) =>
-          verifiedAnswerClaim({
-            message,
-            requester,
-            conversationId: task.conversationId,
-            task: stored,
-            ...overrides,
-          }).answersQuestionId;
-        assert.strictEqual(claim(), questionId);
-        // Another task's question, another owner, another conversation: nothing to stand behind.
-        assert.isUndefined(
-          claim({ message: { ...message, questionId: "other-question" as ChannelQuestionId } }),
-        );
-        assert.isUndefined(
-          claim({ requester: { ...requester!, ownerId: "environment:stranger" } }),
-        );
-        assert.isUndefined(claim({ conversationId: "conversation:elsewhere" }));
-        // Once the question is answered it is closed, and a later answer to it names nothing.
-        yield* gateway.ingest(answer(options[0]!, "first", task.taskId, questionId), rpcContext);
+          read: false,
+        });
         yield* runtime.drain;
-        const again = yield* gateway.ingest(
-          answer(options[0]!, "late", task.taskId, questionId),
-          rpcContext,
-        );
-        yield* runtime.drain;
-        const late = yield* personMessage("late");
-        assert.isUndefined(
-          late?.type === "user_message" ? late.channel?.answersQuestionId : "missing",
-        );
-        assert.isDefined(again.inputId);
+        // "one" closed the question before "two" was read; the read copy still says what was decided.
+        assert.deepStrictEqual(yield* stored("two"), { ...accepted, read: true });
       }).pipe(Effect.provide(harness.layer));
     },
   );

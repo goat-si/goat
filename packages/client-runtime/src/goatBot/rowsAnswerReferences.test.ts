@@ -91,7 +91,7 @@ const person = (
   id: string,
   second: number,
   text: string,
-  fields: { taskId?: string; answersQuestionId?: string } = {},
+  fields: { taskId?: string; answersQuestionId?: string | null } = {},
 ) =>
   item({
     id,
@@ -275,5 +275,55 @@ describe("a task question whose card has not arrived", () => {
     );
     expect(ids(rows)).toEqual(["b1", "pending:k"]);
     expect(bot(rows, "b1")).not.toHaveProperty("answer");
+  });
+});
+
+/** The bot's reply to one of the person's messages. */
+const replyTo = (id: string, second: number, text: string, inputId: string) =>
+  item({
+    id,
+    at: at(second),
+    type: "assistant_message",
+    messageId: "m-" + id,
+    text,
+    streaming: false,
+    channel: { ...meta, kind: "reply", inReplyToInputId: inputId },
+  });
+
+describe("an answer the server refused stays what the person said", () => {
+  it.each([
+    { label: "a pick", text: "Keep" },
+    { label: "typed words", text: "Use the staging cache" },
+  ])("keeps $label sent to a question closed elsewhere, with the refusal after it", ({ text }) => {
+    // Answered on another channel first: the card names an input this chat never saw.
+    const rows = chat([
+      card("task-1", 2, [], [{ questionId: "q1", inputId: "in-slack" }]),
+      question("b1", 1, "task-1", "q1"),
+      person("u1", 3, text, { taskId: "task-1", answersQuestionId: null }),
+      replyTo("r1", 4, "That question was already answered.", "in-u1"),
+    ]);
+    expect(ids(rows)).toEqual(["b1", "u1", "r1"]);
+    expect(bot(rows, "b1")).not.toHaveProperty("answer");
+  });
+
+  it("never folds a refused pick into an earlier question that offers the same choice", () => {
+    const rows = chat([
+      question("b0", 1, "task-2", "legacy", null),
+      card("task-1", 2, [], [{ questionId: "q1", inputId: "in-slack" }]),
+      question("b1", 2, "task-1", "q1"),
+      person("u1", 3, "Keep", { taskId: "task-1", answersQuestionId: null }),
+    ]);
+    expect(ids(rows)).toEqual(["b0", "b1", "u1"]);
+    expect(bot(rows, "b0")).toMatchObject({ options: ["Keep", "Clear"] });
+    expect(bot(rows, "b0")).not.toHaveProperty("answer");
+  });
+
+  it("keeps a message with no verdict, as an older server stores it, as before", () => {
+    const rows = chat([
+      card("task-1", 2, [], [{ questionId: "q1", inputId: "in-slack" }]),
+      question("b1", 1, "task-1", "q1"),
+      person("u1", 3, "Use the staging cache", { taskId: "task-1" }),
+    ]);
+    expect(ids(rows)).toEqual(["b1"]);
   });
 });

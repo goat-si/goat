@@ -49,7 +49,9 @@ import type * as DocumentText from "../provider/DocumentText.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import type { ChannelConnectionOwner, ChannelIngressContext } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
-import { verifiedAnswerClaim } from "./channelPersonMessage.ts";
+import { answerVerdict } from "./channelPersonMessage.ts";
+
+const FINISHED_TASK_STATUSES = new Set(["completed", "failed", "cancelled"]);
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -447,12 +449,14 @@ const make = Effect.gen(function* () {
         input.intent !== "report" && input.taskId !== undefined
           ? yield* ledger.getTask(input.taskId).pipe(Effect.mapError(ledgerFailure))
           : undefined;
+      // A finished task's thread takes no more work: the message is handled in the main chat.
       const validatedTaskId =
         target !== undefined &&
         requester !== undefined &&
         target.ownerId === requester.ownerId &&
         target.task.conversationId === result.conversationId &&
-        mayDirect(requester, input.connectionId, target.task)
+        mayDirect(requester, input.connectionId, target.task) &&
+        !FINISHED_TASK_STATUSES.has(target.task.status)
           ? target.task.taskId
           : undefined;
       const sequence = yield* timeline.record({
@@ -470,7 +474,7 @@ const make = Effect.gen(function* () {
               kind: "inbound",
               inputId: result.inputId,
               clientMessageId: input.externalMessageId,
-              ...verifiedAnswerClaim({
+              ...answerVerdict({
                 message: input,
                 requester,
                 conversationId: result.conversationId,

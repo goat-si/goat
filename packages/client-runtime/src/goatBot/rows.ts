@@ -110,8 +110,9 @@ export interface GoatBotMessagePresentation {
   readonly questionId?: string;
   /** "task" when that question is the task's own, which the server records answers to. */
   readonly questionKind?: "task";
-  /** On a person's message: the task question its card sent it to answer. */
-  readonly answersQuestionId?: string;
+  /** On a person's message sent from a task question's card: the question when the server took
+   *  the answer, null when it refused it. */
+  readonly answersQuestionId?: string | null;
   readonly memory?: MemoryReportReference;
 }
 
@@ -518,12 +519,18 @@ export function buildGoatBotTimeline(input: {
         inputTexts.set(presentation.requestKey, item.text);
       }
       if (presentation?.clientKey) committedRequestKeys.add(presentation.clientKey);
-      const referenced = references
-        ? (presentation?.answersQuestionId ??
-          (presentation?.requestKey ? decidedInputs.get(presentation.requestKey) : undefined))
-        : undefined;
+      const verdict = references ? presentation?.answersQuestionId : undefined;
+      // Sent from a question's card and refused: it stays here as what the person said, and
+      // never answers another question.
+      const refusedAnswer = verdict === null;
+      const referenced =
+        references && !refusedAnswer
+          ? (verdict ??
+            (presentation?.requestKey ? decidedInputs.get(presentation.requestKey) : undefined))
+          : undefined;
       // The option they pressed stays beside the question, including after its buttons close.
       const answersShownQuestion =
+        refusedAnswer ||
         referenced !== undefined ||
         (input.taskId === null &&
           presentation?.taskId != null &&
@@ -534,6 +541,7 @@ export function buildGoatBotTimeline(input: {
       }
       previousInputKey = presentation?.requestKey ?? null;
       sentTasks.set(item.id, presentation?.taskId ?? null);
+      if (refusedAnswer) referenceSends.add(item.id);
       if (referenced !== undefined) {
         referenceSends.add(item.id);
         const decided = presentation?.requestKey
