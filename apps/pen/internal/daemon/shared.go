@@ -43,8 +43,19 @@ func psInstaller(downloadRelay string) string {
 }
 
 // psWord single-quotes s for PowerShell, where nothing inside single quotes is expanded and a quote
-// is written twice.
-func psWord(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+// is written twice. PowerShell reads the typographic quotes U+2018 to U+201B as single quotes too.
+func psWord(s string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, c := range s {
+		b.WriteRune(c)
+		if c == '\'' || c >= '\u2018' && c <= '\u201b' {
+			b.WriteRune(c)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
+}
 
 // shellWord leaves a plain URL or token as it is and single-quotes anything else (config.json can be
 // edited by hand), so a copied command never runs text from the value.
