@@ -158,7 +158,8 @@ export function mobileBotTaskListItems(props: {
                 accessibilityLabel={
                   title === null ? "Work thread: " + row.task.title : "GOAT thread: " + title
                 }
-                className="ml-4 min-h-[44px] justify-center"
+                // The list puts a gap between entries; a thread stays snug under its task.
+                className="-mt-2 ml-4 min-h-[44px] justify-center"
                 onPress={() =>
                   props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
                 }
