@@ -1,6 +1,7 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
 import { useRef, useState, type ReactNode } from "react";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { MobileBotColorField } from "./MobileBotColorField";
 import {
   Modal,
   Pressable,
@@ -24,10 +25,13 @@ export function MobileBotProfileSheet(props: {
   readonly children?: ReactNode;
   /** One of those fields changed, so a save goes through with no profile change. */
   readonly extraChanged?: boolean;
+  /** The server stores a member's colour; absent or false shows no swatches and sends none. */
+  readonly colorEditable?: boolean | undefined;
 }) {
   const [name, setName] = useState(props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
+  const [color, setColor] = useState<string | null>(props.initial.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A new bot needs only a name and a look; what it is for and its model can come later.
@@ -49,7 +53,13 @@ export function MobileBotProfileSheet(props: {
       nameRef.current?.focus();
       return;
     }
-    const changes = botProfileChanges(props.mode, props.initial, { name, avatar, purpose });
+    const changes = botProfileChanges(props.mode, props.initial, {
+      name,
+      avatar,
+      purpose,
+      // Without the swatches the form never carries a colour, so an older server gets no key.
+      ...(props.colorEditable === true ? { color } : {}),
+    });
     if (Object.keys(changes).length === 0 && props.extraChanged !== true) return props.onClose();
     setBusy(true);
     setError(null);
@@ -134,6 +144,9 @@ export function MobileBotProfileSheet(props: {
             onChangeText={setAvatar}
             className={INPUT}
           />
+          {props.colorEditable === true ? (
+            <MobileBotColorField value={color} onChange={setColor} disabled={busy} />
+          ) : null}
           {create ? (
             <Pressable
               accessibilityRole="button"
