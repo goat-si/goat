@@ -85,12 +85,17 @@ it.effect("a model GOAT does not offer is checked too; without a catalog it is u
   }),
 );
 
-it.effect("a model Codex resolves by prefix or namespaced suffix counts as known", () =>
+it.effect("only an exact slug counts as known", () =>
   Effect.gen(function* () {
-    const { modelStatus } = yield* arrivals({ atOpen: [], now: [], served: [["gpt-5.5"]] });
-    assert.strictEqual(yield* modelStatus("gpt-5.5-preview"), "ready");
-    assert.strictEqual(yield* modelStatus("custom/gpt-5.5-preview"), "ready");
-    assert.strictEqual(yield* modelStatus("a/b/gpt-5.5"), "unconfirmed");
+    // A provider's own catalog resolves only exact slugs, so a listed prefix proves nothing.
+    const { modelStatus } = yield* arrivals({
+      atOpen: [model("gpt-5.5")],
+      now: [model("gpt-5.5")],
+      served: [["gpt-5.5"]],
+    });
+    assert.strictEqual(yield* modelStatus("gpt-5.5-preview"), "missing");
+    assert.strictEqual(yield* modelStatus("custom/gpt-5.5"), "missing");
+    assert.strictEqual(yield* modelStatus("gpt-5.5"), "ready");
   }),
 );
 

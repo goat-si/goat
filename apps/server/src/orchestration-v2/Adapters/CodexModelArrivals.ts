@@ -35,20 +35,6 @@ export const reconnectsKeptProcess = Effect.fn("CodexModelArrivals.reconnectsKep
   },
 );
 
-const NAMESPACE = /^[A-Za-z0-9_-]+$/;
-
-/** Codex's own metadata lookup: an exact slug, the longest listed prefix, or that of a namespaced suffix. */
-const resolves = (served: ReadonlySet<string>, model: string) => {
-  if (served.has(model)) return true;
-  const slash = model.indexOf("/");
-  const suffix = slash > 0 ? model.slice(slash + 1) : undefined;
-  const namespaced =
-    suffix !== undefined && !suffix.includes("/") && NAMESPACE.test(model.slice(0, slash));
-  for (const slug of served)
-    if (model.startsWith(slug) || (namespaced && suffix.startsWith(slug))) return true;
-  return false;
-};
-
 /**
  * Codex's app-server reads its catalog only at startup and runs a model it cannot resolve with every
  * MCP tool inline. Otherwise a model is predated (offered only after the process started), missing
@@ -66,10 +52,11 @@ export const makeCodexModelArrivals = <E>(input: {
   const atStart = offeredFromCatalog(input.atStart);
   let served: ReadonlySet<string> | undefined;
   const lists = Effect.fn("CodexModelArrivals.lists")(function* (model: string) {
-    if (served !== undefined && resolves(served, model)) return true;
+    if (served?.has(model)) return true;
     // Codex can still learn models online, so a miss is asked again.
     served = new Set(yield* input.listServed);
-    return resolves(served, model);
+    // Exact: a provider's own catalog matches slugs exactly, and GOAT cannot see which catalog it uses.
+    return served.has(model);
   });
   return Effect.fn("CodexModelArrivals.modelStatus")(function* (model: string) {
     const offered = yield* input.offered;
