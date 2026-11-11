@@ -12,6 +12,7 @@ import { onTestFinished } from "vite-plus/test";
 import {
   isCorepackLauncherMissing,
   pinnedNodeRunners,
+  pinnedVitePlusVersion,
   worktreeInstallCandidates,
 } from "./setup-worktree.ts";
 
@@ -19,7 +20,10 @@ describe("worktreeInstallCandidates", () => {
   it("prefers vp, then pnpm, then npx vite-plus, without the --yes pnpm 12 can reject (#1001)", () => {
     const vp = { command: "vp i --frozen-lockfile", tool: "vp" };
     const pnpm = { command: "pnpm install --frozen-lockfile", tool: "pnpm" };
-    const npx = { command: "npx --yes vite-plus i --frozen-lockfile", tool: "npx vite-plus" };
+    const npx = {
+      command: "npx --yes --package=vite-plus -- vp i --frozen-lockfile",
+      tool: "npx vite-plus",
+    };
     assert.deepEqual(worktreeInstallCandidates({ vp: true, pnpm: true }), [vp, pnpm, npx]);
     assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: true }), [pnpm, npx]);
     assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: false }), [npx]);
@@ -40,6 +44,23 @@ it("reruns setup under the pinned Node with the global vp, else with Node from n
   assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: false, npx: false }), []);
 });
 
+it("the npx fallback names the vp executable and the vite-plus release the workspace pins", () => {
+  const version = pinnedVitePlusVersion(
+    'catalog:\n  vite: npm:x@1.4.0\n  vite-plus: 1.4.0\noverrides:\n  vite-plus: "catalog:"\n',
+  );
+  assert.equal(version, "1.4.0");
+  assert.isUndefined(pinnedVitePlusVersion('overrides:\n  vite-plus: "catalog:"\n'));
+  assert.deepEqual(
+    worktreeInstallCandidates({ vp: false, pnpm: false, vitePlusVersion: version }),
+    [
+      {
+        command: "npx --yes --package=vite-plus@1.4.0 -- vp i --frozen-lockfile",
+        tool: "npx vite-plus",
+      },
+    ],
+  );
+});
+
 it("recognizes only missing corepack pnpm launchers", () => {
   assert.isTrue(
     isCorepackLauncherMissing("Cannot find module 'C:\\cache\\corepack\\v1\\pnpm\\bin\\pnpm.cjs'"),
@@ -56,6 +77,7 @@ function setupFixture(
   pnpmOutput: string,
   trailingLines = 0,
   npx: "installer" | "runs-node" | "hangs" = "installer",
+  vpRunsWrongNode = false,
 ) {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-setup-contract-"));
   const scripts = NodePath.join(root, "scripts");
@@ -89,6 +111,14 @@ function setupFixture(
     );
   }
   const npxBody = npx === "runs-node" ? nodeRunner : npx === "hangs" ? hangingRunner : "";
+  if (vpRunsWrongNode) {
+    // Stands in for a global vp whose env exec starts setup under a Node that is still not the pin.
+    NodeFS.writeFileSync(
+      NodePath.join(bin, "vp"),
+      `#!/bin/sh\nprintf '%s\\n' 'vp' >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then exec "$SETUP_TEST_NODE" "$7"; fi\nexit 0\n`,
+      { mode: 0o755 },
+    );
+  }
   for (const name of ["pnpm", "npx"] as const) {
     const noise = "x".repeat(60);
     const contents = windows
@@ -183,6 +213,28 @@ describe("worktree setup contract", () => {
           "npx",
           "pnpm",
           "npx",
+        ]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "tries npx for the pinned Node when vp ran setup under a Node that is still not the pin",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(`${major + 1}.0.0`, "unexpected install", 0, "runs-node", true);
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 0, result.stderr);
+        assert.isTrue(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-done")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-failed")));
+        // vp is asked for Node first and does not supply it, npx supplies it, then vp installs.
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
+          "vp",
+          "npx",
+          "vp",
         ]);
       } finally {
         fixture.cleanup();

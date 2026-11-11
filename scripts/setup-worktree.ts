@@ -12,6 +12,8 @@ const worktree = NodePath.dirname(import.meta.dirname);
 
 /** Set for the setup this one starts under the pinned Node, so it never starts a third. */
 const PINNED_NODE_RERUN = "GOAT_SETUP_PINNED_NODE";
+/** A rerun that still found an unsupported Node: its runner did not supply the pin. */
+const RERUN_UNSUPPORTED_NODE_EXIT = 3;
 
 /**
  * Ways to run setup again under the pinned Node when PATH's Node is another release.
@@ -41,9 +43,15 @@ export function pinnedNodeRunners(input: {
   ];
 }
 
+/** The vite-plus release pnpm-workspace.yaml pins, so npx runs that one and not the latest. */
+export function pinnedVitePlusVersion(workspaceYaml: string): string | undefined {
+  return /^ {2}vite-plus: (\d+\.\d+\.\d+)\s*$/m.exec(workspaceYaml)?.[1];
+}
+
 export function worktreeInstallCandidates(tools: {
   readonly vp: boolean;
   readonly pnpm: boolean;
+  readonly vitePlusVersion?: string | undefined;
 }): {
   readonly command: string;
   readonly tool: string;
@@ -51,7 +59,11 @@ export function worktreeInstallCandidates(tools: {
   return [
     ...(tools.vp ? [{ command: "vp i --frozen-lockfile", tool: "vp" }] : []),
     ...(tools.pnpm ? [{ command: "pnpm install --frozen-lockfile", tool: "pnpm" }] : []),
-    { command: "npx --yes vite-plus i --frozen-lockfile", tool: "npx vite-plus" },
+    {
+      // The package's executables are vp, vpr and vpx, so npx has to be told which to run.
+      command: `npx --yes --package=vite-plus${tools.vitePlusVersion === undefined ? "" : `@${tools.vitePlusVersion}`} -- vp i --frozen-lockfile`,
+      tool: "npx vite-plus",
+    },
   ];
 }
 
@@ -187,6 +199,13 @@ async function main(): Promise<void> {
       activeRerun = undefined;
       // The rerun leaves setup-done or setup-failed; neither means the runner never started it.
       if (status === 0 && !cancelSignal && NodeFS.existsSync(doneMarker)) process.exit(0);
+      if (status === RERUN_UNSUPPORTED_NODE_EXIT && !cancelSignal) {
+        // The runner started setup under a Node that is still not the pin; the next may do better.
+        NodeFS.rmSync(failedMarker, { force: true });
+        NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+        tried.push(`${runner.tool}: it ran setup under a Node.js that is not ${pinned}`);
+        continue;
+      }
       const rerunFailure = NodeFS.existsSync(failedMarker)
         ? NodeFS.readFileSync(failedMarker, "utf8").split("\n").slice(1).join("\n").trimEnd()
         : undefined;
@@ -205,7 +224,7 @@ async function main(): Promise<void> {
         ? unsupportedNode
         : `${unsupportedNode}\nSetup could not start itself under Node.js ${pinned}. Tried:\n${tried.join("\n")}`;
     process.stderr.write(`${failureDetail}\n`);
-    process.exit(1);
+    process.exit(process.env[PINNED_NODE_RERUN] === "1" ? RERUN_UNSUPPORTED_NODE_EXIT : 1);
   }
 
   // GOAT passes the project root, older builds under its legacy T3 name. The git
@@ -214,9 +233,13 @@ async function main(): Promise<void> {
     process.env.GOAT_PROJECT_ROOT || process.env.T3CODE_PROJECT_ROOT || mainWorktree(); // goat-rename: legacy
 
   // A fresh worktree has no node_modules and often no global `vp`.
+  const workspaceYaml = NodePath.join(worktree, "pnpm-workspace.yaml");
   const candidates = worktreeInstallCandidates({
     vp: toolOnPath("vp"),
     pnpm: toolOnPath("pnpm"),
+    vitePlusVersion: NodeFS.existsSync(workspaceYaml)
+      ? pinnedVitePlusVersion(NodeFS.readFileSync(workspaceYaml, "utf8"))
+      : undefined,
   });
   // Shell resolves Windows shims; closed stdin prevents unattended prompts.
   // pnpm 12 builds can reject --yes, and the frozen lockfile prevents rewrites.
