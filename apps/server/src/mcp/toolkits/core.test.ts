@@ -53,7 +53,7 @@ import {
   OrchestratorQuestionAlreadyAnsweredError,
 } from "../../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService.ts";
+import { layerThreadStartMocks } from "../threadStartMocks.testkit.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
@@ -90,7 +90,7 @@ import { CORE_GOAT_TOOL_NAMES, PUBLISHED_TOOLKITS } from "./coreToolNames.testki
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
-  Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+  Layer.provide(layerThreadStartMocks),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
 
@@ -106,7 +106,7 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 const layerThreadToolkitWithoutProviders = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
-  Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+  Layer.provide(layerThreadStartMocks),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
@@ -913,7 +913,7 @@ it.effect.each([
       McpHttpServer.layerThreadToolkit.pipe(
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provide(layerNoFleetSync),
-        Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+        Layer.provide(layerThreadStartMocks),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
@@ -1569,7 +1569,7 @@ it.effect("pending toolkit host routing preserves target authority", () =>
     const dependencies = McpHttpServer.layerThreadToolkit.pipe(
       Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
       Layer.provide(layerNoFleetSync),
-      Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+      Layer.provide(layerThreadStartMocks),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
       Layer.provide(ServerSettings.layerTest()),
       Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),

@@ -55,7 +55,7 @@ import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import { layerThreadStartMocks } from "./threadStartMocks.testkit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../orchestration-v2/ThreadSearch.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
@@ -85,7 +85,7 @@ function unsupported(driver: ProviderDriverKind, detail: string) {
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
-  Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+  Layer.provide(layerThreadStartMocks),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
 
@@ -1058,7 +1058,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
           Layer.provide(layerNoFleetSync),
         ),
       ).pipe(
-        Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+        Layer.provide(layerThreadStartMocks),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         Layer.provide(ThreadResultService.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
         Layer.provideMerge(McpServer.McpServer.layer),

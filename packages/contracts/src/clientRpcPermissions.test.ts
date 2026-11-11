@@ -308,3 +308,8 @@ it("requires settings authority only when a person widens browser access", () =>
     "orchestration:read",
   ]);
 });
+it("forking a thread needs the operate grant the server checks", () => {
+  expect(clientRpcRequiredScopes(ORCHESTRATION_V2_WS_METHODS.forkThread, {})).toEqual([
+    "orchestration:operate",
+  ]);
+});

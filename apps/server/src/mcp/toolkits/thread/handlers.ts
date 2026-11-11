@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as ThreadForkWorkspace from "../../../orchestration-v2/goat/ThreadForkWorkspace.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -144,23 +145,31 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     writesThread(
       (input) =>
         Effect.gen(function* () {
-          const { threads, projection } = yield* readThread(input.threadId);
+          const { projection } = yield* readThread(input.threadId);
           yield* McpToolAccess.admit(input);
           const commandId = yield* newCommandId();
           const targetThreadId = ThreadId.make(`${commandId}:fork`);
-          const result = yield* threads
-            .dispatch({
-              type: "thread.fork",
+          const forks = yield* ThreadForkWorkspace.ThreadForkWorkspaceService;
+          return yield* forks
+            .fork({
               commandId,
               sourceThreadId: projection.thread.id,
               targetThreadId,
               sourcePoint: input.sourcePoint,
               ...(input.title === undefined ? {} : { title: input.title }),
+              workspace: input.workspace ?? { type: "current" },
               createdBy: "agent",
               creationSource: "mcp",
             })
-            .pipe(Effect.mapError(dispatchFailure));
-          return { sequence: result.sequence, targetThreadId };
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new OrchestratorMcpFailure({
+                    code: "invalid_request",
+                    message: `${error.reason}: ${error.message}`,
+                  }),
+              ),
+            );
         }),
       { admission: "handler" },
     ),

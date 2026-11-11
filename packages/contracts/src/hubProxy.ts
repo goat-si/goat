@@ -57,6 +57,8 @@ const HUB_PROXY_METHOD_POLICY: Readonly<Record<string, (payload: unknown) => boo
   "notes.attach": () => true,
   // A new thread on the node, in a project that exists or one made from a chosen folder.
   "orchestration.launchThread": () => true,
+  // A fork of a thread on the node, in its checkout or a new worktree; the payload names no path.
+  "orchestration.forkThread": () => true,
   // A new session without a project: the node makes its own managed scratch folder. The payload
   // is an empty struct the node's schema strips, as for launchThread.
   "projects.ensureScratch": () => true,
