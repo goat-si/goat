@@ -280,11 +280,11 @@ describe("hand-over persistence recovery", () => {
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const sent: string[] = [];
       const counts = { marks: 0, releases: 0, reconciles: 0 };
-      const faults = {
-        mark: (n: number) => n === 1,
-        release: (_n: number) => false,
-        reconcile: () => false,
-      };
+      const faults: {
+        mark: (n: number) => boolean;
+        release: (n: number) => boolean;
+        reconcile: () => boolean;
+      } = { mark: (n) => n === 1, release: () => false, reconcile: () => false };
       const gates = new Map<
         string,
         { readonly reached: Deferred.Deferred<void>; readonly open: Deferred.Deferred<void> }

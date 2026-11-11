@@ -15,6 +15,7 @@ import { interimAlreadyHeard, isInterimMessage } from "./channelInterimMessages.
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
+const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const mapError = (detail: string) => (cause: unknown) =>
   isLedgerError(cause) ? cause : new ChannelLedgerError({ reason: "persistence", detail, cause });
 /** How long after its input a reply receipt may still go out. */
@@ -270,7 +271,7 @@ export const deliveryLedger = (
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
-            const exclude = JSON.stringify(input.exclude);
+            const exclude = encodeIds(input.exclude);
             // The rule restart recovery uses for a row never handed over. The row keeps its place,
             // so the claim's earlier-row rule still holds the task's later rows behind it.
             const released = yield* sql<{ readonly delivery_id: string }>`
