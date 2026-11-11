@@ -4,11 +4,42 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { currentUnsupportedNodeMessage } from "./lib/node-runtime.ts";
+import { currentUnsupportedNodeMessage, readPinnedNodeVersion } from "./lib/node-runtime.ts";
 
 const ENV_FILES = [".env", NodePath.join("infra", "relay", ".env")];
 
 const worktree = NodePath.dirname(import.meta.dirname);
+
+/** Set for the setup this one starts under the pinned Node, so it never starts a third. */
+const PINNED_NODE_RERUN = "GOAT_SETUP_PINNED_NODE";
+
+/**
+ * Ways to run setup again under the pinned Node when PATH's Node is another release.
+ * `vp env` exists only in the global vp, so a machine without it gets Node from npm.
+ */
+export function pinnedNodeRunners(input: {
+  readonly pinned: string;
+  readonly vp: boolean;
+  readonly npx: boolean;
+}): {
+  readonly command: string;
+  readonly tool: string;
+}[] {
+  const setup = "node scripts/setup-worktree.ts";
+  return [
+    ...(input.vp
+      ? [{ command: `vp env exec --node ${input.pinned} -- ${setup}`, tool: "vp" }]
+      : []),
+    ...(input.npx
+      ? [
+          {
+            command: `npx --yes --package=node@${input.pinned} -- ${setup}`,
+            tool: `npx node@${input.pinned}`,
+          },
+        ]
+      : []),
+  ];
+}
 
 export function worktreeInstallCandidates(tools: {
   readonly vp: boolean;
@@ -98,8 +129,45 @@ async function main(): Promise<void> {
 
   const unsupportedNode = currentUnsupportedNodeMessage("node scripts/setup-worktree.ts");
   if (unsupportedNode) {
-    failureDetail = unsupportedNode;
-    process.stderr.write(`${unsupportedNode}\n`);
+    // A machine that only has another Node, such as a fresh cloud VM, still sets up:
+    // the same script runs once more under the pinned release and owns the markers.
+    const pinned = readPinnedNodeVersion();
+    const runners =
+      process.env[PINNED_NODE_RERUN] === "1"
+        ? []
+        : pinnedNodeRunners({ pinned, vp: toolOnPath("vp"), npx: toolOnPath("npx") });
+    const tried: string[] = [];
+    for (const runner of runners) {
+      process.stderr.write(
+        `Worktree setup: Node.js ${process.versions.node} is not the pinned ${pinned}; running setup under it with ${runner.tool}.\n`,
+      );
+      const rerun = NodeChildProcess.spawn(runner.command, {
+        cwd: worktree,
+        shell: true,
+        stdio: ["ignore", "inherit", "inherit"],
+        env: { ...process.env, [PINNED_NODE_RERUN]: "1" },
+      });
+      activeInstall = rerun;
+      const status = await new Promise<number | null>((resolve) => rerun.on("close", resolve));
+      activeInstall = undefined;
+      // The rerun leaves setup-done or setup-failed; neither means the runner never started it.
+      if (status === 0 && NodeFS.existsSync(doneMarker)) process.exit(0);
+      const rerunFailure = NodeFS.existsSync(failedMarker)
+        ? NodeFS.readFileSync(failedMarker, "utf8").split("\n").slice(1).join("\n").trimEnd()
+        : undefined;
+      if (cancelSignal || rerunFailure !== undefined) {
+        failureDetail = cancelSignal ? `Cancelled by ${cancelSignal}.` : (rerunFailure ?? "");
+        process.exit(status || 1);
+      }
+      // Agents wait on this marker; the runner's own exit must not look like no setup.
+      NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+      tried.push(runner.tool);
+    }
+    failureDetail =
+      tried.length === 0
+        ? unsupportedNode
+        : `${unsupportedNode}\nSetup could not start itself under Node.js ${pinned} (tried ${tried.join(", ")}).`;
+    process.stderr.write(`${failureDetail}\n`);
     process.exit(1);
   }
 

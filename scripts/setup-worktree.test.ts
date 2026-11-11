@@ -8,7 +8,11 @@ import * as NodeURL from "node:url";
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 
-import { isCorepackLauncherMissing, worktreeInstallCandidates } from "./setup-worktree.ts";
+import {
+  isCorepackLauncherMissing,
+  pinnedNodeRunners,
+  worktreeInstallCandidates,
+} from "./setup-worktree.ts";
 
 describe("worktreeInstallCandidates", () => {
   it("prefers vp, then pnpm, then npx vite-plus, without the --yes pnpm 12 can reject (#1001)", () => {
@@ -19,6 +23,20 @@ describe("worktreeInstallCandidates", () => {
     assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: true }), [pnpm, npx]);
     assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: false }), [npx]);
   });
+});
+
+it("reruns setup under the pinned Node with the global vp, else with Node from npm", () => {
+  const vp = {
+    command: "vp env exec --node 26.12.1 -- node scripts/setup-worktree.ts",
+    tool: "vp",
+  };
+  const npx = {
+    command: "npx --yes --package=node@26.12.1 -- node scripts/setup-worktree.ts",
+    tool: "npx node@26.12.1",
+  };
+  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: true, npx: true }), [vp, npx]);
+  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: false, npx: true }), [npx]);
+  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: false, npx: false }), []);
 });
 
 it("recognizes only missing corepack pnpm launchers", () => {
@@ -32,7 +50,7 @@ it("recognizes only missing corepack pnpm launchers", () => {
   assert.isFalse(isCorepackLauncherMissing("ERR_PNPM_OUTDATED_LOCKFILE"));
 });
 
-function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0) {
+function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0, npxRunsNode = false) {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-setup-contract-"));
   const scripts = NodePath.join(root, "scripts");
   const bin = NodePath.join(root, "bin");
@@ -52,11 +70,13 @@ function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0) {
     JSON.stringify({ type: "module", engines: { node: pinned } }),
   );
   const windows = HostProcess.Platform.defaultValue() === "win32";
+  // Stands in for `npx --package=node@<pin> -- node <script>`: the pin becomes this Node.
+  const nodeRunner = `if [ "$3" = "--" ] && [ "$4" = "node" ]; then printf '%s' "$SETUP_TEST_PIN" > package.json; exec "$SETUP_TEST_NODE" "$5"; fi\n`;
   for (const name of ["pnpm", "npx"] as const) {
     const noise = "x".repeat(60);
     const contents = windows
       ? `@echo off\r\necho ${name}>>"%SETUP_TEST_LOG%"\r\n${name === "pnpm" ? `echo ${pnpmOutput} 1>&2\r\nfor /L %%i in (1,1,${trailingLines}) do echo ${noise} 1>&2\r\nexit /b 1` : "exit /b 0"}\r\n`
-      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `printf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit 1` : "exit 0"}\n`;
+      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `printf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit 1` : `${npxRunsNode ? nodeRunner : ""}exit 0`}\n`;
     NodeFS.writeFileSync(NodePath.join(bin, `${name}${windows ? ".cmd" : ""}`), contents, {
       mode: 0o755,
     });
@@ -70,6 +90,8 @@ function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0) {
     PATH: path.join(NodePath.delimiter),
     GOAT_PROJECT_ROOT: root,
     SETUP_TEST_LOG: log,
+    SETUP_TEST_NODE: process.execPath,
+    SETUP_TEST_PIN: JSON.stringify({ type: "module", engines: { node: process.versions.node } }),
   };
   return {
     root,
@@ -86,7 +108,7 @@ function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0) {
 }
 
 describe("worktree setup contract", () => {
-  it("#2178 refuses an unsupported Node before running any installer", () => {
+  it("#2178 refuses an unsupported Node it cannot replace, before running any installer", () => {
     const [major = 0] = process.versions.node.split(".").map(Number);
     const fixture = setupFixture(`${major + 1}.0.0`, "unexpected install");
     try {
@@ -100,16 +122,50 @@ describe("worktree setup contract", () => {
       assert.equal(locator.status, 0, locator.stderr);
       const result = fixture.run();
       assert.equal(result.status, 1, result.stderr);
-      assert.include(
-        NodeFS.readFileSync(NodePath.join(fixture.root, ".goat", "setup-failed"), "utf8"),
-        "GOAT development uses Node.js",
+      const failed = NodeFS.readFileSync(
+        NodePath.join(fixture.root, ".goat", "setup-failed"),
+        "utf8",
       );
-      assert.isFalse(NodeFS.existsSync(fixture.log));
+      assert.include(failed, "GOAT development uses Node.js");
+      assert.include(
+        failed,
+        `could not start itself under Node.js ${major + 1}.0.0 (tried npx node@`,
+      );
+      // npx was asked for the pinned Node and did not start setup; pnpm, the installer, never ran.
+      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["npx"]);
       assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-running")));
     } finally {
       fixture.cleanup();
     }
   });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "sets up under the pinned Node when PATH's Node is another release and vp is absent",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(
+        `${major + 1}.0.0`,
+        "Error: Cannot find module '/x/.cache/node/corepack/v1/pnpm/12.14.0/bin/pnpm.cjs'",
+        0,
+        true,
+      );
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 0, result.stderr);
+        assert.isTrue(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-done")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-failed")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-running")));
+        // npx supplies Node, then the rerun installs: pnpm's launcher is missing, so npx installs.
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
+          "npx",
+          "pnpm",
+          "npx",
+        ]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("#2178 steps past corepack's missing pnpm launcher to the next installer", () => {
     const fixture = setupFixture(
