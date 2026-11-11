@@ -23,7 +23,7 @@ import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
-import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
+import { captureStalled, driverRefused, endForDriverExit } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, takesScreen } from "./ComputerUseScope.ts";
 import { makeIdentityCache } from "./ComputerUseIdentityCache.ts";
 import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
@@ -381,12 +381,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Stream.tap(unanswered.received),
       Stream.buffer({ capacity: "unbounded" }),
       Stream.runForEach(handle),
-      // A driver that exits on its own, or a helper restart, ends this proxy for good (#1348),
-      // and the agent hears why instead of an approval failure (#1233).
+      // A driver that exits on its own, or a helper restart, ends this proxy, and the agent hears
+      // why instead of an approval failure; a thread proxy can start the control again.
       Effect.andThen(
         Effect.suspend(() =>
           lifecycle.current === current
-            ? driverExitReason(current.driver).pipe(Effect.flatMap(end))
+            ? endForDriverExit(current.driver, end, () => finished, options.onDriverEnded)
             : Effect.void,
         ),
       ),

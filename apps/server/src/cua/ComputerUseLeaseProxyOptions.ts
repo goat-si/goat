@@ -10,6 +10,7 @@ import type {
   ComputerUseLeaseCallOutcome,
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
+  ComputerUseDriverEndReason,
   ComputerUseHumanInputSource,
   ComputerUseLeaseUpdate,
   ComputerUseLeaseBrowserClaimReply,
@@ -456,6 +457,8 @@ export interface LeaseProxyOptions<EU, ED> {
     readonly generation: number;
     readonly terminal?: "stopped_by_person" | "screen_locked";
   }) => Effect.Effect<void>;
+  /** The driver exited on its own and ended this proxy, for the reason its exit code gives. */
+  readonly onDriverEnded?: (reason: ComputerUseDriverEndReason) => Effect.Effect<void>;
   /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
   readonly output: (line: string, context?: ReplyContext) => Effect.Effect<void>;
   /** The server's view of this thread's control, newest last. Ending or failing ends it. */
