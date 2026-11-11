@@ -118,6 +118,8 @@ class Link implements RelayLink {
   /** While held messages are handed over, a peer close waits: its notice comes after the drain. */
   #draining = false;
   #closeDeferred = false;
+  /** The observer last told of the close: none is told twice, even when attach() and #finish() both reach it. */
+  #toldClose: ((code: number) => void) | undefined;
   #closeCode = 1006;
   #received = 0;
   #acked = 0;
@@ -422,8 +424,11 @@ class Link implements RelayLink {
   }
 
   #notifyClose(): void {
+    const observer = this.#onClose;
+    if (observer === undefined || observer === this.#toldClose) return;
+    this.#toldClose = observer;
     try {
-      this.#onClose?.(this.#closeCode);
+      observer(this.#closeCode);
     } catch (error) {
       reportListenerError(error);
     }

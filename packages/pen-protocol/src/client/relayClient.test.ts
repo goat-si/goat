@@ -107,6 +107,22 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     },
   );
 
+  it("an observer attached from inside the socket's close() hears of the close once", async () => {
+    const { socket, link } = await opened();
+    socket.receive(Uint8Array.of(1));
+    const seen: Array<string> = [];
+    const close = socket.close.bind(socket);
+    socket.close = (code) => {
+      close(code);
+      link.attach(
+        (message) => seen.push("data:" + message[0]),
+        (closeCode) => seen.push("close:" + closeCode),
+      );
+    };
+    link.close(4400);
+    expect(seen).toEqual(["data:1", "close:4400"]);
+  });
+
   it("a link this side closed before attach still hands over what arrived first", async () => {
     const { socket, link } = await opened();
     socket.receive(Uint8Array.of(1));
