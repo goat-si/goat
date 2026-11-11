@@ -283,6 +283,7 @@ const make = Effect.gen(function* () {
               sessionThreadId: memberBotLaunchIdsFor(owner.ownerId, botId).threadId,
               createdAt: at,
               updatedAt: at,
+              ...(input.color === undefined ? {} : { color: input.color }),
             };
             yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
               (${botProfileKey(owner.ownerId, botId)}, ${ChannelBotProfiles.encodeProfile(created)}, ${at})`;

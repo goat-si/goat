@@ -420,6 +420,53 @@ describe("two bots", () => {
 });
 
 describe("hiding, deleting and restoring member bots", () => {
+  it.effect(
+    "a member's color survives a retried create, edits and hiding; null clears it; main takes none",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const create = () =>
+          members.create(
+            {
+              clientRequestId: "colored",
+              name: "Helper",
+              avatar: null,
+              purpose: "",
+              defaultModelSelection: null,
+              color: "#2F80ED",
+            },
+            owner,
+          );
+        const bot = yield* create();
+        assert.strictEqual(bot.color, "#2F80ED");
+        assert.strictEqual((yield* create()).color, "#2F80ED");
+        const listed = () =>
+          members
+            .list({}, owner)
+            .pipe(Effect.map((bots) => bots.find((b) => b.botId === bot.botId)));
+        yield* members.update({ botId: bot.botId, name: "Builder" }, owner);
+        yield* members.setHidden({ botId: bot.botId, hidden: true }, owner);
+        yield* members.setHidden({ botId: bot.botId, hidden: false }, owner);
+        assert.strictEqual((yield* listed())?.color, "#2F80ED");
+        assert.strictEqual((yield* listed())?.name, "Builder");
+        assert.strictEqual(decodeOlderMember(yield* storedProfile(bot.botId))._tag, "Success");
+        const recolored = yield* members.update({ botId: bot.botId, color: "#C2410C" }, owner);
+        assert.strictEqual(recolored.color, "#C2410C");
+        const cleared = yield* members.update({ botId: bot.botId, color: null }, owner);
+        assert.isUndefined(cleared.color);
+        assert.isUndefined((yield* listed())?.color);
+        assert.strictEqual(
+          yield* refusal(members.update({ botId: MAIN, color: "#2F80ED" }, owner)),
+          "invalid_input",
+        );
+        const main = yield* members.update({ botId: MAIN, color: null }, owner);
+        assert.isUndefined(main.color);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("delete waits for open work, archives the thread, and restore brings it back", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
