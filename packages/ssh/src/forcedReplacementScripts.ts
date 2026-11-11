@@ -53,7 +53,7 @@ export const REMOTE_FORCED_STOP_SCRIPT = `if [ "$FORCE_STOP" = 1 ]; then
   [ "$forced_root" = "$(id -u) $FORCE_START" ] || forced_refused "the process table shows another process under its PID"
   forced_records="$(printf '%s\\n' "$forced_table" | awk -v root="$FORCE_PID" -v me="$(id -u)" '
     { parent[$1] = $2; owner[$1] = $3; start = $4; for (i = 5; i <= NF; i++) start = start " " $i; started[$1] = start }
-    END { for (pid in parent) { if (owner[pid] != me) continue; up = parent[pid]; for (depth = 0; depth < 32 && up != ""; depth++) { if (up == root) { print pid " " started[pid]; break } up = parent[up] } } }')" || forced_records=
+    END { for (pid in parent) { if (owner[pid] != me) continue; up = parent[pid]; for (depth = 0; depth < 32 && up != ""; depth++) { if (up == root) { print pid " " started[pid]; break } up = parent[up] } } }')" || forced_refused "its process table could not be read"
   printf 'Stopping GOAT PID %s (started %s, port %s) for an approved forced update.\\n' "$FORCE_PID" "$FORCE_START" "$FORCE_PORT" >>"$LOG_FILE" 2>/dev/null || :
   if ! forced_signal_same TERM "$FORCE_PID" "$FORCE_START" && server_alive "$FORCE_PID"; then
     forced_refused "it changed before the signal"

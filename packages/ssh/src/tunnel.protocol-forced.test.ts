@@ -325,3 +325,34 @@ exec "$HOME/.test/identity-bin/ps" "$@"
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement descendant parse",
+  () => {
+    it.live("a descendant list that cannot be parsed stops the update before any signal", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        const bin = `${f.test}/awk-bin`;
+        yield* f.fs.makeDirectory(bin);
+        // Only the descendant parse passes the caller's uid as "me".
+        yield* f.fs.writeFileString(
+          `${bin}/awk`,
+          `#!/bin/sh
+for arg in "$@"; do case "$arg" in me=*) exit 2 ;; esac; done
+exec /usr/bin/awk "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/awk`, 0o700);
+        f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.isTrue(isAlive(f.pid));
+        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
