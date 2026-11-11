@@ -407,25 +407,50 @@ it("builds no first message from a new draft that asks /side, and says why", asy
   );
 });
 
+const queuedTask = {
+  ...firstMessage,
+  environmentId: "one",
+  text: "Add a clamp helper",
+  attachments: [],
+  modelSelection: { instanceId: "codex", model: "gpt-5" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  creation: { projectId: "a", workspaceMode: "local", branch: null, worktreePath: null },
+};
+
+async function editQueuedTaskThenClose(screen: ReturnType<typeof setup>, text: string) {
+  mocks.flushWrite.mockResolvedValue(true);
+  mocks.queued.mockReturnValue([queuedTask]);
+  await screen.render(true);
+  await act(async () => {
+    expect(screen.current.beginEditingPendingTask("message-1")).toBe(true);
+  });
+  act(() => screen.current.setPrompt(text));
+  await act(async () => screen.current.cancelEditingPendingTask());
+}
+
+it("saves an ordinary edit of a queued task and releases its hold when the editor closes", async () => {
+  using screen = setup();
+  await editQueuedTaskThenClose(screen, "Add a clamp helper with tests");
+  expect(mocks.flushWrite).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        messageId: "message-1",
+        text: "Add a clamp helper with tests",
+      }),
+      draftKey: "pending-task:message-1",
+    }),
+  );
+  await act(async () => {
+    await mocks.flushWrite.mock.results[0]?.value;
+  });
+  expect(mocks.clearDraft).toHaveBeenCalledWith("pending-task:message-1");
+  expect(mocks.release).toHaveBeenCalledWith("message-1");
+});
+
 it("keeps a queued task edited to /side on hold with its draft when the editor closes", async () => {
   using screen = setup();
-  mocks.flushWrite.mockResolvedValue(true);
-  mocks.queued.mockReturnValue([
-    {
-      ...firstMessage,
-      environmentId: "one",
-      text: "Add a clamp helper",
-      attachments: [],
-      modelSelection: { instanceId: "codex", model: "gpt-5" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      creation: { projectId: "a", workspaceMode: "local", branch: null, worktreePath: null },
-    },
-  ]);
-  await screen.render(true);
-  await act(async () => void screen.current.beginEditingPendingTask("message-1"));
-  act(() => screen.current.setPrompt("/side what changed?"));
-  await act(async () => screen.current.cancelEditingPendingTask());
+  await editQueuedTaskThenClose(screen, "/side what changed?");
   expect(mocks.flushWrite).not.toHaveBeenCalled();
   expect(mocks.release).not.toHaveBeenCalledWith("message-1");
   expect(mocks.clearDraft).not.toHaveBeenCalledWith("pending-task:message-1");
