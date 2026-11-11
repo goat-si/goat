@@ -240,6 +240,23 @@ describe("notes changes from a GOAT Bot session turn", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("a correction naming words two current notes share saves nothing and says so", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const text = NOTES_HEADER + line("Use pnpm", "a") + "\n" + line("Use pnpm", "b") + "\n";
+      yield* writeNotes(text);
+      const turn = yield* sessionTurn(harness, "actually use vp", "alike");
+      const result = yield* callNotes(
+        harness,
+        turn.caller,
+        remember(turn, "Use vp.", "actually use vp", { replaces: "Use pnpm" }),
+      );
+      assert.strictEqual(yield* readNotes, text);
+      assert.deepInclude(result, { outcome: "refused", reason: "notes_alike", told: true });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("the input id is read from the text GOAT sent the session", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
