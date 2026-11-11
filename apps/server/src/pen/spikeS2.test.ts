@@ -7,12 +7,11 @@ import * as NodeNet from "node:net";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
-import { it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { expect } from "vitest";
 import WebSocket from "ws";
 
 type Ctx = { readonly kind: "main" } | { readonly kind: "pen"; readonly peer: string };
@@ -170,8 +169,11 @@ it.live(
       const strayOut = yield* readAll(s5);
       expect(strayOut.slice(strayOut.indexOf("\r\n\r\n") + 4)).toBe("null");
       // Main listener requests get the main context.
-      const main = yield* Effect.promise(() => fetch(mainUrl + "/ctx").then((r) => r.json()));
-      expect(main).toEqual({ kind: "main" });
+      const mainPort = Number(new URL(mainUrl).port);
+      const s6 = NodeNet.connect(mainPort, "127.0.0.1");
+      s6.write("GET /ctx HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+      const mainOut = yield* readAll(s6);
+      expect(mainOut.slice(mainOut.indexOf("\r\n\r\n") + 4)).toBe(JSON.stringify({ kind: "main" }));
 
       const mainWs = yield* Effect.callback<string>((resume) => {
         const ws = new WebSocket(mainUrl.replace("http", "ws") + "/ws");
