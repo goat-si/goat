@@ -363,27 +363,34 @@ it.effect("a record still spawning is never given up", () =>
   }).pipe(Effect.scoped),
 );
 
-it.effect("a fence written while the exited group is classified keeps the record", () =>
-  Effect.gen(function* () {
-    const kept = recordFixture("codex-333333333333", 1010, sessionA);
-    const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
-    gone.add(kept.pgid);
-    const paused = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    control.gate = Deferred.succeed(paused, undefined).pipe(
-      Effect.andThen(Deferred.await(release)),
-    );
-    const goal = { threadId: ThreadId.make("thread-goal"), nativeThreadId: "native-goal" };
-    yield* Effect.gen(function* () {
-      const opening = yield* open("thread-other", sessionA).pipe(Effect.forkScoped);
-      yield* Deferred.await(paused);
-      control.gate = Effect.void;
-      yield* detached.recordGoalBlock({ instanceId: codex, recordName: kept.name }, goal);
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(opening);
-      assert.equal(launched.length, 1);
-      assert.include(yield* recordFiles, kept.name + ".json");
-      assert.isTrue(yield* detached.hasGoalBlock(goal.threadId));
-    }).pipe(Effect.scoped);
-  }).pipe(Effect.scoped),
+it.effect.each([
+  ["another thread", "thread-goal"],
+  ["the opening thread", "thread-other"],
+] as const)(
+  "a fence written for %s while the exited group is classified keeps the record",
+  ([_case, fencedThread]) =>
+    Effect.gen(function* () {
+      const kept = recordFixture("codex-333333333333", 1010, sessionA);
+      const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
+      gone.add(kept.pgid);
+      const paused = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      control.gate = Deferred.succeed(paused, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const goal = { threadId: ThreadId.make(fencedThread), nativeThreadId: "native-goal" };
+      yield* Effect.gen(function* () {
+        const opening = yield* open("thread-other", sessionA).pipe(Effect.exit, Effect.forkScoped);
+        yield* Deferred.await(paused);
+        control.gate = Effect.void;
+        yield* detached.recordGoalBlock({ instanceId: codex, recordName: kept.name }, goal);
+        yield* Deferred.succeed(release, undefined);
+        const opened = yield* Fiber.join(opening);
+        const own = fencedThread === "thread-other";
+        assert.equal(opened._tag, own ? "Failure" : "Success");
+        assert.equal(launched.length, own ? 0 : 1);
+        assert.include(yield* recordFiles, kept.name + ".json");
+        assert.isTrue(yield* detached.hasGoalBlock(goal.threadId));
+      }).pipe(Effect.scoped);
+    }).pipe(Effect.scoped),
 );

@@ -36,6 +36,10 @@ const describe = (record: DetachedAppServerRecord) =>
   record.socketPath +
   ")";
 
+const ownTurn = (record: DetachedAppServerRecord) =>
+  describe(record) +
+  " has exited while it still held this thread's turn from before the restart. GOAT keeps this thread blocked until that turn is settled; restarting GOAT settles it. Other threads can continue.";
+
 const AGAIN = " GOAT checks again on every message, so send it again once that is done.";
 
 /**
@@ -110,13 +114,7 @@ const decideKeptRecord = Effect.fn("CodexDetachedAppServers.decideKeptRecord")(f
     ...(record.stopObligations ?? []).map((stop) => stop.threadId),
     ...input.survivorThreads,
   ]);
-  if (guarded.has(input.threadId))
-    return {
-      type: "refuse",
-      detail:
-        describe(record) +
-        " has exited while it still held this thread's turn from before the restart. GOAT keeps this thread blocked until that turn is settled; restarting GOAT settles it. Other threads can continue.",
-    } as const;
+  if (guarded.has(input.threadId)) return { type: "refuse", detail: ownTurn(record) } as const;
   return guarded.size > 0 ? ({ type: "unlist" } as const) : ({ type: "retire", record } as const);
 });
 
@@ -124,8 +122,11 @@ const decideKeptRecord = Effect.fn("CodexDetachedAppServers.decideKeptRecord")(f
 export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(function* <E>(
   input: Omit<Parameters<typeof decideKeptRecord>[0], "globallyBlocked"> & {
     readonly globallyBlocked: Effect.Effect<string | undefined>;
-    /** Removes the record unless a fence arrived meanwhile; false keeps it, unlisted. */
-    readonly retire: (record: DetachedAppServerRecord) => Effect.Effect<boolean, E>;
+    /** Removes the record unless a fence arrived meanwhile: "own" when it guards this thread. */
+    readonly retire: (
+      record: DetachedAppServerRecord,
+      threadId: ThreadId,
+    ) => Effect.Effect<"removed" | "kept" | "own", E>;
     readonly unlist: Effect.Effect<unknown>;
   },
 ) {
@@ -135,8 +136,13 @@ export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(
   });
   if (decision.type === "refuse")
     return yield* new CodexDetachedAppServerError({ detail: decision.detail });
-  if (decision.type === "retire" && (yield* input.retire(decision.record)))
-    return "retire" as const;
-  if (decision.type !== "connect") yield* input.unlist;
-  return decision.type === "connect" ? ("connect" as const) : ("unlist" as const);
+  if (decision.type === "connect") return "connect" as const;
+  if (decision.type === "retire") {
+    const retired = yield* input.retire(decision.record, input.threadId);
+    if (retired === "own")
+      return yield* new CodexDetachedAppServerError({ detail: ownTurn(decision.record) });
+    if (retired === "removed") return "retire" as const;
+  }
+  yield* input.unlist;
+  return "unlist" as const;
 });
