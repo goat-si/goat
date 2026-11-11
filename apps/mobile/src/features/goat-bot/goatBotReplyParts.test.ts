@@ -138,4 +138,17 @@ describe("splitGoatBotReply", () => {
     const text = ["See [a b][a b].", "", ...table, "", "[a", "b]: https://example.com"].join("\n");
     expect(splitGoatBotReply(text)).toEqual(prose(text));
   });
+
+  it("lets a list or quote end at an unindented paragraph, so what follows splits as usual", () => {
+    const rows = ["  | A | B |", "  | - | - |"];
+    for (const container of ["- item", "> quoted"]) {
+      expect(splitGoatBotReply([container, "", "After.", "", ...rows].join("\n"))).toEqual([
+        { kind: "prose", text: [container, "", "After."].join("\n") },
+        { kind: "table", markdown: rows.join("\n"), columns: 2 },
+      ]);
+      const code = "    [x]: https://example.com";
+      const text = [container, "", "After.", "", ...table, "", code].join("\n");
+      expect(splitGoatBotReply(text).at(-1)).toEqual({ kind: "prose", text: code });
+    }
+  });
 });
