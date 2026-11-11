@@ -6,6 +6,7 @@ import { ScrollView, useWindowDimensions, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { decisionInbox } from "../../state/threads";
+import { useRemoteEnvironmentRuntime } from "../../state/use-remote-environment-registry";
 import { HumanHandoffCard } from "./HumanHandoffCard";
 import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
 
@@ -18,6 +19,9 @@ function OpenApprovalsDock(props: { readonly threadRef: ScopedThreadRef }) {
   const [expanded, setExpanded] = useState(false);
   // The composer stays on screen however long the cards are; the cards scroll instead.
   const maxHeight = Math.round(useWindowDimensions().height * 0.4);
+  // Answers go to the thread's environment; while it is away the cards ask to reconnect.
+  const offline =
+    useRemoteEnvironmentRuntime(props.threadRef.environmentId)?.connectionState !== "connected";
   if (handoffs.length === 0) return null;
   const cards = handoffs.map((handoff) => (
     <HumanHandoffCard
@@ -25,6 +29,7 @@ function OpenApprovalsDock(props: { readonly threadRef: ScopedThreadRef }) {
       environmentId={props.threadRef.environmentId}
       handoff={handoff}
       inherited={false}
+      offline={offline}
     />
   ));
   const scrolling = (

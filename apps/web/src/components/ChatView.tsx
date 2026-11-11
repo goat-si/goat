@@ -1813,7 +1813,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
-  const approvalId = useAwaitingApprovalId(activeThreadRef, activePendingApproval?.requestId);
+  const approvalId = useAwaitingApprovalId(routeThreadDetailRef, activePendingApproval?.requestId);
   const timelineActivity = {
     isWorking,
     runlessWorkActive: runlessWorkStartedAt !== null,

@@ -34,7 +34,6 @@ import {
 import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AppState, Linking, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
-import { useEnvironmentPresentation } from "../../state/presentation";
 import { useEnvironmentScope } from "../../state/session";
 import { serverEnvironment, sshHost } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -44,6 +43,8 @@ type HumanHandoffCardProps = {
   environmentId: EnvironmentId;
   handoff: Handoff;
   inherited: boolean;
+  /** The environment that receives the answer is not connected; answering waits for it. */
+  offline?: boolean;
 };
 
 export function HumanHandoffCard(props: HumanHandoffCardProps) {
@@ -179,9 +180,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
     [],
   );
   const pending = isHandoffPending(handoff.state);
-  // Answers go to the environment that shows the card; without it they cannot be sent.
-  const offline =
-    useEnvironmentPresentation(props.environmentId).presentation?.connection.phase !== "connected";
+  const offline = props.offline === true;
   const act = async (
     action: "opened" | "completed" | "declined" | "cancelled",
     computerUseScope?: "session" | "always",

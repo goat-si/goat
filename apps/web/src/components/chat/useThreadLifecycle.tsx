@@ -648,7 +648,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         onOpenThread: onOpenRelatedThreadStable,
       })
     : null;
-  const approvalBanners = useApprovalBanners(activeThreadRef);
+  const approvalBanners = useApprovalBanners(threadDetailRef);
   // The relative times read the clock; nowMinute re-renders them on the minute.
   const snoozedUntil = activeThreadShell?.snoozedUntil ?? null;
   const settledAt = activeThreadShell?.settledAt ?? null;

@@ -57,6 +57,7 @@ vi.mock("../../state/server", async () => {
 });
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => harness.scopeAllowed }));
 vi.mock("../../state/environments", () => ({ useEnvironment: () => ({ label: "VPS" }) }));
+vi.mock("../../state/presentation", () => ({ useEnvironmentConnectionPhase: () => "connected" }));
 // The add-provider wizard talks to the environment; this stand-in reports how setup ended.
 vi.mock("../settings/AddProviderInstanceDialog", () => ({
   AddProviderInstanceDialog: (props: {
