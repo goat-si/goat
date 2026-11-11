@@ -168,6 +168,8 @@ type live struct {
 	client bool
 	reg    *serviceReg
 	k      uint64
+	// inv is the burned invite of a pairing session (nil for a listed client).
+	inv *serviceInvite
 	// gate orders a client delivery's commit and identity line before its close; closing, closed and conn are
 	// guarded by d.mu (clients.go).
 	gate    sync.Mutex
@@ -613,7 +615,7 @@ func (d *Daemon) viewChanged() {
 	d.lastView = v
 	var doomed []*live
 	// A client session closes only when the view makes its key a member or a revoked member.
-	clients, _ := d.selectLocked(func(l *live) bool { return memberOrRevoked(v, l.remote) })
+	clients, _ := d.selectLocked(func(l *live) bool { return l.inv == nil && memberOrRevoked(v, l.remote) })
 	for k, l := range d.sessions {
 		if l.deferred || l.client {
 			continue

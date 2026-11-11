@@ -24,6 +24,8 @@ import (
 type clientAdmission struct {
 	reg  *serviceReg
 	slot *phoneSlot
+	// inv is set for a service-pair handshake: the invite instance that answered its message 1.
+	inv *serviceInvite
 }
 
 // memberOrRevoked reports a key that is, or was, a member of v: such a key is never a client.
@@ -63,6 +65,34 @@ func (d *Daemon) admitClient(remote []byte, p session.Payload, relay string) (cl
 	return clientAdmission{reg: reg, slot: slot}, nil
 }
 
+// admitPairing decides on a kind 0x03 service-pair handshake before message 2 (contract "Service invites"): the
+// invite must be the live one of the registration holding the name, with budget left, and a phone slot must be free.
+// It spends one answer of the budget with the slot and returns the invite's psk.
+func (d *Daemon) admitPairing(remote []byte, p session.Payload, relay string) (clientAdmission, []byte, error) {
+	if !ValidServiceName(p.Name) || !validInviteID(p.Invite) {
+		return clientAdmission{}, nil, errNotAdmitted
+	}
+	now := d.now()
+	d.svc.mu.Lock()
+	defer d.svc.mu.Unlock()
+	reg := d.svc.byName[p.Name]
+	if reg == nil || reg.ended || reg.name != clientsService {
+		return clientAdmission{}, nil, errNotAdmitted
+	}
+	inv := reg.invite
+	if inv == nil || inv.id != p.Invite || inv.burned || !now.Before(inv.expires) || inv.budget < 1 {
+		return clientAdmission{}, nil, errNotAdmitted
+	}
+	slot, ok := d.svc.reservePhoneLocked(relay, ident.B64.EncodeToString(remote))
+	if !ok {
+		return clientAdmission{}, nil, errNotAdmitted
+	}
+	if inv.budget--; inv.budget == 0 {
+		reg.out.push(jsonLine(map[string]any{"t": "invite-exhausted", "id": inv.id}))
+	}
+	return clientAdmission{reg: reg, slot: slot, inv: inv}, inv.psk, nil
+}
+
 // listedAnywhere reports a key on any registration's list; such a key may not open an account session.
 func (b *serviceBook) listedAnywhere(key string) bool {
 	b.mu.Lock()
@@ -78,14 +108,24 @@ func (b *serviceBook) listedAnywhere(key string) bool {
 // registerClient records a confirmed client session if its registration is still current, still lists its key and
 // the key is not a member or a revoked member.
 func (d *Daemon) registerClient(l *live) bool {
+	now := d.now()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if memberOrRevoked(d.view(), l.remote) {
+	if l.inv == nil && memberOrRevoked(d.view(), l.remote) {
 		return false
 	}
 	d.svc.mu.Lock()
-	_, listed := l.reg.clients[l.remote]
-	ok := listed && !l.reg.ended && d.svc.byName[l.reg.name] == l.reg
+	ok := !l.reg.ended && d.svc.byName[l.reg.name] == l.reg
+	if l.inv == nil {
+		_, listed := l.reg.clients[l.remote]
+		ok = ok && listed
+	} else if inv := l.inv; ok && l.reg.invite == inv && !inv.burned && now.Before(inv.expires) {
+		// The burn: one atomic step under serviceBook.mu (contract "Service invites").
+		inv.burned = true
+		l.reg.out.push(jsonLine(map[string]any{"t": "invite-burned", "id": inv.id}))
+	} else {
+		ok = false
+	}
 	d.svc.mu.Unlock()
 	if !ok {
 		return false
@@ -186,7 +226,8 @@ func (k liveLink) Close(code uint16) error {
 
 // serveClient delivers a confirmed client session to the program of the registration that admitted it.
 func (d *Daemon) serveClient(ctx context.Context, sec *session.Secure, a clientAdmission) {
-	l := &live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec, client: true, reg: a.reg, closed: make(chan struct{})}
+	l := &live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec, client: true, reg: a.reg, inv: a.inv,
+		closed: make(chan struct{})}
 	if d.opt.ClientEnded != nil {
 		defer d.opt.ClientEnded()
 	}
@@ -229,11 +270,14 @@ func (d *Daemon) commitClient(reg *serviceReg, tc net.Conn, l *live) ([]byte, er
 		return nil, failed(causeReplaced, errors.New("the client session is closing"))
 	}
 	v := d.view()
-	if memberOrRevoked(v, l.remote) {
+	if l.inv == nil && memberOrRevoked(v, l.remote) {
 		return nil, failed(causeReplaced, errors.New("the client key is now a member's"))
 	}
 	d.svc.mu.Lock()
 	id, listed := reg.clients[l.remote]
+	if l.inv != nil {
+		listed = true // a pairing session belongs to its burned invite, never to the list
+	}
 	current := !reg.ended && d.svc.byName[reg.name] == reg
 	if listed && current {
 		if reg.conns == nil {
@@ -245,7 +289,14 @@ func (d *Daemon) commitClient(reg *serviceReg, tc net.Conn, l *live) ([]byte, er
 	if !listed || !current {
 		return nil, failed(causeReplaced, errors.New("the client is no longer listed by a current registration"))
 	}
-	j, err := clientIdentityLine(v.MeshID, d.nodeID, id, l.remote, reg.name)
+	var j []byte
+	var err error
+	if l.inv != nil {
+		sas := ident.B64.EncodeToString(session.PairSAS(l.sec.HandshakeHash))
+		j, err = pairingIdentityLine(v.MeshID, d.nodeID, l.inv.id, l.remote, sas, reg.name)
+	} else {
+		j, err = clientIdentityLine(v.MeshID, d.nodeID, id, l.remote, reg.name)
+	}
 	if err != nil {
 		d.svc.uncommit(reg, tc)
 		return nil, failed(causeMalformed, err)
@@ -258,6 +309,6 @@ func (d *Daemon) commitClient(reg *serviceReg, tc net.Conn, l *live) ([]byte, er
 func (d *Daemon) dropClientsLocked(reg *serviceReg, list map[string]string) ([]*live, []chan struct{}) {
 	return d.selectLocked(func(l *live) bool {
 		_, kept := list[l.remote]
-		return l.reg == reg && !kept
+		return l.reg == reg && l.inv == nil && !kept
 	})
 }

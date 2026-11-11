@@ -73,6 +73,13 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 	var slot *acctSlot
 	var client *clientAdmission
 	admit := func(kind byte, remote []byte, p session.Payload) ([]byte, error) {
+		if kind == session.KindJoin && p.Stream == "service-pair" {
+			a, psk, err := d.admitPairing(remote, p, relayOf(c))
+			if err == nil {
+				client = &a
+			}
+			return psk, err
+		}
 		if _, member := d.view().MemberByNoise(remote); kind == session.KindSession && !member {
 			a, err := d.admitClient(remote, p, relayOf(c))
 			if err == nil {
