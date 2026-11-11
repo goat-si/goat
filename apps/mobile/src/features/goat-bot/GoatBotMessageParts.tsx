@@ -29,20 +29,28 @@ export function goatBotTime(iso: string): string {
 export const goatBotRowGap = (position: GoatBotGroupPosition) =>
   position === "single" || position === "first" ? 16 : 6;
 
-/** The bot's small avatar: its chosen emoji, else the goat mark on the neutral avatar circle. */
-function GoatBotAvatar(props: { readonly emoji?: string | null | undefined }) {
+/**
+ * The bot's small avatar: its chosen emoji or initial, on its color when it has one, else the goat
+ * mark on the neutral avatar circle.
+ */
+function GoatBotAvatar(props: {
+  readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
+}) {
   const emoji = goatBotAvatarEmoji(props.emoji);
+  const accent = emoji !== null ? (props.accent ?? null) : null;
   return (
     <View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       className="h-5 w-5 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar"
+      style={accent ? { backgroundColor: accent.background } : undefined}
     >
       {emoji !== null ? (
         <Text
           allowFontScaling={false}
           className="text-goat-avatar-foreground"
-          style={{ fontSize: 11, lineHeight: 14 }}
+          style={{ fontSize: 11, lineHeight: 14, ...(accent ? { color: accent.foreground } : {}) }}
         >
           {emoji}
         </Text>
@@ -58,12 +66,13 @@ export function GoatBotUpdateLabel(props: {
   readonly at: string;
   readonly name: string;
   readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const caption = useScaledTextRole("label");
   const time = goatBotTime(props.at);
   return (
     <View className="flex-row items-center gap-2" style={{ marginLeft: 14 }}>
-      <GoatBotAvatar emoji={props.emoji} />
+      <GoatBotAvatar emoji={props.emoji} accent={props.accent} />
       <Text className="text-foreground-muted" style={caption}>
         {`${props.name} · Update${time ? ` · ${time}` : ""}`}
       </Text>
@@ -198,7 +207,16 @@ export function GoatBotPersonCaption(props: {
   );
 }
 
-const PERSON_WAITS = /^(Waiting|Paused)/u;
+// The waits goatBotActivity reports; a task's own streamed update can also begin "Waiting…", and
+// is a working step, so a wait is one of these exact lines and each is heard once.
+const PERSON_WAITS: ReadonlySet<string> = new Set([
+  "Waiting for your approval",
+  "Waiting for your answer",
+  "Waiting for you to sign in",
+  "Waiting for you",
+  "Waiting on other work",
+  "Paused on a usage limit",
+]);
 
 /**
  * What the bot is doing now, under the last message: its face and one muted line. The words get the
@@ -210,12 +228,13 @@ export function GoatBotActivityLine(props: {
   readonly botName: string;
   /** The bot's profile avatar; an emoji replaces the drawn face. */
   readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
   /** Whether enough of the line shows on screen for its motion to run. */
   readonly inView: boolean;
 }) {
   const label = useScaledTextRole("label");
   const { activity } = props;
-  const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
+  const waits = activity.state === "working" && PERSON_WAITS.has(activity.text);
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
   // Screen readers hear when the bot starts or reads, not each working step, and what it waits on:
@@ -232,7 +251,12 @@ export function GoatBotActivityLine(props: {
   return (
     <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
       <View accessible accessibilityLiveRegion="polite" accessibilityLabel={status}>
-        <GoatBotProgressFace state={face} emoji={props.emoji} inView={props.inView} />
+        <GoatBotProgressFace
+          state={face}
+          emoji={props.emoji}
+          accent={props.accent}
+          inView={props.inView}
+        />
       </View>
       <View
         accessible

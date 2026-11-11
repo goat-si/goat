@@ -13,6 +13,7 @@ import {
   type ChannelCreateBotInput,
   type ChannelDeleteBotInput,
   ChannelGatewayError,
+  type ChannelListOpenAsksResult,
   type ChannelListBotsInput,
   type ChannelRestoreBotInput,
   type ChannelSetBotHiddenInput,
@@ -27,6 +28,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -42,6 +44,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { botProfileKey } from "./channelBotLedger.ts";
 import { memberBotLaunchIdsFor, memberBotStepCommandIdFor } from "./channelIds.ts";
+import { listOpenAsks } from "./channelOpenAsks.ts";
 
 export type MemberBot = BotProfile;
 type Owner = Pick<ChannelConnectionOwner, "ownerId">;
@@ -75,6 +78,12 @@ export class ChannelBotMembers extends Context.Service<
     /** Every owner's unfinished creates and steps; failures are logged and retried later. */
     readonly reconcileAll: Effect.Effect<void>;
     readonly update: ChannelBotProfiles.ChannelBotProfiles["Service"]["update"];
+    /** What this owner's bots wait on the person for, newest first. */
+    readonly openAsks: (
+      owner: Owner,
+    ) => Effect.Effect<ChannelListOpenAsksResult, ChannelGatewayError>;
+    /** Revisions of this owner's tasks and bots; a new one means read the open asks again. */
+    readonly taskChanges: (owner: Owner) => Stream.Stream<number>;
   }
 >()("goat/channels/ChannelBotMembers") {}
 
@@ -327,6 +336,8 @@ const make = Effect.gen(function* () {
             return updated;
           }),
         );
+        // Archiving, restoring or hiding a bot changes which tasks a list shows as waiting.
+        yield* ledger.announceTaskChanges([owner.ownerId]);
         if (record.lifecycle !== undefined) yield* finishMember(owner.ownerId, record);
         const settled = (yield* readMember(owner.ownerId, botId)) ?? record;
         return ChannelBotProfiles.memberProfile(settled);
@@ -402,6 +413,19 @@ const make = Effect.gen(function* () {
       Effect.andThen(profiles.list(owner, { includeDeleted: input.includeDeleted })),
     );
 
+  const openAsks: ChannelBotMembers["Service"]["openAsks"] = Effect.fn(
+    "ChannelBotMembers.openAsks",
+  )(function* (owner: Owner) {
+    // The main bot takes channel work before its GOAT thread exists, so it is always asked.
+    const members = (yield* profiles.list(owner)).map((bot) => bot.botId);
+    return yield* listOpenAsks({
+      sql,
+      threads,
+      ownerId: owner.ownerId,
+      botIds: new Set<string>([MAIN_BOT_ID, ...members]),
+    });
+  }, Effect.mapError(failed));
+
   /** A rename or a new purpose leaves a line in that bot's conversation once it is saved. */
   const update: ChannelBotMembers["Service"]["update"] = (input, owner) =>
     profileEdits.withPermits(1)(
@@ -420,6 +444,8 @@ const make = Effect.gen(function* () {
     );
 
   return ChannelBotMembers.of({
+    openAsks,
+    taskChanges: (owner) => ledger.taskChangeRevisions(owner.ownerId),
     create,
     setHidden,
     remove,
@@ -433,6 +459,9 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(ChannelBotMembers, make);
 
 export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => ({
+  [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () => service.openAsks(owner),
+  [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>
+    service.taskChanges(owner).pipe(Stream.map((revision) => ({ revision }))),
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: (input: ChannelListBotsInput) =>
     service.list(input, owner).pipe(Effect.map((bots) => ({ bots }))),
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>

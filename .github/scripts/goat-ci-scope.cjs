@@ -60,6 +60,8 @@ const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",
   "apps/server/src/cua/",
   "apps/server/src/memory/imports/MemoryImportReaderWindows",
+  "apps/server/src/runtimeRelaunch",
+  "apps/server/src/cli/updateServerRestart",
   "apps/server/src/terminal/nodePtyNativeKill",
   "packages/shared/src/cuaDriver",
   "packages/shared/src/computerUse",

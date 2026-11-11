@@ -107,6 +107,8 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
     }
     if (line.trim() !== "") {
       const afterBlank = index === 0 || (lines[index - 1] ?? "").trim() === "";
+      // An unindented paragraph after a blank line ends any list or quote above it.
+      if (afterBlank && /^\S/.test(line) && !CONTAINER.test(line)) sawContainer = false;
       indentedCode = /^(?: {4}|\t)/.test(line) && !sawContainer && (indentedCode || afterBlank);
     }
     if (!indentedCode && DEFINITION_START.test(line)) return whole;
