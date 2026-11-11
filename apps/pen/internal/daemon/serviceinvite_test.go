@@ -105,12 +105,7 @@ func TestFourPairingHandshakesAreAnsweredTheFifthIsRefusedAndABurnAfterExhaustio
 	if want := ident.B64.EncodeToString(session.PairSAS(sec.HandshakeHash)); j.Pairing.Sas != want || j.Pairing.Invite != id {
 		t.Fatalf("pairing line %+v; want invite %s and the sas of the winner's handshake %s", j.Pairing, id, want)
 	}
-	loser, err := ps[0].Confirm()
-	if err == nil {
-		if code := closedWith(f.ctx, loser); code != wire.CodeNotAdmitted {
-			t.Fatalf("a second confirmation closed %d, want 4401 (one burn)", code)
-		}
-	}
+	refusedAtConfirmation(t, f.ctx, ps[0]) // one burn: a second confirmation gets 4401
 	if m := f.h.op(t, cancelOp(id)); m["was"] != "burned" {
 		t.Fatalf("cancel after the burn answered %v", m)
 	}

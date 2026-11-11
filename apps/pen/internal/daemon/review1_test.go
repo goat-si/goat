@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,9 @@ func TestAPairingWhoseInviteExpiresWhileItWaitsForTheBurnCannotBurn(t *testing.T
 	clk.ms.Store(time.Now().UnixMilli())
 	var hold atomic.Bool
 	reached, release := make(chan struct{}, 1), make(chan struct{})
+	var once sync.Once
+	open := func() { once.Do(func() { close(release) }) }
+	defer open() // a failed assertion never leaves the hook holding the daemon's shutdown
 	st := shortDir(t)
 	id := identity(t, st, rs.URL, "a")
 	if _, err := mesh.Found(st, id, "a", 1); err != nil {
@@ -54,7 +58,7 @@ func TestAPairingWhoseInviteExpiresWhileItWaitsForTheBurnCannotBurn(t *testing.T
 	<-reached // the burn's check has taken d.mu and waits here
 	clk.advance(6 * time.Minute)
 	hold.Store(false)
-	close(release)
+	open()
 	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("a pairing confirmed after its invite expired closed %d, want 4401", code)
 	}
