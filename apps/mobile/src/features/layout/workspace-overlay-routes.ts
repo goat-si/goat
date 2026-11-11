@@ -39,6 +39,17 @@ const LISTED_OVERLAY_ROUTES: ReadonlySet<string> = new Set([
   "ThreadModelPicker",
 ]);
 
+export function isNewTaskRoute(route: {
+  readonly name: string;
+  readonly params?: object;
+}): boolean {
+  return (
+    route.name.startsWith("NewTask") ||
+    route.name.startsWith("AddProject") ||
+    (route.params !== undefined && "draft" in route.params && Boolean(route.params.draft))
+  );
+}
+
 // Every route whose `presentation` is a sheet or modal, read from the root stack's config once.
 let presentedRoutes: ReadonlySet<string> = new Set();
 

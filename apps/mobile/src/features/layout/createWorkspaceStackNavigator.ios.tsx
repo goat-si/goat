@@ -39,7 +39,7 @@ import { WorkspaceTabsProvider, useWorkspaceTabs } from "../workspace/WorkspaceT
 import { WorkspaceNativeTabs } from "../workspace/WorkspaceNativeTabs.ios";
 import { workspaceUsesColumns } from "../workspace/workspace-tabs-state";
 import { isSettingsRoute, settingsOpenIn } from "../settings/settings-navigation";
-import { workspaceRoutesOf } from "./workspace-overlay-routes";
+import { isNewTaskRoute, workspaceRoutesOf } from "./workspace-overlay-routes";
 import { setNativelyPoppingWorkspaceRoute } from "../workspace/workspace-detail-selection";
 import { useDeviceType, useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { nativeInspectorColumnWidth } from "../../lib/layout";
@@ -151,13 +151,7 @@ function ColumnScreen(props: {
             options={options}
             canGoBack={!props.primary}
             column={props.primary ? "primary" : "detail"}
-            onCompose={
-              descriptor.route.params &&
-              "draft" in descriptor.route.params &&
-              descriptor.route.params.draft
-                ? undefined
-                : props.onCompose
-            }
+            onCompose={isNewTaskRoute(descriptor.route) ? undefined : props.onCompose}
           />
           <ColumnContent
             primary={props.primary}
