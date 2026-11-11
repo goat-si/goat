@@ -41,6 +41,40 @@ describe("channel task change revisions", () => {
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
   );
 
+  it.effect("keeps a subscriber's own change however many other owners change meanwhile", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const changes = yield* makeChannelTaskChanges(sql);
+      const mine = yield* watch(changes, "owner-a");
+      yield* changes.announce(["owner-a"]);
+      yield* changes.announce(Array.from({ length: 1_000 }, (_, index) => "other-" + index));
+      yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+      assert.strictEqual(yield* Queue.take(mine), 1);
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+  );
+
+  it.effect(
+    "reports a steady stream of changes once per window instead of waiting for a pause",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const changes = yield* makeChannelTaskChanges(sql);
+        const mine = yield* watch(changes, "owner-a");
+        const step = Duration.millis(100);
+        yield* changes.announce(["owner-a"]);
+        yield* TestClock.adjust(step);
+        yield* changes.announce(["owner-a"]);
+        yield* TestClock.adjust(step);
+        yield* changes.announce(["owner-a"]);
+        // The window opened by the first change closes 250 ms after it, changes still arriving.
+        yield* TestClock.adjust(Duration.millis(50));
+        assert.strictEqual(yield* Queue.take(mine), 1);
+        yield* changes.announce(["owner-a"]);
+        yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+        assert.strictEqual(yield* Queue.take(mine), 2);
+      }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+  );
+
   it.effect("a write announces after it commits, never from inside a caller's transaction", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
