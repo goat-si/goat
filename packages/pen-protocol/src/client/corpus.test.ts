@@ -49,12 +49,20 @@ function splits(length: number): Array<number> {
   return [...points];
 }
 
-function outcome<T>(run: () => T): { ok: T } | { error: string; closeCode: number | undefined } {
+/**
+ * Feeds the pieces, then summarizes what was decoded. On a PenError the summary of what came before it is part of
+ * the outcome, so every split must agree on that too: a caller acts on each event as it comes.
+ */
+function outcome<T>(
+  feed: () => void,
+  summary: () => T,
+): { ok: T } | { error: string; closeCode: number | undefined; before: T } {
   try {
-    return { ok: run() };
+    feed();
+    return { ok: summary() };
   } catch (error) {
     if (!(error instanceof PenError)) throw error;
-    return { error: error.code, closeCode: error.closeCode };
+    return { error: error.code, closeCode: error.closeCode, before: summary() };
   }
 }
 
@@ -71,46 +79,57 @@ function runHttp(context: HttpContext, pieces: ReadonlyArray<Uint8Array>) {
     bodyCap: 8 * 1024 * 1024,
   });
   const events: Array<ResponseEvent> = [];
-  for (const piece of pieces) parser.push(piece, events);
-  if (context.eof === true) events.push(...parser.finish());
-  const head = events.find((event) => event.type === "head");
-  const end = events.find((event) => event.type === "end");
-  let bodyLength = 0;
-  const body: Array<number> = [];
-  for (const event of events) {
-    if (event.type !== "body") continue;
-    bodyLength += event.bytes.length;
-    if (body.length < 64) body.push(...event.bytes.subarray(0, 64));
-  }
-  return {
-    status: head?.type === "head" ? head.status : undefined,
-    headers: head?.type === "head" ? head.headers : undefined,
-    end: end?.type === "end" ? end.delimiter : undefined,
-    bodyLength,
-    bodyHex: toHex(Uint8Array.from(body)),
-    leftoverHex: toHex(parser.leftover()),
-  };
+  return outcome(
+    () => {
+      for (const piece of pieces) parser.push(piece, events);
+      if (context.eof === true) events.push(...parser.finish());
+    },
+    () => {
+      const head = events.find((event) => event.type === "head");
+      const end = events.find((event) => event.type === "end");
+      let bodyLength = 0;
+      const body: Array<number> = [];
+      for (const event of events) {
+        if (event.type !== "body") continue;
+        bodyLength += event.bytes.length;
+        if (body.length < 64) body.push(...event.bytes.subarray(0, 64));
+      }
+      return {
+        status: head?.type === "head" ? head.status : undefined,
+        headers: head?.type === "head" ? head.headers : undefined,
+        end: end?.type === "end" ? end.delimiter : undefined,
+        bodyLength,
+        bodyHex: toHex(Uint8Array.from(body.slice(0, 64))),
+        leftoverHex: toHex(parser.leftover()),
+      };
+    },
+  );
 }
 
 function runWs(context: { readonly eof?: boolean }, pieces: ReadonlyArray<Uint8Array>) {
   const decoder = new FrameDecoder();
   const events: Array<FrameEvent> = [];
-  for (const piece of pieces) decodeInto(decoder, piece, events);
-  if (context.eof === true) events.push(...decoder.finish());
-  return events.map((event) => {
-    if (event.type === "message") {
-      return typeof event.data === "string"
-        ? { type: "message", text: event.data }
-        : { type: "message", binaryLength: event.data.length };
-    }
-    if (event.type === "ping") return { type: "ping", payloadHex: toHex(event.payload) };
-    return { type: "close", code: event.code, reason: event.reason };
-  });
+  return outcome(
+    () => {
+      for (const piece of pieces) decodeInto(decoder, piece, events);
+      if (context.eof === true) events.push(...decoder.finish());
+    },
+    () =>
+      events.map((event) => {
+        if (event.type === "message") {
+          return typeof event.data === "string"
+            ? { type: "message", text: event.data }
+            : { type: "message", binaryLength: event.data.length };
+        }
+        if (event.type === "ping") return { type: "ping", payloadHex: toHex(event.payload) };
+        return { type: "close", code: event.code, reason: event.reason };
+      }),
+  );
 }
 
-function matchHttp(expected: Record<string, unknown>, actual: ReturnType<typeof runHttp>) {
+function matchHttp(expected: Record<string, unknown>, actual: Record<string, unknown>) {
   const subset: Record<string, unknown> = {};
-  for (const key of Object.keys(expected)) subset[key] = actual[key as keyof typeof actual];
+  for (const key of Object.keys(expected)) subset[key] = actual[key];
   if (expected.bodyHex !== undefined) subset.bodyHex = actual.bodyHex;
   return subset;
 }
@@ -124,25 +143,42 @@ describe("HTTP/1.1 response corpus (design 10.2, vectors/http1-malformed.json)",
       const results = [
         [bytes],
         ...splits(bytes.length).map((at) => [bytes.subarray(0, at), bytes.subarray(at)]),
-      ].map((pieces) => outcome(() => runHttp(context, pieces)));
+      ].map((pieces) => runHttp(context, pieces));
       for (const result of results) {
         if ("error" in c.expect) expect(result).toMatchObject({ error: c.expect.error });
         else {
           expect(result).toHaveProperty("ok");
           if ("ok" in result) expect(matchHttp(c.expect.ok, result.ok)).toEqual(c.expect.ok);
         }
+        // Every split decodes the same, the events before an error included.
+        expect(result).toEqual(results[0]);
       }
       if (bytes.length <= 64 * 1024) {
-        const oneByOne = outcome(() =>
-          runHttp(
-            context,
-            Array.from(bytes, (byte) => Uint8Array.of(byte)),
-          ),
+        const oneByOne = runHttp(
+          context,
+          Array.from(bytes, (byte) => Uint8Array.of(byte)),
         );
         expect(oneByOne).toEqual(results[0]);
       }
     },
   );
+
+  it("H36: body bytes within the cap come before the refusal, however the body is split", () => {
+    const run = (pieces: ReadonlyArray<string>) => {
+      const parser = new ResponseParser({ method: "GET", bodyCap: 2 });
+      const events: Array<ResponseEvent> = [];
+      let error = "";
+      try {
+        for (const piece of pieces) parser.push(new TextEncoder().encode(piece), events);
+      } catch (caught) {
+        error = (caught as PenError).code;
+      }
+      const body = events.flatMap((event) => (event.type === "body" ? [...event.bytes] : []));
+      return { body: String.fromCharCode(...body), error };
+    };
+    expect(run(["HTTP/1.1 200 OK\r\n\r\nabc"])).toEqual({ body: "ab", error: "http1/H36" });
+    expect(run(["HTTP/1.1 200 OK\r\n\r\nab", "c"])).toEqual({ body: "ab", error: "http1/H36" });
+  });
 
   it("every parser rule in vectors/http1-rules.json has a case, and every accepting rule an accepted case", () => {
     for (const rule of httpRules.rules.filter((r) => r.where === "parser")) {
@@ -171,11 +207,12 @@ describe("WebSocket frame corpus (design 10.2, vectors/websocket-malformed.json)
       const results = [
         [bytes],
         ...splits(bytes.length).map((at) => [bytes.subarray(0, at), bytes.subarray(at)]),
-      ].map((pieces) => outcome(() => runWs(context, pieces)));
+      ].map((pieces) => runWs(context, pieces));
       for (const result of results) {
         if ("error" in c.expect)
-          expect(result).toEqual({ error: c.expect.error, closeCode: c.expect.closeCode });
+          expect(result).toMatchObject({ error: c.expect.error, closeCode: c.expect.closeCode });
         else expect(result).toEqual({ ok: c.expect.ok });
+        expect(result).toEqual(results[0]);
       }
     },
   );

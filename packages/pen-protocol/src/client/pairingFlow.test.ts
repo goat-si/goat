@@ -3,6 +3,7 @@ import { fromHex, toBase64Url } from "./bytes.ts";
 import { generateX25519 } from "./crypto.ts";
 import { pairingCode, pairingSas, type PairQr } from "./pairing.ts";
 import {
+  CHECKING_WINDOW_MS,
   discardPairing,
   forgetServer,
   noteSessionIssued,
@@ -11,6 +12,7 @@ import {
   type PairingRecord,
   type PairingView,
   type PairResponse,
+  PROBE_INTERVAL_MS,
   type ProbeResult,
   resumePairing,
   retryChecking,
@@ -274,8 +276,8 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     const pendingKey = t.stored()?.pending?.key.publicKey;
     expect(t.views.at(-1)).toMatchObject({ tag: "checking" });
     t.probes[0]?.answer.resolve({ issued: false });
-    await t.clock.nextTimer();
-    t.clock.advance(30_000);
+    await t.clock.whenTimer(PROBE_INTERVAL_MS);
+    t.clock.advance(PROBE_INTERVAL_MS);
     await t.when("probe", 2);
     expect(t.probes.map((probe) => probe.key)).toEqual([pendingKey, pendingKey]);
     t.probes[1]?.answer.resolve({ issued: true });
@@ -289,13 +291,16 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     const done = runPairing(t.deps, qr);
     void toChecking(t, done);
     await t.when("probe");
-    // Twenty probes, at 0 s, 30 s, ... 570 s; the 600 s mark ends Checking.
+    // Twenty probes, at 0 s, 30 s, ... 570 s; the 600 s deadline ends Checking.
     for (let i = 0; i < 20; i++) {
       t.probes[i]?.answer.resolve({ issued: false });
-      await t.clock.nextTimer();
-      t.clock.advance(30_000);
-      if (i < 19) await t.when("probe", i + 2);
+      if (i < 19) {
+        await t.clock.whenTimer(PROBE_INTERVAL_MS, i + 1);
+        t.clock.advance(PROBE_INTERVAL_MS);
+        await t.when("probe", i + 2);
+      }
     }
+    t.clock.advance(PROBE_INTERVAL_MS);
     expect(await done).toEqual({ tag: "not-confirmed" });
     expect(t.probes).toHaveLength(20);
     expect(t.stored()?.pending?.stage).toBe("post-202");
@@ -526,6 +531,30 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     },
   );
 
+  it("a probe that never answers does not hold Checking past its ten minutes: Not Confirmed comes on time", async () => {
+    const pendingKey = generateX25519(() => new Uint8Array(32).fill(7));
+    const t = setup({
+      record: {
+        pending: {
+          key: {
+            privateKey: toBase64Url(pendingKey.privateKey),
+            publicKey: toBase64Url(pendingKey.publicKey),
+          },
+          stage: "post-202",
+          server: { nodeId: NODE, noisePub: "x", relays: [] },
+          startedAt: 0,
+        },
+      },
+    });
+    const done = retryChecking(t.deps, NODE);
+    await t.when("probe");
+    await t.clock.whenTimer(CHECKING_WINDOW_MS);
+    t.clock.advance(CHECKING_WINDOW_MS);
+    expect(await done).toEqual({ tag: "not-confirmed" });
+    t.probes[0]?.answer.resolve({ issued: true, deviceId: "late" });
+    expect(t.stored()?.current).toBeUndefined();
+  });
+
   it("Checking stops at a discard: a negative probe neither probes again nor reports over a newer attempt", async () => {
     const t = setup();
     const done = runPairing(t.deps, qr);
@@ -538,7 +567,7 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     t.probes[0]?.answer.resolve({ issued: false });
     const outcome = await Promise.race([
       done,
-      t.clock.nextTimer().then(() => ({ tag: "probing on" }) as const),
+      t.clock.whenTimer(PROBE_INTERVAL_MS).then(() => ({ tag: "probing on" }) as const),
     ]);
     expect(outcome).toEqual({ tag: "superseded" });
     expect(t.views.slice(before)).toEqual([]);

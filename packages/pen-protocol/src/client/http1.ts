@@ -144,8 +144,13 @@ export class ResponseParser {
         }
         case "close": {
           const take = bytes.length - at;
-          if (this.#received + take > this.#context.bodyCap)
+          const room = this.#context.bodyCap - this.#received;
+          if (take > room) {
+            // The bytes within the cap come first, so a sink sees the same prefix however the body was split.
+            if (room > 0) events.push({ type: "body", bytes: bytes.slice(at, at + room) });
+            this.#received += room;
             throw fail("H36", "the body is over its cap");
+          }
           this.#received += take;
           events.push({ type: "body", bytes: bytes.slice(at) });
           at = bytes.length;

@@ -11,7 +11,7 @@ import {
   servicePsk,
   GOAT_SERVICE,
 } from "./pairing.ts";
-import type { Clock, Random } from "./runtime.ts";
+import type { Clock, Random, Timer } from "./runtime.ts";
 
 /** How long Checking probes after an unconfirmed 202, and how often. */
 export const CHECKING_WINDOW_MS = 10 * 60_000;
@@ -428,26 +428,40 @@ async function checking(
   }
   const attempt = pending.key.publicKey;
   const key = loadKey(pending.key);
-  for (let at = start; ; at += PROBE_INTERVAL_MS) {
-    const result = await deps
-      .probe({ server: pending.server, key })
-      .catch((): ProbeResult => ({ issued: false }));
-    if (result.issued) {
-      // The session proves this attempt's key only; a discarded or replaced attempt promotes nothing.
-      if (!(await promoteAttempt(deps, nodeId, attempt, result.deviceId ?? null)))
-        return SUPERSEDED;
-      return finish(deps, { tag: "paired", deviceId: result.deviceId ?? null });
-    }
-    // A discard or a newer attempt during the probe or the wait ends this Checking without a word.
-    if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
-    const next = at + PROBE_INTERVAL_MS;
-    if (next >= until) {
-      await sleep(deps.clock, until - deps.clock.now());
+  // One deadline for the whole window bounds every probe: one still unanswered at the end is ignored.
+  let deadline: Timer | undefined;
+  const expired = new Promise<"expired">((resolve) => {
+    deadline = deps.clock.setTimer(Math.max(0, until - deps.clock.now()), () => resolve("expired"));
+  });
+  try {
+    for (let at = start; ; at += PROBE_INTERVAL_MS) {
+      const result = await Promise.race([
+        deps.probe({ server: pending.server, key }).catch((): ProbeResult => ({ issued: false })),
+        expired,
+      ]);
+      if (result === "expired") {
+        if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
+        return finish(deps, { tag: "not-confirmed" });
+      }
+      if (result.issued) {
+        // The session proves this attempt's key only; a discarded or replaced attempt promotes nothing.
+        if (!(await promoteAttempt(deps, nodeId, attempt, result.deviceId ?? null)))
+          return SUPERSEDED;
+        return finish(deps, { tag: "paired", deviceId: result.deviceId ?? null });
+      }
+      // A discard or a newer attempt during the probe or the wait ends this Checking without a word.
       if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
-      return finish(deps, { tag: "not-confirmed" });
+      const next = at + PROBE_INTERVAL_MS;
+      if (next >= until) {
+        await expired;
+        if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
+        return finish(deps, { tag: "not-confirmed" });
+      }
+      await sleep(deps.clock, next - deps.clock.now());
+      if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
     }
-    await sleep(deps.clock, next - deps.clock.now());
-    if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
+  } finally {
+    deadline?.cancel();
   }
 }
 

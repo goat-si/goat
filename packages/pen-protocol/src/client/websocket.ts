@@ -163,6 +163,8 @@ export class FrameDecoder {
   /** The stream ended: inside a frame or a fragmented message that is an abnormal close (1006). */
   finish(): Array<FrameEvent> {
     if (this.#error !== undefined) throw this.#error;
+    // After a close frame the input is over, even if it interrupted a fragmented message.
+    if (this.#closed) return [];
     if (this.#stage !== "b0" || this.#messageOpcode !== undefined) {
       this.#error = fail("W25", 1006, "the stream ended inside a frame");
       throw this.#error;

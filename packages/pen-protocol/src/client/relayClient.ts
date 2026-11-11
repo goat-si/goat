@@ -233,9 +233,16 @@ class Link implements RelayLink {
   attach(receiver: (message: Uint8Array) => void, onClose?: (code: number) => void): void {
     this.#receiver = receiver;
     this.#onClose = onClose;
-    for (const message of this.#held.splice(0)) receiver(message);
+    const closedBefore = this.#state === "closed";
+    const held = this.#held.splice(0);
     this.#heldBytes = 0;
-    if (this.#state === "closed") onClose?.(this.#closeCode);
+    // Messages that arrived before a close are still handed over; once the receiver closes the link, the rest are
+    // not, and that close has already told onClose through #finish.
+    for (const message of held) {
+      if (!closedBefore && this.#state === "closed") break;
+      receiver(message);
+    }
+    if (closedBefore) this.#notifyClose();
   }
 
   send(message: Uint8Array): void {
@@ -376,8 +383,12 @@ class Link implements RelayLink {
     for (const waiter of this.#receivers.splice(0)) waiter.reject(error);
     for (const writer of this.#writers.splice(0)) writer.reject(error);
     this.#resolveClosed(code);
+    this.#notifyClose();
+  }
+
+  #notifyClose(): void {
     try {
-      this.#onClose?.(code);
+      this.#onClose?.(this.#closeCode);
     } catch (error) {
       reportListenerError(error);
     }

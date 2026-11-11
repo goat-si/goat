@@ -287,6 +287,12 @@ class PenWebSocket implements PenWebSocketLike {
   }
 
   close(code = 1000, reason = ""): void {
+    // As in the WebSocket standard, the arguments are checked first, in every state: 1000 or 3000-4999, and a
+    // reason of at most 123 bytes.
+    if (!Number.isInteger(code) || (code !== 1000 && (code < 3000 || code > 4999))) {
+      throw new PenError("ws/close-code", "close codes are 1000 or 3000 to 4999");
+    }
+    const payload = closePayload(code, reason);
     if (this.readyState >= CLOSING) return;
     if (this.readyState === CONNECTING) {
       this.readyState = CLOSING;
@@ -294,12 +300,8 @@ class PenWebSocket implements PenWebSocketLike {
       this.#finish(1006, "closed before open");
       return;
     }
-    // Everything that can fail runs before the state changes: the WebSocket API allows 1000 and 3000-4999, a
-    // reason of at most 123 bytes, and the mask needs the CSPRNG. A refused close leaves the socket open.
-    if (!Number.isInteger(code) || (code !== 1000 && (code < 3000 || code > 4999))) {
-      throw new PenError("ws/close-code", "close codes are 1000 or 3000 to 4999");
-    }
-    const frame = encodeFrame(Opcode.Close, closePayload(code, reason), this.#options.random);
+    // The mask needs the CSPRNG; its failure, too, comes before the state changes and leaves the socket open.
+    const frame = encodeFrame(Opcode.Close, payload, this.#options.random);
     this.readyState = CLOSING;
     this.#closeSent = true;
     this.#enqueue(frame);

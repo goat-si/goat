@@ -22,6 +22,14 @@ function binaryFrame(length: number): Uint8Array {
 }
 
 describe("WebSocket message assembly (design 10.2: inbound held up to one message)", () => {
+  it("a close between fragments ends the input cleanly: finish() after it reports nothing", () => {
+    const decoder = new FrameDecoder();
+    const events: Array<FrameEvent> = [];
+    decodeInto(decoder, Uint8Array.of(0x01, 0x01, 0x61, 0x88, 0x02, 0x03, 0xe8), events);
+    expect(events).toMatchObject([{ type: "close", code: 1000 }]);
+    expect(decoder.finish()).toEqual([]);
+  });
+
   it("a 256 KiB frame delivered one byte at a time is one message in one buffer no larger than the message", () => {
     const frame = binaryFrame(256 * 1024);
     const decoder = new FrameDecoder();

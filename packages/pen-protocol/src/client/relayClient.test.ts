@@ -53,6 +53,25 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(socket.textSent().map((text) => parseAck(text))).toEqual([70 * KiB, 135 * KiB]);
   });
 
+  it("a receiver that closes the link while held messages drain gets no more and one close notice", async () => {
+    const { socket, link } = await opened();
+    socket.receive(Uint8Array.of(1));
+    socket.receive(Uint8Array.of(2));
+    const seen: Array<number> = [];
+    let closes = 0;
+    link.attach(
+      (message) => {
+        seen.push(message[0] ?? -1);
+        link.close(1000);
+      },
+      () => {
+        closes += 1;
+      },
+    );
+    expect(seen).toEqual([1]);
+    expect(closes).toBe(1);
+  });
+
   it("sends a text ping every 30 s while open and none after close", async () => {
     const { clock, socket, link } = await opened();
     clock.advance(29_999);

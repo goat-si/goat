@@ -308,6 +308,22 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
     expect(c.socket.readyState).toBe(2);
   });
 
+  it("close() checks its arguments in every state, as the WebSocket standard does", async () => {
+    const construct = makePenWebSocketConstructor({
+      origin: ORIGIN,
+      openStream: () => new Promise(() => undefined),
+      clock: new ManualClock(),
+      random: (n) => new Uint8Array(n),
+    });
+    const connecting = construct("ws://goat.pen/ws");
+    expect(() => connecting.close(1005, "x")).toThrow();
+    expect(() => connecting.close(1000, "x".repeat(124))).toThrow();
+    expect(connecting.readyState).toBe(0);
+    connecting.close(1000);
+    expect(connecting.readyState).toBe(3);
+    expect(() => connecting.close(Number.NaN)).toThrow();
+  });
+
   it("close() when the CSPRNG fails throws and leaves the socket open", async () => {
     let fail = false;
     let seed = 1;
