@@ -240,8 +240,6 @@ export const ChildReadyConnectionInput = Schema.Struct({
     }),
     Schema.Struct({ kind: Schema.Literal("disconnect"), expectedLinkId: TrimmedNonEmptyString }),
     Schema.Struct({ kind: Schema.Literal("restart"), expectedLinkId: TrimmedNonEmptyString }),
-    // ocx sync --expect-link under the Child's admission fence; refused below CHILD_EXPECT_LINK_VERSION.
-    Schema.Struct({ kind: Schema.Literal("sync"), expectedLinkId: TrimmedNonEmptyString }),
   ]),
 });
 export type ChildReadyConnectionInput = typeof ChildReadyConnectionInput.Type;
@@ -252,7 +250,7 @@ export const decodeChildReadyConnectionInput = Schema.decodeUnknownEffect(
 export const ChildReadyConnectionResult = Schema.Struct({
   ...ChildReadyAddress.fields,
   operationId: TrimmedNonEmptyString,
-  kind: Schema.Literals(["connectHubClient", "disconnect", "restart", "sync"]),
+  kind: Schema.Literals(["connectHubClient", "disconnect", "restart"]),
   code: Schema.Int,
   healthy: Schema.Boolean,
   role: Schema.optional(Schema.Literals(["standalone", "hub", "client", "unknown"])),

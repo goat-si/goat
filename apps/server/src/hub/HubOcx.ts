@@ -542,12 +542,7 @@ const make = Effect.gen(function* () {
     if (!("unserved" in served)) return served;
     // Nothing ran there. OpenCodex alone or an older GOAT on a POSIX device still disconnects
     // and restarts through the ocx script that preceded the tool; Windows needs the tool.
-    // A sync is never run unbound: only the Child's tool holds its fence and passes --expect-link.
-    if (
-      operation.kind === "connectHubClient" ||
-      operation.kind === "sync" ||
-      (yield* devicePlatform(alias)) !== "posix"
-    )
+    if (operation.kind === "connectHubClient" || (yield* devicePlatform(alias)) !== "posix")
       return yield* refused(served.unserved);
     yield* authorized(admission);
     return yield* runDevice(

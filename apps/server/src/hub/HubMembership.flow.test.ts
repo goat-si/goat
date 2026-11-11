@@ -79,43 +79,6 @@ it.effect("a restart that timed out is not a refusal, so the link stays", () =>
   }),
 );
 
-const LINK = "lnk_fedcba9876543210";
-
-it.effect("join runs a guarded sync over the new link before verifying", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED });
-    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
-    const added = hub.calls.findIndex((call) => call.startsWith("home link add"));
-    const synced = hub.calls.indexOf(`sync mac-studio ${LINK}`);
-    expect(added).toBeGreaterThanOrEqual(0);
-    expect(synced).toBeGreaterThan(added);
-    expect(synced).toBeLessThan(hub.calls.indexOf("verify mac-studio"));
-    expect(result.steps.find(({ step }) => step === "sync")?.outcome).toBe("ok");
-  }),
-);
-
-it.effect("a busy device defers the join's sync, and the repair ladder does not sync either", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED, running: 1, verdicts: [verdict(["P6"]), verdict()] });
-    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
-    expect(hub.calls.filter((call) => call.includes("sync"))).toEqual([]);
-    expect(
-      result.steps.filter(({ step }) => step === "sync").map(({ outcome }) => outcome),
-    ).toEqual(["deferred", "deferred"]);
-  }),
-);
-
-it.effect("a connection that moved during the join's sync is reported, never as synced", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED, syncExit: 5 });
-    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
-    const sync = result.steps.find(({ step }) => step === "sync");
-    expect(sync?.outcome).toBe("deferred");
-    expect(sync?.detail).toContain("not connected over");
-    expect(result.state).toBe("degraded");
-  }),
-);
-
 it.effect("a join whose parity is unproven says which checks are unproven", () =>
   Effect.gen(function* () {
     const unproven = {
@@ -131,29 +94,11 @@ it.effect("a join whose parity is unproven says which checks are unproven", () =
   }),
 );
 
-it.effect("a guarded join sync that failed is not retried by the ladder's unguarded sync", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED, syncExit: 5, verdicts: [verdict(["P6"]), verdict()] });
-    yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
-    expect(hub.calls).not.toContain("device mac-studio sync");
-  }),
-);
-
-it.effect("after the join's guarded sync ran, the ladder never syncs again unguarded", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED, verdicts: [verdict(["P7"]), verdict()] });
-    yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
-    expect(hub.calls.filter((call) => call.includes("sync"))).toEqual([
-      "sync mac-studio lnk_fedcba9876543210",
-    ]);
-  }),
-);
-
-it.effect("a join whose new link was replaced before its sync is not reported linked", () =>
+it.effect("a join whose new link was replaced during the join is not reported linked", () =>
   Effect.gen(function* () {
     const hub = yield* setup({
       pin: PINNED,
-      replacedDuringSync: "lnk_aaaaaaaaaaaaaaaa",
+      replacedAfterAdd: "lnk_aaaaaaaaaaaaaaaa",
     });
     const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
     expect(result.state).toBe("degraded");
@@ -163,27 +108,45 @@ it.effect("a join whose new link was replaced before its sync is not reported li
 
 it.effect("a join whose new link is gone from the Home record is not reported linked", () =>
   Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED, removedDuringSync: true });
+    const hub = yield* setup({ pin: PINNED, removedAfterAdd: true });
     const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
     expect(result.state).toBe("degraded");
     expect(result.message).toContain("could not confirm");
   }),
 );
 
-it.effect("consent withdrawn while link add runs stops the join's sync", () =>
+it.effect("after a join the repair ladder syncs exactly as on dev: once, only for P6 or P7", () =>
   Effect.gen(function* () {
-    let consenting = true;
-    const hub = yield* setup({ pin: PINNED, onLinkAdd: () => (consenting = false) });
-    const person = {
-      sessionId: "person",
-      scopes: ["orchestration:operate", "settings:write"] as const,
-    };
-    const result = yield* hub.membership.joinWithConsent(
-      scope,
-      "mac-studio",
-      Effect.sync(() => (consenting ? { ...person, scopes: [...person.scopes] } : undefined)),
-    );
-    expect(hub.calls.filter((call) => call.startsWith("sync "))).toEqual([]);
-    expect(result.steps.find(({ step }) => step === "sync")?.outcome).toBe("deferred");
+    // dev ef6c578913 HubMembership.ts:227-271 with hubLadder.ts:7-10: sync rung on P6/P7 via ocx.device.
+    const failingP6 = yield* setup({ pin: PINNED, verdicts: [verdict(["P6"]), verdict()] });
+    yield* failingP6.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(failingP6.calls.filter((call) => call.includes("sync"))).toEqual([
+      "device mac-studio sync",
+    ]);
+    const clean = yield* setup({ pin: PINNED });
+    yield* clean.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(clean.calls.filter((call) => call.includes("sync"))).toEqual([]);
   }),
+);
+
+it.effect(
+  "a join whose routing is not shown says so and warns that repair can interrupt a turn",
+  () =>
+    Effect.gen(function* () {
+      const unproven = {
+        verdict: "unproven" as const,
+        checkedAt: 0,
+        failingCheckIds: [],
+        checks: [{ id: "P7" as const, status: "unproven" as const, reason: "fixture" }],
+      };
+      const linked = yield* setup({ pin: PINNED, verdicts: [unproven] });
+      const child = yield* linked.membership.join(scope, { deviceAlias: "mac-studio" });
+      expect(child.state).toBe("child");
+      expect(child.message).toContain("does not show mac-studio routing through this Home");
+      expect(child.message).toContain("it can interrupt a turn running there");
+      const failing = yield* setup({ pin: PINNED, verdicts: [verdict(["P6"])] });
+      const degraded = yield* failing.membership.join(scope, { deviceAlias: "mac-studio" });
+      expect(degraded.state).toBe("degraded");
+      expect(degraded.message).toContain("it can interrupt a turn running there");
+    }),
 );

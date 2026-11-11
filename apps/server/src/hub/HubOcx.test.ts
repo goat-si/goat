@@ -760,21 +760,3 @@ it.effect("a Child's message reaches the Home only when it is a sentence OpenCod
     expect((yield* restartWith(`pairing ${CODE} leaked`)).message).toBeUndefined();
   }),
 );
-
-it.effect(
-  "a device whose GOAT lacks goat_hub_child_connection never gets an unbound sync script",
-  () =>
-    Effect.gen(function* () {
-      const scripts: Array<string> = [];
-      const calls: Array<Dispatch.SshHostToolCall> = [];
-      const ocx = yield* HubOcx.pipe(
-        Effect.provide(unservedWorld("Linux", "outdated", scripts, calls)),
-      );
-      const admission = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true));
-      const refused = yield* ocx
-        .connection("lidge", { kind: "sync", expectedLinkId: "lnk_1" }, 60_000, admission)
-        .pipe(Effect.flip);
-      expect(refused.reason).toBe("unreachable");
-      expect(scripts.filter((script) => !script.startsWith("uname"))).toEqual([]);
-    }),
-);

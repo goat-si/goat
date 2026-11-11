@@ -62,39 +62,10 @@ const CODES: ReadonlySet<string> = new Set([
   "desktop_lifecycle_unsafe",
 ]);
 const FAILED_DURING = "Remote Link failed during ";
-// ocx sync --expect-link prints {"phase":"child_link_mismatch","reason":...} last; reasons are fixed.
-const MISMATCH_REASONS: ReadonlySet<string> = new Set([
-  "disconnected",
-  "invalid_state",
-  "disconnect_pending",
-  "pending_operation",
-  "hub_client",
-  "link_client",
-  "other_link",
-  "other_key",
-]);
-
-const mismatch = (text: string): string | undefined => {
-  if (!text.startsWith("{")) return undefined;
-  try {
-    const value: unknown = JSON.parse(text);
-    if (typeof value !== "object" || value === null) return undefined;
-    const { phase, reason } = value as { phase?: unknown; reason?: unknown };
-    return phase === "child_link_mismatch" &&
-      typeof reason === "string" &&
-      MISMATCH_REASONS.has(reason)
-      ? `This machine is not connected over that link (${reason}); nothing was changed.`
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
 
 const ESCAPES = /\u001b\[[0-9;?]*[ -/]*[@-~]|[\u0000-\u001f\u007f]/gu;
 
 const recognize = (line: string): string | undefined => {
-  const linked = mismatch(line.trim());
-  if (linked !== undefined) return linked;
   const text = line.replace(/^(?:Error:|❌)\s*/u, "").trim();
   if (CODES.has(text) || SENTENCES.includes(text)) return text;
   const prefix = PREFIXES.find((fixed) => text.startsWith(fixed));

@@ -6,6 +6,7 @@ import type {
   HubDeviceTransport,
   HubParityResult,
 } from "@goat/contracts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * A hub device tool's answer. A thread's approval is a handoff, so the same tool continues once a
@@ -79,6 +80,22 @@ export const deviceExit = (
 export const withUnproven = (message: string, parity: HubParityResult) => {
   const ids = parity.checks.filter(({ status }) => status === "unproven").map(({ id }) => id);
   return ids.length === 0 ? message : `${message} Unproven: ${ids.join(", ")}.`;
+};
+
+/**
+ * When parity does not show Codex routed through this Home, say so and what the only remedy costs:
+ * repair's sync rung runs ocx sync with no fence or link binding, and a runtime restart it causes
+ * can cut a turn there.
+ */
+export const withRoutingAdvice = (message: string, alias: string, parity: HubParityResult) => {
+  const open = parity.checks
+    .filter(
+      ({ id, status }) => (id === "P6" || id === "P7") && status !== "ok" && status !== "skipped",
+    )
+    .map(({ id }) => id);
+  return open.length === 0
+    ? message
+    : `${message} Parity (${open.join(", ")}) does not show ${alias} routing through this Home. ${goatCallText("hub.device_repair")} runs ocx sync there without waiting for running work: run it when ${alias} is idle, because it can interrupt a turn running there.`;
 };
 
 export const linkStatusUnreadable = (forbidden: boolean) =>

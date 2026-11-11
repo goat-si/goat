@@ -102,14 +102,10 @@ export interface Fixture {
   readonly deviceMessage?: Readonly<Record<string, string>>;
   /** Whether the device's GOAT found its OpenCodex executable and listener in agreement. */
   readonly deviceHealthy?: boolean;
-  /** Exit of the Child's `ocx sync --expect-link`; 5 when it found another connection. */
-  readonly syncExit?: number;
-  /** Another link replaces the join's new one under the alias while the join syncs. */
-  readonly replacedDuringSync?: string;
-  /** The join's new link is removed from the Home while the join syncs. */
-  readonly removedDuringSync?: boolean;
-  /** Runs while Home's ocx link add is in flight, as a person withdrawing consent would. */
-  readonly onLinkAdd?: () => void;
+  /** Another link replaces the join's new one under the alias before parity reads it. */
+  readonly replacedAfterAdd?: string;
+  /** The join's new link is gone from the Home before parity reads it. */
+  readonly removedAfterAdd?: boolean;
   /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
   readonly releases?: OpenCodexReleaseCatalog;
   /** Home `ocx link status` fails; "forbidden" is OpenCodex's 403 in Hub mode (opencodex#8184). */
@@ -142,7 +138,6 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     if (command === "probe")
       return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
     if (command === "add") {
-      fixture.onLinkAdd?.();
       if (fixture.addExit) return Effect.succeed({ stdout: "", ...fixture.addExit });
       if (fixture.addFails)
         return Effect.succeed({ code: 1, stdout: "", phase: "child_relay_failed" });
@@ -265,19 +260,6 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
               Effect.gen(function* () {
                 if (operation.kind === "connectHubClient")
                   return yield* Effect.die("connectHubClient is the only way to redeem an invite");
-                if (operation.kind === "sync") {
-                  // The Child's fence refuses while a turn runs; nothing is synced then.
-                  if ((fixture.running ?? 0) !== 0)
-                    return yield* new HubOcxError({
-                      reason: "unreachable",
-                      message: `${alias} refused the connection change; check its membership before retrying.`,
-                    });
-                  calls.push(`sync ${alias} ${operation.expectedLinkId}`);
-                  if (fixture.replacedDuringSync !== undefined)
-                    links.set(alias, fixture.replacedDuringSync);
-                  if (fixture.removedDuringSync === true) links.delete(alias);
-                  return { code: fixture.syncExit ?? 0, stdout: "" };
-                }
                 const kind =
                   operation.kind === "disconnect" ? ["disconnect", "--json"] : ["restart"];
                 const { code } = yield* device(alias, kind);
@@ -313,7 +295,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
               }),
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
             ensureDeviceRuntime: () => Effect.die("unused"),
-            syncDevice: () => Effect.die("the join syncs through the Child's connection tool"),
+            syncDevice: () => Effect.die("unused"),
             directAlias: () =>
               fixture.directFailure === undefined
                 ? Effect.succeed(fixture.direct ?? true)
@@ -341,6 +323,9 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
           verify: (alias) =>
             Effect.sync(() => {
               calls.push(`verify ${alias}`);
+              if (fixture.replacedAfterAdd !== undefined)
+                links.set(alias, fixture.replacedAfterAdd);
+              if (fixture.removedAfterAdd === true) links.delete(alias);
               return (
                 (verdicts.length > 1 ? verdicts.shift() : undefined) ?? verdicts[0] ?? verdict()
               );

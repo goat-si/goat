@@ -27,7 +27,6 @@ it.effect("an owner joins a pinned device: GOAT's pin becomes --expect-fingerpri
       "device mac-studio --version",
       "home link probe mac-studio --json",
       `home link add mac-studio --expect-fingerprint ${PINNED} --json`,
-      "sync mac-studio lnk_fedcba9876543210",
       "verify mac-studio",
       "home link status --json",
     ]);
@@ -233,7 +232,6 @@ it.effect("an exhausted ladder asks to re-link; the approval re-links with the s
       "revoke",
       "link_removed",
       "link_add",
-      "sync",
     ]);
     expect(hub.calls).toContain(`home link add macmini-ts --expect-fingerprint ${PINNED} --json`);
   }),

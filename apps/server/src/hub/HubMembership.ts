@@ -34,13 +34,13 @@ import {
   type OcxOutput,
 } from "./HubOcx.ts";
 import { makeLeaveSteps } from "./hubLeave.ts";
-import { makeLinkSync } from "./hubSync.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
   deviceExit,
   hubDeviceResult as result,
   linkStatusUnreadable,
   phaseMessage,
+  withRoutingAdvice,
   withUnproven,
 } from "./hubDeviceResult.ts";
 import { joinPreflight } from "./hubJoinPreflight.ts";
@@ -205,7 +205,6 @@ const make = Effect.gen(function* () {
   });
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
   const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
-  const syncOverLink = makeLinkSync(ocx);
 
   const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
     const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
@@ -228,17 +227,13 @@ const make = Effect.gen(function* () {
     linkId: string | undefined,
     initial: HubParityResult,
     steps: HubDeviceStep[],
-    // Join and re-link sync once, guarded; their ladder never adds an unguarded sync.
-    skipSync = false,
   ) {
     let current = initial;
     for (const rung of LADDER) {
       if (!failing(current)) break;
       if (!rung.checks.some((id) => current.failingCheckIds.includes(id))) continue;
       let ran: Pick<HubDeviceStep, "outcome" | "detail">;
-      if (rung.step === "sync" && skipSync) {
-        ran = { outcome: "deferred", detail: "Only the join's guarded sync syncs this link." };
-      } else if (rung.step === "reconnect") {
+      if (rung.step === "reconnect") {
         if (linkId === undefined) continue;
         ran = yield* ocx
           .home(["link", "reconnect", "--link-id", linkId, "--json"], HOME_TIMEOUT_MS)
@@ -318,8 +313,6 @@ const make = Effect.gen(function* () {
       });
     }
     steps.push({ step: "link_add", outcome: "ok", detail: linkId });
-    const synced = yield* syncOverLink(alias, linkId, caller.connection);
-    steps.push(synced.step);
     const verified = yield* ladder(
       scope,
       caller,
@@ -327,11 +320,10 @@ const make = Effect.gen(function* () {
       linkId,
       yield* parity.verify(alias, scope),
       steps,
-      true,
     );
     // When P2 holds, parity ties the Child to the Home's current record; it must be this link.
     const recorded = (yield* homeLinks())?.links.find((entry) => entry.alias === alias)?.id;
-    const changed = synced.moved || (recorded !== undefined && recorded !== linkId);
+    const changed = recorded !== undefined && recorded !== linkId;
     // An unreadable or missing record is no proof either.
     const moved = changed || recorded !== linkId;
     const checked = finalState(verified);
@@ -341,13 +333,17 @@ const make = Effect.gen(function* () {
       action,
       alias,
       state,
-      state === "child"
-        ? withUnproven(`${alias} is linked to this Home.`, verified)
-        : moved && checked === "child"
-          ? changed
-            ? `${alias} is linked, but its connection changed during the join, so this link is not proven in use.`
-            : `${alias} is linked, but this Home could not confirm its record of the new link.`
-          : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
+      withRoutingAdvice(
+        state === "child"
+          ? withUnproven(`${alias} is linked to this Home.`, verified)
+          : moved && checked === "child"
+            ? changed
+              ? `${alias} is linked, but its connection changed during the join, so this link is not proven in use.`
+              : `${alias} is linked, but this Home could not confirm its record of the new link.`
+            : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
+        alias,
+        verified,
+      ),
       steps,
       { parity: verified, transport: "remote-link" },
     );
@@ -546,8 +542,12 @@ const make = Effect.gen(function* () {
           "join",
           alias,
           finalState(verified),
-          withUnproven(
-            `${alias} is already linked; nothing was changed. Use ${goatCallText("hub.device_repair")} if checks fail.`,
+          withRoutingAdvice(
+            withUnproven(
+              `${alias} is already linked; nothing was changed. Use ${goatCallText("hub.device_repair")} if checks fail.`,
+              verified,
+            ),
+            alias,
             verified,
           ),
           steps,
