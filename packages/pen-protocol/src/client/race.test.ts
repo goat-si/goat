@@ -3,7 +3,8 @@ import vector from "../../vectors/session.json" with { type: "json" };
 import { fromHex } from "./bytes.ts";
 import { generateX25519, type KeyPair, x25519PublicKey } from "./crypto.ts";
 import { Kind } from "./noise.ts";
-import { openSession, type SessionOptions } from "./race.ts";
+import { pairingCode, pairingSas, servicePairPayload } from "./pairing.ts";
+import { openSession, SERVICE_PAIR_RACE, type SessionOptions } from "./race.ts";
 import { fakeFactory, type FakeSocket } from "./testing/fakeRelay.ts";
 import { ManualClock } from "./testing/manualClock.ts";
 import { respond } from "./testing/noiseResponder.ts";
@@ -67,6 +68,41 @@ const flushOpen = async (...sockets: Array<FakeSocket>) => {
 };
 
 describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
+  it("service-pair (kind 0x03) races the handshake as CONTRACT v1.3 says: message 1 on every relay, and only the confirmed winner's h gives the code", async () => {
+    const psk = new Uint8Array(32).fill(7);
+    const t = setup({
+      kind: Kind.Join,
+      psk,
+      payload: servicePairPayload("goat", "0Fh_z1uKAGoODu_-"),
+      mode: SERVICE_PAIR_RACE,
+    });
+    const a = t.fake.socketFor(A);
+    const b = t.fake.socketFor(B);
+    await flushOpen(a, b);
+    const node = (socket: FakeSocket) =>
+      respond({
+        kind: Kind.Join,
+        nodeId: NODE,
+        localStatic: serverKey,
+        message1: socket.binarySent()[0] ?? new Uint8Array(),
+        psk: () => psk,
+        random,
+      });
+    expect(a.textSent()).toEqual([]);
+    expect(b.textSent()).toEqual([]);
+    const replyB = node(b);
+    const replyA = node(a);
+    b.receive(replyB.message2);
+    const opened = await t.result;
+    expect(opened.relay).toBe(B);
+    expect(opened.handshakeHash).toEqual(replyB.handshakeHash);
+    expect(a.closedWith).toBe(1000);
+    expect(a.binarySent()).toHaveLength(1);
+    expect(pairingCode(pairingSas(opened.handshakeHash))).not.toBe(
+      pairingCode(pairingSas(replyA.handshakeHash)),
+    );
+  });
+
   it("the first verified message 2 wins and alone gets the key confirmation; the other socket closes 1000 unconfirmed", async () => {
     const t = setup();
     const a = t.fake.socketFor(A);

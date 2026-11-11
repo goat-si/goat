@@ -59,6 +59,22 @@ async function request(server: ReturnType<typeof memoryStreamPair>["server"], bo
 }
 
 describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
+  it.each([
+    [4401, "not admitted: the key was dropped from the list or its registration ended"],
+    [4404, "the delivery failed or no program holds the name"],
+  ])(
+    "a stream the node closes %i (%s) fails the request with that code, and no second stream is opened",
+    async (code) => {
+      const t = setup();
+      const pending = t.fetch(ORIGIN + "/api/thing");
+      const server = await t.stream(1);
+      await request(server);
+      server.close(code);
+      await expect(pending).rejects.toMatchObject({ closeCode: code });
+      expect(t.pairs).toHaveLength(1);
+    },
+  );
+
   it("sends GET with Host from the bound origin and Accept-Encoding identity, and returns a Response", async () => {
     const t = setup();
     const pending = t.fetch(ORIGIN + "/api/thing?x=1", { headers: { Accept: "application/json" } });

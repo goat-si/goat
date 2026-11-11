@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import vector from "../../vectors/session.json" with { type: "json" };
-import { fromHex } from "./bytes.ts";
+import framing from "../../vectors/stream.json" with { type: "json" };
+import { fromHex, toHex } from "./bytes.ts";
 import { generateX25519, x25519PublicKey } from "./crypto.ts";
 import { Kind } from "./noise.ts";
 import { openSession } from "./race.ts";
@@ -258,28 +259,53 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     });
   });
 
-  it.each([
-    ["an empty record", new Uint8Array(0)],
-    ["a FIN with extra bytes", Uint8Array.of(1, 0)],
-    ["a CREDIT that is not 5 bytes", Uint8Array.of(2, 0, 0)],
-    ["a CREDIT above what is in flight", record(2, u32le(1))],
-    ["an unknown record type", Uint8Array.of(9)],
-  ])("closes 4400 on %s", async (_name, bad) => {
+  it.each(framing.reject)(
+    "stream.json reject: $why closes $code (Go-generated vector)",
+    async ({ records, fill, fillSize, code }) => {
+      const c = await connected();
+      for (let i = 0; i < (fill ?? 0); i++) c.send(data(new Uint8Array(fillSize ?? 0)));
+      for (const hex of records) c.send(fromHex(hex));
+      expect(c.socket.closedWith).toBe(code);
+      expect(await c.stream.closed).toBe(code);
+      if (records[0] === "01") {
+        // The node's FIN came first: everything it sent arrived whole, so the reader still sees end of stream.
+        expect(await c.stream.read()).toBeNull();
+      } else if (code === 4400) {
+        await expect(c.stream.read()).rejects.toMatchObject({
+          code: "stream-closed",
+          closeCode: 4400,
+        });
+      }
+    },
+  );
+
+  it("stream.json records: the limits match, and this client sends and reads DATA, empty DATA, FIN and CREDIT as those bytes", async () => {
+    expect(STREAM_LIMITS.maxData).toBe(framing.maxData);
+    expect(STREAM_LIMITS.window).toBe(framing.window);
+    expect(STREAM_LIMITS.creditEvery).toBe(framing.creditEvery);
+    const [hello, empty, fin, credit] = framing.records.map((entry) => entry.hex);
     const c = await connected();
-    c.send(bad);
-    expect(c.socket.closedWith).toBe(4400);
-    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed", closeCode: 4400 });
+    await c.stream.write(new TextEncoder().encode("hello"));
+    c.stream.end();
+    expect(c.received().map(toHex)).toEqual([hello, fin]);
+    // The node's: empty DATA is accepted and carries nothing, then 64 KiB, which this client credits as one CREDIT.
+    c.send(fromHex(empty ?? ""));
+    c.send(fromHex(hello ?? ""));
+    c.send(data(new Uint8Array(framing.maxData)));
+    c.send(data(new Uint8Array(framing.creditEvery - 5 - framing.maxData)));
+    let read = 0;
+    while (read < framing.creditEvery) read += (await c.stream.read())?.length ?? 0;
+    expect(c.received().map(toHex)).toEqual([credit]);
+    expect(c.socket.closedWith).toBeUndefined();
   });
 
-  it("closes 4400 on DATA after the node's FIN and on a second FIN", async () => {
-    const first = await connected();
-    first.send(record(1));
-    first.send(data(Uint8Array.of(1)));
-    expect(first.socket.closedWith).toBe(4400);
-    const second = await connected();
-    second.send(record(1));
-    second.send(record(1));
-    expect(second.socket.closedWith).toBe(4400);
+  it("stream.json CREDIT 65536 from the node returns that much DATA in flight", async () => {
+    const c = await connected();
+    await c.stream.write(new Uint8Array(framing.creditEvery));
+    expect(c.stream.stats().inflight).toBe(framing.creditEvery);
+    c.send(fromHex(framing.records[3]?.hex ?? ""));
+    expect(c.stream.stats().inflight).toBe(0);
+    expect(c.socket.closedWith).toBeUndefined();
   });
 
   it("DATA, DATA and FIN arriving before any read are all read, then end of stream, then close 1000 after our FIN", async () => {

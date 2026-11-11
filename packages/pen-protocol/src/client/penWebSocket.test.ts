@@ -109,6 +109,19 @@ async function connected(options: { protocol?: string; random?: (n: number) => U
 }
 
 describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side)", () => {
+  it.each([4401, 4404])(
+    "an open socket whose stream the node closes %i reports close with that code once",
+    async (code) => {
+      const c = await connected();
+      c.accept();
+      await c.opened;
+      c.server.close(code);
+      await c.whenEvent("close");
+      expect(c.events.filter((event) => event.type === "close")).toMatchObject([{ code }]);
+      expect(c.socket.readyState).toBe(3);
+    },
+  );
+
   it("W27a, W27b, W27c: the handshake asks for version 13 with a 16-byte key and offers no extension", async () => {
     const c = await connected();
     expect(c.request.startsWith("GET /ws?x=1 HTTP/1.1\r\nHost: goat.pen\r\n")).toBe(true);

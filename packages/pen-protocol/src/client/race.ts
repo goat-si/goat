@@ -21,10 +21,7 @@ export const RACE_LIMITS = {
   heldBytes: 1024 * 1024,
 } as const;
 
-/**
- * The race kind 0x03 service-pair uses. Design 5.2 races message 1 on every relay; CONTRACT v1.2 gives kind 0x03 the
- * ping race. Q-P's v1.3 contract text settles it (design finding F3).
- */
+/** The race kind 0x03 service-pair uses: CONTRACT v1.3 races the handshake; join and kind 0x04 keep the ping race. */
 export const SERVICE_PAIR_RACE: "handshake" | "ping" = "handshake";
 
 export interface SessionOptions {
