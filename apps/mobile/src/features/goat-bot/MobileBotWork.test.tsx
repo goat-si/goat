@@ -105,6 +105,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
 vi.mock("../../native/StackHeader", () => ({

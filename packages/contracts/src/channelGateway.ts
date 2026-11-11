@@ -145,6 +145,8 @@ export const ChannelOutboundMessage = Schema.Struct({
    * every message send only one such message; anything else always goes.
    */
   interim: Schema.optional(Schema.Literal(true)),
+  /** See ChannelMessageMeta.questionKind. */
+  questionKind: Schema.optional(Schema.Literal("task")),
 });
 export type ChannelOutboundMessage = typeof ChannelOutboundMessage.Type;
 

@@ -108,6 +108,7 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
         : [ChannelQuestionId.make(need.question.requestId)]),
     ]),
   ],
+  answeredQuestions: task.answeredQuestions ?? [],
   ...(task.skillProposal === undefined ? {} : { askInChat: true as const }),
   ...(task.completionReport === undefined ? {} : { completionReport: task.completionReport }),
   ...(task.observed === undefined ? {} : { observed: task.observed }),
@@ -374,6 +375,7 @@ export const narrationFor = (
         text: event.payload.question.text,
         options: event.payload.question.options,
         questionId: event.payload.question.questionId,
+        questionKind: "task" as const,
       };
     default:
       return undefined;

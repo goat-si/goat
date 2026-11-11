@@ -206,9 +206,17 @@ export const makeStorageConsent = Effect.gen(function* () {
           "Whoever approved that decision may not delete GOAT storage on this machine (it takes environment:maintain), or is no longer signed in. Call again without approvalId to ask for a new one.",
         );
     }
-    yield* consumeApproval(approvalId, "storage.clean").pipe(
-      Effect.provideService(SqlClient.SqlClient, sql),
-    );
+    if (scope.thread !== undefined)
+      yield* approvals.markUsed({
+        threadId: scope.thread.threadId,
+        handoffId: approvalId,
+        action: "storage.clean",
+        once: true,
+      });
+    else
+      yield* consumeApproval(approvalId, "storage.clean").pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
   });
 
   return StorageConsent.of({ ask, admit });

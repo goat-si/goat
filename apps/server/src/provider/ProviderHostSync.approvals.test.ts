@@ -359,10 +359,11 @@ it.effect("records the result for every approval that joins one running sync", (
       const [first, joined] = yield* boot({ answer: remote(remoteGate), wrap }, (sync) =>
         Effect.gen(function* () {
           const first = yield* ask(sync, { version: "latest" });
+          // One open approval per thread: the second is asked once the first is answered.
+          yield* approve(sync, first);
           // Same driver, hosts and resolved version, so it joins the first sync.
           const joined = yield* ask(sync, { version: undefined });
           second = joined.handoffId;
-          yield* approve(sync, first);
           const approving = yield* Effect.forkChild(approve(sync, joined));
           // It has joined the running sync and now waits to record that.
           yield* Deferred.await(joinedWrite);
