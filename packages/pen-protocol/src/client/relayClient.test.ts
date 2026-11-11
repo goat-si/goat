@@ -66,6 +66,47 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(seen).toEqual([1]);
   });
 
+  it.each([
+    "close(4400)",
+    "an error event",
+    "a refused send",
+    "close(4400) during a drain",
+  ] as const)(
+    "a socket that reports its close synchronously from close() does not replace the code: %s",
+    async (how) => {
+      const { socket, link } = await opened();
+      const close = socket.close.bind(socket);
+      socket.close = (code) => {
+        close(code);
+        socket.remoteClose(1005);
+      };
+      const notices: Array<number> = [];
+      if (how === "close(4400) during a drain") {
+        socket.receive(Uint8Array.of(1));
+        link.attach(
+          () => link.close(4400),
+          (code) => notices.push(code),
+        );
+      } else {
+        link.attach(
+          () => undefined,
+          (code) => notices.push(code),
+        );
+        if (how === "close(4400)") link.close(4400);
+        if (how === "an error event") socket.fail();
+        if (how === "a refused send") {
+          socket.send = () => {
+            throw new Error("socket gone");
+          };
+          expect(() => link.send(Uint8Array.of(1))).toThrow("socket gone");
+        }
+      }
+      const expected = how.startsWith("close(4400)") ? 4400 : 1006;
+      expect(await link.closed).toBe(expected);
+      expect(notices).toEqual([expected]);
+    },
+  );
+
   it("a link this side closed before attach still hands over what arrived first", async () => {
     const { socket, link } = await opened();
     socket.receive(Uint8Array.of(1));

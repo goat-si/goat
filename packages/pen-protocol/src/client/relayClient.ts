@@ -157,8 +157,7 @@ class Link implements RelayLink {
     // ends 1006 at once and closes the socket, and the close event that may follow changes nothing.
     socket.addEventListener("error", () => {
       if (this.#state === "closed") return;
-      this.#closeSocket(undefined);
-      this.#finish(1006, false);
+      this.#finish(1006, false, () => this.#closeSocket(undefined));
     });
   }
 
@@ -368,19 +367,18 @@ class Link implements RelayLink {
   close(code: number): void {
     this.#closeRequests += 1;
     if (this.#state === "closed") return;
-    this.#closeSocket(this.#state === "connecting" ? undefined : code);
-    this.#finish(code, true);
+    const socketCode = this.#state === "connecting" ? undefined : code;
+    this.#finish(code, true, () => this.#closeSocket(socketCode));
   }
 
   /** Ends the link after the socket refused a send: 1006 locally, and the socket is closed with no code. */
   #abort(): void {
     this.#closeRequests += 1;
     if (this.#state === "closed") return;
-    this.#closeSocket(undefined);
-    this.#finish(1006, true);
+    this.#finish(1006, true, () => this.#closeSocket(undefined));
   }
 
-  /** Closes the socket first, so nothing a close observer does can keep it open. */
+  /** Closes the socket; a socket that throws doing so is dropped. */
   #closeSocket(code: number | undefined): void {
     try {
       if (code === undefined) this.socket.close();
@@ -400,7 +398,11 @@ class Link implements RelayLink {
     });
   }
 
-  #finish(code: number, local: boolean): void {
+  /**
+   * Ends the link: the code is settled first (a socket that reports its close synchronously from close() cannot
+   * replace it), then closeSocket runs, then the observer hears of it, so nothing it does can keep the socket open.
+   */
+  #finish(code: number, local: boolean, closeSocket?: () => void): void {
     if (this.#state === "closed") return;
     const wasConnecting = this.#state === "connecting";
     this.#state = "closed";
@@ -414,6 +416,7 @@ class Link implements RelayLink {
     for (const waiter of this.#receivers.splice(0)) waiter.reject(error);
     for (const writer of this.#writers.splice(0)) writer.reject(error);
     this.#resolveClosed(code);
+    closeSocket?.();
     if (this.#draining) this.#closeDeferred = true;
     else this.#notifyClose();
   }
