@@ -9,6 +9,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeAdmission from "./runtimeAdmission.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
+import * as RuntimeRelaunch from "./runtimeRelaunch.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 
@@ -21,6 +22,7 @@ const setup = (
     readonly gate: Deferred.Deferred<void>;
   },
   lifecycleOrder?: string[],
+  relaunch: Layer.Layer<RuntimeRelaunch.RuntimeRelaunch> | typeof Layer.empty = Layer.empty,
 ) =>
   Effect.gen(function* () {
     const checked = yield* Deferred.make<void>();
@@ -62,10 +64,85 @@ const setup = (
               }),
           });
     const context = yield* Layer.build(
-      RuntimeDrain.layer.pipe(Layer.provideMerge(Layer.merge(dependencies, arbiter))),
+      RuntimeDrain.layer.pipe(Layer.provideMerge(Layer.mergeAll(dependencies, arbiter, relaunch))),
     );
     return { context, checked, stopped };
   });
+
+const relaunchWith = (decision: RuntimeRelaunch.RelaunchDecision) =>
+  Layer.succeed(RuntimeRelaunch.RuntimeRelaunch, { prepare: () => Effect.succeed(decision) });
+
+it.effect("a relaunch the runtime cannot honor is refused before anything drains", () =>
+  Effect.gen(function* () {
+    const refused = relaunchWith({
+      _tag: "unavailable",
+      reason: "The desktop app manages this server.",
+    });
+    for (const relaunch of [refused, Layer.empty]) {
+      const { context, checked } = yield* setup("idle", undefined, undefined, undefined, relaunch);
+      yield* Effect.gen(function* () {
+        const result = yield* (yield* RuntimeDrain.RuntimeDrain).request({
+          ...input,
+          relaunch: true,
+        });
+        assert.equal(result.status, "relaunch-unavailable");
+        assert.isString(result.reason);
+        assert.equal(yield* Deferred.isDone(checked), false);
+        const gate = yield* RuntimeAdmission.RuntimeAdmission;
+        assert.equal(yield* gate.admit(Effect.succeed("admitted")), "admitted");
+      }).pipe(Effect.provide(context));
+    }
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a drained relaunch starts the successor before the restart shutdown", () =>
+  Effect.gen(function* () {
+    const order: string[] = [];
+    const relaunch = relaunchWith({
+      _tag: "ready",
+      start: Effect.sync(() => {
+        order.push("relaunched");
+      }),
+    });
+    const { context, stopped } = yield* setup("idle", undefined, undefined, order, relaunch);
+    yield* Effect.gen(function* () {
+      const result = yield* (yield* RuntimeDrain.RuntimeDrain).request({
+        ...input,
+        relaunch: true,
+      });
+      assert.deepEqual(result, { status: "drained", instanceId: "this-start", forced: false });
+      yield* TestClock.adjust(Duration.millis(250));
+      yield* Deferred.await(stopped);
+      assert.deepEqual(order, ["relaunched", "marked", "shutdown"]);
+    }).pipe(Effect.provide(context));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a successor that cannot start leaves the server serving", () =>
+  Effect.gen(function* () {
+    const relaunch = relaunchWith({
+      _tag: "ready",
+      start: Effect.fail(new RuntimeRelaunch.RuntimeRelaunchError({ command: "goat.exe" })),
+    });
+    const { context, stopped } = yield* setup("idle", undefined, undefined, undefined, relaunch);
+    yield* Effect.gen(function* () {
+      const result = yield* (yield* RuntimeDrain.RuntimeDrain).request({
+        ...input,
+        relaunch: true,
+      });
+      assert.deepEqual(result, {
+        status: "relaunch-unavailable",
+        instanceId: "this-start",
+        forced: false,
+        reason: "Could not start goat.exe.",
+      });
+      const gate = yield* RuntimeAdmission.RuntimeAdmission;
+      assert.equal(yield* gate.admit(Effect.succeed("admitted")), "admitted");
+      yield* TestClock.adjust(Duration.seconds(1));
+      assert.equal(yield* Deferred.isDone(stopped), false);
+    }).pipe(Effect.provide(context));
+  }).pipe(Effect.scoped),
+);
 
 it.effect("idle drain rejects new dispatches and invokes delayed shutdown", () =>
   Effect.gen(function* () {
