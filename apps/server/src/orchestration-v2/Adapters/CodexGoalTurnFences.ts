@@ -1,15 +1,37 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import type * as CodexClient from "effect-codex-app-server/client";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
+  CodexStopObligation,
   CodexSurvivors,
 } from "../../provider/CodexSurvivors.ts";
-import type { PersistedGoals, SurvivorWaiting } from "./CodexSurvivorFenceMaintenance.ts";
+import {
+  readGoalActivity,
+  type PersistedGoals,
+  type SurvivorWaiting,
+} from "./CodexSurvivorFenceMaintenance.ts";
 import { isVerifiedCodexProcessLoss } from "./CodexSurvivorSessionLoss.ts";
 
 type Goal = { readonly record: CodexInstanceRecordKey; readonly block: CodexGoalBlock };
+type GoalActivity = "active" | "inactive";
+
+const goalActivityOf = (method: string, payload: object): GoalActivity | undefined => {
+  if (method === "thread/goal/cleared") return "inactive";
+  if (
+    method !== "thread/goal/updated" ||
+    !("goal" in payload) ||
+    typeof payload.goal !== "object" ||
+    payload.goal === null ||
+    !("status" in payload.goal)
+  )
+    return undefined;
+  return payload.goal.status === "paused" || payload.goal.status === "complete"
+    ? "inactive"
+    : "active";
+};
 
 export const makeGoalTurnFences = (input: {
   readonly client: CodexClient.CodexAppServerClient["Service"];
@@ -26,6 +48,32 @@ export const makeGoalTurnFences = (input: {
   const terminals = new Map<string, Set<string>>();
   const overflow = new Set<string>();
   const writing = new Map<string, Map<string, { count: number; completed: boolean }>>();
+  // The goal state Codex last reported per native thread; reading it inside a notification
+  // handler would wait on the connection that delivers the answer.
+  const goalActivity = new Map<string, GoalActivity>();
+  /**
+   * Clears a goal turn's stop fence. When it is the thread's last fence, its goal is inactive and
+   * its goal block is this record's alone, the block goes in the same write: between two writes
+   * the start guard frees the thread while admission still refuses its start.
+   */
+  const releaseStop = Effect.fn("CodexGoalTurnFences.releaseStop")(function* (
+    service: CodexSurvivors["Service"],
+    record: CodexInstanceRecordKey,
+    stop: CodexStopObligation,
+    inactive: boolean,
+  ) {
+    const sameRecord = (other: CodexInstanceRecordKey) =>
+      other.instanceId === record.instanceId && other.recordName === record.recordName;
+    const release =
+      inactive &&
+      (yield* service.getStopObligations(stop.threadId)).every(
+        (other) => sameRecord(other.record) && other.block.nativeTurnId === stop.nativeTurnId,
+      ) &&
+      (yield* service.getGoalBlocks(stop.threadId)).every(
+        (other) => sameRecord(other.record) && other.block.nativeThreadId === stop.nativeThreadId,
+      );
+    yield* service.clearStopObligation(record, stop, release);
+  });
   const blocksFor = Effect.fn("CodexGoalTurnFences.blocks")(function* (nativeThreadId: string) {
     if (input.service === undefined) return [] as Goal[];
     const candidates = [...(input.goals.get(nativeThreadId) ?? [])];
@@ -70,7 +118,12 @@ export const makeGoalTurnFences = (input: {
           stop.block.nativeThreadId === nativeThreadId &&
           stop.block.nativeTurnId === turnId
         )
-          yield* service.clearStopObligation(stop.record, stop.block);
+          yield* releaseStop(
+            service,
+            stop.record,
+            stop.block,
+            goalActivity.get(nativeThreadId) === "inactive",
+          );
     }
   });
   const fence = Effect.fn("CodexGoalTurnFences.fence")(function* (
@@ -138,6 +191,8 @@ export const makeGoalTurnFences = (input: {
       return;
     const nativeThreadId = payload.threadId;
     if (!input.goals.has(nativeThreadId) && !input.tracked.has(nativeThreadId)) return;
+    const activity = goalActivityOf(method, payload);
+    if (activity !== undefined) goalActivity.set(nativeThreadId, activity);
     if (
       pending.has(nativeThreadId) &&
       (method === "thread/goal/updated" ||
@@ -201,6 +256,7 @@ export const makeGoalTurnFences = (input: {
               )).flat();
         const unresolved = new Set(obligations.map(({ block }) => block.nativeTurnId));
         const seen = new Set<string>();
+        let inactive: boolean | undefined;
         let cursor: string | undefined;
         for (let page = 0; page < 1000; page++) {
           const turns = yield* input.client.request("thread/turns/list", {
@@ -224,9 +280,12 @@ export const makeGoalTurnFences = (input: {
             if (input.waiting.get(nativeThreadId)?.nativeTurnId === turn.id) continue;
             const activeWrite = writing.get(nativeThreadId)?.get(turn.id);
             if (activeWrite !== undefined) activeWrite.completed = true;
+            inactive ??=
+              goalActivity.get(nativeThreadId) === "inactive" ||
+              Option.contains(yield* readGoalActivity(input.client, nativeThreadId), "inactive");
             for (const stop of obligations)
               if (stop.block.nativeTurnId === turn.id)
-                yield* service.clearStopObligation(stop.record, stop.block);
+                yield* releaseStop(service, stop.record, stop.block, inactive);
           }
           if (unresolved.size === 0 || !turns.nextCursor || seen.has(turns.nextCursor)) break;
           seen.add(turns.nextCursor);
@@ -266,7 +325,12 @@ export const makeGoalTurnFences = (input: {
           stop.record.recordName === record.recordName &&
           stop.block.nativeThreadId === block.nativeThreadId
         )
-          yield* input.service.clearStopObligation(stop.record, stop.block);
+          yield* releaseStop(
+            input.service,
+            stop.record,
+            stop.block,
+            goalActivity.get(block.nativeThreadId) === "inactive",
+          );
     }
   });
   const fenced = Effect.fn("CodexGoalTurnFences.fenced")(function* () {

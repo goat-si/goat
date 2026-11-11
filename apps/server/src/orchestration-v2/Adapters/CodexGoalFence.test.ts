@@ -297,3 +297,83 @@ it.effect.each(["completed", "failed", "interrupted", "inProgress", "missing"] a
   "resume reconciles persisted goal turn with %s history",
   (status) => resumePersistedFence(status),
 );
+
+const releaseScenario = (goal: "paused" | "active", path: "live" | "resume") =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("goal-release");
+    const record = { instanceId: ProviderInstanceId.make("codex"), recordName: "record" };
+    const block = { threadId, nativeThreadId: "native-thread" };
+    let stopped = path === "resume";
+    let goalBlocked = true;
+    const refusedWhileFree: Array<string> = [];
+    const service = {
+      getGoalBlocks: () => Effect.sync(() => (goalBlocked ? [{ record, block }] : [])),
+      getStopObligations: () =>
+        Effect.sync(() => (stopped ? [{ record, block: { ...block, nativeTurnId: "U" } }] : [])),
+      recordStopObligation: () =>
+        Effect.sync(() => {
+          stopped = true;
+        }),
+      clearStopObligation: (_key: unknown, _stop: unknown, releaseGoal?: boolean) =>
+        Effect.sync(() => {
+          stopped = false;
+          if (releaseGoal === true) goalBlocked = false;
+          // The start guard now lets a waiting start through; a goal block still refuses it.
+          if (goalBlocked) refusedWhileFree.push("goal block outlived the stop fence");
+        }),
+    } as unknown as CodexSurvivors.CodexSurvivors["Service"];
+    const client = {
+      request: (method: string) =>
+        Effect.succeed(
+          method === "thread/turns/list"
+            ? { data: [{ id: "U", status: "completed" }], nextCursor: null }
+            : method === "thread/goal/get"
+              ? { goal: { status: goal } }
+              : {},
+        ),
+      raw: { request: () => Effect.succeed({}) },
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const fences = makeGoalTurnFences({
+      client,
+      service,
+      goals: new Map([[block.nativeThreadId, [{ record, block }]]]),
+      waiting: new Map(),
+      tracked: new Map(),
+      scope: yield* Scope.Scope,
+      onReady: () => Effect.void,
+    });
+    if (path === "resume") yield* fences.resume();
+    else {
+      yield* fences.observe(
+        "turn/started",
+        { threadId: block.nativeThreadId, turn: { id: "U" } },
+        true,
+      );
+      assert.isTrue(stopped);
+      yield* fences.observe(
+        "thread/goal/updated",
+        { threadId: block.nativeThreadId, goal: { status: goal } },
+        true,
+      );
+      yield* fences.observe(
+        "turn/completed",
+        { threadId: block.nativeThreadId, turn: { id: "U", status: "completed" } },
+        true,
+      );
+    }
+    assert.isFalse(stopped);
+    if (goal === "paused") {
+      assert.isFalse(goalBlocked, "a paused goal's block must go with the last stop fence");
+      assert.deepEqual(refusedWhileFree, []);
+    } else assert.isTrue(goalBlocked, "an active goal keeps its block until /goal pause");
+  }).pipe(Effect.scoped);
+
+it.effect("a goal turn ending after its goal paused clears its fence and goal block together", () =>
+  releaseScenario("paused", "live"),
+);
+it.effect("resume clears a finished goal turn's fence and paused goal block together", () =>
+  releaseScenario("paused", "resume"),
+);
+it.effect("a goal turn ending while its goal stays active keeps the goal block", () =>
+  releaseScenario("active", "live"),
+);

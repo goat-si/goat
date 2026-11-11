@@ -197,6 +197,8 @@ export class CodexSurvivors extends Context.Service<
     /** Threads whose queued starts must wait: an unsettled survivor or a stop fence. */
     readonly startBlockedThreads: Effect.Effect<ReadonlyArray<ThreadId>>;
     readonly setStartWake: (wake: Effect.Effect<void>) => Effect.Effect<void>;
+    /** Runs `effect` after every fence or binding change, beside the start wake; keep it cheap. */
+    readonly onFenceChange: (effect: Effect.Effect<void>) => Effect.Effect<void>;
     readonly release: (binding: CodexSurvivorBinding) => Effect.Effect<void>;
     readonly blockThread?: (threadId: ThreadId) => Effect.Effect<void>;
     readonly classifyRecord: (
@@ -249,6 +251,8 @@ export class CodexSurvivors extends Context.Service<
     readonly clearStopObligation: (
       record: CodexInstanceRecordKey,
       obligation: CodexStopObligation,
+      /** Drops the goal block of the obligation's native thread in the same record write. */
+      releaseGoal?: boolean,
     ) => Effect.Effect<void, CodexDetachedAppServerError>;
     readonly recordGoalBlock: (
       record: CodexInstanceRecordKey,
@@ -277,7 +281,10 @@ export const layer = Layer.effect(
     const bindings = yield* Ref.make<ReadonlyArray<CodexSurvivorBinding>>([]);
     const blockedThreads = yield* Ref.make<ReadonlySet<ThreadId>>(new Set());
     let wakeStarts: Effect.Effect<void> = Effect.void;
-    const wake = Effect.suspend(() => wakeStarts);
+    const fenceListeners: Array<Effect.Effect<void>> = [];
+    const wake = Effect.suspend(() =>
+      Effect.all([wakeStarts, ...fenceListeners], { discard: true }),
+    );
     return CodexSurvivors.of({
       startBlockedThreads: Effect.gen(function* () {
         const current = yield* Ref.get(bindings);
@@ -287,6 +294,11 @@ export const layer = Layer.effect(
       setStartWake: Effect.fn("CodexSurvivors.setStartWake")((effect) =>
         Effect.sync(() => {
           wakeStarts = effect;
+        }),
+      ),
+      onFenceChange: Effect.fn("CodexSurvivors.onFenceChange")((effect) =>
+        Effect.sync(() => {
+          fenceListeners.push(effect);
         }),
       ),
       release: Effect.fn("CodexSurvivors.release")((binding) =>
@@ -446,8 +458,9 @@ export const layer = Layer.effect(
       recordStopObligation: Effect.fn("CodexSurvivors.recordStopObligation")((key, stop) =>
         detached.recordStopObligation(key, stop).pipe(Effect.ensuring(wake)),
       ),
-      clearStopObligation: Effect.fn("CodexSurvivors.clearStopObligation")((key, stop) =>
-        detached.clearStopObligation(key, stop).pipe(Effect.ensuring(wake)),
+      clearStopObligation: Effect.fn("CodexSurvivors.clearStopObligation")(
+        (key, stop, releaseGoal) =>
+          detached.clearStopObligation(key, stop, releaseGoal).pipe(Effect.ensuring(wake)),
       ),
       recordGoalBlock: detached.recordGoalBlock,
       clearGoalBlock: detached.clearGoalBlock,

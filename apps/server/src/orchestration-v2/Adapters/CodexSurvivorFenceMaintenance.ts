@@ -59,6 +59,29 @@ export const forgetUnblockedSurvivor = Effect.fn("CodexSurvivorFenceMaintenance.
   },
 );
 
+/** Whether Codex reports the native thread's goal as running; None when it cannot tell. */
+export const readGoalActivity = (
+  client: CodexClient.CodexAppServerClient["Service"],
+  nativeThreadId: string,
+) =>
+  client.request("thread/goal/get", { threadId: nativeThreadId }).pipe(
+    Effect.map((response) =>
+      response.goal == null
+        ? ("inactive" as const)
+        : response.goal.status === "paused" || response.goal.status === "complete"
+          ? ("inactive" as const)
+          : ("active" as const),
+    ),
+    Effect.catchTags({
+      CodexAppServerRequestError: (error) =>
+        error.code === -32600 && error.errorMessage === "goals feature is disabled"
+          ? Effect.succeed("inactive" as const)
+          : Effect.fail(error),
+    }),
+    Effect.timeout("15 seconds"),
+    Effect.option,
+  );
+
 export const refreshSurvivorGoalBlock = Effect.fn("CodexSurvivorFenceMaintenance.refreshGoal")(
   function* (input: {
     readonly client: CodexClient.CodexAppServerClient["Service"];
@@ -75,25 +98,7 @@ export const refreshSurvivorGoalBlock = Effect.fn("CodexSurvivorFenceMaintenance
         block.nativeThreadId === binding.nativeThreadId,
     );
     if (blocks.length === 0) return;
-    const goal = yield* input.client
-      .request("thread/goal/get", { threadId: binding.nativeThreadId })
-      .pipe(
-        Effect.map((response) =>
-          response.goal == null
-            ? ("inactive" as const)
-            : response.goal.status === "paused" || response.goal.status === "complete"
-              ? ("inactive" as const)
-              : ("active" as const),
-        ),
-        Effect.catchTags({
-          CodexAppServerRequestError: (error) =>
-            error.code === -32600 && error.errorMessage === "goals feature is disabled"
-              ? Effect.succeed("inactive" as const)
-              : Effect.fail(error),
-        }),
-        Effect.timeout("15 seconds"),
-        Effect.option,
-      );
+    const goal = yield* readGoalActivity(input.client, binding.nativeThreadId);
     if (Option.isNone(goal) || goal.value !== "inactive") return;
     if ((yield* service.getStopObligations(binding.threadId)).length > 0) return;
     for (const { record, block } of blocks) yield* service.clearGoalBlock(record, block);
