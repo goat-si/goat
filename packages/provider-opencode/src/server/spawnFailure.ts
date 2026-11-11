@@ -1,5 +1,22 @@
 import * as Data from "effect/Data";
-import { ProviderCommandNotFoundError } from "@goat/provider-core/server/snapshotProbe";
+import * as Effect from "effect/Effect";
+import {
+  ProviderCommandNotFoundError,
+  isMissingProbeToolResult,
+  isWindowsCommandNotFound,
+} from "@goat/provider-core/server/snapshotProbe";
+
+export const isOpenCodeMissingCommand = Effect.fn("OpenCode.isMissingCommand")(function* (
+  code: number,
+  stdout: string,
+  stderr: string,
+  environment?: NodeJS.ProcessEnv,
+) {
+  return (
+    (environment?.MISE_OFFLINE === "1" && isMissingProbeToolResult({ code, stdout, stderr })) ||
+    (yield* isWindowsCommandNotFound(code, stderr))
+  );
+});
 
 export const classifyStartupExit = (stderr: string) =>
   /SQLITE_BUSY|database is locked/i.test(stderr) ? ("databaseLocked" as const) : undefined;

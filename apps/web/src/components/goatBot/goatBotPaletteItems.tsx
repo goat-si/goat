@@ -3,6 +3,7 @@ import type { BotProfile } from "@goat/contracts";
 import type { useNavigate } from "@tanstack/react-router";
 
 import { BotIcon } from "~/components/solar";
+import { dispatchMenuAction } from "~/shortcuts/dispatcher";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
@@ -47,6 +48,15 @@ export function goatBotPaletteItems(
       run: () => navigate({ to: "/bot" }),
     },
   ];
+  actions.push({
+    kind: "action",
+    value: "action:goat-bot-next-ask",
+    searchTerms: ["needs you", "waiting", "question", "approval"],
+    title: "Open next bot ask",
+    icon: <BotIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "goatBot.nextAsk",
+    run: async () => dispatchMenuAction("goatBot.nextAsk"),
+  });
   const search: CommandPaletteActionItem[] = [];
   for (const bot of bots) {
     if (bot.role !== "member") continue;

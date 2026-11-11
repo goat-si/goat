@@ -3,7 +3,7 @@ import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotMembers from "./channels/ChannelBotMembers.ts";
-import { channelBotWorkMocks } from "./channels/testkit/channelBotWorkMocks.ts";
+import { wsHandlerMocks } from "./wsHandlerMocks.testkit.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -613,7 +613,6 @@ it.effect("shell groups read distinct threads once and keep each event's own seq
     const projectUpdated = yield* insert("project", project.id, 0);
     const active = yield* insert("thread", "thread:active", 1);
     const missing = yield* insert("thread", "thread:missing", 0);
-
     const shellReads: Array<ReadonlyArray<string> | undefined> = [];
     let batchFails = false;
     const collect = (afterSequence: number) =>
@@ -667,7 +666,6 @@ it.effect("shell groups read distinct threads once and keep each event's own seq
           ),
         ),
       );
-
     const collectSummary = (afterSequence: number) =>
       collect(afterSequence).pipe(
         Effect.map((items) =>
@@ -688,16 +686,13 @@ it.effect("shell groups read distinct threads once and keep each event's own seq
       ["thread.updated", active, "thread:active"],
       ["thread.removed", missing, "thread:missing"],
     ];
-
     assert.deepEqual(yield* collectSummary(after), expectedGroup);
     assert.deepEqual(shellReads, [["thread:archived", "thread:active", "thread:missing"]]);
-
     shellReads.length = 0;
     assert.deepEqual(yield* collectSummary(active), [
       ["thread.removed", missing, "thread:missing"],
     ]);
     assert.deepEqual(shellReads, [["scalar:thread:missing"]]);
-
     shellReads.length = 0;
     batchFails = true;
     assert.deepEqual(yield* collectSummary(after), expectedGroup);
@@ -709,7 +704,6 @@ it.effect("shell groups read distinct threads once and keep each event's own seq
     ]);
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
-
 it.effect("shell snapshots omit idle children and older settled threads only on request", () =>
   Effect.gen(function* () {
     const shell = (
@@ -779,7 +773,6 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
           ),
         ),
       );
-
     const recent = threads.slice(3, 28).map((thread) => thread.id);
     const full = yield* firstSnapshot({});
     assert.deepEqual(
@@ -812,7 +805,6 @@ const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
     capabilities: { repositoryIdentity: false },
   }),
 });
-
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ShellSnapshotLoads.ShellSnapshotLoads)({}),
   Layer.mock(MemoryService.MemoryService)({
@@ -822,7 +814,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
   Layer.mock(ChannelBotRegistry.ChannelBotRegistry)({}),
   Layer.mock(ChannelBotMembers.ChannelBotMembers)({}),
-  channelBotWorkMocks,
+  wsHandlerMocks,
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelIdentityService.ChannelIdentityService)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
@@ -927,7 +919,6 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(WorkspaceFileSystem.WorkspaceFileSystem)({}),
   Layer.mock(WorktreeSetupTracker.WorktreeSetupTracker)({}),
 );
-
 const layerConfigSources = Layer.mergeAll(
   Keybindings.layer,
   ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer)),
@@ -940,7 +931,6 @@ const layerConfigSources = Layer.mergeAll(
   ),
   Layer.provideMerge(NodeServices.layer),
 );
-
 it.effect(
   "preserves settings during discovery and keybindings during snapshot ACK at the config RPC boundary",
   () =>
@@ -1069,7 +1059,6 @@ it.effect(
       });
       yield* Deferred.await(discoveryStarted);
       yield* Deferred.await(endpointStarted);
-
       const duringDiscovery = yield* settings.updateSettings({ defaultAutoPull: true });
       yield* Deferred.succeed(finishDiscovery, undefined);
       const snapshot = yield* Queue.take(responses);
@@ -1085,7 +1074,6 @@ it.effect(
       yield* acknowledge;
       yield* Deferred.await(keybindingsSubscribed);
       yield* Deferred.await(settingsSubscribed);
-
       // Later updates expose a dropped buffered event as a value mismatch, not a timeout.
       const latestSettings = yield* settings.updateSettings({ enableProviderUpdateChecks: false });
       const latestKeybindings = yield* keybindings.upsertKeybindingRule({
@@ -1135,13 +1123,13 @@ it.effect(
       Effect.scoped,
     ),
 );
-
 it.effect("on-demand clients get provider config without workspace snapshots", () =>
   Effect.gen(function* () {
     const { instanceId, snapshotFor, provider } = makeWorkspaceProviderFixture();
     const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
     let secretGeneration = 0;
     let observedUsageGeneration = -1;
+    let catalogChecks = 0;
     const pulled = yield* Queue.unbounded<void>();
     const responses = yield* Queue.unbounded<unknown>();
     const configRpcServices = Layer.mergeAll(
@@ -1152,6 +1140,9 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         resolveFileManagerRevealKind: () => Effect.succeed(undefined),
       }),
       Layer.mock(ProviderRegistry.ProviderRegistry)({
+        refreshModelCatalog: Effect.sync(() => {
+          catalogChecks++;
+        }),
         getProviders: Effect.succeed([provider]),
         streamChanges: Stream.fromQueue(providerChanges).pipe(
           Stream.tap(() => Queue.offer(pulled, undefined)),
@@ -1271,6 +1262,16 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       refreshed.providers.map((entry) => [entry.workspaceSnapshots, entry.slashCommands]),
       [[[snapshotFor("/b", "2026-10-25T00:00:00.000Z")], []]],
     );
+    yield* server.write(0, {
+      _tag: "Request",
+      id: RpcMessage.RequestId("model-catalog"),
+      tag: WS_METHODS.serverRefreshProviders,
+      payload: { modelCatalogOnly: true },
+      headers: Headers.empty,
+    });
+    assert.deepEqual(yield* Queue.take(responses), { providers: [] });
+    assert.equal(catalogChecks, 1);
+    assert.equal(observedUsageGeneration, -1);
     yield* server.write(0, {
       _tag: "Request",
       id: RpcMessage.RequestId("refresh-secrets"),

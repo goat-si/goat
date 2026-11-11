@@ -813,3 +813,21 @@ describe("SshPreflightReport destination", () => {
     expect(Schema.encodeSync(SshPreflightReport)(report).destination.alias).toBe(alias);
   });
 });
+
+describe("SshHostStatus replaceTarget", () => {
+  const replaceTarget = { pid: 43406, port: 3773, startedAt: "Tue Nov 11 08:01:02 2026" };
+  it("carries the recorded runtime process, and older clients still decode the status", () => {
+    const status = { ...stopped, state: "update_blocked", replaceTarget };
+    expect(decodeStatus(status).replaceTarget).toEqual(replaceTarget);
+    expect(Schema.decodeUnknownSync(Previous.SshHostStatus)(status)).toMatchObject({
+      state: "update_blocked",
+    });
+  });
+  it.each([
+    { name: "init", target: { ...replaceTarget, pid: 1 } },
+    { name: "no port", target: { ...replaceTarget, port: 0 } },
+    { name: "shell text", target: { ...replaceTarget, startedAt: "Tue'; kill -9 1" } },
+  ])("refuses a target with $name", ({ target }) => {
+    expect(() => decodeStatus({ ...stopped, replaceTarget: target })).toThrow();
+  });
+});

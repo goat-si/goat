@@ -23,6 +23,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 import {
   composerContextEditorTokens,
+  collectComposerModelTokens,
   composerSkillLabels,
   composerContextSendBlockReason,
   composerMentionPath,
@@ -34,6 +35,20 @@ import {
   pullRequestComposerContext,
   threadComposerContext,
 } from "./composerContext";
+
+it("keeps a model mention as an editor token and sends the same reference", () => {
+  const text = "Ask model:codex/gpt-5.5 now";
+  const tokens = composerContextEditorTokens(text, collectComposerInlineTokens(text), new Set());
+  expect(tokens).toContainEqual(
+    expect.objectContaining({ type: "model", source: "model:codex/gpt-5.5" }),
+  );
+  expect(serializeComposerMessageForServer(text, undefined, true).text).toBe(text);
+});
+
+it("keeps a selected model chip when its trailing space is deleted", () => {
+  const selected = collectComposerModelTokens("model:codex/gpt-5.5 ");
+  expect(collectComposerModelTokens("model:codex/gpt-5.5", selected)).toEqual(selected);
+});
 
 const terminal = {
   version: 1 as const,

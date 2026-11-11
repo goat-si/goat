@@ -1,5 +1,6 @@
 import type { AgentAwarenessThread } from "../orchestration-v2/ProjectionAwareness.ts";
 import { publishFailurePolicy, RelayPublishCooldown } from "./relayPublishPolicy.ts";
+import { makeSubagentWaits } from "./SubagentWaits.ts";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import type {
   EnvironmentId,
@@ -13,7 +14,10 @@ import {
   type RelayAgentActivityPublishProofPayload,
   type RelayAgentActivityState,
 } from "@goat/contracts/relay";
-import { projectThreadAwarenessV2 } from "@goat/shared/agentAwareness";
+import {
+  projectThreadAwarenessV2,
+  type SubagentRequestAwareness,
+} from "@goat/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
@@ -154,12 +158,17 @@ export const makeAgentAwarenessPublishWorker = Effect.fnUntraced(function* <R>(
   return { enqueue, drain: worker.drain };
 });
 
-function agentAwarenessPublishIdentity(state: RelayAgentActivityState | null): string {
+function agentAwarenessPublishIdentity(
+  state: RelayAgentActivityState | null,
+  child: SubagentRequestAwareness | null = null,
+): string {
   if (state === null) {
     return "null";
   }
   const { updatedAt: _updatedAt, ...meaningfulState } = state;
-  return JSON.stringify(meaningfulState);
+  return JSON.stringify(
+    child === null ? meaningfulState : [meaningfulState, child.childId, child.requestId],
+  );
 }
 
 const CLEARED_PUBLISH_IDENTITY = agentAwarenessPublishIdentity(null);
@@ -291,10 +300,12 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
   readonly threadId: ThreadId;
   readonly thread: Option.Option<AgentAwarenessThread>;
   readonly project: Option.Option<Project>;
+  readonly pendingSubagentRequest?: SubagentRequestAwareness | null;
 }): {
   readonly projectId: string | null;
   readonly state: RelayAgentActivityState | null;
   readonly reason: "snapshot" | "thread-not-found" | "project-not-found";
+  readonly subagentWait?: SubagentRequestAwareness | null;
 } {
   if (Option.isNone(input.thread)) {
     return {
@@ -310,15 +321,22 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
       reason: "project-not-found",
     };
   }
+  const base = {
+    environmentId: input.environmentId,
+    project: input.project.value,
+    thread: input.thread.value,
+  };
+  const ownPhase = projectThreadAwarenessV2(base)?.phase;
+  const subagentWait =
+    ownPhase === "waiting_for_input" || ownPhase === "waiting_for_approval"
+      ? null
+      : (input.pendingSubagentRequest ?? null);
   return {
     projectId: input.thread.value.projectId,
     state: sanitizeRelayAgentActivityState(
-      projectThreadAwarenessV2({
-        environmentId: input.environmentId,
-        project: input.project.value,
-        thread: input.thread.value,
-      }),
+      projectThreadAwarenessV2({ ...base, pendingSubagentRequest: subagentWait }),
     ),
+    subagentWait,
     reason: "snapshot",
   };
 }
@@ -379,6 +397,8 @@ export const make = Effect.gen(function* () {
   const startedAt = (yield* DateTime.now).epochMilliseconds;
   const catchUpRequests = yield* Queue.dropping<void>(1);
   const publishedStateByThreadRef = yield* Ref.make(new Map<ThreadId, string>());
+  const subagentWaits = makeSubagentWaits(threads);
+  let enqueueParent: (id: ThreadId) => Effect.Effect<void> = () => Effect.void;
 
   const readSecretString = (name: string) =>
     secrets
@@ -543,6 +563,8 @@ export const make = Effect.gen(function* () {
 
     // Read only this thread; full shell reads would make each activity event scale with all threads.
     const threadShell = (yield* threads.getAgentAwarenessSnapshot(threadId)).threads[0] ?? null;
+    const parents = yield* subagentWaits.update(threadId, threadShell);
+    yield* Effect.forEach(parents, enqueueParent, { discard: true });
     if (
       threadShell?.lineage.relationshipToParent === "subagent" &&
       !hasLivePublishedState(yield* Ref.get(publishedStateByThreadRef), threadId)
@@ -562,8 +584,12 @@ export const make = Effect.gen(function* () {
       threadId,
       thread,
       project,
+      pendingSubagentRequest: yield* subagentWaits.forParent(threadId),
     });
-    const publishIdentity = agentAwarenessPublishIdentity(snapshot.state);
+    const publishIdentity = agentAwarenessPublishIdentity(
+      snapshot.state,
+      snapshot.subagentWait ?? null,
+    );
     const publishedStateByThread = yield* Ref.get(publishedStateByThreadRef);
     if (
       (snapshot.state?.phase === "completed" || snapshot.state?.phase === "failed") &&
@@ -700,6 +726,7 @@ export const make = Effect.gen(function* () {
   const worker = yield* makeAgentAwarenessPublishWorker(processThreadPublish);
   const enqueueThreadPublish = (threadId: ThreadId) =>
     cancelPublishRetry(threadId).pipe(Effect.andThen(worker.enqueue(threadId)));
+  enqueueParent = enqueueThreadPublish;
   const publishThread: AgentAwarenessRelay["Service"]["publishThread"] = (threadId) =>
     enqueueThreadPublish(threadId).pipe(Effect.andThen(worker.drain));
 
@@ -759,6 +786,19 @@ export const make = Effect.gen(function* () {
       projects.snapshot,
       threads.getAgentAwarenessSnapshot(),
     ]);
+    subagentWaits.beginSweep();
+    let after: ThreadId | undefined;
+    while (true) {
+      const ids = yield* threads.listActiveSubagentThreadIds({
+        limit: 128,
+        ...(after === undefined ? {} : { after }),
+      });
+      yield* Effect.forEach(ids, enqueueThreadPublish, { discard: true });
+      yield* worker.drain;
+      if (ids.length < 128) break;
+      after = ids[ids.length - 1];
+    }
+    yield* Effect.forEach(subagentWaits.finishSweep(), enqueueThreadPublish, { discard: true });
     const activeThreadIds = resolveAgentAwarenessRelayActiveThreadIds({
       environmentId,
       startedAt,

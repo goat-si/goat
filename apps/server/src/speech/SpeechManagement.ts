@@ -28,6 +28,7 @@ export class SpeechManagement extends Context.Service<
         installed: boolean;
         selected: boolean;
         recommended: boolean;
+        benchmark: { cpu: number | null; accelerated: number | null };
       }>,
       SpeechManagementError
     >;
@@ -81,6 +82,7 @@ const make = Effect.gen(function* () {
               installed,
               selected: model.id === current.speech.modelId,
               recommended: model.recommended,
+              benchmark: model.benchmark.secondsPer30s,
             })),
           ),
         { concurrency: 4 },

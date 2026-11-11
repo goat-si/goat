@@ -78,4 +78,15 @@ describe("goatBotUnreadMark", () => {
     expect(goatBotUnreadMark(rows, null, at(30))).toBeNull();
     expect(goatBotUnreadMark(rows, at(3), at(30))).toBeNull();
   });
+
+  it("marks what came while the person was away, but not replies they read before stepping away", () => {
+    const rows = [bot("read", 1), bot("waiting", 3), bot("live", 5), bot("away", 9)];
+    // Opened at 3 having read to 2; read "live" at 5 in the chat; Control Center from 5 to 9.
+    const away = [{ after: at(5), upTo: at(9) }];
+    expect(goatBotUnreadMark(rows, at(2), at(3), undefined, away)).toMatchObject({
+      ids: ["waiting", "away"],
+    });
+    // A chat with no earlier read position still marks what came while away.
+    expect(goatBotUnreadMark(rows, null, at(3), undefined, away)).toMatchObject({ ids: ["away"] });
+  });
 });

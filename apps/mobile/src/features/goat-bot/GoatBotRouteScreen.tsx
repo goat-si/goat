@@ -30,46 +30,62 @@ export function GoatBotRouteScreen({
   // visit: a moment of inactivity keeps its unread boundary.
   const seen = focused && active;
   const { botRef } = useMobileGoatBotHomeMode();
-  const preview = useMobileBotPreview();
   const botId = route.params?.botId;
   const { member, main, missing } = useMobileGoatBotMember(botId);
+  const taskId = route.params?.taskId;
+  const mainChat = !taskId && botId === undefined;
+  const preview = useMobileBotPreview(botRef);
+  const memberChat =
+    !taskId && member !== null && member.state !== "deleted"
+      ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
+      : null;
+  const memberPreview = useMobileBotPreview(memberChat);
   const manage = useMobileBotManage(member?.environmentId ?? null, goatBotName(main));
   const environmentId = botRef?.environmentId;
   const threadId = botRef?.threadId;
-  const taskId = route.params?.taskId;
-  const unreadAt = preview?.unread ? preview.at : null;
-  const mainChat = !taskId && botId === undefined;
-  const shell = useThreadShell(
-    environmentId && threadId ? scopeThreadRef(environmentId, threadId) : null,
-  );
-  const conversation = environmentId && threadId ? `${environmentId}:${threadId}` : null;
+  // The conversation this chat shows and reads: the main bot's or the member's own.
+  const chat = mainChat
+    ? environmentId && threadId
+      ? { environmentId, threadId }
+      : null
+    : memberChat;
+  const chatPreview = mainChat ? preview : memberPreview;
+  const unreadAt = chatPreview?.unread ? chatPreview.at : null;
+  const shell = useThreadShell(chat ? scopeThreadRef(chat.environmentId, chat.threadId) : null);
+  const conversation = chat ? `${chat.environmentId}:${chat.threadId}` : null;
   const serverTracksVisits = shell?.lastVisitedAt !== undefined;
-  const newestAt = preview?.at ?? null;
+  const newestAt = chatPreview?.at ?? null;
   const localRead = useGoatBotLocalRead(conversation);
   // Where the person had read up to when they opened the chat, taken before the visit moves it.
   const readSnapshot = useGoatBotVisitSnapshot({
-    focused: focused && foreground && mainChat,
+    focused: focused && foreground && chat !== null,
     reading: seen,
     conversation,
-    loaded: shell !== null && preview !== null,
+    loaded: shell !== null && chatPreview !== null,
     lastVisitedAt: serverTracksVisits ? (shell?.lastVisitedAt ?? null) : localRead,
     newestAt,
   });
   const visit = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
-  // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while the main conversation is visible.
+  const chatEnvironmentId = chat?.environmentId;
+  const chatThreadId = chat?.threadId;
+  // A member's chat marks its own conversation read, as the main chat does, so its roster row and
+  // waiting count follow what the person has seen.
+  // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while the conversation is visible.
   useEffect(() => {
-    if (!seen || !mainChat || !environmentId || !threadId || !readSnapshot) return;
+    if (!seen || !chatEnvironmentId || !chatThreadId || !readSnapshot) return;
     if (!serverTracksVisits) {
       if (conversation !== null && newestAt !== null)
         recordGoatBotLocalRead(conversation, newestAt);
     } else if (unreadAt) {
-      void visit({ environmentId, input: { threadId, visitedAt: unreadAt } });
+      void visit({
+        environmentId: chatEnvironmentId,
+        input: { threadId: chatThreadId, visitedAt: unreadAt },
+      });
     }
   }, [
     seen,
-    mainChat,
-    environmentId,
-    threadId,
+    chatEnvironmentId,
+    chatThreadId,
     unreadAt,
     readSnapshot,
     visit,
@@ -97,7 +113,7 @@ export function GoatBotRouteScreen({
           : undefined
       }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}
-      readSnapshot={mainChat ? readSnapshot : null}
+      readSnapshot={chat !== null ? readSnapshot : null}
     />
   );
 }

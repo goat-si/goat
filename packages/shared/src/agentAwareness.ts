@@ -1,7 +1,14 @@
-import type { EnvironmentId, OrchestrationV2ThreadShell, Project, ThreadId } from "@goat/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ThreadShell,
+  Project,
+  RuntimeRequestId,
+  ThreadId,
+} from "@goat/contracts";
 import {
   isPendingApprovalRequest,
   isPendingUserInputRequest,
+  isProviderNativeSubagentThread,
   isSideChatThread,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -16,6 +23,42 @@ export type AgentAwarenessPhase =
   | "completed"
   | "failed"
   | "stale";
+
+export interface SubagentRequestAwareness {
+  readonly childId: ThreadId;
+  readonly requestId: RuntimeRequestId;
+  readonly phase: "waiting_for_approval" | "waiting_for_input";
+  readonly createdAt: DateTime.Utc;
+}
+
+export function subagentRequestAwareness(
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    "id" | "lineage" | "creationSource" | "pendingRuntimeRequest" | "activityRunStatus" | "status"
+  >,
+): SubagentRequestAwareness | null {
+  const request = thread.pendingRuntimeRequest;
+  if (
+    thread.lineage.relationshipToParent !== "subagent" ||
+    isProviderNativeSubagentThread(thread) ||
+    request === null ||
+    request.kind === "auth_refresh"
+  )
+    return null;
+  const status = thread.activityRunStatus ?? thread.status;
+  if (
+    request.kind === "user_input" &&
+    request.blocking === false &&
+    (status === "preparing" || status === "starting" || status === "running")
+  )
+    return null;
+  return {
+    childId: thread.id,
+    requestId: request.id,
+    phase: request.kind === "user_input" ? "waiting_for_input" : "waiting_for_approval",
+    createdAt: request.createdAt,
+  };
+}
 
 export interface AgentAwarenessState {
   readonly environmentId: EnvironmentId;
@@ -40,6 +83,7 @@ function buildAgentAwarenessDeepLink(input: {
 export interface ProjectThreadAwarenessV2Input {
   readonly environmentId: EnvironmentId;
   readonly project: Pick<Project, "title">;
+  readonly pendingSubagentRequest?: SubagentRequestAwareness | null;
   readonly thread: Pick<
     OrchestrationV2ThreadShell,
     | "activityRunStatus"
@@ -63,7 +107,13 @@ export function projectThreadAwarenessV2(
 ): AgentAwarenessState | null {
   const { environmentId, project, thread } = input;
   if (thread.lineage.relationshipToParent === "subagent" || isSideChatThread(thread)) return null;
-  const phase = resolveThreadAwarenessPhaseV2(thread);
+  const ownPhase = resolveThreadAwarenessPhaseV2(thread);
+  const childRequest = input.pendingSubagentRequest ?? null;
+  const childDrivesWait =
+    childRequest !== null &&
+    ownPhase !== "waiting_for_approval" &&
+    ownPhase !== "waiting_for_input";
+  const phase = childDrivesWait ? childRequest.phase : ownPhase;
   if (phase === null) {
     return null;
   }
@@ -94,7 +144,7 @@ export function projectThreadAwarenessV2(
     headline: headlineForPhase(phase),
     ...(detail === undefined ? {} : { detail }),
     modelTitle: thread.modelSelection.model,
-    updatedAt: DateTime.formatIso(thread.updatedAt),
+    updatedAt: DateTime.formatIso(childDrivesWait ? childRequest.createdAt : thread.updatedAt),
     deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: thread.id }),
   };
 }

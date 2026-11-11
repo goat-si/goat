@@ -86,6 +86,8 @@ export const ServerSelfUpdateCapability = Schema.Literals([
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  modelCatalogRefresh: Schema.optionalKey(Schema.Boolean),
+  textGenerators: Schema.optionalKey(Schema.Boolean),
   freshContext: Schema.optionalKey(Schema.Boolean),
   memoryHubProtocolVersion: Schema.optionalKey(Schema.Int),
   memory: Schema.optionalKey(
@@ -189,6 +191,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
+  /** Serves orchestration.forkThread, which can give a fork its own worktree. */
+  threadForkWorkspace: Schema.optionalKey(Schema.Boolean),
   threadStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   /** Branch PR references include fork-origin PRs; older servers drop them. */
@@ -241,6 +245,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listOpenAsks`: each open question and approval across bots. */
   goatBotOpenAsks: Schema.optionalKey(Schema.Boolean),
+  /** Server honours `limit` on `channel.listOpenAsks`; older ones return the newest 50. */
+  goatBotOpenAsksLimit: Schema.optionalKey(Schema.Boolean),
   /** Server streams `channel.subscribeTaskChanges`; with older ones clients read on open and focus. */
   goatBotTaskChanges: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */

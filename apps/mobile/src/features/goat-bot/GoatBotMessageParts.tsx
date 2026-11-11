@@ -276,24 +276,38 @@ export function GoatBotActivityLine(props: {
   );
 }
 
-/** A round letter for one choice; filled in the person's colours once it is their answer. */
-function GoatBotChoiceBadge(props: { readonly letter: string; readonly chosen?: boolean }) {
+/**
+ * A round letter for one choice; filled in the person's colours once it is their answer, a member
+ * bot's colour in its chat.
+ */
+function GoatBotChoiceBadge(props: {
+  readonly letter: string;
+  readonly chosen?: boolean;
+  readonly accent?: GoatBotAccent | null | undefined;
+}) {
+  const accent = props.chosen ? (props.accent ?? null) : null;
   return (
     <View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       className={
-        props.chosen
-          ? "h-[26px] w-[26px] items-center justify-center rounded-full bg-goat-person-message"
-          : "h-[26px] w-[26px] items-center justify-center rounded-full border border-foreground-muted"
+        accent
+          ? "h-[26px] w-[26px] items-center justify-center rounded-full"
+          : props.chosen
+            ? "h-[26px] w-[26px] items-center justify-center rounded-full bg-goat-person-message"
+            : "h-[26px] w-[26px] items-center justify-center rounded-full border border-foreground-muted"
       }
+      style={accent ? { backgroundColor: accent.background } : undefined}
     >
       <Text
         className={
-          props.chosen
-            ? "text-xs font-semibold text-goat-person-message-foreground"
-            : "text-xs font-semibold text-foreground-muted"
+          accent
+            ? "text-xs font-semibold"
+            : props.chosen
+              ? "text-xs font-semibold text-goat-person-message-foreground"
+              : "text-xs font-semibold text-foreground-muted"
         }
+        style={accent ? { color: accent.foreground } : undefined}
       >
         {props.letter}
       </Text>
@@ -304,13 +318,16 @@ function GoatBotChoiceBadge(props: { readonly letter: string; readonly chosen?: 
 /**
  * A bot question with choices: one card, the question and its lettered choices. Once answered it
  * keeps the question, dimmed, and only the picked choice; a typed answer stays the person's own
- * message, so the card keeps just the question.
+ * message, so the card keeps just the question. The last row hands over to the composer.
  */
 export function GoatBotQuestionCard(props: {
   readonly children: ReactNode;
   readonly row: Extract<GoatBotRow, { kind: "bot" }>;
   readonly canAnswer: boolean;
   readonly onPick: (answer: string) => void;
+  readonly onSomethingElse?: (() => void) | undefined;
+  /** A member bot's colour for the picked answer's badge. */
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const { row } = props;
   const label = useScaledTextRole("label");
@@ -343,6 +360,21 @@ export function GoatBotQuestionCard(props: {
               </Text>
             </Pressable>
           ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Something else"
+            accessibilityHint="Type your own answer in the message field"
+            accessibilityState={{ disabled: !props.canAnswer }}
+            disabled={!props.canAnswer}
+            onPress={props.onSomethingElse}
+            className="min-h-[44px] flex-row items-center gap-2.5 rounded-xl px-1.5 py-1.5"
+            style={props.canAnswer ? undefined : { opacity: 0.5 }}
+          >
+            <GoatBotChoiceBadge letter={goatBotChoiceLetter(row.options.length)} />
+            <Text className="shrink text-foreground-muted" style={label}>
+              Something else
+            </Text>
+          </Pressable>
         </View>
       ) : picked !== undefined && row.answerIndex !== undefined ? (
         <View
@@ -353,7 +385,11 @@ export function GoatBotQuestionCard(props: {
           className="mt-1.5 min-h-[44px] flex-row items-center gap-2.5"
           style={{ marginHorizontal: -6, paddingHorizontal: 6 }}
         >
-          <GoatBotChoiceBadge letter={goatBotChoiceLetter(row.answerIndex)} chosen />
+          <GoatBotChoiceBadge
+            letter={goatBotChoiceLetter(row.answerIndex)}
+            chosen
+            accent={props.accent}
+          />
           <Text className="shrink text-foreground" style={label}>
             {picked}
           </Text>

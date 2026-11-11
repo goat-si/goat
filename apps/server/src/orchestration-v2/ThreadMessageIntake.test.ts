@@ -482,3 +482,22 @@ it.effect("sends a guest message with the guest's files, never ones the client n
     expect(command.attachments).toEqual([guestFile]);
   }).pipe(Effect.provide(layerIntakeTest)),
 );
+it.effect(
+  "refuses a client-sent fork that names its own workspace before it reaches orchestration",
+  () =>
+    Effect.gen(function* () {
+      const captured: OrchestrationV2ServerCommand[] = [];
+      const error = yield* dispatchCommand({
+        type: "thread.fork",
+        commandId: CommandId.make("client-fork-with-workspace"),
+        sourceThreadId: ThreadId.make("thread-fork-source"),
+        targetThreadId: ThreadId.make("thread-fork-target"),
+        sourcePoint: { type: "latest_stable" },
+        workspace: { branch: "goat/elsewhere", worktreePath: "/tmp/elsewhere" },
+        createdBy: "user",
+        creationSource: "web",
+      }).pipe(Effect.provide(layerFailingDispatch(captured)), Effect.flip);
+      expect(error._tag).toBe("OrchestratorDispatchError");
+      expect(captured).toEqual([]);
+    }).pipe(Effect.provide(layerIntakeTest)),
+);

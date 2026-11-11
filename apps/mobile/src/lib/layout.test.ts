@@ -141,6 +141,33 @@ describe("isPrimarySidebarPinned", () => {
 });
 
 describe("deriveWorkspacePaneLayout", () => {
+  it("reserves the native safe area and inspector width before showing the sidebar", () => {
+    const layout = deriveLayout({ width: 951, height: 669 });
+    expect(
+      deriveWorkspacePaneLayout({
+        layout,
+        viewportWidth: 951,
+        horizontalSafeArea: 76,
+        nativeWorkspace: true,
+        nativeInspectorWidth: 280,
+        primarySidebarPreferredVisible: true,
+        auxiliaryPanePreferredVisible: true,
+        auxiliaryPaneRole: "inspector",
+      }),
+    ).toMatchObject({ primarySidebarVisible: false, primarySidebarSuppressedByAuxiliary: true });
+    expect(
+      deriveWorkspacePaneLayout({
+        layout,
+        viewportWidth: 951,
+        horizontalSafeArea: 0,
+        nativeWorkspace: true,
+        nativeInspectorWidth: 280,
+        primarySidebarPreferredVisible: true,
+        auxiliaryPanePreferredVisible: true,
+        auxiliaryPaneRole: "inspector",
+      }),
+    ).toMatchObject({ primarySidebarVisible: true, primarySidebarSuppressedByAuxiliary: false });
+  });
   it("lets UIKit keep the sidebar independent of the inspector in landscape", () => {
     const layout = deriveLayout({ width: 1_194, height: 834 });
     for (const primarySidebarPreferredVisible of [true, false]) {

@@ -2,6 +2,7 @@ import { PASTED_TEXT_ATTACHMENT_THRESHOLD_BYTES } from "@goat/client-runtime/tex
 import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@goat/contracts";
 import { collectComposerInlineTokens } from "@goat/shared/composerInlineTokens";
 import { composerContextEditorTokens, composerSkillLabels } from "../lib/composerContext";
+import { useComposerModelTokens } from "./useComposerModelTokens";
 import { requireNativeView } from "expo";
 import { TextInputWrapper } from "expo-paste-input";
 import {
@@ -172,16 +173,17 @@ export function ComposerEditor({
   );
 
   const skillLabels = useMemo(() => composerSkillLabels(skills), [skills]);
+  const modelTokens = useComposerModelTokens(props.value);
   const chipTextColor = createNativeComposerTheme(theme).text;
   const tokensJson = useMemo(() => {
     return JSON.stringify(
-      composerContextEditorTokens(props.value, tokens, skillLabels).map((token) => {
+      composerContextEditorTokens(props.value, tokens, skillLabels, modelTokens).map((token) => {
         const record =
           token.type === "context"
             ? props.context?.records.find((record) => record.contextId === token.contextId)
             : undefined;
         const presentation = contextChipPresentation(
-          token.type === "context" ? token.kind : token.type,
+          token.type === "context" ? token.kind : token.type === "model" ? "skill" : token.type,
           record,
         );
         const icon = contextChipIcon(
@@ -191,7 +193,7 @@ export function ComposerEditor({
         const appIconUri =
           token.type === "context" ? props.appChipIconUris?.get(token.contextId) : undefined;
         return {
-          type: token.type,
+          type: token.type === "model" ? "skill" : token.type,
           source: token.source,
           start: token.start,
           end: token.end,
@@ -199,9 +201,11 @@ export function ComposerEditor({
           label:
             token.type === "skill"
               ? (skillLabels.get(token.value) ?? token.value)
-              : token.type === "context"
-                ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · unavailable"}`
-                : basename(token.value),
+              : token.type === "model"
+                ? `${token.instanceId}/${token.model}`
+                : token.type === "context"
+                  ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · unavailable"}`
+                  : basename(token.value),
           detail: token.type === "context" ? composerChipSizeSuffix(record) : "",
           iconUri: appIconUri ?? contextChipIconUri(icon),
           tintsIcon: appIconUri === undefined && icon.kind === "chip",
@@ -210,6 +214,7 @@ export function ComposerEditor({
     );
   }, [
     props.value,
+    modelTokens,
     tokens,
     props.context,
     props.appChipIconUris,

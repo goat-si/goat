@@ -26,6 +26,7 @@ import {
 import { Atom } from "effect/reactivity";
 import type { RefObject } from "react";
 import { useAssetUrls } from "../../assets/assetUrls";
+import { resolveAssetUrl } from "../../assets/assetUrls";
 import {
   DraftId,
   useComposerDraftStore,
@@ -52,6 +53,9 @@ import {
   threadEnvironment,
 } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { assetEnvironment } from "../../state/assets";
+import { readPreparedConnection } from "../../state/session";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
@@ -64,6 +68,7 @@ interface EditingQueuedRun {
   readonly messageId: MessageId;
   readonly originalText: string;
   readonly existingAttachments: ReadonlyArray<ChatAttachment>;
+  readonly removedExistingAttachment?: boolean;
   readonly context?: OrchestrationMessageContext | undefined;
 }
 
@@ -210,6 +215,7 @@ export function useQueuedRunEdit(input: {
     composerRef,
   } = input;
   const editQueuedRunCommand = useEditQueuedRunCommand();
+  const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, { reportFailure: false });
   const pendingRequests = useAtomValue(pendingRequestsAtom(threadDetailRef));
   const editKey = scopedThreadKey(routeThreadRef);
   const storedEdit = useAtomValue(queuedRunEdits.atom)[editKey] ?? null;
@@ -279,26 +285,51 @@ export function useQueuedRunEdit(input: {
         // otherwise it is dropped. Edits outlive navigation, so the toast is
         // unscoped and names the thread: the user may be anywhere by now.
         onRunLeftQueue: (_, edit) => {
-          const recovery = recoverQueuedMessageEdit({
+          void recoverQueuedMessageEdit({
             editTarget: queuedEditDraftTarget(routeThreadRef, edit.runId),
             threadTarget: threadDraftTarget,
             originalText: edit.originalText,
-          });
-          if (recovery === "clean") return;
-          const title = appAtomRegistry.get(
-            environmentThreadShells.threadShellAtom(threadRef),
-          )?.title;
-          const where = title === undefined ? "" : ` in “${title}”`;
-          toastManager.add(
-            stackedThreadToast({
-              type: recovery === "kept" ? "info" : "warning",
-              title: "Queued message is no longer queued",
-              description:
-                recovery === "kept"
-                  ? `Your unsaved edit${where} was kept in the composer.`
-                  : `Your unsaved edit${where} was discarded.`,
-            }),
-          );
+            removedExistingAttachment: edit.removedExistingAttachment === true,
+            existingAttachments: edit.existingAttachments,
+            loadAttachment: async (attachment) => {
+              const connection = readPreparedConnection(environmentId);
+              if (!connection) throw new Error("Environment disconnected");
+              const result = await createAssetUrl({
+                environmentId,
+                input: { resource: { _tag: "attachment", attachmentId: attachment.id } },
+              });
+              if (result._tag === "Failure") throw new Error("Attachment unavailable");
+              const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
+              if (!url) throw new Error("Attachment URL unavailable");
+              const response = await fetch(url, {
+                signal: AbortSignal.timeout(60_000),
+              });
+              if (!response.ok) throw new Error("Attachment download failed");
+              return new File([await response.blob()], attachment.name, {
+                type: attachment.mimeType,
+              });
+            },
+          })
+            .catch(() => "failed" as const)
+            .then((recovery) => {
+              if (recovery === "clean") return;
+              const title = appAtomRegistry.get(
+                environmentThreadShells.threadShellAtom(threadRef),
+              )?.title;
+              const where = title === undefined ? "" : ` in “${title}”`;
+              toastManager.add(
+                stackedThreadToast({
+                  type: recovery === "kept" ? "info" : "warning",
+                  title: "Queued message is no longer queued",
+                  description:
+                    recovery === "failed"
+                      ? `Your unsaved edit${where} could not be restored. Check the original message and reapply your changes.`
+                      : recovery === "kept"
+                        ? `Your unsaved edit${where} was kept in the composer.`
+                        : `Your unsaved edit${where} was discarded.`,
+                }),
+              );
+            });
         },
       },
     );
@@ -313,6 +344,9 @@ export function useQueuedRunEdit(input: {
   const removeEditingAttachment = useStableCallback((attachmentId: string) => {
     queuedRunEdits.update(editKey, (current) => ({
       ...current,
+      removedExistingAttachment:
+        current.removedExistingAttachment ||
+        current.existingAttachments.some((attachment) => attachment.id === attachmentId),
       existingAttachments: current.existingAttachments.filter(
         (attachment) => attachment.id !== attachmentId,
       ),

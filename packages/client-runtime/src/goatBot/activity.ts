@@ -20,7 +20,11 @@ import type { GoatBotItemReaders } from "./rows.ts";
  */
 export interface GoatBotActivity {
   readonly state: "reading" | "working";
+  /** One line, cut to fit; `fullText` is the whole step when it was cut. */
   readonly text: string;
+  readonly fullText?: string;
+  /** Set when the work waits on the person (an answer, approval, sign-in) or a usage limit. */
+  readonly attention?: "waiting" | "paused";
 }
 
 /** The task the working indicator follows and its newest update in the conversation. */
@@ -132,33 +136,44 @@ export function goatBotActivity(input: {
   const { chip, update } = input.task;
   const run = runEvidence(chip, input.worker);
   const summary = chip.summary?.trim() ? chip.summary : null;
+  const needed = attention(chip);
   const text =
-    attentionText(chip) ??
+    needed?.text ??
     run.request ??
     update ??
     summary ??
     (run.status === null ? undefined : RUN_STATUS_TEXT[run.status]) ??
     TASK_STATUS_TEXT[chip.status] ??
     "Working";
-  return { state: "working", text: clip(text) };
+  const flat = text.replace(/\s+/gu, " ").trim();
+  const state = needed?.state ?? (needed === null && run.request !== null ? "waiting" : undefined);
+  return {
+    state: "working",
+    text: clip(flat),
+    ...(flat.length > ACTIVITY_TEXT_LIMIT ? { fullText: flat } : {}),
+    ...(state === undefined ? {} : { attention: state }),
+  };
 }
 
-function attentionText(chip: ChannelTaskChip): string | null {
+function attention(
+  chip: ChannelTaskChip,
+): { readonly text: string; readonly state: "waiting" | "paused" } | null {
   const needsYou = chip.observed?.needsYou ?? [];
   const has = (kind: (typeof needsYou)[number]["kind"]) =>
     needsYou.some((item) => item.kind === kind);
-  if (has("approval")) return "Waiting for your approval";
-  if (chip.openQuestionCount > 0 || has("question")) return "Waiting for your answer";
-  if (has("sign_in")) return "Waiting for you to sign in";
+  const waiting = (text: string) => ({ text, state: "waiting" as const });
+  if (has("approval")) return waiting("Waiting for your approval");
+  if (chip.openQuestionCount > 0 || has("question")) return waiting("Waiting for your answer");
+  if (has("sign_in")) return waiting("Waiting for you to sign in");
   if (has("usage_limit") || chip.observed?.usageLimitResetAt !== undefined) {
-    return "Paused on a usage limit";
+    return { text: "Paused on a usage limit", state: "paused" };
   }
-  return chip.status === "waiting_input" ? "Waiting for you" : null;
+  return chip.status === "waiting_input" ? waiting("Waiting for you") : null;
 }
 
 /** Whether a task waits on the person, by its status or by what its work asks them. */
 export function goatBotTaskWaitsOnPerson(chip: ChannelTaskChip): boolean {
-  return attentionText(chip) !== null;
+  return attention(chip) !== null;
 }
 
 function requestText(kind: string, blocking: boolean | undefined): string | null {
@@ -213,8 +228,7 @@ function runEvidence(
   };
 }
 
-function clip(text: string): string {
-  const flat = text.replace(/\s+/gu, " ").trim();
+function clip(flat: string): string {
   return flat.length <= ACTIVITY_TEXT_LIMIT ? flat : flat.slice(0, ACTIVITY_TEXT_LIMIT - 1) + "…";
 }
 

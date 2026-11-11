@@ -6,6 +6,7 @@ import {
   presentCloudRun,
 } from "@goat/client-runtime/state/cloud-task";
 import { useComposerAttachmentActions } from "./use-composer-attachment-actions";
+import { usePersistThreadModel } from "./use-persist-thread-model";
 import * as Dialog from "../components/ui/Dialog";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { readEnvironmentScope } from "./session";
@@ -201,6 +202,7 @@ export function useThreadComposerState() {
     selectedEnvironmentRuntime,
   } = useThreadSelection();
   const selectedThreadProjection = useSelectedThreadProjection();
+  const persistThreadModel = usePersistThreadModel();
   const selectedThreadVisibleTurnItems = useSelectedThreadVisibleTurnItems();
   const acknowledgedMessages = useAtomValue(acknowledgedThreadMessagesAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
@@ -589,14 +591,13 @@ export function useThreadComposerState() {
       return null;
     }
     if (
-      beforeDispatch === undefined &&
-      (await sideChatCommand({
+      await sideChatCommand({
         thread,
         threadKey,
         text: draft.text,
         hasAttachmentsOrContext: attachments.length > 0 || (draft.context?.records.length ?? 0) > 0,
         connected: selectedEnvironmentRuntime?.connectionState === "connected",
-      }))
+      })
     )
       return null;
     // Recovery preserves over-cap attachments; require trimming or outbox delivery would reject indefinitely.
@@ -908,6 +909,7 @@ export function useThreadComposerState() {
         ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
         : {}),
     });
+    if (selectedThreadCreation === null) persistThreadModel(selectedThreadShell, value);
   };
 
   const onUpdateRuntimeMode = (value: RuntimeMode) => {

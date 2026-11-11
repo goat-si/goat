@@ -1,7 +1,6 @@
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
-import { deliveryLedger } from "./channelDeliveryLedger.ts";
-import { copyUndeliveredReplies, type UndeliveredSourceRow } from "./channelUndeliveredReplies.ts";
+import { deliveryLedger, type UnsentDeliveryRelease } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -59,7 +58,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
-import { waitingTaskCondition } from "./channelWaitingTasks.ts";
+import { newestAskAt, waitingTaskCondition } from "./channelWaitingTasks.ts";
 export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
@@ -467,6 +466,19 @@ export class ChannelLedger extends Context.Service<
       readonly limit: number;
       readonly receiptsOnly?: boolean | undefined;
     }) => Effect.Effect<ReadonlyArray<ChannelStoredDelivery>, ChannelLedgerError>;
+    /**
+     * claimDueDeliveries, also saying how many interim messages it set aside as already heard.
+     * It sets aside a bounded number per call, so a long backlog takes several calls.
+     */
+    readonly claimDue: (input: {
+      readonly owner: string;
+      readonly now: string;
+      readonly limit: number;
+      readonly receiptsOnly?: boolean | undefined;
+    }) => Effect.Effect<
+      { readonly deliveries: ReadonlyArray<ChannelStoredDelivery>; readonly setAside: number },
+      ChannelLedgerError
+    >;
     readonly recordDelivery: (input: {
       readonly owner: string;
       readonly deliveryId: ChannelDeliveryId;
@@ -478,7 +490,20 @@ export class ChannelLedger extends Context.Service<
       readonly owner: string;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
-    /** After a restart: GOAT bot and MCP deliveries retry, external ones in flight become ambiguous. */
+    /**
+     * Records that an external delivery is being handed to its transport now. False when the row
+     * is no longer this claim's (its receipt expired, or recovery took it): then it is not sent.
+     */
+    readonly markSending: (input: {
+      readonly owner: string;
+      readonly deliveryId: ChannelDeliveryId;
+      readonly attempt: number;
+      readonly now: string;
+    }) => Effect.Effect<boolean, ChannelLedgerError>;
+    /**
+     * After a restart: GOAT bot and MCP deliveries and external ones never handed to their
+     * transport retry; external ones handed over become ambiguous.
+     */
     readonly settleInterruptedDeliveries: (input: {
       readonly owner: string;
       readonly now: string;
@@ -569,7 +594,7 @@ export class ChannelLedger extends Context.Service<
       readonly connectionId: string;
       readonly externalActorId: string;
     }) => Effect.Effect<boolean, ChannelLedgerError>;
-  }
+  } & UnsentDeliveryRelease
 >()("goat/channels/ChannelLedger") {}
 
 const ReplyState = Schema.Struct({ text: Schema.String, sentAt: Schema.optional(Schema.String) });
@@ -823,7 +848,7 @@ const make = Effect.gen(function* () {
           version = ${next.version},
           generation = ${next.generation},
           worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = ${encodeTask(next)},
+          task_json = ${encodeTask(next)}, newest_ask_at = ${newestAskAt(next)},
           updated_at = ${next.updatedAt},
           pending_answer_message_id = ${pendingAnswer},
           completion_hold = ${hold}
@@ -857,10 +882,11 @@ const make = Effect.gen(function* () {
       const inserted = yield* sql<{ readonly task_id: string }>`
         INSERT INTO channel_tasks (
           task_id, owner_id, conversation_id, status, version, generation, task_json,
-          created_at, updated_at, bot_id
+          created_at, updated_at, bot_id, newest_ask_at
         ) SELECT
           ${task.taskId}, ${ownerId}, ${task.conversationId}, ${task.status}, ${task.version},
-          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}, bot_id
+          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}, bot_id,
+          ${newestAskAt(task)}
         FROM channel_inbox WHERE input_id = ${task.originInputId} AND owner_id = ${ownerId}
         RETURNING task_id
       `;
@@ -1660,31 +1686,6 @@ const make = Effect.gen(function* () {
         onSome: (channel) => channel.wake,
       }),
     ),
-
-    settleInterruptedDeliveries: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            // Local destinations record idempotently, so an interrupted one is simply sent again.
-            yield* sql`
-              UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind IN ('goat', 'mcp')
-            `;
-            const interrupted = yield* sql<UndeliveredSourceRow>`
-              UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
-                updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
-              RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
-                last_error_code
-            `;
-            yield* copyUndeliveredReplies(sql, interrupted, "ambiguous", input.now);
-          }),
-        )
-        .pipe(
-          Effect.tap(() => receiptGate.changed),
-          Effect.mapError(toLedgerError("settleInterruptedDeliveries")),
-        ),
 
     getDeliveryState: (deliveryId) =>
       sql<{ readonly state: string }>`

@@ -259,3 +259,18 @@ it.effect("a served-by header proves a Hub client's P4 without an advertised ori
     });
   }),
 );
+
+it.effect("a device with no wiring evidence reports P7 unproven", () =>
+  Effect.sync(() => {
+    const device = fleetSnapshot("mac-studio");
+    const evidence = device.parityEvidence;
+    if (evidence === undefined) throw new Error("fixture has parity evidence");
+    const result = parityVerdict({
+      deviceAlias: "mac-studio",
+      checkedAt: 0,
+      home: fleetSnapshot("home"),
+      device: { ...device, parityEvidence: { ...evidence, wiring: [] } },
+    });
+    expect(result.checks.find(({ id }) => id === "P7")?.status).toBe("unproven");
+  }),
+);

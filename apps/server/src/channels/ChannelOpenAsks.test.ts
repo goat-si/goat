@@ -13,6 +13,9 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { openAskCandidates } from "./channelOpenAsks.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
+import { syncNewestAsks } from "./testkit/newestAsks.ts";
 import { nextTaskChange, watchTaskChanges } from "./testkit/taskChanges.ts";
 import {
   linkSlackUser,
@@ -61,6 +64,46 @@ const startWaiting = (
       yield* runtime.drain;
     }
     return task;
+  });
+
+/** Copies of one waiting task under new ids: each with its own bot, update time and question. */
+const copyTask = (
+  taskId: string,
+  count: number,
+  shape: (index: number) => {
+    readonly botId: string;
+    readonly updatedAt: string;
+    readonly askedAt: string;
+  },
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TEMP TABLE IF NOT EXISTS task_copy AS SELECT * FROM channel_tasks WHERE 0`;
+    for (let index = 0; index < count; index++) {
+      const { botId, updatedAt, askedAt } = shape(index);
+      const copy = taskId + "-copy-" + index;
+      const question = [{ questionId: "q-" + copy, text: "Filler " + index, askedAt }];
+      yield* sql`DELETE FROM task_copy`;
+      yield* sql`INSERT INTO task_copy SELECT * FROM channel_tasks WHERE task_id = ${taskId}`;
+      yield* sql`UPDATE task_copy SET task_id = ${copy}, bot_id = ${botId},
+        updated_at = ${updatedAt}, worker_thread_id = NULL,
+        task_json = json_set(task_json, '$.taskId', ${copy},
+          '$.openQuestions', json(${JSON.stringify(question)}))`;
+      yield* sql`INSERT INTO channel_tasks SELECT * FROM task_copy`;
+    }
+    yield* syncNewestAsks();
+  });
+
+/** Puts one question on a task, asked and updated at the given times. */
+const askOnce = (taskId: string, text: string, askedAt: string, updatedAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const question = [{ questionId: "q-" + taskId, text, askedAt }];
+    yield* sql`UPDATE channel_tasks SET status = 'waiting_input', updated_at = ${updatedAt},
+      task_json = json_set(task_json, '$.status', 'waiting_input',
+        '$.openQuestions', json(${JSON.stringify(question)}))
+      WHERE task_id = ${taskId}`;
+    yield* syncNewestAsks();
   });
 
 describe("open asks across bots", () => {
@@ -155,6 +198,7 @@ describe("open asks across bots", () => {
           since,
           approval: { requestId: "approval:late", threadId: done.worker!.threadId },
         });
+        yield* syncNewestAsks();
         const { asks, total } = yield* members.openAsks(owner);
         assert.deepStrictEqual(
           asks.map((ask) => [ask.taskId, ask.kind]).toSorted(),
@@ -193,6 +237,7 @@ describe("open asks across bots", () => {
           { questionId: "old", text: "Old question", askedAt: "2026-10-11T00:00:00.000Z" },
         ])}))
         WHERE task_id = ${recent.taskId}`;
+      yield* syncNewestAsks();
       const result = yield* members.openAsks(owner);
       assert.strictEqual(result.asks.length, 50);
       assert.strictEqual(result.total, 52);
@@ -202,6 +247,164 @@ describe("open asks across bots", () => {
         result.asks.map((ask) => ask.text),
         "Old question",
       );
+      // A person who asks for more reaches the rest, oldest last.
+      const more = yield* members.openAsks(owner, 100);
+      assert.strictEqual(more.asks.length, 52);
+      assert.strictEqual(more.total, 52);
+      assert.strictEqual(more.asks.at(-1)?.text, "Old question");
+    }).pipe(Effect.provide(harness.layer));
+  });
+  it.effect("keeps the newest ask when 200 tasks updated later hold older ones", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const newest = yield* startWaiting(harness, "do: newest question", "Ev-newest");
+      yield* askOnce(
+        newest.taskId,
+        "Newest question",
+        "2026-10-12T05:00:00.000Z",
+        "2026-10-01T00:00:00.000Z",
+      );
+      yield* copyTask(newest.taskId, 200, () => ({
+        botId: "main",
+        updatedAt: "2026-10-20T00:00:00.000Z",
+        askedAt: "2026-10-12T01:00:00.000Z",
+      }));
+      const result = yield* members.openAsks(owner);
+      assert.strictEqual(result.asks[0]?.text, "Newest question");
+      assert.isTrue(result.truncated);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "keeps the newest ask when 200 tasks hold a newer wait that names no question to show",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* linkSlackUser();
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const sql = yield* SqlClient.SqlClient;
+        const newest = yield* startWaiting(harness, "do: newest question", "Ev-unnamed");
+        yield* askOnce(
+          newest.taskId,
+          "Newest question",
+          "2026-10-12T05:00:00.000Z",
+          "2026-10-01T00:00:00.000Z",
+        );
+        yield* copyTask(newest.taskId, 200, () => ({
+          botId: "main",
+          updatedAt: "2026-10-20T00:00:00.000Z",
+          askedAt: "2026-10-12T01:00:00.000Z",
+        }));
+        // A native question reported without its request: the list has nothing to show for it.
+        const unnamed = {
+          pullRequests: [],
+          needsYou: [{ kind: "question", since: "2026-10-12T09:00:00.000Z" }],
+        };
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.observed',
+          json(${JSON.stringify(unnamed)})) WHERE task_id <> ${newest.taskId}`;
+        yield* syncNewestAsks();
+        const result = yield* members.openAsks(owner);
+        assert.strictEqual(result.asks[0]?.text, "Newest question");
+        assert.isTrue(result.truncated);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a stored task's newest ask follows its asks and clears when none are left", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const sql = yield* SqlClient.SqlClient;
+      const task = yield* startWaiting(harness, "do: deploy staging", "Ev-col", request("col"));
+      const stored = () =>
+        Effect.gen(function* () {
+          const [row] = yield* sql<{ readonly newest_ask_at: string | null }>`
+            SELECT newest_ask_at FROM channel_tasks WHERE task_id = ${task.taskId}`;
+          return {
+            column: row?.newest_ask_at ?? null,
+            task: (yield* ledger.getTask(task.taskId))!,
+          };
+        });
+      const approval = yield* stored();
+      const since = approval.task.task.observed?.needsYou[0]?.since;
+      assert.isDefined(since);
+      assert.strictEqual(approval.column, since);
+
+      const askedAt = "2026-10-12T03:00:00.000Z";
+      yield* commitTransition(ledger, approval.task, {
+        type: "task.question.opened",
+        payload: { question: { questionId: "q-col" as never, text: "Which region?", askedAt } },
+      });
+      assert.strictEqual((yield* stored()).column, askedAt);
+
+      yield* commitTransition(ledger, (yield* stored()).task, {
+        type: "task.question.answered",
+        payload: { questionId: "q-col" as never, answer: "us-east" },
+      });
+      assert.strictEqual((yield* stored()).column, since);
+
+      harness.world.runtimeRequests.set(task.worker!.threadId, []);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const resolved = yield* stored();
+      assert.deepStrictEqual(resolved.task.task.observed?.needsYou, []);
+      assert.isNull(resolved.column);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("reads its candidates newest first from the newest ask index, without a sort", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      for (const botIds of [["main"], ["main", "helper"]]) {
+        const candidates = openAskCandidates(sql, {
+          ownerId: owner.ownerId,
+          botIds: new Set(botIds),
+        });
+        const plan = (yield* sql<{
+          readonly detail: string;
+        }>`EXPLAIN QUERY PLAN ${candidates}`).map((row) => row.detail);
+        assert.isTrue(
+          plan.some((detail) => detail.includes("USING INDEX channel_tasks_owner_newest_ask")),
+          plan.join("\n"),
+        );
+        assert.isFalse(
+          plan.some((detail) => detail.includes("TEMP B-TREE")),
+          plan.join("\n"),
+        );
+      }
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves a deleted bot's tasks out before counting toward the limit", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const live = yield* startWaiting(harness, "do: live question", "Ev-live");
+      yield* askOnce(
+        live.taskId,
+        "Live question",
+        "2026-10-12T00:30:00.000Z",
+        "2026-10-01T00:00:00.000Z",
+      );
+      yield* copyTask(live.taskId, 200, () => ({
+        botId: "gone-bot",
+        updatedAt: "2026-10-20T00:00:00.000Z",
+        askedAt: "2026-10-12T04:00:00.000Z",
+      }));
+      const result = yield* members.openAsks(owner);
+      assert.deepStrictEqual(
+        result.asks.map((ask) => ask.text),
+        ["Live question"],
+      );
+      assert.strictEqual(result.total, 1);
+      assert.isFalse(result.truncated);
     }).pipe(Effect.provide(harness.layer));
   });
 });

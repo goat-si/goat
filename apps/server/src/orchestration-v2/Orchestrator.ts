@@ -198,6 +198,7 @@ import {
   followsCurrentConversation,
   isUndeliveredMailboxSteer,
   queuedRunModelSelection,
+  queueTailModelSelection,
 } from "./NotificationMailbox.ts";
 import { foldIntoQueuedNotice } from "./TurnDigest.ts";
 import { EventSinkV2 } from "./EventSink.ts";
@@ -219,6 +220,7 @@ import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from 
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
+import { CommitGuard } from "./goat/CommitGuard.ts";
 import { makeDispatchAdmission } from "./goat/DispatchAdmission.ts";
 import {
   applyToProjection,
@@ -485,10 +487,9 @@ export interface OrchestratorV2Shape
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<ShellSnapshotRead, OrchestratorV2Error>;
-  readonly listActiveSubagentThreadIds: () => Effect.Effect<
-    ReadonlyArray<ThreadId>,
-    OrchestratorV2Error
-  >;
+  readonly listActiveSubagentThreadIds: (
+    page?: Parameters<ProjectionStoreV2["Service"]["listActiveSubagentThreadIds"]>[0],
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, OrchestratorV2Error>;
   readonly countThreads: () => Effect.Effect<number, OrchestratorV2Error>;
   /** Each active thread's parent and launcher, for walking launched threads cheaply. */
   readonly listLaunchEdges: () => Effect.Effect<
@@ -915,6 +916,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const { providerSessionIdFor } = yield* makeProviderSessionPlacement({
     idAllocator,
     settings: serverSettings.getSettings.pipe(Effect.orDie),
+    sessions: providerSessions,
   });
 
   const enforceCommandPolicy =
@@ -1830,6 +1832,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               adapter,
               providerInstanceId: queuedRun.providerInstanceId,
               threadId,
+              model: queuedRun.modelSelection.model,
             }),
           ),
           Effect.mapError(
@@ -4252,6 +4255,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         targetThreadId: command.targetThreadId,
         ...(command.title === undefined ? {} : { title: command.title }),
         sideChat: command.sideChat === true,
+        ...(command.workspace === undefined ? {} : { workspace: command.workspace }),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -4850,6 +4854,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             adapter: targetAdapter,
             providerInstanceId: input.modelSelection.instanceId,
             threadId: input.command.threadId,
+            model: input.modelSelection.model,
           }),
         ));
       const targetProviderThreadBase: OrchestrationV2ProviderThread =
@@ -5443,7 +5448,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
       projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
-    const modelSelection = command.modelSelection ?? projection.thread.modelSelection;
+    let modelSelection = command.modelSelection ?? projection.thread.modelSelection;
     let dispatchMode = resolveMessageDispatchIntent(
       projection,
       command.dispatchMode,
@@ -5516,7 +5521,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : parsedGoalCommand;
     let goalStopRunId: RunId | undefined;
     if (goalCommand !== null) {
-      yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
       // A goal command never joins a running turn. One that starts or ends goal
       // work stops the run and goes first in the queue; the rest wait. A send
       // that asked to be queued (no delivery intent) only queues, and a run
@@ -5719,6 +5723,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
 
     if (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") {
+      yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
       yield* dispatchSteerIntoRun({
         command,
         events,
@@ -5778,6 +5783,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       dispatchMode.type === "start_immediately" ||
       dispatchMode.type === "queue_after_active";
     const shouldQueue = queueBehindRun !== undefined && startsOrQueuesRun;
+    const incomingMessage = { ...command, delegatedCompletion };
+    if (
+      shouldQueue &&
+      command.modelSelection === undefined &&
+      goalStopRunId === undefined &&
+      !followsCurrentConversation(incomingMessage) &&
+      !isBufferedProviderNotification(incomingMessage)
+    ) {
+      modelSelection = queueTailModelSelection(projection);
+    }
+    yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
     // A notice that starts now carries what watched pull requests kept as context (#1055).
     const held = shouldQueue
       ? undefined
@@ -6265,6 +6281,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             adapter,
             providerInstanceId: modelSelection.instanceId,
             threadId: command.threadId,
+            model: modelSelection.model,
           }),
         ));
       const providerThreadId =
@@ -6687,6 +6704,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           adapter,
           providerInstanceId: modelSelection.instanceId,
           threadId: command.threadId,
+          model: modelSelection.model,
         }),
       ));
     const existingProviderSession = projection.providerSessions.find(
@@ -6729,6 +6747,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
               sourceRunStatus: sourceRun.status,
               fromSpecificTurn: sourceRun !== null,
+              crossWorkspace: pendingForkTransfer.crossWorkspace === true,
             }),
           );
     const canResolveForkNatively = forkExecution === "native_fork";
@@ -13235,6 +13254,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       } satisfies OrchestratorV2DispatchResult;
     }
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
+    const guard = (yield* CommitGuard)?.({
+      commandId: command.commandId,
+      commandType: command.type,
+      threadId: commandThreadId(command),
+    });
     const committed = yield* eventSink
       .commitCommand({
         commandId: command.commandId,
@@ -13244,6 +13268,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         events: plan.events,
         effects: plan.effects,
         allowEffectOnly: command.type === "thread.stop",
+        ...(guard === undefined ? {} : { guard }),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
@@ -13758,9 +13783,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError));
     }),
     listActiveSubagentThreadIds: Effect.fn("OrchestratorV2.listActiveSubagentThreadIds")(
-      function () {
+      function (page) {
         return projectionStore
-          .listActiveSubagentThreadIds()
+          .listActiveSubagentThreadIds(page)
           .pipe(Effect.mapError(shellProjectionError));
       },
     ),

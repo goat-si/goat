@@ -11,6 +11,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
+  CHANNEL_GATEWAY_WS_METHODS,
   WsMemoryRpcGroup,
   supportsMemoryProtocol,
   MemoryRpcError,
@@ -102,7 +103,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.terminalAttach
   | typeof WS_METHODS.terminalObserve
   | typeof WS_METHODS.decisionSubscribe
-  | typeof SLACK_CHANNEL_WS_METHODS.subscribeStatus;
+  | typeof SLACK_CHANNEL_WS_METHODS.subscribeStatus
+  | typeof CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.chatGptHandoffSubscribe
@@ -390,6 +392,8 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
     stream: Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>,
   ) => Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>>,
   options?: SubscriptionOptions<TTag>,
+  /** When set, any end but interruption emits this and waits for the next session. */
+  unavailable?: () => A,
 ): Stream.Stream<
   A,
   EnvironmentRpcStreamFailure<TTag>,
@@ -490,6 +494,18 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         isHubNodesUnsupportedError(cause)
                       ) {
                         return Stream.failCause(cause);
+                      }
+                      if (unavailable !== undefined && !Cause.hasInterruptsOnly(cause)) {
+                        return Stream.fromEffect(
+                          Effect.logWarning(
+                            "RPC subscription has no stream on this session; waiting for the next session.",
+                            {
+                              cause: Cause.pretty(cause),
+                              method: tag,
+                              environmentId: supervisor.target.environmentId,
+                            },
+                          ),
+                        ).pipe(Stream.drain, Stream.concat(Stream.sync(unavailable)));
                       }
                       const hasOnlyExpectedFailures =
                         cause.reasons.length > 0 &&
@@ -625,6 +641,50 @@ export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
   EnvironmentSupervisor.EnvironmentSupervisor
 > {
   return subscribeDynamic(tag, () => Effect.succeed(input), options);
+}
+
+/**
+ * One subscription attempt's news: a value, or that this session has no stream. `subscription`
+ * is new for each attempt, so a fresh acknowledgement differs from an old one with equal value.
+ */
+export type SessionStreamUpdate<A> =
+  | { readonly subscription: number; readonly value: A }
+  | { readonly subscription: number; readonly unavailable: true };
+
+let subscriptionAttempts = 0;
+
+/**
+ * Like `subscribe`, for a caller with a fallback: a refusal, an end or a client failure is
+ * reported as unavailable instead of ending the subscription, and only the next session asks
+ * again, so a refused stream is never retried on the session that refused it.
+ */
+export function subscribeOrUnavailable<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+): Stream.Stream<
+  SessionStreamUpdate<EnvironmentRpcStreamValue<TTag>>,
+  EnvironmentRpcStreamFailure<TTag>,
+  EnvironmentSupervisor.EnvironmentSupervisor
+> {
+  let subscription = 0;
+  return subscribeDynamicMapped<TTag, SessionStreamUpdate<EnvironmentRpcStreamValue<TTag>>>(
+    tag,
+    () => Effect.succeed(input),
+    (_session, stream) => {
+      const attempt = ++subscriptionAttempts;
+      subscription = attempt;
+      // A stream that simply ends is as unavailable as a refused one.
+      return stream.pipe(
+        Stream.map((value): SessionStreamUpdate<EnvironmentRpcStreamValue<TTag>> => ({
+          subscription: attempt,
+          value,
+        })),
+        Stream.concat(Stream.sync(() => ({ subscription: attempt, unavailable: true as const }))),
+      );
+    },
+    undefined,
+    () => ({ subscription, unavailable: true as const }),
+  );
 }
 
 export const request = <TTag extends Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>>(

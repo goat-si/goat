@@ -1,5 +1,11 @@
 import { resolveQueuedEditExit } from "@goat/client-runtime/queued-run-edit";
-import type { ChatAttachment } from "@goat/contracts";
+import {
+  ChatFileAttachment,
+  ChatImageAttachment,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  type ChatAttachment,
+} from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import {
   composerDraftHasUserContent,
   useComposerDraftStore,
@@ -8,20 +14,67 @@ import {
   type ComposerThreadTarget,
 } from "../../composerDraftStore";
 
-export function recoverQueuedMessageEdit(input: {
+const isImageAttachment = Schema.is(ChatImageAttachment);
+const isFileAttachment = Schema.is(ChatFileAttachment);
+
+export async function recoverQueuedMessageEdit(input: {
   readonly editTarget: ComposerThreadTarget;
   readonly threadTarget: ComposerThreadTarget;
   readonly originalText: string;
-}): "kept" | "discarded" | "clean" {
+  readonly removedExistingAttachment?: boolean;
+  readonly existingAttachments?: ReadonlyArray<ChatAttachment>;
+  readonly loadAttachment?: (attachment: ChatAttachment) => Promise<File>;
+}): Promise<"kept" | "discarded" | "clean" | "failed"> {
   const store = useComposerDraftStore.getState();
   const draft = store.getComposerDraft(input.editTarget);
   const recovery = resolveQueuedEditExit({
     editChanged:
-      draft !== null &&
-      (draft.prompt !== input.originalText || draft.images.length > 0 || draft.files.length > 0),
+      input.removedExistingAttachment === true ||
+      (draft !== null &&
+        (draft.prompt !== input.originalText || draft.images.length > 0 || draft.files.length > 0)),
     threadDraftEmpty: !composerDraftHasUserContent(store.getComposerDraft(input.threadTarget)),
   });
   if (recovery === "kept") {
+    const existing = input.existingAttachments ?? [];
+    if (!composerDraftHasUserContent(draft) && existing.length === 0) {
+      store.clearComposerContent(input.editTarget);
+      return "discarded";
+    }
+    let files: File[];
+    try {
+      const load = input.loadAttachment;
+      if (existing.length > 0 && !load) return "failed";
+      files = load ? await Promise.all(existing.map(load)) : [];
+    } catch {
+      return "failed";
+    }
+    if (
+      useComposerDraftStore.getState().getComposerDraft(input.editTarget) !== draft ||
+      composerDraftHasUserContent(store.getComposerDraft(input.threadTarget)) ||
+      (draft?.images.length ?? 0) + (draft?.files.length ?? 0) + existing.length >
+        PROVIDER_SEND_TURN_MAX_ATTACHMENTS ||
+      new Set(existing.map((attachment) => attachment.id)).size !== existing.length ||
+      existing.some((attachment) =>
+        [...(draft?.images ?? []), ...(draft?.files ?? [])].some(
+          (item) => item.id === attachment.id,
+        ),
+      ) ||
+      existing.some((attachment) => !isImageAttachment(attachment) && !isFileAttachment(attachment))
+    )
+      return "failed";
+    const images: ComposerImageAttachment[] = [];
+    const attachments: ComposerFileAttachment[] = [];
+    for (const [index, attachment] of existing.entries()) {
+      const file = files[index];
+      if (!file) return "failed";
+      if (isImageAttachment(attachment)) {
+        images.push({ ...attachment, file, previewUrl: URL.createObjectURL(file) });
+      } else if (isFileAttachment(attachment)) {
+        attachments.push({ ...attachment, file });
+      }
+    }
+    store.addImages(input.editTarget, images, { allowDuplicates: true });
+    store.addFiles(input.editTarget, attachments, { allowDuplicates: true });
     store.moveComposerPromptAndImages(input.editTarget, input.threadTarget);
   } else {
     store.clearComposerContent(input.editTarget);

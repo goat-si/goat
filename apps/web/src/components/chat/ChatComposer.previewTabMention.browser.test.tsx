@@ -30,6 +30,49 @@ const sentMessage = () =>
     .map(([request]) => (request as { input?: { message?: SentMessage } }).input?.message)
     .find((message) => message !== undefined);
 
+it("offers a catalog model in the @ menu and sends its model reference", async () => {
+  await using fixture = await setupComposer();
+  const config = fixture.primary.serverConfig!;
+  config.providers = config.providers.map((provider) => ({
+    ...provider,
+    installed: true,
+    models: [
+      ...provider.models,
+      { slug: "other", name: "Other model", isCustom: false, capabilities: null },
+    ],
+  }));
+  store().setDraftThreadContext(id, { envMode: "local", sshDestination: null });
+  store().setPrompt(id, "Compare @other");
+  state.normal.mockResolvedValue({ _tag: "Success", value: {} });
+  await fixture.mount();
+  await act(async () => state.composer!.composerRef.current!.focusAtEnd());
+  const row = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>(
+      '[data-composer-item-id="model:antigravity:other"]',
+    );
+    expect(element?.textContent).toContain("Other model");
+    return element!;
+  });
+  await act(async () => row.click());
+  expect(store().getComposerDraft(id)?.prompt).toBe("Compare model:antigravity/other ");
+  await vi.waitFor(() =>
+    expect(fixture.container.querySelector('[data-composer-model-chip="true"]')).not.toBeNull(),
+  );
+  await act(async () =>
+    fixture.container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click(),
+  );
+  const message = await vi.waitFor(() => {
+    const sent = sentMessage();
+    expect(sent).toBeDefined();
+    return sent!;
+  });
+  expect(message.text).toContain("model:antigravity/other");
+  const sent = state.normal.mock.calls
+    .map(([request]) => request as { input?: { modelSelection?: { model: string } } })
+    .find((request) => request.input?.modelSelection);
+  expect(sent?.input?.modelSelection?.model).toBe("model");
+});
+
 it("refuses an unverified dropped thread without attaching a transcript", async () => {
   await using fixture = await setupComposer();
   vi.mocked(entities.readThreadShell).mockReturnValue({ title: "Remote" } as never);

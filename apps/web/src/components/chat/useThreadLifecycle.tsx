@@ -62,6 +62,9 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { targetShellOmitsChildren } from "../../lib/relatedThreadOpen";
 import { ThreadStatusLine } from "./ThreadStatusLine";
 import { useApprovalBanners } from "./ApprovalDockBanners";
+
+// ChatView reads the timeline's approval through this module, beside its other lifecycle state.
+export { useAwaitingApprovalId } from "./ApprovalDockBanners";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readEnvironmentScope } from "../../state/session";

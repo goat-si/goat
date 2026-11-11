@@ -49,6 +49,7 @@ async function loadHooks(
     NodePath,
     stripFrontmatter: (content: string) => content,
     pi: {
+      registerCommand: () => {},
       on: (name: string, handler: unknown) => {
         if (!handlers.has(name)) handlers.set(name, handler);
       },
@@ -613,6 +614,7 @@ describe("Pi tool discovery permissions", () => {
     await NodeVM.runInNewContext(`${source}\ngoatMcpExtension(pi)`, {
       process: { env: { GOAT_PI_RUNTIME_MODE: "approval-required" } },
       pi: {
+        registerCommand: () => {},
         on: (name: string, handler: ToolCallHook) => {
           if (name === "tool_call") toolCall = handler;
         },
@@ -660,7 +662,10 @@ async function loadRequestHook(): Promise<RequestHook> {
   );
   await NodeVM.runInNewContext(`${source}\ngoatMcpExtension(pi)`, {
     process: { env: {} },
-    pi: { on: (name: string, handler: RequestHook) => handlers.set(name, handler) },
+    pi: {
+      on: (name: string, handler: RequestHook) => handlers.set(name, handler),
+      registerCommand: () => {},
+    },
   });
   const hook = handlers.get("before_provider_request");
   assert.isDefined(hook);

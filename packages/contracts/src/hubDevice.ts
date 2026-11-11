@@ -22,6 +22,20 @@ export const HubDeviceOperationInput = Schema.Struct({
 export type HubDeviceOperationInput = typeof HubDeviceOperationInput.Type;
 
 /**
+ * Moves a Remote Link Child from one SSH alias to another under one approval. Once the old
+ * alias's link is gone, the call names the old link id the approval was asked for.
+ */
+export const HubDeviceMoveInput = Schema.Struct({
+  fromAlias: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  toAlias: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  decisionId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
+  fromLinkId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  /** With fromLinkId: the old link's tunnel port from the same earlier result. */
+  fromTunnelPort: Schema.optional(Schema.Int),
+});
+export type HubDeviceMoveInput = typeof HubDeviceMoveInput.Type;
+
+/**
  * A person's standing consent for an SSH host GOAT set up to join this hub's OpenCodex as a Child
  * after each successful setup. Turning it off never removes a link.
  */
@@ -53,7 +67,7 @@ export type HubDeviceStep = typeof HubDeviceStep.Type;
 
 export const HubDeviceOperationResult = Schema.Struct({
   deviceAlias: TrimmedNonEmptyString,
-  action: Schema.Literals(["join", "leave", "repair"]),
+  action: Schema.Literals(["join", "leave", "repair", "move"]),
   /** child: joined and verified; ready: standalone again; needs_human: answer decisionId, then call again. */
   state: Schema.Literals(["child", "ready", "degraded", "needs_human", "failed"]),
   transport: Schema.optional(HubDeviceTransport),
@@ -61,6 +75,10 @@ export const HubDeviceOperationResult = Schema.Struct({
   steps: Schema.Array(HubDeviceStep),
   parity: Schema.optional(HubParityResult),
   decisionId: Schema.optional(Schema.String),
+  /** A move's old link id: pass it back as fromLinkId once the old alias's link is gone. */
+  fromLinkId: Schema.optional(Schema.String),
+  /** A move's old tunnel port, passed back as fromTunnelPort with fromLinkId. */
+  fromTunnelPort: Schema.optional(Schema.Int),
 });
 export type HubDeviceOperationResult = typeof HubDeviceOperationResult.Type;
 
@@ -80,6 +98,7 @@ export const HubDeviceMcpResult = Schema.Union([
   hubNeedsHuman("goat_hub_device_join"),
   hubNeedsHuman("goat_hub_device_leave"),
   hubNeedsHuman("goat_hub_device_repair"),
+  hubNeedsHuman("goat_hub_device_move"),
   HubDeviceOperationResult,
 ]);
 export type HubDeviceMcpResult = typeof HubDeviceMcpResult.Type;

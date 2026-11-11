@@ -89,6 +89,7 @@ import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
 import { captureFavicon, safeHttpOrigin, selectFaviconCandidates } from "./FaviconCapture.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS, type RecordingInputOptions } from "./RecordingInput.ts";
 import { createPreviewPopupLifecycle, isBlankPopupUrl, popupWebOrigin } from "./PopupLifecycle.ts";
+import { loadUrlAllowingRedirects } from "./loadUrlAllowingRedirects.ts";
 
 export type PreviewNavStatus =
   | { kind: "Idle" }
@@ -1889,7 +1890,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       return;
     }
     yield* attemptPromise({ operation: "navigate.loadURL", tabId, webContentsId: wc.id }, () =>
-      wc.loadURL(url),
+      loadUrlAllowingRedirects(wc, url),
     );
   });
 

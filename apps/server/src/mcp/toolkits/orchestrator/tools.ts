@@ -52,6 +52,8 @@ import {
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
   TrimmedNonEmptyString,
+  HandoffWithdrawInput,
+  HandoffWithdrawResult,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { Tool, Toolkit } from "effect/ai";
@@ -213,6 +215,15 @@ const RequestSecretTool = Tool.make(agentSurfaceRegistry["handoff.create"].name,
   failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["handoff.create"]));
+
+const WithdrawHandoffTool = Tool.make(agentSurfaceRegistry["handoff.withdraw"].name, {
+  description: agentSurfaceRegistry["handoff.withdraw"].description,
+  parameters: HandoffWithdrawInput,
+  success: HandoffWithdrawResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["handoff.withdraw"]));
 
 const CreateThreadsTool = Tool.make(agentSurfaceRegistry["thread.create_many"].name, {
   description: agentSurfaceRegistry["thread.create_many"].description,
@@ -391,6 +402,7 @@ export const OrchestratorToolkit = Toolkit.make(
   UpdateScheduledTaskTool,
   DeleteScheduledTaskTool,
   RequestSecretTool,
+  WithdrawHandoffTool,
   CreateThreadsTool,
   ThreadListTool,
   ThreadReadTool,

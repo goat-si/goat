@@ -156,6 +156,22 @@ describe("channel ingest", () => {
         Schema.encodeSync(json(ChannelOutboundMessage))(outbound),
       ),
     ).toEqual(outbound);
+    // An interim mark survives storage, and a stored message without one still reads.
+    const interim = { ...outbound, interim: true as const };
+    expect(
+      Schema.decodeSync(json(ChannelOutboundMessage))(
+        Schema.encodeSync(json(ChannelOutboundMessage))(interim),
+      ),
+    ).toEqual(interim);
+    // So does reception's decision about a person's answer, taken or refused.
+    for (const answersQuestionId of ["question-1", null]) {
+      const decided = { ...outbound, personAnswer: { answersQuestionId } };
+      expect(
+        Schema.decodeSync(json(ChannelOutboundMessage))(
+          Schema.encodeSync(json(ChannelOutboundMessage))(decided as never),
+        ),
+      ).toEqual(decided);
+    }
   });
   const input = {
     kind: "slack",

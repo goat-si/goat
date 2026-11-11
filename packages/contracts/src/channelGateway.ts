@@ -140,6 +140,20 @@ export const ChannelOutboundMessage = Schema.Struct({
   /** Answers a question offers; transports without buttons list them in the text. */
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   questionId: Schema.optional(ChannelQuestionId),
+  /**
+   * Progress before the answer, such as a milestone or where the work runs. Channels that keep
+   * every message send only one such message; anything else always goes.
+   */
+  interim: Schema.optional(Schema.Literal(true)),
+  /** See ChannelMessageMeta.questionKind. */
+  questionKind: Schema.optional(Schema.Literal("task")),
+  /**
+   * Reception's committed decision about a person's answer from a task question's card, for the
+   * GOAT bot to record on that person's message (ChannelMessageMeta.answersQuestionId).
+   */
+  personAnswer: Schema.optional(
+    Schema.Struct({ answersQuestionId: Schema.NullOr(ChannelQuestionId) }),
+  ),
 });
 export type ChannelOutboundMessage = typeof ChannelOutboundMessage.Type;
 
@@ -243,6 +257,7 @@ const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   not_home: "GOAT Bot runs on another machine in this cluster.",
   bot_busy: "This bot still has work in progress.",
   bot_limit: "This owner already has the most bots allowed.",
+  stream_unavailable: "Task changes are not streaming here; read again when you return.",
 } as const;
 
 export const ChannelGatewayErrorReason = Schema.Literals(
@@ -329,7 +344,15 @@ export const ChannelOpenAsk = Schema.Struct({
   requestId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ChannelOpenAsk = typeof ChannelOpenAsk.Type;
-export const ChannelListOpenAsksInput = Schema.Struct({});
+/** How many asks a read returns unless it asks for more. */
+export const CHANNEL_OPEN_ASKS_DEFAULT_LIMIT = 50;
+export const CHANNEL_OPEN_ASKS_MAX_LIMIT = 500;
+/** Servers with the goatBotOpenAsksLimit capability honour `limit`; older ones return the default. */
+export const ChannelListOpenAsksInput = Schema.Struct({
+  limit: Schema.optionalKey(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(CHANNEL_OPEN_ASKS_MAX_LIMIT)),
+  ),
+});
 export type ChannelListOpenAsksInput = typeof ChannelListOpenAsksInput.Type;
 /** The newest asks; `total` counts them all, and `truncated` says it is a lower bound. */
 export const ChannelListOpenAsksResult = Schema.Struct({

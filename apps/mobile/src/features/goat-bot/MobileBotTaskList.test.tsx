@@ -48,7 +48,7 @@ function TaskList(props: Parameters<typeof mobileBotTaskListItems>[0]) {
   return (
     <>
       {mobileBotTaskListItems(props).map((item) => (
-        <div key={item.key}>{item.node}</div>
+        <div key={item.key}>{item.render()}</div>
       ))}
     </>
   );
@@ -198,4 +198,33 @@ it("lists a conversation card only once when the server still lists its task", a
 it("says there is no work yet only when nothing at all is listed", async () => {
   await show();
   expect(container.textContent).toContain("No tasks yet");
+});
+it("lists each of a task's threads as its own entry, with keys that stay apart for ids holding colons", async () => {
+  // Two threads whose ids, joined with ":", would read the same.
+  const threads = [
+    { environmentId: "env:a", threadId: "b" },
+    { environmentId: "env", threadId: "a:b" },
+    { environmentId: "env", threadId: "thread-3" },
+  ] as unknown as BotWorkTask["threads"];
+  const props = {
+    botName: "GOAT Bot",
+    work: work([{ ...listedTask, threads }]),
+    rows: [task],
+    chatTasks: [],
+    onOpenTask: vi.fn(),
+    onPeekTask: vi.fn(),
+    onOpenThread: vi.fn(),
+    onUpdate: vi.fn(),
+  };
+  const keys = mobileBotTaskListItems(props).map((item) => item.key);
+  expect(new Set(keys).size).toBe(keys.length);
+  const calls = await show({ work: props.work, rows: props.rows });
+  const threadRows = [...container.querySelectorAll('[aria-label="Work thread: Review"]')];
+  expect(threadRows).toHaveLength(3);
+  for (const row of threadRows) await act(async () => (row as HTMLButtonElement).click());
+  expect(calls.thread.mock.calls.map(([target]) => target)).toEqual([
+    { environmentId: "env:a", id: "b" },
+    { environmentId: "env", id: "a:b" },
+    { environmentId: "env", id: "thread-3" },
+  ]);
 });

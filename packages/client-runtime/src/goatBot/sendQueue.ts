@@ -1,4 +1,4 @@
-import type { ChannelTaskId } from "@goat/contracts";
+import type { ChannelQuestionId, ChannelTaskId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import type { GoatBotRef } from "./availability.ts";
@@ -13,6 +13,8 @@ interface Entry<A> {
   readonly createdAt: string;
   readonly bot: GoatBotRef;
   readonly taskId?: ChannelTaskId;
+  /** The task question this answers, from its card; every attempt sends it the same way. */
+  readonly questionId?: ChannelQuestionId;
   state: EntryState;
   requestKey: string | null;
   rejectionReason: string | null;
@@ -32,6 +34,7 @@ export interface GoatBotSendQueueOptions<
     readonly receivedAt: string;
     readonly bot: GoatBotRef;
     readonly taskId?: ChannelTaskId;
+    readonly questionId?: ChannelQuestionId;
   }) => Promise<{ readonly requestKey: string; readonly rejected?: string }>;
   /** Checked right before every attempt; when false the queue stops and waits for a retry. */
   readonly canDispatch: (bot: GoatBotRef) => boolean;
@@ -49,6 +52,7 @@ export interface GoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBotAtta
     bot: GoatBotRef,
     attachments?: ReadonlyArray<A>,
     taskId?: ChannelTaskId,
+    questionId?: ChannelQuestionId,
   ) => string;
   /** Sends a failed message again under the same key. Ignored while it is in flight. */
   readonly retry: (clientKey: string) => void;
@@ -79,6 +83,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
       clientKey: entry.clientKey,
       threadId: entry.bot.threadId,
       ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
+      ...(entry.questionId === undefined ? {} : { questionId: entry.questionId }),
       text: entry.text,
       ...(entry.attachments.length === 0
         ? {}
@@ -121,6 +126,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
         receivedAt: next.createdAt,
         bot: next.bot,
         ...(next.taskId === undefined ? {} : { taskId: next.taskId }),
+        ...(next.questionId === undefined ? {} : { questionId: next.questionId }),
       }))()
       .then(
         (result) => {
@@ -152,7 +158,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
   };
 
   return {
-    submit: (text, bot, attachments = [], taskId) => {
+    submit: (text, bot, attachments = [], taskId, questionId) => {
       if (disposed) throw new Error("GOAT Bot send queue is disposed");
       const clientKey = makeKey();
       entries = [
@@ -164,6 +170,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
           createdAt: now(),
           bot: { ...bot },
           ...(taskId === undefined ? {} : { taskId }),
+          ...(taskId === undefined || questionId === undefined ? {} : { questionId }),
           state: "queued",
           requestKey: null,
           rejectionReason: null,

@@ -37,6 +37,11 @@ conversation session.
 - Agents can list your bots with `goat_channel_bot_list`; they can't create bots or send work to
   them.
 
+On web and desktop, **Needs you** above the Bots list collects open questions, approvals and
+other requests that need your attention, including requests from hidden bots. Expand it and select
+an item to open its task. Use the **Open next bot ask** command to move through them. When more
+wait than the list shows, **Show more** lists the next ones.
+
 ## The face
 
 Each bot's avatar shows what it is doing:

@@ -79,6 +79,8 @@ export const ThreadPullRequestKey = Schema.Struct({
 });
 export type ThreadPullRequestKey = typeof ThreadPullRequestKey.Type;
 
+export const PULL_REQUEST_WATCH_APPROVAL_LIMIT = 100;
+
 export const ThreadPullRequestWatch = Schema.Struct({
   startedAt: IsoDateTime,
   headSha: Schema.NullOr(TrimmedNonEmptyString),
@@ -89,6 +91,13 @@ export const ThreadPullRequestWatch = Schema.Struct({
   ),
   /** Checks still pending when required ones passed early, owed one wake once all settle. */
   owedChecks: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /** At most 100 workflow runs awaiting approval or still running after approval. */
+  awaitingApproval: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString).check(
+      Schema.isMaxLength(PULL_REQUEST_WATCH_APPROVAL_LIMIT),
+    ),
+  ),
+  approvalAnnounced: Schema.optional(Schema.Boolean),
   remarksThrough: IsoDateTime,
   /** Reported remarks at remarksThrough, so late arrivals at that timestamp still count. */
   remarkIds: Schema.Array(TrimmedNonEmptyString),

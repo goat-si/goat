@@ -60,6 +60,8 @@ export interface ThreadForkServiceV2Shape {
     readonly title?: string;
     /** Makes the fork a hidden side chat of the source thread. */
     readonly sideChat?: boolean;
+    /** A checkout ThreadForkWorkspaceService made for this fork. */
+    readonly workspace?: { readonly branch: string; readonly worktreePath: string };
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
     readonly createdAt: DateTime.Utc;
@@ -82,6 +84,13 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           cause: forkableSourceRunStatusError(input.sourceRun),
         });
       }
+      if (input.workspace !== undefined && input.sideChat === true) {
+        return yield* new ThreadForkPlanError({
+          sourceThreadId: input.sourceProjection.thread.id,
+          targetThreadId: input.targetThreadId,
+          cause: "A side chat shares its source's checkout.",
+        });
+      }
       // A fork is the user's own thread: it does not inherit who launched the source,
       // and it is a side chat only when asked, even when its source is one.
       const {
@@ -91,6 +100,14 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
       } = input.sourceProjection.thread;
       const targetThread: OrchestrationV2AppThread = {
         ...sourceThread,
+        ...(input.workspace === undefined
+          ? {}
+          : {
+              branch: input.workspace.branch,
+              worktreePath: input.workspace.worktreePath,
+              // The source branch's pull request does not belong to the new branch.
+              branchPullRequest: null,
+            }),
         // PR context follows the conversation; watching remains the source thread's responsibility.
         pullRequests: input.sourceProjection.thread.pullRequests?.map(
           ({ watch: _watch, ...link }) => link,
@@ -148,6 +165,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             : undefined,
         targetProviderInstanceId: null,
         targetRunId: null,
+        ...(input.workspace === undefined ? {} : { crossWorkspace: true }),
         status: "pending",
         resolution: null,
         createdBy: input.createdBy,

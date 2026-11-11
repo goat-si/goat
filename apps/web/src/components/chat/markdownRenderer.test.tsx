@@ -3,6 +3,7 @@ import {
   CHAT_MARKDOWN_REMARK_PLUGINS,
 } from "@goat/shared/markdownPipeline";
 import { renderToStaticMarkup } from "react-dom/server";
+import katex from "katex";
 import ReactMarkdown from "react-markdown";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -13,6 +14,25 @@ import { createMarkdownRenderer } from "./markdownRenderer";
 const urlTransform = (url: string) => `${url}#seen`;
 
 describe("createMarkdownRenderer", () => {
+  it("keeps KaTeX trust disabled when a prototype contains a processor", () => {
+    const previous = Object.getOwnPropertyDescriptor(Object.prototype, "processor");
+    Object.defineProperty(Object.prototype, "processor", {
+      configurable: true,
+      value: () => true,
+    });
+    let html: string;
+    try {
+      html = katex.renderToString(String.raw`\href{https://example.com}{link}`, {
+        trust: false,
+        strict: "ignore",
+      });
+    } finally {
+      if (previous) Object.defineProperty(Object.prototype, "processor", previous);
+      else Reflect.deleteProperty(Object.prototype, "processor");
+    }
+    expect(html).not.toContain("<a href=");
+  });
+
   const render = createMarkdownRenderer({
     remarkPlugins: CHAT_MARKDOWN_REMARK_PLUGINS,
     rehypePlugins: CHAT_MARKDOWN_REHYPE_PLUGINS,

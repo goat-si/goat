@@ -1570,6 +1570,7 @@ it.layer(
           forceRefresh: Ref.update(forceRefreshCalls, (count) => count + 1).pipe(
             Effect.as(ModelManifest.BUNDLED_MODEL_MANIFEST),
           ),
+          refreshOnDemand: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
           refreshInBackground: Effect.void,
         });
         const layerLatestVersions = Layer.effect(
@@ -1583,7 +1584,6 @@ it.layer(
           ProviderLatestVersions.ProviderLatestVersions.use((latestVersions) =>
             latestVersions.cached(key, Effect.succeed("2.0.0")),
           );
-
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry.ProviderRegistry;
 

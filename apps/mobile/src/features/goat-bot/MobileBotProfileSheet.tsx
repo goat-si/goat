@@ -1,6 +1,7 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
 import { useRef, useState, type ReactNode } from "react";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { MobileBotColorField } from "./MobileBotColorField";
 import {
   Modal,
   Pressable,
@@ -24,10 +25,13 @@ export function MobileBotProfileSheet(props: {
   readonly children?: ReactNode;
   /** One of those fields changed, so a save goes through with no profile change. */
   readonly extraChanged?: boolean;
+  /** The server stores a member's colour; absent or false shows no swatches and sends none. */
+  readonly colorEditable?: boolean | undefined;
 }) {
   const [name, setName] = useState(props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
+  const [color, setColor] = useState<string | null>(props.initial.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A new bot needs only a name and a look; what it is for and its model can come later.
@@ -36,9 +40,11 @@ export function MobileBotProfileSheet(props: {
   const blankName = name.trim() === "";
   // A missing name is pointed out once the person leaves the field or saves, not while they start.
   const [nameChecked, setNameChecked] = useState(false);
+  const [nameTyped, setNameTyped] = useState(false);
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<TextInputInstance>(null);
   const saveDisabled = busy || !props.canSubmit;
+  const saveLabel = create ? (busy ? "Creating…" : "Create") : busy ? "Saving…" : "Save";
 
   const save = async () => {
     if (saveDisabled) return;
@@ -47,7 +53,13 @@ export function MobileBotProfileSheet(props: {
       nameRef.current?.focus();
       return;
     }
-    const changes = botProfileChanges(props.mode, props.initial, { name, avatar, purpose });
+    const changes = botProfileChanges(props.mode, props.initial, {
+      name,
+      avatar,
+      purpose,
+      // Without the swatches the form never carries a colour, so an older server gets no key.
+      ...(props.colorEditable === true ? { color } : {}),
+    });
     if (Object.keys(changes).length === 0 && props.extraChanged !== true) return props.onClose();
     setBusy(true);
     setError(null);
@@ -81,14 +93,14 @@ export function MobileBotProfileSheet(props: {
           </Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={create ? "Create" : "Save"}
+            accessibilityLabel={saveLabel}
             accessibilityState={{ disabled: saveDisabled }}
             disabled={saveDisabled}
             onPress={() => void save()}
             className="min-h-[44px] justify-center px-2"
           >
             <Text className={saveDisabled ? "text-foreground-muted" : "text-foreground"}>
-              {create ? (busy ? "Creating…" : "Create") : busy ? "Saving…" : "Save"}
+              {saveLabel}
             </Text>
           </Pressable>
         </View>
@@ -106,10 +118,14 @@ export function MobileBotProfileSheet(props: {
             value={name}
             maxLength={64}
             editable={!busy}
-            onChangeText={setName}
-            // Leaving a name the person never typed in, say to open More, is not a mistake yet.
+            onChangeText={(next) => {
+              setName(next);
+              setNameTyped(true);
+            }}
+            // Leaving a name the person never typed in, say to open More, is not a mistake yet; one
+            // typed and cleared again is.
             onBlur={() => {
-              if (name !== props.initial.name) setNameChecked(true);
+              if (nameTyped) setNameChecked(true);
             }}
             className={INPUT}
           />
@@ -128,6 +144,9 @@ export function MobileBotProfileSheet(props: {
             onChangeText={setAvatar}
             className={INPUT}
           />
+          {props.colorEditable === true ? (
+            <MobileBotColorField value={color} onChange={setColor} disabled={busy} />
+          ) : null}
           {create ? (
             <Pressable
               accessibilityRole="button"

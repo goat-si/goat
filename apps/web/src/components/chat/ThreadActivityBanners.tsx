@@ -38,6 +38,7 @@ import {
 import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
+import { BackgroundWorkDetails } from "./BackgroundWorkDetails";
 
 export function withPiExtensionStatus(
   items: ComposerBannerStackItem[],
@@ -287,14 +288,17 @@ export function backgroundWorkBannerItem(input: {
             );
           }),
     actions: (
-      <Button
-        size="xs"
-        variant="ghost"
-        disabled={input.stopDisabled}
-        onClick={() => void input.onStop()}
-      >
-        {input.stopping ? "Stopping..." : "Stop"}
-      </Button>
+      <>
+        <BackgroundWorkDetails tasks={input.tasks} />
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={input.stopDisabled}
+          onClick={() => void input.onStop()}
+        >
+          {input.stopping ? "Stopping..." : "Stop"}
+        </Button>
+      </>
     ),
   };
 }

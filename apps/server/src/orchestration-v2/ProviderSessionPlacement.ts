@@ -11,6 +11,7 @@ import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import {
   codexAppServerIsolationAvailable,
   codexSocketTransportMode,
@@ -18,43 +19,74 @@ import {
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 
-/** Decides which provider session a new provider thread lands on. */
-export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.make")(
-  function* (input: {
-    readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-    readonly settings: Effect.Effect<{ readonly codexAppServerIsolation: CodexAppServerIsolation }>;
-  }) {
-    const platform = yield* HostProcess.Platform;
-    const environment = yield* HostProcess.Environment;
-    const isolationAvailable = codexAppServerIsolationAvailable(
-      codexSocketTransportMode(platform, environment),
-    );
-    const providerSessionIdFor = Effect.fn("ProviderSessionPlacement.providerSessionIdFor")(
-      function* (placement: {
-        readonly adapter: ProviderAdapter.ProviderAdapterV2["Service"];
-        readonly providerInstanceId: ProviderInstanceId;
-        readonly threadId: ThreadId;
-      }) {
-        const capabilities = yield* placement.adapter.getCapabilities();
-        if (!capabilities.sessions.supportsMultipleProviderThreadsPerSession) {
-          return yield* input.idAllocator.allocate.providerSession({
+/**
+ * Decides which provider session a new provider thread lands on. A new Codex thread whose shared
+ * process started before its model was added to Codex's catalog opens its own process instead, so
+ * the shared one keeps its running work.
+ */
+export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.make")(function* <
+  E,
+>(input: {
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
+  readonly settings: Effect.Effect<{ readonly codexAppServerIsolation: CodexAppServerIsolation }>;
+  readonly sessions?: {
+    readonly get: (
+      providerSessionId: ProviderSessionId,
+    ) => Effect.Effect<
+      Option.Option<Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "modelStatus">>,
+      E
+    >;
+  };
+}) {
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
+  const isolationAvailable = codexAppServerIsolationAvailable(
+    codexSocketTransportMode(platform, environment),
+  );
+  const sharedPredates = Effect.fnUntraced(function* (shared: ProviderSessionId, model?: string) {
+    if (model === undefined || input.sessions === undefined) return false;
+    const { sessions } = input;
+    const check = Effect.gen(function* () {
+      const live = yield* sessions.get(shared);
+      if (Option.isNone(live) || live.value.modelStatus === undefined) return false;
+      return (yield* live.value.modelStatus(model)) === "predated";
+    });
+    // Dispatch waits on this; a slow answer leaves the thread to the session's own open check.
+    const predates = yield* check.pipe(Effect.timeoutOption("2 seconds"), Effect.option);
+    return Option.getOrElse(Option.flatten(predates), () => false);
+  });
+  const providerSessionIdFor = Effect.fn("ProviderSessionPlacement.providerSessionIdFor")(
+    function* (placement: {
+      readonly adapter: ProviderAdapter.ProviderAdapterV2["Service"];
+      readonly providerInstanceId: ProviderInstanceId;
+      readonly threadId: ThreadId;
+      readonly model?: string;
+    }) {
+      const capabilities = yield* placement.adapter.getCapabilities();
+      if (!capabilities.sessions.supportsMultipleProviderThreadsPerSession) {
+        return yield* input.idAllocator.allocate.providerSession({
+          providerInstanceId: placement.providerInstanceId,
+          threadId: placement.threadId,
+        });
+      }
+      const isolable = placement.adapter.driver === CODEX_DRIVER && isolationAvailable;
+      const shared = input.idAllocator.derive.providerSession({
+        providerInstanceId: placement.providerInstanceId,
+      });
+      const perThread =
+        isolable &&
+        ((yield* input.settings).codexAppServerIsolation === "thread" ||
+          (yield* sharedPredates(shared, placement.model)));
+      return perThread
+        ? input.idAllocator.derive.providerSession({
             providerInstanceId: placement.providerInstanceId,
             threadId: placement.threadId,
-          });
-        }
-        const perThread =
-          placement.adapter.driver === CODEX_DRIVER &&
-          isolationAvailable &&
-          (yield* input.settings).codexAppServerIsolation === "thread";
-        return input.idAllocator.derive.providerSession({
-          providerInstanceId: placement.providerInstanceId,
-          ...(perThread ? { threadId: placement.threadId } : {}),
-        });
-      },
-    );
-    return { providerSessionIdFor };
-  },
-);
+          })
+        : shared;
+    },
+  );
+  return { providerSessionIdFor };
+});
 
 /**
  * The stored session a provider thread keeps through a transition, or null when a new one

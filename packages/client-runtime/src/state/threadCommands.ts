@@ -1,4 +1,4 @@
-import type { ThreadId } from "@goat/contracts";
+import { ORCHESTRATION_V2_WS_METHODS, type ModelSelection, type ThreadId } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -95,6 +95,7 @@ import {
   visitThread,
   watchThreadPullRequest,
 } from "../operations/commands.ts";
+import { forkThread } from "../operations/forkThread.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
@@ -311,6 +312,13 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    setModelSelection: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-model-selection",
+      execute: (input: UpdateThreadMetadataInput & { readonly modelSelection: ModelSelection }) =>
+        updateThreadMetadata(input),
+      scheduler,
+      concurrency,
+    }),
     linkPullRequest: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:link-pull-request",
       execute: (input: LinkThreadPullRequestInput) => linkThreadPullRequest(input),
@@ -401,6 +409,17 @@ export function createThreadEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sourceThreadId]),
       },
     }),
+    /** Fork into the source's checkout or a new worktree; the source environment's capability picks the route. */
+    fork: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:fork",
+      tag: ORCHESTRATION_V2_WS_METHODS.forkThread,
+      execute: forkThread,
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sourceThreadId]),
+      },
+    }),
     mergeBack: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:merge-back",
       execute: (input: MergeThreadBackInput) => mergeThreadBack(input),
@@ -468,6 +487,11 @@ export function createThreadEnvironmentAtoms<R, E>(
   return {
     ...commands,
     snapshotAtom: optimistic.snapshotAtom,
+    pendingThreadIdsAtom: optimistic.pendingThreadIdsAtom,
+    setModelSelection: optimistic.wrap(commands.setModelSelection, (thread, input) => ({
+      ...thread,
+      modelSelection: input.modelSelection,
+    })),
     settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
       !accepted &&
       (thread.pendingRuntimeRequest !== null ||

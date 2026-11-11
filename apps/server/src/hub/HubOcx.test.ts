@@ -724,3 +724,39 @@ it.effect.each([
     expect(output.forbidden === true).toBe(forbidden);
   }),
 );
+
+it.effect("a Child's message reaches the Home only when it is a sentence OpenCodex prints", () =>
+  Effect.gen(function* () {
+    const known =
+      "Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it: restart it from the app.";
+    const restartWith = (message: string) =>
+      HubOcx.pipe(
+        Effect.provide(
+          connectionWorld(
+            (input) => ({
+              destinationEnvironmentId: input.destinationEnvironmentId,
+              homeEnvironmentId: input.homeEnvironmentId,
+              operationId: input.operationId,
+              kind: "restart",
+              code: 1,
+              healthy: true,
+              role: "client",
+              message,
+            }),
+            [],
+            [],
+          ),
+        ),
+        Effect.flatMap((ocx) =>
+          ocx.connection(
+            "mini",
+            { kind: "restart", expectedLinkId: "lnk_0123456789abcdef" },
+            60_000,
+            childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true)),
+          ),
+        ),
+      );
+    expect((yield* restartWith(known)).message).toBe(known);
+    expect((yield* restartWith(`pairing ${CODE} leaked`)).message).toBeUndefined();
+  }),
+);

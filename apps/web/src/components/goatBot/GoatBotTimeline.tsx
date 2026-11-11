@@ -10,6 +10,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
+import { flushSync } from "react-dom";
 import { ArrowUpLeftIcon, CopyIcon, CircleAlertIcon, XIcon } from "~/components/solar";
 import {
   createContext,
@@ -35,6 +36,7 @@ import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
+import { GoatBotReplyFiles } from "./GoatBotReplyFiles";
 import {
   GoatBotActivityLine,
   GoatBotMessageTime,
@@ -44,6 +46,8 @@ import {
 } from "./GoatBotMessageParts";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
 import { GoatBotEventText } from "./GoatBotEventText";
+import { GoatBotReplyCards } from "./GoatBotReplyCards";
+import { goatBotReplySplit } from "./goatBotReplyParts";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -93,7 +97,7 @@ export function GoatBotTimeline({
   readonly onOpenHome?: (() => void) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
+  readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
 }) {
   const { copyToClipboard } = useCopyToClipboard();
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
@@ -141,6 +145,9 @@ export function GoatBotTimeline({
     ? goatBotActivity({ reading: true, task: null, worker: null })
     : working;
   const activityText = activity?.text ?? null;
+  // The transcript's height right after the activity line opened or closed in place; the one
+  // resize that reaches it is that toggle's own and does not follow the newest message.
+  const toggledHeight = useRef<number | null>(null);
   const updateEdges = useStableCallback(() => {
     const scroll = scrollRef.current;
     const wrapper = wrapperRef.current;
@@ -167,7 +174,11 @@ export function GoatBotTimeline({
   // column can get its height after mounting; a reader following the newest message stays there.
   const followResize = useStableCallback(() => {
     const scroll = scrollRef.current;
-    if (scroll !== null && followingRef.current) {
+    const toggled = toggledHeight.current;
+    toggledHeight.current = null;
+    if (scroll !== null && toggled !== null && scroll.scrollHeight === toggled) {
+      lastScrollTopRef.current = scroll.scrollTop;
+    } else if (scroll !== null && followingRef.current) {
       scroll.scrollTop = scroll.scrollHeight;
       lastScrollTopRef.current = scroll.scrollTop;
     }
@@ -411,26 +422,38 @@ export function GoatBotTimeline({
                       className="mt-0.5 size-4 shrink-0 text-destructive-foreground"
                     />
                   ) : null;
+                const memory = row.memory ? (
+                  <MemorySettingsEntry
+                    environmentId={row.memory.environmentId}
+                    reference={row.memory}
+                    label="View memory details"
+                  />
+                ) : null;
                 const body = (
                   <>
                     {toneIcon}
                     <div className="min-w-0 flex-1">
                       <GoatBotLinkedText text={row.text} environmentId={environmentId} />
-                      {row.memory ? (
-                        <MemorySettingsEntry
-                          environmentId={row.memory.environmentId}
-                          reference={row.memory}
-                          label="View memory details"
-                        />
-                      ) : null}
+                      {memory}
                     </div>
                   </>
                 );
+                // An answer with a table reads as cards: its text, each table, and the rest.
+                // The splitter caches by text, so only a row whose text changed is parsed.
+                const reply = toneIcon === null ? goatBotReplySplit(row.text) : null;
                 const card = (
                   <div className="flex w-full min-w-0 items-end gap-2">
-                    <div className="goat-bot-prose goat-bot-card flex w-fit max-w-[min(100%,34rem)] min-w-0 gap-2">
-                      {body}
-                    </div>
+                    {reply !== null && reply.parts.some((part) => part.kind === "table") ? (
+                      <GoatBotReplyCards
+                        reply={reply}
+                        environmentId={environmentId}
+                        trail={memory}
+                      />
+                    ) : (
+                      <div className="goat-bot-prose goat-bot-card flex w-fit max-w-[min(100%,34rem)] min-w-0 gap-2">
+                        {body}
+                      </div>
+                    )}
                     <GoatBotMessageTime
                       id={timeId}
                       createdAt={row.createdAt}
@@ -507,6 +530,7 @@ export function GoatBotTimeline({
                         </Tooltip>
                       </div>
                     </div>
+                    <GoatBotReplyFiles text={row.text} />
                   </li>
                 );
               }
@@ -565,7 +589,19 @@ export function GoatBotTimeline({
           })}
           {activity !== null ? (
             <li className={cn("flex", rows.length > 0 && "mt-6")}>
-              <GoatBotActivityLine activity={activity} />
+              <GoatBotActivityLine
+                activity={activity}
+                onToggle={(toggle) => {
+                  // Opening the line keeps the conversation where it is instead of following it.
+                  const scroll = scrollRef.current;
+                  const top = scroll?.scrollTop;
+                  flushSync(toggle);
+                  if (scroll === null || top === undefined) return;
+                  scroll.scrollTop = top;
+                  lastScrollTopRef.current = scroll.scrollTop;
+                  toggledHeight.current = scroll.scrollHeight;
+                }}
+              />
             </li>
           ) : null}
         </ol>

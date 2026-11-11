@@ -1,5 +1,5 @@
 import { Check, Copy } from "~/components/solar/nodes";
-import { useRef, type ComponentProps } from "react";
+import { use, useRef, type ComponentProps } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import {
@@ -12,9 +12,11 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { reportMarkdownActionFailure } from "./markdownActionFailure";
+import { MarkdownTableCopyOnCard } from "./markdownTableCopyOnCard";
 
 export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const onCard = use(MarkdownTableCopyOnCard);
   const { copyToClipboard, isCopied: copied } = useCopyToClipboard<"markdown" | "csv">({
     timeout: 1200,
     onError: (cause, format) =>
@@ -39,7 +41,13 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
         <table {...props}>{children}</table>
       </ScrollArea>
       {/* Stays within the row's px-1: the chat lane clips sideways overflow. */}
-      <div className="mt-0.5 -mx-1 flex items-center justify-end select-none">
+      <div
+        className={
+          onCard
+            ? "goat-table-card-copy absolute end-2 top-2.5 flex select-none"
+            : "mt-0.5 -mx-1 flex items-center justify-end select-none"
+        }
+      >
         <Menu>
           <Tooltip>
             <TooltipTrigger
