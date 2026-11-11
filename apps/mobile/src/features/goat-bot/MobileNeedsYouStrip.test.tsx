@@ -257,7 +257,7 @@ function serve(result: AsyncResult.AsyncResult<unknown, unknown>) {
   if (query.read !== null) act(() => registry.refresh(query.read!));
 }
 const stripButton = () =>
-  container.querySelector<HTMLButtonElement>('button[aria-label*="waiting for you."]');
+  container.querySelector<HTMLButtonElement>('button[aria-label*="waiting for you"]');
 
 it("reads every bot's asks, labels each by its bot, and opens the task in that bot, a hidden one too", async () => {
   registry = AtomRegistry.make();
@@ -307,6 +307,33 @@ it("shows a failed refresh as failed even after an empty read, and reads again o
   expect(query.reads).toBeGreaterThan(before);
 });
 
+it("keeps the asks it has when a refresh fails, marked out of date, and reads again on Try again", async () => {
+  registry = AtomRegistry.make();
+  await showRoster(true);
+  const earlier = read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:10:00.000Z")]);
+  serve(earlier);
+  await act(async () => {});
+  serve(
+    AsyncResult.failure(Cause.fail(new Error("offline")), {
+      previousSuccess: Option.some(earlier),
+    }),
+  );
+  await act(async () => {});
+  expect(stripButton()?.getAttribute("aria-label")).toBe(
+    "1 waiting for you, may be out of date. Scout: Which machine?",
+  );
+  expect(
+    container.querySelector('[aria-label="Couldn\'t check what waits for you. Try again"]'),
+  ).toBeNull();
+  const retry = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Couldn\'t refresh, this may be out of date. Try again"]',
+  );
+  expect(retry).not.toBeNull();
+  const before = query.reads;
+  await act(async () => retry?.click());
+  expect(query.reads).toBeGreaterThan(before);
+});
+
 it("reads again when the roster comes back into view, so an ask that arrived meanwhile shows", async () => {
   registry = AtomRegistry.make();
   await showRoster(true);
@@ -326,12 +353,14 @@ it("reads again when the roster comes back into view, so an ask that arrived mea
   );
 });
 
-it("says a partial read is partial: a count with no readable ask, and fewer rows than the total", async () => {
+it("says a partial read is partial: none found before the server stopped, and fewer rows than the total", async () => {
   registry = AtomRegistry.make();
   await showRoster(true);
-  serve(read([], 4, true));
+  // The server bounds the tasks it reads before it finds asks, so it can stop with none found.
+  serve(read([], 0, true));
   await act(async () => {});
-  expect(container.textContent).toContain("Needs you · 4+");
+  expect(container.textContent).toContain("Needs you");
+  expect(container.textContent).not.toContain("Needs you ·");
   expect(container.textContent).toContain("Some waiting work couldn't be read.");
   serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:10:00.000Z")], 3));
   await act(async () => {});

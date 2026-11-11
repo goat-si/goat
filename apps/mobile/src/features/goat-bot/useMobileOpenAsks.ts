@@ -29,13 +29,14 @@ export type MobileOpenAsks =
       readonly total: number;
       /** The server read part of the waiting work; `total` is a lower bound. */
       readonly truncated: boolean;
+      /** The last refresh failed; these asks are from an earlier read and may be out of date. */
+      readonly staleRetry: (() => void) | null;
     };
 
 /**
- * Everything that waits on the person on the bots' machine. Open asks close when they are answered,
- * not when a chat is visited. Read again whenever the roster comes into view with the app in front;
- * the client runtime cannot subscribe to channel.subscribeTaskChanges yet. A failed read wins over
- * the last good one, so it never looks like nothing waits.
+ * Open asks close when answered, not when a chat is visited. Read again whenever the roster comes
+ * into view with the app in front (no channel.subscribeTaskChanges on the client runtime yet). A
+ * failed refresh keeps earlier asks marked out of date, or shows only the failure after an empty read.
  */
 export function useMobileOpenAsks(
   environmentId: EnvironmentId | null,
@@ -55,13 +56,17 @@ export function useMobileOpenAsks(
     if (supported && inView) refresh();
   }, [supported, inView, refresh]);
   if (!supported) return { state: "unsupported" };
-  if (asks.error !== null) return { state: "failed", retry: refresh };
-  if (asks.data !== null)
+  const earlier = asks.data;
+  const failed = asks.error !== null;
+  if (failed && (earlier === null || (earlier.asks.length === 0 && earlier.total === 0)))
+    return { state: "failed", retry: refresh };
+  if (earlier !== null)
     return {
       state: "ready",
-      asks: asks.data.asks,
-      total: asks.data.total,
-      truncated: asks.data.truncated,
+      asks: earlier.asks,
+      total: earlier.total,
+      truncated: earlier.truncated,
+      staleRetry: failed ? refresh : null,
     };
   return { state: "loading" };
 }

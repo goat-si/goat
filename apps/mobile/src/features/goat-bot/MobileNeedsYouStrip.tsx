@@ -45,7 +45,7 @@ export function MobileNeedsYouStrip(props: {
       </View>
     );
   }
-  if (open.state !== "ready" || open.total === 0) return null;
+  if (open.state !== "ready" || (open.total === 0 && !open.truncated)) return null;
   const main = props.bots.find((entry) => entry.kind === "main") ?? null;
   const members = [
     ...props.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile] : [])),
@@ -60,13 +60,31 @@ export function MobileNeedsYouStrip(props: {
       : { entry: { kind: "member", profile }, name: profile.name };
   };
   const count = `${open.total}${open.truncated ? "+" : ""}`;
+  const title = open.total > 0 ? `Needs you · ${count}` : "Needs you";
+  const stale =
+    open.staleRetry === null ? null : (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Couldn't refresh, this may be out of date. Try again"
+        onPress={open.staleRetry}
+        className="min-h-[44px] justify-center border-t border-border px-4 py-2"
+      >
+        <Text className="text-xs text-foreground-muted">
+          Couldn't refresh, this may be out of date.{" "}
+          <Text className="text-foreground">Try again</Text>
+        </Text>
+      </Pressable>
+    );
   const newest = open.asks[0];
   if (newest === undefined) {
-    // The server counted waiting work it could not read.
+    // The server stopped before it read all the waiting work, and found none in what it read.
     return (
-      <View className="mx-4 my-2 rounded-2xl bg-goat-bot-message px-4 py-2">
-        <Text className="font-semibold text-foreground">Needs you · {count}</Text>
-        <Text className="text-foreground-muted">Some waiting work couldn't be read.</Text>
+      <View className="mx-4 my-2 overflow-hidden rounded-2xl bg-goat-bot-message">
+        <View className="px-4 py-2">
+          <Text className="font-semibold text-foreground">{title}</Text>
+          <Text className="text-foreground-muted">Some waiting work couldn't be read.</Text>
+        </View>
+        {stale}
       </View>
     );
   }
@@ -77,11 +95,11 @@ export function MobileNeedsYouStrip(props: {
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded }}
-        accessibilityLabel={`${count} waiting for you. ${line}`}
+        accessibilityLabel={`${count} waiting for you${open.staleRetry ? ", may be out of date" : ""}. ${line}`}
         onPress={() => setExpanded((value) => !value)}
         className="min-h-[44px] flex-row items-center gap-2 px-4 py-2"
       >
-        <Text className="font-semibold text-foreground">Needs you · {count}</Text>
+        <Text className="font-semibold text-foreground">{title}</Text>
         <Text numberOfLines={1} className="shrink text-foreground-muted">
           {line}
         </Text>
@@ -93,6 +111,7 @@ export function MobileNeedsYouStrip(props: {
           tintColorClassName="accent-icon-muted"
         />
       </Pressable>
+      {stale}
       {expanded ? (
         <>
           {open.asks.map((ask) => {
