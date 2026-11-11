@@ -124,15 +124,25 @@ vi.mock("react-native", () => ({
   Pressable: ({
     children,
     style,
+    className,
     accessibilityLabel,
+    disabled,
     onPress,
   }: {
     children?: ReactNode;
     style?: unknown;
+    className?: string;
     accessibilityLabel?: string;
+    disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel} onClick={onPress}>
+    <button
+      data-style={JSON.stringify(style)}
+      data-class={className}
+      aria-label={accessibilityLabel}
+      disabled={disabled}
+      onClick={onPress}
+    >
       {children}
     </button>
   ),
@@ -167,11 +177,12 @@ vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => mod
 vi.mock("./useMobileGoatBotMemberModel", () => ({
   useMobileGoatBotMemberModelMenu: () => models.member,
 }));
-vi.mock("./GoatBotModelPill", () => ({
-  GoatBotModelPill: (props: { menu: { label: string; opens: boolean } }) => (
-    <button aria-label="Model" data-opens={String(props.menu.opens)}>
-      {props.menu.label}
-    </button>
+// The real model pill renders; only the native menu it opens stands in, as a box that keeps its style.
+vi.mock("../../components/ui/Menu", () => ({
+  Menu: (props: { children?: ReactNode; style?: unknown }) => (
+    <div data-box="model-menu" data-style={JSON.stringify(props.style ?? null)}>
+      {props.children}
+    </div>
   ),
 }));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
