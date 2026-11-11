@@ -147,6 +147,13 @@ export const ChannelOutboundMessage = Schema.Struct({
   interim: Schema.optional(Schema.Literal(true)),
   /** See ChannelMessageMeta.questionKind. */
   questionKind: Schema.optional(Schema.Literal("task")),
+  /**
+   * Reception's committed decision about a person's answer from a task question's card, for the
+   * GOAT bot to record on that person's message (ChannelMessageMeta.answersQuestionId).
+   */
+  personAnswer: Schema.optional(
+    Schema.Struct({ answersQuestionId: Schema.NullOr(ChannelQuestionId) }),
+  ),
 });
 export type ChannelOutboundMessage = typeof ChannelOutboundMessage.Type;
 
