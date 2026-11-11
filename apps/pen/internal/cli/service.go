@@ -67,8 +67,8 @@ func installedService(st *state.Store) string {
 	return "none"
 }
 
-// exePath is this binary, symlinks resolved.
-func exePath() (string, error) {
+// exePath is this binary, symlinks resolved (a variable so tests can give another path).
+var exePath = func() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err

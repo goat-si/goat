@@ -163,9 +163,30 @@ func TestTaskXMLEscapesThePathAndAccount(t *testing.T) {
 	t.Cleanup(func() { TaskXML = old })
 	TaskXML = string(tmpl)
 	exe, account := `C:\Program Files\R&D <x>\pen.exe`, `D&D\a<b`
-	def := parseTask(t, utf16File(renderTask(exe, account)))
+	xml, err := renderTask(exe, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := parseTask(t, utf16File(xml))
 	if def.Command != exe || def.User != account || def.LogonUser != account {
 		t.Fatalf("task definition %+v", def)
+	}
+}
+
+// Task Scheduler expands %VAR% in the action's path and has no escape for it, so like the systemd unit
+// and the plist the task refuses a path it cannot carry exactly.
+func TestTaskRefusesAPathTaskSchedulerWouldChange(t *testing.T) {
+	for _, exe := range []string{`C:\Users\100%USERNAME%\pen.exe`, "C:\\a\x01\\pen.exe", "C:\\a\xff\\pen.exe"} {
+		if _, err := renderTask(exe, testAccount); err == nil {
+			t.Fatalf("renderTask accepted %q", exe)
+		}
+	}
+	st, _ := windowsHome(t, func(string, []string) error { return nil })
+	old := exePath
+	t.Cleanup(func() { exePath = old })
+	exePath = func() (string, error) { return `C:\Users\100%USERNAME%\pen.exe`, nil }
+	if err := startTask(st); err == nil || !strings.Contains(err.Error(), "%USERNAME%") {
+		t.Fatalf("startTask: %v, want a refusal naming the path", err)
 	}
 }
 

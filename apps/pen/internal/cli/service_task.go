@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 	"github.com/goat-si/goat/apps/pen/internal/state"
@@ -62,13 +63,19 @@ func accountTaskName() (string, error) {
 	return taskName(account), nil
 }
 
-func renderTask(exe, account string) string {
+// renderTask fills the task definition. Task Scheduler expands %VAR% in the action's path with no
+// escape, so a path with % (or control characters, or bytes that are not UTF-8) is refused, as the
+// systemd unit refuses $.
+func renderTask(exe, account string) (string, error) {
+	if !utf8.ValidString(exe) || strings.ContainsFunc(exe, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '%' }) {
+		return "", fmt.Errorf("cannot write a task that starts %q exactly (%%, control characters or bytes that are not UTF-8); install pen under a path without them", exe)
+	}
 	esc := func(s string) string {
 		var b bytes.Buffer
 		xml.EscapeText(&b, []byte(s))
 		return b.String()
 	}
-	return strings.NewReplacer("__PEN__", esc(exe), "__USER__", esc(account)).Replace(TaskXML)
+	return strings.NewReplacer("__PEN__", esc(exe), "__USER__", esc(account)).Replace(TaskXML), nil
 }
 
 // utf16File is s as UTF-16LE with a byte order mark: schtasks /XML refuses UTF-8 ("cannot switch encoding").
@@ -94,7 +101,11 @@ func startTask(st *state.Store) error {
 	}
 	name := taskName(account)
 	path := st.Path(".pen-task.xml")
-	if err := os.WriteFile(path, utf16File(renderTask(exe, account)), 0o600); err != nil {
+	def, err := renderTask(exe, account)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, utf16File(def), 0o600); err != nil {
 		return err
 	}
 	defer os.Remove(path)
