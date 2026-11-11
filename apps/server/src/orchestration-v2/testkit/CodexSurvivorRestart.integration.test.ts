@@ -180,6 +180,7 @@ const runRestartScenario = (
           Effect.sync(() => {
             wakeStarts = wake;
           }),
+        onFenceChange: () => Effect.void,
         release: (binding) =>
           Ref.update(bindings, (items) =>
             items.filter((item) => item.threadId !== binding.threadId),

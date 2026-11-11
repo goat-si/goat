@@ -104,4 +104,38 @@ describe("splitGoatBotReply", () => {
   it("returns one prose part for text without a table", () => {
     expect(splitGoatBotReply("Just words.")).toEqual(prose("Just words."));
   });
+
+  it("splits a table indented up to three spaces when no list or quote could hold it", () => {
+    const rows = ["  | A | B |", "   | - | - |", "  | 1 | 2 |"];
+    expect(splitGoatBotReply(["Intro", "", ...rows].join("\n"))).toEqual([
+      { kind: "prose", text: "Intro" },
+      { kind: "table", markdown: rows.join("\n"), columns: 2 },
+    ]);
+  });
+
+  it("splits a table whose header starts with inline HTML", () => {
+    const rows = ["<strong>A</strong> | B", "| - | - |", "| 1 | 2 |"];
+    expect(splitGoatBotReply(rows.join("\n"))).toEqual([
+      { kind: "table", markdown: rows.join("\n"), columns: 2 },
+    ]);
+  });
+
+  it("splits a reply whose definition-shaped line is code, which defines nothing", () => {
+    for (const code of [
+      ["```", "[x]: https://example.com", "```"],
+      ["    [x]: https://example.com"],
+    ]) {
+      const text = ["Intro", "", ...table, "", ...code].join("\n");
+      expect(splitGoatBotReply(text)).toEqual([
+        { kind: "prose", text: "Intro" },
+        { kind: "table", markdown: table.join("\n"), columns: 3 },
+        { kind: "prose", text: code.join("\n") },
+      ]);
+    }
+  });
+
+  it("keeps a reply whole when a definition's label runs onto the next line", () => {
+    const text = ["See [a b][a b].", "", ...table, "", "[a", "b]: https://example.com"].join("\n");
+    expect(splitGoatBotReply(text)).toEqual(prose(text));
+  });
 });
