@@ -72,9 +72,9 @@ func (d *Daemon) admitPairing(remote []byte, p session.Payload, relay string) (c
 	if !ValidServiceName(p.Name) || !validInviteID(p.Invite) {
 		return clientAdmission{}, nil, errNotAdmitted
 	}
-	now := d.now()
 	d.svc.mu.Lock()
 	defer d.svc.mu.Unlock()
+	now := d.now() // read under the lock, right before the expiry decision
 	reg := d.svc.byName[p.Name]
 	if reg == nil || reg.ended || reg.name != clientsService {
 		return clientAdmission{}, nil, errNotAdmitted
@@ -108,13 +108,16 @@ func (b *serviceBook) listedAnywhere(key string) bool {
 // registerClient records a confirmed client session if its registration is still current, still lists its key and
 // the key is not a member or a revoked member.
 func (d *Daemon) registerClient(l *live) bool {
-	now := d.now()
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.opt.ClientRegistering != nil {
+		d.opt.ClientRegistering()
+	}
 	if l.inv == nil && memberOrRevoked(d.view(), l.remote) {
 		return false
 	}
 	d.svc.mu.Lock()
+	now := d.now() // read under the lock, right before the burn's expiry decision
 	ok := !l.reg.ended && d.svc.byName[l.reg.name] == l.reg
 	if l.inv == nil {
 		_, listed := l.reg.clients[l.remote]
@@ -146,7 +149,8 @@ func claimLocked(l *live) bool {
 }
 
 // closeOwned closes what an owner claimed: the local connection and the relay session, after any commit and identity
-// line in progress; then it signals closed.
+// line in progress; then it returns the session's phone slot and signals closed. The slot is held until here, so a
+// session still closing keeps counting against the caps.
 func (d *Daemon) closeOwned(l *live, code uint16) {
 	if d.opt.ClientClosing != nil {
 		d.opt.ClientClosing()
@@ -160,6 +164,9 @@ func (d *Daemon) closeOwned(l *live, code uint16) {
 	d.mu.Lock()
 	delete(d.sessions, l.k)
 	d.mu.Unlock()
+	if l.slot != nil {
+		d.svc.releasePhone(l.slot)
+	}
 	close(l.closed)
 }
 
@@ -227,12 +234,12 @@ func (k liveLink) Close(code uint16) error {
 // serveClient delivers a confirmed client session to the program of the registration that admitted it.
 func (d *Daemon) serveClient(ctx context.Context, sec *session.Secure, a clientAdmission) {
 	l := &live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec, client: true, reg: a.reg, inv: a.inv,
-		closed: make(chan struct{})}
-	if d.opt.ClientEnded != nil {
-		defer d.opt.ClientEnded()
-	}
+		slot: a.slot, closed: make(chan struct{})}
 	if !d.registerClient(l) {
 		sec.Close(wire.CodeNotAdmitted)
+		if a.slot != nil {
+			d.svc.releasePhone(a.slot)
+		}
 		return
 	}
 	defer d.closeLive(l, wire.CodeNormal)

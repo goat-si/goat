@@ -84,12 +84,13 @@ func TestADeliveryThatFailsWhileAListDropIsClosingItKeepsTheDropsCode(t *testing
 	}
 }
 
-func TestReplacingARegistrationWhileItsListDropIsClosingEndsTheOldOneOnlyAfterThatClose(t *testing.T) {
+func TestReplacingARegistrationWhileItsListDropIsClosingTellsTheOldHolderAtOnceAndEndsItOnlyAfterThatClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
-	a, held := heldNode(t, ctx, rs, nil)
+	ended := make(chan string, 8)
+	a, held := heldNode(t, ctx, rs, ended)
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
 	prog.serve()
@@ -118,18 +119,21 @@ func TestReplacingARegistrationWhileItsListDropIsClosingEndsTheOldOneOnlyAfterTh
 		}
 	}()
 	register(t, a, "goat", prog.port(), key) // replaces old while its teardown holds the close
-	events <- "released"
+	// The old holder learns at once, while the close is still held.
+	if e := <-events; e != "replaced" {
+		t.Fatalf("old holder got %q, want replaced", e)
+	}
+	if e := <-events; e != "eof" {
+		t.Fatalf("old holder got %q, want its connection closed", e)
+	}
+	ended <- "released"
 	held.hold.Store(false)
 	close(held.release)
-	var seen []string
-	for e := range events {
-		seen = append(seen, e)
-		if e == "eof" {
-			break
-		}
+	if e := <-ended; e != "released" {
+		t.Fatalf("the old registration ended (%s) before its held close finished", e)
 	}
-	if len(seen) < 2 || seen[0] != "released" || seen[len(seen)-1] != "eof" {
-		t.Fatalf("old holder events %v: nothing may end the old registration before the held close finished", seen)
+	if e := <-ended; e != old.reply["id"] {
+		t.Fatalf("ended %q, want the old registration %v", e, old.reply["id"])
 	}
 	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("closed %d, want 4401", code)

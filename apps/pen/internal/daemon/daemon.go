@@ -72,8 +72,11 @@ type Options struct {
 	// ClientClosing, when set, runs when the owner of a client session's close starts closing it, before it takes
 	// the session's gate (tests).
 	ClientClosing func()
-	// ClientEnded, when set, runs when a client session's goroutine is done with it (tests).
+	// ClientEnded, when set, runs when the goroutine that accepted a confirmed client or pairing session is done with
+	// it, after everything that goroutine releases (tests).
 	ClientEnded func()
+	// ClientRegistering, when set, runs as a confirmed client or pairing session's check takes d.mu (tests).
+	ClientRegistering func()
 	// PhoneSlots, when set, is told the node-wide count of held phone slots after every change, in order (tests).
 	PhoneSlots func(total int)
 }
@@ -172,8 +175,10 @@ type live struct {
 	client bool
 	reg    *serviceReg
 	k      uint64
-	// inv is the burned invite of a pairing session (nil for a listed client).
-	inv *serviceInvite
+	// inv is the burned invite of a pairing session (nil for a listed client); slot is its phone slot, returned by
+	// the close owner.
+	inv  *serviceInvite
+	slot *phoneSlot
 	// gate orders a client delivery's commit and identity line before its close; closing, closed and conn are
 	// guarded by d.mu (clients.go).
 	gate    sync.Mutex

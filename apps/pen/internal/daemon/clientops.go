@@ -317,14 +317,16 @@ func (d *Daemon) opInvite(reg *serviceReg, b []byte, extra map[string]any) (*hol
 		return refuse("the psk is not canonical base64url of 32 bytes")
 	}
 	at, ok := positiveInteger(o.ExpiresAt)
-	now := d.now()
-	expires := time.UnixMilli(at)
-	if !ok || !expires.After(now) || expires.Sub(now) > maxInviteAhead {
-		return refuse("expiresAt is not an integer of milliseconds within the next 10 minutes")
+	if !ok {
+		return refuse("expiresAt is not an integer of milliseconds")
 	}
+	expires := time.UnixMilli(at)
 	inv := &serviceInvite{id: o.ID, psk: psk, expires: expires, budget: inviteBudget}
 	d.svc.mu.Lock()
 	defer d.svc.mu.Unlock()
+	if now := d.now(); !expires.After(now) || expires.Sub(now) > maxInviteAhead {
+		return reg.out.push(opRefusal(inviteOpName, extra, "expiresAt is not within the next 10 minutes"))
+	}
 	if reg.ended || d.svc.byName[reg.name] != reg {
 		return reg.out.push(opRefusal(inviteOpName, extra, refusedReplaced))
 	}
@@ -343,9 +345,9 @@ func (d *Daemon) opCancel(reg *serviceReg, b []byte, extra map[string]any) (*hol
 	if err := exact(b, &o); err != nil || !validInviteID(o.ID) {
 		return reg.out.push(opRefusal(cancelOpName, extra, "the op's members are not exactly op and a 16-character id"))
 	}
-	now := d.now()
 	d.svc.mu.Lock()
 	defer d.svc.mu.Unlock()
+	now := d.now()
 	was := "absent"
 	if inv := reg.invite; inv != nil && inv.id == o.ID {
 		switch {

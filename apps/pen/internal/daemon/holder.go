@@ -27,14 +27,16 @@ type holderQueue struct {
 	conn net.Conn
 	// wmu holds one write at a time, so failWith's line never splits another; broken (guarded by wmu) is set once a
 	// write failed, possibly part way through a line, after which nothing more is written.
-	wmu     sync.Mutex
-	broken  bool
-	mu      sync.Mutex
-	entries []*holderEntry
-	failed  bool
-	wake    chan struct{}
-	dead    chan struct{}
-	once    sync.Once
+	wmu    sync.Mutex
+	broken bool
+	// beforeWrite, when set, runs after an entry is ready and before its write takes wmu (tests).
+	beforeWrite func()
+	mu          sync.Mutex
+	entries     []*holderEntry
+	failed      bool
+	wake        chan struct{}
+	dead        chan struct{}
+	once        sync.Once
 }
 
 func newHolderQueue(c net.Conn) *holderQueue {
@@ -117,9 +119,16 @@ func (q *holderQueue) run() {
 		case <-q.dead:
 			return
 		}
+		if q.beforeWrite != nil {
+			q.beforeWrite()
+		}
 		q.wmu.Lock()
+		q.mu.Lock()
+		failed := q.failed
+		q.mu.Unlock()
 		var err error
-		if q.broken {
+		// Checked with write ownership held: once failWith has marked the queue, no queued line starts.
+		if failed || q.broken {
 			err = net.ErrClosed
 		} else if _, err = q.conn.Write(e.line); err != nil {
 			q.broken = true
@@ -156,13 +165,13 @@ func (q *holderQueue) failWith(last []byte) {
 		q.entries = nil
 		q.mu.Unlock()
 		close(q.dead)
-		if last != nil {
-			q.wmu.Lock()
-			if !q.broken {
-				q.conn.Write(last)
-			}
-			q.wmu.Unlock()
+		// The connection closes while write ownership is still held, so no queued write can start between the last
+		// line and the close.
+		q.wmu.Lock()
+		if last != nil && !q.broken {
+			q.conn.Write(last)
 		}
 		q.conn.Close()
+		q.wmu.Unlock()
 	})
 }

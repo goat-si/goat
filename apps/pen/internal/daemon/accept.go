@@ -98,9 +98,10 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		return nil, err
 	}
 	sec, err := session.Respond(ctx, c, d.id, d.nodeID, admit)
-	if client != nil && client.slot != nil {
-		// Held from before message 2 until the session ends, whatever ends it.
-		defer d.svc.releasePhone(client.slot)
+	if err != nil && client != nil && client.slot != nil {
+		// Taken before message 2; a handshake that did not confirm returns it here. A confirmed session's slot is
+		// returned by serveClient or by the owner of its close.
+		d.svc.releasePhone(client.slot)
 	}
 	if slot != nil {
 		defer d.releaseAccount(slot)
@@ -109,6 +110,9 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		return
 	}
 	if client != nil {
+		if d.opt.ClientEnded != nil {
+			defer d.opt.ClientEnded()
+		}
 		d.serveClient(ctx, sec, *client)
 		return
 	}

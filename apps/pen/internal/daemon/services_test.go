@@ -107,6 +107,8 @@ type program struct {
 	raw        chan []byte
 	// accepts counts every connection the node made to the program.
 	accepts atomic.Int64
+	// ended, when set, receives a value as each connection's handler returns (the node closed it or it failed).
+	ended chan struct{}
 }
 
 func newProgram(t *testing.T, name string, key []byte) *program {
@@ -136,6 +138,9 @@ func (p *program) serve() {
 }
 
 func (p *program) handle(c net.Conn) {
+	if p.ended != nil {
+		defer func() { p.ended <- struct{}{} }()
+	}
 	defer c.Close()
 	var seen bytes.Buffer
 	r := bufio.NewReader(io.TeeReader(c, &seen))

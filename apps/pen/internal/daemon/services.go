@@ -468,11 +468,12 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	d.spawn(reg.out.run)
 	reg.wmu.Unlock()
 	if old != nil {
-		d.endRegistration(old, conns)
-		// The old holder's lines may still wait in its queue; replaced ends it without waiting for them.
+		// The old holder learns at once, without waiting for queued lines or for its sessions' closes, which run
+		// beside the new registration.
 		old.wmu.Lock()
 		old.wmu.Unlock()
 		old.out.failWith([]byte(`{"t":"replaced","id":"` + old.id + `"}` + "\n"))
+		d.spawn(func() { d.endRegistration(old, conns) })
 	}
 	defer func() {
 		reg.out.fail()
