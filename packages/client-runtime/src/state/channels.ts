@@ -256,6 +256,15 @@ export function createChannelEnvironmentAtoms<R, E>(
       staleTimeMs: 2_000,
     }),
     listBotThreads,
+    listOpenAsks: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-open-asks",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,
+      staleTimeMs: 2_000,
+    }),
+    taskChanges: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:channel:task-changes",
+      tag: CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
+    }),
     listBotNotes: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-notes",
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
