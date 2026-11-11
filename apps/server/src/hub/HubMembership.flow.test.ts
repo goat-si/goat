@@ -1,5 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { ProviderInstanceConfigMap, ServerProvider } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import { builtInCodexWiring, localOpenCodexRoutes } from "./localRoutes.ts";
+import { parityVerdict } from "./parity.ts";
+import { fleetSnapshot } from "./parity.testkit.ts";
 
 import { PINNED, scope, setup, verdict } from "./HubMembership.testkit.ts";
 
@@ -130,7 +135,7 @@ it.effect("after a join the repair ladder syncs exactly as on dev: once, only fo
 );
 
 it.effect(
-  "a join whose routing is not shown says so and warns that repair can interrupt a turn",
+  "a join whose routing is not shown says so and tells failed from unproven: repair can interrupt a turn, or changes nothing",
   () =>
     Effect.gen(function* () {
       const unproven = {
@@ -142,11 +147,84 @@ it.effect(
       const linked = yield* setup({ pin: PINNED, verdicts: [unproven] });
       const child = yield* linked.membership.join(scope, { deviceAlias: "mac-studio" });
       expect(child.state).toBe("child");
-      expect(child.message).toContain("does not show mac-studio routing through this Home");
-      expect(child.message).toContain("it can interrupt a turn running there");
+      expect(child.message).toContain("cannot yet show mac-studio routing through this Home");
+      expect(child.message).toContain("changes nothing for an unproven check");
+      expect(child.message).not.toContain("interrupt");
       const failing = yield* setup({ pin: PINNED, verdicts: [verdict(["P6"])] });
       const degraded = yield* failing.membership.join(scope, { deviceAlias: "mac-studio" });
       expect(degraded.state).toBe("degraded");
       expect(degraded.message).toContain("it can interrupt a turn running there");
     }),
+);
+
+const decodeInstances = Schema.decodeUnknownSync(ProviderInstanceConfigMap);
+const decodeProvider = Schema.decodeUnknownSync(ServerProvider);
+/** A Child whose Claude routes through local OpenCodex and whose built-in Codex routes natively. */
+const nativeBuiltInCodex = () => {
+  const instances = decodeInstances({
+    claude: {
+      driver: "claudeAgent",
+      environment: [{ name: "ANTHROPIC_BASE_URL", value: "http://127.0.0.1:10100" }],
+    },
+  });
+  const providers = [
+    decodeProvider({
+      instanceId: "codex",
+      driver: "codex",
+      enabled: true,
+      installed: true,
+      version: "fixture",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-11-11T00:00:00.000Z",
+      models: [],
+      codexRoute: { modelRoute: "default", effectiveBaseUrl: "https://api.openai.com/v1" },
+    }),
+  ];
+  const device = fleetSnapshot("mac-studio");
+  const evidence = device.parityEvidence;
+  if (evidence === undefined) throw new Error("fixture has parity evidence");
+  const verdictWith = (
+    wiring: ReadonlyArray<{ status: "ok" | "failed" | "unproven"; reason: string }>,
+  ) =>
+    parityVerdict({
+      deviceAlias: "mac-studio",
+      checkedAt: 0,
+      home: fleetSnapshot("home"),
+      device: {
+        ...device,
+        parityEvidence: {
+          ...evidence,
+          wiring: wiring.map(({ status, reason }) => ({ status, reason })),
+        },
+      },
+    });
+  const configured = localOpenCodexRoutes({ instances, providers, environment: {}, port: 10100 });
+  return {
+    // What dev's parity read: settings entries only.
+    dev: verdictWith(configured),
+    now: verdictWith([...configured, ...builtInCodexWiring({ instances, providers, port: 10100 })]),
+  };
+};
+
+it.effect(
+  "a built-in Codex routing natively is reported but never triggers the join's sync on a busy Child",
+  () =>
+    Effect.gen(function* () {
+      const { now } = nativeBuiltInCodex();
+      const hub = yield* setup({ pin: PINNED, running: 1, verdicts: [now] });
+      const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+      expect(hub.calls.filter((call) => call.includes("sync"))).toEqual([]);
+      expect(result.message).toContain("P7");
+    }),
+);
+
+it.effect("the post-join sync trigger for built-in Codex evidence equals dev's", () =>
+  Effect.sync(() => {
+    const { dev, now } = nativeBuiltInCodex();
+    const syncTrigger = (ids: ReadonlyArray<string>) =>
+      ids.filter((id) => id === "P6" || id === "P7");
+    expect(syncTrigger(now.failingCheckIds)).toEqual(syncTrigger(dev.failingCheckIds));
+    expect(now.checks.find(({ id }) => id === "P7")?.status).not.toBe("ok");
+  }),
 );
