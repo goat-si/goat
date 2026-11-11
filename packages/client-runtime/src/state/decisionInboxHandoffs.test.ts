@@ -266,6 +266,30 @@ describe("decision inbox approval handoffs", () => {
     }
   });
 
+  it("does not dock a cached approval the capped feed does not confirm until its thread is live", () => {
+    const h = harness();
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("listed") }],
+        handoffsTotal: 201,
+      });
+      // Answered elsewhere while away; the cached projection still holds it.
+      h.set(ref(a), [], "synchronizing", null, [handoffItem(approval("stale"))]);
+      const docked = () =>
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId);
+      expect(docked()).toEqual(["listed"]);
+      h.set(ref(a), [], "cached", "Disconnected", [handoffItem(approval("stale"))]);
+      expect(docked()).toEqual(["listed"]);
+      h.set(ref(a), [], "live", null, [handoffItem(approval("older"))]);
+      expect(docked()).toEqual(["older", "listed"]);
+    } finally {
+      stopDock();
+      h.registry.dispose();
+    }
+  });
+
   it("keeps a capped feed's approval docked when the thread's loaded history lacks it", () => {
     const h = harness();
     const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
