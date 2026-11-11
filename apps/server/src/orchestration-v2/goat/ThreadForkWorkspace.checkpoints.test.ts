@@ -12,6 +12,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   ThreadId,
+  type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
@@ -67,7 +68,7 @@ it.effect(
                   driver,
                   providerInstanceId: instanceId,
                   status: "ready",
-                  cwd: input.runtimePolicy.cwd,
+                  cwd: input.runtimePolicy.cwd ?? source,
                   model: modelSelection.model,
                   capabilities,
                   createdAt: now,
@@ -137,9 +138,7 @@ it.effect(
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
           const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-          const watch = (
-            predicate: (event: Orchestrator.OrchestratorV2DomainEventLike) => boolean,
-          ) =>
+          const watch = (predicate: (event: OrchestrationV2DomainEvent) => boolean) =>
             orchestrator.streamDomainEvents.pipe(
               Stream.filter(predicate),
               Stream.take(1),
