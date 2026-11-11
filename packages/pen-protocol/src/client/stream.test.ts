@@ -151,6 +151,18 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     expect(c.received()).toEqual([data(new Uint8Array(1))]);
   });
 
+  it("end() during a write blocked at the window sends FIN only after that write's DATA", async () => {
+    const c = await connected();
+    await c.stream.write(new Uint8Array(512 * KiB));
+    c.received();
+    const blocked = c.stream.write(Uint8Array.of(9));
+    c.stream.end();
+    expect(c.received()).toEqual([]);
+    c.send(record(2, u32le(64 * KiB)));
+    await blocked;
+    expect(c.received()).toEqual([data(Uint8Array.of(9)), record(1)]);
+  });
+
   it("refuses a second write while one is pending and a single write over 1 MiB", async () => {
     const c = await connected();
     await expect(c.stream.write(new Uint8Array(STREAM_LIMITS.maxWrite + 1))).rejects.toMatchObject({

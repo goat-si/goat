@@ -104,7 +104,9 @@ export type PairingView =
   | { readonly tag: "not-confirmed" }
   | { readonly tag: "connect-once" }
   | { readonly tag: "pending-unresolved" }
-  | { readonly tag: "discarded" };
+  | { readonly tag: "discarded" }
+  /** The outcome belonged to an attempt the person discarded or replaced; nothing changed. */
+  | { readonly tag: "superseded" };
 
 export interface PairingDeps {
   readonly store: PairingStore;
@@ -136,15 +138,78 @@ function loadKey(key: StoredKey): KeyPair {
   return { privateKey, publicKey: x25519PublicKey(privateKey) };
 }
 
-// Record transitions (design table in 020): pure, so each is exactly one save.
-function promote(record: PairingRecord, deviceId: string | null): PairingRecord {
-  const pending = record.pending;
-  if (pending === undefined) return record;
-  const previous = record.current ?? record.previous;
-  return {
-    current: { key: pending.key, deviceId, server: pending.server },
-    ...(previous === undefined ? {} : { previous }),
-  };
+// Record transitions. Each runs inside update(), which serializes all changes to one server's record, and each
+// outcome is tied to its attempt by the pending key's public key: a late answer for a discarded or replaced attempt
+// changes nothing.
+const updates = new WeakMap<PairingStore, Map<string, Promise<unknown>>>();
+
+/** Runs change on the latest record, one change at a time per server; undefined from change writes nothing. */
+async function update<T>(
+  deps: Pick<PairingDeps, "store">,
+  nodeId: string,
+  change: (record: PairingRecord) => { readonly next?: PairingRecord; readonly result: T },
+): Promise<T> {
+  let byNode = updates.get(deps.store);
+  if (byNode === undefined) {
+    byNode = new Map();
+    updates.set(deps.store, byNode);
+  }
+  const before = byNode.get(nodeId) ?? Promise.resolve();
+  const run = before
+    .catch(() => undefined)
+    .then(async () => {
+      const { next, result } = change((await deps.store.load(nodeId)) ?? {});
+      if (next !== undefined) await saveOrRemove(deps, nodeId, next);
+      return result;
+    });
+  byNode.set(nodeId, run);
+  try {
+    return await run;
+  } finally {
+    if (byNode.get(nodeId) === run) byNode.delete(nodeId);
+  }
+}
+
+const isAttempt = (record: PairingRecord, publicKey: string) =>
+  record.pending?.key.publicKey === publicKey;
+
+/** Promotes the attempt's pending key; false when that attempt is no longer the pending one. */
+function promoteAttempt(
+  deps: PairingDeps,
+  nodeId: string,
+  publicKey: string,
+  deviceId: string | null,
+) {
+  return update(deps, nodeId, (record) => {
+    const pending = record.pending;
+    if (pending === undefined || !isAttempt(record, publicKey)) return { result: false };
+    const previous = record.current ?? record.previous;
+    return {
+      next: {
+        current: { key: pending.key, deviceId, server: pending.server },
+        ...(previous === undefined ? {} : { previous }),
+      },
+      result: true,
+    };
+  });
+}
+
+/** Removes the attempt's pending key after its own refusal or failure; another attempt's key is left alone. */
+async function dropPending(deps: PairingDeps, nodeId: string, publicKey: string): Promise<void> {
+  await update(deps, nodeId, (record) =>
+    isAttempt(record, publicKey)
+      ? { next: withoutPending(record), result: undefined }
+      : { result: undefined },
+  ).catch(() => undefined);
+}
+
+/** Replaces the attempt's pending entry; false when the attempt is no longer the pending one. */
+function setPending(deps: PairingDeps, nodeId: string, publicKey: string, pending: PendingPairing) {
+  return update(deps, nodeId, (record) =>
+    isAttempt(record, publicKey)
+      ? { next: { ...withoutPending(record), pending }, result: true }
+      : { result: false },
+  );
 }
 
 function withoutPending(record: PairingRecord): PairingRecord {
@@ -158,7 +223,7 @@ function finish(deps: PairingDeps, view: PairingView): PairingView {
 }
 
 async function saveOrRemove(
-  deps: PairingDeps,
+  deps: Pick<PairingDeps, "store">,
   nodeId: string,
   record: PairingRecord,
 ): Promise<void> {
@@ -173,47 +238,55 @@ async function saveOrRemove(
   }
 }
 
-/** Removes the pending key after a refusal or a failure before any 202; a failure here is retried at start-up. */
-async function dropPending(deps: PairingDeps, nodeId: string): Promise<void> {
-  const record = (await deps.store.load(nodeId)) ?? {};
-  await saveOrRemove(deps, nodeId, withoutPending(record)).catch(() => undefined);
-}
-
 /** Pairs this phone with the server named by a scanned QR. Returns the final view (also shown). */
 export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<PairingView> {
-  const record = (await deps.store.load(qr.nodeId)) ?? {};
-  if (record.pending?.stage === "post-202") return finish(deps, { tag: "pending-unresolved" });
-  const replacing = record.current !== undefined;
-  if (record.current !== undefined && record.current.deviceId === null) {
-    return finish(deps, { tag: "connect-once" });
-  }
   let key: KeyPair;
   try {
     key = generateX25519(deps.random);
   } catch {
     return finish(deps, { tag: "not-paired", reason: "this phone could not create a key" });
   }
+  const attempt = toBase64Url(key.publicKey);
   const server: ServerPin = {
     nodeId: qr.nodeId,
     noisePub: toBase64Url(qr.serverNoisePub),
     relays: [...qr.relays],
   };
-  const replacesDeviceId = record.current?.deviceId ?? undefined;
-  const pending: PendingPairing = {
-    key: storeKey(key),
-    stage: "pre-202",
-    server,
-    secret: toBase64Url(qr.secret),
-    startedAt: deps.clock.now(),
-    ...(replacesDeviceId === undefined ? {} : { replacesDeviceId }),
-  };
+  // The decision to start and the pending key's save are one serialized step on the latest record.
+  type Start =
+    | { readonly tag: "start"; readonly pending: PendingPairing; readonly replacing: boolean }
+    | { readonly tag: "stop"; readonly view: PairingView };
+  let start: Start;
   try {
-    await deps.store.save(qr.nodeId, { ...withoutPending(record), pending });
+    start = await update<Start>(deps, qr.nodeId, (record) => {
+      if (record.pending?.stage === "post-202") {
+        return { result: { tag: "stop", view: { tag: "pending-unresolved" } } };
+      }
+      if (record.current !== undefined && record.current.deviceId === null) {
+        return { result: { tag: "stop", view: { tag: "connect-once" } } };
+      }
+      const replacesDeviceId = record.current?.deviceId ?? undefined;
+      const pending: PendingPairing = {
+        key: storeKey(key),
+        stage: "pre-202",
+        server,
+        secret: toBase64Url(qr.secret),
+        startedAt: deps.clock.now(),
+        ...(replacesDeviceId === undefined ? {} : { replacesDeviceId }),
+      };
+      return {
+        next: { ...withoutPending(record), pending },
+        result: { tag: "start", pending, replacing: record.current !== undefined },
+      };
+    });
   } catch {
     return finish(deps, { tag: "not-paired", reason: "this phone could not store its key" });
   }
+  if (start.tag === "stop") return finish(deps, start.view);
+  const { pending } = start;
+  const replacesDeviceId = pending.replacesDeviceId;
 
-  deps.show({ tag: "dialling", replacing });
+  deps.show({ tag: "dialling", replacing: start.replacing });
   let channel: PairingChannel;
   try {
     channel = await deps.openPairing({
@@ -223,14 +296,17 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
       psk: servicePsk(qr.secret, qr.nodeId, qr.serverNoisePub, GOAT_SERVICE),
     });
   } catch {
-    await dropPending(deps, qr.nodeId);
+    await dropPending(deps, qr.nodeId, attempt);
     return finish(deps, { tag: "not-paired", reason: "could not reach the server for pairing" });
   }
 
   const { secret: _secret, ...requested } = pending;
   let answer: PairResponse;
   try {
-    await deps.store.save(qr.nodeId, { ...withoutPending(record), pending: requested });
+    if (!(await setPending(deps, qr.nodeId, attempt, requested))) {
+      channel.close();
+      return finish(deps, { tag: "superseded" });
+    }
     deps.show({ tag: "requesting" });
     answer = await channel.request({
       ...deps.device,
@@ -238,7 +314,7 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
     });
   } catch {
     channel.close();
-    await dropPending(deps, qr.nodeId);
+    await dropPending(deps, qr.nodeId, attempt);
     return finish(deps, {
       tag: "not-paired",
       reason: "the pairing stream closed before the server answered",
@@ -246,25 +322,27 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
   }
   if (answer.status === 409) {
     channel.close();
-    await dropPending(deps, qr.nodeId);
+    await dropPending(deps, qr.nodeId, attempt);
     return finish(deps, { tag: "refused", reason: answer.reason });
   }
   if (answer.status !== 202) {
     channel.close();
-    await dropPending(deps, qr.nodeId);
+    await dropPending(deps, qr.nodeId, attempt);
     return finish(deps, { tag: "not-paired", reason: "unexpected answer " + answer.status });
   }
 
   // The marker comes before the code: a code can only be typed after it, so before it nothing can have committed.
+  let marked: boolean;
   try {
-    await deps.store.save(qr.nodeId, {
-      ...withoutPending(record),
-      pending: { ...requested, stage: "post-202" },
-    });
+    marked = await setPending(deps, qr.nodeId, attempt, { ...requested, stage: "post-202" });
   } catch {
     channel.close();
-    await dropPending(deps, qr.nodeId);
+    await dropPending(deps, qr.nodeId, attempt);
     return finish(deps, { tag: "not-paired", reason: "this phone could not record the pairing" });
+  }
+  if (!marked) {
+    channel.close();
+    return finish(deps, { tag: "superseded" });
   }
   deps.show({ tag: "code", code: pairingCode(pairingSas(channel.handshakeHash)) });
 
@@ -279,12 +357,13 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
     if (result.status === 204) continue;
     channel.close();
     if (result.status === 200) {
-      const latest = (await deps.store.load(qr.nodeId)) ?? {};
-      await deps.store.save(qr.nodeId, promote(latest, result.deviceId));
+      if (!(await promoteAttempt(deps, qr.nodeId, attempt, result.deviceId))) {
+        return finish(deps, { tag: "superseded" });
+      }
       return finish(deps, { tag: "paired", deviceId: result.deviceId });
     }
     if (result.status === 409) {
-      await dropPending(deps, qr.nodeId);
+      await dropPending(deps, qr.nodeId, attempt);
       return finish(deps, { tag: "refused", reason: result.reason });
     }
     return checking(deps, qr.nodeId);
@@ -301,6 +380,7 @@ async function checking(deps: PairingDeps, nodeId: string): Promise<PairingView>
   const pending = record?.pending;
   if (pending === undefined)
     return finish(deps, { tag: "not-paired", reason: "no pairing in progress" });
+  const attempt = pending.key.publicKey;
   const key = loadKey(pending.key);
   const start = deps.clock.now();
   const until = start + CHECKING_WINDOW_MS;
@@ -310,8 +390,10 @@ async function checking(deps: PairingDeps, nodeId: string): Promise<PairingView>
       .probe({ server: pending.server, key })
       .catch((): ProbeResult => ({ issued: false }));
     if (result.issued) {
-      const latest = (await deps.store.load(nodeId)) ?? {};
-      await deps.store.save(nodeId, promote(latest, result.deviceId ?? null));
+      // The session proves this attempt's key only; a discarded or replaced attempt promotes nothing.
+      if (!(await promoteAttempt(deps, nodeId, attempt, result.deviceId ?? null))) {
+        return finish(deps, { tag: "superseded" });
+      }
       return finish(deps, { tag: "paired", deviceId: result.deviceId ?? null });
     }
     const next = at + PROBE_INTERVAL_MS;
@@ -330,14 +412,13 @@ export function retryChecking(deps: PairingDeps, nodeId: string): Promise<Pairin
 
 /** The person's Discard: removes only the pending key. */
 export async function discardPairing(deps: PairingDeps, nodeId: string): Promise<PairingView> {
-  const record = (await deps.store.load(nodeId)) ?? {};
-  await saveOrRemove(deps, nodeId, withoutPending(record));
+  await update(deps, nodeId, (record) => ({ next: withoutPending(record), result: undefined }));
   return finish(deps, { tag: "discarded" });
 }
 
 /** The person's Forget <server> on this phone: removes every key for that server. */
 export async function forgetServer(deps: PairingDeps, nodeId: string): Promise<void> {
-  await deps.store.remove(nodeId);
+  await update(deps, nodeId, () => ({ next: {}, result: undefined }));
 }
 
 /** Start-up recovery for one server's record. */
@@ -345,15 +426,21 @@ export async function resumePairing(
   deps: PairingDeps,
   nodeId: string,
 ): Promise<PairingView | undefined> {
-  const record = await deps.store.load(nodeId);
-  if (record === undefined) return undefined;
-  if (record.pending?.stage === "pre-202") {
-    await saveOrRemove(deps, nodeId, withoutPending(record));
+  const stage = await update(deps, nodeId, (record) => {
+    if (record.pending?.stage === "pre-202")
+      return { next: withoutPending(record), result: "dropped" as const };
+    if (record.pending?.stage === "post-202") return { result: "checking" as const };
+    if (record.current !== undefined) return { result: "paired" as const };
+    return { result: "none" as const };
+  });
+  if (stage === "dropped") {
     return finish(deps, { tag: "not-paired", reason: "interrupted before the server answered" });
   }
-  if (record.pending?.stage === "post-202") return checking(deps, nodeId);
-  if (record.current !== undefined)
-    return finish(deps, { tag: "paired", deviceId: record.current.deviceId });
+  if (stage === "checking") return checking(deps, nodeId);
+  if (stage === "paired") {
+    const record = await deps.store.load(nodeId);
+    return finish(deps, { tag: "paired", deviceId: record?.current?.deviceId ?? null });
+  }
   return undefined;
 }
 
@@ -367,19 +454,17 @@ export async function noteSessionIssued(
   publicKey: Uint8Array,
   deviceId?: string,
 ): Promise<void> {
-  const record = await deps.store.load(nodeId);
-  const current = record?.current;
-  if (
-    record === undefined ||
-    current === undefined ||
-    current.key.publicKey !== toBase64Url(publicKey)
-  )
-    return;
-  if (record.previous === undefined && (current.deviceId !== null || deviceId === undefined))
-    return;
-  const { previous: _previous, ...rest } = record;
-  await deps.store.save(nodeId, {
-    ...rest,
-    current: { ...current, deviceId: current.deviceId ?? deviceId ?? null },
+  const issued = toBase64Url(publicKey);
+  await update(deps, nodeId, (record) => {
+    const current = record.current;
+    if (current === undefined || current.key.publicKey !== issued) return { result: undefined };
+    if (record.previous === undefined && (current.deviceId !== null || deviceId === undefined)) {
+      return { result: undefined };
+    }
+    const { previous: _previous, ...rest } = record;
+    return {
+      next: { ...rest, current: { ...current, deviceId: current.deviceId ?? deviceId ?? null } },
+      result: undefined,
+    };
   });
 }

@@ -96,6 +96,7 @@ class Stream implements PenStream {
   #eofRead = false;
   #closeCode: number | undefined;
   #writing = false;
+  #finAfterWrite = false;
   #readers: Array<() => void> = [];
   #creditWaiters: Array<() => void> = [];
 
@@ -209,10 +210,24 @@ class Stream implements PenStream {
       }
     } finally {
       this.#writing = false;
+      // An end() that arrived during this write sends its FIN now, after the write's last DATA.
+      if (this.#finAfterWrite) {
+        this.#finAfterWrite = false;
+        this.#sendFin();
+      }
     }
   }
 
   end(): void {
+    if (this.#sentFin || this.#closeCode !== undefined) return;
+    if (this.#writing) {
+      this.#finAfterWrite = true;
+      return;
+    }
+    this.#sendFin();
+  }
+
+  #sendFin(): void {
     if (this.#sentFin || this.#closeCode !== undefined) return;
     this.#sentFin = true;
     this.session.send(Uint8Array.of(TYPE_FIN));

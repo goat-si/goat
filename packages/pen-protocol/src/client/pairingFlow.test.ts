@@ -332,6 +332,64 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     expect(t.stored()?.current?.deviceId).toBe("new-device");
   });
 
+  it("a late session for a discarded attempt does not promote the newer attempt's key", async () => {
+    const t = setup();
+    const done = runPairing(t.deps, qr);
+    void toChecking(t, done);
+    await t.when("probe");
+    await discardPairing(t.deps, NODE);
+    const newer = {
+      key: { privateKey: "n", publicKey: "newer" },
+      stage: "post-202" as const,
+      server: { nodeId: NODE, noisePub: "x", relays: [] },
+      startedAt: 1,
+    };
+    await t.deps.store.save(NODE, { pending: newer });
+    t.probes[0]?.answer.resolve({ issued: true, deviceId: "old-attempt" });
+    expect(await done).toEqual({ tag: "superseded" });
+    expect(t.stored()).toEqual({ pending: newer });
+  });
+
+  it("a late 409 for an attempt that was replaced does not remove the newer attempt's key", async () => {
+    const t = setup();
+    const done = runPairing(t.deps, qr);
+    await t.when("dial");
+    t.race.resolve(t.channel);
+    await t.when("request");
+    t.replies.request.resolve({ status: 202 });
+    await t.when("poll");
+    const newer = {
+      key: { privateKey: "n", publicKey: "newer" },
+      stage: "post-202" as const,
+      server: { nodeId: NODE, noisePub: "x", relays: [] },
+      startedAt: 1,
+    };
+    await t.deps.store.save(NODE, { pending: newer });
+    t.replies.polls[0]?.resolve({ status: 409, reason: "mismatch" });
+    expect(await done).toEqual({ tag: "refused", reason: "mismatch" });
+    expect(t.stored()).toEqual({ pending: newer });
+  });
+
+  it("a late 200 for an attempt that was replaced promotes nothing", async () => {
+    const t = setup();
+    const done = runPairing(t.deps, qr);
+    await t.when("dial");
+    t.race.resolve(t.channel);
+    await t.when("request");
+    t.replies.request.resolve({ status: 202 });
+    await t.when("poll");
+    const newer = {
+      key: { privateKey: "n", publicKey: "newer" },
+      stage: "post-202" as const,
+      server: { nodeId: NODE, noisePub: "x", relays: [] },
+      startedAt: 1,
+    };
+    await t.deps.store.save(NODE, { pending: newer });
+    t.replies.polls[0]?.resolve({ status: 200, deviceId: "d", environmentId: "e", label: "Mac" });
+    expect(await done).toEqual({ tag: "superseded" });
+    expect(t.stored()).toEqual({ pending: newer });
+  });
+
   it("a replacement whose old device id is unknown stops before dialling; Forget removes current and previous", async () => {
     const pairing = {
       key: { privateKey: "a", publicKey: "b" },

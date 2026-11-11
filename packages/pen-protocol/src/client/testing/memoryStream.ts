@@ -30,6 +30,7 @@ export function memoryStreamPair() {
   const toServer = pipe();
   const toClient = pipe();
   let closeCode: number | undefined;
+  let blocked = false;
   let resolveClosed!: (code: number) => void;
   const closed = new Promise<number>((resolve) => {
     resolveClosed = resolve;
@@ -44,6 +45,8 @@ export function memoryStreamPair() {
   const client: PenStream = {
     write: async (bytes) => {
       if (closeCode !== undefined) throw new PenError("stream-closed", "closed", { closeCode });
+      // A peer that withholds credit: the write never completes (until the stream closes).
+      if (blocked) await closed;
       toServer.chunks.push(bytes.slice());
       wake(toServer);
     },
@@ -80,6 +83,10 @@ export function memoryStreamPair() {
       },
       clientEnded: () => toServer.ended,
       closeCode: () => closeCode,
+      /** From now on the client's writes wait forever, as under a peer that never credits. */
+      block: () => {
+        blocked = true;
+      },
       /** Resolves once the client closed the stream. */
       whenClosed: () => closed.then(() => undefined),
     },

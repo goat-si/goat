@@ -280,7 +280,7 @@ class PenWebSocket implements PenWebSocketLike {
     this.#closeSent = true;
     this.#enqueue(encodeFrame(Opcode.Close, closePayload(code, reason), this.#options.random));
     this.#closeTimer = this.#options.clock.setTimer(PEN_WEBSOCKET_LIMITS.closeMs, () =>
-      this.#finish(1006, "no close frame"),
+      this.#finish(1006, "no close frame", true),
     );
   }
 
@@ -290,17 +290,30 @@ class PenWebSocket implements PenWebSocketLike {
     this.#finish(code, reason);
   }
 
-  #finish(code: number, reason: string): void {
+  /**
+   * Ends the socket. Queued frames (a close echo, or the close frame naming a protocol error) drain for at most
+   * the close timeout; an expired close timeout closes the stream at once (4408) and drops what is queued.
+   */
+  #finish(code: number, reason: string, force = false): void {
     if (this.#finished) return;
     this.#finished = true;
     this.#closeTimer?.cancel();
     this.readyState = CLOSED;
     const stream = this.#stream;
-    // Let queued frames (a close echo) reach the stream before it ends.
-    void this.#pump().then(() => {
-      stream?.end();
-      stream?.close(1000);
-    });
+    if (force) {
+      this.#outbound = [];
+      this.#outboundBytes = 0;
+      stream?.close(4408);
+    } else {
+      const drainLimit = this.#options.clock.setTimer(PEN_WEBSOCKET_LIMITS.closeMs, () =>
+        stream?.close(4408),
+      );
+      void this.#pump().then(() => {
+        drainLimit.cancel();
+        stream?.end();
+        stream?.close(1000);
+      });
+    }
     this.#dispatch("close", { type: "close", code, reason });
   }
 }

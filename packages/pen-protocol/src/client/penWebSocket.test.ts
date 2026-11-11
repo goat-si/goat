@@ -211,6 +211,33 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
     expect(c.events.at(-1)).toMatchObject({ code: 1006 });
   });
 
+  it("a close whose frame cannot be written (no stream credit) still closes the stream when the 5 s close timeout fires", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.server.block();
+    c.socket.close(1000, "bye");
+    await c.clock.whenTimer(PEN_WEBSOCKET_LIMITS.closeMs);
+    c.clock.advance(PEN_WEBSOCKET_LIMITS.closeMs);
+    await c.whenEvent("close");
+    expect(c.events.at(-1)).toMatchObject({ type: "close", code: 1006 });
+    await c.server.whenClosed();
+  });
+
+  it("a failure with writes blocked still closes the stream once the 5 s drain limit passes", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.server.block();
+    c.server.write("\xc1\x00");
+    await c.whenEvent("close");
+    expect(c.events.at(-1)).toMatchObject({ type: "close", code: 1002 });
+    await c.clock.whenTimer(PEN_WEBSOCKET_LIMITS.closeMs);
+    c.clock.advance(PEN_WEBSOCKET_LIMITS.closeMs);
+    await c.server.whenClosed();
+    expect(c.server.closeCode()).toBe(4408);
+  });
+
   it("a malformed server frame fails the socket with the rule's close code", async () => {
     const c = await connected();
     c.accept();
