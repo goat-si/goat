@@ -198,6 +198,16 @@ describe("rekey boundary (CONTRACT Record layer: REKEY every 2^20 messages per d
     expect(keys.send.nonce).toBe(1);
   });
 
+  it("an inbound record over 65,535 bytes is refused before decryption with 4400, even when it authenticates", () => {
+    const largest = nodeSeal(key, 0n, new Uint8Array(65_519));
+    expect(cipherStateAt(key, 0).open(largest)).toHaveLength(65_519);
+    const oversized = nodeSeal(key, 0n, new Uint8Array(65_520));
+    expect(oversized.length).toBe(65_536);
+    expect(() => cipherStateAt(key, 0).open(oversized)).toThrow(
+      expect.objectContaining({ code: "record-too-large", closeCode: 4400 }),
+    );
+  });
+
   it("a nonce past 2^53 - 1 is refused instead of wrapping", () => {
     expect(() => cipherStateAt(key, Number.MAX_SAFE_INTEGER).seal(new Uint8Array(1))).toThrow(
       expect.objectContaining({ code: "nonce-exhausted" }),

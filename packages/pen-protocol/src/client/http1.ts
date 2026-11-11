@@ -1,6 +1,6 @@
 // HTTP/1.1 over a Pen stream, client side (design 10.2): a request serializer and an incremental response parser.
 // Every check runs per byte in arrival order, so any split of the input gives the same result and the same error.
-import { asciiEncode, concatBytes, toBase64 } from "./bytes.ts";
+import { asciiEncode, ByteBuffer, toBase64 } from "./bytes.ts";
 import { sha1Hash } from "./crypto.ts";
 import { PenError } from "./errors.ts";
 
@@ -82,7 +82,8 @@ export class ResponseParser {
   #chunkDigits = 0;
   #chunkSize = 0;
   #chunkLineBytes = 0;
-  #leftover: Array<Uint8Array> = [];
+  // Bytes after the response, one coalesced buffer (at most the relay's 1 MiB message per push in practice).
+  #leftover = new ByteBuffer(HTTP1_LIMITS.body);
 
   constructor(context: ResponseContext) {
     this.#context = context;
@@ -90,7 +91,9 @@ export class ResponseParser {
 
   /** Bytes after the response ended: frames after a 101, or unsolicited bytes after any other response. */
   leftover(): Uint8Array {
-    return concatBytes(...this.#leftover);
+    const bytes = this.#leftover.take();
+    this.#leftover.append(bytes);
+    return bytes.slice();
   }
 
   push(bytes: Uint8Array): Array<ResponseEvent> {
@@ -171,7 +174,10 @@ export class ResponseParser {
         }
         case "done":
         case "upgraded":
-          this.#leftover.push(bytes.slice(at));
+          if (this.#leftover.length + bytes.length - at > HTTP1_LIMITS.body) {
+            throw fail("H42", "too many bytes after the response");
+          }
+          this.#leftover.append(bytes.subarray(at));
           at = bytes.length;
           break;
       }

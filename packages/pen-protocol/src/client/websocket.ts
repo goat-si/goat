@@ -1,6 +1,6 @@
 // RFC 6455 over a Pen stream, client side (design 10.2): the opening handshake, masked frames out, and an incremental
 // frame decoder that holds at most one message and refuses every ambiguous or oversized form before allocating.
-import { concatBytes, toBase64, utf8Encode } from "./bytes.ts";
+import { ByteBuffer, concatBytes, toBase64, utf8Encode } from "./bytes.ts";
 import { PenError } from "./errors.ts";
 import { type HeaderList, serializeRequest } from "./http1.ts";
 import { type Random, takeRandom } from "./runtime.ts";
@@ -106,21 +106,28 @@ export class FrameDecoder {
   #opcode = 0;
   #lengthBytes: Array<number> = [];
   #remaining = 0;
-  #payload: Array<Uint8Array> = [];
+  #control = new ByteBuffer(WEBSOCKET_LIMITS.control);
   // The message being assembled across fragments.
   #messageOpcode: number | undefined;
   #fragments = 0;
   #messageBytes = 0;
-  #parts: Array<Uint8Array> = [];
+  #message = new ByteBuffer(WEBSOCKET_LIMITS.message);
   #text: Utf8Decoder | undefined;
+
+  /** The largest message buffer this decoder has allocated. */
+  peakCapacity(): number {
+    return this.#message.peakCapacity;
+  }
 
   push(bytes: Uint8Array): Array<FrameEvent> {
     if (this.#error !== undefined) throw this.#error;
     try {
       return this.#push(bytes);
     } catch (error) {
-      if (error instanceof PenError) this.#error = error;
-      throw error;
+      // Any failure is final, and only PenError leaves the decoder.
+      this.#error =
+        error instanceof PenError ? error : fail("internal", 1011, "the decoder failed");
+      throw this.#error;
     }
   }
 
@@ -157,7 +164,7 @@ export class FrameDecoder {
           break;
         case "payload": {
           const take = Math.min(this.#remaining, bytes.length - at);
-          const piece = bytes.slice(at, at + take);
+          const piece = bytes.subarray(at, at + take);
           at += take;
           this.#remaining -= take;
           this.#acceptPayload(piece);
@@ -226,13 +233,15 @@ export class FrameDecoder {
         this.#messageOpcode = this.#opcode;
         this.#fragments = 0;
         this.#messageBytes = 0;
-        this.#parts = [];
+        this.#message = new ByteBuffer(WEBSOCKET_LIMITS.message);
         this.#text = this.#opcode === Opcode.Text ? new Utf8Decoder() : undefined;
       }
       this.#fragments += 1;
       this.#messageBytes += length;
+      // Binary payload goes into one buffer: sized exactly for the final frame, doubling before it.
+      if (this.#text === undefined) this.#message.reserve(this.#messageBytes, this.#fin);
     }
-    this.#payload = [];
+    this.#control = new ByteBuffer(WEBSOCKET_LIMITS.control);
     this.#remaining = length;
     this.#stage = "payload";
     if (length === 0) this.#endFrame(events);
@@ -240,21 +249,20 @@ export class FrameDecoder {
 
   #acceptPayload(piece: Uint8Array): void {
     if (this.#opcode >= 8) {
-      this.#payload.push(piece);
+      this.#control.append(piece);
       return;
     }
     if (this.#text !== undefined) {
       if (!this.#text.push(piece)) throw fail("W15", 1007, "text is not UTF-8");
     } else {
-      this.#parts.push(piece);
+      this.#message.append(piece);
     }
   }
 
   #endFrame(events: Array<FrameEvent>): void {
     this.#stage = "b0";
     if (this.#opcode >= 8) {
-      const payload = concatBytes(...this.#payload);
-      this.#payload = [];
+      const payload = this.#control.take();
       if (this.#opcode === Opcode.Ping) events.push({ type: "ping", payload });
       else if (this.#opcode === Opcode.Close) events.push(this.#close(payload));
       // A pong is never solicited by this client, so it is ignored.
@@ -262,11 +270,9 @@ export class FrameDecoder {
     }
     if (!this.#fin) return;
     const text = this.#text;
-    const data =
-      text === undefined ? concatBytes(...this.#parts) : text.finish() ? text.take() : null;
+    const data = text === undefined ? this.#message.take() : text.finish() ? text.take() : null;
     if (data === null) throw fail("W15", 1007, "text ends inside a code point");
     this.#messageOpcode = undefined;
-    this.#parts = [];
     this.#text = undefined;
     events.push({ type: "message", data });
   }

@@ -1,6 +1,6 @@
 // A fetch function over Pen streams (design 10.1, 10.2), for client-runtime's layerRemoteHttpClient seam.
 // One request at a time per stream; reuse only after a cleanly delimited response; no automatic retry.
-import { utf8Encode } from "./bytes.ts";
+import { ByteBuffer, utf8Encode } from "./bytes.ts";
 import { PenError } from "./errors.ts";
 import { HTTP1_LIMITS, type HeaderList, ResponseParser, serializeRequest } from "./http1.ts";
 import type { Clock, Timer } from "./runtime.ts";
@@ -256,19 +256,14 @@ export function makePenFetch(options: PenFetchOptions): PenFetch {
   const cap = options.bodyCap ?? HTTP1_LIMITS.body;
   return async (input, init) => {
     const prepared = fetcher.prepare(input, init);
-    const parts: Array<Uint8Array> = [];
+    // One contiguous buffer: the server chooses how the body is split, so storage must not grow per piece.
+    const buffer = new ByteBuffer(cap);
     const head = await fetcher.exchange(prepared, cap, (bytes) => {
-      parts.push(bytes);
+      buffer.append(bytes);
     });
-    let body: Uint8Array<ArrayBuffer> | null = null;
-    if (!NULL_BODY_STATUS.has(head.status) && prepared.method !== "HEAD") {
-      body = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-      let at = 0;
-      for (const part of parts) {
-        body.set(part, at);
-        at += part.length;
-      }
-    }
+    const bytes = buffer.take();
+    const body: Uint8Array<ArrayBuffer> | null =
+      NULL_BODY_STATUS.has(head.status) || prepared.method === "HEAD" ? null : bytes;
     return new Response(body, {
       status: head.status,
       statusText: head.statusText,

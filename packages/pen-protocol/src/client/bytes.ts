@@ -12,6 +12,58 @@ export function concatBytes(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
   return out;
 }
 
+/**
+ * Bytes appended into one contiguous buffer, never one object per piece: peers choose how data is split, so
+ * storage must not grow with the number of pieces. Capacity grows by doubling up to `limit`.
+ */
+export class ByteBuffer {
+  #buffer: Uint8Array<ArrayBuffer> = new Uint8Array(0);
+  #length = 0;
+  #peak = 0;
+  readonly #limit: number;
+
+  constructor(limit: number) {
+    this.#limit = limit;
+  }
+
+  get length(): number {
+    return this.#length;
+  }
+
+  /** The largest capacity this buffer has held. */
+  get peakCapacity(): number {
+    return this.#peak;
+  }
+
+  /** Makes room for `total` bytes; `exact` when no more will follow, so nothing is over-allocated. */
+  reserve(total: number, exact = false): void {
+    if (total > this.#limit) throw new RangeError("ByteBuffer over its limit");
+    if (total <= this.#buffer.length) return;
+    const size = exact
+      ? total
+      : Math.min(this.#limit, Math.max(total, this.#buffer.length * 2, 256));
+    const next = new Uint8Array(size);
+    next.set(this.#buffer.subarray(0, this.#length));
+    this.#buffer = next;
+    this.#peak = Math.max(this.#peak, size);
+  }
+
+  append(bytes: Uint8Array): void {
+    this.reserve(this.#length + bytes.length);
+    this.#buffer.set(bytes, this.#length);
+    this.#length += bytes.length;
+  }
+
+  /** The bytes so far; the buffer is empty afterwards. */
+  take(): Uint8Array<ArrayBuffer> {
+    const out =
+      this.#length === this.#buffer.length ? this.#buffer : this.#buffer.slice(0, this.#length);
+    this.#buffer = new Uint8Array(0);
+    this.#length = 0;
+    return out;
+  }
+}
+
 /** Equal length and content, without an early exit on the first difference. */
 export function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;

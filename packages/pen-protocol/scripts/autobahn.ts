@@ -9,7 +9,9 @@ import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
 import { makePenWebSocketConstructor, type PenWebSocketLike } from "../src/client/penWebSocket.ts";
 import type { Clock } from "../src/client/runtime.ts";
+import type { PenStream } from "../src/client/stream.ts";
 import { netStream } from "../src/client/testing/netStream.ts";
+import { checkAutobahnReport } from "./autobahnReport.ts";
 
 const [serverUrl = "ws://127.0.0.1:9001", reportsDir = "autobahn-reports"] = process.argv.slice(2);
 const AGENT = "pen-client";
@@ -22,29 +24,34 @@ const clock: Clock = {
     return { cancel: () => clearTimeout(handle) };
   },
 };
+// The case's TCP stream, so a case ends when its connection has closed, not when the client reported close.
+let lastStream: PenStream | undefined;
 const construct = makePenWebSocketConstructor({
   origin,
   clock,
   random: (n) => new Uint8Array(NodeCrypto.randomBytes(n)),
   openStream: () =>
     new Promise((resolve, reject) => {
-      const socket = NodeNet.connect(Number(url.port), url.hostname, () =>
-        resolve(netStream(socket)),
-      );
+      const socket = NodeNet.connect(Number(url.port), url.hostname, () => {
+        lastStream = netStream(socket);
+        resolve(lastStream);
+      });
       socket.once("error", reject);
     }),
 });
 
-/** Opens a socket and resolves on close; onMessage sees every message. */
-function session(
+/** Opens a socket and resolves once it closed and its TCP connection ended; onMessage sees every message. */
+async function session(
   path: string,
   onMessage: (socket: PenWebSocketLike, data: unknown) => void,
 ): Promise<void> {
-  return new Promise((resolve) => {
+  lastStream = undefined;
+  await new Promise<void>((resolve) => {
     const socket = construct("ws://" + url.host + path);
     socket.addEventListener("message", (event) => onMessage(socket, event.data));
     socket.addEventListener("close", () => resolve());
   });
+  await lastStream?.closed;
 }
 
 let count = 0;
@@ -52,6 +59,14 @@ await session("/getCaseCount", (_socket, data) => {
   count = Number(data);
 });
 if (!Number.isInteger(count) || count <= 0) throw new Error("the fuzzingserver reported no cases");
+// The expected case ids come from the server's own case list, not from the report.
+const expectedIds: Array<string> = [];
+for (let n = 1; n <= count; n++) {
+  await session("/getCaseInfo?case=" + n, (_socket, data) => {
+    expectedIds.push((JSON.parse(String(data)) as { id: string }).id);
+  });
+}
+if (expectedIds.length !== count) throw new Error("the fuzzingserver did not describe every case");
 process.stdout.write("autobahn: " + count + " cases\n");
 for (let n = 1; n <= count; n++) {
   await session("/runCase?case=" + n + "&agent=" + AGENT, (socket, data) => {
@@ -64,43 +79,25 @@ for (let n = 1; n <= count; n++) {
 }
 await session("/updateReports?agent=" + AGENT, () => undefined);
 
+type Entry = { behavior: string; behaviorClose: string; reportfile?: string };
 const index = JSON.parse(
   NodeFS.readFileSync(NodePath.join(reportsDir, "clients", "index.json"), "utf8"),
-) as Record<string, Record<string, { behavior: string; behaviorClose: string }>>;
+) as Record<string, Record<string, Entry>>;
 const results = index[AGENT] ?? {};
-const passing = new Set(["OK", "NON-STRICT", "INFORMATIONAL"]);
-// Messages of more than 1,024 fragments are refused by design 10.2 with 1009; these cases must end that way.
-const refusedByDesign = new Map([
-  ["9.3.1", 1009],
-  ["9.3.2", 1009],
-  ["9.3.3", 1009],
-  ["9.4.1", 1009],
-  ["9.4.2", 1009],
-  ["9.4.3", 1009],
-]);
+const clientClose = (id: string) => {
+  const file = results[id]?.reportfile;
+  if (file === undefined) return undefined;
+  const detail = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(reportsDir, "clients", file), "utf8"),
+  ) as {
+    remoteCloseCode?: number;
+  };
+  return detail.remoteCloseCode;
+};
 const tally = new Map<string, number>();
-const bad: Array<string> = [];
-for (const [id, result] of Object.entries(results) as Array<
-  [string, { behavior: string; behaviorClose: string; reportfile?: string }]
->) {
+for (const result of Object.values(results)) {
   const key = result.behavior + "/" + result.behaviorClose;
   tally.set(key, (tally.get(key) ?? 0) + 1);
-  const refusal = refusedByDesign.get(id);
-  if (refusal !== undefined) {
-    const detail = JSON.parse(
-      NodeFS.readFileSync(NodePath.join(reportsDir, "clients", result.reportfile ?? ""), "utf8"),
-    ) as {
-      localCloseCode?: number;
-      remoteCloseCode?: number;
-    };
-    process.stdout.write(
-      "autobahn: " + id + " refused by design, client close " + detail.remoteCloseCode + "\n",
-    );
-    if (detail.remoteCloseCode !== refusal)
-      bad.push(id + " expected a " + refusal + " close from the client");
-    continue;
-  }
-  if (!passing.has(result.behavior) || !passing.has(result.behaviorClose)) bad.push(id + " " + key);
 }
 process.stdout.write(
   "autobahn: " +
@@ -109,16 +106,11 @@ process.stdout.write(
     [...tally].map(([k, v]) => k + " " + v).join(", ") +
     "\n",
 );
-if (Object.keys(results).length !== count) {
-  process.stderr.write(
-    "autobahn: " + count + " cases ran but " + Object.keys(results).length + " were reported\n",
-  );
-  process.exit(1);
-}
-if (bad.length > 0) {
-  process.stderr.write("autobahn: failing cases:\n" + bad.join("\n") + "\n");
+const problems = checkAutobahnReport(expectedIds, results, clientClose);
+if (problems.length > 0) {
+  process.stderr.write("autobahn: failing:\n" + problems.join("\n") + "\n");
   process.exit(1);
 }
 process.stdout.write(
-  "autobahn: every case passed (12.x and 13.x, permessage-deflate, are excluded: the client offers no extension)\n",
+  "autobahn: every expected case passed; 9.3.1-9.3.3 and 9.4.1-9.4.3 ended with the client's 1009 by design; 12.x and 13.x (permessage-deflate) are excluded because the client offers no extension\n",
 );

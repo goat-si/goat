@@ -18,6 +18,8 @@ export const Kind = { Session: 0x01, Join: 0x03, Account: 0x04 } as const;
 export type Kind = (typeof Kind)[keyof typeof Kind];
 
 export const MAX_PLAINTEXT = 65_519;
+/** A record's largest ciphertext: the plaintext cap plus the 16-byte tag. */
+export const MAX_CIPHERTEXT = MAX_PLAINTEXT + 16;
 export const REKEY_INTERVAL = 2 ** 20;
 export const MAX_FIRST_MESSAGE = 4096;
 export const MAX_PAYLOAD = 256;
@@ -68,6 +70,11 @@ export class CipherState {
   }
 
   open(ciphertext: Uint8Array): Uint8Array {
+    if (ciphertext.length > MAX_CIPHERTEXT) {
+      throw new PenError("record-too-large", "a record carries at most 65,519 plaintext bytes", {
+        closeCode: 4400,
+      });
+    }
     this.#checkNonce();
     const plaintext = aeadOpen(this.#key, this.#n, EMPTY, ciphertext);
     this.#advance();
