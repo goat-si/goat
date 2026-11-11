@@ -7,7 +7,7 @@ on web and desktop, or the Bots segment on mobile Home. To reach it from Slack o
 
 On web and desktop, with a GOAT server that lists the bot's work, the conversation holds only what
 you and the bot say: its answers, its questions, a line while it works and how the work ended. The
-tasks it starts open from **Work** in the bot's header, where each one has its own view. Finished
+tasks it starts open from the bot's home: select the bot's name at the top of its chat. Finished
 work whose ending the chat never told, such as a request made from Slack, keeps its card. Other
 clients and older servers show each task as a card in the conversation.
 
@@ -17,8 +17,9 @@ The main bot is GOAT Bot. On servers that support it, **New bot** creates more b
 name, an emoji, a purpose and a model, and its own conversation and task list. A bot answers
 under its own name and purpose from its next conversation session.
 
-- Edit any bot, including the main one, from its row menu (long press on mobile), its name at the
-  top of its chat, or **Settings → GOAT Bot → Profile**. A new name also changes how the main bot
+- Edit any bot, including the main one, from its row menu (long press on mobile), **Edit bot** in
+  its home (its name at the top of its chat on web and desktop), or **Settings → GOAT Bot →
+  Profile**. A new name also changes how the main bot
   introduces itself in Slack and iMessage.
 - An added bot's model can change in its edit dialog or from the model button in its message
   box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main

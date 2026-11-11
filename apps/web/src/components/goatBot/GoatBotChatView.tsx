@@ -134,9 +134,24 @@ export function GoatBotChatView({
   const acceptsFiles = canSend && attachmentSupport !== null;
   const composerRef = useRef<GoatBotComposerHandle>(null);
   const homeRef = useRef<HTMLButtonElement>(null);
+  // Why the narrow sheet last closed: a draft action leaves focus in the message box and a file
+  // takes focus itself; plain dismissal returns focus to the chip that opened the sheet.
+  const sheetClosedFor = useRef<"draft" | "file" | null>(null);
+  const sheetFinalFocus = () => {
+    const reason = sheetClosedFor.current;
+    sheetClosedFor.current = null;
+    if (reason === "file") return false;
+    const field = reason === "draft" ? composerRef.current?.field() : null;
+    if (!field) return homeRef.current ?? true;
+    field.setSelectionRange(field.value.length, field.value.length);
+    return field;
+  };
   const onDraft = canSend
     ? (text: string) => {
-        if (narrow) setPanelOpen(false);
+        if (narrow) {
+          sheetClosedFor.current = "draft";
+          setPanelOpen(false);
+        }
         composerRef.current?.replaceText(text);
       }
     : undefined;
@@ -148,19 +163,12 @@ export function GoatBotChatView({
     readonly file: ChannelBotArtifact;
   } | null>(null);
   const fileOpener = useRef<HTMLElement | null>(null);
-  // A file opened from the narrow sheet takes focus itself; the closing sheet leaves it there.
-  const fileOpenedFromSheet = useRef(false);
-  const sheetFinalFocus = () => {
-    const opened = fileOpenedFromSheet.current;
-    fileOpenedFromSheet.current = false;
-    return opened ? false : (homeRef.current ?? true);
-  };
   const openFile = bot
     ? (file: ChannelBotArtifact) => {
         fileOpener.current =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
         if (narrow) {
-          fileOpenedFromSheet.current = true;
+          sheetClosedFor.current = "file";
           setPanelOpen(false);
         }
         setViewing({ environmentId: bot.environmentId, threadId: bot.threadId, file });
