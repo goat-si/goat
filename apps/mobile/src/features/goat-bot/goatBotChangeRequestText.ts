@@ -57,14 +57,22 @@ function openElements(html: string, before: number): number {
   return open;
 }
 
-/** The reply's link nodes; an address quoted in code, Markdown or HTML, is never one. */
+// A space, or a control character such as a tab or line break, in a parsed address.
+const INVISIBLE = /[\u0000-\u0020\u007F-\u009F]/u;
+
+/**
+ * The reply's link nodes; an address quoted in code, Markdown or HTML, is never one. A link whose
+ * address holds a space or control character stays exactly as written: it could not be written
+ * back the same, so it gets no short label and does not name the reply's repository.
+ */
 function linkNodes(node: MarkdownNode, into: MarkdownNode[] = []): MarkdownNode[] {
   let quoted = 0;
   for (const child of node.children ?? []) {
     if (child.type === "html") quoted = openElements(child.value ?? "", quoted);
     else if (quoted > 0) continue;
-    else if (child.type === "link") into.push(child);
-    else if (!NOT_PROSE.has(child.type)) linkNodes(child, into);
+    else if (child.type === "link") {
+      if (child.url !== undefined && !INVISIBLE.test(child.url)) into.push(child);
+    } else if (!NOT_PROSE.has(child.type)) linkNodes(child, into);
   }
   return into;
 }
@@ -83,17 +91,12 @@ export function goatBotChangeRequestContext(markdown: string): GoatBotReplyRepos
 }
 
 /**
- * A parsed link address written back as a Markdown destination that reads back the same: angle
- * brackets hold spaces and parentheses; backslashes, brackets and entities are escaped, and a
- * line break, which cannot sit in a destination, is percent-encoded.
+ * A parsed link address, made of visible characters, written back as a Markdown destination that
+ * reads back the same: angle brackets hold parentheses; backslashes, brackets and entities are
+ * escaped.
  */
 function markdownDestination(url: string): string {
-  const escaped = url
-    .replace(/[\\<>]/gu, "\\$&")
-    .replaceAll("&", "&amp;")
-    .replaceAll("\n", "%0A")
-    .replaceAll("\r", "%0D");
-  return `<${escaped}>`;
+  return `<${url.replace(/[\\<>]/gu, "\\$&").replaceAll("&", "&amp;")}>`;
 }
 
 /**
@@ -122,7 +125,7 @@ export function goatBotChangeRequestLinks(
     if (link.url === undefined || !bare(link) || start === undefined || end === undefined) continue;
     const label = goatBotChangeRequestLabel(link.url, repository);
     if (label === null) continue;
-    if (!named.has(link.url) && !/[\s<>]/u.test(link.url)) {
+    if (!named.has(link.url) && !/[<>]/u.test(link.url)) {
       // An autolink keeps the address as the link's words wherever the bot left it bare.
       labels.set(link.url, label);
       edits.push({ start, end, value: `<${link.url}>` });

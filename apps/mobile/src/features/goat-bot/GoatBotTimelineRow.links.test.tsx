@@ -265,6 +265,25 @@ it("keeps a collapsed task summary's indented code as written", async () => {
   expect(shown).not.toContain("a/repo#7");
 });
 
+it("leaves a link whose address holds a control character, tab or line break exactly as written", async () => {
+  const odd = pr(7, "b/repo");
+  const links = [
+    `[${odd}?q=a&#10;b](<${odd}?q=a&#10;b>)`,
+    `[${odd}?q=a\u0001b](<${odd}?q=a\u0001b>)`,
+    `[${odd}?q=a\tb](<${odd}?q=a\tb>)`,
+  ];
+  for (const link of links) {
+    await show(reply(`**Fixed** in ${pr(9, "a/repo")}; see ${link}.`));
+    const sent = native.markdown.at(-1) ?? "";
+    expect(sent).toContain(`see ${link}.`);
+    // The odd address takes no part in choosing the reply's repository: #9 still shortens alone.
+    expect(view.container.textContent).toContain(`pill[${pr(9, "a/repo")}=#9]`);
+    await view.unmount();
+    h.dispose();
+  }
+  await show(reply("x"));
+});
+
 it("bounds an unclosed inline tag to its paragraph in a collapsed task summary", async () => {
   const summary = [
     "<span>Note",
