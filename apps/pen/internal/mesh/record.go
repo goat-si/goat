@@ -46,6 +46,8 @@ const (
 	maxSub         = 255
 	// maxAccountAdmitPrev is how many heads an admit via google names.
 	maxAccountAdmitPrev = 8
+	// maxSharedPrev is how many heads a record of a shared mesh names (ADR-0026).
+	maxSharedPrev = 8
 )
 
 // Card is a member card signed by its subject.

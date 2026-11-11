@@ -516,7 +516,7 @@ func (s *Store) View() *View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.view == nil {
-		s.view = compute(s.MeshID, s.all(), s.bare)
+		s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
 	}
 	return s.view
 }
@@ -630,7 +630,7 @@ func (s *Store) memberLocked(id *ident.Identity) bool {
 		return false
 	}
 	if s.view == nil {
-		s.view = compute(s.MeshID, s.all(), s.bare)
+		s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
 	}
 	_, ok := s.view.Members[ident.B64.EncodeToString(id.SignPub)]
 	return ok
@@ -647,6 +647,10 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		// An admit for an account names at most 8 heads, so its body stays within 2048 bytes.
 		limit = maxAccountAdmitPrev
 	}
+	if s.shares {
+		// Dropped records leave many heads; naming 64 would pass the 2048-byte body limit.
+		limit = min(limit, maxSharedPrev)
+	}
 	by := ident.B64.EncodeToString(id.SignPub)
 	n, own := s.selfN, ""
 	var ownN uint64
@@ -659,7 +663,11 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		}
 	}
 	n = max(n, ownN) + 1
-	r, err := Sign(id, s.MeshID, typ, n, s.choosePrev(own, limit), at, f)
+	prev := s.choosePrev(own, limit)
+	if s.shares && typ == TypeRevoke {
+		prev = s.withSubjectCards(prev, f.Subjects)
+	}
+	r, err := Sign(id, s.MeshID, typ, n, prev, at, f)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err

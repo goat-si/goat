@@ -46,6 +46,10 @@
   without an introducer is not introduced. A record is admissible when its signer is introduced; a
   `revoke`'s subjects need not be, since it spends only its signer's lineage places. The view still
   decides what a record does at its turn; this only replaces the storage check "introduced in its past".
+  That check moves into the view for revokes: a revoke reaches only subjects whose found or admit is in
+  its own past, so no revoke can stop a later admission. A node signing a revoke names each subject's
+  found or admit in `prev`, which keeps that link when records between them were dropped, and names at
+  most 8 heads besides, so dropped records cannot push a body past 2048 bytes.
 - **Depth.** The founder's depth is 0; a key's depth is its introducer's signer's depth plus 1. A key
   admitting itself, or admitted again deeper, keeps its shallowest introduction.
 - **Lineage.** The founder alone is lineage 0. A key the founder admits is in lineage
