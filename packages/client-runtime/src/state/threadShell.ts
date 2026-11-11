@@ -56,7 +56,7 @@ const isChildRunLive = (
 
 /** Provider-native
     subagents ask on their parent, so they are skipped. */
-function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {
+export function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {
   const kind = thread.pendingRuntimeRequest?.kind;
   if (
     kind === undefined ||

@@ -3,6 +3,7 @@ import {
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@goat/contracts";
+import { subagentRequest } from "@goat/client-runtime/state/threads";
 import * as DateTime from "effect/DateTime";
 
 export type ThreadNotificationKind = "input" | "completion";
@@ -138,6 +139,8 @@ export function feedOwnedApprovalThreads(
     if (!isPendingApprovalRequest(request)) continue;
     const handoff = request?.handoff !== undefined;
     if (handoff) viaHandoff.add(thread.id);
+    // Only a request the shell raises on the ancestors counts for them.
+    if (subagentRequest(thread) === null) continue;
     // The same walk that raises a subagent's approval on its ancestors.
     const seen = new Set<ThreadId>([thread.id]);
     let current: OrchestrationV2ThreadShell | undefined = thread;
@@ -160,12 +163,14 @@ export function feedOwnedApprovalThreads(
 /**
  * The one approval handoff a thread's shell notification stands for, with the title it names: the
  * newest among its own and its subagents'. None when the thread waits on its own provider approval.
- * Others are left for the feed to announce.
+ * Only an approval notification stands for one. Others are left for the feed to announce.
  */
 export function approvalHandoffShownBy(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   threadId: ThreadId,
+  status: string,
 ): { readonly id: string; readonly title: string } | null {
+  if (status !== "approval") return null;
   const byId = new Map(threads.map((thread) => [thread.id, thread] as const));
   const own = byId.get(threadId)?.pendingRuntimeRequest;
   if (own != null && own.handoff === undefined && isPendingApprovalRequest(own)) return null;
@@ -173,6 +178,7 @@ export function approvalHandoffShownBy(
   for (const thread of threads) {
     const request = thread.pendingRuntimeRequest;
     if (request?.handoff?.kind !== "approval") continue;
+    if (thread.id !== threadId && subagentRequest(thread) === null) continue;
     const seen = new Set<ThreadId>();
     let current: OrchestrationV2ThreadShell | undefined = thread;
     while (current !== undefined && !seen.has(current.id)) {

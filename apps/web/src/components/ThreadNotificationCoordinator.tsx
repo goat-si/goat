@@ -502,7 +502,8 @@ export function startThreadNotifications(
         const state = entry.previous.get(threadId);
         if (!state) return;
         // The approval this notification stands for is named here and not announced again.
-        const shown = kind === "input" ? approvalHandoffShownBy(entry.threads, threadId) : null;
+        const shown =
+          kind === "input" ? approvalHandoffShownBy(entry.threads, threadId, state.status) : null;
         if (shown) entry.approvals.remember(shown.id);
         present(environmentId, state, kind, shown?.title);
       }),

@@ -197,9 +197,11 @@ describe("which approvals the decision feed announces", () => {
     id: string,
     request: OrchestrationV2ThreadShell["pendingRuntimeRequest"],
     parent: string | null = null,
+    live = true,
   ) =>
     ({
       id: ThreadId.make(id),
+      activityRunStatus: live ? "running" : null,
       lineage: {
         rootThreadId: ThreadId.make(parent ?? id),
         parentThreadId: parent === null ? null : ThreadId.make(parent),
@@ -261,7 +263,7 @@ describe("which approvals the decision feed announces", () => {
     const notify = vi.fn();
     const gate = createApprovalNotificationGate<string>(notify);
     // The shell's one notification for root stands for one approval, the newest, and names it.
-    const shown = approvalHandoffShownBy(threads, ThreadId.make("root"));
+    const shown = approvalHandoffShownBy(threads, ThreadId.make("root"), "approval");
     expect(shown).toEqual({ id: "two-a", title: "Join pen-lidge to the hub" });
     if (shown) gate.remember(shown.id);
     gate.setBaseline(0);
@@ -274,10 +276,20 @@ describe("which approvals the decision feed announces", () => {
 
   it("stands for no handoff when the thread waits on its own provider approval", () => {
     const threads = [shell("root", provider("p")), shell("child", handoff("child-a"), "root")];
-    expect(approvalHandoffShownBy(threads, ThreadId.make("root"))).toBeNull();
-    expect(approvalHandoffShownBy(threads, ThreadId.make("child"))).toEqual({
+    expect(approvalHandoffShownBy(threads, ThreadId.make("root"), "approval")).toBeNull();
+    expect(approvalHandoffShownBy(threads, ThreadId.make("child"), "approval")).toEqual({
       id: "child-a",
       title: "Join pen-lidge to the hub",
     });
+  });
+  it("claims no handoff for a notification about anything other than an approval", () => {
+    const threads = [shell("root", null), shell("child", handoff("child-a"), "root")];
+    expect(approvalHandoffShownBy(threads, ThreadId.make("root"), "failed")).toBeNull();
+  });
+
+  it("ignores a subagent whose run ended, as the parent's status does", () => {
+    const threads = [shell("root", null), shell("child", handoff("child-a"), "root", false)];
+    expect(approvalHandoffShownBy(threads, ThreadId.make("root"), "approval")).toBeNull();
+    expect([...feedOwnedApprovalThreads(threads, true)]).toEqual(["child"]);
   });
 });
