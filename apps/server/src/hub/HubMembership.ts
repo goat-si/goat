@@ -228,7 +228,7 @@ const make = Effect.gen(function* () {
     linkId: string | undefined,
     initial: HubParityResult,
     steps: HubDeviceStep[],
-    // A join that deferred its own sync on a busy device does not sync here either.
+    // After a join's guarded sync did not run cleanly, never fall back to an unguarded one.
     skipSync = false,
   ) {
     let current = initial;
@@ -237,7 +237,7 @@ const make = Effect.gen(function* () {
       if (!rung.checks.some((id) => current.failingCheckIds.includes(id))) continue;
       let ran: Pick<HubDeviceStep, "outcome" | "detail">;
       if (rung.step === "sync" && skipSync) {
-        ran = { outcome: "deferred", detail: "Sync waits until the device is idle." };
+        ran = { outcome: "deferred", detail: "Only the join's guarded sync syncs this link." };
       } else if (rung.step === "reconnect") {
         if (linkId === undefined) continue;
         ran = yield* ocx
@@ -327,7 +327,7 @@ const make = Effect.gen(function* () {
       linkId,
       yield* parity.verify(alias, scope),
       steps,
-      synced.outcome === "deferred",
+      synced.outcome !== "ok",
     );
     const state = finalState(verified);
     yield* audit(caller, `hub.${action}`, alias, state, decisionId);

@@ -129,3 +129,11 @@ it.effect("a join whose parity is unproven says which checks are unproven", () =
     expect(result.message).toContain("Unproven: P7.");
   }),
 );
+
+it.effect("a guarded join sync that failed is not retried by the ladder's unguarded sync", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, syncExit: 91, verdicts: [verdict(["P6"]), verdict()] });
+    yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(hub.calls).not.toContain("device mac-studio sync");
+  }),
+);
