@@ -4252,6 +4252,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         targetThreadId: command.targetThreadId,
         ...(command.title === undefined ? {} : { title: command.title }),
         sideChat: command.sideChat === true,
+        ...(command.workspace === undefined ? {} : { workspace: command.workspace }),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -6729,6 +6730,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
               sourceRunStatus: sourceRun.status,
               fromSpecificTurn: sourceRun !== null,
+              crossWorkspace: pendingForkTransfer.crossWorkspace === true,
             }),
           );
     const canResolveForkNatively = forkExecution === "native_fork";
