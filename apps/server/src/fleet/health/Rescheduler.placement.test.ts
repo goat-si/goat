@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import * as FleetHostStates from "./FleetHostStates.ts";
 import * as Rescheduler from "./Rescheduler.ts";
 import { databaseFile, loseA, newWorld, request, withServer } from "./Rescheduler.testkit.ts";
 
@@ -97,6 +98,46 @@ it.effect(
             const next = yield* reschedule({ targetHost: "C" });
             expect(next._tag).toBe("Rescheduled");
             expect(world.launches.map((launch) => launch.host)).toEqual(["C"]);
+          }),
+        );
+      }),
+    ),
+);
+
+it.effect(
+  "with placement, a retry of a pinned key reaches its target even when this machine's own view would refuse that host",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = newWorld();
+        world.reachable.B = true;
+        const filename = yield* databaseFile;
+        yield* placed(
+          world,
+          filename,
+          Effect.gen(function* () {
+            yield* loseA(world);
+            world.loseNextLaunchResponse = true;
+            expect((yield* reschedule({ targetHost: "B" }))._tag).toBe("Unconfirmed");
+            // This machine now sees B as taking no new work; the earlier key still has to learn its outcome.
+            const states = yield* FleetHostStates.FleetHostStates;
+            yield* states.cordon({ host: "B", draining: false, reason: null, changedBy: null });
+            const move = yield* Effect.flatMap(Rescheduler.Rescheduler, (service) =>
+              service.findMove({
+                clientRequestId: request().clientRequestId,
+                owner: request().owner,
+              }),
+            );
+            expect(move._tag).toBe("Unknown");
+            expect((yield* reschedule({ targetHost: "B" }))._tag).toBe("Rescheduled");
+            expect(world.launches.length).toBe(1);
+            const found = yield* Effect.flatMap(Rescheduler.Rescheduler, (service) =>
+              service.findMove({
+                clientRequestId: request().clientRequestId,
+                owner: request().owner,
+              }),
+            );
+            expect(found._tag).toBe("Launched");
           }),
         );
       }),

@@ -60,6 +60,9 @@ export interface PlacementPlacerShape {
     readonly authorize: Effect.Effect<RuntimeMode, E, R>;
     readonly local: (commandId: CommandId, payload: P) => Effect.Effect<unknown, E2>;
   }) => Effect.Effect<RecoveredOutcome, PlacementAttemptsError | E, R>;
+  readonly latestAttempt: (
+    ownerKey: string,
+  ) => Effect.Effect<Attempt | null, PlacementAttemptsError>;
   /** Whether this owner has ever sent a placed attempt; without one nothing was sent. */
   readonly hasAttempt: (ownerKey: string) => Effect.Effect<boolean, PlacementAttemptsError>;
   /** One attempt on another GOAT over SSH dispatch; a retry resends the frozen payload. */
@@ -321,6 +324,7 @@ const make = Effect.gen(function* () {
 
   return PlacementPlacer.of({
     recover,
+    latestAttempt: attempts.latest,
     hasAttempt: Effect.fn("PlacementPlacer.hasAttempt")(function* (ownerKey: string) {
       return (yield* attempts.latest(ownerKey)) !== null;
     }),

@@ -810,6 +810,16 @@ const make = Effect.gen(function* () {
             );
           const blocked = yield* gate(request);
           if (blocked !== null) return blocked;
+          // A placed key goes straight back to its target, which answers from its record: this
+          // machine's capacity view must not refuse a retry of a slot the first send may hold.
+          if (placedBefore && pinned !== null)
+            return yield* launchOn(
+              request,
+              pinned,
+              title,
+              resumedFrom === "replica" ? "base" : resumedFrom,
+              request.modelSelection,
+            );
           if (resumedFrom === "replica") {
             // Goal attempts on this machine recover from their replicas in GoalRecovery; importing a
             // replica on another host waits for remote goal workers (#576).
@@ -879,7 +889,26 @@ const make = Effect.gen(function* () {
             } as const;
           const settled =
             claim.threadId === null ? null : { threadId: ThreadId.make(claim.threadId) };
-          const found = settled ?? (yield* findOnHost(claim.targetHost, claim.title));
+          // A placed move is answered by its attempt record, never by a title on the target.
+          const attempt =
+            settled === null && Option.isSome(placer)
+              ? yield* placer.value
+                  .latestAttempt("reschedule:" + clientRequestId)
+                  .pipe(Effect.orElseSucceed(() => undefined))
+              : null;
+          if (attempt === undefined || (attempt !== null && attempt.state === "unknown"))
+            return {
+              _tag: "Unknown",
+              host: claim.targetHost,
+              message:
+                "The move's placed launch on " + claim.targetHost + " has an unknown outcome.",
+            } as const;
+          if (attempt?.state === "not_started") return { _tag: "NotLaunched" } as const;
+          const found =
+            settled ??
+            (attempt?.threadId != null
+              ? { threadId: ThreadId.make(attempt.threadId) }
+              : yield* findOnHost(claim.targetHost, claim.title));
           if (found === null || found.threadId === null)
             return {
               _tag: "Unknown",
