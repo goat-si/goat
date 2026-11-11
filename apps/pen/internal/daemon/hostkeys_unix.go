@@ -8,4 +8,8 @@ func hostKeysFix(glob string) string {
 	return "make them readable (sudo chmod 644 " + glob + "), then run pen down and pen up, or wait up to an hour"
 }
 
+func hostKeysDirFix(dir string) string {
+	return "let every account list it (sudo chmod 755 " + dir + "), then run pen down and pen up, or wait up to an hour"
+}
+
 func loginName(account string) string { return account }

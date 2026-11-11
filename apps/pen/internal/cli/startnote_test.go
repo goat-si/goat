@@ -2,7 +2,8 @@ package cli
 
 import (
 	"errors"
-	"os/user"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,7 +34,7 @@ func TestUpWithoutAServiceManagerSaysNothingRestartsPenAndPrintsTheStartupLine(t
 	fakeStartNote(t, "linux", false, "")
 	note := startNote(serviceMode(false, nil), false)
 	// A startup script that runs as another account (root's) would start another node.
-	if !strings.Contains(note, "nothing starts Pen again") || !strings.Contains(note, "as "+currentUser(t)) ||
+	if !strings.Contains(note, "nothing starts Pen again") || !strings.Contains(note, "uid "+strconv.Itoa(os.Getuid())) ||
 		!strings.Contains(note, "@reboot '/root/.local/bin/pen' up") || !strings.Contains(note, "systemctl --user") {
 		t.Fatalf("pen up without a service manager printed %q", note)
 	}
@@ -54,9 +55,10 @@ func TestUpWithoutAServiceManagerSaysNothingRestartsPenAndPrintsTheStartupLine(t
 // prints the line that keeps it running. Lingering on, or no logind to ask, prints nothing.
 func TestUpUnderSystemdWithLingerOffPrintsTheEnableLingerLine(t *testing.T) {
 	fakeStartNote(t, "linux", true, "no")
-	// Linger is read for this process's uid; a stale USER must not name another account.
+	// Linger is read for this process's uid, and the fix names that uid: a name lookup without cgo
+	// can fall back to a stale USER.
 	t.Setenv("USER", "someone-else")
-	if note := startNote("systemd", false); !strings.Contains(note, "sudo loginctl enable-linger "+currentUser(t)) || strings.Contains(note, "someone-else") {
+	if note := startNote("systemd", false); !strings.Contains(note, "sudo loginctl enable-linger "+strconv.Itoa(os.Getuid())) || strings.Contains(note, "someone-else") {
 		t.Fatalf("pen up under systemd with Linger=no printed %q", note)
 	}
 	fakeStartNote(t, "linux", true, "yes")
@@ -67,12 +69,4 @@ func TestUpUnderSystemdWithLingerOffPrintsTheEnableLingerLine(t *testing.T) {
 	if note := startNote("systemd", false); note != "" {
 		t.Fatalf("pen up without logind printed %q", note)
 	}
-}
-
-func currentUser(t *testing.T) string {
-	u, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u.Username
 }
