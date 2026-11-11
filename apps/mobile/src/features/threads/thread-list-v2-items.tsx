@@ -24,7 +24,7 @@ import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models
 import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@goat/contracts";
 import { canSnooze } from "@goat/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
-import { memo, useCallback, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
 import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import type { ThreadListProvider } from "../../state/thread-list-environments";
@@ -81,6 +81,9 @@ import {
   ThreadListV2WorktreeGlyph,
 } from "./thread-list-v2-row-meta";
 import { threadListV2RowAccessibilityLabel } from "./thread-list-v2-label";
+import { providerInstanceNameLabel } from "../../lib/modelOptions";
+import { ThreadListV2Section, ThreadListV2SectionDivider } from "./thread-list-v2-section";
+export { ThreadListV2Section, ThreadListV2SectionDivider } from "./thread-list-v2-section";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -89,92 +92,6 @@ const TITLE_FAVICON_SIZE = 15;
 const TITLE_FAVICON_OFFSET = 4;
 // Lines below the title start where the title text does.
 const TITLE_TEXT_INSET = TITLE_FAVICON_SIZE + 8;
-
-export function ThreadListV2Section(props: {
-  readonly label: string;
-  readonly trailing?: ReactNode;
-  readonly pane?: "screen" | "sidebar";
-  readonly tone?: "default" | "snoozed";
-  readonly disclosure?: {
-    readonly expanded: boolean;
-    readonly disabled?: boolean;
-    readonly onToggle: () => void;
-    readonly accessibilityLabel: string;
-    readonly accessibilityHint: string;
-  };
-}) {
-  const snoozed = props.tone === "snoozed";
-  const sidebarPane = props.pane === "sidebar";
-  const className = cn(
-    "mb-1.5 mt-4 flex-row items-center gap-2.5",
-    props.pane === "sidebar" ? "px-3" : "px-5",
-  );
-  const content = (
-    <>
-      <Text
-        className={cn(
-          "text-xs font-goat-medium",
-          sidebarPane
-            ? "text-drawer-foreground-muted"
-            : snoozed
-              ? "text-foreground-secondary"
-              : "text-foreground-tertiary",
-        )}
-      >
-        {props.label}
-      </Text>
-      <View
-        className={cn(
-          "h-px flex-1",
-          snoozed ? "bg-primary/20" : sidebarPane ? "bg-drawer-border" : "bg-border",
-        )}
-      />
-      {props.disclosure ? (
-        <SymbolView
-          name="chevron.down"
-          size={10}
-          tintColorClassName={
-            sidebarPane
-              ? "accent-drawer-foreground-muted"
-              : snoozed
-                ? "accent-icon-muted"
-                : "accent-foreground-muted"
-          }
-          type="monochrome"
-          style={{ transform: [{ rotate: props.disclosure.expanded ? "180deg" : "0deg" }] }}
-        />
-      ) : null}
-      {props.trailing}
-    </>
-  );
-
-  return props.disclosure ? (
-    <Pressable
-      accessibilityHint={props.disclosure.accessibilityHint}
-      accessibilityLabel={props.disclosure.accessibilityLabel}
-      accessibilityRole="button"
-      accessibilityState={{
-        disabled: props.disclosure.disabled,
-        expanded: props.disclosure.expanded,
-      }}
-      className={className}
-      disabled={props.disclosure.disabled}
-      onPress={props.disclosure.onToggle}
-      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-    >
-      {content}
-    </Pressable>
-  ) : (
-    <View className={className}>{content}</View>
-  );
-}
-
-export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivider(props: {
-  readonly label: string;
-  readonly pane?: "screen" | "sidebar";
-}) {
-  return <ThreadListV2Section {...props} />;
-});
 
 type ThreadListV2ShelfHeaderProps = {
   readonly count: number;
@@ -542,6 +459,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   }, [thread, props.providers]);
 
   const providerInstance = props.providerInstance;
+  const providerNameLabel = providerInstance
+    ? providerInstanceNameLabel({
+        provider: providerInstance.driverKind,
+        iconUrl: providerIconUrl,
+        displayName: providerInstance.displayName,
+        showBadge: providerInstance.showBadge,
+      })
+    : null;
   const pr = useThreadPr(thread);
   const prBadgeLabel = pr ? resolveThreadPrBadgeAction(pr).accessibilityLabel : null;
   const handleOpenPullRequests = useCallback(() => {
@@ -569,6 +494,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     thread,
     hasQueuedMessages: props.hasQueuedMessages,
     isRegeneratingTitle,
+    providerName: providerNameLabel,
   });
   const timeLabel = props.timeLabel;
 
@@ -1188,6 +1114,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               showBadge={providerInstance.showBadge}
               surfaceColor={rowAppearance.providerIconSurfaceColor}
             />
+            {providerNameLabel ? (
+              <Text
+                className={cn(
+                  "ml-1.5 text-xs",
+                  selected
+                    ? selectedThreadRowColors.mutedForegroundClassName
+                    : rowAppearance.tertiaryForegroundClassName,
+                )}
+                ellipsizeMode="middle"
+                numberOfLines={1}
+                style={{ maxWidth: 140 }}
+              >
+                {providerNameLabel}
+              </Text>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -1280,6 +1221,20 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             >
               {thread.title}
             </Text>
+            {providerNameLabel ? (
+              <Text
+                className={cn(
+                  "text-xs",
+                  selected
+                    ? selectedThreadRowColors.mutedForegroundClassName
+                    : rowAppearance.tertiaryForegroundClassName,
+                )}
+                ellipsizeMode="middle"
+                numberOfLines={1}
+              >
+                {providerNameLabel}
+              </Text>
+            ) : null}
             {thread.source.historyArchive !== undefined && !props.searchMatch ? (
               <Text
                 className={cn(

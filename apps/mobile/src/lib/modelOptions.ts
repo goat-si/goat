@@ -12,11 +12,27 @@ import type {
   RuntimeMode,
   ServerConfig as GoatServerConfig,
 } from "@goat/contracts";
-import { resolveProjectProviderInstanceEnabled } from "@goat/contracts";
+import {
+  resolveOfficialAcpRegistryIconUrl,
+  resolveProjectProviderInstanceEnabled,
+} from "@goat/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
 } from "@goat/shared/model";
+
+export function providerInstanceNameLabel(input: {
+  readonly provider: string | null | undefined;
+  readonly iconUrl?: string | null | undefined;
+  readonly displayName: string;
+  readonly showBadge: boolean;
+}): string | null {
+  return input.showBadge &&
+    input.provider === "acpRegistry" &&
+    resolveOfficialAcpRegistryIconUrl(input.iconUrl) === null
+    ? input.displayName
+    : null;
+}
 
 export type ModelOption = {
   readonly key: string;
