@@ -1,7 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelConversationId,
+  ChannelGatewayError,
   type ChannelInputId,
+  type ChannelOutboundMessage,
   type ChannelQuestionId,
   ChannelReceptionId,
   type ChannelTaskId,
@@ -10,6 +12,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -18,10 +21,12 @@ import { buildGoatBotTimeline } from "../../../../packages/client-runtime/src/go
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { ANSWER_DECISION_ATTEMPTS } from "./ChannelDeliveryWorker.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelTransport from "./ChannelTransport.ts";
 import { mainBotKey } from "./channelBotLedger.ts";
 import { answerVerdict } from "./channelPersonMessage.ts";
 import {
@@ -323,13 +328,67 @@ const answerRow = (inputId: ChannelInputId) =>
     }));
   });
 
+/** The decision row's state and how many times it was handed to its transport. */
+const answerAttempts = (inputId: ChannelInputId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [row] = yield* sql<{ readonly state: string; readonly attempts: number }>`
+      SELECT state, attempts FROM channel_outbox WHERE cause_key = ${"answer:" + inputId}`;
+    return row;
+  });
+
+/**
+ * The GOAT transport with its decision writes failing while `failing` holds; `writes` lists the
+ * input each decision write was for.
+ */
+const decisionWrites = Effect.gen(function* () {
+  const registry = yield* ChannelTransport.ChannelTransportRegistry;
+  const goat = Option.getOrThrow(yield* registry.resolve("goat"));
+  const control = { failing: true, writes: [] as Array<string | undefined> };
+  yield* registry.register({
+    kind: "goat",
+    send: (message: ChannelOutboundMessage) => {
+      if (message.personAnswer === undefined) return goat.send(message);
+      control.writes.push(message.inReplyToInputId);
+      return control.failing
+        ? Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" }))
+        : goat.send(message);
+    },
+  });
+  return control;
+});
+
+/** Two picks sent while the question was open: the first is taken, the second refused. */
+const twoPicks = Effect.gen(function* () {
+  const { gateway, runtime, task, questionId, options } = yield* askedTask;
+  const one = yield* gateway.ingest(
+    answer(options[0]!, "one", task.taskId, questionId),
+    rpcContext,
+  );
+  const two = yield* gateway.ingest(
+    answer(options[0]!, "two", task.taskId, questionId),
+    rpcContext,
+  );
+  return { runtime, questionId, one, two };
+});
+
+/** Ten passes far enough apart that a write failing every time uses all its delivery attempts. */
+const failTenTimes = (runtime: ChannelRuntime.ChannelRuntime["Service"]) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      yield* runtime.drain;
+      yield* TestClock.adjust("5 minutes");
+    }
+  });
+
 describe("delivering reception's decision about an answer", () => {
   it.effect(
-    "a decision whose receipt passed its deadline across a restart is still recorded, once",
+    "a decision write interrupted by a restart, after its receipt's deadline, is still recorded, once",
     () => {
       const harness = makeHarness({ projects: 2 });
       return Effect.gen(function* () {
         const { gateway, runtime, task, questionId, options } = yield* askedTask;
+        const sql = yield* SqlClient.SqlClient;
         const sent = yield* gateway.ingest(
           answer(options[0]!, "one", task.taskId, questionId),
           rpcContext,
@@ -337,6 +396,12 @@ describe("delivering reception's decision about an answer", () => {
         yield* runtime.runPass;
         yield* runtime.settle([sent.inputId]);
         yield* TestClock.adjust("61 seconds");
+        // The process stopped with the decision write claimed, as a claim leaves it.
+        yield* sql`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
+          send_started_at = NULL WHERE cause_key = ${"answer:" + sent.inputId}`;
+        assert.deepStrictEqual(yield* answerRow(sent.inputId), [
+          { state: "delivering", personAnswer: { answersQuestionId: questionId } },
+        ]);
         yield* runtime.recover;
         assert.deepStrictEqual(yield* answerRow(sent.inputId), [
           { state: "pending", personAnswer: { answersQuestionId: questionId } },
@@ -352,6 +417,84 @@ describe("delivering reception's decision about an answer", () => {
           1,
         );
         assert.strictEqual((yield* stored("one")).answersQuestionId, questionId);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "a refusal whose write failed every delivery attempt is written on a later pass (#2977)",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        const { runtime, questionId, two } = yield* twoPicks;
+        const writes = yield* decisionWrites;
+        yield* failTenTimes(runtime);
+        assert.deepStrictEqual(yield* answerAttempts(two.inputId), {
+          state: "failed",
+          attempts: 10,
+        });
+        // Acceptance expected the pick to answer the question; nothing has corrected it yet.
+        assert.strictEqual((yield* stored("two")).answersQuestionId, questionId);
+        writes.failing = false;
+        yield* TestClock.adjust("10 minutes");
+        yield* runtime.drain;
+        assert.strictEqual((yield* answerAttempts(two.inputId))?.state, "delivered");
+        assert.strictEqual((yield* stored("two")).answersQuestionId, null);
+        assert.strictEqual((yield* stored("one")).answersQuestionId, questionId);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a decision write that keeps failing is tried again a bounded number of times", () => {
+    const harness = makeHarness({ projects: 2 });
+    return Effect.gen(function* () {
+      const { runtime, two } = yield* twoPicks;
+      const writes = yield* decisionWrites;
+      yield* failTenTimes(runtime);
+      const tries = () => writes.writes.filter((inputId) => inputId === two.inputId).length;
+      assert.strictEqual(tries(), 10);
+      // One more try per repair run, ten minutes apart, until the row has used its attempts.
+      for (let run = 0; run < ANSWER_DECISION_ATTEMPTS; run += 1) {
+        yield* TestClock.adjust("10 minutes");
+        yield* runtime.drain;
+      }
+      assert.strictEqual(tries(), ANSWER_DECISION_ATTEMPTS);
+      assert.deepStrictEqual(yield* answerAttempts(two.inputId), {
+        state: "failed",
+        attempts: ANSWER_DECISION_ATTEMPTS,
+      });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "a decision a server without it marked delivered unwritten is written once after the upgrade",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        const { runtime, questionId, one, two } = yield* twoPicks;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const sql = yield* SqlClient.SqlClient;
+        const writes = yield* decisionWrites;
+        writes.failing = false;
+        assert.isTrue(yield* runtime.claimForWork);
+        yield* reception.receive(one.inputId, runtime.ownerToken);
+        yield* reception.receive(two.inputId, runtime.ownerToken);
+        // An older server reads the row without personAnswer and records it delivered.
+        yield* sql`UPDATE channel_outbox SET state = 'delivered', attempts = 1
+          WHERE cause_key = ${"answer:" + two.inputId}`;
+        assert.strictEqual((yield* stored("two")).answersQuestionId, questionId);
+        // The next repair run, as the upgraded server's first pass would be.
+        yield* TestClock.adjust("10 minutes");
+        yield* runtime.drain;
+        assert.strictEqual((yield* stored("two")).answersQuestionId, null);
+        assert.deepStrictEqual(yield* answerAttempts(two.inputId), {
+          state: "delivered",
+          attempts: 2,
+        });
+        // Written by a server that applies it, it is never written again.
+        yield* TestClock.adjust("10 minutes");
+        yield* runtime.drain;
+        assert.strictEqual(writes.writes.filter((inputId) => inputId === two.inputId).length, 1);
       }).pipe(Effect.provide(harness.layer));
     },
   );
