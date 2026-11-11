@@ -221,6 +221,10 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+  let checkSequence = 0;
+  // Per repo scope: when each worktree's check last started (least recent goes first), and the
+  // worktrees decided since remaining last reached 0 (a repeat skips counting them, so it ends).
+  const scopes = new Map<string, { lastStart: Map<string, number>; decided: Set<string> }>();
 
   const real = (target: string) =>
     fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
@@ -827,21 +831,39 @@ const make = Effect.gen(function* () {
     const dryRun = input.dryRun !== false;
     const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
     const facts = yield* scan(input.repo);
+    const scopeKey = input.repo ?? "";
+    const scope = scopes.get(scopeKey) ?? { lastStart: new Map(), decided: new Set<string>() };
+    scopes.set(scopeKey, scope);
+    if (!dryRun)
+      facts.sort((a, b) => {
+        const order =
+          (scope.lastStart.get(a.entry.path) ?? 0) - (scope.lastStart.get(b.entry.path) ?? 0);
+        return order || a.entry.path.localeCompare(b.entry.path);
+      });
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
-    let attempted = false;
     let remaining = 0;
+    let checked = false;
+    // A worktree counts as decided only once its check finished, so an interrupted call leaves it.
+    let deciding: string | null = null;
     for (const fact of facts) {
+      if (deciding !== null) scope.decided.add(deciding);
+      deciding = null;
       if (fact.entry.main) continue;
+      // Every removing call checks at least one worktree, so a slow scan cannot stall repeats.
+      if (!dryRun && checked && (yield* Clock.currentTimeMillis) >= deadline) {
+        if (!scope.decided.has(fact.entry.path)) remaining++;
+        continue;
+      }
+      checked = true;
+      if (!dryRun) {
+        scope.lastStart.set(fact.entry.path, ++checkSequence);
+        deciding = fact.entry.path;
+      }
       const entry = { path: fact.entry.path, branch: fact.entry.branch };
       const blocker = sweepBlocker(fact);
       if (blocker !== null) {
         kept.push({ ...entry, reason: blocker });
-        continue;
-      }
-      // The deadline never skips the first eligible removal, so a repeated sweep can make progress.
-      if (!dryRun && attempted && (yield* Clock.currentTimeMillis) >= deadline) {
-        remaining++;
         continue;
       }
       const work = yield* unsavedWork(fact);
@@ -854,7 +876,6 @@ const make = Effect.gen(function* () {
         removed.push({ ...entry, reason });
         continue;
       }
-      attempted = true;
       yield* removeChecked(fact, {
         force: false,
         deleteBranch: false,
@@ -866,6 +887,8 @@ const make = Effect.gen(function* () {
         }),
       );
     }
+    if (deciding !== null) scope.decided.add(deciding);
+    if (!dryRun && remaining === 0) scope.decided.clear();
     return { dryRun, removed, kept, remaining };
   });
 
