@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -391,5 +393,81 @@ func TestDownOnWindowsWaitsForTheSupervisorAndEndsOneThatStays(t *testing.T) {
 		if _, err := os.Stat(st.Path(downMarker)); err != nil {
 			t.Fatalf("pen down left no down marker: %v", err)
 		}
+	}
+}
+
+// The task's supervisor follows the --service rule: a start it refuses ends it with exit 0, so nothing
+// counts a failure or restarts it, and the reason is left in daemon.log and in the record pen up reads.
+func TestSupervisorOnARefusedRelayListEndsCleanlyAndLeavesTheReason(t *testing.T) {
+	st := storeWithRelay(t, "http://relay.example.com")
+	t.Setenv("PEN_HOME", st.Dir)
+	cfg, err := st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := daemon.CheckConfig(cfg)
+	if reason == nil {
+		t.Fatal("the test relay list is accepted")
+	}
+	var out, errOut bytes.Buffer
+	if code := RunUp([]string{"--supervise"}, &out, &errOut); code != 0 {
+		t.Fatalf("pen up --supervise exit %d (%s), want 0", code, errOut.String())
+	}
+	for _, f := range []string{"daemon.log", refusedRecord} {
+		b, err := os.ReadFile(st.Path(f))
+		if err != nil || !strings.Contains(string(b), reason.Error()) {
+			t.Fatalf("%s does not carry the reason %q: %q, %v", f, reason, b, err)
+		}
+	}
+}
+
+// The supervisor runs the daemon with the service invocation: a daemon that refuses its start (its config
+// changed after the supervisor checked it) ends the supervisor instead of being restarted every 2 s.
+func TestSupervisorDoesNotRestartADaemonThatRefusedItsStart(t *testing.T) {
+	st := storeWithRelay(t, "http://relay.example.com")
+	t.Setenv("PEN_HOME", st.Dir)
+	t.Setenv("PEN_TEST_MAIN", "1")
+	old := superviseWait
+	t.Cleanup(func() { superviseWait = old; debug.SetCrashOutput(nil, debug.CrashOptions{}) })
+	superviseWait = func(d time.Duration) {
+		t.Errorf("the supervisor restarts the daemon after %v", d)
+		st.WriteAtomic(downMarker, nil, 0o600) // ends the loop
+	}
+	if code := runSupervised(st, io.Discard); code != 0 {
+		t.Fatalf("supervisor exit %d", code)
+	}
+	if b, _ := os.ReadFile(st.Path(refusedRecord)); runtime.GOOS == "windows" && len(b) == 0 {
+		t.Fatal("the daemon's refusal left no record for pen up")
+	}
+}
+
+// pen up reports a start the task's supervisor refused, with its reason, instead of running the task again.
+func TestUpOnWindowsReportsAStartTheSupervisorRefused(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	var st *state.Store
+	runs := 0
+	st, calls := windowsHome(t, func(verb string, _ []string) error {
+		switch verb {
+		case "/Query":
+			return errors.New("not registered")
+		case "/Run":
+			runs++
+			if runs > 1 {
+				t.Fatalf("pen up ran the task again after the supervisor refused the start")
+			}
+			if err := st.WriteAtomic(refusedRecord, []byte("this node left its mesh\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	})
+	if err := st.WriteAtomic(refusedRecord, []byte("an older refusal\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := RunUp([]string{"--relay", rs.URL, "--name", "a"}, &out, &errOut)
+	if code == 0 || !strings.Contains(errOut.String(), "this node left its mesh") {
+		t.Fatalf("pen up exit %d (%q): %s", code, *calls, errOut.String())
 	}
 }

@@ -104,16 +104,24 @@ func startTask(st *state.Store) error {
 	if err := os.Remove(st.Path(downMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := os.Remove(st.Path(refusedRecord)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	// A supervisor that pen down just ended can still count as running for Task Scheduler, which then
 	// drops this /Run (IgnoreNew); another /Run is harmless, since a second supervisor would find the
-	// lock held and exit, so repeat it until the daemon answers.
+	// lock held and exit, so repeat it until the daemon answers. A start the supervisor or its daemon
+	// refused ends the wait with the reason.
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		if err := run("schtasks", "/Run", "/TN", name); err != nil {
 			return err
 		}
-		if answers(st, runRetry) {
+		up, refusal := started(st, runRetry)
+		if up {
 			return nil
+		}
+		if refusal != "" {
+			return fmt.Errorf("the pen task %s refused to start: %s", name, strings.TrimPrefix(refusal, "pen: "))
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the pen task %s did not start the daemon within %v", name, readyTimeout)
@@ -124,16 +132,20 @@ func startTask(st *state.Store) error {
 // runRetry is how long pen up waits for the daemon before it repeats schtasks /Run (a seam for tests).
 var runRetry = 2 * time.Second
 
-// answers reports whether the daemon answers on the control socket within d.
-func answers(st *state.Store, d time.Duration) bool {
+// started waits up to d for the daemon to answer on the control socket (up) or for the task to record
+// that it refused the start (the reason).
+func started(st *state.Store, d time.Duration) (up bool, refusal string) {
 	deadline := time.Now().Add(d)
 	for {
 		var s daemon.Status
 		if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
-			return true
+			return true, ""
+		}
+		if b, err := os.ReadFile(st.Path(refusedRecord)); err == nil && len(b) > 0 {
+			return false, strings.TrimSpace(string(b))
 		}
 		if !time.Now().Before(deadline) {
-			return false
+			return false, ""
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -255,7 +267,8 @@ func runSupervised(st *state.Store, stderr io.Writer) int {
 		return 1
 	}
 	return superviseLoop(func() int {
-		cmd := exec.Command(exe, "up", "--foreground")
+		// --service: a daemon that refuses its start exits 0 and ends this loop instead of restarting.
+		cmd := exec.Command(exe, "up", "--foreground", "--service")
 		cmd.Stdout, cmd.Stderr = logf, logf
 		hideWindow(cmd)
 		err := cmd.Run()
@@ -268,10 +281,33 @@ func runSupervised(st *state.Store, stderr io.Writer) int {
 			return -1
 		}
 		return 0
-	}, stopRequested, time.Sleep, time.Now, logger.Printf)
+	}, stopRequested, superviseWait, time.Now, logger.Printf)
 }
 
 const restartFirst, restartMax = 2 * time.Second, time.Minute
+
+// superviseWait is the supervisor's wait before a restart (a seam for tests).
+var superviseWait = time.Sleep
+
+// refusedRecord holds the reason the Windows task refused to start Pen, for pen up to report.
+const refusedRecord = "start-refused"
+
+// noteRefused leaves the reason for a refused service start where it can be read: on stderr (daemon.log
+// for the daemon the supervisor runs), in daemon.log for the supervisor itself, whose console nobody
+// sees, and for the Windows task in refusedRecord, which pen up reports.
+func noteRefused(st *state.Store, supervise bool, err error, stderr io.Writer) {
+	msg := "pen: " + err.Error() + "\n"
+	io.WriteString(stderr, msg)
+	if supervise {
+		if logf, err := os.OpenFile(st.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			log.New(logf, "", log.LstdFlags).Print("pen supervisor: " + msg)
+			logf.Close()
+		}
+	}
+	if supervise || serviceOS == "windows" {
+		st.WriteAtomic(refusedRecord, []byte(msg), 0o600) // best effort: the reason is in daemon.log too
+	}
+}
 
 // superviseLoop runs the daemon until it exits 0 (pen down, pen leave, the left marker) or pen down is
 // recorded (stopRequested, checked before every start). After any other exit it waits 2 s, doubling up
