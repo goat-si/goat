@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  GoatBotEventSubject,
   MemoryReportReference,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2TurnItem,
@@ -195,6 +196,8 @@ export type GoatBotRow =
       readonly kind: "event";
       readonly id: string;
       readonly text: string;
+      /** The routine or task the line names, which a client can open. */
+      readonly subject?: GoatBotEventSubject;
       readonly createdAt: string;
       readonly firstInGroup: boolean;
       readonly groupPosition: GoatBotGroupPosition;
@@ -559,6 +562,7 @@ export function buildGoatBotTimeline(input: {
             kind: "event",
             id: item.id,
             text: item.summary,
+            ...(item.source.subject === undefined ? {} : { subject: item.source.subject }),
             createdAt: itemCreatedAt(item),
           });
         }

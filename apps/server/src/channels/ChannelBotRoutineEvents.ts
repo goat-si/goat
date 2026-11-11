@@ -66,6 +66,7 @@ const announce = Effect.fn("ChannelBotRoutineEvents.announce")(function* (
     kind: "routine-" + change.replace(" ", "-"),
     id: task.id,
     text: "Routine " + task.title + " " + change,
+    subject: { kind: "routine", id: task.id, name: task.title },
   });
 });
 

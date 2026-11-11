@@ -78,6 +78,8 @@ describe("ChannelBotRoutineEvents", () => {
           [setUp.text, setUp.kind, setUp.id, setUp.botId],
           ["Routine Standup set up", "routine-set-up", "new", "main"],
         );
+        // The line names its routine, so a client can open it from the line.
+        assert.deepStrictEqual(setUp.subject, { kind: "routine", id: "new", name: "Standup" });
         yield* Queue.offer(
           feed,
           list(routine("old", { enabled: false }), routine("new", { title: "Standup" })),
