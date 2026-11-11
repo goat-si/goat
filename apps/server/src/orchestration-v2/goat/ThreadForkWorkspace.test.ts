@@ -58,7 +58,12 @@ interface World {
   readonly dispatches: Array<OrchestrationV2ServerCommand>;
   runs: ReadonlyArray<OrchestrationV2Run>;
   outcome: "accept" | "reject" | "commit_then_fail";
+  /** After a committed-then-failed dispatch, the receipt and thread reads fail too. */
+  readsFailAfterDispatch: boolean;
+  readsFail: boolean;
   gate: Deferred.Deferred<void> | null;
+  atGate: number;
+  allAtGate: Deferred.Deferred<void> | null;
   scratch: boolean;
   capabilities: OrchestrationV2ProviderCapabilities;
   setupRuns: number;
@@ -91,7 +96,11 @@ const acquireWorld = Effect.acquireRelease(
       dispatches: [],
       runs: [{ id: sourceRunId, status: "completed" } as unknown as OrchestrationV2Run],
       outcome: "accept",
+      readsFailAfterDispatch: false,
+      readsFail: false,
       gate: null,
+      atGate: 0,
+      allAtGate: null,
       scratch: false,
       capabilities: CodexProviderCapabilitiesV2,
       setupRuns: 0,
@@ -126,7 +135,7 @@ const layerFakes = (world: World) =>
   Layer.mergeAll(
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadRecords: (threadId: ThreadId) => {
-        const thread = world.threads.get(threadId);
+        const thread = world.readsFail ? undefined : world.threads.get(threadId);
         return thread === undefined
           ? Effect.fail(
               new ThreadManagementService.ThreadManagementThreadNotFoundError({
@@ -136,11 +145,25 @@ const layerFakes = (world: World) =>
             )
           : Effect.succeed({ thread, runs: threadId === sourceThreadId ? world.runs : [] });
       },
+      getThreadShell: (threadId: ThreadId) =>
+        world.readsFail
+          ? Effect.fail(
+              new ThreadManagementService.ThreadManagementThreadNotFoundError({
+                projectId,
+                threadId,
+              }),
+            )
+          : Effect.succeed(world.threads.get(threadId) ?? null),
       dispatch: (command: OrchestrationV2ServerCommand) =>
         Effect.gen(function* () {
           world.dispatches.push(command);
           if (command.type !== "thread.fork") return yield* Effect.die("unexpected command");
-          if (world.gate !== null) yield* Deferred.await(world.gate);
+          if (world.gate !== null) {
+            world.atGate += 1;
+            if (world.atGate === 4 && world.allAtGate !== null)
+              yield* Deferred.succeed(world.allAtGate, undefined);
+            yield* Deferred.await(world.gate);
+          }
           const sequence = world.dispatches.length;
           const receipt = (status: "accepted" | "rejected") =>
             world.receipts.set(command.commandId, {
@@ -169,7 +192,10 @@ const layerFakes = (world: World) =>
             worktreePath: command.workspace?.worktreePath ?? source?.worktreePath ?? null,
           } as unknown as OrchestrationV2AppThread);
           receipt("accepted");
-          if (world.outcome === "commit_then_fail") return yield* refused;
+          if (world.outcome === "commit_then_fail") {
+            world.readsFail = world.readsFailAfterDispatch;
+            return yield* refused;
+          }
           return { sequence, storedEvents: [] } as unknown as Effect.Success<
             ReturnType<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>
           >;
@@ -177,7 +203,9 @@ const layerFakes = (world: World) =>
     } as never),
     Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({
       getByCommandId: (commandId: CommandId) =>
-        Effect.succeed(Option.fromNullishOr(world.receipts.get(commandId))),
+        world.readsFail
+          ? Effect.fail(new CommandReceiptStore.CommandReceiptStoreReadError({ commandId }))
+          : Effect.succeed(Option.fromNullishOr(world.receipts.get(commandId))),
     }),
     Layer.mock(ProjectService.ProjectService)({
       getById: () =>
@@ -553,4 +581,40 @@ it.effect(
       assert.equal(result.worktree?.baseCommit, git(sourceWorktree, ["rev-parse", "HEAD"]));
       assert.equal(read(result.worktree?.worktreePath ?? "", "tracked.txt"), "worktree commit\n");
     }).pipe(Effect.scoped),
+);
+
+it.effect("keeps the checkout when the fork's outcome cannot be read after dispatch fails", () =>
+  Effect.gen(function* () {
+    const world = yield* makeWorld;
+    world.outcome = "commit_then_fail";
+    world.readsFailAfterDispatch = true;
+    const error = yield* forkIn(world).pipe(withService(world), Effect.flip);
+    assert.equal(error.reason, "fork_failed");
+    const kept = error.retainedWorktreePath ?? "";
+    assert.isTrue(NodeFS.existsSync(kept));
+    assert.lengthOf(worktreePaths(world.repo), 2);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("refuses a fifth concurrent fork before it touches git", () =>
+  Effect.gen(function* () {
+    const world = yield* makeWorld;
+    world.gate = yield* Deferred.make<void>();
+    world.allAtGate = yield* Deferred.make<void>();
+    const outcome = yield* Effect.gen(function* () {
+      const running = yield* Effect.forEach(["fork-a", "fork-b", "fork-c", "fork-d"], (commandId) =>
+        forkIn(world, { commandId }).pipe(Effect.forkChild),
+      );
+      yield* Deferred.await(world.allAtGate as Deferred.Deferred<void>);
+      const refused = yield* forkIn(world, { commandId: "fork-e" }).pipe(Effect.flip);
+      const worktreesWhileFull = worktreePaths(world.repo).length;
+      yield* Deferred.succeed(world.gate as Deferred.Deferred<void>, undefined);
+      const done = yield* Effect.forEach(running, Fiber.join);
+      return { refused, worktreesWhileFull, done };
+    }).pipe(withService(world));
+    assert.equal(outcome.refused.reason, "fork_failed");
+    assert.equal(outcome.worktreesWhileFull, 5);
+    assert.lengthOf(outcome.done, 4);
+    assert.lengthOf(world.dispatches, 4);
+  }).pipe(Effect.scoped),
 );
