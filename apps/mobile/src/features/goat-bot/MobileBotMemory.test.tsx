@@ -385,7 +385,7 @@ it("offers no fill for a note whose text another note shares, since the request 
   await typeWording("Keep replies very short");
   expect(button("Fill message")).toBeUndefined();
   expect(container.textContent).toContain(
-    "Two notes read “Keep replies short”, so GOAT Bot can't tell which one you mean.",
+    "More than one note reads “Keep replies short”, so GOAT Bot can't tell which one you mean.",
   );
   state.copy.mockClear();
   await press("Copy");
@@ -412,6 +412,50 @@ it("offers no fill for a note whose text another note shares, since the request 
   );
   await press("Discard");
   expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+});
+
+it("holds back forget and change for notes whose words differ only in spacing", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 1, date: "2026-11-10", text: "Use  pnpm" },
+        { index: 0, date: "2026-11-01", text: "Use pnpm" },
+      ],
+      truncated: false,
+    },
+  });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  const forgets = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to forget",
+  );
+  await act(async () => forgets[1]?.click());
+  expect(onDraft).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(
+    "More than one note reads “Use pnpm”, so GOAT Bot can't tell which one you mean.",
+  );
+  await press("Discard");
+  await act(async () => forgets[0]?.click());
+  expect(onDraft).not.toHaveBeenCalled();
+});
+
+it("holds back forget and change on a list cut to the newest part of memory.md, since a note out of view may read the same", async () => {
+  setup({ data: { revision: "r1", notes: [sourced(0, "Reply in Korean")], truncated: true } });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  await press("Ask to forget");
+  expect(onDraft).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(
+    "This list shows only the newest part of memory.md, so another note may also read “Reply in Korean” and GOAT Bot can't tell which one you mean.",
+  );
+  await press("Discard");
+  await press("Ask to change");
+  await typeWording("Reply in English");
+  expect(button("Fill message")).toBeUndefined();
+  await press("Copy");
+  expect(state.copy).toHaveBeenCalledWith("Reply in English", { target: "new wording" });
+  expect(onDraft).not.toHaveBeenCalled();
 });
 
 it("keeps a wording apart when a new read leaves identical notes it cannot tell apart", async () => {
@@ -581,7 +625,7 @@ it("offers no forget request for a note whose text another note shares, and stil
   await act(async () => forgets()[2]?.click());
   expect(onDraft).not.toHaveBeenCalled();
   expect(container.textContent).toContain(
-    "Two notes read “Keep replies short”, so GOAT Bot can't tell which one you mean.",
+    "More than one note reads “Keep replies short”, so GOAT Bot can't tell which one you mean.",
   );
   state.copy.mockClear();
   await press("Copy");
