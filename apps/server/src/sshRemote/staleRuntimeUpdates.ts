@@ -35,18 +35,17 @@ export const cancelStaleRuntimeUpdates = Effect.fn("SshHostSetup.cancelStaleRunt
       const current = (yield* setup.status({ host })).status;
       if (current?.state !== "ready" || current.runtimeVersion !== requestedVersion) continue;
       const address = { threadId: handoff.requestedBy.threadId, handoffId: handoff.handoffId };
+      // Done is recorded first: until the card ends, each tick repeats this, so a stop between
+      // the steps never leaves the update without its outcome.
+      if (Option.isSome(dispatch) && current.setup?.operationId === operationId)
+        yield* dispatch.value.publishSetupOutcome(host, current.setup, { kind: "complete" });
       const ended = yield* handoffs.cancelPending(
         address,
         `${host} already runs GOAT ${requestedVersion}, so it needs no update.`,
       );
       // A person may have answered since the read; their answer stands.
       if (ended.state !== "cancelled" || ended.actor.type !== "server") continue;
-      // Its setup record ends as done, not as a cancelled setup.
       yield* handoffs.finishSshContinuation(address);
-      if (Option.isSome(dispatch) && current.setup?.operationId === operationId)
-        yield* dispatch.value
-          .publishSetupOutcome(host, current.setup, { kind: "complete" })
-          .pipe(Effect.ignore({ log: true }));
     }
   },
 );

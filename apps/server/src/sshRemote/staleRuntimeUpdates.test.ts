@@ -166,7 +166,8 @@ it.effect("a person's approval that lands while the sweep runs is kept and still
           (yield* handoffs.completedSshContinuations).map((entry) => entry.handoff.handoffId),
           [asked.handoffId],
         );
-        assert.deepEqual(published, []);
+        // The host already runs that version, so "done" is right whichever way the card ended.
+        assert.deepEqual(published, ["complete"]);
       }).pipe(
         Effect.provide(
           Handoffs.layer.pipe(
@@ -187,6 +188,82 @@ it.effect("a person's approval that lands while the sweep runs is kept and still
           ),
         ),
       );
+    }),
+  ),
+);
+
+it.effect("a stale runtime update keeps its done outcome when GOAT stops between its steps", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const { environmentId, dependencies } = yield* computerUseGrantClients(orchestrator);
+      yield* Effect.gen(function* () {
+        const handoffs = yield* Handoffs.Handoffs;
+        const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        const asked = yield* handoffs.create({
+          kind: "approval",
+          title: "Update runtime on lidge?",
+          reason: "Running agent work gets up to a minute to finish.",
+          requestedBy: { threadId, providerInstanceId: instanceId, path: "ssh.runtime_update" },
+          target: { environmentId, path: "ssh.runtime_update" },
+          runId: run.id,
+          nodeId: run.rootNodeId!,
+          human: { location: "Update GOAT on lidge now." },
+          args: {
+            version: 1,
+            step: "runtime_update",
+            host: "lidge",
+            operationId: "op-1",
+            aliasGeneration: 0,
+            requestedVersion: "0.1.9",
+          },
+          expiresAt: DateTime.add(yield* DateTime.now, { hours: 24 }),
+          sshProgress: {
+            host: "lidge",
+            operationId: "op-1",
+            aliasGeneration: 0,
+            environmentId,
+            threadId,
+          },
+        });
+        const published: Array<string> = [];
+        const dispatch: Option.Option<
+          Pick<SshRemoteDispatch.SshRemoteDispatch["Service"], "publishSetupOutcome">
+        > = Option.some({
+          publishSetupOutcome: (_host, _operation, outcome) =>
+            Effect.sync(() => published.push(outcome.kind) > 0),
+        });
+        const setup = {
+          status: () =>
+            Effect.succeed<SshHostResult>({
+              kind: "ok",
+              status: {
+                host: "lidge",
+                state: "ready",
+                runtimeVersion: "0.1.9",
+                requestedVersion: "0.1.9",
+                setup: { ...setupRecord, stage: "runtime" },
+              },
+            }),
+        };
+        // GOAT stops before it ends the card: the done outcome is already recorded.
+        const stopped = yield* cancelStaleRuntimeUpdates(
+          { ...handoffs, cancelPending: () => Effect.die("stopped") },
+          setup,
+          dispatch,
+        ).pipe(Effect.exit);
+        assert.isTrue(stopped._tag === "Failure");
+        assert.deepEqual(published, ["complete"]);
+        // GOAT stops after ending the card, before tidying its continuation.
+        yield* cancelStaleRuntimeUpdates(
+          { ...handoffs, finishSshContinuation: () => Effect.die("stopped") },
+          setup,
+          dispatch,
+        ).pipe(Effect.exit);
+        const address = { threadId, handoffId: asked.handoffId };
+        assert.equal((yield* handoffs.read(address)).state, "cancelled");
+        // The restarted server does not report it as a cancelled or failed setup.
+        assert.deepEqual(yield* handoffs.resolvedSshOutcomes, []);
+      }).pipe(Effect.provide(Handoffs.layer.pipe(Layer.provide(dependencies))));
     }),
   ),
 );

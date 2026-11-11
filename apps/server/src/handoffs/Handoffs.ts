@@ -807,10 +807,12 @@ const make = Effect.gen(function* () {
     const results: Array<{ handoff: Handoff; sshProgress: SshProgressBinding }> = [];
     for (const row of rows) {
       const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
+      // GOAT ends an SSH card only when its work is moot (staleRuntimeUpdates), never a failure.
+      const moot = handoff.state === "cancelled" && handoff.actor.type === "server";
       if (
         !handoff.target.path.startsWith("ssh.") ||
-        handoff.state === "completed" ||
-        isHandoffPending(handoff.state)
+        moot ||
+        !["declined", "cancelled", "expired", "failed"].includes(handoff.state)
       )
         continue;
       const payload = yield* loadPrivate(handoff.handoffId);
