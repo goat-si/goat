@@ -322,7 +322,7 @@ interface LiveSessionEntry {
   readonly idleGeneration: number;
   readonly busyTurns: ReadonlySet<string>;
   readonly busyTurnByThread: ReadonlyMap<ThreadId, string>;
-  readonly turnOpens: ReadonlyMap<ThreadId, Retirement.TurnOpen>;
+  readonly turnOpens: ReadonlyMap<ThreadId, string>;
   readonly lastActivityAtMs: number;
   readonly idleFiber: Fiber.Fiber<void, never> | null;
   readonly pinnedSinceMs: number | null;
@@ -2785,7 +2785,7 @@ export const layerWithOptions = (
                       idleGeneration: 0,
                       busyTurns: new Set(),
                       busyTurnByThread: new Map(),
-                      turnOpens: new Map(turn ? [[input.threadId, { at: now, id: turn.id }]] : []),
+                      turnOpens: new Map(turn?.id ? [[input.threadId, turn.id]] : []),
                       lastActivityAtMs: now,
                       idleFiber: null,
                       pinnedSinceMs: null,

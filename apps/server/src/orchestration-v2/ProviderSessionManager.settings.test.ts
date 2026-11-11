@@ -37,7 +37,6 @@ import * as EventSink from "./EventSink.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import * as Retirement from "./ProviderSessionRetirement.ts";
 import {
   layerTestEventSink,
   layerTestStores,
@@ -677,16 +676,19 @@ it.effect(
     }),
 );
 
-it.effect("a start that never registers stops holding the process once it expires", () =>
+it.effect("a start still running after minutes keeps holding the process", () =>
   Effect.gen(function* () {
     const fixture = yield* makeFixture;
     yield* Effect.gen(function* () {
-      const { open } = yield* sharedSession;
+      const { manager, open, providerSessionId } = yield* sharedSession;
+      // Thread A's start is still waiting on a slow thread/start; only its own exit ends the hold.
       yield* open(threadA);
       fixture.catalog.push(addedModel);
-      yield* TestClock.adjust(Retirement.TURN_OPEN_TTL_MS);
-      yield* open(threadB, addedModel);
-      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+      yield* TestClock.adjust("10 minutes");
+      const refused = yield* open(threadB, addedModel).pipe(Effect.exit);
+      assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
+      assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+      assert.isTrue(yield* manager.isLive(providerSessionId));
     }).pipe(Effect.provide(layer(fixture)));
   }),
 );

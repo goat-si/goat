@@ -1,7 +1,6 @@
 import type { ProviderInstanceId, ProviderSessionId } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Cause from "effect/Cause";
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -13,8 +12,6 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 
 /** How often a retiring session rechecks its work; it stops within one probe after the work ends. */
 export const RETIRE_PROBE_MS = 5_000;
-/** Longer than a thread start plus a turn start take, so a start that never registers stops counting. */
-export const TURN_OPEN_TTL_MS = 180_000;
 export const RETIRED_DETAIL = "The provider's settings changed; its process restarts with them.";
 
 /** A turn cannot start on the current process: its settings changed, or it cannot run the turn's model. */
@@ -73,8 +70,8 @@ export interface RetirableSession {
   readonly busyTurns: ReadonlySet<string>;
   /** Advances with session activity; a release removes the entry only while it still matches. */
   readonly idleGeneration: number;
-  /** Threads whose turn-start open returned but whose turn is not busy yet. */
-  readonly turnOpens: ReadonlyMap<string, TurnOpen>;
+  /** Run ids of turn starts that opened here and have neither registered busy nor exited, by thread. */
+  readonly turnOpens: ReadonlyMap<string, string>;
   readonly runtime: Pick<
     ProviderAdapter.ProviderAdapterV2SessionRuntime,
     | "instanceId"
@@ -103,25 +100,18 @@ export const restartRequired = (retired: Retirement, runningTurns: number, model
     ...(model === undefined || !isModelRefusal(retired) ? {} : { model, modelStatus: retired }),
   });
 
-/** One turn-start open; `id` keeps a failed attempt from clearing a newer one on the same thread. */
-export interface TurnOpen {
-  readonly at: number;
-  readonly id: string;
-}
-
+/** `runId` keeps a finished attempt from clearing a newer one on the same thread. */
 export const withoutTurnOpen = <K extends string>(
-  opens: ReadonlyMap<K, TurnOpen>,
+  opens: ReadonlyMap<K, string>,
   threadId: K,
-  id?: string,
+  runId?: string,
 ) => {
   const open = opens.get(threadId);
-  if (open === undefined || (id !== undefined && open.id !== id)) return opens;
+  if (open === undefined || (runId !== undefined && open !== runId)) return opens;
   const next = new Map(opens);
   next.delete(threadId);
   return next;
 };
-
-const isStarting = (open: TurnOpen, now: number) => now - open.at < TURN_OPEN_TTL_MS;
 
 /** Refuses a turn on a process, however it was opened, that cannot run the turn's model. */
 export const refuseUnready = Effect.fnUntraced(function* <E>(
@@ -188,23 +178,21 @@ export const make = <
    */
   const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
     providerSessionId: ProviderSessionId,
-    turn?: { readonly model: string; readonly threadId: string; readonly id: string },
+    turn?: { readonly model: string; readonly threadId: string; readonly id?: string | undefined },
   ) {
     const key = String(providerSessionId);
     const model = turn?.model;
     // Turn starts and ends replace the entry, so every decision reads it again after a yield.
     const read = Ref.get(input.sessions).pipe(Effect.map((current) => current.get(key)));
-    if (turn !== undefined) {
-      const openedAt = yield* Clock.currentTimeMillis;
+    const runId = turn?.id;
+    // Held until the start attempt registers its turn or exits; its own lifecycle ends it.
+    if (turn !== undefined && runId !== undefined)
       yield* Ref.update(input.sessions, (current) => {
         const entry = current.get(key);
         if (entry === undefined) return current;
-        const turnOpens = new Map(
-          [...entry.turnOpens].filter(([, open]) => isStarting(open, openedAt)),
-        ).set(turn.threadId, { at: openedAt, id: turn.id });
+        const turnOpens = new Map(entry.turnOpens).set(turn.threadId, runId);
         return new Map(current).set(key, { ...entry, turnOpens });
       });
-    }
     const releaseIdle = Effect.fnUntraced(function* (
       busy: "retiring" | "predated" | "unconfirmed",
     ) {
@@ -212,10 +200,7 @@ export const make = <
       if (latest === undefined) return "released" as Retirement;
       if (latest.busyTurns.size > 0) return busy;
       // Another thread's turn opened here and has not registered yet; releasing would fail its start.
-      const now = yield* Clock.currentTimeMillis;
-      const starting = [...latest.turnOpens].some(
-        ([threadId, open]) => threadId !== turn?.threadId && isStarting(open, now),
-      );
+      const starting = [...latest.turnOpens.keys()].some((threadId) => threadId !== turn?.threadId);
       if (busy !== "retiring" && starting) return busy;
       // Activity seen while the probes below yield keeps the session, as it does for idle release.
       const generation = latest.idleGeneration;
@@ -281,10 +266,9 @@ export const make = <
     );
   });
 
-  let turnOpenIds = 0;
-  /** A turn-start open for `model`, identified by its run, or none when the open starts no turn. */
+  /** A turn-start open for `model`; only one with a run, which settles it on exit, reserves the process. */
   const turnFor = <T extends string>(model: string | undefined, threadId: T, runId?: string) =>
-    model === undefined ? undefined : { model, threadId, id: runId ?? `open:${++turnOpenIds}` };
+    model === undefined ? undefined : { model, threadId, id: runId };
 
   /** Ends a start attempt's reservation on every session once it exits, registered or not. */
   const settleTurnStart = (turn: { readonly threadId: string; readonly id: string }) =>
