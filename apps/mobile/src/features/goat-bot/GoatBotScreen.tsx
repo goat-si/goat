@@ -231,7 +231,12 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   return (
     <View className="gap-1.5" style={{ marginTop }}>
       {row.firstInGroup && row.proactive ? (
-        <GoatBotUpdateLabel at={row.createdAt} name={botName} emoji={props.botEmoji} />
+        <GoatBotUpdateLabel
+          at={row.createdAt}
+          name={botName}
+          emoji={props.botEmoji}
+          accent={props.accent}
+        />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
       {row.options.length > 0 || row.answer !== undefined ? (
@@ -412,7 +417,11 @@ export function GoatBotScreen(props: {
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const eventsKey = events.key;
-  const listExtraData = useMemo(() => ({ accent, eventsKey }), [accent, eventsKey]);
+  const focusDivider = unread.focusDivider;
+  const listExtraData = useMemo(
+    () => ({ accent, eventsKey, focusDivider }),
+    [accent, eventsKey, focusDivider],
+  );
   const renderItem = useCallback(
     ({ item }: { item: GoatBotChatItem }) =>
       item.kind === "unread" ? (
@@ -488,6 +497,7 @@ export function GoatBotScreen(props: {
           activity={session.activity ?? null}
           title={title}
           emoji={botEmoji}
+          accent={accent}
           onPress={taskId ? undefined : openHome}
           {...(member
             ? {
@@ -510,6 +520,7 @@ export function GoatBotScreen(props: {
               <GoatBotChipFace
                 activity={session.activity ?? null}
                 emoji={botEmoji}
+                accent={accent}
                 {...(member
                   ? {
                       conversation: {
@@ -538,6 +549,7 @@ export function GoatBotScreen(props: {
           turnsWaiting={session.turnsWaiting}
           botName={title}
           botAvatar={botEmoji}
+          botAccent={accent}
           main={props.main ?? null}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
@@ -615,7 +627,8 @@ export function GoatBotScreen(props: {
           }
           renderItem={renderItem}
           // Rows are memoized by key, data and this: a new accent must reach the pills already shown,
-          // and an event line must learn where its routine or task now opens.
+          // the "New" line must learn when to take VoiceOver focus, and an event line where its
+          // routine or task now opens.
           extraData={listExtraData}
           initialScrollAtEnd
           maintainScrollAtEnd
@@ -653,6 +666,7 @@ export function GoatBotScreen(props: {
                   activity={session.activity}
                   botName={title}
                   emoji={botEmoji}
+                  accent={accent}
                   inView={footerInView}
                 />
               </View>

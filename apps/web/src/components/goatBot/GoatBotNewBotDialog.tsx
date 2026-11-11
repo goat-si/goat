@@ -25,7 +25,7 @@ export function GoatBotNewBotDialog({
   readonly canSubmit: boolean;
   readonly onCreated: (bot: BotProfile) => void;
   readonly onClose: () => void;
-  /** The name being created while the request runs, then null. */
+  /** The name being created while the request runs, then null when it failed; a bot it made stays. */
   readonly onPending?: ((name: string | null) => void) | undefined;
   readonly mainName?: string;
 }) {

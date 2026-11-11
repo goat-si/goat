@@ -73,6 +73,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotDayStamp.test.tsx",
   "src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
   "src/features/goat-bot/GoatBotScreen.events.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.unread.test.tsx",
   "src/features/goat-bot/GoatBotScreen.memory.test.tsx",
   "src/features/goat-bot/GoatBotTimelineRow.test.tsx",
   "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
