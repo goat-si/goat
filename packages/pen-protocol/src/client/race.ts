@@ -138,7 +138,8 @@ export class SecureSession {
   }
 
   onClose(handler: (code: number) => void): void {
-    if (this.#closedCode !== undefined) notify(handler, this.#closedCode);
+    // During a held drain even a known close waits: the observer hears of it after the earlier records.
+    if (this.#closedCode !== undefined && !this.#draining) notify(handler, this.#closedCode);
     else this.#onClose.push(handler);
   }
 

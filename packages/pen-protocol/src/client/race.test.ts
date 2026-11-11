@@ -323,6 +323,25 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
     expect(seen).toEqual(["data:1", "data:2", "close:1000"]);
   });
 
+  it("a close observer added during the held drain, after a peer close, hears of it only after the drain", async () => {
+    const t = setup({ relays: [A] });
+    const a = t.fake.socketFor(A);
+    await flushOpen(a);
+    const reply = answer(a);
+    const { session } = await t.result;
+    a.receive(reply.send.seal(Uint8Array.of(1)));
+    a.receive(reply.send.seal(Uint8Array.of(2)));
+    const seen: Array<string> = [];
+    session.onRecord((plaintext) => {
+      seen.push("data:" + plaintext[0]);
+      if (plaintext[0] === 1) {
+        a.remoteClose(1000);
+        session.onClose((code) => seen.push("close:" + code));
+      }
+    });
+    expect(seen).toEqual(["data:1", "data:2", "close:1000"]);
+  });
+
   it("a close observer added after the close that throws is reported, not thrown to the caller", async () => {
     const reported: Array<unknown> = [];
     vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
