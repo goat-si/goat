@@ -136,6 +136,33 @@ it("draws an answer's table on its own card between the text around it", async (
   expect(screen.getByRole("button").all()).toHaveLength(1);
 });
 
+it("resolves a reference link defined after the table in the card that uses it", async () => {
+  const text = [
+    "Start with [the docs][docs].",
+    "",
+    "| Plan | Price |",
+    "| --- | --- |",
+    "| Basic | $5 |",
+    "",
+    "More in [the docs][docs].",
+    "",
+    "[docs]: https://example.test/docs",
+  ].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[bot("definitions", text)]}
+    />,
+  );
+  const links = await screen.getByRole("link", { name: "the docs" }).all();
+  expect(links).toHaveLength(2);
+  for (const link of links) {
+    expect(link).toHaveAttribute("href", "https://example.test/docs");
+  }
+  expect(screen.container.textContent).not.toContain("[docs]:");
+});
+
 it("names the conversation and an update after the renamed main bot", async () => {
   const main = { botId: "main", role: "main", name: "Goaty" } as BotProfile;
   await using screen = await render(

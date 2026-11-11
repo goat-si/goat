@@ -6,7 +6,6 @@ import {
   goatBotStampParts,
   goatBotReceiptLabel,
   goatBotRejectionText,
-  goatBotReplyParts,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
@@ -46,6 +45,7 @@ import {
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
 import { GoatBotEventText } from "./GoatBotEventText";
 import { GoatBotReplyCards } from "./GoatBotReplyCards";
+import { goatBotReplySplit } from "./goatBotReplyParts";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -430,12 +430,13 @@ export function GoatBotTimeline({
                   </>
                 );
                 // An answer with a table reads as cards: its text, each table, and the rest.
-                const parts = toneIcon === null ? goatBotReplyParts(row.text) : [];
+                // The splitter caches by text, so only a row whose text changed is parsed.
+                const reply = toneIcon === null ? goatBotReplySplit(row.text) : null;
                 const card = (
                   <div className="flex w-full min-w-0 items-end gap-2">
-                    {parts.some((part) => part.kind === "table") ? (
+                    {reply !== null && reply.parts.some((part) => part.kind === "table") ? (
                       <GoatBotReplyCards
-                        parts={parts}
+                        reply={reply}
                         environmentId={environmentId}
                         trail={memory}
                       />
