@@ -171,9 +171,10 @@ const TASKS = [
 /** Matrix order: the quick run's test job follows the checks. */
 const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
 /**
- * Minutes of plain Node work with no browsers, native headers or need for many cores. They run on
- * hosted ubuntu-24.04 even when the lidge pool is on, so they never queue behind half-hour
- * server shards.
+ * Tasks that run on hosted ubuntu-24.04 even when the lidge pool is on. Most are minutes of plain
+ * Node work with no browsers, native headers or need for many cores, kept off the queue behind
+ * half-hour server shards. test-relay is here because its Floci tests start a Docker container,
+ * and lidge runners have no Docker.
  */
 const HOSTED_TASKS = new Set([
   "check",
@@ -182,6 +183,7 @@ const HOSTED_TASKS = new Set([
   "test-client-runtime",
   "test-mobile",
   "test-shared",
+  "test-relay",
   "test-ingest",
   LINUX_COMPUTER_USE_TASK,
   PEN_TASK,

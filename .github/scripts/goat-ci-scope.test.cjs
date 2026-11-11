@@ -451,7 +451,7 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("marks the browser, native, ssh, relay and server work linux and sends the rest to hosted runners", () => {
+  it("marks the browser, native, ssh and server work linux and sends the rest, relay's Docker tests included, to hosted runners", () => {
     const pools = Object.fromEntries(matrixFor(TASKS).include.map((e) => [e.task, e.runner]));
     assert.deepEqual(
       Object.keys(pools).filter((task) => pools[task] === "linux"),
@@ -460,12 +460,12 @@ describe("matrixFor", () => {
         "test-packages",
         "test-ssh",
         "test-desktop",
-        "test-relay",
         "test-memory-growth",
         "build",
         "test-server",
       ],
     );
+    assert.equal(pools["test-relay"], "hosted");
     assert.deepEqual(
       Object.keys(pools).filter((task) => pools[task] === "windows"),
       ["test-windows"],
