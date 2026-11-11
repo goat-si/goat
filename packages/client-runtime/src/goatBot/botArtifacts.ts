@@ -101,7 +101,10 @@ const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/;
 const listableName = (name: string) =>
   name !== "" && !name.startsWith(".") && !/[:\\]/.test(name) && name === name.trim();
 
-/** `path` with `.`, `..` and repeated separators resolved, or null when it is not absolute. */
+/**
+ * `path` with `.` and repeated separators removed, or null when it is not absolute or has a `..`
+ * segment: a link inside the folder can make `..` lead elsewhere, so it is never resolved here.
+ */
 function normalizedAbsolute(path: string, windows: boolean): string | null {
   if (windows ? !WINDOWS_ABSOLUTE.test(path) : !path.startsWith("/")) return null;
   const parts = path.split(windows ? /[\\/]/ : "/");
@@ -114,10 +117,12 @@ function normalizedAbsolute(path: string, windows: boolean): string | null {
   const kept: Array<string> = [];
   for (const part of parts) {
     if (part === "" || part === ".") continue;
-    if (part === "..") kept.pop();
-    else kept.push(part);
+    if (part === "..") return null;
+    kept.push(part);
   }
-  return [...head, ...kept].join("/");
+  const joined = [...head, ...kept].join("/");
+  // Windows compares paths without regard to case; elsewhere a different case is a different file.
+  return windows ? joined.toLowerCase() : joined;
 }
 
 /**
@@ -140,7 +145,10 @@ export function goatBotReplyFiles<File extends { readonly relativePath: string }
     const file = files.find((candidate) =>
       absolute === null
         ? code === candidate.relativePath
-        : absolute === `${folder}/${candidate.relativePath}`,
+        : absolute ===
+          (windows
+            ? `${folder}/${candidate.relativePath.toLowerCase()}`
+            : `${folder}/${candidate.relativePath}`),
     );
     if (file !== undefined && !named.includes(file)) named.push(file);
   }

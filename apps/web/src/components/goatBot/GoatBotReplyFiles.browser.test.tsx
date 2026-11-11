@@ -159,6 +159,7 @@ it("a full path gets a card only when it is inside this server's artifacts folde
         rows={[
           reply("other", "The other machine wrote `/other/artifacts/reports/summary.md`."),
           reply("climb", `Also \`${ROOT}/../../x/artifacts/reports/summary.md\`.`),
+          reply("link", `Through a link: \`${ROOT}/link/../reports/summary.md\`.`),
           reply("own", `I saved \`${ROOT}/reports/summary.md\`.`),
         ]}
         onRetry={() => {}}

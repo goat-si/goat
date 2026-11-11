@@ -355,10 +355,12 @@ describe("files a reply names", () => {
     expect(named(`/elsewhere${root}/reports/summary.md`)).toEqual([]);
   });
 
-  it("a full path that climbs out of the artifacts folder names nothing", () => {
+  it("a full path with a '..' segment names nothing, since a link in the folder can lead outside it", () => {
     expect(named(`${root}/../../elsewhere/artifacts/reports/summary.md`)).toEqual([]);
     expect(named(`${root}/reports/../../artifacts2/chart.png`)).toEqual([]);
-    expect(named(`${root}/reports/../chart.png`)).toEqual(["chart.png"]);
+    // artifacts/link may point outside the folder, so link/../chart.png need not be artifacts/chart.png.
+    expect(named(`${root}/link/../chart.png`)).toEqual([]);
+    expect(named(`${root}/reports/../chart.png`)).toEqual([]);
   });
 
   it("a relative path names a file only when it is exactly a listed path", () => {
@@ -383,6 +385,17 @@ describe("files a reply names", () => {
       "chart.png",
     ]);
     expect(named("D:\\other\\artifacts\\chart.png", windowsRoot)).toEqual([]);
+  });
+
+  it("a Windows server's folder matches without regard to case, and a POSIX one exactly", () => {
+    const windowsRoot = "C:\\Users\\me\\.goat\\userdata\\goat-bot\\artifacts";
+    expect(named("c:/users/ME/.goat/userdata/goat-bot/artifacts/chart.png", windowsRoot)).toEqual([
+      "chart.png",
+    ]);
+    expect(
+      named("\\\\server\\share\\Artifacts\\chart.png", "\\\\Server\\Share\\artifacts"),
+    ).toEqual(["chart.png"]);
+    expect(named(`${root.toUpperCase()}/chart.png`)).toEqual([]);
   });
 
   it("reads the Library for any inline code the listing could hold, names without an extension too", () => {
