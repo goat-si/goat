@@ -78,6 +78,18 @@ export const approvalRequestDetail = Effect.fn("channel.approvalRequestDetail")(
   };
 });
 
+/** The words of a native question, as its coding thread asked it. */
+export const nativeQuestionText = Effect.fn("channel.nativeQuestionText")(function* (
+  ref: ChannelTaskApprovalRef,
+  threads: ThreadManagement.ThreadManagementService["Service"],
+) {
+  const records = yield* recentRecords(threads, ref.threadId);
+  const item = records?.turnItems.find(
+    (entry) => entry.type === "user_input_request" && entry.requestId === ref.requestId,
+  );
+  return item?.type === "user_input_request" ? item.questions[0]?.question : undefined;
+});
+
 const choiceFor = Effect.fn("channel.nativeQuestionChoiceFor")(function* (
   ref: ChannelTaskApprovalRef,
   threads: ThreadManagement.ThreadManagementService["Service"],

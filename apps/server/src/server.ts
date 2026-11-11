@@ -49,6 +49,7 @@ import * as RemoteReportService from "./remoteReports/RemoteReportService.ts";
 import * as RuntimeAdmission from "./runtimeAdmission.ts";
 import * as RuntimeControl from "./runtimeControl.ts";
 import * as RuntimeDrain from "./runtimeDrain.ts";
+import * as RuntimeRelaunch from "./runtimeRelaunch.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
@@ -852,6 +853,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       Layer.provideMerge(SshRuntimeAutoUpdate.layer),
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(RuntimeDrain.layerShutdown),
+      Layer.provide(RuntimeRelaunch.layer),
       Layer.provideMerge(RuntimeAdmission.layer),
       Layer.provideMerge(RuntimeIdentity.layer),
     ),

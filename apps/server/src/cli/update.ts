@@ -41,6 +41,7 @@ import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
 import { createUpdateProgress } from "./updateProgress.ts";
 import { resolveNpmUpdateCommand } from "./invocation.ts";
+import { restartHandStartedServer } from "./updateServerRestart.ts";
 
 export class CliUpdateError extends Schema.TaggedError<CliUpdateError>()("CliUpdateError", {
   reason: Schema.String,
@@ -719,9 +720,28 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       `  The background service serves ${status.installedBaseDir ?? "another GOAT home"} and was left unchanged.`,
     );
   }
-  if (foreground !== undefined) {
-    yield* Console.log(
-      `  A server started by hand is still running at ${foreground.origin} (pid ${foreground.pid}). Stop it and start it again to pick up ${targetVersion}.`,
-    );
+  if (foreground !== undefined && foreground.serverVersion !== targetVersion) {
+    // Windows has no background service, so the server restarts itself when asked to.
+    const restart =
+      platform === "win32" && input.assumeYes
+        ? yield* restartHandStartedServer({
+            server: foreground,
+            serverRuntimeStatePath: input.serverRuntimeStatePath,
+            targetVersion,
+          })
+        : undefined;
+    if (restart?._tag === "restarted") {
+      yield* Console.log(
+        `  Restarted the server at ${restart.origin} on ${targetVersion} (pid ${restart.pid}).`,
+      );
+    } else if (restart?._tag === "stopped") {
+      yield* Console.log(`  ${restart.reason} Start it again with goat serve.`);
+    } else {
+      if (restart !== undefined)
+        yield* Console.log(`  Could not restart the server started by hand: ${restart.reason}`);
+      yield* Console.log(
+        `  A server started by hand is still running at ${foreground.origin} (pid ${foreground.pid}). Stop it and start it again to pick up ${targetVersion}.`,
+      );
+    }
   }
 });
