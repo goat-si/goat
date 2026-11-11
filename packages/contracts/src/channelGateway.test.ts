@@ -163,6 +163,15 @@ describe("channel ingest", () => {
         Schema.encodeSync(json(ChannelOutboundMessage))(interim),
       ),
     ).toEqual(interim);
+    // So does reception's decision about a person's answer, taken or refused.
+    for (const answersQuestionId of ["question-1", null]) {
+      const decided = { ...outbound, personAnswer: { answersQuestionId } };
+      expect(
+        Schema.decodeSync(json(ChannelOutboundMessage))(
+          Schema.encodeSync(json(ChannelOutboundMessage))(decided as never),
+        ),
+      ).toEqual(decided);
+    }
   });
   const input = {
     kind: "slack",

@@ -343,6 +343,22 @@ describe("timeline records", () => {
         },
       }),
     ).toMatchObject({ entry: { meta: { inReplyToInputId: "input-1" } } });
+    const decided = {
+      recordKey: "input:input-1",
+      entry: {
+        type: "message",
+        role: "user",
+        text: "Keep",
+        answerDecided: true,
+        meta: {
+          conversationId: "conv-1",
+          originKind: "goat",
+          kind: "inbound",
+          answersQuestionId: null,
+        },
+      },
+    };
+    expect(roundTrip(ChannelTimelineRecord, decided)).toEqual(decided);
     expect(
       roundTrip(ChannelTimelineRecord, {
         recordKey: "event:profile-name:scout:change-1",
