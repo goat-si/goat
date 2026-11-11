@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  type ChannelConversationId,
   type ChannelInputId,
   type ChannelQuestionId,
   ChannelReceptionId,
@@ -477,7 +478,7 @@ describe("recording a person's message more than once", () => {
             text: "Keep",
             ...(answerDecided === undefined ? {} : { answerDecided }),
             meta: {
-              conversationId: "conversation-1",
+              conversationId: "conversation-1" as ChannelConversationId,
               originKind: "goat",
               kind: "inbound",
               inputId: "in-1" as ChannelInputId,
