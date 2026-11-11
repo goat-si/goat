@@ -83,8 +83,11 @@ it("sends the picked model while its thread selection save is pending", async ()
   });
   // Unmount only once the sent message renders, so no import the send started is still
   // loading through the mocked driver's route when the next file takes the page.
-  await expect.element(page.getByText("Send immediately").first()).toBeVisible();
-  await expect
-    .element(page.getByTestId("composer-editor"))
-    .not.toHaveTextContent("Send immediately");
+  await vi.waitFor(() => {
+    expect(document.querySelector('[data-testid="composer-editor"]')?.textContent?.trim()).toBe("");
+    const sent = [...document.querySelectorAll('[data-message-role="user"]')].map(
+      (row) => row.textContent ?? "",
+    );
+    expect(sent.some((text) => text.includes("Send immediately"))).toBe(true);
+  });
 });
