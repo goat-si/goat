@@ -47,6 +47,9 @@ type Store struct {
 	self string
 	// uncapped is set while reloading the node's own saved set.
 	uncapped bool
+	// shares switches to ADR-0026 (shares.go); bare holds hashes kept records name without a record.
+	shares bool
+	bare   map[string]bool
 
 	// pool holds records whose prev is incomplete, in memory only.
 	pool    map[string]pooled
@@ -83,12 +86,14 @@ type storeFile struct {
 	Records []*Record `json:"records"`
 	Pool    []*Record `json:"pool"`
 	SelfN   uint64    `json:"selfN"`
+	Shares  bool      `json:"shares,omitempty"`
 }
 
 // NewStore is an empty set for meshID; st may be nil for an unpersisted set.
 func NewStore(st *state.Store, meshID string) *Store {
 	return &Store{st: st, MeshID: meshID, recs: map[string]*Record{}, pool: map[string]pooled{},
-		poolBy: map[string]int{}, reach: map[string]map[string]bool{}, onDisk: map[string]bool{}}
+		poolBy: map[string]int{}, reach: map[string]map[string]bool{}, onDisk: map[string]bool{},
+		bare: map[string]bool{}}
 }
 
 // SetSelf names this node's signing key (base64url), whose records are never pooled.
@@ -114,6 +119,7 @@ func LoadFile(st *state.Store, name string) (*Store, error) {
 		return nil, os.ErrNotExist
 	}
 	s := NewStore(st, f.MeshID)
+	s.shares = f.Shares
 	// The node's own saved set reloads whole: caps apply to records arriving from peers.
 	s.uncapped = true
 	_, err = s.merge(f.Records)
@@ -200,6 +206,9 @@ func (s *Store) prevPresent(r *Record) bool {
 }
 
 func (s *Store) merge(recs []*Record) ([]*Record, error) {
+	if s.shares {
+		return s.mergeShared(recs), nil
+	}
 	var added []*Record
 	var full error
 	store := func(r *Record) {
@@ -404,7 +413,7 @@ func (s *Store) SaveFile(st *state.Store, name string) error {
 	gen, adopt, known := s.changes, s.adopt, s.onDisk[name]
 	// The pool is not persisted (contract "Records").
 	recs := s.all()
-	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, Pool: []*Record{}}
+	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, Pool: []*Record{}, Shares: s.shares}
 	s.mu.Unlock()
 	if s.afterSnapshot != nil {
 		s.afterSnapshot()
@@ -447,6 +456,9 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 		return ErrRemoved
 	case ok && disk.MeshID != s.MeshID && !adopt:
 		return ErrReplaced
+	case ok && disk.MeshID == s.MeshID && f.Shares:
+		// Under shares a record the set let go stays gone: no union with the file.
+		f.SelfN = max(f.SelfN, disk.SelfN)
 	case ok && disk.MeshID == s.MeshID:
 		have := make(map[string]bool, len(recs))
 		for _, r := range recs {
@@ -459,7 +471,11 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 		}
 		f.SelfN = max(f.SelfN, disk.SelfN)
 	}
-	f.Records = CanonicalOrder(recs)
+	if f.Shares {
+		f.Records = canonicalOrder(recs, bareOf(byHashOf(recs)))
+	} else {
+		f.Records = CanonicalOrder(recs)
+	}
 	return st.WriteJSON(name, f, 0o600)
 }
 
@@ -475,7 +491,7 @@ func (s *Store) all() []*Record {
 func (s *Store) Records() []*Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return CanonicalOrder(s.all())
+	return canonicalOrder(s.all(), s.bare)
 }
 
 // Has reports whether hash is stored.
@@ -497,7 +513,7 @@ func (s *Store) View() *View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.view == nil {
-		s.view = Compute(s.MeshID, s.all())
+		s.view = compute(s.MeshID, s.all(), s.bare)
 	}
 	return s.view
 }
@@ -611,7 +627,7 @@ func (s *Store) memberLocked(id *ident.Identity) bool {
 		return false
 	}
 	if s.view == nil {
-		s.view = Compute(s.MeshID, s.all())
+		s.view = compute(s.MeshID, s.all(), s.bare)
 	}
 	_, ok := s.view.Members[ident.B64.EncodeToString(id.SignPub)]
 	return ok

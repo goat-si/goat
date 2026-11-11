@@ -105,7 +105,10 @@ func (h *hashHeap) Pop() any {
 
 // CanonicalOrder is Kahn's topological order over prev edges, smallest raw SHA-256 first among
 // ready records. Records whose prev is not all in the set are left out.
-func CanonicalOrder(recs []*Record) []*Record {
+func CanonicalOrder(recs []*Record) []*Record { return canonicalOrder(recs, nil) }
+
+// canonicalOrder is CanonicalOrder where a prev in bare counts as present (ADR-0026 bare hashes).
+func canonicalOrder(recs []*Record, bare map[string]bool) []*Record {
 	byHash := make(map[string]*Record, len(recs))
 	for _, r := range recs {
 		byHash[r.Hash] = r
@@ -115,19 +118,22 @@ func CanonicalOrder(recs []*Record) []*Record {
 	ready := &hashHeap{}
 	for _, r := range byHash {
 		missing := false
+		held := 0
 		for _, p := range r.B.Prev {
 			if byHash[p] == nil {
-				missing = true
+				missing = missing || !bare[p]
+				continue
 			}
+			held++
 			children[p] = append(children[p], r)
 		}
 		switch {
 		case missing:
 			indeg[r.Hash] = -1 // never ready, nor are its descendants
-		case len(r.B.Prev) == 0:
+		case held == 0:
 			heap.Push(ready, r)
 		default:
-			indeg[r.Hash] = len(r.B.Prev)
+			indeg[r.Hash] = held
 		}
 	}
 	out := make([]*Record, 0, len(byHash))
@@ -150,8 +156,11 @@ type chainKey struct {
 }
 
 // Compute replays recs in canonical order (contract "View").
-func Compute(meshID string, recs []*Record) *View {
-	order := CanonicalOrder(recs)
+func Compute(meshID string, recs []*Record) *View { return compute(meshID, recs, nil) }
+
+// compute is Compute where a prev in bare counts as present and holds nothing (ADR-0026).
+func compute(meshID string, recs []*Record, bare map[string]bool) *View {
+	order := canonicalOrder(recs, bare)
 	v := &View{MeshID: meshID, Members: map[string]Member{}, Revoked: map[string]Member{}, Effective: map[string]bool{}}
 	pos := make(map[string]int, len(order))
 	for i, r := range order {
@@ -165,7 +174,10 @@ func Compute(meshID string, recs []*Record) *View {
 	for i, r := range order {
 		a := make([]uint64, words)
 		for _, p := range r.B.Prev {
-			j := pos[p]
+			j, ok := pos[p]
+			if !ok {
+				continue // a bare hash: no record, no past
+			}
 			for w, x := range anc[j] {
 				a[w] |= x
 			}
