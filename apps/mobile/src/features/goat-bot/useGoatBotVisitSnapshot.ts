@@ -97,7 +97,14 @@ export function useGoatBotVisitSnapshot(input: {
       });
     } else if (!reading && last !== undefined && last.upTo !== input.newestAt) {
       setSnapshot({ ...snapshot, away: [...away.slice(0, -1), { ...last, upTo: input.newestAt }] });
-    } else if (reading && (snapshot.paused || snapshot.seen !== input.newestAt)) {
+    } else if (reading && snapshot.paused) {
+      // A reply first seen as the person comes back arrived while they were away.
+      const closed =
+        last !== undefined && last.upTo !== input.newestAt
+          ? [...away.slice(0, -1), { ...last, upTo: input.newestAt }]
+          : away;
+      setSnapshot({ ...snapshot, paused: false, seen: input.newestAt, away: closed });
+    } else if (reading && snapshot.seen !== input.newestAt) {
       setSnapshot({ ...snapshot, paused: false, seen: input.newestAt });
     }
   }
