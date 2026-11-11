@@ -390,7 +390,8 @@ it("asks a question in one card with lettered choices and sends the pick to its 
     ),
   ).toEqual(["A. Yes", "B. Later", "Something else"]);
   await view.click("B. Later");
-  expect(onSend).toHaveBeenCalledWith("Later", "task-1");
+  // An older server names no question, so the pick goes to the task alone.
+  expect(onSend).toHaveBeenCalledWith("Later", "task-1", undefined);
 });
 
 it("ends an open question with a Something else row that hands over to the composer", async () => {

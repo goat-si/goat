@@ -17,6 +17,8 @@ const screenSession = vi.hoisted(() => ({
   workTaskId: undefined as string | undefined,
   homeOpen: false,
   chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
+  send: vi.fn((_text: string, _attachments?: unknown) => true),
+  answer: vi.fn((_text: string, _taskId?: string, _questionId?: string) => true),
 }));
 // Event lines resolve their routine or task against the home's reads, which these tests do not load.
 vi.mock("./useGoatBotEventTargets", () => ({
@@ -253,7 +255,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
       rows: screenSession.rows,
       canSend: true,
       attachmentSupport: { maxUploadBytes: null },
-      onSend: () => true,
+      onSend: screenSession.send,
+      onAnswer: screenSession.answer,
       onRetryInput: () => {},
       replyingSince: null,
       activity: screenSession.activity,
