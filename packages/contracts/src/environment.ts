@@ -189,6 +189,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
+  /** Serves orchestration.forkThread, which can give a fork its own worktree. */
+  threadForkWorkspace: Schema.optionalKey(Schema.Boolean),
   threadStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   /** Branch PR references include fork-origin PRs; older servers drop them. */

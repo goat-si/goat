@@ -12,7 +12,7 @@ import * as Handlers from "./handlers.ts";
 
 import { layerNoFleetSync } from "../../../goatclaw/FleetSync.testkit.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
+import { layerThreadStartMocks } from "../../threadStartMocks.testkit.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -82,7 +82,7 @@ const task = (id: string, threadId: string | null, lastRunStatus: "succeeded" | 
 const layerThreadTools = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
-  Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+  Layer.provide(layerThreadStartMocks),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),

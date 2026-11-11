@@ -4586,3 +4586,33 @@ describe("PiRpc framing", () => {
     );
   });
 });
+it.effect("a native fork starts the forked Pi session in the target thread's cwd", () =>
+  Effect.gen(function* () {
+    const fake = yield* makeFakePi;
+    const forkFake = yield* makeFakePi;
+    const targetCwd = "/tmp/goat-fork-target";
+    const adapter = yield* makeAdapter(fake, "", forkFake);
+    // The orchestrator forks on the target thread's own session, opened in its cwd.
+    const runtime = yield* adapter.openSession({
+      threadId: THREAD_ID,
+      providerSessionId: SESSION_ID,
+      modelSelection: modelSelection("default"),
+      runtimePolicy: { ...runtimePolicy, cwd: targetCwd },
+    });
+    const source = yield* runtime.ensureThread({
+      threadId: THREAD_ID,
+      modelSelection: modelSelection("default"),
+      runtimePolicy: { ...runtimePolicy, cwd: targetCwd },
+    });
+    forkFake.queueState({ sessionFile: "/fake/forked.jsonl" });
+    fake.queueState({ sessionFile: "/fake/forked.jsonl" });
+    yield* runtime.forkThread({
+      sourceProviderThread: source,
+      targetThreadId: ThreadId.make("fork-target-cwd"),
+    });
+    const spawn = forkFake.lastSpawn();
+    assert.equal(spawn.args[spawn.args.indexOf("--fork") + 1], FAKE_SESSION_FILE);
+    assert.notInclude(FAKE_SESSION_FILE, targetCwd);
+    assert.equal(spawn.cwd, targetCwd);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);

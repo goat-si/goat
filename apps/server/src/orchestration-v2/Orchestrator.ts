@@ -915,6 +915,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const { providerSessionIdFor } = yield* makeProviderSessionPlacement({
     idAllocator,
     settings: serverSettings.getSettings.pipe(Effect.orDie),
+    sessions: providerSessions,
   });
 
   const enforceCommandPolicy =
@@ -1830,6 +1831,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               adapter,
               providerInstanceId: queuedRun.providerInstanceId,
               threadId,
+              model: queuedRun.modelSelection.model,
             }),
           ),
           Effect.mapError(
@@ -4252,6 +4254,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         targetThreadId: command.targetThreadId,
         ...(command.title === undefined ? {} : { title: command.title }),
         sideChat: command.sideChat === true,
+        ...(command.workspace === undefined ? {} : { workspace: command.workspace }),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -4850,6 +4853,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             adapter: targetAdapter,
             providerInstanceId: input.modelSelection.instanceId,
             threadId: input.command.threadId,
+            model: input.modelSelection.model,
           }),
         ));
       const targetProviderThreadBase: OrchestrationV2ProviderThread =
@@ -6265,6 +6269,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             adapter,
             providerInstanceId: modelSelection.instanceId,
             threadId: command.threadId,
+            model: modelSelection.model,
           }),
         ));
       const providerThreadId =
@@ -6687,6 +6692,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           adapter,
           providerInstanceId: modelSelection.instanceId,
           threadId: command.threadId,
+          model: modelSelection.model,
         }),
       ));
     const existingProviderSession = projection.providerSessions.find(
@@ -6729,6 +6735,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
               sourceRunStatus: sourceRun.status,
               fromSpecificTurn: sourceRun !== null,
+              crossWorkspace: pendingForkTransfer.crossWorkspace === true,
             }),
           );
     const canResolveForkNatively = forkExecution === "native_fork";

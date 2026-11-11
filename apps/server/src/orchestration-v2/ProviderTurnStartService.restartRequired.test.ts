@@ -30,3 +30,22 @@ effectIt.effect("fails the run without a retry while the provider waits to resta
     ]);
   }),
 );
+
+effectIt.effect(
+  "a start that fails after its session opened gives up its restart reservation",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        ensureThreadFailure: new Error("thread/resume failed"),
+      });
+
+      yield* harness.start.pipe(Effect.exit);
+
+      expect(harness.open).toHaveBeenCalledOnce();
+      expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+      expect(harness.settleTurnStart).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: harness.threadId, runId: harness.runId }),
+      );
+    }),
+);

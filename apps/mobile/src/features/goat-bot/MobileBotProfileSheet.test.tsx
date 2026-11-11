@@ -187,3 +187,12 @@ it("opens Edit with the bot's stored purpose and sends nothing when it is unchan
   expect(onSubmit).not.toHaveBeenCalled();
   expect(onClose).toHaveBeenCalled();
 });
+
+it("says Creating… to a screen reader while a new bot is being created", async () => {
+  const pending = Promise.withResolvers<string | null>();
+  await mount(() => pending.promise, true, "create");
+  await type("Name", "Scout");
+  await act(async () => create().click());
+  expect(container.querySelector('button[aria-label="Creating…"]')).not.toBeNull();
+  await act(async () => pending.resolve(null));
+});

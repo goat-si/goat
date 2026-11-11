@@ -282,6 +282,8 @@ export const OrchestrationV2ContextTransfer = Schema.Struct({
   sourceTokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   targetProviderInstanceId: Schema.NullOr(ProviderInstanceId),
   targetRunId: Schema.NullOr(RunId),
+  /** The fork works in another checkout than its source did. */
+  crossWorkspace: Schema.optional(Schema.Boolean),
   status: Schema.Literals([
     "pending",
     "resolved_native",
@@ -336,6 +338,8 @@ export const OrchestrationV2ThreadCapabilities = Schema.Struct({
   canForkFromTurn: Schema.Boolean,
   canForkFromSubagentThread: Schema.Boolean,
   exposesNativeThreadId: Schema.Boolean,
+  /** Native fork starts the new provider thread in the target thread's cwd. */
+  forkHonorsTargetCwd: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationV2ThreadCapabilities = typeof OrchestrationV2ThreadCapabilities.Type;
 
@@ -3395,6 +3399,10 @@ export const OrchestrationV2Command = Schema.Union([
     title: Schema.optional(TrimmedNonEmptyString),
     /** Makes the fork a side chat of its source thread. */
     sideChat: Schema.optional(Schema.Boolean),
+    /** Server-issued by ThreadForkWorkspaceService; public dispatch refuses it. */
+    workspace: Schema.optional(
+      Schema.Struct({ branch: TrimmedNonEmptyString, worktreePath: TrimmedNonEmptyString }),
+    ),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({
@@ -3702,6 +3710,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   stopHeldTurn: "orchestration.stopHeldTurn",
   getTurnItem: "orchestration.getTurnItem",
   launchThread: "orchestration.launchThread",
+  forkThread: "orchestration.forkThread",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",

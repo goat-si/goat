@@ -121,7 +121,11 @@ function makeSourceProjection(
 
 const planFork = (
   sourceRun: OrchestrationV2Run,
-  options: { readonly sideChat?: boolean; readonly sourceThread?: OrchestrationV2AppThread } = {},
+  options: {
+    readonly sideChat?: boolean;
+    readonly sourceThread?: OrchestrationV2AppThread;
+    readonly workspace?: { readonly branch: string; readonly worktreePath: string };
+  } = {},
   sourceProjection = makeSourceProjection(sourceRun, options.sourceThread),
 ) =>
   Effect.gen(function* () {
@@ -129,6 +133,7 @@ const planFork = (
     return yield* service.plan({
       sourceProjection,
       ...(options.sideChat === undefined ? {} : { sideChat: options.sideChat }),
+      ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
       sourceRun,
       sourceProviderThread: undefined,
       canonicalSourcePoint: {
@@ -309,5 +314,51 @@ it.effect("does not carry side-chat status into an ordinary fork of a side chat"
     };
     const fork = yield* planFork(makeSourceRun("completed"), { sourceThread });
     assert.isUndefined(fork.targetThread.sideChatOf);
+  }),
+);
+
+it.effect(
+  "a fork given its own workspace works there and marks its context as cross-checkout",
+  () =>
+    Effect.gen(function* () {
+      const sourceRun = makeSourceRun("completed");
+      const legacyLink = {
+        projectId: makeSourceThread().projectId,
+        repository: "example/repo",
+        number: 7,
+        url: "https://github.com/example/repo/pull/7",
+      };
+      const sourceProjection = {
+        ...makeSourceProjection(sourceRun),
+        thread: {
+          ...makeSourceThread(),
+          branchPullRequest: legacyLink,
+          linkedPullRequest: legacyLink,
+        },
+      };
+      const workspace = { branch: "goat/fork-1", worktreePath: "/tmp/goat-fork-1" };
+      const fork = yield* planFork(sourceRun, { workspace }, sourceProjection);
+
+      assert.equal(fork.targetThread.branch, "goat/fork-1");
+      assert.equal(fork.targetThread.worktreePath, "/tmp/goat-fork-1");
+      // The source branch's pull request is not the new branch's.
+      assert.isNull(fork.targetThread.branchPullRequest);
+      assert.deepEqual(fork.targetThread.linkedPullRequest, legacyLink);
+      assert.isTrue(fork.transfer.crossWorkspace);
+
+      const sameCheckout = yield* planFork(sourceRun, {}, sourceProjection);
+      assert.equal(sameCheckout.targetThread.worktreePath, "/tmp/source-worktree");
+      assert.deepEqual(sameCheckout.targetThread.branchPullRequest, legacyLink);
+      assert.isUndefined(sameCheckout.transfer.crossWorkspace);
+    }),
+);
+
+it.effect("refuses a side chat in its own workspace", () =>
+  Effect.gen(function* () {
+    const error = yield* planFork(makeSourceRun("completed"), {
+      sideChat: true,
+      workspace: { branch: "goat/fork-2", worktreePath: "/tmp/goat-fork-2" },
+    }).pipe(Effect.flip);
+    assert.equal(error._tag, "ThreadForkPlanError");
   }),
 );

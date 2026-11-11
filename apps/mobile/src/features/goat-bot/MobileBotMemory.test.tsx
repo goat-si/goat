@@ -558,3 +558,38 @@ it("says when every note has been replaced", async () => {
   await press("Show replaced notes (1)");
   expect(container.textContent).toContain("Replaced by a later note");
 });
+
+it("offers no forget request for a note whose text another note shares, and still forgets one of its own", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 2, date: "2026-11-11", text: "Use metric units" },
+        { index: 1, date: "2026-11-10", text: "Keep replies short" },
+        { index: 0, date: "2026-11-01", text: "Keep replies short" },
+      ],
+      truncated: false,
+    },
+  });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  const forgets = () =>
+    [...container.querySelectorAll("button")].filter(
+      (item) => item.textContent === "Ask to forget",
+    );
+  // The older of the two "Keep replies short" notes.
+  await act(async () => forgets()[2]?.click());
+  expect(onDraft).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(
+    "Two notes read “Keep replies short”, so GOAT Bot can't tell which one you mean.",
+  );
+  state.copy.mockClear();
+  await press("Copy");
+  expect(state.copy).toHaveBeenCalledWith("Keep replies short", { target: "note" });
+  await press("Discard");
+  expect(container.textContent).not.toContain("so GOAT Bot can't tell which one you mean");
+  expect(onDraft).not.toHaveBeenCalled();
+  // A note with text of its own still drafts its forget request.
+  await act(async () => forgets()[0]?.click());
+  expect(onDraft).toHaveBeenCalledWith(goatBotForgetNoteMessage("Use metric units"));
+});

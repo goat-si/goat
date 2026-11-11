@@ -234,6 +234,8 @@ function MobileNoteRow(props: {
   const setWording = props.onWordingChange;
   const draft = wording === null ? null : changeNoteDraft(note, wording);
   const canAsk = onDraft !== undefined;
+  // A forget request names its note by text too, so a shared text gets the same notice.
+  const [forgetting, setForgetting] = useState(false);
   return (
     <View className="gap-1 border-b border-border py-2">
       <Text className="text-foreground-muted">{noteDateLabel(note)}</Text>
@@ -242,7 +244,14 @@ function MobileNoteRow(props: {
       {note.replaces !== undefined ? (
         <Text className="text-foreground-muted">Replaces: “{note.replaces}”</Text>
       ) : null}
-      {wording === null ? (
+      {wording === null && forgetting ? (
+        <MobileSharedNoteNotice
+          text={note.text}
+          copy={note.text}
+          copyTarget="note"
+          onDiscard={() => setForgetting(false)}
+        />
+      ) : wording === null ? (
         <View className="flex-row flex-wrap gap-x-4">
           <Pressable
             accessibilityRole="button"
@@ -257,7 +266,9 @@ function MobileNoteRow(props: {
           <Pressable
             accessibilityRole="button"
             disabled={!canAsk}
-            onPress={() => onDraft?.(forgetNoteDraft(note))}
+            onPress={() =>
+              props.sharedText ? setForgetting(true) : onDraft?.(forgetNoteDraft(note))
+            }
             className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
           >
             <Text className={canAsk ? "text-foreground" : "text-foreground-muted"}>
@@ -275,27 +286,12 @@ function MobileNoteRow(props: {
             className="min-h-[44px] rounded-md border border-border px-3 py-2 text-foreground"
           />
           {props.sharedText ? (
-            <>
-              <Text className="text-foreground-muted">
-                Two notes read “{note.text}”, so GOAT Bot can't tell which one you mean.
-              </Text>
-              <View className="flex-row flex-wrap gap-x-4">
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => void tryCopyTextWithHaptic(wording, { target: "new wording" })}
-                  className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
-                >
-                  <Text className="text-foreground">Copy</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setWording(null)}
-                  className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
-                >
-                  <Text className="text-foreground">Discard</Text>
-                </Pressable>
-              </View>
-            </>
+            <MobileSharedNoteNotice
+              text={note.text}
+              copy={wording}
+              copyTarget="new wording"
+              onDiscard={() => setWording(null)}
+            />
           ) : (
             <View className="flex-row flex-wrap gap-x-4">
               <Pressable
@@ -323,6 +319,38 @@ function MobileNoteRow(props: {
           )}
         </View>
       )}
+    </View>
+  );
+}
+
+/** Two notes read the same, so a request naming one by its text cannot pick it; keep it by hand. */
+function MobileSharedNoteNotice(props: {
+  readonly text: string;
+  readonly copy: string;
+  readonly copyTarget: string;
+  readonly onDiscard: () => void;
+}) {
+  return (
+    <View className="gap-1">
+      <Text className="text-foreground-muted">
+        Two notes read “{props.text}”, so GOAT Bot can't tell which one you mean.
+      </Text>
+      <View className="flex-row flex-wrap gap-x-4">
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => void tryCopyTextWithHaptic(props.copy, { target: props.copyTarget })}
+          className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
+        >
+          <Text className="text-foreground">Copy</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          onPress={props.onDiscard}
+          className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
+        >
+          <Text className="text-foreground">Discard</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

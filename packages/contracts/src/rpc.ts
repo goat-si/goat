@@ -61,13 +61,6 @@ import {
   McpAppUpdateModelContextInput,
 } from "./mcpApps.ts";
 import {
-  ChatGptReconnectProfileInput,
-  ChatGptReconnectProfile,
-  ChatGptImportProfileInput,
-  ChatGptHandoffInput,
-  ChatGptHandoffState,
-} from "./providerSetup.ts";
-import {
   ProviderHostMatrixInput,
   ProviderHostMatrixResult,
   ProviderHostSyncError,
@@ -83,6 +76,11 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  ChatGptReconnectProfileInput,
+  ChatGptReconnectProfile,
+  ChatGptImportProfileInput,
+  ChatGptHandoffInput,
+  ChatGptHandoffState,
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
   ProviderAuthCancelInput,
@@ -96,6 +94,7 @@ import {
   ProviderSetupError,
   ProviderSetupInput,
 } from "./providerSetup.ts";
+import { WsOrchestrationV2ForkThreadRpc } from "./threadFork.ts";
 
 import {
   AcpRegistryAcceptUrlAuthInput,
@@ -2751,6 +2750,7 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetOlderSettledThreadsRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
+  WsOrchestrationV2ForkThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,

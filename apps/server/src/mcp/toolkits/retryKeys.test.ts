@@ -21,6 +21,7 @@ import * as CloudMachines from "../../cloudMachines/CloudMachineService.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as Threads from "../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadForkWorkspace from "../../orchestration-v2/goat/ThreadForkWorkspace.ts";
 import * as Sqlite from "../../persistence/Sqlite.ts";
 import * as ManagedFolders from "../../project/ManagedProjectFolders.ts";
 import * as Projects from "../../project/ProjectService.ts";
@@ -114,6 +115,24 @@ const fixture = (options: { readonly sharedDatabase?: boolean } = {}) => {
     ServerSettings.layerTest(),
     NodeCrypto.layer,
     Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
+    Layer.mock(ThreadForkWorkspace.ThreadForkWorkspaceService)({
+      fork: (input) =>
+        Effect.sync(() => ({
+          sequence: record(input),
+          targetThreadId: input.targetThreadId,
+          ...(input.workspace.type === "worktree"
+            ? {
+                worktree: {
+                  branch: "goat/fork",
+                  worktreePath: "/worktrees/fork",
+                  baseCommit: "abc",
+                  uncommitted: "carried" as const,
+                  setupScript: "no-script" as const,
+                },
+              }
+            : {}),
+        })),
+    }),
     Layer.mock(Threads.ThreadManagementService)({
       getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
       getProjectThreadRecords: ({ threadId }) =>
@@ -229,6 +248,11 @@ const requests = [
     result: { targetThreadId: expect.any(String) },
   },
   {
+    name: "goat_thread_fork",
+    args: { sourcePoint: { type: "latest_stable" }, workspace: { type: "worktree" } },
+    result: { worktree: { worktreePath: "/worktrees/fork", uncommitted: "carried" } },
+  },
+  {
     name: "goat_thread_merge_back",
     args: { targetThreadId: "target", sourcePoint: { type: "latest_stable" } },
     result: { targetThreadId: "target" },
@@ -273,7 +297,7 @@ it.effect.each(requests)(
   },
 );
 
-it.effect.each(requests.slice(0, 4))(
+it.effect.each(requests.slice(0, 5))(
   "$name checks the orchestration credential before replay",
   ({ name, args: request }) => {
     const { performed, served, capabilities } = fixture();
