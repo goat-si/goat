@@ -1003,6 +1003,7 @@ type ThreadStatusInput = Pick<
   lastVisitedAt?: string | null | undefined;
   pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
   blockedOnThreadWait?: boolean | undefined;
+  latestRunStartHeld?: boolean | undefined;
 };
 
 /**
@@ -1450,7 +1451,6 @@ export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
   const { thread } = input;
-
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return {
       label: "Pending Approval",
@@ -1459,7 +1459,6 @@ export function resolveThreadStatusPill(input: {
       pulse: false,
     };
   }
-
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return {
       label: "Awaiting Input",
@@ -1492,7 +1491,7 @@ export function resolveThreadStatusPill(input: {
 
   if (
     thread.runtime?.status === "preparing" ||
-    thread.runtime?.status === "starting" ||
+    (thread.runtime?.status === "starting" && !thread.latestRunStartHeld) ||
     thread.runtime?.status === "queued"
   ) {
     return {
@@ -1505,6 +1504,7 @@ export function resolveThreadStatusPill(input: {
 
   if (
     (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
+    (thread.runtime?.status === "starting" && thread.latestRunStartHeld === true) ||
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
   ) {
     return {

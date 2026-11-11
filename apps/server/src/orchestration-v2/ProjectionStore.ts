@@ -1757,6 +1757,9 @@ export function threadShellFromProjection(
       ? {}
       : { historyOrigin: projection.thread.historyOrigin }),
     latestRunId: latestRun?.id ?? null,
+    ...(latestRun?.status === "starting" && latestRun.startHold !== undefined
+      ? { latestRunStartHeld: true }
+      : {}),
     latestRunRequestedAt: latestRun?.requestedAt ?? null,
     latestRunStartedAt: latestRun?.startedAt ?? null,
     latestRunCompletedAt: latestRun?.completedAt ?? null,
@@ -1891,6 +1894,7 @@ type ShellThreadState = {
   readonly latestRunCompletedAt: DateTime.Utc | null;
   readonly latestRunCompletionNotification?: string | undefined;
   readonly latestRunStopRequested: boolean;
+  readonly latestRunStartHeld: boolean;
   readonly activeRunId: RunId | null;
   readonly blockedOnThreadWait: boolean;
   readonly activityRunStatus: ShellActivityRunStatus | null;
@@ -2033,6 +2037,7 @@ function shellFromState(input: {
       ? {}
       : { markedUnreadCompletionAt: input.state.thread.markedUnreadCompletionAt }),
     latestRunStopRequested: input.state.latestRunStopRequested,
+    ...(input.state.latestRunStartHeld ? { latestRunStartHeld: true } : {}),
     activeRunId: input.state.activeRunId,
     blockedOnThreadWait: input.state.blockedOnThreadWait,
     activityRunStatus: input.state.activityRunStatus,
@@ -6904,6 +6909,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestRunCompletedAt,
           latestRunCompletionNotification,
           latestRunStopRequested,
+          latestRunStartHeld: latestRunStatus === "starting" && row.latest_run_start_held === 1,
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
           blockedOnThreadWait: deriveBlockedOnThreadWait({
             activeRun:
