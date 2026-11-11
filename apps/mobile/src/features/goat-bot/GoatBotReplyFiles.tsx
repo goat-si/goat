@@ -3,6 +3,7 @@ import {
   botArtifactPreviewSlot,
   botArtifactViewKind,
   goatBotReplyFiles,
+  goatBotReplyMayNameFile,
 } from "@goat/client-runtime/goatBot";
 import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import type { ChannelBotArtifact, EnvironmentId, ThreadId } from "@goat/contracts";
@@ -60,14 +61,6 @@ export interface GoatBotFilesReply {
 }
 
 const GoatBotFilesContext = createContext<GoatBotFiles | null>(null);
-
-const INLINE_CODE = /`([^`\n]+)`/g;
-
-/** A reply's inline-code spans, each a possible file name; the listing decides which are. */
-function namesSomething(text: string): boolean {
-  for (const match of text.matchAll(INLINE_CODE)) if ((match[1] ?? "").trim() !== "") return true;
-  return false;
-}
 
 interface ListingReads {
   readonly chatKey: string;
@@ -156,7 +149,7 @@ export function GoatBotFilesProvider(props: {
       const older = state.coveredUpTo !== null && reply.createdAt <= state.coveredUpTo;
       if (state.latestFinished === null || reply.createdAt > state.latestFinished)
         state.latestFinished = reply.createdAt;
-      if (!namesSomething(reply.text)) continue;
+      if (!goatBotReplyMayNameFile(reply.text)) continue;
       // History older than a reply a read already started after: that read saw its files.
       if (older && !state.streamed.has(reply.id)) continue;
       owed = true;
