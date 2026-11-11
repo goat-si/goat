@@ -1,6 +1,10 @@
 package mesh
 
-import "sort"
+import (
+	"bytes"
+	"slices"
+	"sort"
+)
 
 // learnVersion takes the mesh's version from its found record among recs, and switches a mesh of the
 // shared epoch to shares.
@@ -38,9 +42,17 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 	}
 	type share struct {
 		lineage int
-		control bool
+		lock    bool
+	}
+	// A lineage's revoke places hold one revoke per (subject, compromised), the smallest of each, and
+	// of those the ShareRevokes smallest: a lineage spends only its own places.
+	type revokeSlot struct {
+		subject     string
+		lineage     int
+		compromised bool
 	}
 	groups := map[share][]*Record{}
+	revokes := map[revokeSlot]*Record{}
 	for _, r := range cands {
 		if r.B.Type == TypeFound || r.B.Type == TypeAdmit {
 			continue
@@ -49,18 +61,38 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 		if !ok {
 			continue
 		}
-		control := (r.B.Type == TypeRevoke || r.B.Type == TypeLock) && !r.Opaque
-		if r.B.Type == TypeRevoke && !r.Opaque && !allIntroduced(keys, r.B.Subjects) {
+		if r.B.Type == TypeRevoke && !r.Opaque {
+			if !allIntroduced(keys, r.B.Subjects) {
+				continue
+			}
+			for _, sub := range r.B.Subjects {
+				slot := revokeSlot{sub, k.lineage, r.B.Compromised != nil && *r.B.Compromised}
+				if best := revokes[slot]; best == nil || bytes.Compare(r.Sum[:], best.Sum[:]) < 0 {
+					revokes[slot] = r
+				}
+			}
 			continue
 		}
-		key := share{k.lineage, control}
+		key := share{k.lineage, r.B.Type == TypeLock && !r.Opaque}
 		groups[key] = append(groups[key], r)
+	}
+	byLineage := map[int][]*Record{}
+	for slot, r := range revokes {
+		if !slices.Contains(byLineage[slot.lineage], r) {
+			byLineage[slot.lineage] = append(byLineage[slot.lineage], r)
+		}
+	}
+	for _, rs := range byLineage {
+		sortByHash(rs)
+		for _, r := range rs[:min(ShareRevokes, len(rs))] {
+			kept[r.Hash] = r
+		}
 	}
 	for key, rs := range groups {
 		sortByHash(rs)
 		n := ShareOrdinary
-		if key.control {
-			n = ShareControl
+		if key.lock {
+			n = ShareLocks
 		}
 		for _, r := range rs[:min(n, len(rs))] {
 			kept[r.Hash] = r

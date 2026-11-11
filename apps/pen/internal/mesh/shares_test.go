@@ -45,32 +45,45 @@ func hashesOf(s *Store) []string {
 	return out
 }
 
-// #2864 under ADR-0026: a member that fills the record space with records of its own lineage cannot
-// stop a member of another lineage from recording its revoke.
+// #2864 under ADR-0026: a member that fills the record space with records of its own lineage, and fills
+// its revoke and lock places too, cannot stop a member of another lineage, or the founder, from recording
+// its revoke; another lineage's own full lock share does not stop it either.
 func TestAFillerCannotStopAMemberOfAnotherLineageFromRevokingIt(t *testing.T) {
 	f, h, o, x := detID(1), detID(2), detID(3), detID(4)
 	b, found := newMesh(t, f)
 	ah := b.admit(f, h, found)
 	ao := b.admit(f, o, ah)
 	ax := b.admit(h, x, ao)
+	hl, ol := nonceLineage(ah.B.Card.C.Nonce), nonceLineage(ao.B.Card.C.Nonce)
+	if hl == ol {
+		t.Fatalf("setup: h and o share lineage %d", hl)
+	}
 	last := ax
 	for i := 0; i < MaxRecords; i++ {
 		last = b.sign(h, TypeName, []*Record{last}, Fields{Subject: pub(h), Name: fmt.Sprintf("n%d", i)})
 	}
 	for i := 0; i < 64; i++ {
 		last = b.sign(h, TypeRevoke, []*Record{last}, Fields{Subjects: []string{pub(x)}})
+		last = b.sign(h, TypeLock, []*Record{last}, Fields{On: i%2 == 0})
+	}
+	honest := ao
+	for i := 0; i < 2*ShareLocks; i++ {
+		honest = b.sign(o, TypeLock, []*Record{honest}, Fields{On: i%2 == 0})
 	}
 	s := sharedStore(b)
 	mergeEach(t, s, b.recs)
-	if n := keptOf(s, 1, TypeName); n != ShareOrdinary {
-		t.Fatalf("filler's lineage keeps %d names, want its share %d", n, ShareOrdinary)
+	for _, c := range []struct {
+		typ  string
+		want int
+	}{{TypeName, ShareOrdinary}, {TypeLock, ShareLocks}, {TypeRevoke, 1}} {
+		if n := keptOf(s, hl, c.typ); n != c.want {
+			t.Fatalf("filler's lineage keeps %d %s records, want %d", n, c.typ, c.want)
+		}
 	}
-	if n := keptOf(s, 1, TypeRevoke); n != ShareControl {
-		t.Fatalf("filler's lineage keeps %d revokes, want %d", n, ShareControl)
-	}
-	removal := b.sign(o, TypeRevoke, []*Record{ao}, Fields{Subjects: []string{pub(h)}})
-	if added, err := s.Merge([]*Record{removal}); err != nil || len(added) != 1 {
-		t.Fatalf("the revoke of the filler: stored %d, %v", len(added), err)
+	removal := b.sign(o, TypeRevoke, []*Record{honest}, Fields{Subjects: []string{pub(h)}})
+	byFounder := b.sign(f, TypeRevoke, []*Record{ao}, Fields{Subjects: []string{pub(h)}})
+	if added, err := s.Merge([]*Record{removal, byFounder}); err != nil || len(added) != 2 {
+		t.Fatalf("the revokes of the filler by another lineage and the founder: stored %d, %v", len(added), err)
 	}
 	if _, ok := s.View().Revoked[pub(h)]; !ok {
 		t.Fatal("the filler is still a member after another lineage revoked it")
@@ -95,7 +108,7 @@ func TestSharedStoresAgreeWhateverTheArrivalOrder(t *testing.T) {
 	}
 	var honest []*Record
 	for i := 0; i < 8; i++ {
-		honest = append(honest, b.sign(o, TypeName, []*Record{filler[i*37]}, Fields{Subject: pub(o), Name: fmt.Sprintf("o%d", i)}))
+		honest = append(honest, b.sign(o, TypeName, []*Record{filler[i*(ShareOrdinary/8)]}, Fields{Subject: pub(o), Name: fmt.Sprintf("o%d", i)}))
 	}
 	recs := slices.Clone(b.recs)
 	rev := slices.Clone(recs)
@@ -118,10 +131,11 @@ func TestSharedStoresAgreeWhateverTheArrivalOrder(t *testing.T) {
 	if !slices.Equal(a.Bare(), c.Bare()) {
 		t.Fatalf("bare hashes differ: %d vs %d", len(a.Bare()), len(c.Bare()))
 	}
-	if n := keptOf(a, 1, TypeName); n != ShareOrdinary {
+	hl := nonceLineage(ah.B.Card.C.Nonce)
+	if n := keptOf(a, hl, TypeName); n != ShareOrdinary {
 		t.Fatalf("filler lineage keeps %d names, want %d", n, ShareOrdinary)
 	}
-	if n := keptOf(a, 1, TypeAdmit); n != ShareAdmits {
+	if n := keptOf(a, hl, TypeAdmit); n != ShareAdmits {
 		t.Fatalf("filler lineage keeps %d admits, want %d", n, ShareAdmits)
 	}
 	if len(a.Bare()) == 0 {
