@@ -111,7 +111,7 @@ $forced_records
 GOAT_FORCED_RECORDS
   # The stopped version can be started again only when it answered its protocol, its launch
   # identity was verified and its release is still installed; the supervisor then rolls back to it.
-  FORCED_PREVIOUS_VERSION=; FORCED_PREVIOUS_IDENTITY=; FORCED_PREVIOUS_RUNNER="$STATE_DIR/run-t3.previous"
+  FORCED_PREVIOUS_VERSION=; FORCED_PREVIOUS_IDENTITY=; FORCED_PREVIOUS_RUNNER="$STATE_DIR/forced-runner.previous"
   rm -f "$FORCED_PREVIOUS_RUNNER"
   if [ "$forced_identity_verified" = 1 ] && valid_version "\${FORCED_LIVE_VERSION:-}" &&
      [ -x "$HOME/.goat/runtime/goat/versions/$FORCED_LIVE_VERSION/goat" ] &&
