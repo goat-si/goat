@@ -63,6 +63,7 @@ export class SecureSession {
   #closeRequests = 0;
   /** While held records are handed over, a link close waits: observers hear of it after the drain. */
   #draining = false;
+  #receiving = false;
 
   constructor(link: RelayLink, keys: SessionKeys) {
     this.link = link;
@@ -123,6 +124,10 @@ export class SecureSession {
 
   /** Takes the session's records, held ones first. */
   onRecord(handler: (plaintext: Uint8Array) => void): void {
+    // One receiver per session (a stream takes it): a second, reentrant or later, would split the records.
+    if (this.#receiving)
+      throw new PenError("session-receiver", "a session takes one record receiver");
+    this.#receiving = true;
     const requests = this.#closeRequests;
     // Held records go first and in order, with any that arrive meanwhile. They arrived before any close, so a link
     // close does not stop the drain; only a close() this side makes (a protocol error, a throwing receiver) does, and

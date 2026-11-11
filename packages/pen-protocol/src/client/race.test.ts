@@ -360,6 +360,32 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
     expect(seen).toEqual(["data:1", "data:2", "early:1000", "late:1000"]);
   });
 
+  it("a session takes one record receiver: a second, reentrant or later, is refused", async () => {
+    const t = setup({ relays: [A] });
+    const a = t.fake.socketFor(A);
+    await flushOpen(a);
+    const reply = answer(a);
+    const { session } = await t.result;
+    for (const n of [1, 2, 3]) a.receive(reply.send.seal(Uint8Array.of(n)));
+    const seen: Array<string> = [];
+    let refused: unknown;
+    session.onRecord((plaintext) => {
+      seen.push("first:" + plaintext[0]);
+      if (plaintext[0] === 1) {
+        try {
+          session.onRecord((other) => seen.push("second:" + other[0]));
+        } catch (error) {
+          refused = error;
+        }
+      }
+    });
+    expect(seen).toEqual(["first:1", "first:2", "first:3"]);
+    expect(refused).toMatchObject({ code: "session-receiver" });
+    expect(() => session.onRecord(() => undefined)).toThrow(
+      expect.objectContaining({ code: "session-receiver" }),
+    );
+  });
+
   it("a close observer added after the close that throws is reported, not thrown to the caller", async () => {
     const reported: Array<unknown> = [];
     vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
