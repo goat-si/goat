@@ -47,12 +47,6 @@ export const answerVerdict = (input: {
 type PersonMessageEntry = Extract<ChannelTimelineRecord["entry"], { readonly type: "message" }>;
 
 /**
- * The external id a decision's delivery records once the GOAT transport has handled it. A server
- * that predates personAnswer records the row delivered without it and without writing it.
- */
-export const ANSWER_DECISION_HANDLED = "answer-decision";
-
-/**
  * The person's message as the bot thread shows it, from fields fixed when it was stored, plus
  * what the revision adds (its read time or the answer decision).
  */

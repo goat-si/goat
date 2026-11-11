@@ -12,7 +12,6 @@ import {
   type UndeliveredSourceRow,
 } from "./channelUndeliveredReplies.ts";
 import { interimAlreadyHeard, isInterimMessage } from "./channelInterimMessages.ts";
-import { ANSWER_DECISION_HANDLED } from "./channelPersonMessage.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
@@ -117,17 +116,6 @@ export interface ChannelDeliveryLedgerOps extends UnsentDeliveryRelease {
     readonly owner: string;
     readonly now: string;
   }) => Effect.Effect<void, ChannelLedgerError>;
-  /**
-   * Puts back up to `limit` answer decisions whose write failed, or that a server without the
-   * decision marked delivered unwritten, while they have had fewer than `maxAttempts` tries.
-   * Returns how many went back.
-   */
-  readonly requeueAnswerDecisions: (input: {
-    readonly owner: string;
-    readonly now: string;
-    readonly maxAttempts: number;
-    readonly limit: number;
-  }) => Effect.Effect<number, ChannelLedgerError>;
 }
 
 export const deliveryLedger = (
@@ -365,27 +353,6 @@ export const deliveryLedger = (
           }),
         )
         .pipe(Effect.mapError(mapError("releaseUnsentDeliveries"))),
-    requeueAnswerDecisions: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            // The range reads answer: rows through the cause_key index.
-            const requeued = yield* sql<{ readonly delivery_id: string }>`
-              UPDATE channel_outbox SET state = 'pending', next_attempt_at = ${input.now},
-                updated_at = ${input.now}
-              WHERE delivery_id IN (
-                SELECT delivery_id FROM channel_outbox
-                WHERE cause_key >= 'answer:' AND cause_key < 'answer;'
-                  AND attempts < ${input.maxAttempts}
-                  AND (state = 'failed' OR (state = 'delivered'
-                    AND external_message_id IS NOT ${ANSWER_DECISION_HANDLED}))
-                ORDER BY updated_at LIMIT ${input.limit})
-              RETURNING delivery_id`;
-            return requeued.length;
-          }),
-        )
-        .pipe(Effect.mapError(mapError("requeueAnswerDecisions"))),
     recordDelivery: (input) =>
       expiring((expire) =>
         sql
@@ -423,10 +390,6 @@ export const deliveryLedger = (
     releaseUnsentDeliveries: Effect.fn("ChannelLedger.releaseUnsentDeliveries")(
       operations.releaseUnsentDeliveries,
       Effect.tap((result) => (result.released > 0 ? changed : Effect.void)),
-    ),
-    requeueAnswerDecisions: Effect.fn("ChannelLedger.requeueAnswerDecisions")(
-      operations.requeueAnswerDecisions,
-      Effect.tap((count) => (count > 0 ? changed : Effect.void)),
     ),
     expireReceipts: Effect.fn("ChannelLedger.expireReceipts")(
       operations.expireReceipts,

@@ -28,13 +28,11 @@ import * as ChannelWake from "./ChannelWake.ts";
 /** With exponential backoff capped at five minutes, ten attempts span about thirteen minutes. */
 const MAX_ATTEMPTS = 10;
 /**
- * An answer decision is a local write, so one that failed (or that a server without it marked
- * delivered unwritten) goes back for one more try per repair run, ten minutes apart, at most
- * this many tries in all and a bounded number of rows per run.
+ * An answer decision is a local write that nothing else corrects, so it keeps retrying on the
+ * normal path for longer: more attempts, up to ten minutes apart, before it fails.
  */
 export const ANSWER_DECISION_ATTEMPTS = MAX_ATTEMPTS + 6;
-const ANSWER_REPAIR_INTERVAL = Duration.minutes(10);
-const ANSWER_REPAIRS_PER_RUN = 20;
+const ANSWER_DECISION_MAX_WAIT_SECONDS = 600;
 /** Rows one pass may send before it yields to the rest of the loop. */
 const MAX_PER_PASS = 50;
 /** A failed hand-over's release is retried this often, at most this many times, in batches. */
@@ -62,6 +60,10 @@ export const deliveryOutcomeFor = (
   error: ChannelGatewayError,
   attempts: number,
   now: DateTime.Utc,
+  limits: { readonly maxAttempts: number; readonly maxWaitSeconds: number } = {
+    maxAttempts: MAX_ATTEMPTS,
+    maxWaitSeconds: 300,
+  },
 ): ChannelLedger.ChannelDeliveryOutcome => {
   const code = error.deliveryErrorCode ?? error.reason;
   if (error.reason === "adapter_unavailable") return { type: "failed", errorCode: code };
@@ -69,8 +71,8 @@ export const deliveryOutcomeFor = (
   if (error.deliveryErrorCode !== undefined && NON_RETRYABLE.has(error.deliveryErrorCode)) {
     return { type: "failed", errorCode: code };
   }
-  if (attempts >= MAX_ATTEMPTS) return { type: "failed", errorCode: code };
-  const waitSeconds = error.retryAfterSeconds ?? Math.min(2 ** attempts, 300);
+  if (attempts >= limits.maxAttempts) return { type: "failed", errorCode: code };
+  const waitSeconds = error.retryAfterSeconds ?? Math.min(2 ** attempts, limits.maxWaitSeconds);
   return {
     type: "retry",
     at: DateTime.formatIso(DateTime.addDuration(now, Duration.seconds(waitSeconds))),
@@ -154,9 +156,6 @@ const make = Effect.gen(function* () {
     Effect.forever,
     Effect.forkIn(scope),
   );
-  // The first pass repairs, so a restart retries what failed before it.
-  let nextAnswerRepairAt = 0;
-
   const release = (entry: PendingRelease) =>
     Effect.gen(function* () {
       const at = DateTime.formatIso(yield* DateTime.now);
@@ -356,33 +355,22 @@ const make = Effect.gen(function* () {
                 ? {}
                 : { externalMessageId: sent.success.externalMessageId }),
             }
-          : deliveryOutcomeFor(sent.failure, delivery.attempts, finishedAt),
+          : deliveryOutcomeFor(
+              sent.failure,
+              delivery.attempts,
+              finishedAt,
+              delivery.message.personAnswer === undefined
+                ? undefined
+                : {
+                    maxAttempts: ANSWER_DECISION_ATTEMPTS,
+                    maxWaitSeconds: ANSWER_DECISION_MAX_WAIT_SECONDS,
+                  },
+            ),
       now: DateTime.formatIso(finishedAt),
     });
   });
 
-  const repairAnswerDecisions = Effect.fn("ChannelDeliveryWorker.repairAnswerDecisions")(function* (
-    owner: string,
-  ) {
-    const now = yield* DateTime.now;
-    if (DateTime.toEpochMillis(now) < nextAnswerRepairAt) return;
-    nextAnswerRepairAt = DateTime.toEpochMillis(DateTime.addDuration(now, ANSWER_REPAIR_INTERVAL));
-    yield* ledger
-      .requeueAnswerDecisions({
-        owner,
-        now: DateTime.formatIso(now),
-        maxAttempts: ANSWER_DECISION_ATTEMPTS,
-        limit: ANSWER_REPAIRS_PER_RUN,
-      })
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("channel answer decision repair failed", { cause }),
-        ),
-      );
-  });
-
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
-    yield* repairAnswerDecisions(owner);
     let handled = yield* deliverReceipts(owner);
     while (handled < MAX_PER_PASS) {
       const claimed = yield* ledger.claimDue({

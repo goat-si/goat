@@ -28,7 +28,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import { timelineIdsFor } from "./channelIds.ts";
-import { ANSWER_DECISION_HANDLED, personMessageEntry } from "./channelPersonMessage.ts";
+import { personMessageEntry } from "./channelPersonMessage.ts";
 
 export class ChannelBotTimeline extends Context.Service<
   ChannelBotTimeline,
@@ -150,11 +150,7 @@ export const layerGoatTransport = Layer.effectDiscard(
         if (message.personAnswer !== undefined) {
           yield* recordAnswerDecision(message, message.personAnswer.answersQuestionId);
           const acceptedAt = DateTime.formatIso(yield* DateTime.now);
-          return {
-            deliveryId: message.deliveryId,
-            acceptedAt,
-            externalMessageId: ANSWER_DECISION_HANDLED,
-          };
+          return { deliveryId: message.deliveryId, acceptedAt };
         }
         const source = yield* sourceOf(message);
         // A delivery goes to the current thread of the bot its input or task belongs to, so work
