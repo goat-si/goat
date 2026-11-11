@@ -9,7 +9,7 @@ import { ComposerBanner } from "./ComposerBanner";
 import type { ComposerBannerStackContent, ComposerBannerStackItem } from "./ComposerBannerStack";
 import { HandoffCard } from "./HandoffCard";
 
-// Past two, one row stands for them all so the composer stays in view.
+// Up to two show in full; past two, one row stands for them all so the composer stays in view.
 const MAX_SEPARATE_APPROVALS = 2;
 
 function DockedApproval(props: { environmentId: EnvironmentId; handoff: Handoff }) {
@@ -41,13 +41,27 @@ function approvalBannerItems(input: {
   readonly onToggle: () => void;
 }): Array<ComposerBannerStackItem | ComposerBannerStackContent> {
   const { environmentId, handoffs } = input;
+  if (handoffs.length === 0) return [];
+  // One banner holds them, so the stack never tucks the second one behind other notices.
   if (handoffs.length <= MAX_SEPARATE_APPROVALS)
-    return handoffs.map((handoff) => ({
-      id: `approval:${handoff.handoffId}`,
-      variant: "info",
-      priority: "urgent",
-      content: <DockedApproval environmentId={environmentId} handoff={handoff} />,
-    }));
+    return [
+      {
+        id: "approvals",
+        variant: "info",
+        priority: "urgent",
+        content: (
+          <div className="flex flex-col gap-3">
+            {handoffs.map((handoff) => (
+              <DockedApproval
+                key={handoff.handoffId}
+                environmentId={environmentId}
+                handoff={handoff}
+              />
+            ))}
+          </div>
+        ),
+      },
+    ];
   return [
     {
       id: "approvals",

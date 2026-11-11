@@ -312,6 +312,7 @@ export function startThreadNotifications(
     environmentId: EnvironmentId,
     state: NotificationState,
     kind: ThreadNotificationKind,
+    approvalTitle?: string,
   ) => {
     let { thread } = state;
     const { status } = state;
@@ -355,7 +356,7 @@ export function startThreadNotifications(
       const toastId = toastManager.add({
         type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
         title,
-        description: thread.title,
+        description: approvalTitle ? `${approvalTitle} · ${thread.title}` : thread.title,
         data: {
           hideCopyButton: true,
           leadingIcon:
@@ -391,7 +392,7 @@ export function startThreadNotifications(
       return;
     try {
       const notification = new Notification(title, {
-        body: thread.title,
+        body: approvalTitle ? `${approvalTitle} · ${thread.title}` : thread.title,
         tag: threadNotificationTag(environmentId, thread.id),
         silent: true,
         // Windows drops clicks after a toast moves into Notification Center.
@@ -500,10 +501,10 @@ export function startThreadNotifications(
       gate: createThreadNotificationGate<ThreadId>((threadId, kind) => {
         const state = entry.previous.get(threadId);
         if (!state) return;
-        // The approval this notification stands for is not announced again by the feed.
-        for (const id of approvalHandoffShownBy(entry.threads, threadId))
-          entry.approvals.remember(id);
-        present(environmentId, state, kind);
+        // The approval this notification stands for is named here and not announced again.
+        const shown = kind === "input" ? approvalHandoffShownBy(entry.threads, threadId) : null;
+        if (shown) entry.approvals.remember(shown.id);
+        present(environmentId, state, kind, shown?.title);
       }),
       approvals: createApprovalNotificationGate<string>((handoffId) => {
         const handoff = handoffs.get(handoffId);

@@ -158,18 +158,18 @@ export function feedOwnedApprovalThreads(
 }
 
 /**
- * The one approval handoff a thread's shell notification stands for: the newest among its own and
- * its subagents'. None when the thread waits on its own provider approval. Others are left for
- * the feed to announce.
+ * The one approval handoff a thread's shell notification stands for, with the title it names: the
+ * newest among its own and its subagents'. None when the thread waits on its own provider approval.
+ * Others are left for the feed to announce.
  */
 export function approvalHandoffShownBy(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   threadId: ThreadId,
-): ReadonlyArray<string> {
+): { readonly id: string; readonly title: string } | null {
   const byId = new Map(threads.map((thread) => [thread.id, thread] as const));
   const own = byId.get(threadId)?.pendingRuntimeRequest;
-  if (own != null && own.handoff === undefined && isPendingApprovalRequest(own)) return [];
-  let newest: { readonly id: string; readonly at: number } | null = null;
+  if (own != null && own.handoff === undefined && isPendingApprovalRequest(own)) return null;
+  let newest: { readonly id: string; readonly title: string; readonly at: number } | null = null;
   for (const thread of threads) {
     const request = thread.pendingRuntimeRequest;
     if (request?.handoff?.kind !== "approval") continue;
@@ -178,7 +178,8 @@ export function approvalHandoffShownBy(
     while (current !== undefined && !seen.has(current.id)) {
       if (current.id === threadId) {
         const at = DateTime.toEpochMillis(request.createdAt);
-        if (newest === null || at > newest.at) newest = { id: String(request.id), at };
+        if (newest === null || at > newest.at)
+          newest = { id: String(request.id), title: request.handoff.title, at };
         break;
       }
       seen.add(current.id);
@@ -188,5 +189,5 @@ export function approvalHandoffShownBy(
           : undefined;
     }
   }
-  return newest === null ? [] : [newest.id];
+  return newest === null ? null : { id: newest.id, title: newest.title };
 }

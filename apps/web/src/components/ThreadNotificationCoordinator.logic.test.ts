@@ -260,8 +260,10 @@ describe("which approvals the decision feed announces", () => {
     ];
     const notify = vi.fn();
     const gate = createApprovalNotificationGate<string>(notify);
-    // The shell's one notification for root stands for one approval, the newest.
-    for (const id of approvalHandoffShownBy(threads, ThreadId.make("root"))) gate.remember(id);
+    // The shell's one notification for root stands for one approval, the newest, and names it.
+    const shown = approvalHandoffShownBy(threads, ThreadId.make("root"));
+    expect(shown).toEqual({ id: "two-a", title: "Join pen-lidge to the hub" });
+    if (shown) gate.remember(shown.id);
     gate.setBaseline(0);
     gate.observe([
       { id: "one-a", createdAt: 1 },
@@ -272,7 +274,10 @@ describe("which approvals the decision feed announces", () => {
 
   it("stands for no handoff when the thread waits on its own provider approval", () => {
     const threads = [shell("root", provider("p")), shell("child", handoff("child-a"), "root")];
-    expect(approvalHandoffShownBy(threads, ThreadId.make("root"))).toEqual([]);
-    expect(approvalHandoffShownBy(threads, ThreadId.make("child"))).toEqual(["child-a"]);
+    expect(approvalHandoffShownBy(threads, ThreadId.make("root"))).toBeNull();
+    expect(approvalHandoffShownBy(threads, ThreadId.make("child"))).toEqual({
+      id: "child-a",
+      title: "Join pen-lidge to the hub",
+    });
   });
 });
