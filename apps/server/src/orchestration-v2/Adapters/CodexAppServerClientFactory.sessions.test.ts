@@ -83,6 +83,7 @@ const harness = Effect.fn("CodexFactorySessionsTest.harness")(function* (
     );
   const gone = new Set<number>();
   const members = new Map<number, ReadonlyArray<Member>>();
+  const control: { gate: Effect.Effect<void> } = { gate: Effect.void };
   const connected: string[] = [];
   const launched: string[] = [];
   let spawned = false;
@@ -91,13 +92,15 @@ const harness = Effect.fn("CodexFactorySessionsTest.harness")(function* (
     bootId: Effect.succeed("boot"),
     processTable: {
       groupMembers: (pgid) =>
-        Effect.sync(() =>
-          gone.has(pgid)
-            ? []
-            : (members.get(pgid) ??
-              records
-                .filter((record) => record.pgid === pgid)
-                .map((record) => ({ pid: pgid, pgid, argv: record.socketPath }))),
+        Effect.suspend(() => control.gate).pipe(
+          Effect.map(() =>
+            gone.has(pgid)
+              ? []
+              : (members.get(pgid) ??
+                records
+                  .filter((record) => record.pgid === pgid)
+                  .map((record) => ({ pid: pgid, pgid, argv: record.socketPath }))),
+          ),
         ),
       ownerOfSocket: () => Effect.void.pipe(Effect.as(undefined)),
     },
@@ -164,7 +167,17 @@ const harness = Effect.fn("CodexFactorySessionsTest.harness")(function* (
   const recordFiles = Effect.promise(() => NodeFSP.readdir(dir)).pipe(
     Effect.map((files) => files.filter((file) => file.endsWith(".json")).sort()),
   );
-  return { open, connected, launched, members, gone, recordFiles, spawned: () => spawned };
+  return {
+    open,
+    detached,
+    control,
+    connected,
+    launched,
+    members,
+    gone,
+    recordFiles,
+    spawned: () => spawned,
+  };
 });
 
 it.effect("each session reconnects to the preserved process its record names", () =>
@@ -315,7 +328,8 @@ it.effect("a record still spawning is never given up", () =>
   Effect.gen(function* () {
     const kept = recordFixture("codex-222222222222", 1009, sessionA, { state: "spawning" });
     const threadId = ThreadId.make("thread-spawning");
-    const { open, launched, gone, recordFiles } = yield* harness([kept], {
+    // The group stays alive: nothing may connect to it, signal it or start beside it.
+    const { open, connected, launched, gone, recordFiles } = yield* harness([kept], {
       survivors: Layer.mock(CodexSurvivors.CodexSurvivors)({
         get: () =>
           Effect.succeed({
@@ -342,10 +356,34 @@ it.effect("a record still spawning is never given up", () =>
           } as never),
       }),
     });
-    gone.add(kept.pgid);
     const result = yield* open(threadId, sessionA).pipe(Effect.scoped, Effect.exit);
     assert.equal(result._tag, "Failure");
-    assert.equal(launched.length, 0);
+    assert.deepEqual([connected, launched, [...gone]], [[], [], []]);
     assert.deepEqual(yield* recordFiles, [kept.name + ".json"]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a fence written while the exited group is classified keeps the record", () =>
+  Effect.gen(function* () {
+    const kept = recordFixture("codex-333333333333", 1010, sessionA);
+    const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
+    gone.add(kept.pgid);
+    const paused = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    control.gate = Deferred.succeed(paused, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+    );
+    const goal = { threadId: ThreadId.make("thread-goal"), nativeThreadId: "native-goal" };
+    yield* Effect.gen(function* () {
+      const opening = yield* open("thread-other", sessionA).pipe(Effect.forkScoped);
+      yield* Deferred.await(paused);
+      control.gate = Effect.void;
+      yield* detached.recordGoalBlock({ instanceId: codex, recordName: kept.name }, goal);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(opening);
+      assert.equal(launched.length, 1);
+      assert.include(yield* recordFiles, kept.name + ".json");
+      assert.isTrue(yield* detached.hasGoalBlock(goal.threadId));
+    }).pipe(Effect.scoped);
   }).pipe(Effect.scoped),
 );

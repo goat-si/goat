@@ -124,7 +124,8 @@ const decideKeptRecord = Effect.fn("CodexDetachedAppServers.decideKeptRecord")(f
 export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(function* <E>(
   input: Omit<Parameters<typeof decideKeptRecord>[0], "globallyBlocked"> & {
     readonly globallyBlocked: Effect.Effect<string | undefined>;
-    readonly retire: (record: DetachedAppServerRecord) => Effect.Effect<unknown, E>;
+    /** Removes the record unless a fence arrived meanwhile; false keeps it, unlisted. */
+    readonly retire: (record: DetachedAppServerRecord) => Effect.Effect<boolean, E>;
     readonly unlist: Effect.Effect<unknown>;
   },
 ) {
@@ -134,7 +135,8 @@ export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(
   });
   if (decision.type === "refuse")
     return yield* new CodexDetachedAppServerError({ detail: decision.detail });
-  if (decision.type === "retire") yield* input.retire(decision.record);
-  if (decision.type === "unlist") yield* input.unlist;
-  return decision.type;
+  if (decision.type === "retire" && (yield* input.retire(decision.record)))
+    return "retire" as const;
+  if (decision.type !== "connect") yield* input.unlist;
+  return decision.type === "connect" ? ("connect" as const) : ("unlist" as const);
 });

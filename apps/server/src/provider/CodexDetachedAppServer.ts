@@ -96,6 +96,7 @@ export type DetachedClassification =
 export type DetachedOutcome = "cleaned" | "tombstoned" | "blocked" | "signalled" | "retained";
 
 export { CodexDetachedAppServerError };
+export { privateSocketDirectory } from "./CodexDetachedLaunch.ts";
 
 const RECORD_DIRECTORY = "codex-app-servers";
 const TERM_GRACE = "5 seconds";
@@ -104,30 +105,6 @@ const READINESS = Schedule.spaced("50 millis");
 const READINESS_LIMIT = "30 seconds";
 const MAX_SOCKET_PATH_BYTES = 103;
 const ABANDONED = "abandoned";
-
-/** Runs as the detached group leader: publishes its pid with link(2), then execs Codex in place. */
-export const PID_HANDSHAKE_SCRIPT =
-  'printf %s "$$" > "$1.$$" && ln "$1.$$" "$1" || { rm -f "$1.$$"; exit 75; }; rm -f "$1.$$"; shift; exec "$@"';
-
-/** Creates root/codex with mode 0700 and refuses a directory another user could write to. */
-export const privateSocketDirectory = (root: string, uid: number) =>
-  Effect.tryPromise({
-    try: async () => {
-      const directory = NodePath.join(root, "codex");
-      await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
-      for (const path of [root, directory]) {
-        const stat = await NodeFSP.lstat(path);
-        if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o077) !== 0)
-          throw new Error(path + " must be a private directory owned by this user.");
-      }
-      return directory;
-    },
-    catch: (cause) =>
-      new CodexDetachedAppServerError({
-        detail: "The Codex socket directory is not private.",
-        cause,
-      }),
-  });
 
 export const classifyDetachedAppServer = Effect.fn("CodexDetachedAppServers.classify")(function* (
   record: DetachedAppServerRecord,
@@ -295,19 +272,19 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       }),
     );
 
+  const removeRecordUnlocked = (record: DetachedAppServerRecord) =>
+    tryIo("Could not remove a Codex process record.", async () => {
+      const files = paths(record.name);
+      // GOAT's alias in its private socket directory; Codex removes its own socket on a clean exit.
+      await NodeFSP.rm(record.socketPath, { force: true });
+      await NodeFSP.rm(files.record, { force: true });
+      await NodeFSP.rm(files.pid, { force: true });
+      await NodeFSP.rm(files.stderr, { force: true });
+      fences.delete(record.name);
+      recoveryRetained.delete(record.name);
+    });
   const removeRecord = (record: DetachedAppServerRecord) =>
-    recordGate.withPermit(
-      tryIo("Could not remove a Codex process record.", async () => {
-        const files = paths(record.name);
-        // GOAT's alias in its private socket directory; Codex removes its own socket on a clean exit.
-        await NodeFSP.rm(record.socketPath, { force: true });
-        await NodeFSP.rm(files.record, { force: true });
-        await NodeFSP.rm(files.pid, { force: true });
-        await NodeFSP.rm(files.stderr, { force: true });
-        fences.delete(record.name);
-        recoveryRetained.delete(record.name);
-      }),
-    );
+    recordGate.withPermit(removeRecordUnlocked(record));
 
   const readPidFile = (name: string) =>
     tryIo("Could not read a Codex pid file.", async () => {
@@ -888,7 +865,17 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       globallyBlocked: Ref.get(globallyBlocked),
       classify: (record) => classify(record),
       warn,
-      retire: (record) => finishGone(record, { type: "gone" }),
+      // Re-read under the gate: a fence written while the group was classified keeps the record.
+      retire: (record) =>
+        recordGate.withPermit(
+          Effect.suspend(() => {
+            const current = fences.get(record.name);
+            if (current === undefined) return Effect.succeed(true);
+            if (current.goalBlocks?.length || current.stopObligations?.length)
+              return Effect.succeed(false);
+            return removeRecordUnlocked(current).pipe(Effect.as(true));
+          }),
+        ),
       unlist: Effect.sync(() => recoveryRetained.delete(input.name)),
     });
 
