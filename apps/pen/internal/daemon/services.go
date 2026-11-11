@@ -91,6 +91,8 @@ type serviceReg struct {
 	// first; endDone closes when it finished.
 	endStarted bool
 	endDone    chan struct{}
+	// handshakes are the admitted client and pairing handshakes, guarded by serviceBook.mu (clients.go).
+	handshakes map[*handshake]struct{}
 	// gen, clients and invite are the v1.3 ops' state, guarded by serviceBook.mu: the last list generation applied,
 	// the listed client keys (noisePub to client id) and the live service invite. out carries answers and events.
 	gen     uint64

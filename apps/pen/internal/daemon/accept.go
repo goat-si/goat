@@ -74,14 +74,14 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 	var client *clientAdmission
 	admit := func(kind byte, remote []byte, p session.Payload) ([]byte, error) {
 		if kind == session.KindJoin && p.Stream == "service-pair" {
-			a, psk, err := d.admitPairing(remote, p, relayOf(c))
+			a, psk, err := d.admitPairing(remote, p, c)
 			if err == nil {
 				client = &a
 			}
 			return psk, err
 		}
 		if _, member := d.view().MemberByNoise(remote); kind == session.KindSession && !member {
-			a, err := d.admitClient(remote, p, relayOf(c))
+			a, err := d.admitClient(remote, p, c)
 			if err == nil {
 				client = &a
 			}
@@ -98,6 +98,13 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		return nil, err
 	}
 	sec, err := session.Respond(ctx, c, d.id, d.nodeID, admit)
+	if client != nil {
+		// Tracked on its registration until this goroutine is done with it (registered first, so it runs last).
+		defer d.svc.leaveHandshake(client.reg, client.hs)
+		if err == nil {
+			d.svc.confirmHandshake(client.hs)
+		}
+	}
 	if err != nil && client != nil && client.slot != nil {
 		// Taken before message 2; a handshake that did not confirm returns it here. A confirmed session's slot is
 		// returned by serveClient or by the owner of its close.

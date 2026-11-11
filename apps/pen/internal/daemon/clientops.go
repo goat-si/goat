@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
+	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/strictjson"
 )
 
@@ -244,7 +245,7 @@ func (d *Daemon) opClients(reg *serviceReg, b []byte, extra map[string]any) (*ho
 		d.mu.Unlock()
 		return refuse(reason)
 	}
-	e, ok, reason := d.svc.setClients(reg, uint64(gen), list)
+	e, ok, reason, unconfirmed, handshakes := d.svc.setClients(reg, uint64(gen), list)
 	var mine []*live
 	var waits []chan struct{}
 	if ok {
@@ -259,6 +260,7 @@ func (d *Daemon) opClients(reg *serviceReg, b []byte, extra map[string]any) (*ho
 	}
 	// The answer is written only after every session of a dropped key and its delivery are closed.
 	d.closeAndWait(mine, waits)
+	closeHandshakes(unconfirmed, handshakes)
 	e.fill(jsonLine(map[string]any{"t": "clients", "gen": gen}))
 	return e, true
 }
@@ -285,22 +287,27 @@ func (d *Daemon) notClientKeyLocked(list map[string]string) string {
 	return ""
 }
 
-// setClients replaces reg's list when gen rises, reserving the answer's place in the holder's order.
-func (b *serviceBook) setClients(reg *serviceReg, gen uint64, list map[string]string) (*holderEntry, bool, string) {
+// setClients replaces reg's list when gen rises, reserving the answer's place in the holder's order. It also returns
+// the unconfirmed client handshakes of keys the list dropped, to close, and the done signals to wait for.
+func (b *serviceBook) setClients(reg *serviceReg, gen uint64, list map[string]string) (*holderEntry, bool, string, []relay.Conn, []chan struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if reg.ended || b.byName[reg.name] != reg {
-		return nil, false, refusedReplaced
+		return nil, false, refusedReplaced, nil, nil
 	}
 	if gen <= reg.gen {
-		return nil, false, "gen does not rise above the last list applied on this registration"
+		return nil, false, "gen does not rise above the last list applied on this registration", nil, nil
 	}
 	e, ok := reg.out.reserve()
 	if !ok {
-		return nil, false, ""
+		return nil, false, "", nil, nil
 	}
 	reg.gen, reg.clients = gen, list
-	return e, true, ""
+	unconfirmed, done := reg.handshakesLocked(func(hs *handshake) bool {
+		_, kept := list[hs.key]
+		return !hs.pairing && !hs.confirmed && !kept
+	})
+	return e, true, "", unconfirmed, done
 }
 
 func (d *Daemon) opInvite(reg *serviceReg, b []byte, extra map[string]any) (*holderEntry, bool) {

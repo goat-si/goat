@@ -7,6 +7,7 @@ import (
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
+	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/stream"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
@@ -24,8 +25,69 @@ import (
 type clientAdmission struct {
 	reg  *serviceReg
 	slot *phoneSlot
+	hs   *handshake
 	// inv is set for a service-pair handshake: the invite instance that answered its message 1.
 	inv *serviceInvite
+}
+
+// handshake is an admitted client or pairing handshake of a registration, tracked from before message 2 until the
+// goroutine that accepted it is done (done closes then), so the registration's end and a list drop also close the
+// ones whose key confirmation has not arrived. confirmed is guarded by serviceBook.mu.
+type handshake struct {
+	conn      relay.Conn
+	key       string
+	pairing   bool
+	confirmed bool
+	done      chan struct{}
+}
+
+// trackLocked records an admitted handshake on reg; serviceBook.mu is held.
+func (reg *serviceReg) trackLocked(conn relay.Conn, key string, pairing bool) *handshake {
+	hs := &handshake{conn: conn, key: key, pairing: pairing, done: make(chan struct{})}
+	if reg.handshakes == nil {
+		reg.handshakes = map[*handshake]struct{}{}
+	}
+	reg.handshakes[hs] = struct{}{}
+	return hs
+}
+
+// handshakesLocked returns the connections of the matching handshakes that are not confirmed yet, to close, and the
+// done signals of all matching ones, to wait for; serviceBook.mu is held.
+func (reg *serviceReg) handshakesLocked(match func(*handshake) bool) (unconfirmed []relay.Conn, done []chan struct{}) {
+	for hs := range reg.handshakes {
+		if match(hs) {
+			if !hs.confirmed {
+				unconfirmed = append(unconfirmed, hs.conn)
+			}
+			done = append(done, hs.done)
+		}
+	}
+	return unconfirmed, done
+}
+
+// confirmHandshake marks hs confirmed: from now on its session's own checks and close owner handle it.
+func (b *serviceBook) confirmHandshake(hs *handshake) {
+	b.mu.Lock()
+	hs.confirmed = true
+	b.mu.Unlock()
+}
+
+// leaveHandshake ends tracking hs once the goroutine that accepted it is done with it.
+func (b *serviceBook) leaveHandshake(reg *serviceReg, hs *handshake) {
+	b.mu.Lock()
+	delete(reg.handshakes, hs)
+	b.mu.Unlock()
+	close(hs.done)
+}
+
+// closeHandshakes closes unconfirmed handshakes 4401 and waits until every handshake in done is finished.
+func closeHandshakes(unconfirmed []relay.Conn, done []chan struct{}) {
+	for _, c := range unconfirmed {
+		c.Close(wire.CodeNotAdmitted)
+	}
+	for _, w := range done {
+		<-w
+	}
 }
 
 // memberOrRevoked reports a key that is, or was, a member of v: such a key is never a client.
@@ -44,7 +106,7 @@ func memberOrRevoked(v *mesh.View, key string) bool {
 }
 
 // admitClient decides on a kind 0x01 service stream from a key that is not a member, before message 2.
-func (d *Daemon) admitClient(remote []byte, p session.Payload, relay string) (clientAdmission, error) {
+func (d *Daemon) admitClient(remote []byte, p session.Payload, conn relay.Conn) (clientAdmission, error) {
 	key := ident.B64.EncodeToString(remote)
 	if p.Stream != "service" || !ValidServiceName(p.Name) || memberOrRevoked(d.view(), key) {
 		return clientAdmission{}, errNotAdmitted
@@ -58,17 +120,17 @@ func (d *Daemon) admitClient(remote []byte, p session.Payload, relay string) (cl
 	if _, listed := reg.clients[key]; !listed {
 		return clientAdmission{}, errNotAdmitted
 	}
-	slot, ok := d.svc.reservePhoneLocked(relay, key)
+	slot, ok := d.svc.reservePhoneLocked(relayOf(conn), key)
 	if !ok {
 		return clientAdmission{}, errNotAdmitted
 	}
-	return clientAdmission{reg: reg, slot: slot}, nil
+	return clientAdmission{reg: reg, slot: slot, hs: reg.trackLocked(conn, key, false)}, nil
 }
 
 // admitPairing decides on a kind 0x03 service-pair handshake before message 2 (contract "Service invites"): the
 // invite must be the live one of the registration holding the name, with budget left, and a phone slot must be free.
 // It spends one answer of the budget with the slot and returns the invite's psk.
-func (d *Daemon) admitPairing(remote []byte, p session.Payload, relay string) (clientAdmission, []byte, error) {
+func (d *Daemon) admitPairing(remote []byte, p session.Payload, conn relay.Conn) (clientAdmission, []byte, error) {
 	if !ValidServiceName(p.Name) || !validInviteID(p.Invite) {
 		return clientAdmission{}, nil, errNotAdmitted
 	}
@@ -83,14 +145,15 @@ func (d *Daemon) admitPairing(remote []byte, p session.Payload, relay string) (c
 	if inv == nil || inv.id != p.Invite || inv.burned || !now.Before(inv.expires) || inv.budget < 1 {
 		return clientAdmission{}, nil, errNotAdmitted
 	}
-	slot, ok := d.svc.reservePhoneLocked(relay, ident.B64.EncodeToString(remote))
+	key := ident.B64.EncodeToString(remote)
+	slot, ok := d.svc.reservePhoneLocked(relayOf(conn), key)
 	if !ok {
 		return clientAdmission{}, nil, errNotAdmitted
 	}
 	if inv.budget--; inv.budget == 0 {
 		reg.out.push(jsonLine(map[string]any{"t": "invite-exhausted", "id": inv.id}))
 	}
-	return clientAdmission{reg: reg, slot: slot, inv: inv}, inv.psk, nil
+	return clientAdmission{reg: reg, slot: slot, inv: inv, hs: reg.trackLocked(conn, key, true)}, inv.psk, nil
 }
 
 // listedAnywhere reports a key on any registration's list; such a key may not open an account session.
@@ -215,8 +278,12 @@ func (d *Daemon) endRegistration(reg *serviceReg) {
 	first := !reg.endStarted
 	reg.endStarted = true
 	conns := reg.endConns
+	var unconfirmed []relay.Conn
+	var handshakes []chan struct{}
 	if first {
 		reg.endConns = nil
+		// No handshake joins an ended registration, so this is all of them.
+		unconfirmed, handshakes = reg.handshakesLocked(func(*handshake) bool { return true })
 	}
 	d.svc.mu.Unlock()
 	if !first {
@@ -239,6 +306,7 @@ func (d *Daemon) endRegistration(reg *serviceReg) {
 	for _, w := range waits {
 		<-w
 	}
+	closeHandshakes(unconfirmed, handshakes)
 	close(reg.endDone)
 }
 

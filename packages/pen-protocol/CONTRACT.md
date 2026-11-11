@@ -678,7 +678,8 @@ node close the connection, which ends the registration.
 **Lifetime.** The list, the invite and the last applied G live only in memory. They start empty with each
 registration and end with it: when its connection closes, when the node stops, or when a newer registration of the
 name replaces it. When a registration ends, the node closes every client and pairing session admitted under it with
-4401, along with the connections it delivered to the program ("Registration").
+4401, handshakes it answered whose key confirmation has not arrived included, along with the connections it delivered
+to the program ("Registration"), and returns their phone slots before the end completes.
 
 ### Admission of client keys
 
@@ -699,8 +700,8 @@ name replaces it. When a registration ends, the node closes every client and pai
   a client session of that registration and delivers it as in "Local delivery", with that section's cap (4429) and
   failure code (4404). A client delivery commits only if, at the commit, the registration is still current and still
   lists the key. The identity line is written after the commit, in its client form ("Identity line forms").
-- When a list drops a key, the node closes that key's client sessions 4401, and the connections it delivered for
-  them, before it answers the list. From that answer on, no session of that key reaches the program unless a later
+- When a list drops a key, the node closes that key's client sessions 4401 (handshakes it answered whose key
+  confirmation has not arrived included), and the connections it delivered for them, before it answers the list. From that answer on, no session of that key reaches the program unless a later
   list names it again.
 - A client session is not a member session. A change of the mesh view closes it only as the bullet above says; no
   other view change does. It never marks a member
