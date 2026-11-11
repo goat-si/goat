@@ -123,7 +123,12 @@ it("keeps the unread boundary across a moment of inactivity, writes no visit the
   // Back: the same visit and boundary, and the reply from the inactive moment is new too.
   route.active = true;
   await view.show();
-  expect(route.snapshot).toMatchObject({ key: opened?.key, readUpTo: at(1), newestAtOpen: at(9) });
+  expect(route.snapshot).toMatchObject({
+    key: opened?.key,
+    readUpTo: at(1),
+    newestAtOpen: at(2),
+    away: [{ after: at(2), upTo: at(9) }],
+  });
   await view.unmount();
 });
 
@@ -160,6 +165,8 @@ it("records a member chat's visit against the member's own conversation while it
   const root = createRoot(document.createElement("div"));
   const member = { route: { params: { botId: "scout" } } } as unknown as RouteProps;
   await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  // The member's own read position is taken before its visit is written, for its "New" marker.
+  expect(route.snapshot).toMatchObject({ readUpTo: at(1), newestAtOpen: at(5) });
   // The member's newest message is read, in its own conversation; the main chat is not touched.
   expect(route.visit).toHaveBeenCalledTimes(1);
   expect(route.visit).toHaveBeenCalledWith(
