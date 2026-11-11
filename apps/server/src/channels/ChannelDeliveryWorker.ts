@@ -18,7 +18,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schedule from "effect/Schedule";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -28,6 +27,12 @@ import * as ChannelWake from "./ChannelWake.ts";
 const MAX_ATTEMPTS = 10;
 /** Rows one pass may send before it yields to the rest of the loop. */
 const MAX_PER_PASS = 50;
+/** A failed hand-over's release is retried this often, at most this many times, in batches. */
+const RELEASE_RETRY_INTERVAL = Duration.seconds(5);
+export const RELEASE_ATTEMPTS = 6;
+const RELEASE_BATCH = 20;
+/** Releases held for retry; beyond this a stuck row waits for restart recovery. */
+const MAX_PENDING_RELEASES = 100;
 const NON_RETRYABLE = new Set([
   "not_in_channel",
   "channel_not_found",
@@ -74,14 +79,98 @@ const make = Effect.gen(function* () {
   const wake = yield* ChannelWake.ChannelWake;
   const scope = yield* Effect.scope;
   const receipts = new Set<Fiber.Fiber<void, unknown>>();
-  // Claims wait while a failed hand-over is still being released; the release runs on another fiber.
-  let releasing = 0;
-  const releasesPending = () => releasing > 0;
+  interface PendingRelease {
+    readonly owner: string;
+    readonly deliveryId: ChannelLedger.ChannelStoredDelivery["deliveryId"];
+    readonly attempt: number;
+    tries: number;
+  }
+  // A row whose release failed stays delivering, which holds back only its own task's later rows.
+  const pendingReleases = new Map<string, PendingRelease>();
+  let releaseLoopRunning = false;
+
+  const release = (entry: PendingRelease) =>
+    Effect.gen(function* () {
+      const at = DateTime.formatIso(yield* DateTime.now);
+      yield* ledger.recordDelivery({
+        owner: entry.owner,
+        deliveryId: entry.deliveryId,
+        attempt: entry.attempt,
+        now: at,
+        outcome: {
+          type: "retry",
+          at: DateTime.formatIso(
+            DateTime.addDuration(DateTime.makeUnsafe(at), RELEASE_RETRY_INTERVAL),
+          ),
+          errorCode: "unknown",
+        },
+      });
+    });
+
+  /** Settles one release attempt; true when the entry is finished with, either way. */
+  const tryRelease = Effect.fn("ChannelDeliveryWorker.tryRelease")(function* (
+    entry: PendingRelease,
+  ) {
+    entry.tries += 1;
+    const result = yield* release(entry).pipe(Effect.result);
+    if (result._tag === "Success") {
+      yield* wake.wake;
+      return true;
+    }
+    yield* Effect.logWarning("channel delivery release failed", { error: result.failure });
+    // Any failure other than persistence, or a persistent one past the bound, leaves the row
+    // delivering for restart recovery, as before.
+    if (result.failure.reason !== "persistence") return true;
+    if (entry.tries >= RELEASE_ATTEMPTS) {
+      yield* Effect.logWarning("channel delivery release abandoned until restart", {
+        deliveryId: entry.deliveryId,
+        tries: entry.tries,
+      });
+      return true;
+    }
+    return false;
+  });
+
+  const releaseLoop = Effect.gen(function* () {
+    while (true) {
+      if (pendingReleases.size === 0) {
+        releaseLoopRunning = false;
+        return;
+      }
+      yield* Effect.sleep(RELEASE_RETRY_INTERVAL);
+      for (const entry of [...pendingReleases.values()].slice(0, RELEASE_BATCH)) {
+        if (yield* tryRelease(entry)) pendingReleases.delete(entry.deliveryId);
+      }
+    }
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        releaseLoopRunning = false;
+      }),
+    ),
+  );
+
+  const holdForRelease = Effect.fn("ChannelDeliveryWorker.holdForRelease")(function* (
+    entry: PendingRelease,
+  ) {
+    if (pendingReleases.size >= MAX_PENDING_RELEASES) {
+      yield* Effect.logWarning("channel delivery release abandoned until restart", {
+        deliveryId: entry.deliveryId,
+        tries: entry.tries,
+      });
+      return;
+    }
+    pendingReleases.set(entry.deliveryId, entry);
+    if (releaseLoopRunning) return;
+    releaseLoopRunning = true;
+    yield* Effect.forkIn(releaseLoop, scope);
+  });
 
   /**
    * Records the hand-over just before an external send; a restart before it sends the row again,
    * after it the person may have seen it. False means do not send: the row is no longer this
-   * claim's, or the record failed and the claim went back to pending for a later pass.
+   * claim's, or the record failed and the claim is released (now, or by the retry loop) for a
+   * later pass.
    */
   const handOver = Effect.fn("ChannelDeliveryWorker.handOver")(function* (
     delivery: ChannelLedger.ChannelStoredDelivery,
@@ -95,37 +184,13 @@ const make = Effect.gen(function* () {
       Effect.catchCause((cause) =>
         Effect.gen(function* () {
           yield* Effect.logWarning("channel delivery hand-over not recorded", { cause });
-          releasing += 1;
-          yield* Effect.gen(function* () {
-            const at = DateTime.formatIso(yield* DateTime.now);
-            yield* ledger.recordDelivery({
-              ...claim,
-              now: at,
-              outcome: {
-                type: "retry",
-                at: DateTime.formatIso(
-                  DateTime.addDuration(DateTime.makeUnsafe(at), Duration.seconds(5)),
-                ),
-                errorCode: "unknown",
-              },
-            });
-          }).pipe(
-            Effect.tapError((error) =>
-              Effect.logWarning("channel delivery release failed", { error }),
-            ),
-            Effect.retry({
-              schedule: Schedule.spaced("5 seconds"),
-              while: (error) => error.reason === "persistence",
-            }),
-            Effect.ensuring(
-              Effect.sync(() => {
-                releasing -= 1;
-              }),
-            ),
-            // Any other failure leaves the row to restart recovery, as before.
-            Effect.ignore,
-          );
-          yield* wake.wake;
+          const entry: PendingRelease = {
+            owner,
+            deliveryId: delivery.deliveryId,
+            attempt: delivery.attempts,
+            tries: 0,
+          };
+          if (!(yield* tryRelease(entry))) yield* holdForRelease(entry);
           return false;
         }),
       ),
@@ -186,7 +251,7 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     let handled = 0;
-    while (handled < MAX_PER_PASS && !releasesPending()) {
+    while (handled < MAX_PER_PASS) {
       const [row] = yield* ledger.claimDueDeliveries({
         owner,
         now: DateTime.formatIso(yield* DateTime.now),
@@ -213,7 +278,7 @@ const make = Effect.gen(function* () {
 
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
     let handled = yield* deliverReceipts(owner);
-    while (handled < MAX_PER_PASS && !releasesPending()) {
+    while (handled < MAX_PER_PASS) {
       const claimed = yield* ledger.claimDue({
         owner,
         now: DateTime.formatIso(yield* DateTime.now),

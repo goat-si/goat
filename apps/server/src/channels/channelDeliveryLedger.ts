@@ -194,16 +194,27 @@ export const deliveryLedger = (
           Effect.gen(function* () {
             yield* fence(input.owner);
             const handOverNow = DateTime.formatIso(yield* DateTime.now);
-            const deadline = DateTime.formatIso(
-              DateTime.makeUnsafe(Date.parse(handOverNow) - RECEIPT_DEADLINE_MS),
-            );
+            const [row] = yield* sql<{
+              readonly cause_key: string;
+              readonly input_id: string | null;
+            }>`SELECT cause_key, input_id FROM channel_outbox
+              WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
+                AND attempts = ${input.attempt}`;
+            if (row === undefined) return false;
+            // Only a reply receipt has a deadline; it is looked up by its input id.
+            if (row.input_id !== null && row.cause_key === "reply:" + row.input_id) {
+              const deadline = DateTime.formatIso(
+                DateTime.makeUnsafe(Date.parse(handOverNow) - RECEIPT_DEADLINE_MS),
+              );
+              const expired = yield* sql<{ readonly input_id: string }>`SELECT input_id
+                FROM channel_inbox WHERE input_id = ${row.input_id}
+                  AND accepted_at <= ${deadline}`;
+              if (expired.length > 0) return false;
+            }
             const marked = yield* sql<{ readonly delivery_id: string }>`UPDATE channel_outbox
               SET send_started_at = ${handOverNow}
               WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
                 AND attempts = ${input.attempt}
-                AND NOT EXISTS (SELECT 1 FROM channel_inbox i
-                  WHERE channel_outbox.cause_key = 'reply:' || i.input_id
-                    AND i.accepted_at <= ${deadline})
               RETURNING delivery_id`;
             return marked.length > 0;
           }),

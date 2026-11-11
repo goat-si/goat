@@ -3,8 +3,6 @@ import type { ChannelReceptionInput } from "@goat/contracts";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
-import * as Deferred from "effect/Deferred";
-import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -268,73 +266,125 @@ describe("one message before the answer, whatever the order", () => {
 });
 
 describe("hand-over persistence recovery", () => {
+  /** A worker whose first hand-over fails and whose releases of that row fail as told. */
+  const releaseHarness = (
+    harness: ReturnType<typeof harnessWith>,
+    failRelease: (n: number) => boolean,
+  ) =>
+    Effect.gen(function* () {
+      const { task } = yield* startSlackTurn(harness, "release-retry");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const sent: string[] = [];
+      const counts = { marks: 0, releases: 0 };
+      const error = new ChannelLedgerError({ reason: "persistence", detail: "unavailable" });
+      const wrapped = {
+        ...ledger,
+        markSending: (input: Parameters<typeof ledger.markSending>[0]) =>
+          ++counts.marks === 1 ? Effect.fail(error) : ledger.markSending(input),
+        recordDelivery: (input: Parameters<typeof ledger.recordDelivery>[0]) =>
+          input.outcome.type === "retry" && failRelease(++counts.releases)
+            ? Effect.fail(error)
+            : ledger.recordDelivery(input),
+      };
+      const enqueue = (key: string, taskId: typeof task.taskId | undefined) =>
+        Effect.gen(function* () {
+          const now = DateTime.formatIso(yield* DateTime.now);
+          yield* ledger.enqueueDeliveries(
+            [
+              {
+                deliveryId: deliveryIdFor(key),
+                causeKey: key,
+                ...(taskId === undefined ? {} : { taskId }),
+                message: {
+                  deliveryId: deliveryIdFor(key),
+                  destination: task.originAddress,
+                  kind: "question" as const,
+                  text: key,
+                  ...(taskId === undefined ? {} : { taskId }),
+                },
+              },
+            ],
+            now,
+          );
+        });
+      const services = ChannelDeliveryWorker.layer.pipe(
+        Layer.provide(Layer.succeed(ChannelLedger.ChannelLedger)(wrapped)),
+        Layer.provide(
+          Layer.mock(ChannelGateway.ChannelGateway)({
+            send: (message) =>
+              Effect.sync(() => {
+                sent.push(message.text);
+                return { deliveryId: message.deliveryId, acceptedAt: "1970-01-01T00:00:00.000Z" };
+              }),
+          }),
+        ),
+        Layer.provide(ChannelWake.layer),
+      );
+      return { task, ledger, owner: runtime.ownerToken, sent, counts, enqueue, services };
+    });
+
+  it.effect("a release that recovers lets the task's held message go on the next pass", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { task, ledger, owner, sent, counts, enqueue, services } = yield* releaseHarness(
+        harness,
+        (n) => n === 1,
+      );
+      yield* enqueue("release-first", task.taskId);
+      yield* enqueue("release-later", task.taskId);
+      yield* Effect.gen(function* () {
+        const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+        yield* worker.deliverDue(owner);
+        assert.deepStrictEqual(sent, []);
+        assert.strictEqual(
+          yield* ledger.getDeliveryState(deliveryIdFor("release-first")),
+          "delivering",
+        );
+        yield* TestClock.adjust("5 seconds");
+        assert.strictEqual(counts.releases, 2);
+        assert.strictEqual(
+          yield* ledger.getDeliveryState(deliveryIdFor("release-first")),
+          "pending",
+        );
+        yield* TestClock.adjust("5 seconds");
+        yield* worker.deliverDue(owner);
+        assert.deepStrictEqual(sent, ["release-first", "release-later"]);
+      }).pipe(Effect.provide(Layer.fresh(services)));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect(
-    "releases a failed hand-over after persistence recovers and sends the task's later message",
+    "a release that keeps failing holds back only its own task, and its retries stop at the bound",
     () => {
       const harness = harnessWith(botModel);
       return Effect.gen(function* () {
-        const { task } = yield* startSlackTurn(harness, "release-retry");
-        const ledger = yield* ChannelLedger.ChannelLedger;
-        const failed = yield* Deferred.make<void>();
-        const sent: string[] = [];
-        let marks = 0;
-        let releases = 0;
-        const error = new ChannelLedgerError({ reason: "persistence", detail: "unavailable" });
-        const wrapped = {
-          ...ledger,
-          markSending: (input: Parameters<typeof ledger.markSending>[0]) =>
-            ++marks === 1 ? Effect.fail(error) : ledger.markSending(input),
-          recordDelivery: (input: Parameters<typeof ledger.recordDelivery>[0]) =>
-            input.outcome.type === "retry" && ++releases === 1
-              ? Deferred.succeed(failed, undefined).pipe(Effect.andThen(Effect.fail(error)))
-              : ledger.recordDelivery(input),
-        };
-        const now = DateTime.formatIso(yield* DateTime.now);
-        const rows = ["release-first", "release-later"].map((key) => ({
-          deliveryId: deliveryIdFor(key),
-          causeKey: key,
-          taskId: task.taskId,
-          message: {
-            deliveryId: deliveryIdFor(key),
-            destination: task.originAddress,
-            kind: "question" as const,
-            text: key,
-            taskId: task.taskId,
-          },
-        }));
-        yield* ledger.enqueueDeliveries(rows, now);
-        const services = ChannelDeliveryWorker.layer.pipe(
-          Layer.provide(Layer.succeed(ChannelLedger.ChannelLedger)(wrapped)),
-          Layer.provide(
-            Layer.mock(ChannelGateway.ChannelGateway)({
-              send: (message) =>
-                Effect.sync(() => {
-                  sent.push(message.text);
-                  return { deliveryId: message.deliveryId, acceptedAt: now };
-                }),
-            }),
-          ),
-          Layer.provide(ChannelWake.layer),
+        const { task, ledger, owner, sent, counts, enqueue, services } = yield* releaseHarness(
+          harness,
+          () => true,
         );
+        yield* enqueue("stuck-first", task.taskId);
+        yield* enqueue("stuck-later", task.taskId);
+        yield* enqueue("unrelated-before", undefined);
         yield* Effect.gen(function* () {
           const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
-          const pass = yield* worker
-            .deliverDue((yield* ChannelRuntime.ChannelRuntime).ownerToken)
-            .pipe(Effect.forkChild);
-          yield* Effect.raceFirst(
-            Deferred.await(failed),
-            Fiber.join(pass).pipe(Effect.andThen(Effect.die("release was not attempted"))),
-          );
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, ["unrelated-before"]);
           yield* TestClock.adjust("5 seconds");
-          yield* Fiber.join(pass);
+          yield* enqueue("unrelated-during", undefined);
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, ["unrelated-before", "unrelated-during"]);
+          for (let step = 0; step < ChannelDeliveryWorker.RELEASE_ATTEMPTS + 2; step += 1) {
+            yield* TestClock.adjust("5 seconds");
+          }
+          assert.strictEqual(counts.releases, ChannelDeliveryWorker.RELEASE_ATTEMPTS);
+          // Left delivering for restart recovery; the task's later message still waits behind it.
           assert.strictEqual(
-            yield* ledger.getDeliveryState(deliveryIdFor("release-first")),
-            "pending",
+            yield* ledger.getDeliveryState(deliveryIdFor("stuck-first")),
+            "delivering",
           );
-          assert.deepStrictEqual(sent, []);
-          yield* TestClock.adjust("5 seconds");
-          yield* worker.deliverDue((yield* ChannelRuntime.ChannelRuntime).ownerToken);
-          assert.deepStrictEqual(sent, ["release-first", "release-later"]);
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, ["unrelated-before", "unrelated-during"]);
         }).pipe(Effect.provide(Layer.fresh(services)));
       }).pipe(Effect.provide(harness.layer));
     },
