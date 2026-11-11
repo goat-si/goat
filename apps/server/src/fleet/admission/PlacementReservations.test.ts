@@ -441,6 +441,54 @@ describe("prune and the watermark", () => {
   );
 });
 
+describe("atomicity in the real store", () => {
+  it.effect(
+    "a prune whose watermark write fails deletes nothing and leaves the watermark as it was",
+    () =>
+      Effect.gen(function* () {
+        const reservations = yield* PlacementReservations;
+        const sql = yield* SqlClient.SqlClient;
+        const commandId = yield* admitted(key("old"));
+        yield* reservations.finalize({ commandId, epoch: EPOCH, reason: "failed" });
+        yield* sql`
+        CREATE TRIGGER fail_watermark BEFORE UPDATE ON placement_watermark
+        BEGIN SELECT RAISE(ABORT, 'injected watermark failure'); END
+      `;
+        const failed = yield* reservations.prune(T0 + RETAIN_MS + 1).pipe(Effect.flip);
+        assert.strictEqual(failed._tag, "PlacementStoreError");
+        assert.strictEqual((yield* reservations.get(commandId))?.state, "fenced");
+        assert.strictEqual((yield* reservations.lookup(key("old"))).watermark, 0);
+        yield* sql`DROP TRIGGER fail_watermark`;
+        assert.deepStrictEqual(yield* reservations.prune(T0 + RETAIN_MS + 1), {
+          deleted: 1,
+          watermark: T0,
+        });
+      }).pipe(Effect.provide(store())),
+  );
+
+  it.effect(
+    "a renewal racing the sweep at the lease boundary leaves the row pending exactly when the renewal wrote",
+    () =>
+      Effect.gen(function* () {
+        const reservations = yield* PlacementReservations;
+        for (let round = 0; round < 12; round += 1) {
+          const commandId = yield* admitted(key("race-" + round));
+          const boundary = T0 + LEASE_MS + 1;
+          const [renewed] = yield* Effect.all(
+            [
+              reservations.renew({ commandId, epoch: EPOCH, now: boundary - 1 }),
+              reservations.sweep(boundary),
+            ],
+            { concurrency: "unbounded" },
+          );
+          const row = yield* reservations.get(commandId);
+          assert.strictEqual(row?.state === "pending", renewed);
+          assert.strictEqual(row?.state === "fenced", !renewed);
+        }
+      }).pipe(Effect.provide(store())),
+  );
+});
+
 describe("clock jumps", () => {
   it.effect(
     "after a prune at day 31, a clock moved back to day 26 and then into the window still reads the pruned key expired, also after a restart",

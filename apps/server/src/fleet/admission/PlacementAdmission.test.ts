@@ -34,7 +34,15 @@ const freshFile = () =>
     "state.sqlite",
   );
 
-const admissionOn = (file: string, maxThreads?: number) => {
+const admissionOn = (
+  file: string,
+  maxThreads?: number,
+  reservations: Layer.Layer<
+    Reservations.PlacementReservations,
+    never,
+    SqlClient.SqlClient
+  > = Reservations.layer,
+) => {
   const harness = makeHarness({
     runSetup: () => Effect.never,
     databaseLayer: Layer.orDie(
@@ -45,7 +53,7 @@ const admissionOn = (file: string, maxThreads?: number) => {
       : { serverSettings: { fleet: { hosts: { local: { maxThreads } } } } }),
   });
   return Admission.layer.pipe(
-    Layer.provideMerge(Layer.mergeAll(Reservations.layer, FleetHostStates.layer)),
+    Layer.provideMerge(Layer.mergeAll(reservations, FleetHostStates.layer)),
     Layer.provideMerge(harness.layer),
     Layer.provide(Layer.succeed(PlacementAdmissionEnabled, true)),
   );
@@ -345,6 +353,53 @@ describe("placement admission on the target", () => {
       assert.isTrue(Exit.isFailure(exit));
       assert.strictEqual(yield* Ref.get(launcher.calls), 0);
     }).pipe(Effect.provide(admission())),
+  );
+});
+
+describe("the counted transition seen from outside", () => {
+  it.effect(
+    "while the initial message's commit is held open, a reader sees exactly one of reservation or run, and a new key admitted meanwhile is full",
+    () => {
+      const inside = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      // Holds markCounted, and with it the commit transaction it runs in.
+      const held = Layer.effect(
+        Reservations.PlacementReservations,
+        Effect.gen(function* () {
+          const real = yield* Reservations.PlacementReservations;
+          return Reservations.PlacementReservations.of({
+            ...real,
+            markCounted: (input) =>
+              Deferred.succeed(inside, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(real.markCounted(input)),
+              ),
+          });
+        }),
+      ).pipe(Layer.provide(Reservations.layer));
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        const store = yield* Reservations.PlacementReservations;
+        const launcher = yield* makeLauncher();
+        const commandId = placementCommandId(key("held"));
+        const first = yield* place(key("held"), launcher).pipe(Effect.forkChild);
+        yield* Deferred.await(inside);
+        const counts = Effect.gen(function* () {
+          const row = yield* store.get(commandId);
+          return { reserved: row?.state === "pending" ? 1 : 0, live: yield* runningCount };
+        });
+        // A read started while the commit is open sees one side of it, never both or neither.
+        const during = yield* counts.pipe(Effect.forkChild);
+        const other = yield* makeLauncher();
+        const raced = yield* place(key("other"), other).pipe(Effect.forkChild);
+        yield* Deferred.succeed(release, undefined);
+        assert.strictEqual((yield* Fiber.join(first))._tag, "Started");
+        const seen = yield* Fiber.join(during);
+        assert.strictEqual(seen.reserved + seen.live, 1);
+        assert.deepStrictEqual(yield* counts, { reserved: 0, live: 1 });
+        assert.deepStrictEqual(yield* Fiber.join(raced), { _tag: "Refused", refusal: "full" });
+      }).pipe(Effect.provide(admissionOn(freshFile(), 1, held)));
+    },
   );
 });
 
