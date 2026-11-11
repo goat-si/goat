@@ -98,7 +98,7 @@ export const EMPTY_GOAT_BOT_SOURCE_STEPS: GoatBotSourceSteps = {
   heldFrom: null,
 };
 
-export const EMPTY_GOAT_BOT_ACTIVITY_PLACEMENT: GoatBotActivityPlacement = {
+const NO_MARKS: GoatBotActivityPlacement = {
   beforeRow: new Map(),
   trailing: null,
 };
@@ -433,7 +433,5 @@ export function goatBotActivityPlacement(input: {
     if (source.at !== null && gap === 0) continue;
     put(gap, { kind: "elsewhere", host: source.host });
   }
-  return beforeRow.size === 0 && trailing === null
-    ? EMPTY_GOAT_BOT_ACTIVITY_PLACEMENT
-    : { beforeRow, trailing };
+  return beforeRow.size === 0 && trailing === null ? NO_MARKS : { beforeRow, trailing };
 }
