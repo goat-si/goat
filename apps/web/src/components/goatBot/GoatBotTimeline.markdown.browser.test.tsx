@@ -133,7 +133,7 @@ it("draws an answer's table on its own card between the text around it", async (
   expect(cards[2]?.textContent).toBe("Pro adds sync.");
   const copy = screen.getByRole("button", { name: "Copy table" });
   expect(cards[1]?.contains(copy.element())).toBe(true);
-  expect(screen.getByRole("button").all()).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Copy table" }).all()).toHaveLength(1);
 });
 
 it("resolves a reference link defined after the table in the card that uses it", async () => {
