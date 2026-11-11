@@ -254,3 +254,36 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement publishes the new runner before it stops anything",
+  () => {
+    it.live("a publication that fails stops nothing", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        const bin = `${f.test}/mv-bin`;
+        yield* f.fs.makeDirectory(bin);
+        // The final rename of the new runner fails, as on a full or read-only disk.
+        yield* f.fs.writeFileString(
+          `${bin}/mv`,
+          `#!/bin/sh
+if [ "$2" = '${f.state}/run-t3.sh' ]; then
+  case "$1" in '${f.state}'/run-t3.next.*.restore) ;; '${f.state}'/run-t3.next.*) printf 'injected publication failure\\n' >&2; exit 73 ;; esac
+fi
+exec /bin/mv "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/mv`, 0o700);
+        f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: yield* approved(f),
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.isTrue(isAlive(f.pid));
+        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);

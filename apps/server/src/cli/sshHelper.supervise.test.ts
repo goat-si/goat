@@ -618,3 +618,46 @@ it("records a supervisor that throws as a failed replacement", async () => {
     { status: "failed", targetVersion: "2.0.0" },
   );
 });
+
+it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "a replacement that exits before it is ready is never signalled by PID",
+  async () => {
+    const { baseDir, stateDir, logFile } = tempSuperviseHome();
+    const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
+    NodeFS.writeFileSync(runnerFile, `#!${process.execPath}\nprocess.exit(3);\n`, { mode: 0o700 });
+    // The child is reaped as it exits, and its PID is then taken by another process: nothing may
+    // be signalled by that number.
+    const oldPid = deadPid();
+    const sent: Array<string | number | undefined> = [];
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (signal === 0 || signal === undefined) {
+        if (pid === oldPid) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        return true;
+      }
+      sent.push(signal);
+      return true;
+    });
+    try {
+      const result = await superviseSshRuntimeReplacement({
+        oldPid,
+        oldInstanceId: "old",
+        port: 1,
+        baseDir,
+        stateDir,
+        runnerFile,
+        previousRunnerFile: "",
+        targetVersion: "2.0.0",
+        previousVersion: "",
+        identity: "new",
+        previousIdentity: "",
+        exitTimeoutMs: 1000,
+        readyTimeoutMs: 1000,
+        logFile,
+      });
+      assert.equal(result.status, "failed");
+      assert.deepEqual(sent, []);
+    } finally {
+      kill.mockRestore();
+    }
+  },
+);
