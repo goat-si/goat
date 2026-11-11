@@ -72,6 +72,7 @@ vi.mock("~/state/entities", async (original) => {
     },
   };
 });
+vi.mock("./GoatBotNeedsYou", () => ({ GoatBotNeedsYou: () => null }));
 vi.mock("./GoatBotSidebarRow", () => ({
   GoatBotSidebarRow: ({ name }: { name: string }) => <div>{name} Main</div>,
 }));

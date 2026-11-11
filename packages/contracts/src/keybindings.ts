@@ -120,6 +120,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "composer.mode",
   "composer.workspace",
   "composer.branch",
+  "goatBot.nextAsk",
   "chat.new",
   "chat.newLocal",
   "chat.newWithoutProject",
