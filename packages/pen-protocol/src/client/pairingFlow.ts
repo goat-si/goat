@@ -408,37 +408,46 @@ async function checking(
 ): Promise<PairingView> {
   const start = deps.clock.now();
   const until = start + CHECKING_WINDOW_MS;
-  // Checking runs only for its own attempt, only after that attempt's 202 was recorded, and it starts (screen
-  // included) in turn with every other change to the record: a discard or a newer attempt is either seen here or
-  // comes after the Checking screen and is seen at the next step.
-  const pending = await update(deps, nodeId, (record) => {
-    const candidate = record.pending;
-    const own =
-      candidate !== undefined &&
-      candidate.stage === "post-202" &&
-      (expected === undefined || candidate.key.publicKey === expected);
-    if (!own) return { result: undefined };
-    deps.show({ tag: "checking", until });
-    return { result: candidate };
-  });
-  if (pending === undefined) {
-    return expected === undefined
-      ? finish(deps, { tag: "not-paired", reason: "no pairing in progress" })
-      : SUPERSEDED;
-  }
-  const attempt = pending.key.publicKey;
-  const key = loadKey(pending.key);
-  // One deadline for the whole window bounds every probe: one still unanswered at the end is ignored.
+  // One deadline for the whole window, counted from here (the store read included): no probe starts after it, and
+  // one still unanswered at it is ignored.
+  let past = false;
   let deadline: Timer | undefined;
   const expired = new Promise<"expired">((resolve) => {
-    deadline = deps.clock.setTimer(Math.max(0, until - deps.clock.now()), () => resolve("expired"));
+    deadline = deps.clock.setTimer(CHECKING_WINDOW_MS, () => {
+      past = true;
+      resolve("expired");
+    });
   });
   try {
+    // Checking runs only for its own attempt, only after that attempt's 202 was recorded, and it starts (screen
+    // included) in turn with every other change to the record: a discard or a newer attempt is either seen here or
+    // comes after the Checking screen and is seen at the next step.
+    const pending = await update(deps, nodeId, (record) => {
+      const candidate = record.pending;
+      const own =
+        candidate !== undefined &&
+        candidate.stage === "post-202" &&
+        (expected === undefined || candidate.key.publicKey === expected);
+      if (!own) return { result: undefined };
+      deps.show({ tag: "checking", until });
+      return { result: candidate };
+    });
+    if (pending === undefined) {
+      return expected === undefined
+        ? finish(deps, { tag: "not-paired", reason: "no pairing in progress" })
+        : SUPERSEDED;
+    }
+    const attempt = pending.key.publicKey;
+    const key = loadKey(pending.key);
     for (let at = start; ; at += PROBE_INTERVAL_MS) {
-      const result = await Promise.race([
-        deps.probe({ server: pending.server, key }).catch((): ProbeResult => ({ issued: false })),
-        expired,
-      ]);
+      const result = past
+        ? "expired"
+        : await Promise.race([
+            deps
+              .probe({ server: pending.server, key })
+              .catch((): ProbeResult => ({ issued: false })),
+            expired,
+          ]);
       if (result === "expired") {
         if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
         return finish(deps, { tag: "not-confirmed" });

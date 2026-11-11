@@ -305,6 +305,31 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it.each(["held", "live"] as const)(
+    "a record receiver that throws on a %s record is reported and ends the session 1011",
+    async (when) => {
+      const reported: Array<unknown> = [];
+      vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
+      try {
+        const t = setup({ relays: [A] });
+        const a = t.fake.socketFor(A);
+        await flushOpen(a);
+        const reply = answer(a);
+        const { session } = await t.result;
+        const receiver = () => {
+          throw new Error("receiver");
+        };
+        if (when === "held") a.receive(reply.send.seal(Uint8Array.of(0, 1)));
+        session.onRecord(receiver);
+        if (when === "live") a.receive(reply.send.seal(Uint8Array.of(0, 1)));
+        expect(a.closedWith).toBe(1011);
+        expect(reported).toHaveLength(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });
 
 describe("ping race (CONTRACT Several relays, kinds 0x03 and 0x04)", () => {

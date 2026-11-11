@@ -185,13 +185,17 @@ export class ResponseParser {
           break;
         }
         case "done":
-        case "upgraded":
-          if (this.#leftover.length + bytes.length - at > HTTP1_LIMITS.body) {
+        case "upgraded": {
+          const room = HTTP1_LIMITS.body - this.#leftover.length;
+          if (bytes.length - at > room) {
+            // What fits is kept first, so the bytes held at the refusal do not depend on the split.
+            this.#leftover.append(bytes.subarray(at, at + room));
             throw fail("H42", "too many bytes after the response");
           }
           this.#leftover.append(bytes.subarray(at));
           at = bytes.length;
           break;
+        }
       }
     }
   }

@@ -79,7 +79,7 @@ export class SecureSession {
       return;
     }
     if (this.#onRecord !== undefined) {
-      this.#onRecord(plaintext);
+      this.#deliver(this.#onRecord, plaintext);
       return;
     }
     if (
@@ -91,6 +91,16 @@ export class SecureSession {
     }
     this.#held.push(plaintext);
     this.#heldBytes += plaintext.length;
+  }
+
+  /** A receiver that throws ends its session (1011, WebSocket's internal error) and is reported; nothing escapes. */
+  #deliver(handler: (plaintext: Uint8Array) => void, plaintext: Uint8Array): void {
+    try {
+      handler(plaintext);
+    } catch (error) {
+      this.close(1011);
+      reportListenerError(error);
+    }
   }
 
   #onLinkClose(code: number): void {
@@ -110,7 +120,7 @@ export class SecureSession {
     // A held record that ends the session (a protocol error) ends the drain too: nothing after it is delivered.
     for (const record of this.#held.splice(0)) {
       if (this.#closedCode !== undefined) break;
-      handler(record);
+      this.#deliver(handler, record);
     }
     this.#heldBytes = 0;
   }

@@ -531,6 +531,34 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     },
   );
 
+  it("the ten minutes count from the start of Checking: a store slower than that leaves no time for a probe", async () => {
+    const pendingKey = generateX25519(() => new Uint8Array(32).fill(7));
+    const t = setup({
+      record: {
+        pending: {
+          key: {
+            privateKey: toBase64Url(pendingKey.privateKey),
+            publicKey: toBase64Url(pendingKey.publicKey),
+          },
+          stage: "post-202",
+          server: { nodeId: NODE, noisePub: "x", relays: [] },
+          startedAt: 0,
+        },
+      },
+    });
+    const gate = t.holdLoad(1);
+    const done = retryChecking(t.deps, NODE);
+    await t.when("load", 1);
+    t.clock.advance(CHECKING_WINDOW_MS + 1);
+    gate.resolve();
+    const first = await Promise.race([
+      done,
+      t.when("probe").then(() => ({ tag: "probed" }) as const),
+    ]);
+    expect(first).toEqual({ tag: "not-confirmed" });
+    expect(t.stored()?.pending?.stage).toBe("post-202");
+  });
+
   it("a probe that never answers does not hold Checking past its ten minutes: Not Confirmed comes on time", async () => {
     const pendingKey = generateX25519(() => new Uint8Array(32).fill(7));
     const t = setup({

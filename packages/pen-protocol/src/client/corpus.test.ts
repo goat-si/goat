@@ -8,7 +8,7 @@ import wsCases from "../../vectors/websocket-malformed.json" with { type: "json"
 import wsRules from "../../vectors/websocket-rules.json" with { type: "json" };
 import { fromHex, toHex } from "./bytes.ts";
 import { PenError } from "./errors.ts";
-import { ResponseParser, type ResponseEvent } from "./http1.ts";
+import { HTTP1_LIMITS, ResponseParser, type ResponseEvent } from "./http1.ts";
 import { decodeInto } from "./testing/frames.ts";
 import { FrameDecoder, type FrameEvent } from "./websocket.ts";
 
@@ -162,6 +162,26 @@ describe("HTTP/1.1 response corpus (design 10.2, vectors/http1-malformed.json)",
       }
     },
   );
+
+  it("H42: the bytes kept after a response are the same at the refusal, however they were split", () => {
+    const head = new TextEncoder().encode("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    const after = new Uint8Array(HTTP1_LIMITS.body + 1);
+    const run = (pieces: ReadonlyArray<Uint8Array>) => {
+      const parser = new ResponseParser({ method: "GET", bodyCap: 0 });
+      let error = "";
+      try {
+        for (const piece of [head, ...pieces]) parser.push(piece);
+      } catch (caught) {
+        error = (caught as PenError).code;
+      }
+      return { error, kept: parser.leftover().length };
+    };
+    const whole = run([after]);
+    expect(whole.error).toBe("http1/H42");
+    expect(run([after.subarray(0, HTTP1_LIMITS.body), after.subarray(HTTP1_LIMITS.body)])).toEqual(
+      whole,
+    );
+  });
 
   it("H36: body bytes within the cap come before the refusal, however the body is split", () => {
     const run = (pieces: ReadonlyArray<string>) => {
