@@ -14,10 +14,12 @@ func (s *Store) SetLineageShares() {
 }
 
 // selectShares is the kept set of ADR-0026: a function of the candidates alone, so nodes that have
-// exchanged their records keep the same ones whatever the arrival order.
-func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
+// exchanged their records keep the same ones whatever the arrival order. waiting holds the revokes
+// that name a subject not introduced yet; like a record whose signer is not introduced, they wait.
+func selectShares(cands []*Record) (kept map[string]*Record, keys map[string]intro, waiting map[string]bool) {
 	keys, admits := introductions(cands, true)
-	kept := make(map[string]*Record, len(admits))
+	kept = make(map[string]*Record, len(admits))
+	waiting = map[string]bool{}
 	for _, r := range admits {
 		kept[r.Hash] = r
 	}
@@ -35,7 +37,8 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 	groups := map[share][]*Record{}
 	revokes := map[revokeSlot]*Record{}
 	for _, r := range cands {
-		if r.B.Type == TypeFound || r.B.Type == TypeAdmit {
+		// An admit this version cannot read introduces nobody; it is an ordinary record of its signer.
+		if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && !r.Opaque {
 			continue
 		}
 		k, ok := keys[r.B.By]
@@ -44,6 +47,7 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 		}
 		if r.B.Type == TypeRevoke && !r.Opaque {
 			if !allIntroduced(keys, r.B.Subjects) {
+				waiting[r.Hash] = true
 				continue
 			}
 			for _, sub := range r.B.Subjects {
@@ -79,7 +83,7 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 			kept[r.Hash] = r
 		}
 	}
-	return kept, keys
+	return kept, keys, waiting
 }
 
 func allIntroduced(keys map[string]intro, subjects []string) bool {
@@ -115,15 +119,16 @@ func (s *Store) mergeShared(recs []*Record) []*Record {
 	if len(seen) == 0 {
 		return nil
 	}
-	kept, keys := selectShares(cands)
-	// A record whose signer is not introduced yet waits in the bounded pool for its admit; one left out
-	// of a share is dropped.
+	kept, keys, waiting := selectShares(cands)
+	// A record whose signer (or revoke subject) is not introduced yet waits in the bounded pool for its
+	// admit; one left out of a share is dropped. Hash order makes the pool's evictions the same everywhere.
+	sortByHash(cands)
 	for _, r := range cands {
 		if kept[r.Hash] != nil {
 			s.poolRemove(r)
 			continue
 		}
-		if _, ok := keys[r.B.By]; ok {
+		if _, ok := keys[r.B.By]; ok && !waiting[r.Hash] {
 			s.poolRemove(r)
 		} else if _, waiting := s.pool[r.Hash]; !waiting && r.B.By != s.self {
 			s.poolAdd(r)
