@@ -50,6 +50,19 @@ export interface LocalOpenCodexRoute {
   readonly reason: string;
 }
 
+const CODEX_REASON = "Codex effective endpoint must use the device's OpenCodex port.";
+// This URL comes from Codex's config/read, after verifyEffectiveCodexRoute for a
+// managed Home route. An inspect-only "connected" label is insufficient evidence.
+const codexStatus = (provider: ServerProvider | undefined, port: number) => {
+  const effective =
+    provider?.status === "ready" ? provider.codexRoute?.effectiveBaseUrl : undefined;
+  return effective === undefined
+    ? ("unproven" as const)
+    : usesLocalPort(effective, port, "/v1")
+      ? ("ok" as const)
+      : ("failed" as const);
+};
+
 /**
  * Which enabled provider instances reach models through this device's OpenCodex on `port`.
  * Drivers OpenCodex does not wire (cloud agents, Cursor, Grok) are not listed: they never use it.
@@ -95,18 +108,7 @@ export function localOpenCodexRoutes(input: {
       }
     }
     if (entry.driver === "codex") {
-      // This URL comes from Codex's config/read, after verifyEffectiveCodexRoute for a
-      // managed Home route. An inspect-only "connected" label is insufficient evidence.
-      const effective =
-        provider?.status === "ready" ? provider.codexRoute?.effectiveBaseUrl : undefined;
-      add(
-        effective === undefined
-          ? "unproven"
-          : usesLocalPort(effective, input.port, "/v1")
-            ? "ok"
-            : "failed",
-        "Codex effective endpoint must use the device's OpenCodex port.",
-      );
+      add(codexStatus(provider, input.port), CODEX_REASON);
     } else if (entry.driver === "claudeAgent") {
       const value =
         entry.environment?.find(({ name }) => name === "ANTHROPIC_BASE_URL")?.value ??
@@ -138,4 +140,30 @@ export function localOpenCodexRoutes(input: {
     }
   }
   return routes;
+}
+
+/**
+ * Parity evidence for Codex instances the device runs without a settings entry (its built-in
+ * one). Kept out of localOpenCodexRoutes: hub-down admission reads that list, and listing these
+ * there would pause work that never needed the Home.
+ */
+export function builtInCodexWiring(input: {
+  readonly instances: ServerSettings["providerInstances"];
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly port: number;
+}): Array<LocalOpenCodexRoute> {
+  return input.providers
+    .filter(
+      (provider) =>
+        provider.driver === "codex" &&
+        provider.enabled &&
+        provider.executionLocation !== "cloud" &&
+        !Object.hasOwn(input.instances, provider.instanceId),
+    )
+    .map((provider) => ({
+      instanceId: provider.instanceId,
+      driver: provider.driver,
+      status: codexStatus(provider, input.port),
+      reason: CODEX_REASON,
+    }));
 }

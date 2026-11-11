@@ -59,3 +59,38 @@ it("tells a never-read conversation from one whose shell has not loaded", async 
   expect((await view.show({ ...base, lastVisitedAt: null }))?.readUpTo).toBeNull();
   await view.unmount();
 });
+
+it("keeps a moment away apart from the opening boundary, so a reply read before it stays read", async () => {
+  const view = await mount({ ...base, reading: true });
+  const opened = await view.show({ ...base, reading: true });
+  // A reply arrives and is read in the chat; then Control Center opens and another reply comes.
+  await view.show({ ...base, reading: true, lastVisitedAt: "T2", newestAt: "N2" });
+  await view.show({ ...base, reading: false, lastVisitedAt: "T2", newestAt: "N2" });
+  const away = await view.show({ ...base, reading: false, lastVisitedAt: "T2", newestAt: "N3" });
+  expect(away).toMatchObject({ key: opened?.key, readUpTo: "T1", newestAtOpen: "N1" });
+  expect(away?.away).toEqual([{ after: "N2", upTo: "N3" }]);
+  // Back in the chat, the moment away is kept; a later reply is read as it arrives.
+  await view.show({ ...base, reading: true, lastVisitedAt: "T2", newestAt: "N3" });
+  const later = await view.show({ ...base, reading: true, lastVisitedAt: "T3", newestAt: "N4" });
+  expect(later?.away).toEqual([{ after: "N2", upTo: "N3" }]);
+  await view.unmount();
+});
+
+it("counts a reply that arrives in the same moment the person steps away as unread", async () => {
+  const view = await mount({ ...base, reading: true });
+  await view.show({ ...base, reading: true });
+  // Control Center opens as the reply lands: the person never saw N2.
+  const away = await view.show({ ...base, reading: false, newestAt: "N2" });
+  expect(away?.away).toEqual([{ after: "N1", upTo: "N2" }]);
+  await view.unmount();
+});
+
+it("counts a reply that arrives in the same moment the person comes back as unread", async () => {
+  const view = await mount({ ...base, reading: true });
+  await view.show({ ...base, reading: true });
+  await view.show({ ...base, reading: false });
+  // Back from Control Center as the reply lands: it came while the person was away.
+  const back = await view.show({ ...base, reading: true, newestAt: "N2" });
+  expect(back?.away).toEqual([{ after: "N1", upTo: "N2" }]);
+  await view.unmount();
+});

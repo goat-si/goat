@@ -1,5 +1,6 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
 import { useRef, useState, type ReactNode } from "react";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import {
   Modal,
   Pressable,
@@ -29,12 +30,16 @@ export function MobileBotProfileSheet(props: {
   const [purpose, setPurpose] = useState(props.initial.purpose);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A new bot needs only a name and a look; what it is for and its model can come later.
+  const [moreOpen, setMoreOpen] = useState(props.mode === "edit");
+  const create = props.mode === "create";
   const blankName = name.trim() === "";
   // A missing name is pointed out once the person leaves the field or saves, not while they start.
   const [nameChecked, setNameChecked] = useState(false);
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<TextInputInstance>(null);
   const saveDisabled = busy || !props.canSubmit;
+  const saveLabel = create ? (busy ? "Creating…" : "Create") : busy ? "Saving…" : "Save";
 
   const save = async () => {
     if (saveDisabled) return;
@@ -77,14 +82,14 @@ export function MobileBotProfileSheet(props: {
           </Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Save"
+            accessibilityLabel={saveLabel}
             accessibilityState={{ disabled: saveDisabled }}
             disabled={saveDisabled}
             onPress={() => void save()}
             className="min-h-[44px] justify-center px-2"
           >
             <Text className={saveDisabled ? "text-foreground-muted" : "text-foreground"}>
-              {busy ? "Saving…" : "Save"}
+              {saveLabel}
             </Text>
           </Pressable>
         </View>
@@ -103,7 +108,10 @@ export function MobileBotProfileSheet(props: {
             maxLength={64}
             editable={!busy}
             onChangeText={setName}
-            onBlur={() => setNameChecked(true)}
+            // Leaving a name the person never typed in, say to open More, is not a mistake yet.
+            onBlur={() => {
+              if (name !== props.initial.name) setNameChecked(true);
+            }}
             className={INPUT}
           />
           {nameMissing ? (
@@ -121,18 +129,38 @@ export function MobileBotProfileSheet(props: {
             onChangeText={setAvatar}
             className={INPUT}
           />
-          <Text className="text-foreground">Purpose</Text>
-          <TextInput
-            accessibilityLabel="Purpose"
-            value={purpose}
-            maxLength={4000}
-            editable={!busy}
-            multiline
-            placeholder="What should this bot help with?"
-            onChangeText={setPurpose}
-            className={INPUT + " min-h-[120px]"}
-          />
-          {props.children}
+          {create ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="More"
+              accessibilityState={{ expanded: moreOpen }}
+              onPress={() => setMoreOpen((open) => !open)}
+              className="min-h-[44px] flex-row items-center gap-1 self-start"
+            >
+              <SymbolView
+                name={moreOpen ? "chevron.down" : "chevron.right"}
+                size={12}
+                tintColorClassName="accent-icon-muted"
+              />
+              <Text className="text-foreground-muted">More</Text>
+            </Pressable>
+          ) : null}
+          {moreOpen ? (
+            <>
+              <Text className="text-foreground">Purpose</Text>
+              <TextInput
+                accessibilityLabel="Purpose"
+                value={purpose}
+                maxLength={4000}
+                editable={!busy}
+                multiline
+                placeholder="What should this bot help with?"
+                onChangeText={setPurpose}
+                className={INPUT + " min-h-[120px]"}
+              />
+              {props.children}
+            </>
+          ) : null}
           {error ? (
             <Text accessibilityRole="alert" className="text-danger-foreground">
               {error}

@@ -3,6 +3,7 @@ import {
   type ChannelBotRef,
   type ChannelIngestInput,
   type ChannelListBotThreadsInput,
+  type ChannelQuestionId,
   type ChannelTaskId,
   type ChatAttachment,
   type EnvironmentId,
@@ -21,6 +22,7 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
+import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
 
 const NO_WORK: ReadonlyArray<GoatBotWorkRef> = Object.freeze([]);
@@ -38,6 +40,9 @@ const PENDING_REMOTE_WINDOW_MS = 2 * 60_000;
  * go through `ingest`, which returns once the server stored the message; the reply arrives on
  * the bot thread. Sends are not serialized: the bot takes a new message while work runs.
  */
+/** How long the task change stream stays open after its last view unmounts. */
+const TASK_CHANGES_IDLE_TTL_MS = 2_000;
+
 export function createChannelEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
@@ -256,6 +261,29 @@ export function createChannelEnvironmentAtoms<R, E>(
       staleTimeMs: 2_000,
     }),
     listBotThreads,
+    listOpenAsks: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-open-asks",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,
+      staleTimeMs: 2_000,
+    }),
+    /** Whether this client may read open asks; without it the strip shows nothing. */
+    listOpenAsksPermission: createCommandPermissions(
+      runtime,
+      CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,
+    ).permissionAtom,
+    /**
+     * "Read again" for the owner's channel tasks, one stream per environment however many views
+     * use it. It closes soon after the last one unmounts: the server allows few per connection.
+     */
+    taskChanges: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:channel:task-changes",
+      tag: CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
+      idleTtlMs: TASK_CHANGES_IDLE_TTL_MS,
+    }),
+    taskChangesPermission: createCommandPermissions(
+      runtime,
+      CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
+    ).permissionAtom,
     listBotNotes: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-notes",
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
@@ -336,13 +364,15 @@ export function createChannelEnvironmentAtoms<R, E>(
  * instead of a second message.
  */
 export function goatBotIngestInput(input: {
-  readonly bot: ChannelBotRef;
+  readonly bot: Pick<ChannelBotRef, "environmentId" | "threadId">;
   readonly text: string;
   /** Uploads this server already holds; the gateway refuses any other file. */
   readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly clientMessageId: string;
   readonly receivedAt: string;
   readonly taskId?: ChannelTaskId;
+  /** With taskId: the card's question this answers, sent as an answer the server checks. */
+  readonly questionId?: ChannelQuestionId;
 }): ChannelIngestInput {
   return {
     kind: "goat",
@@ -359,8 +389,11 @@ export function goatBotIngestInput(input: {
     text: input.text,
     attachments: input.attachments ?? [],
     receivedAt: input.receivedAt,
-    intent: "message",
-    ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+    ...(input.taskId === undefined
+      ? { intent: "message" as const }
+      : input.questionId === undefined
+        ? { intent: "message" as const, taskId: input.taskId }
+        : { intent: "answer" as const, taskId: input.taskId, questionId: input.questionId }),
   };
 }
 

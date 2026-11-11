@@ -1,5 +1,6 @@
 import {
   type EnvironmentAuthorizationError,
+  type HandoffError,
   type ProviderHostSyncDriver,
   ProviderHostSyncError,
   type ProviderSyncHostState,
@@ -15,6 +16,11 @@ import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 export type Failure = ProviderHostSyncError | EnvironmentAuthorizationError;
 export const fail = (code: ProviderHostSyncError["code"], detail: string) =>
   new ProviderHostSyncError({ code, detail });
+/** A failed ask keeps the hold's words, so the agent learns which card it waits on. */
+export const askFailed = (error: HandoffError) =>
+  error.reason === "limit_reached"
+    ? fail("invalid_request", error.message)
+    : fail("unavailable", "Could not ask for approval. Try again.");
 
 /** How a remote call failed, in the words a person acts on. */
 export type RemoteFailure = {

@@ -10,14 +10,7 @@ import * as SettingsSessionPermit from "./auth/settingsSessionPermit.ts";
 import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
-import {
-  CHANNEL_GATEWAY_WS_METHODS,
-  ChannelGatewayError,
-  HubProxyRpcError,
-  MemoryRpcError,
-  OrchestrationDispatchCommandError,
-  SLACK_CHANNEL_WS_METHODS,
-} from "@goat/contracts";
+import { threadForkRpcHandlers } from "./orchestration-v2/goat/ThreadForkRpc.ts";
 import * as Crypto from "effect/Crypto";
 import * as Clock from "effect/Clock";
 import { installRelayClient } from "./cloud/installRelayClient.ts";
@@ -121,6 +114,12 @@ import {
   type PullRequestRef,
   type ScheduledTaskListResult,
   AutomationResumeError,
+  CHANNEL_GATEWAY_WS_METHODS,
+  ChannelGatewayError,
+  HubProxyRpcError,
+  MemoryRpcError,
+  OrchestrationDispatchCommandError,
+  SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -2176,6 +2175,7 @@ export const layerWsRpc = (
                 ),
             ),
           ),
+        ...(yield* threadForkRpcHandlers(startup)),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": input.commandId,

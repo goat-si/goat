@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationV2ThreadProjection } from "@goat/contracts";
+import { RunId, ThreadId, type OrchestrationV2ThreadProjection } from "@goat/contracts";
 
 import {
   canForkProjectedAssistantItem,
   deriveThreadQueueWorkflowState,
   resolveLatestMergeBackRun,
+  threadForkAvailability,
   threadSupportsProviderHandoff,
 } from "./threadWorkflows.ts";
 
@@ -409,4 +410,89 @@ describe("thread workflows", () => {
       expect(resolveLatestMergeBackRun(projection)).toBeNull();
     },
   );
+});
+
+describe("thread fork availability", () => {
+  type AvailabilityInput = Parameters<typeof threadForkAvailability>[0];
+  type AvailabilityOverrides = {
+    readonly thread?: Partial<AvailabilityInput["thread"]>;
+    readonly capabilities?: AvailabilityInput["capabilities"];
+    readonly project?: AvailabilityInput["project"];
+    readonly cloud?: boolean;
+    readonly viaHubProxy?: boolean;
+  };
+  const availability = (overrides?: AvailabilityOverrides): AvailabilityInput => ({
+    thread: {
+      latestRunId: RunId.make("run"),
+      worktreePath: null,
+      ...overrides?.thread,
+    },
+    capabilities: overrides?.capabilities ?? { threadForkWorkspace: true },
+    project: overrides?.project ?? { isGitRepository: true, isScratch: false },
+    cloud: overrides?.cloud ?? false,
+    viaHubProxy: overrides?.viaHubProxy ?? false,
+  });
+
+  it.each([
+    [
+      "a side chat cannot be forked",
+      { thread: { sideChatOf: ThreadId.make("parent") } },
+      { canFork: false, canForkIntoWorktree: false, reason: "A side chat cannot be forked." },
+    ],
+    [
+      "a thread with no finished turn cannot be forked",
+      { thread: { latestRunId: null } },
+      {
+        canFork: false,
+        canForkIntoWorktree: false,
+        reason: "This thread has no turn to fork from yet.",
+      },
+    ],
+    [
+      "a server that forks offers both the checkout and a new worktree",
+      {},
+      { canFork: true, canForkIntoWorktree: true, inWorktree: false, reason: null },
+    ],
+    [
+      "a server without fork support offers only the same checkout",
+      { capabilities: {} },
+      { canFork: true, canForkIntoWorktree: false, inWorktree: false, reason: null },
+    ],
+    [
+      "a hub-proxied server without fork support asks for an update",
+      { capabilities: {}, viaHubProxy: true },
+      {
+        canFork: false,
+        canForkIntoWorktree: false,
+        reason: "Update this server to fork from here.",
+      },
+    ],
+    [
+      "a cloud thread cannot fork into a worktree",
+      { cloud: true },
+      { canFork: true, canForkIntoWorktree: false, reason: null },
+    ],
+    [
+      "a scratch project cannot fork into a worktree",
+      { project: { isGitRepository: true, isScratch: true } },
+      { canFork: true, canForkIntoWorktree: false, reason: null },
+    ],
+    [
+      "a non-git project cannot fork into a worktree",
+      { project: { isGitRepository: false, isScratch: false } },
+      { canFork: true, canForkIntoWorktree: false, reason: null },
+    ],
+    [
+      "an unknown project still offers a worktree fork",
+      { project: null },
+      { canFork: true, canForkIntoWorktree: true, reason: null },
+    ],
+    [
+      "a thread already in a worktree reports it",
+      { thread: { worktreePath: "/workspace/fork" } },
+      { canFork: true, canForkIntoWorktree: true, inWorktree: true, reason: null },
+    ],
+  ] as const)("reports what the fork entry offers when %s", (_label, overrides, expected) => {
+    expect(threadForkAvailability(availability(overrides))).toMatchObject(expected);
+  });
 });

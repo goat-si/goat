@@ -5,7 +5,8 @@
 #   & ([scriptblock]::Create((irm <relay>/install.ps1))) --up                 (then start a new mesh on this machine)
 # --name N names this machine for --join, --login or --up. The node uses every relay in PEN_RELAYS; one or more
 # --relay URL replace that list. pen downloads from PEN_RELAY, which invites name in their install line.
-# pen.exe goes to %LOCALAPPDATA%\Programs\pen (PEN_INSTALL_DIR overrides it and then leaves PATH alone).
+# pen.exe goes to %LOCALAPPDATA%\Programs\pen (PEN_INSTALL_DIR overrides it and then leaves PATH alone, as
+# PEN_NO_MODIFY_PATH=1 does).
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -83,7 +84,7 @@ if (Test-Path -LiteralPath $tmp) { Fail "could not remove its download $tmp; pen
 Write-Output "installed $pen ($Version)"
 
 $cmd = 'pen'
-if (-not $env:PEN_INSTALL_DIR) {
+if (-not $env:PEN_INSTALL_DIR -and $env:PEN_NO_MODIFY_PATH -ne '1') {
 	$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 	$parts = @(); if ($userPath) { $parts = $userPath -split ';' | Where-Object { $_ } }
 	if ($parts -notcontains $dir) {

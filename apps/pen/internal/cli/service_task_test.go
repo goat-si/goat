@@ -1216,3 +1216,35 @@ func TestAResumedLeaveRefusesWhileADaemonHoldsItsLock(t *testing.T) {
 		t.Fatalf("pen leave deleted files under a running daemon: %v", err)
 	}
 }
+
+// A daemon.lock that cannot be opened as a file (a folder) makes the daemon's state unknown, so a
+// resumed pen leave must not delete anything under it.
+func TestAResumedLeaveRefusesWhenDaemonLockCannotBeChecked(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st, calls := windowsHome(t, func(string, []string) error { return nil })
+	soloNode(t, st, rs.URL)
+	if err := st.WriteAtomic(daemon.LeftMarker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := st.Path("daemon.lock")
+	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lockPath, "held"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := RunLeave(nil, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "daemon.lock") {
+		t.Fatalf("pen leave: exit %d, %q %q; want a refusal naming daemon.lock", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(st.Path("identity.json")); err != nil {
+		t.Fatalf("pen leave deleted files when daemon.lock could not be checked: %v", err)
+	}
+	if slices.ContainsFunc(*calls, func(c string) bool { return strings.Contains(c, "/Delete") }) {
+		t.Fatalf("pen leave deleted the task when daemon.lock could not be checked: %q", *calls)
+	}
+}

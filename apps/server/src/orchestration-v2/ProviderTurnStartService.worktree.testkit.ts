@@ -156,7 +156,9 @@ export function makeWorktreeStartHarness(
             );
           },
         }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          settleTurnStart: () => Effect.void,
+        }),
         Layer.mock(ProviderAuthService.ProviderAuthService)({
           tryHandlePromptCommand: () => Effect.succeed(false),
         }),

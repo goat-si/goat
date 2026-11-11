@@ -89,6 +89,8 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member, limit time.Duration) s
 			return "not taken: the relay is busy (4429); it syncs again within 10 minutes"
 		case wire.CodeMeshFull:
 			return "not taken: its mesh is full (4508)"
+		case wire.CodeEpoch:
+			return "not taken: it runs an older Pen than this mesh needs (4509)"
 		case wire.CodeNotKept:
 			return "not taken: it cannot write its state folder (4507)"
 		}
@@ -148,6 +150,15 @@ func OpenTCP(ctx context.Context, relays []string, id *ident.Identity, m mesh.Me
 		return nil, err
 	}
 	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "tcp", Port: port})
+}
+
+// OpenService opens a kind 0x01 service stream for name on member m and returns the confirmed session.
+func OpenService(ctx context.Context, relays []string, id *ident.Identity, m mesh.Member, name string) (*session.Secure, error) {
+	noise, err := ident.DecodeKey(m.NoisePub)
+	if err != nil {
+		return nil, err
+	}
+	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "service", Name: name})
 }
 
 // Join runs the joiner side of tok against its relay and returns the verified set (not yet saved).

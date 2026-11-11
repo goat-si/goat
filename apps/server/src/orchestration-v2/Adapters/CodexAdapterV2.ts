@@ -6,6 +6,7 @@ import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
 import { makeCodexMemoryDelivery } from "./CodexMemoryDelivery.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
+import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import { makeCodexAssistantText } from "./CodexAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
@@ -38,8 +39,6 @@ import {
   completeCodexTurnTokenUsage,
   type CodexTurnTokenUsageState,
 } from "../../provider/CodexTurnTokenUsage.ts";
-import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
-import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
 import { withCodexManagedFailure, failureResetAt } from "../../provider/CodexManagedFailure.ts";
 import {
   buildCodexInitializeParams,
@@ -59,7 +58,6 @@ import {
   parseGoalCommand,
   ProviderDriverKind,
   ProviderSetupError,
-  type ServerProviderCompatibilityAdvisory,
 } from "@goat/contracts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import {
@@ -67,10 +65,14 @@ import {
   codexImageGenerationProjection,
   type CodexImageGenerationItem,
 } from "./CodexGeneratedImageMarkdown.ts";
+import { CodexAppServerClientFactory } from "./CodexAppServerClientFactory.ts";
+import type { CodexAdapterV2Hooks, CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
+export type { CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
 import {
-  CodexAppServerClientFactory,
-  type CodexAppServerClientFactoryShape,
-} from "./CodexAppServerClientFactory.ts";
+  listCodexModelSlugs,
+  makeCodexModelArrivals,
+  reconnectsKeptProcess,
+} from "./CodexModelArrivals.ts";
 export {
   CodexAppServerClientFactory,
   layerAppServerClientFactory,
@@ -313,6 +315,7 @@ export const CodexProviderCapabilitiesV2 = {
     canForkFromTurn: true,
     canForkFromSubagentThread: true,
     exposesNativeThreadId: true,
+    forkHonorsTargetCwd: true,
   },
   turns: {
     exposesNativeTurnId: true,
@@ -1404,7 +1407,7 @@ export type CodexAdapterV2DriverEnv =
 
 export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapterV2")(function* (
   { instanceId, environment, enabled, config }: ProviderAdapterDriverCreateInput<CodexSettings>,
-  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime" | "compatibility"> = {},
+  hooks: CodexAdapterV2Hooks = {},
 ) {
   const clientFactory = yield* CodexAppServerClientFactory;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
@@ -1459,38 +1462,6 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
   create: createCodexAdapterV2,
 };
 
-export interface CodexAdapterV2Options {
-  /** L5 binds committed snapshot authority, including snapshot-only sessions. */
-  readonly currentMemoryPolicy?: (
-    threadId: ThreadId,
-  ) => Effect.Effect<MemorySnapshot.MemorySnapshotPolicy>;
-  /** L5 supplies the manager's scoped credential publication stream. */
-  readonly mcpCredentialRotations?: Stream.Stream<{
-    readonly threadId: ThreadId;
-    readonly providerInstanceId: ProviderInstanceId;
-  }>;
-  readonly instanceId: ProviderInstanceId;
-  readonly settings: CodexSettings;
-  readonly environment: NodeJS.ProcessEnv;
-  readonly sessionConfigKey?: string;
-  readonly clientFactory: CodexAppServerClientFactoryShape;
-  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
-  readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
-  readonly compatibility?: (
-    version: string,
-  ) => Effect.Effect<ServerProviderCompatibilityAdvisory | undefined>;
-  readonly crypto: Crypto.Crypto;
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly serverConfig: ServerConfig["Service"];
-  /** Omitting this leaves late completions projection-only. */
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
-}
-
 const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) => {
   const { memoryContext: _body, ...rest } = input;
   return rest;
@@ -1503,6 +1474,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   const derivedCache = yield* MemoryDerivedCache.MemoryDerivedCache;
   const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
+  const detached = yield* Effect.serviceOption(CodexDetachedAppServers);
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const memorySnapshots = Option.getOrUndefined(
     yield* Effect.serviceOption(MemorySnapshot.MemorySnapshot),
@@ -1600,6 +1572,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }).pipe(toOpenSessionError)
             : [];
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
+        const { offeredModels } = adapterOptions;
+        // A kept process read its catalog in an earlier GOAT run, so what GOAT offers now says nothing.
+        const offeredAtStart =
+          offeredModels === undefined
+            ? undefined
+            : (yield* reconnectsKeptProcess({
+                  detached,
+                  survivors,
+                  instanceId: adapterOptions.instanceId,
+                  providerSessionId: input.providerSessionId,
+                  threadId: input.threadId,
+                }))
+              ? []
+              : yield* offeredModels;
         const client = yield* clientFactory
           .open({
             instanceId: adapterOptions.instanceId,
@@ -1893,7 +1879,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           scope,
         });
-        const events = yield* survivorHooks.makeSessionEvents(input.providerSessionId);
+        const events = yield* survivorHooks.makeSessionEvents(
+          input.providerSessionId,
+          Effect.suspend(() => Ref.get(activeTurns)).pipe(Effect.map(Survivor.startedRootTurns)),
+        );
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
@@ -7298,6 +7287,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           events: Stream.fromEffectRepeat(Queue.take(events)),
           canReuseContextUsage: canReuseCodexContextUsage,
           reopenAfterClose: true,
+          ...(offeredModels === undefined || offeredAtStart === undefined
+            ? {}
+            : {
+                modelStatus: makeCodexModelArrivals({
+                  atStart: offeredAtStart,
+                  offered: offeredModels,
+                  listServed: ensureInitialized.pipe(
+                    Effect.andThen(
+                      listCodexModelSlugs((params) => client.request("model/list", params)),
+                    ),
+                  ),
+                }),
+              }),
           ...makeCodexLiveWork({
             client,
             activeTurns: Ref.get(activeTurns),

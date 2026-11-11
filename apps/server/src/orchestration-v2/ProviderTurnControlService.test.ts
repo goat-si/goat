@@ -312,6 +312,7 @@ it.effect(
           release: () => Effect.void,
           detach: () => Effect.void,
           otherWorkingThreads: () => Effect.succeed([]),
+          settleTurnStart: () => Effect.void,
           releaseUnlessBusy: () => Effect.succeed(true),
         }),
       );

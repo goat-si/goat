@@ -1,4 +1,4 @@
-import { act, type ReactNode } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
@@ -48,7 +48,9 @@ const state = vi.hoisted(() => ({
   cause: null as unknown,
   refresh: vi.fn(),
   requested: vi.fn(),
+  copy: vi.fn(async (_text: string) => true),
 }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: state.copy }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     listBotNotes: (target: unknown) => {
@@ -68,6 +70,7 @@ vi.mock("../../state/query", () => ({
   }),
 }));
 import { MobileBotMemory } from "./MobileBotMemory";
+import type { MobileNoteWordings } from "./mobileNoteWordings";
 
 const environmentId = EnvironmentId.make("env");
 const older = { index: 0, date: null, text: "Keep replies short" };
@@ -90,20 +93,32 @@ function setup(options: { data?: unknown; cause?: unknown } = {}) {
   state.refresh.mockReset();
   state.requested.mockReset();
 }
+// The home keeps the wordings being written; this holds them the same way.
+function Memory(props: Props) {
+  const [wordings, setWordings] = useState<MobileNoteWordings>(new Map());
+  return (
+    <MobileBotMemory
+      environmentId={environmentId}
+      connected
+      supported
+      member={false}
+      wordings={wordings}
+      onWordingChange={(note, wording) =>
+        setWordings((current) => {
+          const next = new Map(current);
+          if (wording === null) next.delete(note);
+          else next.set(note, wording);
+          return next;
+        })
+      }
+      {...props}
+    />
+  );
+}
 async function render(props: Props = {}) {
   document.body.appendChild(container);
   if (!root) root = createRoot(container);
-  await act(async () =>
-    root?.render(
-      <MobileBotMemory
-        environmentId={environmentId}
-        connected
-        supported
-        member={false}
-        {...props}
-      />,
-    ),
-  );
+  await act(async () => root?.render(<Memory {...props} />));
 }
 const button = (label: string) =>
   [...container.querySelectorAll("button")].find((item) => item.textContent === label);
@@ -138,7 +153,7 @@ it("says when there are no notes yet, and a member's tab says they are shared", 
 
 it("Ask to forget drafts the quoted note and nothing else", async () => {
   setup();
-  const onDraft = vi.fn();
+  const onDraft = vi.fn(() => true);
   await render({ onDraft });
   await press("Ask to forget");
   expect(onDraft).toHaveBeenCalledTimes(1);
@@ -147,7 +162,7 @@ it("Ask to forget drafts the quoted note and nothing else", async () => {
 
 it("Ask to change asks for the new wording first, then drafts the quoted change", async () => {
   setup();
-  const onDraft = vi.fn();
+  const onDraft = vi.fn(() => true);
   await render({ onDraft });
   await press("Ask to change");
   const field = container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]')!;
@@ -227,7 +242,7 @@ it("asks again when opened and whenever the bot answers or a task moves on", asy
 });
 it("a new list drops an open change so new wording never lands on another note", async () => {
   setup();
-  await render({ onDraft: () => {} });
+  await render({ onDraft: () => true });
   // The older note is index 0; once it is forgotten the newer note becomes index 0.
   const changes = [...container.querySelectorAll("button")].filter(
     (item) => item.textContent === "Ask to change",
@@ -237,9 +252,201 @@ it("a new list drops an open change so new wording never lands on another note",
     older.text,
   );
   state.data = { revision: "r2", notes: [{ ...newer, index: 0 }], truncated: false };
-  await render({ onDraft: () => {} });
+  await render({ onDraft: () => true });
   expect(container.textContent).toContain(newer.text);
   expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+});
+async function typeWording(text: string) {
+  const field = container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]')!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+it("keeps a note's new wording when the bot writes another note meanwhile", async () => {
+  setup();
+  await render({ onDraft: () => true });
+  const changes = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to change",
+  );
+  await act(async () => changes[1]?.click());
+  await typeWording("Keep replies very short");
+  // The bot adds a note: the file's revision changes and every line moves down one place.
+  state.data = {
+    revision: "r2",
+    notes: [{ index: 2, date: "2026-11-11", text: "Use metric units" }, { ...newer }, { ...older }],
+    truncated: false,
+  };
+  await render({ onDraft: () => true });
+  expect(container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]')?.value).toBe(
+    "Keep replies very short",
+  );
+});
+
+it("shows a new wording on its own, to copy or discard, once its note is gone", async () => {
+  setup();
+  await render({ onDraft: () => true });
+  const changes = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to change",
+  );
+  await act(async () => changes[1]?.click());
+  await typeWording("Keep replies very short");
+  state.data = { revision: "r2", notes: [{ ...newer, index: 0 }], truncated: false };
+  await render({ onDraft: () => true });
+  // It never lands on another note.
+  expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+  expect(container.textContent).toContain("“Keep replies short” changed while you wrote");
+  expect(container.textContent).toContain("Keep replies very short");
+  state.copy.mockClear();
+  await press("Copy");
+  expect(state.copy).toHaveBeenCalledWith("Keep replies very short", { target: "new wording" });
+  await press("Discard");
+  expect(container.textContent).not.toContain("Keep replies very short");
+});
+
+it("a note whose text names an object property still lists and can be changed", async () => {
+  setup({
+    data: {
+      revision: "r",
+      notes: [{ index: 0, date: null, text: "constructor" }],
+      truncated: false,
+    },
+  });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  expect(container.textContent).toContain("constructor");
+  expect(button("Ask to change")).toBeDefined();
+  await press("Ask to change");
+  await typeWording("toString");
+  await press("Fill message");
+  expect(onDraft).toHaveBeenCalledWith(goatBotChangeNoteMessage("constructor", "toString"));
+});
+
+const editorAfter = (date: string) => {
+  const text = container.textContent ?? "";
+  const field = container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]');
+  return { field, after: field !== null && text.indexOf(date) < text.lastIndexOf("Discard") };
+};
+
+it("opens the change on the note pressed when two notes read the same but differ by date", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 1, date: "2026-11-10", text: "Keep replies short" },
+        { index: 0, date: "2026-11-01", text: "Keep replies short" },
+      ],
+      truncated: false,
+    },
+  });
+  await render({ onDraft: () => true });
+  const changes = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to change",
+  );
+  await act(async () => changes[1]?.click());
+  // Only the older note opens its editor; the newer one still offers Ask to change.
+  expect(container.querySelectorAll('[aria-label="New wording"]')).toHaveLength(1);
+  const text = container.textContent ?? "";
+  expect(text.indexOf("2026-11-01")).toBeLessThan(text.indexOf("Discard"));
+  expect(text.indexOf("Ask to change")).toBeLessThan(text.indexOf("2026-11-01"));
+  // A new read with both notes still there keeps the wording on the older one.
+  await typeWording("Keep replies very short");
+  state.data = {
+    revision: "r2",
+    notes: (state.data as { notes: unknown[] }).notes,
+    truncated: false,
+  };
+  await render({ onDraft: () => true });
+  expect(editorAfter("2026-11-01")).toMatchObject({ after: true });
+  expect(editorAfter("2026-11-01").field?.value).toBe("Keep replies very short");
+});
+
+it("offers no fill for a note whose text another note shares, since the request could change the other one", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 2, date: "2026-11-11", text: "Use metric units" },
+        { index: 1, date: "2026-11-10", text: "Keep replies short" },
+        { index: 0, date: "2026-11-01", text: "Keep replies short" },
+      ],
+      truncated: false,
+    },
+  });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  const changes = () =>
+    [...container.querySelectorAll("button")].filter(
+      (item) => item.textContent === "Ask to change",
+    );
+  await act(async () => changes()[2]?.click());
+  await typeWording("Keep replies very short");
+  expect(button("Fill message")).toBeUndefined();
+  expect(container.textContent).toContain(
+    "Two notes read “Keep replies short”, so GOAT Bot can't tell which one you mean.",
+  );
+  state.copy.mockClear();
+  await press("Copy");
+  expect(state.copy).toHaveBeenCalledWith("Keep replies very short", { target: "new wording" });
+  expect(onDraft).not.toHaveBeenCalled();
+  // The wording survives another read of the file.
+  state.data = { ...(state.data as object), revision: "r2" };
+  await render({ onDraft });
+  expect(container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]')?.value).toBe(
+    "Keep replies very short",
+  );
+  // A note with text of its own still fills as before.
+  await act(async () => changes()[0]?.click());
+  const fields = container.querySelectorAll<HTMLTextAreaElement>('[aria-label="New wording"]');
+  const unique = fields[0]!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(unique, "Use metric units only");
+    unique.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await press("Fill message");
+  expect(onDraft).toHaveBeenCalledWith(
+    goatBotChangeNoteMessage("Use metric units", "Use metric units only"),
+  );
+  await press("Discard");
+  expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+});
+
+it("keeps a wording apart when a new read leaves identical notes it cannot tell apart", async () => {
+  const same = { date: "2026-11-10", text: "Keep replies short" };
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 1, ...same },
+        { index: 0, ...same },
+      ],
+      truncated: false,
+    },
+  });
+  await render({ onDraft: () => true });
+  const changes = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to change",
+  );
+  await act(async () => changes[1]?.click());
+  expect(container.querySelectorAll('[aria-label="New wording"]')).toHaveLength(1);
+  await typeWording("Keep replies very short");
+  state.data = {
+    revision: "r2",
+    notes: [
+      { index: 2, ...same },
+      { index: 1, ...same },
+      { index: 0, date: null, text: "Other" },
+    ],
+    truncated: false,
+  };
+  await render({ onDraft: () => true });
+  expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+  expect(container.textContent).toContain("Keep replies very short");
+  expect(button("Copy")).toBeDefined();
+  expect(button("Discard")).toBeDefined();
 });
 const sourced = (index: number, text: string, extra: Record<string, unknown> = {}) => ({
   index,
@@ -289,7 +496,7 @@ it("keeps replaced notes behind a toggle that says whether it is open", async ()
       truncated: false,
     },
   });
-  await render({ onDraft: () => {} });
+  await render({ onDraft: () => true });
   expect(container.textContent).toContain("Replaces: “Reply in Korean”");
   expect(container.textContent).not.toContain("Replaced by:");
   expect(button("Show replaced notes (1)")?.getAttribute("aria-expanded")).toBe("false");
@@ -307,7 +514,7 @@ it("keeps replaced notes behind a toggle that says whether it is open", async ()
 
 it("a correction that arrives while a change is open drops the change and hides the old note", async () => {
   setup({ data: { revision: "r1", notes: [sourced(0, "Reply in Korean")], truncated: false } });
-  await render({ onDraft: () => {}, refreshKey: "a" });
+  await render({ onDraft: () => true, refreshKey: "a" });
   await press("Ask to change");
   expect(container.querySelector('[aria-label="New wording"]')).not.toBeNull();
   state.data = {
@@ -318,7 +525,7 @@ it("a correction that arrives while a change is open drops the change and hides 
     ],
     truncated: false,
   };
-  await render({ onDraft: () => {}, refreshKey: "b" });
+  await render({ onDraft: () => true, refreshKey: "b" });
   expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
   expect(
     [...container.querySelectorAll("button")].filter(
@@ -350,4 +557,39 @@ it("says when every note has been replaced", async () => {
   expect(container.textContent).toContain("No current notes.");
   await press("Show replaced notes (1)");
   expect(container.textContent).toContain("Replaced by a later note");
+});
+
+it("offers no forget request for a note whose text another note shares, and still forgets one of its own", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 2, date: "2026-11-11", text: "Use metric units" },
+        { index: 1, date: "2026-11-10", text: "Keep replies short" },
+        { index: 0, date: "2026-11-01", text: "Keep replies short" },
+      ],
+      truncated: false,
+    },
+  });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  const forgets = () =>
+    [...container.querySelectorAll("button")].filter(
+      (item) => item.textContent === "Ask to forget",
+    );
+  // The older of the two "Keep replies short" notes.
+  await act(async () => forgets()[2]?.click());
+  expect(onDraft).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(
+    "Two notes read “Keep replies short”, so GOAT Bot can't tell which one you mean.",
+  );
+  state.copy.mockClear();
+  await press("Copy");
+  expect(state.copy).toHaveBeenCalledWith("Keep replies short", { target: "note" });
+  await press("Discard");
+  expect(container.textContent).not.toContain("so GOAT Bot can't tell which one you mean");
+  expect(onDraft).not.toHaveBeenCalled();
+  // A note with text of its own still drafts its forget request.
+  await act(async () => forgets()[0]?.click());
+  expect(onDraft).toHaveBeenCalledWith(goatBotForgetNoteMessage("Use metric units"));
 });

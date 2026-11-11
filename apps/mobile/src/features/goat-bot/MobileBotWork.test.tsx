@@ -9,6 +9,9 @@ import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
+}));
 vi.mock("react-native", () => ({
   Platform: nativePlatform,
   Switch: ({
@@ -33,6 +36,18 @@ vi.mock("react-native", () => ({
   ),
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  FlatList: (
+    props: {
+      data: ReadonlyArray<{ key: string }>;
+      renderItem: (info: { item: { key: string }; index: number }) => ReactNode;
+    } & Record<string, unknown>,
+  ) => (
+    <div>
+      {props.data.map((item, index) => (
+        <div key={item.key}>{props.renderItem({ item, index })}</div>
+      ))}
+    </div>
+  ),
   Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
     visible ? <div>{children}</div> : null,
   Alert: { alert: vi.fn() },
@@ -90,6 +105,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
 vi.mock("../../native/StackHeader", () => ({

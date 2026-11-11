@@ -354,19 +354,22 @@ Claude instances can also compact idle threads for you. See
 
 ## Side chat
 
-On web and desktop, send `/side <question>` to ask about the current thread without
-adding to it. The question opens in a **Side chat** tab in the right panel, and its
-answers never enter the thread's history. Send `/side` alone, use the side chat button
-in the thread header, or press `Mod+/` to open or close the tab.
+Send `/side <question>` to ask about the current thread without adding to it. Its
+answers never enter the thread's history. On web and desktop, the question opens
+in a **Side chat** tab in the right panel. Send `/side` alone, use the side chat button
+in the thread header, or press `Mod+/` to open or close the tab. On mobile, `/side` is
+in the `/` menu at the start of a message in an existing thread, and the side chat opens
+as its own screen; `/side` alone opens it without asking anything, and `/btw` works the
+same way.
 
 The side chat starts from the conversation up to the last finished turn, and every
 question you send it also carries the thread's current state: whether it is working,
 interrupted, or waiting on you, its goal, its task list, and its latest messages. You can
-ask what the thread is doing while the agent is still working, and the side chat header
-shows the thread's status. It has the full composer, with the thread's model, workspace,
-and permission mode. It is meant for questions and leaves files alone unless you ask it
-to change something. Use **Start a new side chat** to discard it, or **Open as a full
-thread** to continue it on its own.
+ask what the thread is doing while the agent is still working. It has the full composer,
+with the thread's model, workspace, and permission mode. It is meant for questions and
+leaves files alone unless you ask it to change something. On web and desktop, the side
+chat header shows the thread's status; use **Start a new side chat** to discard it, or
+**Open as a full thread** to continue it on its own.
 
 ## Goals
 

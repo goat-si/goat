@@ -1,4 +1,4 @@
-import type { ModelSelection, ThreadId } from "@goat/contracts";
+import { ORCHESTRATION_V2_WS_METHODS, type ModelSelection, type ThreadId } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -95,6 +95,7 @@ import {
   visitThread,
   watchThreadPullRequest,
 } from "../operations/commands.ts";
+import { forkThread } from "../operations/forkThread.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
@@ -402,6 +403,17 @@ export function createThreadEnvironmentAtoms<R, E>(
     forkAsSideChat: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:fork-as-side-chat",
       execute: (input: ForkThreadAsSideChatInput) => forkThreadAsSideChat(input),
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sourceThreadId]),
+      },
+    }),
+    /** Fork into the source's checkout or a new worktree; the source environment's capability picks the route. */
+    fork: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:fork",
+      tag: ORCHESTRATION_V2_WS_METHODS.forkThread,
+      execute: forkThread,
       scheduler,
       concurrency: {
         mode: "serial",

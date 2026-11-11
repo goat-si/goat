@@ -108,6 +108,7 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
         : [ChannelQuestionId.make(need.question.requestId)]),
     ]),
   ],
+  answeredQuestions: task.answeredQuestions ?? [],
   ...(task.skillProposal === undefined ? {} : { askInChat: true as const }),
   ...(task.completionReport === undefined ? {} : { completionReport: task.completionReport }),
   ...(task.observed === undefined ? {} : { observed: task.observed }),
@@ -337,6 +338,7 @@ export const narrationFor = (
         : {
             kind: "receipt" as const,
             text: task.title + " → " + event.payload.target.placementReason,
+            interim: true,
           };
     case "task.completed":
       if (task.kind === "turn") {
@@ -361,10 +363,10 @@ export const narrationFor = (
       };
     case "task.progress":
       return event.payload.milestone === true
-        ? { kind: "receipt" as const, text: event.payload.summary }
+        ? { kind: "receipt" as const, text: event.payload.summary, interim: true }
         : undefined;
     case "task.moved":
-      return { kind: "receipt" as const, text: movedNarration(event.payload) };
+      return { kind: "receipt" as const, text: movedNarration(event.payload), interim: true };
     case "task.cancelled":
       return { kind: "failure" as const, text: "Stopped: " + task.title };
     case "task.question.opened":
@@ -373,6 +375,7 @@ export const narrationFor = (
         text: event.payload.question.text,
         options: event.payload.question.options,
         questionId: event.payload.question.questionId,
+        questionKind: "task" as const,
       };
     default:
       return undefined;

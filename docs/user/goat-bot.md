@@ -13,9 +13,10 @@ task as a card in the conversation.
 
 ## Bots
 
-The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with a
-name, an emoji, a purpose and a model, and its own conversation and task list. A bot answers
-under its own name and purpose from its next conversation session.
+The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with its
+own conversation and task list. A new bot needs only a name and a look: its purpose and model sit
+under **More** and can change later. A bot answers under its own name and purpose from its next
+conversation session.
 
 - Edit any bot, including the main one, from its row menu (long press on mobile), **Edit bot** in
   its home (its name at the top of its chat on web and desktop), or **Settings → GOAT Bot →
@@ -35,6 +36,10 @@ under its own name and purpose from its next conversation session.
   history, mail, messages or saved credentials only when you ask about it.
 - Agents can list your bots with `goat_channel_bot_list`; they can't create bots or send work to
   them.
+
+On web and desktop, **Needs you** above the Bots list collects open questions, approvals and
+other requests that need your attention, including requests from hidden bots. Expand it and select
+an item to open its task. Use the **Open next bot ask** command to move through them.
 
 ## The face
 

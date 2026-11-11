@@ -44,6 +44,10 @@ import {
 } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import {
+  materializeWorkspaceSnapshot,
+  type MaterializeWorkspaceSnapshotInput,
+} from "./GitWorkspaceSnapshotMaterialize.ts";
 import { chunkPathsForGitCheckIgnore } from "./gitCheckIgnoreChunks.ts";
 import { parseGitRemoteVerboseOutput } from "./gitRemoteParsing.ts";
 
@@ -366,6 +370,8 @@ export interface GitWorkspaceSnapshotResult {
   readonly snapshotRef: string;
   readonly commitOid: string;
   readonly addedUntrackedPaths: ReadonlyArray<string>;
+  /** False when the snapshot omitted contents it could not read. */
+  readonly complete: boolean;
 }
 
 export class GitVcsDriver extends Context.Service<
@@ -886,10 +892,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly cwd: string;
     readonly ref: string;
     readonly strict: boolean;
-  }): Effect.fn.Return<
-    GitWorkspaceSnapshotResult & { readonly complete: boolean },
-    VcsError | GitWorkspaceSnapshotError
-  > {
+  }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
     const readUntracked = Effect.fn("GitVcsDriver.snapshot.readUntracked")(function* () {
       const paths = yield* execute({
@@ -1732,11 +1735,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     capabilities,
     execute,
     captureWorkspaceSnapshot: (input: GitWorkspaceSnapshotInput) =>
-      captureTree({
-        cwd: input.cwd,
-        ref: input.snapshotRef,
-        strict: true,
-      }).pipe(Effect.map(({ complete: _complete, ...snapshot }) => snapshot)),
+      captureTree({ cwd: input.cwd, ref: input.snapshotRef, strict: true }),
+    materializeWorkspaceSnapshot: (input: MaterializeWorkspaceSnapshotInput) =>
+      materializeWorkspaceSnapshot({ execute, fileSystem, path }, input),
     checkpoints,
     detectRepository,
     isInsideWorkTree,

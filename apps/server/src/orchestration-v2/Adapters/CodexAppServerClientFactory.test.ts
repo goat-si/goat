@@ -44,6 +44,7 @@ it.effect("a socket attempt that leaves an unstoppable process refuses the stdio
             socketTransportEnabled: true,
             socketTransportMode: "socket",
             listPreservedForSession: () => Effect.succeed([]),
+            ensureReleasedClear: () => Effect.void,
             open: () => Effect.fail(new CodexDetachedAppServerError({ detail: "not ready" })),
             ensureNotBlocked: () =>
               Effect.suspend(() =>
@@ -96,6 +97,7 @@ it.effect("socket and stdio launches both cap Codex's jemalloc arenas", () =>
             socketTransportEnabled: true,
             socketTransportMode: "socket",
             listPreservedForSession: () => Effect.succeed([]),
+            ensureReleasedClear: () => Effect.void,
             ensureNotBlocked: () => Effect.void,
             open: (input) =>
               Effect.sync(() => launchEnvs.push(input.env)).pipe(
@@ -172,6 +174,7 @@ it.effect("automatic transport uses the project survival setting before opening 
             socketTransportEnabled: false,
             socketTransportMode: "auto",
             listPreservedForSession: () => Effect.succeed([]),
+            ensureReleasedClear: () => Effect.void,
             ensureNotBlocked: () => Effect.void,
             open: () =>
               Effect.sync(() => {
@@ -228,6 +231,7 @@ it.effect("an identified survivor never falls back to a new Codex process", () =
               } as never),
           }),
           Layer.mock(CodexSurvivors.CodexSurvivors)({
+            list: Effect.succeed([]),
             get: () =>
               Effect.succeed({
                 instanceId,
@@ -239,9 +243,11 @@ it.effect("an identified survivor never falls back to a new Codex process", () =
               }),
           }),
           Layer.mock(CodexDetachedAppServers)({
+            settleKept: () => Effect.succeed("connect" as const),
             socketTransportEnabled: true,
             socketTransportMode: "socket",
             listPreservedForSession: () => Effect.succeed([]),
+            ensureReleasedClear: () => Effect.void,
             ensureNotBlocked: () => Effect.void,
             connectExisting: () =>
               Effect.sync(() => {
@@ -312,6 +318,7 @@ it.effect(
                 ]),
             }),
             Layer.mock(CodexDetachedAppServers)({
+              settleKept: () => Effect.succeed("connect" as const),
               socketTransportEnabled: true,
               socketTransportMode: "socket",
               ensureNotBlocked: () => Effect.void,
@@ -373,6 +380,7 @@ it.effect("a preserved process reconnects after its last goal block clears", () 
             listGoalBlocksByInstance: () => Effect.succeed([]),
           }),
           Layer.mock(CodexDetachedAppServers)({
+            settleKept: () => Effect.succeed("connect" as const),
             socketTransportEnabled: true,
             socketTransportMode: "socket",
             ensureNotBlocked: () => Effect.void,

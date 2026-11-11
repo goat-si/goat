@@ -5,6 +5,8 @@ import {
   OrchestrationV2ContextTransfer,
   OrchestrationV2DispatchCommandResult,
   OrchestrationV2ThreadForkSourcePoint,
+  OrchestrationV2ThreadForkResult,
+  OrchestrationV2ThreadForkWorkspace,
   OrchestratorMcpFailure,
   OrchestratorMcpPendingRequestListInput,
   OrchestratorMcpPendingRequestListResult,
@@ -33,6 +35,7 @@ import { Tool, Toolkit } from "effect/ai";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadForkWorkspace from "../../../orchestration-v2/goat/ThreadForkWorkspace.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -181,9 +184,11 @@ const ThreadForkTool = Tool.make(agentSurfaceRegistry["thread.fork"].name, {
       threadId: Schema.optional(ThreadId),
       sourcePoint: OrchestrationV2ThreadForkSourcePoint,
       title: Schema.optional(TrimmedNonEmptyString),
+      workspace: Schema.optional(OrchestrationV2ThreadForkWorkspace),
     }),
   ),
-  success: transferResult,
+  success: OrchestrationV2ThreadForkResult,
+  dependencies: [...commandTool.dependencies, ThreadForkWorkspace.ThreadForkWorkspaceService],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.fork"]));
 const ThreadMergeBackTool = Tool.make(agentSurfaceRegistry["thread.merge_back"].name, {
   ...commandTool,

@@ -2,8 +2,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
-  CHECK_IN_DEFAULT_TIME,
-  CHECK_IN_DEFAULT_WEEKDAYS,
   checkInRoutineInput,
   findCheckInRoutine,
   WEEKDAY_LABELS,
@@ -19,28 +17,45 @@ import { Platform, Pressable, Text, View } from "react-native";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useThreadShell } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
+import {
+  closedCheckInDraft,
+  MOBILE_CHECK_IN_DRAFT,
+  type MobileCheckInDraft,
+  type MobileCheckInDraftUpdate,
+  nextCheckInRequest,
+} from "./mobileCheckInDraft";
 
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
-/** Offers the one-tap check-in routine while the bot has none, and creates it. */
+/**
+ * Offers the one-tap check-in routine while the bot has none, and creates it. A draft still open
+ * when the routine arrives stays, so a change made while saving can still update it.
+ */
 export function MobileBotCheckInForm(props: {
   readonly environmentId: EnvironmentId;
   readonly botThreadId: ThreadId;
   readonly tasks: readonly Pick<ScheduledTask, "id" | "title" | "threadId">[];
   readonly botName?: string;
+  readonly draft: MobileCheckInDraft;
+  readonly onDraftChange: MobileCheckInDraftUpdate;
 }) {
   const bot = useThreadShell(scopeThreadRef(props.environmentId, props.botThreadId));
   const canCreate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(props.environmentId),
   );
-  const [open, setOpen] = useState(false);
-  const [timeOfDay, setTimeOfDay] = useState(CHECK_IN_DEFAULT_TIME);
-  const [weekdays, setWeekdays] = useState<readonly number[]>(CHECK_IN_DEFAULT_WEEKDAYS);
+  const { draft, onDraftChange } = props;
+  const { open, timeOfDay, weekdays, error } = draft;
+  const saving = draft.pending !== null;
+  const setOpen = (value: boolean) =>
+    onDraftChange((current) => (value ? { ...current, open: true } : closedCheckInDraft(current)));
+  const setTimeOfDay = (value: string) =>
+    onDraftChange((current) => ({ ...current, timeOfDay: value, edits: current.edits + 1 }));
+  const setWeekdays = (value: readonly number[]) =>
+    onDraftChange((current) => ({ ...current, weekdays: value, edits: current.edits + 1 }));
   const [pickingTime, setPickingTime] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const botName = props.botName ?? "GOAT Bot";
-  if (!canCreate || findCheckInRoutine(props.tasks, props.botThreadId) !== undefined) return null;
+  const existing = findCheckInRoutine(props.tasks, props.botThreadId) !== undefined;
+  if (!canCreate || (existing && !open)) return null;
   if (!open) {
     return (
       <Pressable
@@ -58,8 +73,9 @@ export function MobileBotCheckInForm(props: {
   };
   const save = async () => {
     if (bot === null || saving) return;
-    setSaving(true);
-    setError(null);
+    const saved = draft.edits;
+    const request = nextCheckInRequest();
+    onDraftChange((current) => ({ ...current, pending: request, error: null }));
     const result = await runAtomCommand(
       appAtomRegistry,
       serverEnvironment.upsertScheduledTask,
@@ -75,19 +91,32 @@ export function MobileBotCheckInForm(props: {
       },
       { label: "GOAT Bot check-in routine", reportFailure: false },
     );
-    setSaving(false);
+    // The draft lives above this form, which may have scrolled away: settle it there if this save
+    // is still its own, and close it only if nothing changed while it saved.
+    const settle = (next: (current: MobileCheckInDraft) => MobileCheckInDraft) =>
+      onDraftChange((current) => (current.pending === request ? next(current) : current));
     if (result._tag === "Success") {
-      setOpen(false);
+      settle((current) =>
+        current.edits === saved
+          ? { ...MOBILE_CHECK_IN_DRAFT, edits: current.edits }
+          : { ...current, pending: null },
+      );
       return;
     }
-    if (isAtomCommandInterrupted(result)) return;
+    if (isAtomCommandInterrupted(result)) {
+      settle((current) => ({ ...current, pending: null }));
+      return;
+    }
     const failure = squashAtomCommandFailure(result);
-    setError(failure instanceof Error ? failure.message : String(failure));
+    const message = failure instanceof Error ? failure.message : String(failure);
+    settle((current) => ({ ...current, pending: null, error: message }));
   };
   return (
     <View className="gap-2 border-b border-border py-2">
       <Text className="text-foreground-muted">
-        {botName} looks over your open work and messages you only when something needs you.
+        {existing
+          ? `${botName} already checks in on you. Save to change when.`
+          : `${botName} looks over your open work and messages you only when something needs you.`}
       </Text>
       <Pressable
         accessibilityRole="button"

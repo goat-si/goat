@@ -103,3 +103,42 @@ it("centers the example buttons under the title", async () => {
   for (const button of examples)
     expect(Math.abs(center(button) - center(title))).toBeLessThanOrEqual(1);
 });
+
+it("has its status region before the first message, so the first reading is heard", async () => {
+  const now = "2026-10-15T00:00:00.000Z";
+  vi.setSystemTime(Date.parse(now));
+  using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+  const bot = { environmentId: EnvironmentId.make("local"), threadId: ThreadId.make("bot") };
+  const view = (
+    rows: Parameters<typeof GoatBotChatView>[0]["rows"],
+    replyingSince: string | null,
+  ) => (
+    <GoatBotChatView
+      availability={{ kind: "ready", bot }}
+      canOperate
+      rows={rows}
+      replyingSince={replyingSince}
+      onSend={() => {}}
+      onRetryInput={() => {}}
+      legacyAgentRoute={null}
+    />
+  );
+  await using screen = await render(view([], null));
+  const region = screen.container.querySelector('[role="status"][aria-live="polite"]');
+  expect(region?.textContent).toBe("");
+  const first = {
+    kind: "bot" as const,
+    id: "b1",
+    text: "Hello",
+    createdAt: "2026-10-15T00:00:00.000Z",
+    tone: "reply" as const,
+    proactive: false,
+    replyTo: null,
+    options: [],
+    firstInGroup: true,
+    groupPosition: "single" as const,
+  };
+  await screen.rerender(view([first], now));
+  await expect.poll(() => region?.textContent).toBe("Reading your message");
+  expect(screen.container.querySelector('[role="status"][aria-live="polite"]')).toBe(region);
+});

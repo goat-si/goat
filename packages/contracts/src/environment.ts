@@ -191,6 +191,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
+  /** Serves orchestration.forkThread, which can give a fork its own worktree. */
+  threadForkWorkspace: Schema.optionalKey(Schema.Boolean),
   threadStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   /** Branch PR references include fork-origin PRs; older servers drop them. */
@@ -227,6 +229,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server answers `POST /.well-known/goat/runtime/drain`: it can stop admitting turns, drain,
       and exit on its own for a replacement. Servers without it are attach-only. */
   drainRestart: Schema.optionalKey(Schema.Boolean),
+  /** A drain request may ask the server to start its successor itself (`relaunch`). Older
+      servers ignore that key and only stop, so callers check this first. */
+  runtimeRelaunch: Schema.optionalKey(Schema.Boolean),
   /** Server answers `POST /.well-known/goat/runtime/session`, so an SSH client can attach to it
       without starting its own server. The GOAT app's server is attached this way. */
   runtimeSessions: Schema.optionalKey(Schema.Boolean),
@@ -238,6 +243,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotHome: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.getBotStatus`. Older servers leave clients paging `listTasks`. */
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.listOpenAsks`: each open question and approval across bots. */
+  goatBotOpenAsks: Schema.optionalKey(Schema.Boolean),
+  /** Server streams `channel.subscribeTaskChanges`; with older ones clients read on open and focus. */
+  goatBotTaskChanges: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
