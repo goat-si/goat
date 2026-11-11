@@ -19,6 +19,7 @@ import {
   Pressable,
   Text,
   TextInput,
+  type TextInputInstance,
   View,
   useWindowDimensions,
 } from "react-native";
@@ -401,16 +402,34 @@ export function GoatBotScreen(props: {
       accent,
     ],
   );
-  // A drafted request (New routine, Ask to change or forget) fills only an empty message box.
+  const inputRef = useRef<TextInputInstance>(null);
+  // Photos still being read after the picker closed; they join the message when they arrive.
+  const [intake, setIntake] = useState(0);
+  // Where the caret goes once the home sheet has gone, after a request filled the box from it.
+  const focusOnDismiss = useRef<number | null>(null);
+  const focusInput = (caret: number) => {
+    inputRef.current?.focus();
+    inputRef.current?.setSelection(caret, caret);
+  };
+  const sheetGone = () => {
+    const caret = focusOnDismiss.current;
+    focusOnDismiss.current = null;
+    if (caret !== null) focusInput(caret);
+  };
+  // A drafted request (New routine, Ask to change or forget) fills only an empty message box; the
+  // caller keeps its sheet and wording when the box is taken.
   const draft = (request: string) => {
-    if (text.trim().length > 0 || attachments.length > 0) {
+    if (text.trim().length > 0 || attachments.length > 0 || intake > 0) {
       Alert.alert(
         "Your message is still in the box",
         "Send or clear it, then try again to start this request.",
       );
-      return;
+      return false;
     }
     setText(request);
+    if (homeOpen) focusOnDismiss.current = request.length;
+    else focusInput(request.length);
+    return true;
   };
   const send = () => {
     if (session.onSend(text, attachments)) {
@@ -464,7 +483,12 @@ export function GoatBotScreen(props: {
         <MobileBotWork
           taskId={taskId}
           open={homeOpen}
-          onOpenChange={setHomeOpen}
+          onOpenChange={(next) => {
+            setHomeOpen(next);
+            // iOS reports the sheet's dismissal; Android's modal is gone once it is hidden.
+            if (!next && Platform.OS === "android") sheetGone();
+          }}
+          onDismissed={sheetGone}
           chipFace={
             Platform.OS === "android" ? (
               <GoatBotChipFace
@@ -648,6 +672,7 @@ export function GoatBotScreen(props: {
         />
         {/* Two rows on a phone: the field, then attach, model and send under the thumb. */}
         <TextInput
+          ref={inputRef}
           accessibilityLabel={`Message ${title}`}
           placeholder={`Message ${title}`}
           placeholderTextColorClassName="accent-placeholder"
@@ -677,6 +702,7 @@ export function GoatBotScreen(props: {
               existingCount={attachments.length}
               maxUploadBytes={support.maxUploadBytes}
               getLifetime={() => pickerLifetime.current?.signal}
+              onIntake={(change) => setIntake((count) => count + change)}
               onPicked={(picked) => {
                 if (!pickerLifetime.current || pickerLifetime.current.signal.aborted) {
                   releaseGoatBotAttachments(picked);

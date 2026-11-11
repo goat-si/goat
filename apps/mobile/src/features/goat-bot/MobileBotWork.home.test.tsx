@@ -58,7 +58,7 @@ const state = vi.hoisted(() => ({
   detail: null as null | { status: string; data: boolean; error: string | null },
   messages: [] as object[],
   life: [] as string[],
-  draft: vi.fn(),
+  draft: vi.fn(() => true),
   openTask: vi.fn(),
   openThread: vi.fn(),
   workRevision: null as string | null,

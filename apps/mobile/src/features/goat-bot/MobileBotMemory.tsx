@@ -26,7 +26,8 @@ export function MobileBotMemory(props: {
   readonly member: boolean;
   readonly botName?: string;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
-  readonly onDraft?: ((text: string) => void) | undefined;
+  /** Fills the chat's message box; false when it was refused and nothing changed. */
+  readonly onDraft?: ((text: string) => boolean) | undefined;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly refreshKey?: string | undefined;
 }) {
@@ -88,7 +89,7 @@ function MobileNoteList(props: {
   readonly revision: string | null;
   readonly notes: ReadonlyArray<ChannelBotNote>;
   readonly truncated: boolean;
-  readonly onDraft: ((text: string) => void) | undefined;
+  readonly onDraft: ((text: string) => boolean) | undefined;
   readonly botName: string;
 }) {
   const view = goatBotNotesView({ notes: props.notes, truncated: props.truncated });
@@ -159,7 +160,7 @@ function MobileNoteList(props: {
 function MobileNoteRow(props: {
   readonly note: ChannelBotNote;
   readonly source: string | null;
-  readonly onDraft: ((text: string) => void) | undefined;
+  readonly onDraft: ((text: string) => boolean) | undefined;
 }) {
   const { note, onDraft } = props;
   const [wording, setWording] = useState<string | null>(null);
@@ -211,8 +212,8 @@ function MobileNoteRow(props: {
               disabled={draft === null || !canAsk}
               onPress={() => {
                 if (draft === null) return;
-                onDraft?.(draft);
-                setWording(null);
+                // A refused fill keeps the new wording so the person can try again.
+                if (onDraft?.(draft)) setWording(null);
               }}
               className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
             >

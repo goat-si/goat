@@ -138,7 +138,7 @@ it("says when there are no notes yet, and a member's tab says they are shared", 
 
 it("Ask to forget drafts the quoted note and nothing else", async () => {
   setup();
-  const onDraft = vi.fn();
+  const onDraft = vi.fn(() => true);
   await render({ onDraft });
   await press("Ask to forget");
   expect(onDraft).toHaveBeenCalledTimes(1);
@@ -147,7 +147,7 @@ it("Ask to forget drafts the quoted note and nothing else", async () => {
 
 it("Ask to change asks for the new wording first, then drafts the quoted change", async () => {
   setup();
-  const onDraft = vi.fn();
+  const onDraft = vi.fn(() => true);
   await render({ onDraft });
   await press("Ask to change");
   const field = container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]')!;
@@ -227,7 +227,7 @@ it("asks again when opened and whenever the bot answers or a task moves on", asy
 });
 it("a new list drops an open change so new wording never lands on another note", async () => {
   setup();
-  await render({ onDraft: () => {} });
+  await render({ onDraft: () => true });
   // The older note is index 0; once it is forgotten the newer note becomes index 0.
   const changes = [...container.querySelectorAll("button")].filter(
     (item) => item.textContent === "Ask to change",
@@ -237,7 +237,7 @@ it("a new list drops an open change so new wording never lands on another note",
     older.text,
   );
   state.data = { revision: "r2", notes: [{ ...newer, index: 0 }], truncated: false };
-  await render({ onDraft: () => {} });
+  await render({ onDraft: () => true });
   expect(container.textContent).toContain(newer.text);
   expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
 });
@@ -289,7 +289,7 @@ it("keeps replaced notes behind a toggle that says whether it is open", async ()
       truncated: false,
     },
   });
-  await render({ onDraft: () => {} });
+  await render({ onDraft: () => true });
   expect(container.textContent).toContain("Replaces: “Reply in Korean”");
   expect(container.textContent).not.toContain("Replaced by:");
   expect(button("Show replaced notes (1)")?.getAttribute("aria-expanded")).toBe("false");
@@ -307,7 +307,7 @@ it("keeps replaced notes behind a toggle that says whether it is open", async ()
 
 it("a correction that arrives while a change is open drops the change and hides the old note", async () => {
   setup({ data: { revision: "r1", notes: [sourced(0, "Reply in Korean")], truncated: false } });
-  await render({ onDraft: () => {}, refreshKey: "a" });
+  await render({ onDraft: () => true, refreshKey: "a" });
   await press("Ask to change");
   expect(container.querySelector('[aria-label="New wording"]')).not.toBeNull();
   state.data = {
@@ -318,7 +318,7 @@ it("a correction that arrives while a change is open drops the change and hides 
     ],
     truncated: false,
   };
-  await render({ onDraft: () => {}, refreshKey: "b" });
+  await render({ onDraft: () => true, refreshKey: "b" });
   expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
   expect(
     [...container.querySelectorAll("button")].filter(

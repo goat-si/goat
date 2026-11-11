@@ -81,7 +81,10 @@ export function MobileBotWork(props: {
   /** The main bot, named on a member's inherited model. */
   readonly main?: Pick<BotProfile, "name"> | null;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
-  readonly onDraft?: ((text: string) => void) | undefined;
+  /** Fills the chat's message box; false when the box already holds a message. */
+  readonly onDraft?: ((text: string) => boolean) | undefined;
+  /** The sheet has finished going away (iOS). */
+  readonly onDismissed?: (() => void) | undefined;
   /** Task cards in the conversation; the Tasks tab lists the ones the server no longer does. */
   readonly chatTasks?: ReadonlyArray<GoatBotTaskCard>;
   /** The transcript's card for the task this screen shows, for a task the server no longer lists. */
@@ -365,8 +368,7 @@ export function MobileBotWork(props: {
           onNewRoutine={
             props.onDraft
               ? () => {
-                  closeSheet();
-                  props.onDraft?.(GOAT_BOT_NEW_ROUTINE_DRAFT);
+                  if (props.onDraft?.(GOAT_BOT_NEW_ROUTINE_DRAFT)) closeSheet();
                 }
               : undefined
           }
@@ -399,8 +401,9 @@ export function MobileBotWork(props: {
             onDraft={
               props.onDraft
                 ? (text) => {
-                    closeSheet();
-                    props.onDraft?.(text);
+                    const taken = props.onDraft?.(text) === true;
+                    if (taken) closeSheet();
+                    return taken;
                   }
                 : undefined
             }
@@ -529,6 +532,7 @@ export function MobileBotWork(props: {
         animationType="slide"
         presentationStyle="pageSheet"
         allowSwipeDismissal
+        onDismiss={props.onDismissed}
         // iOS calls this when the sheet is swiped away; Android when back leaves a peek first.
         onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >

@@ -1,4 +1,12 @@
-import { act, useState, type ReactNode } from "react";
+import {
+  act,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { createRoot } from "react-dom/client";
 import type { GoatBotRow, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import {
@@ -17,6 +25,35 @@ const session = vi.hoisted(() => ({
   onSend: vi.fn(() => true),
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
   refresh: vi.fn(),
+  attachments: false,
+}));
+// The message box's native focus and caret, and a photo the picker is still reading.
+const box = vi.hoisted(() => ({
+  focus: vi.fn(),
+  setSelection: vi.fn(),
+  pick: null as null | ((value: { attachments: object[]; error?: string }) => void),
+}));
+vi.mock("../../lib/composerImages", () => ({
+  pickComposerMedia: () =>
+    new Promise((resolve) => {
+      box.pick = resolve;
+    }),
+  pickComposerFiles: async () => ({ files: [] }),
+}));
+vi.mock("../threads/ComposerAttachmentButton", () => ({
+  ComposerAttachmentButton: (props: { onPickMedia: () => void }) => (
+    <button onClick={props.onPickMedia}>Photo Library</button>
+  ),
+}));
+vi.mock("../../components/ComposerAttachmentStrip", () => ({
+  ComposerAttachmentStrip: () => null,
+}));
+vi.mock("../../components/ui/Dialog", () => ({ alert: vi.fn() }));
+vi.mock("../../state/use-composer-drafts", () => ({
+  releaseUnusedComposerAttachmentFiles: async () => {},
+}));
+vi.mock("../../lib/composerAttachmentFiles", () => ({
+  retainComposerAttachmentFile: () => () => {},
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -33,8 +70,23 @@ vi.mock("react-native", () => ({
       ))}
     </div>
   ),
-  Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
-    visible ? <section aria-label="Work sheet">{children}</section> : null,
+  // Like iOS, a sheet reports its dismissal once it has gone.
+  Modal: function Modal({
+    children,
+    visible,
+    onDismiss,
+  }: {
+    children?: ReactNode;
+    visible: boolean;
+    onDismiss?: () => void;
+  }) {
+    const shown = useRef(visible);
+    useEffect(() => {
+      if (shown.current && !visible) onDismiss?.();
+      shown.current = visible;
+    }, [visible, onDismiss]);
+    return visible ? <section aria-label="Work sheet">{children}</section> : null;
+  },
   Alert: { alert: vi.fn() },
   Switch: () => null,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -54,23 +106,32 @@ vi.mock("react-native", () => ({
     </button>
   ),
   TextInput: ({
+    ref,
     value,
     onChangeText,
     accessibilityLabel,
     accessibilityState,
   }: {
+    ref?: Ref<{ focus: () => void; setSelection: (start: number, end: number) => void }>;
     value?: string;
     onChangeText?: (text: string) => void;
     accessibilityLabel?: string;
     accessibilityState?: { disabled?: boolean };
-  }) => (
-    <textarea
-      aria-label={accessibilityLabel}
-      aria-disabled={accessibilityState?.disabled}
-      value={value}
-      onChange={(event) => onChangeText?.(event.currentTarget.value)}
-    />
-  ),
+  }) => {
+    useImperativeHandle(ref, () =>
+      accessibilityLabel?.startsWith("Message ")
+        ? { focus: box.focus, setSelection: box.setSelection }
+        : { focus: () => {}, setSelection: () => {} },
+    );
+    return (
+      <textarea
+        aria-label={accessibilityLabel}
+        aria-disabled={accessibilityState?.disabled}
+        value={value}
+        onChange={(event) => onChangeText?.(event.currentTarget.value)}
+      />
+    );
+  },
   Platform: { OS: "ios" },
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
@@ -101,11 +162,6 @@ vi.mock("./GoatBotShimmerText", () => ({ GoatBotShimmerText: () => null }));
 vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
-vi.mock("./GoatBotComposerAttachments", () => ({
-  GoatBotAttachButton: () => null,
-  GoatBotAttachmentStrip: () => null,
-  releaseGoatBotAttachments: () => {},
-}));
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
@@ -146,7 +202,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
     availability: "ready",
     rows: session.rows,
     canSend: session.canSend && member?.state !== "deleted",
-    attachmentSupport: null,
+    attachmentSupport: session.attachments ? { maxUploadBytes: null } : null,
     onSend: session.onSend,
     onRetryInput: () => {},
     replyingSince: null,
@@ -245,6 +301,10 @@ function setup() {
   session.notes = [note];
   session.onSend.mockClear();
   session.refresh.mockReset();
+  session.attachments = false;
+  box.focus.mockClear();
+  box.setSelection.mockClear();
+  box.pick = null;
 }
 const buttonIn = (container: HTMLElement, label: string) =>
   [...container.querySelectorAll("button")].find(
@@ -456,5 +516,68 @@ it("a drafted request keeps what the person already typed, and says why", async 
   await press(view.container, "Ask to forget");
   expect(composer(view.container).value).toBe("Half a thought");
   expect(Alert.alert).toHaveBeenCalledTimes(1);
+  await view.unmount();
+});
+async function typeInto(field: HTMLTextAreaElement, value: string) {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+it("a refused Fill message keeps the sheet open and the new wording the person wrote", async () => {
+  setup();
+  const view = await render();
+  await typeInto(composer(view.container), "Half a thought");
+  await openMemory(view.container);
+  await press(view.container, "Ask to change");
+  const wording = () =>
+    view.container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]');
+  await typeInto(wording()!, "Reply in English");
+  await press(view.container, "Fill message");
+  expect(view.container.querySelector('[aria-label="Work sheet"]')).not.toBeNull();
+  expect(wording()?.value).toBe("Reply in English");
+  expect(composer(view.container).value).toBe("Half a thought");
+  // Ask to forget and New routine also leave the sheet where it was.
+  await press(view.container, "Cancel");
+  await press(view.container, "Ask to forget");
+  expect(view.container.querySelector('[aria-label="Work sheet"]')).not.toBeNull();
+  await press(view.container, "Home");
+  await press(view.container, "New routine");
+  expect(view.container.querySelector('[aria-label="Work sheet"]')).not.toBeNull();
+  expect(composer(view.container).value).toBe("Half a thought");
+  await view.unmount();
+});
+
+it("a photo the picker is still reading counts as a message in the box", async () => {
+  setup();
+  session.attachments = true;
+  const { Alert } = await import("react-native");
+  vi.mocked(Alert.alert).mockClear();
+  const view = await render();
+  await press(view.container, "Photo Library");
+  expect(box.pick).not.toBeNull();
+  await press(view.container, "Open GOAT Bot home");
+  await press(view.container, "New routine");
+  expect(composer(view.container).value).toBe("");
+  expect(view.container.querySelector('[aria-label="Work sheet"]')).not.toBeNull();
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+  // Once the picker comes back empty, the box is free again.
+  await act(async () => box.pick?.({ attachments: [] }));
+  await press(view.container, "New routine");
+  expect(composer(view.container).value).toBe("Set up a routine: ");
+  await view.unmount();
+});
+
+it("an accepted request focuses the message box once the sheet has gone, caret at the end", async () => {
+  setup();
+  const view = await render();
+  await press(view.container, "Open GOAT Bot home");
+  await press(view.container, "New routine");
+  expect(view.container.querySelector('[aria-label="Work sheet"]')).toBeNull();
+  expect(box.focus).toHaveBeenCalledTimes(1);
+  const end = "Set up a routine: ".length;
+  expect(box.setSelection).toHaveBeenCalledWith(end, end);
   await view.unmount();
 });
