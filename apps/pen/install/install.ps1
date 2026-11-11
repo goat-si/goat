@@ -78,6 +78,8 @@ try {
 } finally {
 	Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
+# Nothing below may run pen while the download is still there (install.sh removes it the same way).
+if (Test-Path -LiteralPath $tmp) { Fail "could not remove its download $tmp; pen is installed but was not started" }
 Write-Output "installed $pen ($Version)"
 
 $cmd = 'pen'
