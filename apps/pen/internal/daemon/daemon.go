@@ -154,6 +154,11 @@ type live struct {
 	// deferred is set on the mesh session that carried its own peer's revoke; it closes itself
 	// after its done.
 	deferred bool
+	// client marks a session from a key that is not a member, admitted under reg (contract "Service clients"); k is
+	// its key in d.sessions.
+	client bool
+	reg    *serviceReg
+	k      uint64
 }
 
 type seenInfo struct {

@@ -71,7 +71,15 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 
 func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 	var slot *acctSlot
+	var client *clientAdmission
 	admit := func(kind byte, remote []byte, p session.Payload) ([]byte, error) {
+		if _, member := d.view().MemberByNoise(remote); kind == session.KindSession && !member {
+			a, err := d.admitClient(remote, p)
+			if err == nil {
+				client = &a
+			}
+			return nil, err
+		}
 		psk, err := d.admit(kind, remote, p)
 		if err != nil || kind != session.KindAccount {
 			return psk, err
@@ -84,6 +92,10 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		defer d.releaseAccount(slot)
 	}
 	if err != nil {
+		return
+	}
+	if client != nil {
+		d.serveClient(ctx, sec, *client)
 		return
 	}
 	switch sec.Payload.Stream {

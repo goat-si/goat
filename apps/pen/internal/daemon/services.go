@@ -255,16 +255,9 @@ func (d *Daemon) serveService(ctx context.Context, sec *session.Secure) {
 		sec.Close(wire.CodeOffline)
 		return
 	}
-	conn, err := d.deliver(ctx, reg, sec.RemoteStatic)
+	conn, err := d.deliverTo(ctx, reg, sec.RemoteStatic, nil)
 	if err != nil {
-		cause := causeMalformed
-		var de *deliveryError
-		if errors.As(err, &de) {
-			cause = de.cause
-		}
-		if d.svc.shouldLog(cause, d.now()) {
-			d.opt.Logf("service %s: delivery failed (%v); is the program on port %d the one that registered it?", reg.name, err, reg.port)
-		}
+		d.logDelivery(reg, err)
 		sec.Close(wire.CodeOffline)
 		return
 	}
@@ -274,9 +267,22 @@ func (d *Daemon) serveService(ctx context.Context, sec *session.Secure) {
 	stream.Splice(ctx, sec, conn, conn, conn.CloseWrite)
 }
 
-// deliver dials reg's port and runs the mutual proof for the member with Noise key remote; it returns the
-// connection committed to reg, after line 3, ready for the payload.
-func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, remote []byte) (*net.TCPConn, error) {
+// logDelivery logs a failed delivery under its cause, at most once a minute per cause.
+func (d *Daemon) logDelivery(reg *serviceReg, err error) {
+	cause := causeMalformed
+	var de *deliveryError
+	if errors.As(err, &de) {
+		cause = de.cause
+	}
+	if d.svc.shouldLog(cause, d.now()) {
+		d.opt.Logf("service %s: delivery failed (%v); is the program on port %d the one that registered it?", reg.name, err, reg.port)
+	}
+}
+
+// deliverTo dials reg's port and runs the mutual proof for the caller with Noise key remote: a member when l is
+// nil, otherwise the client or pairing session l. It returns the connection committed to reg, after line 3, ready
+// for the payload.
+func (d *Daemon) deliverTo(ctx context.Context, reg *serviceReg, remote []byte, l *live) (*net.TCPConn, error) {
 	dctx, cancel := context.WithTimeout(ctx, deliveryDialTimeout)
 	c, err := (&net.Dialer{}).DialContext(dctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(reg.port)))
 	cancel()
@@ -309,20 +315,13 @@ func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, remote []byte) (*
 	if !hmac.Equal(a, serviceMAC(reg.key, "pen-svc/1 "+reg.name, nd, ng)) {
 		return nil, failed(causeProof, errors.New("the program's answer does not prove the registered key"))
 	}
-	if !d.svc.commit(reg, tc) {
-		return nil, failed(causeReplaced, errors.New("the registration ended during the delivery"))
-	}
-	// J carries the caller as the view holds it now, after the commit and before line 3.
-	v := d.view()
-	caller, member := v.MemberByNoise(remote)
-	if !member {
-		d.svc.uncommit(reg, tc)
-		return nil, failed(causeReplaced, errors.New("the caller is no longer a member"))
-	}
-	j, err := identityLine(v.MeshID, d.nodeID, caller, reg.name)
-	if err != nil {
-		d.svc.uncommit(reg, tc)
-		return nil, failed(causeMalformed, err)
+	var j []byte
+	if l != nil {
+		if j, err = d.clientLine(reg, tc, l); err != nil {
+			return nil, err
+		}
+	} else if j, err = d.memberLine(reg, tc, remote); err != nil {
+		return nil, err
 	}
 	b := serviceMAC(reg.key, "pen-svc/1 pen", nd, ng, j)
 	if _, err := io.WriteString(tc, string(j)+" "+strictB64.EncodeToString(b)+"\n"); err != nil {
@@ -335,6 +334,26 @@ func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, remote []byte) (*
 	}
 	ok = true
 	return tc, nil
+}
+
+// memberLine commits a member's delivery and renders its identity line: the caller as the view holds it now, after
+// the commit and before line 3.
+func (d *Daemon) memberLine(reg *serviceReg, tc net.Conn, remote []byte) ([]byte, error) {
+	if !d.svc.commit(reg, tc) {
+		return nil, failed(causeReplaced, errors.New("the registration ended during the delivery"))
+	}
+	v := d.view()
+	caller, member := v.MemberByNoise(remote)
+	if !member {
+		d.svc.uncommit(reg, tc)
+		return nil, failed(causeReplaced, errors.New("the caller is no longer a member"))
+	}
+	j, err := identityLine(v.MeshID, d.nodeID, caller, reg.name)
+	if err != nil {
+		d.svc.uncommit(reg, tc)
+		return nil, failed(causeMalformed, err)
+	}
+	return j, nil
 }
 
 // parseAnswer decodes line 2, "<Ng> <A>" LF, exactly: 88 bytes, canonical base64url, no CR.
