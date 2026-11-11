@@ -29,7 +29,9 @@
 //
 // test-pen runs Pen's suites (the Go node, its install and mesh scripts, and the protocol, relay
 // and login packages) in lane=all and whenever a pull request changes PEN_PATHS. The Go module has
-// no package.json, so path prefixes select it rather than the workspace graph.
+// no package.json, so path prefixes select it rather than the workspace graph. test-pen-windows runs
+// the Go suite and the PowerShell install check on hosted Windows for the Go paths (PEN_GO_PATHS), in
+// lane=all and in the windows lane.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -102,6 +104,11 @@ const PEN_SHARED_FILES = [
   "vite.config.ts",
 ];
 const PEN_TASK = "test-pen";
+/** Pen's Go node and the vectors its suite reads; a change under one also selects test-pen-windows. */
+const PEN_GO_PATHS = ["apps/pen/", "packages/pen-protocol/"];
+const PEN_WINDOWS_TASK = "test-pen-windows";
+/** Tasks that run on hosted Windows. */
+const WINDOWS_RUNNER_TASKS = new Set([WINDOWS_TASK, PEN_WINDOWS_TASK]);
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
 /** CI script tests use node:test, not Vitest. */
@@ -165,15 +172,17 @@ const TASKS = [
   WINDOWS_TASK,
   LINUX_COMPUTER_USE_TASK,
   PEN_TASK,
+  PEN_WINDOWS_TASK,
   "build",
   "test-server",
 ];
 /** Matrix order: the quick run's test job follows the checks. */
 const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
 /**
- * Minutes of plain Node work with no browsers, native headers or need for many cores. They run on
- * hosted ubuntu-24.04 even when the lidge pool is on, so they never queue behind half-hour
- * server shards.
+ * Tasks that run on hosted ubuntu-24.04 even when the lidge pool is on. Most are minutes of plain
+ * Node work with no browsers, native headers or need for many cores, kept off the queue behind
+ * half-hour server shards. test-relay is here because its Floci tests start a Docker container,
+ * and lidge runners have no Docker.
  */
 const HOSTED_TASKS = new Set([
   "check",
@@ -182,6 +191,7 @@ const HOSTED_TASKS = new Set([
   "test-client-runtime",
   "test-mobile",
   "test-shared",
+  "test-relay",
   "test-ingest",
   LINUX_COMPUTER_USE_TASK,
   PEN_TASK,
@@ -254,6 +264,7 @@ const isWindowsSensitive = (file) =>
 const isLinuxComputerUse = (file) =>
   LINUX_COMPUTER_USE_PATHS.some((prefix) => file.startsWith(prefix));
 const isPen = (file) => PEN_PATHS.some((prefix) => file.startsWith(prefix));
+const isPenGo = (file) => PEN_GO_PATHS.some((prefix) => file.startsWith(prefix));
 
 /** Prose that only the check task (formatting) reads. */
 function isDocument(file) {
@@ -469,6 +480,7 @@ function selectTasks(
     if (suiteDirs.some((dir) => file.startsWith(dir))) choose(PACKAGES_TASK, file);
     if (isPen(file)) {
       choose(PEN_TASK, file);
+      if (isPenGo(file)) choose(PEN_WINDOWS_TASK, file);
       choose("typecheck", file);
       continue;
     }
@@ -540,7 +552,11 @@ function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];
   for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
-    const runner = task === WINDOWS_TASK ? "windows" : HOSTED_TASKS.has(task) ? "hosted" : "linux";
+    const runner = WINDOWS_RUNNER_TASKS.has(task)
+      ? "windows"
+      : HOSTED_TASKS.has(task)
+        ? "hosted"
+        : "linux";
     if (task === "test-server") {
       const related = server.mode === "related";
       const count = related ? server.shards : SERVER_SHARDS;
@@ -638,8 +654,8 @@ function laneRun(lane) {
   if (lane === "windows") {
     return {
       full: false,
-      tasks: [WINDOWS_TASK],
-      reasons: reasons([WINDOWS_TASK], why),
+      tasks: [WINDOWS_TASK, PEN_WINDOWS_TASK],
+      reasons: reasons([WINDOWS_TASK, PEN_WINDOWS_TASK], why),
       server: fullServer(why),
     };
   }
@@ -784,6 +800,11 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
   if (penChange !== undefined) {
     tasks.add(PEN_TASK);
     reasons.set(PEN_TASK, penChange);
+  }
+  const penGoChange = changed.find((file) => isPenGo(file) || PEN_CI_FILES.includes(file));
+  if (penGoChange !== undefined) {
+    tasks.add(PEN_WINDOWS_TASK);
+    reasons.set(PEN_WINDOWS_TASK, penGoChange);
   }
   return {
     ...result,

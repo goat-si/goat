@@ -3,12 +3,16 @@ package cli
 import (
 	"errors"
 	"net"
-	"syscall"
 )
 
 // localGone reports errors that only mean the local TCP client already went away.
 func localGone(err error) bool {
-	return errors.Is(err, syscall.ENOTCONN) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
+	for _, e := range goneErrnos {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // errClientGone marks a localGone error from the local socket, so it is told apart from relay errors after Splice.

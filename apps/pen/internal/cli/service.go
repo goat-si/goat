@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/goat-si/goat/apps/pen/internal/state"
@@ -16,8 +18,8 @@ import (
 
 const launchdLabel = "si.goat.pen"
 
-// serviceMode picks systemd --user, launchd or none (a detached child). A non-default state
-// directory never gets a service, so test and scratch homes cannot replace the real one.
+// serviceMode picks systemd --user, launchd, a Windows logon task or none (a detached child). A
+// non-default state directory never gets a service, so test and scratch homes cannot replace the real one.
 func serviceMode(noService bool, st *state.Store) string {
 	if noService || os.Getenv("PEN_SERVICE") == "none" || os.Getenv("PEN_HOME") != "" {
 		return "none"
@@ -31,6 +33,8 @@ func serviceMode(noService bool, st *state.Store) string {
 		if _, err := exec.LookPath("launchctl"); err == nil {
 			return "launchd"
 		}
+	case "windows":
+		return "task" // schtasks.exe ships with every Windows 10 and 11
 	}
 	return "none"
 }
@@ -50,6 +54,12 @@ func installedService(st *state.Store) string {
 	if os.Getenv("PEN_HOME") != "" {
 		return "none"
 	}
+	if serviceOS == "windows" {
+		if name, err := accountTaskName(); err == nil && run("schtasks", "/Query", "/TN", name) == nil {
+			return "task"
+		}
+		return "none"
+	}
 	if _, err := os.Stat(unitPath()); err == nil && serviceOS == "linux" {
 		return "systemd"
 	}
@@ -59,15 +69,24 @@ func installedService(st *state.Store) string {
 	return "none"
 }
 
-// render fills a service template with this executable's path and the home folder, escaped for
-// the file it goes into: XML text in the launchd plist, systemd's quoted word in the unit.
-func render(tmpl string, plist bool) (string, error) {
+// exePath is this binary, symlinks resolved (a variable so tests can give another path).
+var exePath = func() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
 	if p, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = p
+	}
+	return exe, nil
+}
+
+// render fills a service template with this executable's path and the home folder, escaped for
+// the file it goes into: XML text in the launchd plist, systemd's quoted word in the unit.
+func render(tmpl string, plist bool) (string, error) {
+	exe, err := exePath()
+	if err != nil {
+		return "", err
 	}
 	h, _ := os.UserHomeDir()
 	return fill(tmpl, plist, exe, h)
@@ -111,8 +130,16 @@ func writeFile(path, content string) error {
 // serviceOS and run are variables so tests can drive the service paths without a service manager.
 var serviceOS = runtime.GOOS
 
+// run runs a service manager command, ended (by its own process) after commandTimeout.
 var run = func(name string, args ...string) error {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s %s: no answer within %v", name, strings.Join(args, " "), commandTimeout)
+	}
 	if err != nil {
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -153,23 +180,29 @@ func startService(mode string, st *state.Store) error {
 		if err := run("launchctl", "bootstrap", guiDomain(), plistPath()); err != nil {
 			return err
 		}
+	case "task":
+		if err := startTaskInTurn(st); err != nil { // pen up holds the task turn
+			return err
+		}
 	}
 	return waitControl(st)
 }
 
-func stopService(mode string) error {
+func stopService(mode string, st *state.Store) error {
 	switch mode {
 	case "systemd":
 		return run("systemctl", "--user", "stop", "pen.service")
 	case "launchd":
 		return run("launchctl", "bootout", guiDomain()+"/"+launchdLabel)
+	case "task":
+		return stopTaskInTurn(st) // pen down holds the task turn
 	}
 	return nil
 }
 
 // removeService stops and disables the service, then deletes its file. disable --now stops a unit
 // that an older install loaded with Restart=always, so it cannot loop on the left marker.
-func removeService(mode string) error {
+func removeService(mode string, st *state.Store) error {
 	switch mode {
 	case "systemd":
 		run("systemctl", "--user", "disable", "--now", "pen.service") // absent or already stopped is fine
@@ -182,6 +215,8 @@ func removeService(mode string) error {
 		if err := os.Remove(plistPath()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+	case "task":
+		return removeTaskInTurn(st) // pen leave holds the task turn
 	}
 	return nil
 }

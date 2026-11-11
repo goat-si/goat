@@ -300,6 +300,17 @@ export type ChannelGetBotStatusInput = typeof ChannelGetBotStatusInput.Type;
 export const ChannelGetBotStatusResult = Schema.Struct({
   bot: Schema.NullOr(ChannelBotRef),
   waitingCount: NonNegativeInt,
+  /**
+   * The newest message in the bot's conversation, shortened, for a roster row. Absent from
+   * servers before it existed and while the conversation is empty.
+   */
+  latest: Schema.optionalKey(
+    Schema.Struct({
+      text: Schema.String,
+      at: IsoDateTime,
+      author: Schema.Literals(["bot", "person"]),
+    }),
+  ),
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 

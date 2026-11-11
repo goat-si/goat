@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// wakeJump is how far the wall clock may run ahead of the monotonic clock between two checks
-// before the daemon treats it as a sleep (the monotonic clock stops while the machine sleeps).
+// wakeJump is how far the wall clock may run ahead of the awake clock between two checks before the
+// daemon treats it as a sleep (the awake clock stops while the machine sleeps).
 const wakeJump = 10 * time.Second
 
 // wakeLoop redials every uplink at once after the machine slept: its sockets are likely dead, and
@@ -18,21 +18,21 @@ func (d *Daemon) wakeLoop(ctx context.Context) {
 		defer t.Stop()
 		ticks = t.C
 	}
-	last := d.now()
+	lastWall, lastAwake := d.now(), d.opt.Awake()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
 		}
-		now := d.now()
-		wall := now.Round(0).Sub(last.Round(0))
+		now, awake := d.now(), d.opt.Awake()
+		wall := now.Round(0).Sub(lastWall.Round(0))
 		// A forward wall-clock step over 10 s (an NTP correction) looks the same and costs one redial.
-		if slept := wall - d.opt.Since(last); slept > wakeJump {
+		if slept := wall - (awake - lastAwake); slept > wakeJump {
 			d.opt.Logf("woke after about %v asleep; redialing the relays", slept.Round(time.Second))
 			d.redialUplinks()
 		}
-		last = now
+		lastWall, lastAwake = now, awake
 	}
 }
 

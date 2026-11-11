@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -22,13 +23,27 @@ var Stdin io.Reader = os.Stdin
 // Version is set by main.
 var Version = "dev"
 
-// ServiceUnit and LaunchdPlist are the service templates main embeds.
-var ServiceUnit, LaunchdPlist string
+// ServiceUnit, LaunchdPlist and TaskXML are the service templates main embeds.
+var ServiceUnit, LaunchdPlist, TaskXML string
 
 func fail(stderr io.Writer, err error) int {
 	fmt.Fprintln(stderr, "pen:", err)
 	return 1
 }
+
+// Bounds on what pen up, pen down and pen leave wait for, so a daemon or service manager that stops
+// answering cannot hold them (or the Windows task turn they may hold): a status or stop request on the
+// control socket, an operation that may reach other members (leave, rename, reconnect), and one run of
+// schtasks, systemctl or launchctl. probeTimeout is a variable for tests.
+var probeTimeout = 2 * time.Second
+
+// leaveTimeout is how long pen leave waits for the daemon's leave (a variable for tests).
+var leaveTimeout = opTimeout
+
+const (
+	opTimeout      = time.Minute
+	commandTimeout = 15 * time.Second
+)
 
 func newFlags(name string, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet("pen "+name, flag.ContinueOnError)

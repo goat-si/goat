@@ -15,6 +15,7 @@ import "~/index.css";
 
 const state = vi.hoisted(() => ({
   narrow: false,
+  threads: [] as ReadonlyArray<unknown>,
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
   refresh: vi.fn(),
 }));
@@ -37,7 +38,8 @@ vi.mock("~/hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("./useBotRoster", () => ({
   useBotThreads: () => ({
-    rows: [],
+    rows: state.threads,
+    remoteWork: [],
     supported: true,
     loaded: true,
     failed: false,
@@ -93,10 +95,11 @@ const environmentId = EnvironmentId.make("local");
 
 function setup(narrow = false) {
   state.narrow = narrow;
+  state.threads = [];
   state.notes = [note];
   state.refresh.mockReset();
   const onSend = vi.fn<(text: string) => void>();
-  const view = (rows: GoatBotRow[] = []) => (
+  const view = (rows: GoatBotRow[] = [], peek = false) => (
     <GoatBotChatView
       availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
       canOperate
@@ -105,6 +108,7 @@ function setup(narrow = false) {
       onRetryInput={() => {}}
       legacyAgentRoute={null}
       attachmentSupport={{ maxUploadBytes: 1_000_000 }}
+      rowsForTask={peek ? () => [] : undefined}
     />
   );
   return { view, onSend };
@@ -150,6 +154,43 @@ it("closing the narrow home sheet returns focus and keeps the draft", async () =
   await expect.element(field).toHaveValue("Draft on mobile");
 });
 
+it("in the narrow sheet Escape steps from a task back to Home, then closes the sheet, keeping the draft", async () => {
+  const { view } = setup(true);
+  const at = "2026-11-09T00:00:00.000Z";
+  state.threads = [
+    {
+      kind: "task",
+      task: {
+        taskId: "task-a",
+        title: "Stop the port 3774 server",
+        status: "running",
+        updatedAt: at,
+      },
+      view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+      worker: { environmentId: "local", threadId: "channel-worker:a" },
+    },
+  ];
+  await using screen = await render(view([], true));
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  const field = composer(screen);
+  await userEvent.type(field, "Half a thought");
+  await userEvent.click(chip);
+  await expect.element(page.getByRole("tab", { name: "Home" })).toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await expect.element(page.getByText("Go to thread")).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  // The first Escape leaves the task; the sheet stays open on Home.
+  await expect.element(page.getByText("Go to thread")).not.toBeInTheDocument();
+  await expect.element(page.getByRole("tab", { name: "Home" })).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("tab", { name: "Home" })).not.toBeInTheDocument();
+  await expect.element(chip).toHaveFocus();
+  await expect.element(field).toHaveValue("Half a thought");
+});
+
 it("Ask to forget puts the quoted note in the composer and sends nothing", async () => {
   const { view, onSend } = setup();
   await using screen = await render(view());
@@ -188,8 +229,18 @@ it("on a narrow screen the work sheet closes and the composer holds the draft", 
   await openMemory(screen);
   await userEvent.click(page.getByRole("button", { name: "Ask to forget" }));
   await expect.element(page.getByRole("tab", { name: "Library" })).not.toBeInTheDocument();
-  await expect.element(composer(screen)).toHaveValue(goatBotForgetNoteMessage(note.text));
+  const field = composer(screen);
+  const drafted = goatBotForgetNoteMessage(note.text);
+  await expect.element(field).toHaveValue(drafted);
+  // The person edits and sends from the keyboard, so the caret waits at the end of the draft.
+  await expect.element(field).toHaveFocus();
+  expect((field.element() as HTMLTextAreaElement).selectionStart).toBe(drafted.length);
   expect(onSend).not.toHaveBeenCalled();
+  // Opening and dismissing the sheet afterwards still returns focus to the chip.
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await userEvent.click(chip);
+  await userEvent.click(page.getByRole("button", { name: "Close" }));
+  await expect.element(chip).toHaveFocus();
 });
 
 const botRow = (text: string): GoatBotRow => ({

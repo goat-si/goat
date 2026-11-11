@@ -7,9 +7,9 @@ on web and desktop, or the Bots segment on mobile Home. To reach it from Slack o
 
 With a GOAT server that lists the bot's work, the conversation holds only what you and the bot
 say: its answers, its questions, a line while it works and how the work ended. The tasks it starts
-open from the bot's home, reached from its header, where each one has its own view. Finished work
-whose ending the chat never told, such as a request made from Slack, keeps its card. Older servers
-show each task as a card in the conversation.
+open from the bot's home: select the bot's name at the top of its chat. Finished work whose ending
+the chat never told, such as a request made from Slack, keeps its card. Older servers show each
+task as a card in the conversation.
 
 ## Bots
 
@@ -17,8 +17,9 @@ The main bot is GOAT Bot. On servers that support it, **New bot** creates more b
 name, an emoji, a purpose and a model, and its own conversation and task list. A bot answers
 under its own name and purpose from its next conversation session.
 
-- Edit any bot, including the main one, from its row menu (long press on mobile), its name at the
-  top of its chat, or **Settings → GOAT Bot → Profile**. A new name also changes how the main bot
+- Edit any bot, including the main one, from its row menu (long press on mobile), **Edit bot** in
+  its home (its name at the top of its chat on web and desktop), or **Settings → GOAT Bot →
+  Profile**. A new name also changes how the main bot
   introduces itself in Slack and iMessage.
 - An added bot's model can change in its edit dialog or from the model button in its message
   box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
@@ -51,11 +52,12 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
-The bot's name at the top of its chat opens the bot's home, where **Edit bot** changes its name,
-face, purpose and model. **Home** is one page: a status note when
+On web and desktop, the bot's name at the top of its chat opens the bot's home, where **Edit
+bot** changes its name, face, purpose and model. **Home** is one page: a status note when
 something needs fixing, the machines its work runs on, its tasks, and its routines. Selecting a
 task shows its conversation right there, beside the chat; **Go to thread** opens it in full.
-**Library** holds the files the bot saved and its memory.
+**Library** holds the files the bot saved and its memory. On mobile, **Work** opens a sheet of the
+bot's tasks, and a task opens in its own view.
 
 - The status note says why the bot can't work right now: the machine it answers on, its model,
   open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
