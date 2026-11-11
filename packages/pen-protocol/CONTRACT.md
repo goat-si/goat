@@ -600,9 +600,9 @@ may authorize from this list. The `watch` op keeps its v1.1 lines.
 `pen ssh-config` writes a `Host pen-<nodeId>` block for every member, ahead of the name blocks, with
 `ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's known_hosts,
 and, where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's shared
-connection never carries it. `pen-<name>` blocks and the `pen-*` block are unchanged. Where a member's name equals
-another member's node id, the earlier `pen-<nodeId>` block wins for that alias, as `pen pipe` already resolved such an
-alias to the node id.
+connection never carries it. `pen-<name>` blocks and the `pen-*` block are unchanged, except that a name equal to a
+member's node id gets no block of its own: that alias already meant the node, as `pen pipe` resolves node ids first,
+and its block would have lent the node another member's `User`.
 
 ## Close codes
 

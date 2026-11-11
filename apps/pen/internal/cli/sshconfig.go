@@ -78,7 +78,7 @@ func hostsOf(v *mesh.View) []sshHost {
 	}
 	var hosts []sshHost
 	for _, m := range v.SortedMembers() {
-		hosts = append(hosts, sshHost{Name: m.Name, User: m.User})
+		hosts = append(hosts, sshHost{Name: m.Name, User: m.User, NodeID: m.NodeID, NoisePub: m.NoisePub})
 	}
 	return hosts
 }
@@ -107,7 +107,8 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 func sshArg(s string) string { return `"` + strings.ReplaceAll(s, "%", "%%") + `"` }
 
 // sshHost is one member's concrete Host block; User is empty when the member did not publish one.
-type sshHost struct{ Name, User string }
+// NodeID and NoisePub, when set, give the member an exact pen-<nodeId> block too.
+type sshHost struct{ Name, User, NodeID, NoisePub string }
 
 // controlSocketMax is the smallest sun_path (macOS, with its NUL); ssh binds the control socket
 // first under its path plus a 17-byte ".<16 random>" suffix, and %C expands to 40 hex digits.
@@ -138,8 +139,30 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 		fmt.Fprintf(&b, "    ControlPath %s\n", strings.TrimSuffix(sshArg(controlPrefix), `"`)+`%C"`)
 		b.WriteString("    ControlPersist 10m\n")
 	}
+	// Exact blocks first: OpenSSH keeps the first value it reads, so pen-<nodeId> never takes the pen-*
+	// block's ProxyCommand or its shared connection, which another route may have opened.
+	ids := map[string]bool{}
 	for _, h := range hosts {
-		block("pen-"+h.Name, h.User)
+		if h.NodeID == "" {
+			continue
+		}
+		ids[h.NodeID] = true
+		fmt.Fprintf(&b, "Host pen-%s\n", h.NodeID)
+		if h.User != "" {
+			fmt.Fprintf(&b, "    User %s\n", h.User)
+		}
+		fmt.Fprintf(&b, "    ProxyCommand %s --node %s --noise %s 22\n", strings.ReplaceAll(cmd, "%", "%%"), h.NodeID, h.NoisePub)
+		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(configPath(knownHosts)))
+		b.WriteString("    StrictHostKeyChecking yes\n")
+		if connectionReuse {
+			b.WriteString("    ControlMaster no\n    ControlPath none\n")
+		}
+	}
+	for _, h := range hosts {
+		// A name that is a member's node id already means that node (pen pipe resolves ids first).
+		if !ids[h.Name] {
+			block("pen-"+h.Name, h.User)
+		}
 	}
 	block("pen-*", "")
 	return b.String()

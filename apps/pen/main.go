@@ -37,6 +37,8 @@ const usage = `usage: pen <command> [flags]
   revoke <member> [--compromised]         remove a member
   leave                                   remove this node and delete its keys
   pipe <node> <port>                      connect stdin/stdout to a member's local port
+  pipe --node <id> --noise <key> (<port>|@<service>)   the same on exactly that node, or to its registered service
+  service register <name> --port <port>   hold a local service registration (key on stdin) while stdin is open
   forward <localPort> <node>:<port>       forward a local port to a member's port
   ssh-config [--write|--install|--uninstall]   ssh_config for pen-<name> hosts (--install puts it first in ~/.ssh/config)
   dashboard [--no-open] [--stop]          open this node's local management page, or close it
@@ -56,7 +58,7 @@ func main() {
 		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,
 		"ssh-config": cli.RunSSHConfig, "relay": cli.RunRelay,
 		"login": cli.RunLogin, "logout": cli.RunLogout, "lock": cli.RunLock, "approve": cli.RunApprove,
-		"deny": cli.RunDeny, "account": cli.RunAccount, "dashboard": cli.RunDashboard,
+		"deny": cli.RunDeny, "account": cli.RunAccount, "dashboard": cli.RunDashboard, "service": cli.RunService,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
