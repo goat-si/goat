@@ -1573,15 +1573,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
         const { offeredModels } = adapterOptions;
         // A kept process read its catalog in an earlier GOAT run, so what GOAT offers now says nothing.
-        const kept = yield* reconnectsKeptProcess({
-          detached,
-          survivors,
-          instanceId: adapterOptions.instanceId,
-          providerSessionId: input.providerSessionId,
-          threadId: input.threadId,
-        });
         const offeredAtStart =
-          offeredModels === undefined ? undefined : kept ? [] : yield* offeredModels;
+          offeredModels === undefined
+            ? undefined
+            : (yield* reconnectsKeptProcess({
+                  detached,
+                  survivors,
+                  instanceId: adapterOptions.instanceId,
+                  providerSessionId: input.providerSessionId,
+                  threadId: input.threadId,
+                }))
+              ? []
+              : yield* offeredModels;
         const client = yield* clientFactory
           .open({
             instanceId: adapterOptions.instanceId,
