@@ -5,6 +5,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createPackageWithOptions, extractFile, listPackage, statFile } from "@electron/asar";
 import { vi } from "vite-plus/test";
 import * as CuaRelease from "@goat/shared/cuaDriverRelease";
+import { isNightlyDesktopVersion } from "../apps/desktop/src/updates/updateChannels.ts";
+import { renderWindowsBuildInfo } from "./build-computer-use-helper-windows.ts";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
@@ -2114,10 +2116,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("builds a local Windows helper with the identity its desktop channel expects", () => {
-    assert.equal(resolveWindowsHelperChannel("0.0.17"), "stable");
-    assert.equal(resolveWindowsHelperChannel("0.0.17-nightly.20260413.42"), "nightly");
-    assert.equal(resolveWindowsHelperChannel("0.0.41-preview.20260912.1589"), "preview");
-    assert.equal(resolveWindowsHelperChannel("0.0.33-pr.8182.1"), "preview");
+    for (const version of [
+      "0.0.17",
+      "0.0.17-nightly.20260413.42",
+      "0.0.41-preview.20260912.1589",
+      "0.0.33-pr.8182.1",
+    ]) {
+      // The packaged desktop expects this identity (DesktopEnvironment's channel, ComputerUseHelper's handshake).
+      const expected = CuaRelease.computerUseHelperBundleIdForChannel(
+        isNightlyDesktopVersion(version) ? "nightly" : "stable",
+      );
+      const helper = renderWindowsBuildInfo({
+        channel: resolveWindowsHelperChannel(version),
+        version,
+        pins: [],
+        allowAnyParent: true,
+      });
+      assert.include(helper, `HelperId = "${expected}";`, version);
+    }
   });
 
   it("limits Electron locales and excludes separately packaged resources", () => {

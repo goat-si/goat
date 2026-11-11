@@ -2975,8 +2975,9 @@ export function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
 }
 
+/** A "-preview." build runs nightly's helper; a "-pr." build keeps stable's (isNightlyDesktopVersion). */
 export function resolveWindowsHelperChannel(version: string): "stable" | "nightly" | "preview" {
-  if (isDesktopPreviewVersion(version)) return "preview";
+  if (/-preview\.\d{8}\.\d+$/.test(version)) return "preview";
   return resolveDesktopUpdateChannel(version) === "nightly" ? "nightly" : "stable";
 }
 
