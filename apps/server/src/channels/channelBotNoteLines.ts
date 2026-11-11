@@ -88,16 +88,6 @@ const markReplaced = (lines: ReadonlyArray<ChannelBotNoteLine>) => {
   });
 };
 
-/** A note line without the replaces marker the parser counts, or the line itself when it has none. */
-export const withoutReplacesMarker = (raw: string) => {
-  if (!raw.endsWith(")")) return raw;
-  for (let at = raw.indexOf(MARKER); at !== -1; at = raw.indexOf(MARKER, at + 1)) {
-    const replaces = jsonString(raw.slice(at + MARKER.length, -1));
-    if (replaces !== undefined && SOURCED.test(raw.slice(0, at))) return raw.slice(0, at);
-  }
-  return raw;
-};
-
 /** Every line of a notes file, oldest first, without the header, blank lines or headings. */
 export const parseChannelBotNoteLines = (text: string): ReadonlyArray<ChannelBotNoteLine> => {
   const normal = text.replaceAll("\r\n", "\n");

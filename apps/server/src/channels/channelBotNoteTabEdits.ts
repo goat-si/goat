@@ -24,7 +24,6 @@ import {
   currentNoteNamedBy,
   NOTES_HEADER,
   parseChannelBotNoteLines,
-  withoutReplacesMarker,
   type ChannelBotNoteLine,
 } from "./channelBotNoteLines.ts";
 import {
@@ -162,9 +161,9 @@ const sameRead = (left: NotesTail | null, right: NotesTail | null) =>
   left === null || right === null ? left === right : sameBytes(left.bytes, right.bytes);
 
 /**
- * Whether `after` holds exactly the lines kept, each replacing the same kept line as before. Removing
- * a note with the notes it replaced keeps every other binding, but it can change how other lines
- * parse: a note above the header, once removed, makes the header start the file again.
+ * Whether `after` holds exactly the lines kept, byte for byte, each replacing the same kept line as
+ * before. Removing a note with the notes it replaced keeps every other binding, but it can change
+ * how other lines parse: a note above the header, once removed, makes the header start the file again.
  */
 const sameBindings = (
   kept: ReadonlyArray<ChannelBotNoteLine>,
@@ -176,14 +175,15 @@ const sameBindings = (
     kept.every((line, at) => {
       const now = after[at];
       const by = line.replacedBy === undefined ? undefined : position.get(line.replacedBy);
-      return now !== undefined && now.text === line.text && now.replacedBy === by;
+      return now !== undefined && now.raw === line.raw && now.replacedBy === by;
     })
   );
 };
 
 /**
- * The file without `selected` and the notes it replaced, followed through the parser's bindings,
- * and without replaces markers that bind nothing and quote one of them. Every other byte is kept.
+ * The file without `selected` and the notes it replaced, followed through the parser's bindings.
+ * Every other line is kept byte for byte; a replaces marker binds only an earlier line, so one left
+ * behind can never bind a later note.
  */
 const withoutNote = (
   fileText: string,
@@ -197,9 +197,6 @@ const withoutNote = (
   const removed = new Set<number>();
   for (let at: number | undefined = selected.index; at !== undefined; at = replacedOf.get(at))
     removed.add(at);
-  const removedTexts = new Set(
-    [...removed].map((index) => collapseNoteText(lines[index]?.text ?? "")),
-  );
   // Physical lines keep their own endings; parsed notes map onto them with the parser's skips.
   const physical = fileText.split(/(?<=\n)/u);
   const headerLines = fileText.replaceAll("\r\n", "\n").startsWith(NOTES_HEADER)
@@ -212,12 +209,6 @@ const withoutNote = (
     const line = lines[index++];
     if (line === undefined || line.raw !== content) return "unmapped" as const;
     if (removed.has(line.index)) physical[at] = "";
-    else if (
-      line.replaces !== undefined &&
-      !replacedOf.has(line.index) &&
-      removedTexts.has(collapseNoteText(line.replaces))
-    )
-      physical[at] = (physical[at] ?? "").replace(line.raw, withoutReplacesMarker(line.raw));
   }
   if (index !== lines.length) return "unmapped" as const;
   const text = physical.join("");

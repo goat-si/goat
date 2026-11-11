@@ -78,21 +78,19 @@ const notesRead = (note: string, count: number) =>
   (count === 2 ? "Two notes read “" : count + " notes read “") + note + "”";
 
 // A request in the person's own words reaches a turn that may edit the notes file by hand.
-const tidyNotes = (count: number) =>
-  " To clean them up, ask me in your own words to remove the " +
-  (count === 2 ? "duplicate." : "duplicates.");
+const TIDY_NOTES = " To clean them up, ask me in your own words which one to remove.";
 
 /** The answer to a Memory tab change or forget whose words more than one current note reads. */
 export const notesAlikeAnswer = (note: string, count: number) =>
   notesRead(note, count) +
   (count === 2 ? ", so I left them both." : ", so I left them all.") +
-  tidyNotes(count);
+  TIDY_NOTES;
 
 /** The reply to a correction whose words more than one current note reads: nothing was saved. */
 export const notesAlikeNotSaved = (note: string, count: number) =>
   notesRead(note, count) +
   ", so I didn't save that change: I can't tell which one it replaces." +
-  tidyNotes(count);
+  TIDY_NOTES;
 
 /** What a model reads for a person's message: its text, then the names of the files sent with it. */
 export const inboundTextWithFiles = (message: {

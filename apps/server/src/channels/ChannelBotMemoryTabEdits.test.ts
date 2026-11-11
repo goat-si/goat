@@ -162,7 +162,7 @@ describe("Memory tab requests to change or forget a note", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("Ask to forget removes the note, the notes it replaced and quotes of them", () => {
+  it.effect("Ask to forget removes the note and the notes it replaced, and nothing else", () => {
     const { asked, layer } = harnessFor();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -187,7 +187,8 @@ describe("Memory tab requests to change or forget a note", () => {
       assert.notInclude(asked, message);
       assert.strictEqual(
         yield* readNotes,
-        NOTES_HEADER + korean + line("Weekly sync is on Monday.", "g") + "\n",
+        // The last note's marker bound nothing (Mina was already replaced), so it stays as it was.
+        NOTES_HEADER + korean + line("Weekly sync is on Monday.", "g", mina) + "\n",
       );
       assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
       assert.strictEqual(yield* taskCount, 0);
@@ -277,6 +278,22 @@ describe("Memory tab requests to change or forget a note", () => {
         yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
         assert.strictEqual(yield* readNotes, text);
         assert.include(yield* replies, CHANNEL_COPY.noteForgetWouldRebind);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "Ask to forget leaves every other line as it was, an unmatched correction naming it too",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        // The correction came first, so it replaces nothing; the later note is its own.
+        const unmatched = line("Use vp", "z", "Use pnpm") + "\n";
+        yield* writeNotes(NOTES_HEADER + unmatched + line("Use pnpm", "x") + "\n");
+        yield* send(goatBotForgetNoteMessage("Use pnpm"), "tab-forget");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + unmatched);
+        assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
       }).pipe(Effect.provide(layer));
     },
   );

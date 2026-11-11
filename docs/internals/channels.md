@@ -63,8 +63,9 @@ two generations. Reads change nothing, so a reception retried after a crash read
   changing those sentences changes the server's contract too. A change appends the new note with a
   replaces marker; a forget rewrites `memory.md` without the note and the notes it replaced,
   followed through the parser's bindings and never by text, since a later note may read like one
-  it replaced. Words address a note only when exactly one current note reads them, spacing
-  collapsed (`currentNoteNamedBy` in
+  it replaced; every other line stays byte for byte. Words address a note only when exactly one
+  current note reads them, or when they are an earlier version of exactly one current note,
+  spacing collapsed (`currentNoteNamedBy` and `noteNamedBy` in
   [`channelBotNoteLines.ts`](../../apps/server/src/channels/channelBotNoteLines.ts)), and a
   model's correction goes through the same rule; otherwise nothing is saved and the reply says so.
   Lines are never moved or reordered to pick one: a correction binds to the nearest earlier note in
