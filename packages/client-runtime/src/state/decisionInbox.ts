@@ -442,16 +442,17 @@ export function createDecisionInboxAtoms(input: {
         );
       // While the feed is away, the last list it gave stays docked; feedAwayAtom disables it.
       let next: ReadonlyArray<Handoff>;
+      // A cached or failed thread detail can still hold an approval answered elsewhere.
+      const liveLoaded = () =>
+        get(input.details.statusAtom(ref)) === "live" && get(input.details.errorAtom(ref)) === null
+          ? get(input.details.pendingHandoffsAtom(ref))
+          : [];
       if (feed === null) next = forThread(known.get(ref.environmentId)?.handoffs ?? []);
-      else if (feed.handoffs === undefined) next = get(input.details.pendingHandoffsAtom(ref));
+      else if (feed.handoffs === undefined) next = liveLoaded();
       else if ((feed.handoffsTotal ?? feed.handoffs.length) > feed.handoffs.length) {
         // Capped: the thread's loaded approvals plus the feed's, since a server without snapshot
-        // retention can leave a listed one outside the loaded history. Only a live detail counts;
-        // a cached one can still hold an approval answered elsewhere.
-        const live =
-          get(input.details.statusAtom(ref)) === "live" &&
-          get(input.details.errorAtom(ref)) === null;
-        const loaded = live ? get(input.details.pendingHandoffsAtom(ref)) : [];
+        // retention can leave a listed one outside the loaded history.
+        const loaded = liveLoaded();
         const ids = new Set(loaded.map((handoff) => handoff.handoffId));
         next = [...loaded, ...forThread(feed.handoffs).filter((h) => !ids.has(h.handoffId))];
       } else next = forThread(feed.handoffs);

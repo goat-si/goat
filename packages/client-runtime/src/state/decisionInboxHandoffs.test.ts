@@ -284,6 +284,10 @@ describe("decision inbox approval handoffs", () => {
       expect(docked()).toEqual(["listed"]);
       h.set(ref(a), [], "live", null, [handoffItem(approval("older"))]);
       expect(docked()).toEqual(["older", "listed"]);
+      // A server whose feed cannot list approvals relies on the thread alone, so it must be live too.
+      h.registry.set(h.feeds(a), { items: [] });
+      h.set(ref(a), [], "cached", "Disconnected", [handoffItem(approval("stale"))]);
+      expect(docked()).toEqual([]);
     } finally {
       stopDock();
       h.registry.dispose();
