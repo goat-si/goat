@@ -143,10 +143,14 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 		block("pen-"+h.Name, h.User)
 	}
 	// Exact blocks come before pen-*: OpenSSH keeps the first value it reads, so pen-<nodeId> never takes the
-	// fallback's ProxyCommand or its shared connection, which another route may have opened. They come after
-	// the name blocks, so a name equal to a node id keeps the block it had (that alias is not exact).
+	// fallback's ProxyCommand or its shared connection, which another route may have opened. An id another
+	// member uses as a name gets none, so that alias stays exactly as it was (and is not exact).
+	names := map[string]bool{}
 	for _, h := range hosts {
-		if h.NodeID == "" {
+		names[h.Name] = true
+	}
+	for _, h := range hosts {
+		if h.NodeID == "" || names[h.NodeID] {
 			continue
 		}
 		fmt.Fprintf(&b, "Host pen-%s\n", h.NodeID)

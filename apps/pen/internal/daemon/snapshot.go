@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"time"
 )
 
 // Snapshot is one watch.snapshot line (contract "Snapshot watch"): the whole member list, every time.
@@ -29,10 +28,8 @@ type SnapshotMember struct {
 	Online   bool     `json:"online"`
 }
 
+// maxSnapWatchers bounds watch.snapshot; each line's write is bounded by the control connection (boundedConn).
 const maxSnapWatchers = 8
-
-// snapshotWriteTimeout bounds one line to a snapshot watcher; a socket that does not take it is closed.
-var snapshotWriteTimeout = 5 * time.Second
 
 // snapshotLineLocked renders the current snapshot; d.mu is held.
 func (d *Daemon) snapshotLineLocked() []byte {
@@ -86,9 +83,6 @@ func (d *Daemon) controlSnapshot(ctx context.Context, c net.Conn, fail func(erro
 		d.mu.Unlock()
 	}()
 	write := func(line []byte) bool {
-		if err := c.SetWriteDeadline(time.Now().Add(snapshotWriteTimeout)); err != nil {
-			return false
-		}
 		_, err := c.Write(line)
 		return err == nil
 	}

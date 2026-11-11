@@ -495,7 +495,7 @@ way: the local management page (dashboard) cannot register, and neither can a me
   exactly as long as this connection. When the connection closes, the node removes registration R and nothing
   else, so an old holder's exit never removes a newer registration.
 - A new registration for N replaces the current one: the node sends `{"t":"replaced","id":R}` (R the old id) on the
-  old connection, giving that write 1 s, and closes it, so the old holder learns it lost the name. A node holds at
+  old connection, giving that write 5 s like every control write, and closes it, so the old holder learns it lost the name. A node holds at
   most 8 names; a request for a ninth is refused. The node ignores anything a holder sends after its request.
 - K is exactly 43 base64url characters without padding that decode to 32 bytes and encode back to the same text; N
   and P follow the rules above; anything else is refused.
@@ -549,7 +549,7 @@ Rules for the program; GOAT implements them:
 - Before the proof: at most 16 connections in the handshake at once, the 17th closed at accept; 3 s from accept to a
   verified line 3; line 1 read with a 128-byte cap up to the LF, line 3 with a 2,200-byte cap. Decoding is exact: the
   fixed prefix, base64url fields of exactly 43 characters that decode to 32 bytes and encode back to the same text, no
-  CR, line 2 split at its last SP, J strict JSON with no unknown, missing or duplicate members and the value types
+  CR, line 3 split at its last SP, J strict JSON with no unknown, missing or duplicate members and the value types
   above. The program compares B in constant time over J's exact bytes, then checks that M and S equal the mesh id and
   node id it pinned for this machine. Any violation, EOF or timeout closes the socket with no reply.
 - After the proof: at most 32 live connections per calling node id and 128 in total, extras closed at once. A

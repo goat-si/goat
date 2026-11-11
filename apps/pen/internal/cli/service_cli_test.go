@@ -455,7 +455,7 @@ func TestSSHConfigKeepsEveryNameBlockAsItWasEvenANameThatEqualsANodeID(t *testin
 	hosts := []sshHost{
 		{Name: "dup", User: "u1", NodeID: id1, NoisePub: k(1)},
 		{Name: "dup", User: "u2", NodeID: id2, NoisePub: k(2)},
-		{Name: id1, User: "u3", NodeID: id3, NoisePub: k(3)},
+		{Name: id1, NodeID: id3, NoisePub: k(3)}, // no User: the exact block must not lend it one
 	}
 	cmd := proxyPrefix("/bin/pen", "")
 	got := sshConfigText(cmd, "/k/known_hosts", "/k", hosts)
@@ -473,6 +473,9 @@ func TestSSHConfigKeepsEveryNameBlockAsItWasEvenANameThatEqualsANodeID(t *testin
 		if g != sshG(t, old, "pen-"+id1) {
 			t.Fatalf("pen-<id1> changed for people:\n%s", g)
 		}
+	}
+	if strings.Contains(got, "Host pen-"+id1+"\n    User u1") || strings.Count(got, "Host pen-"+id1+"\n") != 1 {
+		t.Fatalf("an id another member uses as a name got an exact block:\n%s", got)
 	}
 	if g := sshG(t, got, "pen-"+id2); g != "" && !strings.Contains(g, "--node "+id2+" --noise "+k(2)+" 22") {
 		t.Fatalf("pen-<id2> is not exact:\n%s", g)

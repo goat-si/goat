@@ -31,11 +31,10 @@ const (
 	answerCap = 128
 )
 
-// Local delivery deadlines, and how long a replaced holder gets to read its notice (variables for tests).
+// Local delivery deadlines (variables for tests).
 var (
 	deliveryDialTimeout   = 5 * time.Second
 	deliveryAnswerTimeout = 5 * time.Second
-	replacedWriteTimeout  = time.Second
 )
 
 // strictB64 is base64url without padding that refuses non-zero trailing bits, so one key has one text.
@@ -435,7 +434,6 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, req Request, r
 	if old != nil {
 		closeAll(conns)
 		old.wmu.Lock()
-		old.holder.SetWriteDeadline(time.Now().Add(replacedWriteTimeout))
 		io.WriteString(old.holder, `{"t":"replaced","id":"`+old.id+`"}`+"\n")
 		old.wmu.Unlock()
 		old.holder.Close()

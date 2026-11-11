@@ -97,7 +97,7 @@ Run `pen ssh-config --install` on the machine where GOAT runs. It adds an SSH ho
 `pen-<name>` for every member, with the member's login user and host keys, and keeps the list
 current as machines join or leave. GOAT finds these hosts like any other SSH host, so you can
 [open projects and start work](./remote-access.md#desktop-managed-ssh) on a member by choosing
-`pen-<name>`. `pen ssh-config --uninstall` removes them. Each member also gets `pen-<nodeId>` (the full id is in `pen ls --json`), which reaches exactly that machine and never shares a connection with another ssh.
+`pen-<name>`. `pen ssh-config --uninstall` removes them. Each member also gets `pen-<nodeId>` (the full id is in `pen ls --json`), which reaches exactly that machine and never shares a connection with another ssh (unless another member is named with that id, which keeps its old meaning).
 
 An SSH connection stays open for 10 minutes after you close it, so the next `ssh pen-<name>` starts
 almost at once. `ssh -o ControlPath=none pen-<name>` opens a separate connection. Windows's ssh cannot keep a

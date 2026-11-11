@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -762,5 +763,18 @@ func TestTheControlSocketClosesConnectionsPastItsCapAndServesTheOthers(t *testin
 		if err != nil || !bytes.Contains(line, []byte(`"nodeId"`)) {
 			t.Fatalf("a connection within the cap got %q, %v", line, err)
 		}
+	}
+}
+
+func TestAControlWriteToAClientThatStopsReadingEndsAtItsDeadline(t *testing.T) {
+	was := controlWriteTimeout
+	controlWriteTimeout = time.Millisecond
+	defer func() { controlWriteTimeout = was }()
+	server, client := net.Pipe() // a pipe has no buffer: a write waits for a reader that never comes
+	defer client.Close()
+	defer server.Close()
+	var ne net.Error
+	if _, err := (boundedConn{server}).Write([]byte("line\n")); !errors.As(err, &ne) || !ne.Timeout() {
+		t.Fatalf("got %v, want a write timeout", err)
 	}
 }
