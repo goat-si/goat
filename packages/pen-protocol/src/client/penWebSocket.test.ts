@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { fromHex, toHex } from "./bytes.ts";
 import { websocketAccept } from "./http1.ts";
 import {
@@ -209,6 +209,33 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
     await c.whenEvent("close");
     expect(c.events.map((e) => e.type)).toEqual(["open", "close"]);
     expect(c.events.at(-1)).toMatchObject({ code: 1000 });
+  });
+
+  it("a listener that throws is reported, and delivery and the close go on", async () => {
+    const reported: Array<unknown> = [];
+    vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
+    try {
+      const c = await connected();
+      for (const type of ["message", "error", "close"] as const) {
+        c.socket.addEventListener(type, () => {
+          throw new Error(type + " listener");
+        });
+      }
+      c.accept();
+      await c.opened;
+      c.server.write("\x81\x01A\x81\x01B\xc1\x00");
+      await c.whenEvent("close");
+      expect(c.events.map((e) => e.type)).toEqual(["open", "message", "message", "error", "close"]);
+      expect(c.events.at(-1)).toMatchObject({ code: 1002 });
+      expect(reported.map((error) => (error as Error).message)).toEqual([
+        "message listener",
+        "message listener",
+        "error listener",
+        "close listener",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("the stream ending between frames closes the socket once with 1006", async () => {

@@ -102,6 +102,8 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     open.socket.fail();
     await expect(waiting).rejects.toMatchObject({ code: "relay-closed", closeCode: 1006 });
     expect(await open.link.closed).toBe(1006);
+    // A socket that reported an error but did not close itself is closed (with no code).
+    expect(open.socket.closedWith).toBeNull();
   });
 
   it("a binary send the socket refuses ends the link 1006; close() finishes even when the socket's close throws", async () => {

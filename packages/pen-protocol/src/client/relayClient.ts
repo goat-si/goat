@@ -1,6 +1,6 @@
 // The relay client socket (CONTRACT "Relay", design 10.1): binary messages, ping, cumulative acks, the 1 MiB cap,
 // and bounds on what is held in either direction.
-import { PenError } from "./errors.ts";
+import { PenError, reportListenerError } from "./errors.ts";
 import type { Clock, Timer } from "./runtime.ts";
 
 export const RELAY_LIMITS = {
@@ -147,8 +147,12 @@ class Link implements RelayLink {
       this.#finish(typeof event.code === "number" ? event.code : 1006, false),
     );
     // A refused or broken connection reports an error (Node's ws throws an error event nobody listens to): the link
-    // ends 1006 at once, and the close event that may follow changes nothing.
-    socket.addEventListener("error", () => this.#finish(1006, false));
+    // ends 1006 at once and closes the socket, and the close event that may follow changes nothing.
+    socket.addEventListener("error", () => {
+      if (this.#state === "closed") return;
+      this.#closeSocket(undefined);
+      this.#finish(1006, false);
+    });
   }
 
   #onOpen(): void {
@@ -327,24 +331,24 @@ class Link implements RelayLink {
 
   close(code: number): void {
     if (this.#state === "closed") return;
-    const connecting = this.#state === "connecting";
+    this.#closeSocket(this.#state === "connecting" ? undefined : code);
     this.#finish(code, true);
-    try {
-      if (connecting) this.socket.close();
-      else this.socket.close(code);
-    } catch {
-      // A socket that cannot even close is dropped; the link is finished either way.
-    }
   }
 
   /** Ends the link after the socket refused a send: 1006 locally, and the socket is closed with no code. */
   #abort(): void {
     if (this.#state === "closed") return;
+    this.#closeSocket(undefined);
     this.#finish(1006, true);
+  }
+
+  /** Closes the socket first, so nothing a close observer does can keep it open. */
+  #closeSocket(code: number | undefined): void {
     try {
-      this.socket.close();
+      if (code === undefined) this.socket.close();
+      else this.socket.close(code);
     } catch {
-      // As in close().
+      // A socket that cannot even close is dropped; the link finishes either way.
     }
   }
 
@@ -372,6 +376,10 @@ class Link implements RelayLink {
     for (const waiter of this.#receivers.splice(0)) waiter.reject(error);
     for (const writer of this.#writers.splice(0)) writer.reject(error);
     this.#resolveClosed(code);
-    this.#onClose?.(code);
+    try {
+      this.#onClose?.(code);
+    } catch (error) {
+      reportListenerError(error);
+    }
   }
 }

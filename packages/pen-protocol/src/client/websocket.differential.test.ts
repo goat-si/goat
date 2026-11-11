@@ -165,7 +165,8 @@ function viaPen(port: number, replies: ReadonlyArray<string | Uint8Array>): Prom
             );
           }
         }
-        for (const event of decoder.push(bytes)) {
+        decoder.feed(bytes);
+        for (let event = decoder.next(); event !== null; event = decoder.next()) {
           seen.push(toSeen(event));
           if (event.type === "ping") socket.write(encodeFrame(Opcode.Pong, event.payload, random));
           if (event.type === "close") {

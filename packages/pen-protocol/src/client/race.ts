@@ -1,7 +1,7 @@
 // Opening a Pen session over the relays (CONTRACT "Several relays"): the handshake race for kind 0x01 (Go
 // daemon/race.go openSessionVia) and the ping race for kinds 0x03 and 0x04 (Go relay/socket.go Racer.Dial).
 import type { KeyPair } from "./crypto.ts";
-import { PenError } from "./errors.ts";
+import { PenError, reportListenerError } from "./errors.ts";
 import { type Kind, type SessionKeys, startInitiator } from "./noise.ts";
 import {
   dialRelay,
@@ -95,7 +95,13 @@ export class SecureSession {
 
   #onLinkClose(code: number): void {
     this.#closedCode = code;
-    for (const fn of this.#onClose.splice(0)) fn(code);
+    for (const fn of this.#onClose.splice(0)) {
+      try {
+        fn(code);
+      } catch (error) {
+        reportListenerError(error);
+      }
+    }
   }
 
   /** Takes the session's records, held ones first. */

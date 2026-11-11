@@ -9,6 +9,7 @@ import wsRules from "../../vectors/websocket-rules.json" with { type: "json" };
 import { fromHex, toHex } from "./bytes.ts";
 import { PenError } from "./errors.ts";
 import { ResponseParser, type ResponseEvent } from "./http1.ts";
+import { decodeInto } from "./testing/frames.ts";
 import { FrameDecoder, type FrameEvent } from "./websocket.ts";
 
 type Chunk =
@@ -94,7 +95,7 @@ function runHttp(context: HttpContext, pieces: ReadonlyArray<Uint8Array>) {
 function runWs(context: { readonly eof?: boolean }, pieces: ReadonlyArray<Uint8Array>) {
   const decoder = new FrameDecoder();
   const events: Array<FrameEvent> = [];
-  for (const piece of pieces) events.push(...decoder.push(piece));
+  for (const piece of pieces) decodeInto(decoder, piece, events);
   if (context.eof === true) events.push(...decoder.finish());
   return events.map((event) => {
     if (event.type === "message") {

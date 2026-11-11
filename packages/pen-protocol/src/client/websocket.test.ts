@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { FrameDecoder } from "./websocket.ts";
+import { decodeInto } from "./testing/frames.ts";
+import { FrameDecoder, type FrameEvent } from "./websocket.ts";
 
 function binaryFrame(length: number): Uint8Array {
   const head = Uint8Array.of(
@@ -24,8 +25,8 @@ describe("WebSocket message assembly (design 10.2: inbound held up to one messag
   it("a 256 KiB frame delivered one byte at a time is one message in one buffer no larger than the message", () => {
     const frame = binaryFrame(256 * 1024);
     const decoder = new FrameDecoder();
-    const events = [];
-    for (let i = 0; i < frame.length; i++) events.push(...decoder.push(frame.subarray(i, i + 1)));
+    const events: Array<FrameEvent> = [];
+    for (let i = 0; i < frame.length; i++) decodeInto(decoder, frame.subarray(i, i + 1), events);
     expect(events).toHaveLength(1);
     const message = events[0];
     expect(message?.type).toBe("message");
@@ -49,9 +50,8 @@ describe("WebSocket message assembly (design 10.2: inbound held up to one messag
     }
     const bytes = Uint8Array.from(fragments);
     const decoder = new FrameDecoder();
-    const events = [];
-    for (let i = 0; i < bytes.length; i += 7)
-      events.push(...decoder.push(bytes.subarray(i, i + 7)));
+    const events: Array<FrameEvent> = [];
+    for (let i = 0; i < bytes.length; i += 7) decodeInto(decoder, bytes.subarray(i, i + 7), events);
     expect(events).toHaveLength(1);
     expect(decoder.peakCapacity()).toBeLessThanOrEqual(2 * 1024 * 1024);
   });

@@ -472,25 +472,31 @@ export async function resumePairing(
   deps: PairingDeps,
   nodeId: string,
 ): Promise<PairingView | undefined> {
-  type Stage = "dropped" | "paired" | "none" | { readonly checking: string };
+  type Stage =
+    | "dropped"
+    | "none"
+    | { readonly checking: string }
+    | { readonly paired: PairingView };
   const stage = await update<Stage>(deps, nodeId, (record) => {
     if (record.pending?.stage === "pre-202")
       return { next: withoutPending(record), result: "dropped" };
     if (record.pending?.stage === "post-202")
       return { result: { checking: record.pending.key.publicKey } };
-    if (record.current !== undefined) return { result: "paired" };
+    if (record.current !== undefined) {
+      // Shown in the same turn as the read, so a Forget can only come after it.
+      return {
+        result: { paired: finish(deps, { tag: "paired", deviceId: record.current.deviceId }) },
+      };
+    }
     return { result: "none" };
   });
   if (stage === "dropped") {
     return finish(deps, { tag: "not-paired", reason: "interrupted before the server answered" });
   }
+  if (stage === "none") return undefined;
+  if ("paired" in stage) return stage.paired;
   // Recovery checks the attempt it found; one that was discarded or replaced meanwhile is not adopted.
-  if (typeof stage === "object") return checking(deps, nodeId, stage.checking);
-  if (stage === "paired") {
-    const record = await deps.store.load(nodeId);
-    return finish(deps, { tag: "paired", deviceId: record?.current?.deviceId ?? null });
-  }
-  return undefined;
+  return checking(deps, nodeId, stage.checking);
 }
 
 /**

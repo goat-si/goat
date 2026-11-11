@@ -1,7 +1,7 @@
 // A WebSocketLike over a Pen stream (design 10.1, 10.2), for the effect Socket.WebSocketConstructor seam.
 // Frames out are masked with a fresh CSPRNG mask; frames in are decoded by FrameDecoder; one message is held at a time.
 import { utf8Encode } from "./bytes.ts";
-import { PenError } from "./errors.ts";
+import { PenError, reportListenerError } from "./errors.ts";
 import { ResponseParser } from "./http1.ts";
 import type { Clock, Random, Timer } from "./runtime.ts";
 import type { PenStream } from "./stream.ts";
@@ -120,7 +120,11 @@ class PenWebSocket implements PenWebSocketLike {
     if (set === undefined) return;
     for (const entry of Array.from(set)) {
       if (entry.once) set.delete(entry);
-      entry.listener(event);
+      try {
+        entry.listener(event);
+      } catch (error) {
+        reportListenerError(error);
+      }
     }
   }
 

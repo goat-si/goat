@@ -4,8 +4,9 @@ import wsCases from "../../vectors/websocket-malformed.json" with { type: "json"
 import { fromHex } from "./bytes.ts";
 import { PenError } from "./errors.ts";
 import { ResponseParser } from "./http1.ts";
+import { decodeInto } from "./testing/frames.ts";
 import { seededRandom } from "./testing/seededRandom.ts";
-import { FrameDecoder } from "./websocket.ts";
+import { FrameDecoder, type FrameEvent } from "./websocket.ts";
 
 type Rand = ReturnType<typeof seededRandom>;
 const MAX_SEED = 4096;
@@ -55,32 +56,40 @@ function mutate(rand: Rand, input: Uint8Array, pool: ReadonlyArray<Uint8Array>):
   return Uint8Array.from(bytes.map((b) => b & 255));
 }
 
-/** Splits at random points, feeding pieces and the EOF, recording events or the first PenError. */
+/** A parser under test: it appends each event it decodes to out, as it decodes it. */
+interface Target<T> {
+  push(bytes: Uint8Array, out: Array<T>): void;
+  finish(out: Array<T>): void;
+}
+
+/**
+ * Splits at random points, feeding pieces and the EOF, recording events or the first PenError. With
+ * keepsEvents, the events before an error are part of the outcome too: a caller acts on each as it comes.
+ */
 function run<T>(
-  make: () => { push(b: Uint8Array): Array<T>; finish(): Array<T> },
+  make: () => Target<T>,
   input: Uint8Array,
   cuts: ReadonlyArray<number>,
   eof: boolean,
+  keepsEvents: boolean,
 ) {
   const target = make();
   const events: Array<T> = [];
+  const shown = () =>
+    JSON.stringify(mergeBodies(events), (_k, v) => (v instanceof Uint8Array ? [...v] : v));
   let last = 0;
   try {
     for (const cut of [...cuts, input.length]) {
-      events.push(...target.push(input.subarray(last, cut)));
+      target.push(input.subarray(last, cut), events);
       last = cut;
     }
-    if (eof) events.push(...target.finish());
-    return {
-      events: JSON.stringify(mergeBodies(events), (_k, v) =>
-        v instanceof Uint8Array ? [...v] : v,
-      ),
-    };
+    if (eof) target.finish(events);
+    return { events: shown() };
   } catch (error) {
     // Only PenError may escape a parser, and after it the parser accepts nothing more.
     expect(error).toBeInstanceOf(PenError);
-    expect(() => target.push(Uint8Array.of(0))).toThrow(error as PenError);
-    return { error: (error as PenError).code };
+    expect(() => target.push(Uint8Array.of(0), [])).toThrow(error as PenError);
+    return { error: (error as PenError).code, ...(keepsEvents ? { before: shown() } : {}) };
   }
 }
 
@@ -106,7 +115,8 @@ function property<T>(
   name: string,
   seed: number,
   pool: Array<Uint8Array>,
-  make: (rand: Rand) => () => { push(b: Uint8Array): Array<T>; finish(): Array<T> },
+  make: (rand: Rand) => () => Target<T>,
+  keepsEvents: boolean,
 ) {
   it(name, () => {
     const rand = seededRandom(seed);
@@ -114,11 +124,11 @@ function property<T>(
       const input = mutate(rand, pool[rand.int(pool.length)] ?? new Uint8Array(), pool);
       const eof = rand.int(3) === 0;
       const factory = make(rand);
-      const whole = run(factory, input, [], eof);
+      const whole = run(factory, input, [], eof, keepsEvents);
       const cuts = Array.from({ length: rand.int(6) }, () => rand.int(input.length + 1)).sort(
         (a, b) => a - b,
       );
-      expect(run(factory, input, cuts, eof), "iteration " + i).toEqual(whole);
+      expect(run(factory, input, cuts, eof, keepsEvents), "iteration " + i).toEqual(whole);
     }
   });
 }
@@ -144,20 +154,35 @@ describe("fixed-seed fuzzing (design 10.2 exit criterion)", () => {
     (rand) => {
       const method = rand.int(5) === 0 ? "HEAD" : "GET";
       const upgrade = rand.int(3) === 0 ? { key: "dGhlIHNhbXBsZSBub25jZQ==" } : undefined;
-      return () =>
-        new ResponseParser({
+      return () => {
+        const parser = new ResponseParser({
           method,
           ...(upgrade === undefined ? {} : { upgrade }),
           bodyCap: 64 * 1024,
         });
+        return {
+          push: (bytes, out) => out.push(...parser.push(bytes)),
+          finish: (out) => out.push(...parser.finish()),
+        };
+      };
     },
+    // A failed response is dropped whole by the fetch adapter, so only the error must not depend on the split.
+    false,
   );
 
   property(
-    "WebSocket decoder: only PenError escapes, any split equals the whole input, errors are final",
+    "WebSocket decoder: only PenError escapes, any split gives the same events and error, errors are final",
     0xf022_0002,
     wsPool,
-    () => () => new FrameDecoder(),
+    () => (): Target<FrameEvent> => {
+      const decoder = new FrameDecoder();
+      return {
+        push: (bytes, out) => decodeInto(decoder, bytes, out),
+        finish: (out) => out.push(...decoder.finish()),
+      };
+    },
+    // The WebSocket adapter delivers each message as it is decoded, so events before an error count too.
+    true,
   );
 
   it("request, response, next request: a parser per exchange sees the same bytes split any way", () => {

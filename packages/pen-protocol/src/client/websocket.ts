@@ -160,14 +160,6 @@ export class FrameDecoder {
     }
   }
 
-  /** Feeds bytes and decodes every event they complete (for callers that hold no more than the input). */
-  push(bytes: Uint8Array): Array<FrameEvent> {
-    this.feed(bytes);
-    const events: Array<FrameEvent> = [];
-    for (let event = this.next(); event !== null; event = this.next()) events.push(event);
-    return events;
-  }
-
   /** The stream ended: inside a frame or a fragmented message that is an abnormal close (1006). */
   finish(): Array<FrameEvent> {
     if (this.#error !== undefined) throw this.#error;

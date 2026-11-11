@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import vector from "../../vectors/session.json" with { type: "json" };
 import { fromHex } from "./bytes.ts";
 import { generateX25519, type KeyPair, x25519PublicKey } from "./crypto.ts";
@@ -279,6 +279,31 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
       },
     });
     await expect(lone.result).rejects.toThrow("no socket");
+  });
+
+  it("a session close observer that throws is reported; the others still run and the socket is closed", async () => {
+    const reported: Array<unknown> = [];
+    vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
+    try {
+      const t = setup({ relays: [A] });
+      const a = t.fake.socketFor(A);
+      await flushOpen(a);
+      answer(a);
+      const { session } = await t.result;
+      let later = false;
+      session.onClose(() => {
+        throw new Error("observer");
+      });
+      session.onClose(() => {
+        later = true;
+      });
+      session.close(1000);
+      expect(a.closedWith).toBe(1000);
+      expect(later).toBe(true);
+      expect(reported).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

@@ -45,7 +45,10 @@ const fail = (rule: string, message: string) => new PenError("http1/" + rule, me
 const TCHAR = /^[!#$%&'*+.^_\x60|~0-9A-Za-z-]+$/;
 
 function tokens(values: ReadonlyArray<string>): Array<string> {
-  return values.flatMap((value) => value.split(",").map((token) => token.trim().toLowerCase()));
+  // Only SP and HTAB are HTTP whitespace (RFC 9110 OWS); String.trim() would also take NBSP and others.
+  return values.flatMap((value) =>
+    value.split(",").map((token) => token.replace(/^[ \t]+|[ \t]+$/g, "").toLowerCase()),
+  );
 }
 
 /** Sec-WebSocket-Accept for a key (RFC 6455 section 4.2.2). */

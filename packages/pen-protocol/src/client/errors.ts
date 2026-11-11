@@ -14,3 +14,16 @@ export class PenError extends Error {
     this.closeCode = options?.closeCode;
   }
 }
+
+/**
+ * Hands an exception thrown by a caller's listener to the platform, as an event target does: through reportError
+ * where the platform has it, else rethrown on its own microtask. The module's own work has already gone on.
+ */
+export function reportListenerError(error: unknown): void {
+  const report = (globalThis as { reportError?: (error: unknown) => void }).reportError;
+  if (typeof report === "function") report(error);
+  else
+    queueMicrotask(() => {
+      throw error;
+    });
+}

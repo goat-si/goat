@@ -188,12 +188,53 @@
       }
     },
     {
+      "id": "W08a",
+      "name": "close with a 123-byte reason (a 125-byte payload)",
+      "context": {},
+      "input": [
+        {
+          "hex": "887d03e8"
+        },
+        {
+          "repeatHex": "61",
+          "count": 123
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1000,
+            "reason": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      }
+    },
+    {
       "id": "W08b",
       "name": "ping with a 126-byte payload",
       "context": {},
       "input": [
         {
           "hex": "897e007e070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
+        }
+      ],
+      "expect": {
+        "error": "ws/W08",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W08b",
+      "name": "close with a 124-byte reason (a 126-byte payload)",
+      "context": {},
+      "input": [
+        {
+          "hex": "887e007e03e8"
+        },
+        {
+          "repeatHex": "61",
+          "count": 124
         }
       ],
       "expect": {

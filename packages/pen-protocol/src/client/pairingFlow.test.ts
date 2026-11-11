@@ -423,6 +423,24 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     expect(t.events).toContain("close");
   });
 
+  it("start-up recovery shows Paired in turn with other changes: a Forget meanwhile comes after it", async () => {
+    const current = {
+      key: { privateKey: "a", publicKey: "b" },
+      deviceId: "old",
+      server: { nodeId: NODE, noisePub: "x", relays: [] },
+    };
+    const t = setup({ record: { current } });
+    const gate = t.holdLoad(2);
+    const resumed = resumePairing(t.deps, NODE);
+    await Promise.race([resumed, t.when("load", 2)]);
+    const forgotten = forgetServer(t.deps, NODE);
+    await Promise.race([forgotten, resumed]);
+    gate.resolve();
+    await Promise.all([forgotten, resumed]);
+    expect(t.stored()).toBeUndefined();
+    expect(t.events.indexOf("show:paired")).toBeLessThan(t.events.indexOf("remove"));
+  });
+
   it("a late 409 for an attempt that was replaced does not remove the newer attempt's key", async () => {
     const t = setup();
     const done = runPairing(t.deps, qr);
