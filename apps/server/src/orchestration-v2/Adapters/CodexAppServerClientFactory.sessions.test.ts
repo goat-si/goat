@@ -169,6 +169,7 @@ const harness = Effect.fn("CodexFactorySessionsTest.harness")(function* (
   );
   return {
     open,
+    dir,
     detached,
     control,
     connected,
@@ -474,5 +475,48 @@ it.effect("a fence written after a kept record was retired restores the record w
       yield* detached.clearStopObligation(key, stop).pipe(Effect.flip);
       assert.notInclude(yield* recordFiles, kept.name + ".json");
     }).pipe(Effect.scoped);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a retired record with a fence write pending outlives the retired-record limit", () =>
+  Effect.gen(function* () {
+    const records = Array.from({ length: 34 }, (_, index) =>
+      recordFixture("codex-evict-" + String(index).padStart(2, "0"), 2000 + index, "s" + index),
+    );
+    const { open, detached, gone, recordFiles } = yield* harness(records);
+    for (const record of records) gone.add(record.pgid);
+    const [first, ...rest] = records;
+    if (first === undefined) return;
+    yield* open("thread-0", ProviderSessionId.make(first.providerSessionId)).pipe(Effect.scoped);
+    const goal = { threadId: ThreadId.make("thread-pending"), nativeThreadId: "native-pending" };
+    // Refused by the instance check, this write stays pending for the retired record.
+    const other = { instanceId: ProviderInstanceId.make("other"), recordName: first.name };
+    yield* detached.recordGoalBlock(other, goal).pipe(Effect.flip);
+    for (const record of rest)
+      yield* open("thread-" + record.name, ProviderSessionId.make(record.providerSessionId)).pipe(
+        Effect.scoped,
+      );
+    yield* detached.recordGoalBlock({ instanceId: codex, recordName: first.name }, goal);
+    assert.include(yield* recordFiles, first.name + ".json");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a retired record that cannot be read is never rewritten from its retired copy", () =>
+  Effect.gen(function* () {
+    const kept = recordFixture("codex-777777777777", 1014, sessionA);
+    const { open, dir, detached, gone } = yield* harness([kept]);
+    gone.add(kept.pgid);
+    const key = { instanceId: codex, recordName: kept.name };
+    const file = NodePath.join(dir, kept.name + ".json");
+    yield* open("thread-first", sessionA).pipe(Effect.scoped);
+    yield* detached.recordGoalBlock(key, {
+      threadId: ThreadId.make("thread-a"),
+      nativeThreadId: "native-a",
+    });
+    yield* Effect.promise(() => NodeFSP.writeFile(file, "{"));
+    yield* detached
+      .recordGoalBlock(key, { threadId: ThreadId.make("thread-b"), nativeThreadId: "native-b" })
+      .pipe(Effect.flip);
+    assert.equal(yield* Effect.promise(() => NodeFSP.readFile(file, "utf8")), "{");
   }).pipe(Effect.scoped),
 );

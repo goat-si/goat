@@ -226,8 +226,10 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const recordGate = yield* Semaphore.make(1);
   const fences = new Map<string, DetachedAppServerRecord>();
   const failedFences = new Map<string, ThreadId>();
-  // Records settleKept removed (at most 32); a fence written after removal restores its record.
+  // Records settleKept removed; a fence written after removal restores its record.
   const retiredRecords = new Map<string, DetachedAppServerRecord>();
+  const pendingFor = (name: string) =>
+    [...failedFences.keys()].some((k) => JSON.parse(k)[2] === name);
   const shuttingDown = yield* Ref.make(false);
   const blocked = yield* Ref.make(new Map<string, DetachedAppServerRecord>());
   /** Set when a record cannot be attributed to a provider instance or the records cannot be listed. */
@@ -883,10 +885,9 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
               return Effect.succeed("own" as const);
             if (current === undefined) return Effect.succeed("removed" as const);
             // A fence write that names this record and has not landed lives only in memory.
-            const pending = [...failedFences.keys()].some((k) => JSON.parse(k)[2] === record.name);
-            if (keep || pending || fenced.length > 0) return Effect.succeed("kept" as const);
-            if (retiredRecords.size >= 32) retiredRecords.clear();
-            retiredRecords.set(current.name, current);
+            if (keep || pendingFor(record.name) || fenced.length > 0)
+              return Effect.succeed("kept" as const);
+            KeptRecord.rememberRetired(retiredRecords, current, pendingFor);
             return removeRecordUnlocked(current).pipe(Effect.as("removed" as const));
           }),
         ),

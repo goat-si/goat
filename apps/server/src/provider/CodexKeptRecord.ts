@@ -156,12 +156,31 @@ export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(
 export const fenceCount = (record: DetachedAppServerRecord) =>
   (record.goalBlocks?.length ?? 0) + (record.stopObligations?.length ?? 0);
 
-/** A fence written after settleKept removed its record restores it; any other write still fails. */
-export const restoreRetired = <E>(
+const missing = (error: CodexDetachedAppServerError) =>
+  typeof error.cause === "object" &&
+  error.cause !== null &&
+  (error.cause as { code?: unknown }).code === "ENOENT";
+
+/** A fence written after settleKept removed its record restores it; any other failure stands. */
+export const restoreRetired = (
   retired: DetachedAppServerRecord | undefined,
   change: (record: DetachedAppServerRecord) => DetachedAppServerRecord,
-  error: E,
+  error: CodexDetachedAppServerError,
 ) =>
-  retired !== undefined && fenceCount(change(retired)) > 0
+  retired !== undefined && missing(error) && fenceCount(change(retired)) > 0
     ? Effect.succeed(retired)
     : Effect.fail(error);
+
+const RETIRED_LIMIT = 32;
+
+/** Remembers a retired record, evicting the oldest one that no fence write is pending for. */
+export const rememberRetired = (
+  retired: Map<string, DetachedAppServerRecord>,
+  record: DetachedAppServerRecord,
+  pending: (name: string) => boolean,
+) => {
+  const evict =
+    retired.size >= RETIRED_LIMIT ? [...retired.keys()].find((name) => !pending(name)) : undefined;
+  if (evict !== undefined) retired.delete(evict);
+  retired.set(record.name, record);
+};
