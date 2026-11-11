@@ -228,7 +228,7 @@ const make = Effect.gen(function* () {
     linkId: string | undefined,
     initial: HubParityResult,
     steps: HubDeviceStep[],
-    // After a join's guarded sync did not run cleanly, never fall back to an unguarded one.
+    // Join and re-link sync once, guarded; their ladder never adds an unguarded sync.
     skipSync = false,
   ) {
     let current = initial;
@@ -327,7 +327,7 @@ const make = Effect.gen(function* () {
       linkId,
       yield* parity.verify(alias, scope),
       steps,
-      synced.outcome !== "ok",
+      true,
     );
     const state = finalState(verified);
     yield* audit(caller, `hub.${action}`, alias, state, decisionId);

@@ -137,3 +137,13 @@ it.effect("a guarded join sync that failed is not retried by the ladder's unguar
     expect(hub.calls).not.toContain("device mac-studio sync");
   }),
 );
+
+it.effect("after the join's guarded sync ran, the ladder never syncs again unguarded", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, verdicts: [verdict(["P7"]), verdict()] });
+    yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(hub.calls.filter((call) => call.includes("sync"))).toEqual([
+      "sync mac-studio lnk_fedcba9876543210",
+    ]);
+  }),
+);
