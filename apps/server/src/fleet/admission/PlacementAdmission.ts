@@ -36,7 +36,10 @@ import {
 } from "./PlacementReservations.ts";
 
 export const RENEW_EVERY = Duration.minutes(1);
-export const JOIN_WAIT = Duration.seconds(20);
+/** How long a retry waits for the owner before it is told "unconfirmed, still pending". */
+export const JoinWait = Context.Reference<Duration.Duration>("goat/fleet/admission/JoinWait", {
+  defaultValue: () => Duration.seconds(20),
+});
 export const SWEEP_EVERY = Duration.seconds(30);
 export const PRUNE_EVERY = Duration.hours(24);
 
@@ -174,7 +177,11 @@ const make = Effect.gen(function* () {
       // A renewal that matches no row means the reservation was fenced: stop the launch.
       const renewing = yield* now.pipe(
         Effect.flatMap((at) => store.renew({ commandId, epoch, now: at })),
-        Effect.orElseSucceed(() => true),
+        // A failed renewal write proves nothing; the sweep fences a lease that really lapsed.
+        Effect.catchTags({
+          PlacementStoreError: (error) =>
+            Effect.logWarning("placement lease renewal failed", { error }).pipe(Effect.as(true)),
+        }),
         Effect.flatMap((renewed) => (renewed ? Effect.void : Fiber.interrupt(running))),
         Effect.delay(RENEW_EVERY),
         Effect.forever,
@@ -260,7 +267,9 @@ const make = Effect.gen(function* () {
               case "Admitted": {
                 const done = yield* Deferred.make<void>();
                 owners.set(commandId, done);
+                // Admission is uninterruptible; the launch it hands off must stay interruptible.
                 yield* own(commandId, input.launch(commandId), done).pipe(
+                  Effect.interruptible,
                   Effect.forkIn(scope),
                   Effect.catchCause(() =>
                     store
@@ -275,7 +284,7 @@ const make = Effect.gen(function* () {
         ),
       );
       if ("answer" in step) return step.answer;
-      const finished = yield* Deferred.await(step.wait).pipe(Effect.timeoutOption(JOIN_WAIT));
+      const finished = yield* Deferred.await(step.wait).pipe(Effect.timeoutOption(yield* JoinWait));
       return Option.isNone(finished)
         ? ({ _tag: "Pending" } as const)
         : yield* readAnswer(commandId);
