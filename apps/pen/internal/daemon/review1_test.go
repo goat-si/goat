@@ -94,17 +94,22 @@ func TestTwoSimultaneousConfirmationsBurnTheInviteOnce(t *testing.T) {
 	for range 2 {
 		sec := <-secs
 		if sec == nil {
-			refused++
-			continue
+			t.Fatal("a confirmation could not be sent")
 		}
 		if err := echo(f.ctx, sec, "w"); err == nil {
 			open++
-		} else {
+		} else if code := closedWith(f.ctx, sec); code == wire.CodeNotAdmitted || relayCode(err) == wire.CodeNotAdmitted {
 			refused++
+		} else {
+			t.Fatalf("the losing confirmation ended with %v, want 4401", err)
 		}
 	}
 	if open != 1 || refused != 1 {
 		t.Fatalf("%d sessions open and %d refused; want exactly one winner", open, refused)
+	}
+	// One burn only: the next holder line is the cancel's answer, which finds the invite burned.
+	if m := f.h.op(t, cancelOp(id)); m["t"] != "invite-cancelled" || m["was"] != "burned" {
+		t.Fatalf("after the race the holder read %v, want the cancel answer reporting burned", m)
 	}
 }
 
@@ -180,13 +185,13 @@ func TestNoQueuedHolderLineIsWrittenAfterReplaced(t *testing.T) {
 	defer far.Close()
 	q := newHolderQueue(near)
 	reached, release := make(chan struct{}), make(chan struct{})
-	q.beforeWrite = func() {
+	q.whileWriting = func() {
 		close(reached)
 		<-release
 	}
 	go q.run()
 	q.push([]byte("stale\n"))
-	<-reached // the writer saw a ready line and has not taken write ownership
+	<-reached // the writer holds write ownership for a ready line and has not written
 	got := make(chan string, 1)
 	go func() {
 		var b strings.Builder
@@ -200,7 +205,8 @@ func TestNoQueuedHolderLineIsWrittenAfterReplaced(t *testing.T) {
 			}
 		}
 	}()
-	q.failWith([]byte("replaced\n"))
+	go q.failWith([]byte("replaced\n"))
+	<-q.dead // failWith marked the queue failed and waits for write ownership
 	close(release)
 	if s := <-got; s != "replaced\n" {
 		t.Fatalf("the holder read %q, want only the replaced line", s)

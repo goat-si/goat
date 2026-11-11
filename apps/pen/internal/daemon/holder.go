@@ -29,14 +29,14 @@ type holderQueue struct {
 	// write failed, possibly part way through a line, after which nothing more is written.
 	wmu    sync.Mutex
 	broken bool
-	// beforeWrite, when set, runs after an entry is ready and before its write takes wmu (tests).
-	beforeWrite func()
-	mu          sync.Mutex
-	entries     []*holderEntry
-	failed      bool
-	wake        chan struct{}
-	dead        chan struct{}
-	once        sync.Once
+	// whileWriting, when set, runs once the writer holds wmu for a ready entry, before it checks and writes (tests).
+	whileWriting func()
+	mu           sync.Mutex
+	entries      []*holderEntry
+	failed       bool
+	wake         chan struct{}
+	dead         chan struct{}
+	once         sync.Once
 }
 
 func newHolderQueue(c net.Conn) *holderQueue {
@@ -119,10 +119,10 @@ func (q *holderQueue) run() {
 		case <-q.dead:
 			return
 		}
-		if q.beforeWrite != nil {
-			q.beforeWrite()
-		}
 		q.wmu.Lock()
+		if q.whileWriting != nil {
+			q.whileWriting()
+		}
 		q.mu.Lock()
 		failed := q.failed
 		q.mu.Unlock()

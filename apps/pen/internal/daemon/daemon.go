@@ -72,6 +72,13 @@ type Options struct {
 	// ClientClosing, when set, runs when the owner of a client session's close starts closing it, before it takes
 	// the session's gate (tests).
 	ClientClosing func()
+	// ClientClosed, when set, runs when that owner has closed the session and its local connection, before it signals
+	// the session closed (tests).
+	ClientClosed func()
+	// RegistrationEnding, when set, runs as a registration's single teardown starts (tests).
+	RegistrationEnding func()
+	// HolderWriting, when set, runs as a holder queue's writer holds write ownership, before it writes (tests).
+	HolderWriting func()
 	// ClientEnded, when set, runs when the goroutine that accepted a confirmed client or pairing session is done with
 	// it, after everything that goroutine releases (tests).
 	ClientEnded func()

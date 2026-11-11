@@ -167,6 +167,9 @@ func (d *Daemon) closeOwned(l *live, code uint16) {
 	if l.slot != nil {
 		d.svc.releasePhone(l.slot)
 	}
+	if d.opt.ClientClosed != nil {
+		d.opt.ClientClosed()
+	}
 	close(l.closed)
 }
 
@@ -205,17 +208,30 @@ func (d *Daemon) selectLocked(match func(*live) bool) (mine []*live, waits []cha
 
 // endRegistration closes the client and pairing sessions admitted under reg with 4401 and the connections delivered
 // to it, and returns once all of them are closed.
-func (d *Daemon) endRegistration(reg *serviceReg, conns []net.Conn) {
-	d.mu.Lock()
-	mine, waits := d.selectLocked(func(l *live) bool { return l.reg == reg })
-	d.mu.Unlock()
-	for _, l := range mine {
-		d.closeOwned(l, wire.CodeNotAdmitted)
-	}
-	closeAll(conns)
-	for _, w := range waits {
-		<-w
-	}
+// It runs once, whoever calls it first (the registration's own end or its replacement); every caller returns only
+// once it finished. reg must have ended.
+func (d *Daemon) endRegistration(reg *serviceReg) {
+	reg.endOnce.Do(func() {
+		if d.opt.RegistrationEnding != nil {
+			d.opt.RegistrationEnding()
+		}
+		d.svc.mu.Lock()
+		conns := reg.endConns
+		reg.endConns = nil
+		d.svc.mu.Unlock()
+		d.mu.Lock()
+		mine, waits := d.selectLocked(func(l *live) bool { return l.reg == reg })
+		d.mu.Unlock()
+		for _, l := range mine {
+			d.closeOwned(l, wire.CodeNotAdmitted)
+		}
+		closeAll(conns)
+		for _, w := range waits {
+			<-w
+		}
+		close(reg.endDone)
+	})
+	<-reg.endDone
 }
 
 // liveLink is a client session as a stream link: its closes go through the session's single owner.

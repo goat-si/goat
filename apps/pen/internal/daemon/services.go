@@ -82,9 +82,14 @@ type serviceReg struct {
 	holder net.Conn
 	// wmu orders the holder's registered answer and a replaced notice.
 	wmu sync.Mutex
-	// ended and conns are guarded by serviceBook.mu: conns are the deliveries committed to it.
-	ended bool
-	conns map[net.Conn]struct{}
+	// ended and conns are guarded by serviceBook.mu: conns are the deliveries committed to it; once it ended,
+	// endConns are the deliveries its single teardown (endRegistration) closes.
+	ended    bool
+	conns    map[net.Conn]struct{}
+	endConns []net.Conn
+	// endOnce runs the teardown once, whoever ends the registration first; endDone closes when it finished.
+	endOnce sync.Once
+	endDone chan struct{}
 	// gen, clients and invite are the v1.3 ops' state, guarded by serviceBook.mu: the last list generation applied,
 	// the listed client keys (noisePub to client id) and the live service invite. out carries answers and events.
 	gen     uint64
@@ -106,9 +111,8 @@ type serviceBook struct {
 
 var errTooManyServices = fmt.Errorf("this node already holds %d service names", maxServices)
 
-// add makes reg current for its name and returns the registration it replaced, if any, already ended,
-// with the deliveries that were committed to it.
-func (b *serviceBook) add(reg *serviceReg) (*serviceReg, []net.Conn, error) {
+// add makes reg current for its name and returns the registration it replaced, if any, already ended.
+func (b *serviceBook) add(reg *serviceReg) (*serviceReg, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.byName == nil {
@@ -116,37 +120,38 @@ func (b *serviceBook) add(reg *serviceReg) (*serviceReg, []net.Conn, error) {
 	}
 	old := b.byName[reg.name]
 	if old == nil && len(b.byName) >= maxServices {
-		return nil, nil, errTooManyServices
+		return nil, errTooManyServices
 	}
 	b.byName[reg.name] = reg
 	if old == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	return old, b.endLocked(old), nil
+	b.endLocked(old)
+	return old, nil
 }
 
-func (b *serviceBook) endLocked(reg *serviceReg) []net.Conn {
+// endLocked ends reg: it stops being current, forgets its list and invite, and hands its committed deliveries to
+// its teardown.
+func (b *serviceBook) endLocked(reg *serviceReg) {
 	if b.byName[reg.name] == reg {
 		delete(b.byName, reg.name)
 	}
 	if reg.ended {
-		return nil
+		return
 	}
 	reg.ended = true
 	reg.clients, reg.invite = nil, nil
-	conns := make([]net.Conn, 0, len(reg.conns))
 	for c := range reg.conns {
-		conns = append(conns, c)
+		reg.endConns = append(reg.endConns, c)
 	}
 	reg.conns = nil
-	return conns
 }
 
-// end removes reg (only reg, never a newer registration of its name) and returns its committed deliveries.
-func (b *serviceBook) end(reg *serviceReg) []net.Conn {
+// end removes reg (only reg, never a newer registration of its name).
+func (b *serviceBook) end(reg *serviceReg) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.endLocked(reg)
+	b.endLocked(reg)
 }
 
 func (b *serviceBook) lookup(name string) *serviceReg {
@@ -456,9 +461,10 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	idb := make([]byte, 16)
 	rand.Read(idb)
 	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c,
-		out: newHolderQueue(c)}
+		out: newHolderQueue(c), endDone: make(chan struct{})}
+	reg.out.whileWriting = d.opt.HolderWriting
 	reg.wmu.Lock()
-	old, conns, err := d.svc.add(reg)
+	old, err := d.svc.add(reg)
 	if err != nil {
 		reg.wmu.Unlock()
 		fail(err)
@@ -468,16 +474,17 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	d.spawn(reg.out.run)
 	reg.wmu.Unlock()
 	if old != nil {
-		// The old holder learns at once, without waiting for queued lines or for its sessions' closes, which run
-		// beside the new registration.
+		// The old registration's sessions and deliveries close at once, and its holder is told beside that: neither
+		// waits for the other, nor for queued lines.
+		d.spawn(func() { d.endRegistration(old) })
 		old.wmu.Lock()
 		old.wmu.Unlock()
-		old.out.failWith([]byte(`{"t":"replaced","id":"` + old.id + `"}` + "\n"))
-		d.spawn(func() { d.endRegistration(old, conns) })
+		d.spawn(func() { old.out.failWith([]byte(`{"t":"replaced","id":"` + old.id + `"}` + "\n")) })
 	}
 	defer func() {
 		reg.out.fail()
-		d.endRegistration(reg, d.svc.end(reg))
+		d.svc.end(reg)
+		d.endRegistration(reg)
 		if d.opt.ServiceEnded != nil {
 			d.opt.ServiceEnded(reg.id)
 		}
