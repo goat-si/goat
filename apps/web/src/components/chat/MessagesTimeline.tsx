@@ -1,4 +1,5 @@
-import { keyExtractor, getItemType } from "./timelineListItems";
+import { useDisclosureReveal } from "./useDisclosureReveal";
+import { keyExtractor, getItemType, timelineListStateFor } from "./timelineListItems";
 import {
   TimelineListFooter,
   TIMELINE_LIST_HEADER,
@@ -73,8 +74,6 @@ import { Skeleton } from "../ui/skeleton";
 import { ExpandedImagePreview } from "./ExpandedImagePreview";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
-  readTimelinePosition,
-  type RememberedTimelinePosition,
   rememberTimelinePosition,
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
@@ -115,7 +114,6 @@ import {
   type TimelineRowActivityState,
   TimelineRowCtx,
   TimelineRowActivityCtx,
-  type WorkGroupViewState,
   type TimelineRow,
 } from "./timelineRowContext";
 import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
@@ -146,22 +144,6 @@ import {
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
-
-function timelineListStateFor(identity: string): {
-  readonly identity: string;
-  readonly rememberedPosition: RememberedTimelinePosition | undefined;
-  readonly workGroupViewState: WorkGroupViewState;
-} {
-  const rememberedPosition = readTimelinePosition(identity);
-  return {
-    identity,
-    rememberedPosition,
-    workGroupViewState: rememberedPosition?.disclosures?.workGroupState ?? {
-      scrollPositions: new Map(),
-      expandedEntries: new Set(),
-    },
-  };
-}
 
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
@@ -481,6 +463,22 @@ const ConversationTimeline = memo(function ConversationTimeline({
     return disclosureAnchorKey === null || row.id === disclosureAnchorKey;
   };
 
+  const disclosureReveal = useDisclosureReveal({
+    listRef,
+    identity: listIdentityKey,
+    composerInset: contentInsetEndAdjustment,
+    reducedMotion: prefersReducedMotion,
+  });
+  const preserveDisclosurePosition = (
+    anchorKey: string,
+    reveal?: { readonly entryId?: string | undefined; readonly contentKey?: string | undefined },
+  ) => {
+    const following = isWorking && listRef.current?.getState().isFollowingEnd;
+    disclosureReveal.prepare(anchorKey, following ? undefined : reveal);
+    suspendEndScrollMaintenanceForDisclosure(anchorKey, !reveal);
+  };
+
+  // Turn and attempt folds reveal later rows rather than growing their own row.
   const onToggleTurnFold = (runId: RunId) => {
     suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
     setExpandedRunIds((existing) => {
@@ -494,7 +492,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   };
   const onToggleWorkGroup = (groupId: string, anchorKey: string) => {
-    suspendEndScrollMaintenanceForDisclosure(anchorKey, expandedWorkGroupIds.has(groupId));
+    preserveDisclosurePosition(
+      anchorKey,
+      expandedWorkGroupIds.has(groupId) ? undefined : { contentKey: `${groupId}:details` },
+    );
     setExpandedWorkGroupIds((existing) => {
       const next = new Set(existing);
       if (next.has(groupId)) {
@@ -1050,7 +1051,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
-    onToggleWorkEntry: suspendEndScrollMaintenanceForDisclosure,
+    onToggleWorkEntry: (anchorKey, collapsed, entryId) =>
+      preserveDisclosurePosition(anchorKey, collapsed ? undefined : { entryId }),
+    onWorkEntryContentReady: disclosureReveal.ready,
     onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
     onRetryCloudRun: onRetryCloudRun ?? null,
     retryableWorkspacePreparationRunIds,
@@ -1141,6 +1144,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     viewportRef.current = viewport;
     const detachViewport = viewport ? onViewportAttach?.(viewport) : undefined;
     const stopRememberingRelease = viewport?.onFollowReleased(rememberReleasedPosition);
+    const stopDisclosureReveal = viewport?.subscribe(disclosureReveal.clear);
     let contentSizeFrame: number | null = null;
     // LegendList lays rows out from layout effects; the next frame sees them settled.
     let scheduledData: unknown = null;
@@ -1155,6 +1159,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       contentSizeFrame = requestAnimationFrame(() => {
         contentSizeFrame = null;
         handleContentSizeChanged(laidOutData);
+        disclosureReveal.reveal();
       });
     };
     const stopListeningToContentSize = list
@@ -1165,7 +1170,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
       stopListeningToContentSize?.();
       stopRememberingRelease?.();
       onContentOverflowChange?.(false);
+      stopDisclosureReveal?.();
       if (contentSizeFrame !== null) cancelAnimationFrame(contentSizeFrame);
+      disclosureReveal.dispose();
       detachViewport?.();
       viewport?.dispose();
       if (viewportRef.current === viewport) viewportRef.current = null;
