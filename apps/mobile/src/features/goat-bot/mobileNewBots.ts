@@ -21,9 +21,9 @@ export type CreateNewBot = (name: string, clientRequestId: string) => Promise<Bo
 
 /**
  * Opens the created bot's chat if the person is still where they tapped; it decides from what is
- * true when the server answers.
+ * true when the server answers. It belongs to the roster mount that was tapped.
  */
-export type OpenIfStillHere = (bot: BotProfile) => void;
+export type OpenIfStillHere = (bot: BotProfile, sentTo: EnvironmentId) => void;
 
 interface Slot {
   readonly operation: NewBotOperation | null;
@@ -79,7 +79,7 @@ async function run(environmentId: EnvironmentId, create: CreateNewBot) {
     operation: null,
     created: [...slot.created.filter((bot) => bot.botId !== result.botId), result],
   });
-  open?.(result);
+  open?.(result, environmentId);
 }
 
 /**
@@ -128,7 +128,14 @@ export function retryNewBot(
 /** Ends a failed create; a later tap is a new request. */
 export function dismissNewBot(environmentId: EnvironmentId): void {
   const slot = slotOf(environmentId);
-  if (slot.operation?.phase === "failed") set(environmentId, { ...slot, operation: null });
+  if (slot.operation?.phase !== "failed") return;
+  intents.delete(environmentId);
+  set(environmentId, { ...slot, operation: null });
+}
+
+/** The roster that tapped has gone: its create answers into the list, opening nothing. */
+export function forgetNewBotIntent(environmentId: EnvironmentId, open: OpenIfStillHere): void {
+  if (intents.get(environmentId) === open) intents.delete(environmentId);
 }
 
 /** Removes a created bot's row before the list has it. */
@@ -147,11 +154,8 @@ export function settleListedNewBots(
   if (created.length !== slot.created.length) set(environmentId, { ...slot, created });
 }
 
-/** Environments the app no longer has (removed, or signed out): their creates are forgotten. */
-export function forgetNewBots(keep: ReadonlySet<string>): void {
-  for (const environmentId of slots.keys()) {
-    if (keep.has(environmentId)) continue;
-    intents.delete(environmentId);
-    set(environmentId, EMPTY);
-  }
+/** The environment left the app (removed, or signed out): its create and rows are forgotten. */
+export function forgetNewBotEnvironment(environmentId: EnvironmentId): void {
+  intents.delete(environmentId);
+  if (slots.has(environmentId)) set(environmentId, EMPTY);
 }

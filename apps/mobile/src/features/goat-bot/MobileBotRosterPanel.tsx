@@ -1,16 +1,21 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelTaskId } from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import { Alert, AppState, Pressable, Text, View } from "react-native";
-import { useEnvironments } from "../../state/environments";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { MobileBotRosterView } from "./MobileBotRosterView";
-import { currentGoatBotRefEnvironment } from "./mobileGoatBotRefEnvironment";
 import {
   dismissCreatedBot,
   dismissNewBot,
-  forgetNewBots,
+  forgetNewBotIntent,
   newBotSlot,
   retryNewBot,
   settleListedNewBots,
@@ -44,21 +49,45 @@ export function MobileBotRoster(props: {
     manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
   const { onOpenBot } = props;
   const navigation = useNavigation();
-  // Where the person is, read at the tap and again when the create answers: the new chat opens only
-  // if nothing changed in between and the app is in front. One comparison; nothing watches.
+  // This roster mount as it is now: whether it is mounted and on screen, and its environment. A
+  // create's answer reads it then; the open belongs to the mount that was tapped.
+  const visible = props.visible !== false;
+  const mount = useRef({ mounted: true, visible, environmentId });
+  const issued = useRef(new Map<OpenIfStillHere, NonNullable<typeof environmentId>>());
+  // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this mount's committed visibility and environment.
+  useLayoutEffect(() => {
+    mount.current = { mounted: true, visible, environmentId };
+  }, [visible, environmentId]);
+  // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers.
+  useEffect(() => {
+    const live = mount.current;
+    const opens = issued.current;
+    return () => {
+      mount.current = { ...live, mounted: false };
+      for (const [open, sentTo] of opens) forgetNewBotIntent(sentTo, open);
+      opens.clear();
+    };
+  }, []);
+  // The new chat opens only if, when the create answers: the app is in front, this roster is still
+  // mounted and on screen, the focused route at every level reads as at the tap, and the roster
+  // still shows the environment the create was sent to. Read then; nothing watches.
   const openIfStillHere = (): OpenIfStillHere => {
     const tapped = whereNow(navigation);
-    return (bot) => {
-      if (AppState.currentState === "active" && whereNow(navigation) === tapped)
+    const open: OpenIfStillHere = (bot, sentTo) => {
+      issued.current.delete(open);
+      const now = mount.current;
+      if (
+        AppState.currentState === "active" &&
+        now.mounted &&
+        now.visible &&
+        whereNow(navigation) === tapped &&
+        now.environmentId === sentTo
+      )
         onOpenBot({ kind: "member", profile: bot });
     };
+    if (environmentId !== null) issued.current.set(open, environmentId);
+    return open;
   };
-  const { presentationById } = useEnvironments();
-  const environmentKeys = [...presentationById.keys()].sort().join(" ");
-  // oxlint-disable-next-line goat/react-effect-budget -- A removed environment, or signing out, ends that environment's create and its rows.
-  useEffect(() => {
-    forgetNewBots(new Set(environmentKeys === "" ? [] : environmentKeys.split(" ")));
-  }, [environmentKeys]);
   const listed = roster.listedBots;
   const refreshBots = roster.refreshBots;
   const refreshedFor = useRef(new Set<string>());
@@ -187,7 +216,7 @@ type Navigation = Omit<NavigationProp<ParamListBase>, "getParent"> & {
 type Route = { readonly key: string; readonly params?: object; readonly state?: State };
 type State = { readonly index?: number; readonly routes: ReadonlyArray<Route> };
 
-/** The focused route at every level, with its params, and the chosen bot's environment. */
+/** The focused route at every level, with its params. */
 function whereNow(navigation: ReturnType<typeof useNavigation>): string {
   let root = navigation as unknown as Navigation;
   for (let parent = root.getParent(); parent !== undefined; parent = parent.getParent())
@@ -200,5 +229,5 @@ function whereNow(navigation: ReturnType<typeof useNavigation>): string {
     focused.push([route.key, route.params ?? null]);
     state = route.state;
   }
-  return JSON.stringify([focused, currentGoatBotRefEnvironment()]);
+  return JSON.stringify(focused);
 }

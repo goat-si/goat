@@ -47,21 +47,9 @@ const state = vi.hoisted(() => ({
   },
   appState: "active",
   rosterError: null as string | null,
-  refEnvironment: null as string | null,
-  environments: null as null | string[],
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
-}));
-vi.mock("./mobileGoatBotRefEnvironment", () => ({
-  currentGoatBotRefEnvironment: () => state.refEnvironment,
-}));
-vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({
-    presentationById: new Map(
-      (state.environments ?? [state.roster.environmentId]).map((id) => [id, {}]),
-    ),
-  }),
 }));
 vi.mock("react-native", () => ({
   View: ({
@@ -276,8 +264,6 @@ async function newBotRoster(options: { visible?: boolean; listed?: Array<object>
   state.roster.refreshBots = vi.fn();
   state.navState = { index: 0, routes: [{ key: "home", name: "Home" }] };
   state.appState = "active";
-  state.refEnvironment = state.roster.environmentId;
-  state.environments = null;
   state.rosterError = null;
   const answers: Array<(value: object | string) => void> = [];
   state.manage.create.mockReset();
@@ -291,6 +277,7 @@ async function newBotRoster(options: { visible?: boolean; listed?: Array<object>
     act(async () =>
       root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} visible={visible} />),
     );
+  const swap = (other: React.ReactNode) => act(async () => root.render(other));
   await draw();
   const members = () => state.members as { canCreate: boolean; onNewBot: () => void };
   return {
@@ -298,6 +285,7 @@ async function newBotRoster(options: { visible?: boolean; listed?: Array<object>
     opened,
     answers,
     draw,
+    swap,
     members,
     tap: () => act(async () => members().onNewBot()),
     answer: (value: object | string) => act(async () => answers.shift()?.(value)),
@@ -370,12 +358,6 @@ it("opens nothing when the person has moved on by the time the create answers, a
         state.appState = "background";
       },
     ],
-    [
-      "another bot environment",
-      () => {
-        state.refEnvironment = "env-other";
-      },
-    ],
   ];
   for (const [, move] of moves) {
     const view = await newBotRoster();
@@ -407,15 +389,29 @@ it("frees New bot as soon as the create answers, keeps the created bot's row unt
   await failed.unmount();
 });
 
-it("forgets a create when its environment leaves the app", async () => {
-  const view = await newBotRoster();
-  await view.tap();
-  state.environments = [];
-  await view.draw();
-  await view.answer(stored("research", "New bot"));
-  expect(view.opened).not.toHaveBeenCalled();
-  expect(view.container.textContent).toBe("");
-  await view.unmount();
+it("opens nothing once the tapped roster has gone, is off screen, or shows another environment", async () => {
+  // The Bots / Threads switch: the layout swaps the roster out for the thread list.
+  const switched = await newBotRoster();
+  await switched.tap();
+  await switched.swap(<div>Threads</div>);
+  await switched.answer(stored("research", "New bot"));
+  expect(switched.opened).not.toHaveBeenCalled();
+  await switched.unmount();
+  // Still mounted under another page.
+  const hidden = await newBotRoster();
+  await hidden.tap();
+  await hidden.draw(false);
+  await hidden.answer(stored("research", "New bot"));
+  expect(hidden.opened).not.toHaveBeenCalled();
+  await hidden.unmount();
+  // The roster now shows another environment's bots.
+  const moved = await newBotRoster();
+  await moved.tap();
+  state.roster.environmentId = "env-elsewhere";
+  await moved.draw();
+  await moved.answer(stored("research", "New bot"));
+  expect(moved.opened).not.toHaveBeenCalled();
+  await moved.unmount();
 });
 
 it("says why a create failed; Retry sends the same request and name, and Dismiss lets a later tap start anew", async () => {
