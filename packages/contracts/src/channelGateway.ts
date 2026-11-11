@@ -315,13 +315,14 @@ export const ChannelGetBotStatusResult = Schema.Struct({
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 
 /**
- * One thing a bot waits on the person for, across all of the owner's bots: an open question or
- * an approval, with the words its card shows and the card it opens. Newest first.
+ * One thing a bot waits on the person for, across all of the owner's bots: an open question, an
+ * approval, a sign-in or a usage-limit pause, with the words its card shows. `taskId` (with
+ * `questionId` or `requestId` when there is one) is the card or task view it opens.
  */
 export const ChannelOpenAsk = Schema.Struct({
   botId: BotId,
   taskId: ChannelTaskId,
-  kind: Schema.Literals(["question", "approval"]),
+  kind: Schema.Literals(["question", "approval", "sign_in", "usage_limit"]),
   text: Schema.String,
   askedAt: IsoDateTime,
   questionId: Schema.optionalKey(ChannelQuestionId),
@@ -330,7 +331,12 @@ export const ChannelOpenAsk = Schema.Struct({
 export type ChannelOpenAsk = typeof ChannelOpenAsk.Type;
 export const ChannelListOpenAsksInput = Schema.Struct({});
 export type ChannelListOpenAsksInput = typeof ChannelListOpenAsksInput.Type;
-export const ChannelListOpenAsksResult = Schema.Struct({ asks: Schema.Array(ChannelOpenAsk) });
+/** The newest asks; `total` counts them all, and `truncated` says it is a lower bound. */
+export const ChannelListOpenAsksResult = Schema.Struct({
+  asks: Schema.Array(ChannelOpenAsk),
+  total: NonNegativeInt,
+  truncated: Schema.Boolean,
+});
 export type ChannelListOpenAsksResult = typeof ChannelListOpenAsksResult.Type;
 
 /** Main first; never creates a bot. Deleted members only when asked for. */

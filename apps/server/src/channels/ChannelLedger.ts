@@ -58,6 +58,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { waitingTaskCondition } from "./channelWaitingTasks.ts";
 export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
@@ -1287,12 +1288,7 @@ const make = Effect.gen(function* () {
         sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
         FROM channel_tasks
-        WHERE owner_id = ${ownerId} AND bot_id = ${botId}
-          AND (status = 'waiting_input'
-            OR (status = 'running' AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0)
-            OR (status IN ('completed', 'failed') AND EXISTS (
-              SELECT 1 FROM json_each(task_json, '$.observed.needsYou')
-              WHERE json_extract(value, '$.kind') = 'approval')))
+        WHERE owner_id = ${ownerId} AND bot_id = ${botId} AND ${waitingTaskCondition(sql)}
       `,
       ).pipe(
         Effect.map((rows) => {

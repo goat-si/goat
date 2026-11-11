@@ -13,8 +13,7 @@ import {
   type ChannelCreateBotInput,
   type ChannelDeleteBotInput,
   ChannelGatewayError,
-  type ChannelOpenAsk,
-  CHANNEL_LIST_TASKS_MAX_LIMIT,
+  type ChannelListOpenAsksResult,
   type ChannelListBotsInput,
   type ChannelRestoreBotInput,
   type ChannelSetBotHiddenInput,
@@ -44,7 +43,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { botProfileKey } from "./channelBotLedger.ts";
 import { memberBotLaunchIdsFor, memberBotStepCommandIdFor } from "./channelIds.ts";
-import { newestAsks, openAsksFor } from "./channelOpenAsks.ts";
+import { listOpenAsks } from "./channelOpenAsks.ts";
 
 export type MemberBot = BotProfile;
 type Owner = Pick<ChannelConnectionOwner, "ownerId">;
@@ -81,7 +80,7 @@ export class ChannelBotMembers extends Context.Service<
     /** What this owner's bots wait on the person for, newest first. */
     readonly openAsks: (
       owner: Owner,
-    ) => Effect.Effect<ReadonlyArray<ChannelOpenAsk>, ChannelGatewayError>;
+    ) => Effect.Effect<ChannelListOpenAsksResult, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotMembers") {}
 
@@ -412,19 +411,14 @@ const make = Effect.gen(function* () {
   const openAsks: ChannelBotMembers["Service"]["openAsks"] = Effect.fn(
     "ChannelBotMembers.openAsks",
   )(function* (owner: Owner) {
-    const asks: Array<ChannelOpenAsk> = [];
     // The main bot takes channel work before its GOAT thread exists, so it is always asked.
     const members = (yield* profiles.list(owner)).map((bot) => bot.botId);
-    for (const botId of new Set([BotId.make(MAIN_BOT_ID), ...members])) {
-      const page = yield* ledger.listTasks({
-        ownerId: owner.ownerId,
-        botId,
-        statuses: ["running", "waiting_input"],
-        limit: CHANNEL_LIST_TASKS_MAX_LIMIT,
-      });
-      asks.push(...(yield* openAsksFor(botId, page.tasks, threads)));
-    }
-    return newestAsks(asks);
+    return yield* listOpenAsks({
+      sql,
+      threads,
+      ownerId: owner.ownerId,
+      botIds: new Set<string>([MAIN_BOT_ID, ...members]),
+    });
   }, Effect.mapError(failed));
 
   /** A rename or a new purpose leaves a line in that bot's conversation once it is saved. */
@@ -459,8 +453,7 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(ChannelBotMembers, make);
 
 export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => ({
-  [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () =>
-    service.openAsks(owner).pipe(Effect.map((asks) => ({ asks }))),
+  [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () => service.openAsks(owner),
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: (input: ChannelListBotsInput) =>
     service.list(input, owner).pipe(Effect.map((bots) => ({ bots }))),
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
