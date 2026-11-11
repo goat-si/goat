@@ -118,6 +118,7 @@ import { fromLenientJson } from "@goat/shared/schemaJson";
 import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@goat/shared/model";
+import { claudeVersionError } from "./ClaudeVersionError.ts";
 import {
   CLAUDE_RESUME_COMPACTION_COMPACT_ANSWER,
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
@@ -3869,6 +3870,7 @@ interface ClaudeLiveQueryContext {
   openedPermissionMode: PermissionMode;
   receivedInit: boolean;
   reportedModel: string | undefined;
+  claudeCodeVersion: string | undefined;
   permissionMode: PermissionMode;
   stopping: boolean;
   readonly subagentsFromEarlierProcesses: ReadonlySet<ActiveClaudeSubagent>;
@@ -9331,15 +9333,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               (message.terminal_reason == null ||
                 message.terminal_reason === "api_error" ||
                 message.terminal_reason === "blocking_limit");
-            // The CLI also labels 403 authentication_failed; show its text because login cannot grant access.
             const permissionDenied =
               message.subtype === "success" && message.api_error_status === 403;
+            const rewrittenVersionError = yield* claudeVersionError(
+              message,
+              liveQuery.claudeCodeVersion,
+              adapterOptions.settings,
+              context.input.runtimePolicy.cwd ?? undefined,
+              adapterOptions.environment,
+            ).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            );
             const failureHint = permissionDenied
               ? message.result
               : (context.authenticationFailureMessage ??
                 (usageLimited
                   ? "Claude usage limit reached. Send the message again once the limit resets."
-                  : undefined));
+                  : rewrittenVersionError));
             // Usage-limited /compact reports success; fail it so queued messages wait for the limit to clear.
             const limitedCompaction =
               usageLimited && message.subtype === "success" && message.local_command === "compact"
@@ -10411,6 +10422,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             openedPermissionMode: queryOptions.permissionMode,
             receivedInit: false,
             reportedModel: undefined,
+            claudeCodeVersion: undefined,
             permissionMode: queryOptions.permissionMode,
             stopping: false,
             handedOffSubagents: new Set(),
@@ -10448,6 +10460,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.openedPermissionMode =
                       message.permissionMode ?? context.openedPermissionMode;
                     context.receivedInit = true;
+                    context.claudeCodeVersion = message.claude_code_version;
                   }
                   if (
                     message.type === "system" &&
