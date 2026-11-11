@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off
 // Runs CI's fast checks for this branch's changes: format and lint of the
-// changed files, knip, generated GraphQL operations, typecheck of the affected
+// changed files, knip, generated GraphQL operations, the agent surface audit and context
+// budget, typecheck of the affected
 // packages and their dependents, and changed, companion, and importing tests (directly or through
 // testkit/fixture files), plus special suites. Production chains belong to broader CI lanes.
 // A change to prompt text also runs the provider replay suites that record it. A dependency change
@@ -22,7 +23,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { guardChild } from "../packages/shared/src/errorGuards.ts";
 import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
-import { isChangedCode, lintChangedArgs, vitePlusCommand } from "./check-changed-command.ts";
+import {
+  agentSurfaceCheckSteps,
+  isChangedCode,
+  lintChangedArgs,
+  vitePlusCommand,
+} from "./check-changed-command.ts";
 import { testsForChanges } from "./lib/changed-tests.ts";
 import { splitTests } from "./lib/split-tests.ts";
 
@@ -249,6 +255,7 @@ const steps = [
     name: `graphql (${dir})`,
     args: ["run", "--filter", `./${dir}`, "generate", "--check"],
   })),
+  ...agentSurfaceCheckSteps(files),
   affected.length > 0 && {
     name: `typecheck (${affected.length} packages)`,
     // `tsc --noEmit` writes nothing another package reads, so dependency order
