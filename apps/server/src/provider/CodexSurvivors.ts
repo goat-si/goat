@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as Detached from "./CodexDetachedAppServerLive.ts";
@@ -28,6 +29,7 @@ import {
   type DetachedClassification,
 } from "./CodexDetachedAppServer.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { holdLostConnectionTurn } from "./CodexLostConnectionHold.ts";
 import { servesSession } from "./CodexRecordSessions.ts";
 import { containRecoveryThread, type RecoveryRun } from "./CodexSurvivorRecoveryContainment.ts";
 
@@ -199,6 +201,14 @@ export class CodexSurvivors extends Context.Service<
     readonly setStartWake: (wake: Effect.Effect<void>) => Effect.Effect<void>;
     /** Runs `effect` after every fence or binding change, beside the start wake; keep it cheap. */
     readonly onFenceChange: (effect: Effect.Effect<void>) => Effect.Effect<void>;
+    /**
+     * Holds the thread behind a turn whose connection dropped while its process kept running, until
+     * the turn ends; false when the process is verified gone.
+     */
+    readonly holdLostConnectionTurn?: (
+      record: CodexInstanceRecordKey,
+      stop: CodexStopObligation,
+    ) => Effect.Effect<boolean, CodexDetachedAppServerError>;
     readonly release: (binding: CodexSurvivorBinding) => Effect.Effect<void>;
     readonly blockThread?: (threadId: ThreadId) => Effect.Effect<void>;
     readonly classifyRecord: (
@@ -280,6 +290,7 @@ export const layer = Layer.effect(
     const blockedThreads = yield* Ref.make<ReadonlySet<ThreadId>>(new Set());
     let wakeStarts: Effect.Effect<void> = Effect.void;
     const fenceListeners: Array<Effect.Effect<void>> = [];
+    const layerScope = yield* Scope.Scope;
     const wake = Effect.suspend(() =>
       Effect.all([wakeStarts, ...fenceListeners], { discard: true }),
     );
@@ -298,6 +309,9 @@ export const layer = Layer.effect(
         Effect.sync(() => {
           fenceListeners.push(effect);
         }),
+      ),
+      holdLostConnectionTurn: Effect.fn("CodexSurvivors.holdLostConnectionTurn")((record, stop) =>
+        holdLostConnectionTurn({ survivors: service, record, stop, scope: layerScope }),
       ),
       release: Effect.fn("CodexSurvivors.release")((binding) =>
         Ref.update(bindings, (current) =>
@@ -331,8 +345,10 @@ export const layer = Layer.effect(
             );
             yield* client.request("initialize", buildCodexInitializeParams());
             yield* client.notify("initialized", undefined);
+            // Newest first: a long thread's running turn is past the first page of the oldest.
             const page = yield* client.request("thread/turns/list", {
               threadId: nativeThreadId,
+              sortDirection: "desc",
               limit: 100,
             });
             const turn = page.data.find((value) => value.id === nativeTurnId);
