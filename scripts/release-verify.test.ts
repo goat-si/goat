@@ -234,18 +234,23 @@ describe("release payload helpers", () => {
     expect(exposureProblems(officeWasm, "/Users/someone/src/lib.rs", [])).toEqual([
       `${officeWasm}: absolute build path`,
     ]);
-    // Cua Driver is an upstream release; its Windows executables carry its hosted CI's paths.
-    const cua = "win-unpacked/resources/cua-driver/cua-driver.exe";
     const windowsRunner = ["C:\\Users\\runneradmin", "C:\\a\\goat\\goat"];
-    expect(
-      exposureProblems(
-        cua,
-        "D:\\a\\cua\\cua\\src C:\\Users\\runneradmin\\.cargo\\x",
-        windowsRunner,
-      ),
-    ).toEqual([]);
-    expect(exposureProblems(cua, "C:\\a\\goat\\goat\\apps\\x", windowsRunner)).toEqual([
-      `${cua}: absolute build path`,
+    // Cua Driver is an upstream release; its Windows executables carry its hosted CI's paths.
+    // Linux ships it in resources/cua-driver, Windows inside the GOAT Computer Use helper.
+    for (const cua of [
+      "linux-unpacked/resources/cua-driver/cua-driver",
+      "win-unpacked/resources/computer-use-helper/cua-driver/cua-driver-uia.exe",
+    ]) {
+      const driverCi = "D:\\a\\cua\\cua\\src C:\\Users\\runneradmin\\.cargo\\x";
+      expect(exposureProblems(cua, driverCi, windowsRunner)).toEqual([]);
+      expect(exposureProblems(cua, "C:\\a\\goat\\goat\\apps\\x", windowsRunner)).toEqual([
+        `${cua}: absolute build path`,
+      ]);
+    }
+    // The helper itself is GOAT code.
+    const helper = "win-unpacked/resources/computer-use-helper/GOAT Computer Use.exe";
+    expect(exposureProblems(helper, "D:\\a\\goat\\x", [])).toEqual([
+      `${helper}: absolute build path`,
     ]);
     expect(exposureProblems("main.js", "'C:\\a\\b\\c'")).toEqual([]);
     // Electron's own executable and libraries carry Chromium's inline source maps.
