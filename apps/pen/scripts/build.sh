@@ -38,8 +38,12 @@ for target in $targets; do
 done
 
 cd "$out"
+# Lines read "<sum>  <archive>": install.sh, install.ps1 and check-public.ts match the line ending in
+# " <archive>". Git Bash's sha256sum on Windows marks binary mode ("<sum> *<archive>"); drop the marker.
 if command -v sha256sum >/dev/null 2>&1; then
-	sha256sum pen-*.gz >SHA256SUMS
+	sha256sum pen-*.gz >SHA256SUMS.raw
+	sed 's/^\([0-9a-f]*\) [ *]/\1  /' SHA256SUMS.raw >SHA256SUMS
+	rm SHA256SUMS.raw
 else
 	shasum -a 256 pen-*.gz >SHA256SUMS
 fi
