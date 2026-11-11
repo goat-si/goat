@@ -70,6 +70,7 @@ vi.mock("../../state/query", () => ({
   }),
 }));
 import { MobileBotMemory } from "./MobileBotMemory";
+import type { MobileNoteWordings } from "./mobileNoteWordings";
 
 const environmentId = EnvironmentId.make("env");
 const older = { index: 0, date: null, text: "Keep replies short" };
@@ -94,7 +95,7 @@ function setup(options: { data?: unknown; cause?: unknown } = {}) {
 }
 // The home keeps the wordings being written; this holds them the same way.
 function Memory(props: Props) {
-  const [wordings, setWordings] = useState<ReadonlyMap<string, string>>(new Map());
+  const [wordings, setWordings] = useState<MobileNoteWordings>(new Map());
   return (
     <MobileBotMemory
       environmentId={environmentId}
@@ -321,6 +322,80 @@ it("a note whose text names an object property still lists and can be changed", 
   await typeWording("toString");
   await press("Fill message");
   expect(onDraft).toHaveBeenCalledWith(goatBotChangeNoteMessage("constructor", "toString"));
+});
+
+const editorAfter = (date: string) => {
+  const text = container.textContent ?? "";
+  const field = container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]');
+  return { field, after: field !== null && text.indexOf(date) < text.lastIndexOf("Fill message") };
+};
+
+it("opens the change on the note pressed when two notes read the same but differ by date", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 1, date: "2026-11-10", text: "Keep replies short" },
+        { index: 0, date: "2026-11-01", text: "Keep replies short" },
+      ],
+      truncated: false,
+    },
+  });
+  await render({ onDraft: () => true });
+  const changes = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to change",
+  );
+  await act(async () => changes[1]?.click());
+  // Only the older note opens its editor; the newer one still offers Ask to change.
+  expect(container.querySelectorAll('[aria-label="New wording"]')).toHaveLength(1);
+  const text = container.textContent ?? "";
+  expect(text.indexOf("2026-11-01")).toBeLessThan(text.indexOf("Fill message"));
+  expect(text.indexOf("Ask to change")).toBeLessThan(text.indexOf("2026-11-01"));
+  // A new read with both notes still there keeps the wording on the older one.
+  await typeWording("Keep replies very short");
+  state.data = {
+    revision: "r2",
+    notes: (state.data as { notes: unknown[] }).notes,
+    truncated: false,
+  };
+  await render({ onDraft: () => true });
+  expect(editorAfter("2026-11-01")).toMatchObject({ after: true });
+  expect(editorAfter("2026-11-01").field?.value).toBe("Keep replies very short");
+});
+
+it("keeps a wording apart when a new read leaves identical notes it cannot tell apart", async () => {
+  const same = { date: "2026-11-10", text: "Keep replies short" };
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 1, ...same },
+        { index: 0, ...same },
+      ],
+      truncated: false,
+    },
+  });
+  await render({ onDraft: () => true });
+  const changes = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to change",
+  );
+  await act(async () => changes[1]?.click());
+  expect(container.querySelectorAll('[aria-label="New wording"]')).toHaveLength(1);
+  await typeWording("Keep replies very short");
+  state.data = {
+    revision: "r2",
+    notes: [
+      { index: 2, ...same },
+      { index: 1, ...same },
+      { index: 0, date: null, text: "Other" },
+    ],
+    truncated: false,
+  };
+  await render({ onDraft: () => true });
+  expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+  expect(container.textContent).toContain("Keep replies very short");
+  expect(button("Copy")).toBeDefined();
+  expect(button("Discard")).toBeDefined();
 });
 const sourced = (index: number, text: string, extra: Record<string, unknown> = {}) => ({
   index,
