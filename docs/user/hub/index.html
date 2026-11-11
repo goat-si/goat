@@ -85,7 +85,12 @@ Claude Code, OpenCode, and Pi use the hub only when you route them there; see
 <p><strong>Repair</strong> walks the fixes for failing checks in order: sync the device’s
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.
 <strong>Leave</strong> disconnects the device and returns it to its own sign-ins, then revokes
-its link or Hub key on the hub; GOAT asks before it does that.</p>
+its link or Hub key on the hub; GOAT asks before it does that.
+To move a Child to another SSH alias of the same machine, such as its
+<code>pen-&lt;name&gt;</code> alias, ask an agent to move it (<code>goat_hub_device_move</code>): you approve
+once, for both aliases, the machine, the old link and the new host key, and GOAT
+leaves the old alias and links the new one. If the new link fails, the same
+approval finishes the move later. Aliases that name different machines are refused.</p>
 <h2 id="sync-opencodex-models">Sync OpenCodex models</h2>
 <p><strong>Sync OpenCodex</strong> loads OpenCodex’s current models into Codex, on the hub first
 and then on each linked Child. Find it in <strong>Settings → Hub → OpenCodex models</strong>,
