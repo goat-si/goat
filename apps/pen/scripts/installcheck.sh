@@ -45,7 +45,7 @@ inst() {
 	n="$1"
 	shift
 	mkdir -p "$work/$n/tmp"
-	curl -fsSL "$relay/install.sh" | TMPDIR="$work/$n/tmp" HOME="$work/$n" SHELL="${shell:-/bin/sh}" PEN_NO_MODIFY_PATH="${nopath:-}" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
+	curl -fsSL "$relay/install.sh" | TMPDIR="$work/$n/tmp" HOME="$work/$n" SHELL="${shell:-/bin/sh}" ZDOTDIR="${zdotdir:-}" PEN_NO_MODIFY_PATH="${nopath:-}" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
 }
 # install.sh downloads into a folder under TMPDIR; it must be gone also when install.sh ends by running pen.
 notmp() {
@@ -91,6 +91,15 @@ if command -v zsh >/dev/null; then
 	shell=""
 	finds "$work/v" zsh || { echo "FAIL: zsh does not find pen after install.sh"; exit 1; }
 fi
+# zsh reads its files from ZDOTDIR when that is set; fish reads none of these files.
+mkdir -p "$work/u/zd"
+shell=/bin/zsh zdotdir="$work/u/zd" inst u >/dev/null
+shell=""
+zdotdir=""
+[ "$(marked "$work/u/zd/.zshenv")" = 1 ] && [ ! -e "$work/u/.zshenv" ] || { echo "FAIL: install.sh for zsh ignored ZDOTDIR"; exit 1; }
+shell=/usr/bin/fish inst t >"$work/t.out"
+shell=""
+[ ! -e "$work/t/.profile" ] && grep -q "fish_add_path $work/t/.local/bin" "$work/t.out" || { echo "FAIL: install.sh for fish wrote a file fish does not read, or gave no fish_add_path line:"; cat "$work/t.out"; exit 1; }
 nopath=1 inst y >"$work/y.out"
 nopath=""
 [ ! -e "$work/y/.profile" ] || { echo "FAIL: PEN_NO_MODIFY_PATH=1 still wrote ~/.profile"; exit 1; }

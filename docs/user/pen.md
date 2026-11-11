@@ -26,9 +26,10 @@ curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh
 ```
 
 This puts `pen` in `~/.local/bin` and prints what to run next. It does not start or join a mesh. When
-`~/.local/bin` is not on your PATH, it adds one marked line to your shell's startup files (`~/.zshenv` for zsh,
-`~/.bashrc` and `~/.bash_profile` or `~/.profile` for bash, otherwise `~/.profile`), so new terminals find
-`pen`; `curl ... | PEN_NO_MODIFY_PATH=1 sh` leaves them alone.
+`~/.local/bin` is not on your PATH, it adds one marked line to your shell's startup files (`.zshenv` in
+`$ZDOTDIR` or your home for zsh, `~/.bashrc` and `~/.bash_profile` or `~/.profile` for bash, otherwise
+`~/.profile`), so new terminals find `pen`; for fish it prints the `fish_add_path` line to run instead.
+`curl ... | PEN_NO_MODIFY_PATH=1 sh` leaves your files alone.
 To install and connect in one step, add one of these after `sh -s --`:
 
 | Option           | What it does                                                    |

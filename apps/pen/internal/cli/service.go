@@ -58,7 +58,8 @@ func startNote(mode string, noService bool) string {
 		}
 		// Another account's startup script (root's) would start another node from its own home.
 		return "pen: no service manager answered (" + manager + "), so nothing starts Pen again if it stops or this machine restarts. Run " +
-			shellQuote(exe) + " up at startup as this account (uid " + strconv.Itoa(os.Getuid()) + "), with its HOME, for example with the line @reboot " + shellQuote(exe) + " up in its crontab -e"
+			shellQuote(exe) + " up at startup as this account (uid " + strconv.Itoa(os.Getuid()) + "), with its HOME, for example with the line @reboot " +
+			strings.ReplaceAll(shellQuote(exe), "%", `\%`) + " up in its crontab -e" // cron reads an unescaped % as a newline
 	case mode == "systemd":
 		linger, err := output("loginctl", "show-user", strconv.Itoa(os.Getuid()), "--property=Linger", "--value")
 		if err != nil || strings.TrimSpace(linger) != "no" {

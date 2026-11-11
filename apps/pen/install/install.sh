@@ -87,11 +87,12 @@ case ":$PATH:" in
 *":$HOME/.local/bin:"*) ;;
 *)
 	pen="$HOME/.local/bin/pen"
-	# zsh reads ~/.zshenv in every shell; bash reads the first of its three login profiles in a login
-	# shell and ~/.bashrc in other interactive ones (a desktop terminal). Positional parameters keep
-	# paths with spaces whole under set -f.
+	# zsh reads .zshenv (in ZDOTDIR when set) in every shell; bash reads the first of its three login
+	# profiles in a login shell and ~/.bashrc in other interactive ones (a desktop terminal); fish reads
+	# none of these. Positional parameters keep paths with spaces whole under set -f.
 	case "${SHELL:-}" in
-	*/zsh) set -- "$HOME/.zshenv" ;;
+	*/zsh) set -- "${ZDOTDIR:-$HOME}/.zshenv" ;;
+	*/fish) set -- ;;
 	*/bash)
 		login="$HOME/.profile"
 		for p in "$HOME/.bash_profile" "$HOME/.bash_login"; do
@@ -109,6 +110,8 @@ case ":$PATH:" in
 	mark="# added by pen install.sh (PEN_NO_MODIFY_PATH=1 skips this)"
 	if [ "${PEN_NO_MODIFY_PATH:-}" = 1 ]; then
 		echo "add $HOME/.local/bin to your PATH to run pen directly"
+	elif [ $# = 0 ]; then
+		echo "add $HOME/.local/bin to your PATH to run pen directly (fish: fish_add_path $HOME/.local/bin)"
 	else
 		for profile in "$@"; do
 			if grep -qF "$mark" "$profile" 2>/dev/null || printf '\n%s %s\n' "$line" "$mark" >>"$profile" 2>/dev/null; then

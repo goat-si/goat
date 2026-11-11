@@ -49,6 +49,12 @@ func TestUpWithoutAServiceManagerSaysNothingRestartsPenAndPrintsTheStartupLine(t
 	if note := startNote(serviceMode(false, nil), false); !strings.Contains(note, "launchctl") || strings.Contains(note, "systemctl") {
 		t.Fatalf("pen up on macOS without launchctl printed %q", note)
 	}
+	// cron turns an unescaped % into a newline, also inside quotes.
+	fakeStartNote(t, "linux", false, "")
+	exePath = func() (string, error) { return "/opt/50%/pen", nil }
+	if note := startNote(serviceMode(false, nil), false); !strings.Contains(note, `@reboot '/opt/50\%/pen' up`) {
+		t.Fatalf("pen up with a %% in its path printed %q", note)
+	}
 }
 
 // P3: with lingering off, systemd stops Pen's user service when the user's last session ends; pen up

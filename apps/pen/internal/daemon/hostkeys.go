@@ -36,11 +36,12 @@ func ReadHostKeys(glob string) (keys []string, problem string) {
 			return nil, "cannot list " + dir + " (" + pathCause(err) + ")" + effect + hostKeysDirFix(dir)
 		}
 	}
-	var unreadable []string
+	var unreadable, failed []string
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			unreadable = append(unreadable, p+" ("+pathCause(err)+")")
+			failed = append(failed, p)
 			continue
 		}
 		f := strings.Fields(string(b))
@@ -54,7 +55,7 @@ func ReadHostKeys(glob string) (keys []string, problem string) {
 		keys = keys[:8]
 	}
 	if len(unreadable) > 0 {
-		problem = "cannot read " + strings.Join(unreadable, "; ") + effect + hostKeysFix(glob)
+		problem = "cannot read " + strings.Join(unreadable, "; ") + effect + hostKeysFix(failed)
 	}
 	return keys, problem
 }

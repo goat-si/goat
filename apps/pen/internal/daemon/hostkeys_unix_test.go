@@ -19,8 +19,9 @@ func TestHostKeyFixesQuoteThePathAndOnlyAddAccess(t *testing.T) {
 		strings.Contains(d, "chmod") || strings.Contains(d, "setfacl") {
 		t.Fatalf("folder fix %q", d)
 	}
-	f := hostKeysFix(dir + "/ssh_host_*_key.pub")
-	if !strings.Contains(f, "chmod a+r '/srv/my keys'/ssh_host_*_key.pub") {
+	// The fix names the files that failed, each quoted whole: a PEN_HOSTKEYS glob may hold shell syntax.
+	f := hostKeysFix([]string{dir + "/ssh_host_$(id)_key.pub", "/etc/ssh/ssh_host_rsa_key.pub"})
+	if !strings.Contains(f, "chmod a+r '/srv/my keys/ssh_host_$(id)_key.pub' '/etc/ssh/ssh_host_rsa_key.pub'") {
 		t.Fatalf("file fix %q", f)
 	}
 }

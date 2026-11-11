@@ -62,7 +62,7 @@ func TestAKeyFolderThatCannotBeListedIsReportedAndAMissingOneIsNot(t *testing.T)
 	glob := filepath.Join(notDir, "ssh_host_*_key.pub")
 	// The folder needs its own fix: opening up the .pub files does not make the folder listable.
 	if keys, problem := ReadHostKeys(glob); len(keys) != 0 || !strings.Contains(problem, notDir) ||
-		!strings.Contains(problem, hostKeysDirFix(notDir)) || strings.Contains(problem, hostKeysFix(glob)) {
+		!strings.Contains(problem, hostKeysDirFix(notDir)) || strings.Contains(problem, "chmod a+r") || strings.Contains(problem, ":(R)'") {
 		t.Fatalf("a key folder that cannot be listed gave keys %q, problem %q", keys, problem)
 	}
 	if _, problem := ReadHostKeys(filepath.Join(t.TempDir(), "absent", "ssh_host_*_key.pub")); problem != "" {
