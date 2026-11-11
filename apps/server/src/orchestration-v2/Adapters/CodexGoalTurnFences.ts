@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import type * as CodexClient from "effect-codex-app-server/client";
 import type {
   CodexGoalBlock,
@@ -16,6 +17,7 @@ export const makeGoalTurnFences = (input: {
   readonly goals: PersistedGoals;
   readonly waiting: SurvivorWaiting;
   readonly tracked: SurvivorWaiting;
+  readonly scope: Scope.Scope;
   readonly onReady: (threadId: string) => Effect.Effect<void>;
 }) => {
   const pending = new Set(input.goals.keys());
@@ -89,9 +91,25 @@ export const makeGoalTurnFences = (input: {
     writing.set(nativeThreadId, turns);
     pending.add(nativeThreadId);
     const result = yield* Effect.gen(function* () {
-      for (const { record, block } of yield* blocksFor(nativeThreadId))
+      const blocks = yield* blocksFor(nativeThreadId);
+      for (const { record, block } of blocks)
         yield* service.recordStopObligation(record, { ...block, nativeTurnId: turnId });
+      return blocks.length > 0;
     }).pipe(Effect.result);
+    // Without a pause Codex keeps continuing the goal with turns no run owns, and each holds the
+    // thread's admission. The fenced turn itself still finishes.
+    if (result._tag === "Success" && result.success)
+      yield* input.client
+        .request("thread/goal/set", { threadId: nativeThreadId, status: "paused" })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not pause a Codex goal that started an unowned turn", {
+              nativeThreadId,
+              cause,
+            }),
+          ),
+          Effect.forkIn(input.scope),
+        );
     state.count--;
     if (result._tag === "Failure") overflow.add(nativeThreadId);
     if (state.count === 0) {

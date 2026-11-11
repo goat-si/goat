@@ -200,10 +200,7 @@ describe("ssh tunnel scripts", () => {
       script,
       'GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$GOAT_ARCHIVE_VERSION"',
     );
-    assert.include(
-      script,
-      'GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"',
-    );
+    assert.include(script, 'GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"');
     assert.include(script, "SHA256SUMS");
     assert.include(script, 'exec "$GOAT_RUNTIME_DIR/goat" "$@"');
     assert.notInclude(script, "npx");
@@ -308,7 +305,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(devLaunch, `GOAT_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(devLaunch, "does not satisfy required range ");
     // A failed cold start still cleans up the child this script launched.
-    assert.include(launch, 'server_kill "$REMOTE_PID" || true');
+    assert.include(launch, 'launch_stop_server "$REMOTE_PID"');
     assert.include(launch, "wait_ready");
     assert.include(launch, '"$RUNNER_FILE" serve --host 127.0.0.1');
     assert.include(launch, '--base-dir "$DEFAULT_SERVER_HOME"');

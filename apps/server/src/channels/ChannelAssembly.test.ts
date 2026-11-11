@@ -387,8 +387,8 @@ describe("R7 path over the assembled layer (fake Slack SDK)", () => {
           (post) => !post.text.includes("SLACK-RESULT-7B") || post.threadTs === slackRoot,
         ),
       );
-      // The bot shows GOAT's conversation in full, but for Slack's task only its chip, which
-      // carries the result; the Slack request and Slack's answers stay in Slack.
+      // The bot shows GOAT's conversation in full, with its task's result told once; for Slack's
+      // task only its chip, which carries the result; the Slack request and answers stay in Slack.
       const after = yield* botMessages;
       assert.deepStrictEqual(
         after.messages.filter(
@@ -408,7 +408,7 @@ describe("R7 path over the assembled layer (fake Slack SDK)", () => {
       assert.strictEqual(cards.get(slackTask.taskId)?.summary, "SLACK-RESULT-7B");
       assert.strictEqual(cards.get(goatTask.taskId)?.summary, "GOAT-RESULT-7A");
       const botTexts = after.messages.map((message) => message.text).join("\n");
-      assert.notInclude(botTexts, "GOAT-RESULT-7A");
+      assert.strictEqual(botTexts.split("GOAT-RESULT-7A").length, 2);
       assert.notInclude(botTexts, "do: slack job");
       assert.deepStrictEqual(after.runs, []);
     }).pipe(Effect.provide(harness.layer));

@@ -209,6 +209,7 @@ async function toGoogle(
     csrf: "",
     sub: "",
     email: "",
+    started_at: ctx.store.stamp(ctx.now),
   });
   const location = authorizationUrl(found, target, {
     redirectUri: `${ctx.origin}${CALLBACK}`,
@@ -287,6 +288,8 @@ export async function callback(ctx: Context, request: Request): Promise<Response
   if (!current) return error(ctx, "session", 400);
   const identity = await signedIn(ctx, current, ctx.url);
   if (!identity) return error(ctx, "google", 400);
+  // The account was reset after this sign-in went to Google: it predates the reset, so it ends here.
+  if (current.row.started_at <= ctx.store.resetAt(identity.sub)) return error(ctx, "session", 403);
   if (current.row.purpose === "reset") {
     const csrf = randomToken();
     ctx.store.updateSession(current.idHash, { sub: identity.sub, email: identity.email, csrf });
@@ -323,6 +326,8 @@ export async function confirm(ctx: Context, request: Request): Promise<Response>
   if (posted instanceof Response) return posted;
   const { current, form } = posted;
   if (current.row.purpose !== "device" || !current.row.sub) return error(ctx, "session", 403);
+  if (current.row.started_at <= ctx.store.resetAt(current.row.sub))
+    return error(ctx, "session", 403);
   const action = form.get("action");
   if (action !== "approve" && action !== "deny") return error(ctx, "csrf", 400);
   const device = ctx.store.deviceByUserCode(current.row.user_code);

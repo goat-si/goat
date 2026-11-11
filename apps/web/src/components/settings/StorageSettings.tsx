@@ -576,7 +576,7 @@ export function StorageSettingsPanel() {
             <SettingsRow
               title="Clean up worktrees unused for"
               status={ruleStatus("worktreeAfterDays")}
-              description="Remove worktrees after their threads have been inactive for this many days. Branches and thread history are kept."
+              description="Remove worktrees after their threads have been inactive for this many days. Worktrees with commits that are not merged stay. Branches and thread history are kept."
               serverScoped={!isProjectScope}
               control={
                 <RetentionControl
@@ -602,7 +602,7 @@ export function StorageSettingsPanel() {
                   ]
                     .filter(Boolean)
                     .join(". ")}
-                  description="Remove worktrees this many days after their thread settles. Set 0 days to remove them at the next cleanup. Branches and thread history are kept."
+                  description="Remove worktrees this many days after their thread settles. Set 0 days to remove them at the next cleanup. Worktrees with commits that are not merged stay. Branches and thread history are kept."
                   serverScoped={!isProjectScope}
                   control={
                     <RetentionControl

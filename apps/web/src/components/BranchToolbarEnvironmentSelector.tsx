@@ -6,9 +6,10 @@ import { shortcutLabelForCommand } from "../keybindings";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import type { EnvironmentId } from "@goat/contracts";
 import { PlusIcon, ScaleIcon } from "~/components/solar";
-import { memo } from "react";
+import { memo, useState } from "react";
 
 import { ADD_TO_MACHINE_LABEL_CLASS, type EnvironmentOption } from "./BranchToolbar.logic";
+import { type MachineWithoutProject, machineArrivalLabel } from "../lib/runOnArrival";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
@@ -26,8 +27,9 @@ interface BranchToolbarEnvironmentSelectorProps {
   envLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
-  environmentsWithoutProject?: readonly EnvironmentOption[];
+  environmentsWithoutProject?: readonly MachineWithoutProject[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  onArriveOnMachine?: ((machine: MachineWithoutProject) => void) | undefined;
   onAddToMachine?: (() => void) | undefined;
 }
 
@@ -35,6 +37,7 @@ interface BranchToolbarEnvironmentSelectorProps {
 const AUTO_VALUE = "action:auto";
 const ADD_MACHINE_VALUE = "action:add-machine";
 const environmentValue = (id: EnvironmentId) => `env:${id}`;
+const arrivalValue = (id: EnvironmentId) => `arrive:${id}`;
 
 export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvironmentSelector({
   autoEnvironmentLabel,
@@ -44,9 +47,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   availableEnvironments,
   environmentsWithoutProject = [],
   onEnvironmentChange,
+  onArriveOnMachine,
   onAddToMachine,
 }: BranchToolbarEnvironmentSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
+  // Picking a machine without the project leaves the selected value unchanged, so close explicitly.
+  const [open, setOpen] = useState(false);
   const shortcutLabel = shortcutLabelForCommand(
     useAtomValue(primaryServerKeybindingsAtom),
     "composer.host",
@@ -60,6 +66,10 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
       : []),
     ...availableEnvironments.map((env) => ({
       value: environmentValue(env.environmentId),
+      label: env.label,
+    })),
+    ...environmentsWithoutProject.map((env) => ({
+      value: arrivalValue(env.environmentId),
       label: env.label,
     })),
     ...(onAddToMachine ? [{ value: ADD_MACHINE_VALUE, label: "Add to another machine" }] : []),
@@ -91,6 +101,8 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   return (
     <Select
       modal={false}
+      open={open}
+      onOpenChange={setOpen}
       value={autoEnvironmentLabel ? AUTO_VALUE : environmentValue(environmentId)}
       onValueChange={(value) => {
         if (value === ADD_MACHINE_VALUE) {
@@ -99,6 +111,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           onAutoEnvironment?.();
         } else if (value?.startsWith("env:")) {
           onEnvironmentChange?.(value.slice(4) as EnvironmentId);
+        } else if (value?.startsWith("arrive:")) {
+          const machine = environmentsWithoutProject.find(
+            (env) => arrivalValue(env.environmentId) === value,
+          );
+          setOpen(false);
+          if (machine) onArriveOnMachine?.(machine);
         }
       }}
       items={environmentItems}
@@ -161,12 +179,20 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             </SelectItem>
           ))}
           {environmentsWithoutProject.map((env) => (
-            <SelectItem key={env.environmentId} value={env.environmentId} disabled>
+            <SelectItem
+              key={env.environmentId}
+              value={arrivalValue(env.environmentId)}
+              disabled={!onArriveOnMachine || env.arrival.kind === "unavailable"}
+            >
               <span className="inline-flex items-center gap-1.5">
                 <EnvironmentMachineIcon kind={env.machine} className="size-3" />
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate">{env.label}</span>
-                  <span className="text-muted-foreground text-xs">Project not added here</span>
+                  <span className="truncate text-muted-foreground text-xs">
+                    {onArriveOnMachine
+                      ? machineArrivalLabel(env.arrival)
+                      : "Project not added here"}
+                  </span>
                 </span>
               </span>
             </SelectItem>

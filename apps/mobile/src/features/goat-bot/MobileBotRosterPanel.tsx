@@ -10,6 +10,7 @@ import { MobileBotRosterView } from "./MobileBotRosterView";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileBotManage } from "./useMobileBotManage";
+import { useMobileGoatBotMemberModelEditable } from "./useMobileGoatBotMemberModel";
 import { uuidv4 } from "../../lib/uuid";
 
 export function MobileBotRoster(props: {
@@ -142,6 +143,8 @@ export function MobileBotRoster(props: {
       />
       {sheet !== null && roster.environmentId !== null ? (
         <BotSheet
+          // A new sheet starts from its own bot's model.
+          key={sheet.mode === "edit" ? sheet.bot.botId : "create"}
           sheet={sheet}
           environmentId={roster.environmentId}
           manage={manage}
@@ -162,19 +165,37 @@ function BotSheet(props: {
   readonly onCreated: (bot: BotProfile) => void;
   readonly onClose: () => void;
 }) {
-  const [model, setModel] = useState<BotProfile["defaultModelSelection"]>(null);
-  const [clientRequestId] = useState(uuidv4);
   const { sheet, manage } = props;
-  if (sheet.mode === "edit")
+  const initialModel = sheet.mode === "edit" ? sheet.bot.defaultModelSelection : null;
+  const [model, setModel] = useState<BotProfile["defaultModelSelection"]>(initialModel);
+  const [clientRequestId] = useState(uuidv4);
+  // Only a member has a model of its own; the main bot's is the GOAT Bot model setting.
+  const modelEditable =
+    useMobileGoatBotMemberModelEditable(props.environmentId).editable &&
+    sheet.mode === "edit" &&
+    sheet.bot.role === "member";
+  if (sheet.mode === "edit") {
+    const modelChanged = modelEditable && !sameModel(model, initialModel);
     return (
       <MobileBotProfileSheet
         mode="edit"
         initial={sheet.bot}
         canSubmit={manage.canEdit}
+        extraChanged={modelChanged}
         onClose={props.onClose}
-        onSubmit={(changes) => manage.update(sheet.bot, changes)}
-      />
+        onSubmit={(changes) => manage.update(sheet.bot, changes, modelChanged ? model : undefined)}
+      >
+        {modelEditable ? (
+          <MobileNewBotModel
+            environmentId={props.environmentId}
+            model={model}
+            onChange={setModel}
+            mainName={props.mainName}
+          />
+        ) : null}
+      </MobileBotProfileSheet>
     );
+  }
   return (
     <MobileBotProfileSheet
       mode="create"
@@ -196,4 +217,12 @@ function BotSheet(props: {
       />
     </MobileBotProfileSheet>
   );
+}
+
+function sameModel(
+  left: BotProfile["defaultModelSelection"],
+  right: BotProfile["defaultModelSelection"],
+) {
+  if (left === null || right === null) return left === right;
+  return left.instanceId === right.instanceId && left.model === right.model;
 }

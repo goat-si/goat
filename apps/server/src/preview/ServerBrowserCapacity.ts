@@ -32,12 +32,14 @@ export function makeCapacity<T extends CapacityTab>(options: {
     [...options.tabs.values()].filter((tab) => tab.control.agentId === id).length +
       opening().filter((pending) => pending.agentId === id).length >=
     Limits.AGENT_TAB_LIMIT;
+  // The desktop draws its tabs in its own webview, so they never get a streamed viewer.
+  const visible = (tab: T) =>
+    tab.viewers.size > 0 || (tab.desktop !== null && options.isShown(tab));
   const idle = () =>
     [...options.tabs.values()].filter(
       (tab) =>
         tab.control.agentId !== null &&
-        tab.viewers.size === 0 &&
-        !(tab.desktop !== null && options.isShown(tab)) &&
+        !visible(tab) &&
         tab.usedAt < options.now() - Limits.AGENT_TAB_IDLE_MS &&
         tab.control.controller === null &&
         tab.control.handoffReason === null &&
@@ -62,5 +64,5 @@ export function makeCapacity<T extends CapacityTab>(options: {
         options.drop(tab);
     }
   });
-  return { atLimit: (id: string) => serverFull() || agentFull(id), reclaim, closeIdle };
+  return { atLimit: (id: string) => serverFull() || agentFull(id), reclaim, closeIdle, visible };
 }

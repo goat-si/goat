@@ -3,10 +3,22 @@ import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { AuthSourceControlWriteScope, resolveEnvironmentMachineKind } from "@goat/contracts";
 
 import type { EnvironmentOption } from "../components/BranchToolbar.logic";
-import { useEnvironments } from "../state/environments";
+import { type EnvironmentPresentation, useEnvironments } from "../state/environments";
 import { useEnvironmentsWithScope } from "../state/session";
 
 export type AddProjectTarget = Pick<EnvironmentOption, "environmentId" | "label" | "machine">;
+
+/** Whether the user may clone projects onto this connected machine. */
+export function canCloneProjectInto(
+  environment: EnvironmentPresentation,
+  canCloneEnvironmentIds: ReadonlySet<EnvironmentPresentation["environmentId"]>,
+): boolean {
+  return (
+    canCloneEnvironmentIds.has(environment.environmentId) &&
+    canCreateProjectInEnvironment(environment.connection.phase) &&
+    environment.serverConfig?.environment.capabilities.projectCloneTracking === true
+  );
+}
 
 /**
  * Connected machines that do not have the project yet and can clone it.
@@ -27,10 +39,7 @@ export function useAddProjectTargets(
   return environments
     .filter(
       (environment) =>
-        !hasProject.has(environment.environmentId) &&
-        canClone.has(environment.environmentId) &&
-        canCreateProjectInEnvironment(environment.connection.phase) &&
-        environment.serverConfig?.environment.capabilities.projectCloneTracking === true,
+        !hasProject.has(environment.environmentId) && canCloneProjectInto(environment, canClone),
     )
     .map((environment) => ({
       environmentId: environment.environmentId,

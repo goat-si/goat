@@ -29,16 +29,8 @@ export function GoatBotSidebarTabs() {
   const { enabled } = useGoatBotEnabled();
   const mode = useGlobalAgentStore(selectGlobalAgentMode);
   const setMode = useGlobalAgentStore((state) => state.setMode);
-  const {
-    roster,
-    groups,
-    rows,
-    rowsLoaded,
-    environmentId,
-    refresh,
-    slackEnabled,
-    supportsMembers,
-  } = useBotRoster();
+  const { roster, groups, rows, environmentId, refresh, slackEnabled, supportsMembers } =
+    useBotRoster();
   const mainName = roster[0]?.profile?.name ?? "GOAT Bot";
   if (!enabled) return null;
   return (
@@ -58,11 +50,6 @@ export function GoatBotSidebarTabs() {
             slackEnabled={slackEnabled}
             main={roster[0]?.profile ?? null}
           />
-          {rowsLoaded && rows.length === 0 && (
-            <p className="px-4 text-xs text-sidebar-muted-foreground">
-              Work {mainName} starts will appear here.
-            </p>
-          )}
           {environmentId && (
             <GoatBotChildRows environmentId={environmentId} rows={rows} refresh={refresh} />
           )}

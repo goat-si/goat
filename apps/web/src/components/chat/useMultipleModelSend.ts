@@ -289,5 +289,6 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
       sendInFlightRef.current = false;
       resetLocalDispatch();
     }
+    return startedCount > 0;
   };
 }

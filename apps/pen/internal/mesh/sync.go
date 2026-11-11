@@ -63,8 +63,8 @@ func (s *Store) take(l Link, m *Msg, onMerged Merged, received *int) error {
 	}
 	// A record refused for the cap fails the sync, so the sender sees it was not taken.
 	if errors.Is(err, ErrFull) {
-		l.Close(wire.CodeCaps)
-		return &relay.CloseError{Code: wire.CodeCaps}
+		l.Close(wire.CodeMeshFull)
+		return &relay.CloseError{Code: wire.CodeMeshFull}
 	}
 	return err
 }
@@ -158,6 +158,14 @@ func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHel
 			if !gotHello {
 				l.Close(errLine.Code)
 				return errLine
+			}
+			// Done tells the initiator its records are kept. A set that still holds records it
+			// could not write (an earlier sync, or this one with nothing new) tries again first.
+			if onMerged != nil && s.Unsaved() {
+				if err := onMerged(nil); err != nil {
+					l.Close(wire.CodeNotKept)
+					return &relay.CloseError{Code: wire.CodeNotKept}
+				}
 			}
 			return c.Write(Msg{T: "done"})
 		}

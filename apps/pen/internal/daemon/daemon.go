@@ -314,6 +314,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.every(ctx, logCapEvery, func() {
 			d.capLog()
 			d.pruneInvites()
+			d.retrySave()
 		})
 	})
 	d.spawn(func() { d.hostKeysLoop(ctx) })
@@ -534,18 +535,35 @@ func (d *Daemon) markSeen(noisePub []byte, online bool, via string) {
 // onMerged persists new records and publishes the new view; a failed save fails the sync that
 // brought them, and pen ls shows it until a save succeeds.
 func (d *Daemon) onMerged(added []*mesh.Record) error {
-	err := d.mesh().Save()
-	d.mu.Lock()
-	d.saveErr = err
-	d.mu.Unlock()
-	if err != nil {
-		d.opt.Logf("mesh save: %v; records received are not kept, so syncs that bring them fail", err)
-	}
+	err := d.saveMesh()
 	d.viewChanged()
 	if n := d.mesh().Len(); n >= mesh.MaxOrdinary {
 		d.opt.Logf("mesh holds %d records: new members, names, locks and bindings are refused (revokes until %d); start a new mesh", n, mesh.MaxRecords)
 	}
 	return err
+}
+
+// saveMesh writes mesh.json and records the outcome for pen ls. While the set holds records it
+// could not write, no sync is acknowledged and the daemon retries on each sync and every minute.
+func (d *Daemon) saveMesh() error {
+	err := d.mesh().Save()
+	d.mu.Lock()
+	was := d.saveErr
+	d.saveErr = err
+	d.mu.Unlock()
+	if err != nil {
+		d.opt.Logf("mesh save: %v; records received are not kept, so syncs are not acknowledged until a save succeeds", err)
+	} else if was != nil {
+		d.opt.Logf("mesh save: the state folder is writable again; every record is kept")
+	}
+	return err
+}
+
+// retrySave writes records that an earlier save could not.
+func (d *Daemon) retrySave() {
+	if d.mesh().Unsaved() {
+		d.saveMesh()
+	}
 }
 
 // viewChanged closes sessions of keys that are no longer members, tells watchers, rewrites known_hosts.

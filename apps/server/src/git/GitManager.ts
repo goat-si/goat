@@ -53,10 +53,8 @@ import {
   sanitizeFeatureBranchName,
 } from "@goat/shared/git";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
-import {
-  type ChangeRequestTerminology,
-  UNKNOWN_SOURCE_CONTROL_CLIENT,
-} from "@goat/source-control-core/shared/definition";
+import { summarizeGitActionResult } from "./gitActionSummary.ts";
+import { UNKNOWN_SOURCE_CONTROL_CLIENT } from "@goat/source-control-core/shared/definition";
 import {
   normalizeThreadPullRequestKey,
   threadPullRequestKeyOf,
@@ -161,8 +159,6 @@ export class GitManager extends Context.Service<
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
-const SHORT_SHA_LENGTH = 7;
-const TOAST_DESCRIPTION_MAX = 72;
 const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
 const PR_LOOKUP_CACHE_TTL = Duration.seconds(60);
@@ -432,58 +428,6 @@ function limitCommandOutput(item: OrchestrationV2TurnItem): OrchestrationV2TurnI
   if (item.type !== "command_execution" || item.output === undefined) return item;
   if (item.output.length <= PR_THREAD_COMMAND_OUTPUT_CHARS) return item;
   return { ...item, output: `[truncated]\n${item.output.slice(-PR_THREAD_COMMAND_OUTPUT_CHARS)}` };
-}
-
-function shortenSha(sha: string | undefined): string | null {
-  if (!sha) return null;
-  return sha.slice(0, SHORT_SHA_LENGTH);
-}
-
-function truncateText(
-  value: string | undefined,
-  maxLength = TOAST_DESCRIPTION_MAX,
-): string | undefined {
-  if (!value) return undefined;
-  if (value.length <= maxLength) return value;
-  if (maxLength <= 3) return "...".slice(0, maxLength);
-  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
-}
-
-function withDescription(title: string, description: string | undefined) {
-  return description ? { title, description } : { title };
-}
-
-function summarizeGitActionResult(
-  result: Pick<GitRunStackedActionResult, "commit" | "push" | "pr">,
-  terms: ChangeRequestTerminology,
-): {
-  title: string;
-  description?: string;
-} {
-  if (result.pr.status === "created" || result.pr.status === "opened_existing") {
-    const prNumber = result.pr.number ? ` #${result.pr.number}` : "";
-    const title = `${result.pr.status === "created" ? "Created" : "Opened"} ${terms.shortLabel}${prNumber}`;
-    return withDescription(title, truncateText(result.pr.title));
-  }
-
-  if (result.push.status === "pushed") {
-    const shortSha = shortenSha(result.commit.commitSha);
-    const branch = result.push.upstreamBranch ?? result.push.branch;
-    const pushedCommitPart = shortSha ? ` ${shortSha}` : "";
-    const branchPart = branch ? ` to ${branch}` : "";
-    return withDescription(
-      `Pushed${pushedCommitPart}${branchPart}`,
-      truncateText(result.commit.subject),
-    );
-  }
-
-  if (result.commit.status === "created") {
-    const shortSha = shortenSha(result.commit.commitSha);
-    const title = shortSha ? `Committed ${shortSha}` : "Committed changes";
-    return withDescription(title, truncateText(result.commit.subject));
-  }
-
-  return { title: "Done" };
 }
 
 function sanitizeCommitMessage(generated: {
@@ -2210,6 +2154,34 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const ensurePrHeadIsNotBase = Effect.fn("ensurePrHeadIsNotBase")(function* (
+    cwd: string,
+    status: { branch: string; upstreamRef: string | null; hasUpstream: boolean },
+    changeRequestLabel: string,
+  ) {
+    const target = yield* gitCore.resolvePushTarget(cwd, status);
+    if (!target) return;
+    const headContext = yield* resolveBranchHeadContext(cwd, {
+      branch: status.branch,
+      upstreamRef: `${target.remoteName}/${target.branchName}`,
+      remoteName: target.remoteName,
+    });
+    if (headContext.isCrossRepository) return;
+    const { baseBranch } = yield* resolvePrBase(
+      cwd,
+      status.branch,
+      status.upstreamRef,
+      headContext,
+    );
+    if (baseBranch !== target.branchName) return;
+    if (yield* findOpenPr(cwd, headContext)) return;
+    return yield* new GitManagerError({
+      operation: "runStackedAction",
+      cwd,
+      detail: `${baseBranch} is the base branch. Check out a feature branch to create ${changeRequestLabel}.`,
+    });
+  });
+
   const runPrStep = Effect.fn("runPrStep")(function* (
     settings: SourceControlTextGenerationSettings,
     cwd: string,
@@ -3062,6 +3034,17 @@ export const make = Effect.gen(function* () {
         const currentBranch = branchStep.name ?? initialStatus.branch;
         const commitAction = isCommitAction(input.action) ? input.action : null;
         const changeRequestTerms = wantsPr ? yield* changeRequestTermsFor(input.cwd) : null;
+        // A stale or missing origin/HEAD hides the default branch from status, so check here
+        // before anything is committed or pushed to it.
+        if (changeRequestTerms && !input.featureBranch && initialStatus.branch) {
+          yield* ensurePrHeadIsNotBase(
+            input.cwd,
+            { ...initialStatus, branch: initialStatus.branch },
+            changeRequestTerms.shortLabelWithArticle,
+          );
+        }
+        // A stale or missing origin/HEAD hides the default branch from status, so check here
+        // before anything is committed or pushed to it.
 
         const commit = commitAction
           ? yield* Ref.set(currentPhase, Option.some("commit")).pipe(

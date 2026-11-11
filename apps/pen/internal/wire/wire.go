@@ -24,6 +24,9 @@ const (
 	// CodeNotKept closes a mesh sync whose records the member could not keep (its state folder
 	// cannot be written).
 	CodeNotKept uint16 = 4507
+	// CodeMeshFull closes a mesh sync that brought a record the member refused for its record
+	// cap. Relays never use it (their 4429 means busy).
+	CodeMeshFull uint16 = 4508
 )
 
 // Mux frame types on the uplink.

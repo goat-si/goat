@@ -210,11 +210,15 @@ type outq struct {
 	// closeTimer bounds the closing write; writerDone is set when run returns.
 	closeTimer *time.Timer
 	writerDone bool
-	bySID      map[uint32]int
-	pongs      int
-	done       bool
-	wake       chan struct{}
-	ended      chan struct{}
+	// onWriteFail, when set, is called once a write fails or times out; failWrite, when set, can
+	// fail a write before it starts as a stalled peer would (tests).
+	onWriteFail func()
+	failWrite   func() error
+	bySID       map[uint32]int
+	pongs       int
+	done        bool
+	wake        chan struct{}
+	ended       chan struct{}
 }
 
 type outItem struct {
@@ -489,6 +493,12 @@ func (q *outq) close(code uint16) {
 }
 func (q *outq) wait() { <-q.ended }
 
+func (q *outq) writeFailed() {
+	if q.onWriteFail != nil {
+		q.onWriteFail()
+	}
+}
+
 // written gives back the cost of the item the writer held.
 func (q *outq) written() {
 	q.mu.Lock()
@@ -539,6 +549,7 @@ func (q *outq) run() {
 			case <-done:
 			case <-cctx.Done():
 				q.ws.CloseNow()
+				q.writeFailed()
 			}
 			cancel()
 			return
@@ -547,12 +558,19 @@ func (q *outq) run() {
 		if it.is(itemText) {
 			typ = websocket.MessageText
 		}
-		wctx, cancel := context.WithTimeout(ctx, q.timeout)
-		err := q.ws.Write(wctx, typ, it.data)
-		cancel()
+		var err error
+		if q.failWrite != nil {
+			err = q.failWrite()
+		}
+		if err == nil {
+			wctx, cancel := context.WithTimeout(ctx, q.timeout)
+			err = q.ws.Write(wctx, typ, it.data)
+			cancel()
+		}
 		q.written()
 		if err != nil {
 			q.ws.CloseNow()
+			q.writeFailed()
 			q.mu.Lock()
 			q.dropLocked()
 			q.mu.Unlock()

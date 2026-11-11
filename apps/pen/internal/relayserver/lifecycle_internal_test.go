@@ -3,7 +3,9 @@ package relayserver
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"math"
 	mrand "math/rand/v2"
 	"net/http/httptest"
 	"sync"
@@ -40,12 +42,49 @@ type live struct {
 	mu     sync.Mutex
 	opened int
 	conns  []*websocket.Conn
+	// stall names the client session whose next data write fails as a stalled peer's would;
+	// stalled receives once it did.
+	stallNode string
+	stallSID  uint32
+	stalled   chan struct{}
+	// authed[nodeID] receives once per uplink the relay accepted (Hooks.OnUplink).
+	t      *testing.T
+	authed map[string]chan struct{}
+}
+
+// failsafe bounds a wait for an event the test drives, so a missing event fails with a message
+// instead of hanging; no outcome depends on it.
+const failsafe = 30 * time.Second
+
+func (lv *live) authedCh(nodeID string) chan struct{} {
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	ch := lv.authed[nodeID]
+	if ch == nil {
+		ch = make(chan struct{}, 1024)
+		lv.authed[nodeID] = ch
+	}
+	return ch
 }
 
 func newLive(t *testing.T, l Limits) *live {
 	s := New(l)
-	lv := &live{s: s, done: make(chan struct{}, 1<<16)}
+	lv := &live{s: s, done: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1), t: t, authed: map[string]chan struct{}{}}
 	s.Hooks.OnSocketDone = func(string, string) { lv.done <- struct{}{} }
+	s.Hooks.OnUplink = func(nodeID string) { lv.authedCh(nodeID) <- struct{}{} }
+	s.Hooks.FailWrite = func(nodeID, role string, sid uint32) error {
+		lv.mu.Lock()
+		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID
+		lv.mu.Unlock()
+		if !hit {
+			return nil
+		}
+		select {
+		case lv.stalled <- struct{}{}:
+		default:
+		}
+		return errors.New("stalled peer")
+	}
 	hs := httptest.NewServer(s)
 	t.Cleanup(hs.Close)
 	lv.url = hs.URL
@@ -73,6 +112,8 @@ type liveNode struct {
 	ws    *websocket.Conn
 	mu    sync.Mutex
 	opens []uint32
+	// opened receives each OPEN's sid as it arrives (dropped when full).
+	opened chan uint32
 }
 
 func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
@@ -90,7 +131,7 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 		answer = relay.AnswerChallenge(id, lv.origin, ch)
 	}
 	ws.Write(ctx, websocket.MessageBinary, answer)
-	n := &liveNode{id: id, ws: ws}
+	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64)}
 	go func() {
 		total, last := uint64(len(ch)), uint64(0)
 		for {
@@ -109,10 +150,35 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 				n.mu.Lock()
 				n.opens = append(n.opens, f.SID)
 				n.mu.Unlock()
+				select {
+				case n.opened <- f.SID:
+				default:
+				}
 			}
 		}
 	}()
+	if good {
+		// Clients dialed before the relay accepted this uplink would reach no uplink (4404) or
+		// the one it replaces.
+		select {
+		case <-lv.authedCh(id.NodeID()):
+		case <-time.After(failsafe):
+			lv.t.Fatalf("the relay did not accept the uplink of %s", id.NodeID())
+		}
+	}
 	return n
+}
+
+// nextOpen is the sid of the next OPEN this uplink receives.
+func (n *liveNode) nextOpen(t *testing.T) uint32 {
+	t.Helper()
+	select {
+	case sid := <-n.opened:
+		return sid
+	case <-time.After(failsafe):
+		t.Fatalf("no OPEN reached the uplink of %s", n.id.NodeID())
+		return 0
+	}
 }
 
 func (n *liveNode) someSID(r *mrand.Rand) (uint32, bool) {
@@ -128,11 +194,22 @@ func (n *liveNode) someSID(r *mrand.Rand) (uint32, bool) {
 // that never read, first and second messages, node answers and closes, 4429 refusals, write
 // timeouts, a relay shutdown), every counter is back to exactly zero once all sockets are gone.
 func TestCountersReturnToZeroAfterAnySequenceOfSocketLifecycles(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]int{}
+	count := func(k string) {
+		mu.Lock()
+		seen[k]++
+		mu.Unlock()
+	}
 	for seed := range uint64(6) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			l := DefaultLimits()
+			// Only how fast stalled random sockets end; no assertion depends on it (the prelude drives
+			// the write-failure path through Hooks.FailWrite).
 			l.WriteTimeout = 200 * time.Millisecond
 			lv := newLive(t, l)
+			lv.s.Hooks.OnEnd = func(role string, code uint16) { count(fmt.Sprintf("%s %d", role, code)) }
+			lv.s.Hooks.OnWriteFailed = func(role string) { count(role + " write failed") }
 			r := mrand.New(mrand.NewPCG(seed, 7))
 			ctx := context.Background()
 			var ids []*ident.Identity
@@ -140,7 +217,7 @@ func TestCountersReturnToZeroAfterAnySequenceOfSocketLifecycles(t *testing.T) {
 				id, _ := ident.Generate(rand.Reader)
 				ids = append(ids, id)
 			}
-			nodes := map[int]*liveNode{}
+			nodes := map[int]*liveNode{0: prelude(t, lv, ids)}
 			var clients []*websocket.Conn
 			for range 300 {
 				i := r.IntN(len(ids))
@@ -188,6 +265,7 @@ func TestCountersReturnToZeroAfterAnySequenceOfSocketLifecycles(t *testing.T) {
 			}
 			if seed%2 == 0 {
 				lv.s.Close()
+				count("relay shutdown")
 			}
 			lv.mu.Lock()
 			for _, c := range lv.conns {
@@ -205,34 +283,95 @@ func TestCountersReturnToZeroAfterAnySequenceOfSocketLifecycles(t *testing.T) {
 				t.Fatalf("with every socket gone: %d queued, %d read bytes, %d address shares, %d rooms still counted",
 					lv.s.Queued(), lv.s.Reading(), shares, rooms)
 			}
+			mu.Lock()
+			defer mu.Unlock()
+			want := []string{"node 4403", "node 4409", "client 4404", "client 4429", "client 4408", "client 1000", "client write failed"}
+			if seed%2 == 0 {
+				want = append(want, "relay shutdown")
+			}
+			for _, path := range want {
+				if seen[path] == 0 {
+					t.Errorf("seed %d never took the exit path %q (seen: %v)", seed, path, seen)
+				}
+			}
+			clear(seen)
 		})
 	}
 }
 
-// P2: serving and disconnecting many authenticated node ids leaves no per-node state behind.
-func TestManyNodeIdsLeaveNoPerNodeStateBehind(t *testing.T) {
+// T1: the per-room session id counter wraps past 0xffffffff to 1 and skips ids still live, so a
+// wrap never sends the node a second OPEN for a live session (which would end its uplink).
+func TestAWrappedSessionIDSkipsTheLiveOnes(t *testing.T) {
 	lv := newLive(t, DefaultLimits())
-	for range 200 {
-		id, _ := ident.Generate(rand.Reader)
-		n := lv.uplink(id, true)
-		if n == nil {
-			t.Fatal("an uplink was refused")
-		}
-		c := lv.dial("/v1/client/" + id.NodeID())
-		if c != nil {
-			c.CloseNow()
-		}
-		n.ws.CloseNow()
-	}
-	lv.mu.Lock()
-	opened := lv.opened
-	lv.mu.Unlock()
-	for range opened {
-		<-lv.done
+	id, _ := ident.Generate(rand.Reader)
+	n := lv.uplink(id, true)
+	if n == nil {
+		t.Fatal("uplink refused")
 	}
 	lv.s.mu.Lock()
-	defer lv.s.mu.Unlock()
-	if kept := len(lv.s.rooms) + len(lv.s.unauth) + len(lv.s.shares); kept != 0 {
-		t.Fatalf("%d per-node or per-address entries kept after every socket is gone", kept)
+	rm := lv.s.rooms[id.NodeID()]
+	lv.s.mu.Unlock()
+	first := lv.dial("/v1/client/" + id.NodeID())
+	if got := n.nextOpen(t); got != 1 {
+		t.Fatalf("first session got sid %d, want 1", got)
 	}
+	rm.mu.Lock()
+	rm.sid = math.MaxUint32
+	rm.mu.Unlock()
+	lv.dial("/v1/client/" + id.NodeID())
+	if got := n.nextOpen(t); got != 2 {
+		t.Fatalf("after the wrap the new session got sid %d, want 2 (1 is live)", got)
+	}
+	rm.mu.Lock()
+	k := rm.clients[1]
+	rm.mu.Unlock()
+	if k == nil || k.closed {
+		t.Fatal("the session that holds sid 1 ended")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := first.Write(ctx, websocket.MessageBinary, []byte("still here")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// prelude drives each exit path once so every seed covers them, whatever its random steps do.
+func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
+	ctx := context.Background()
+	if lv.uplink(ids[1], false) == nil {
+		t.Fatal("prelude: an uplink failing authentication was refused before its challenge")
+	}
+	old := lv.uplink(ids[0], true)
+	orphan := lv.dial("/v1/client/" + ids[0].NodeID())
+	old.nextOpen(t)
+	n := lv.uplink(ids[0], true) // replaces old (4409); orphan ends 4404
+	_ = orphan
+	for range 9 { // the ninth pending session ends the oldest 4429
+		lv.dial("/v1/client/" + ids[0].NodeID())
+		n.nextOpen(t)
+	}
+	twice := lv.dial("/v1/client/" + ids[0].NodeID())
+	n.nextOpen(t)
+	twice.Write(ctx, websocket.MessageBinary, []byte("first"))
+	twice.Write(ctx, websocket.MessageBinary, []byte("second")) // 4408
+	closed := lv.dial("/v1/client/" + ids[0].NodeID())
+	sid := n.nextOpen(t)
+	n.ws.Write(ctx, websocket.MessageBinary, wire.CloseFrame(sid, 1000).Encode())
+	if _, _, err := closed.Read(ctx); err == nil {
+		t.Fatal("prelude: the session the node closed is still open")
+	}
+	// A client whose write fails as a stalled one's would: the hook fails it, so no kernel buffer
+	// or timer decides whether this path is taken.
+	lv.dial("/v1/client/" + ids[0].NodeID())
+	sid = n.nextOpen(t)
+	lv.mu.Lock()
+	lv.stallNode, lv.stallSID = ids[0].NodeID(), sid
+	lv.mu.Unlock()
+	n.ws.Write(ctx, websocket.MessageBinary, wire.Frame{Type: wire.FrameData, SID: sid, Payload: []byte("to a stalled client")}.Encode())
+	select {
+	case <-lv.stalled:
+	case <-time.After(failsafe):
+		t.Fatal("prelude: the stalled client's write was never attempted")
+	}
+	return n
 }

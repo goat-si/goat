@@ -41,6 +41,13 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 type LocalInput<A> = Omit<A, "host">;
 
 /**
+ * After its first removal attempt, a sweep starts checking no further worktrees once this has passed:
+ * half the bound a remote caller waits (HostThreadsMcpService REMOTE_TIMEOUT_MS), leaving the rest
+ * for work under way. Nothing is cut short; an interrupted delete leaves a half-removed checkout.
+ */
+const CLEANUP_SWEEP_BUDGET_MS = 60_000;
+
+/**
  * Lists, removes, and sweeps the git worktrees of this environment's project
  * repositories. Dispatchers create a worktree per thread and nothing removes
  * it when the thread ends, so agents need a safe way to clean up after
@@ -818,15 +825,23 @@ const make = Effect.gen(function* () {
     "WorktreeInventory.cleanup",
   )(function* (input) {
     const dryRun = input.dryRun !== false;
+    const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
     const facts = yield* scan(input.repo);
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
+    let attempted = false;
+    let remaining = 0;
     for (const fact of facts) {
       if (fact.entry.main) continue;
       const entry = { path: fact.entry.path, branch: fact.entry.branch };
       const blocker = sweepBlocker(fact);
       if (blocker !== null) {
         kept.push({ ...entry, reason: blocker });
+        continue;
+      }
+      // The deadline never skips the first eligible removal, so a repeated sweep can make progress.
+      if (!dryRun && attempted && (yield* Clock.currentTimeMillis) >= deadline) {
+        remaining++;
         continue;
       }
       const work = yield* unsavedWork(fact);
@@ -839,6 +854,7 @@ const make = Effect.gen(function* () {
         removed.push({ ...entry, reason });
         continue;
       }
+      attempted = true;
       yield* removeChecked(fact, {
         force: false,
         deleteBranch: false,
@@ -850,7 +866,7 @@ const make = Effect.gen(function* () {
         }),
       );
     }
-    return { dryRun, removed, kept };
+    return { dryRun, removed, kept, remaining };
   });
 
   const facts: WorktreeInventoryService["Service"]["facts"] = scan(undefined).pipe(

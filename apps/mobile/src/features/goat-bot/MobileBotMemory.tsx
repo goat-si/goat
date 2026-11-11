@@ -15,6 +15,7 @@ import { Pressable, Text, TextInput, View } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
+import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
 export function MobileBotMemory(props: {
@@ -99,9 +100,10 @@ function MobileNoteList(props: {
         <Text className="text-foreground-muted">{GOAT_BOT_NOTES_TRUNCATED_COPY}</Text>
       ) : null}
       {view.empty === "none" ? (
-        <Text className="text-foreground-muted">
-          No notes yet. Ask {props.botName} to remember a standing rule.
-        </Text>
+        <MobileBotPanelEmpty
+          title="No notes yet"
+          next={`Ask ${props.botName} to remember a standing rule.`}
+        />
       ) : view.empty === "none_in_window" ? (
         <Text className="text-foreground-muted">
           No complete note fits in the newest 64 KB of memory.md.

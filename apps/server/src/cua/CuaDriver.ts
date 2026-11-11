@@ -471,10 +471,12 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       yield* revoke(entry);
     }
   }, lifecycle.withPermit);
-  const prepareBrowserFence = (requireCurrent: boolean) => {
+  // With no driver running, fence the last generation seen so a newer host can pass its probe;
+  // an unknown fence would keep claims off until the server restarts (#2720).
+  const prepareBrowserFence = () => {
     const entry = active;
     const generation = entry?.hostGeneration;
-    generations.fence(entry === undefined && !requireCurrent ? generations.last() : generation);
+    generations.fence(entry === undefined ? generations.last() : generation);
     return lifecycle.withPermit(
       Effect.gen(function* () {
         if (entry === undefined) return false;
@@ -506,8 +508,8 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           ),
       ),
     ),
-    fenceBrowserManifest: Effect.suspend(() => prepareBrowserFence(false)),
-    markBrowserFence: () => ({ run: prepareBrowserFence(true) }),
+    fenceBrowserManifest: Effect.suspend(() => prepareBrowserFence()),
+    markBrowserFence: () => ({ run: prepareBrowserFence() }),
     afterBrowserFenceFailure: capability.afterFenceFailure,
     ...(refresh ? { refreshManifest } : {}),
     acquire,

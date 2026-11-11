@@ -13,5 +13,6 @@ See [Keybindings](./keybindings.md) to customize these shortcuts.
 If you return to typing while a terminal is starting, the composer keeps focus when the terminal
 becomes ready. Opening or switching to a terminal explicitly still focuses it.
 
-In GOAT Bot, Tab also stops on each message. A focused or hovered message shows the time it was
-sent beside the bubble; the centered stamps mark days and long pauses.
+In GOAT Bot, Tab also stops on each message, and a screen reader reads its time. Each run of the
+bot's replies shows its time beside the bot's name; the centered stamps mark a new day or a pause
+of 15 minutes or more.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"os"
 	"slices"
 	"time"
@@ -141,8 +142,14 @@ func (d *Daemon) adopt(ctx context.Context) error {
 
 // replaceMesh makes store this node's mesh; relays (when set) replace the relay list.
 func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) error {
+	store.Adopt()
 	if err := store.Save(); err != nil {
 		return err
+	}
+	// mesh.json now refuses a save of the old set (another mesh), and the old set stops writing,
+	// so a save of it that was already running cannot be the last write.
+	if old := d.mesh(); old != nil && old != store {
+		old.Retire()
 	}
 	// The old mesh's invites go; new ones persist in offers.json as before. The old book is retired
 	// first, so a prune or invite still holding it cannot write them back.
@@ -160,10 +167,6 @@ func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) er
 	d.store = store
 	d.invites = invites
 	d.meshMu.Unlock()
-	// A save of the old set that was already running must not be the last write.
-	if err := store.Save(); err != nil {
-		return err
-	}
 	d.cfgMu.Lock()
 	changed := relays != nil && !slices.Equal(d.cfg.RelayList(), relays)
 	if changed {
@@ -212,8 +215,11 @@ func (d *Daemon) saveConfig() error {
 	d.cfgMu.Lock()
 	cfg := d.cfg
 	d.cfgMu.Unlock()
-	if disk, err := d.st.LoadConfig(); err == nil && disk.DownloadRelay != "" {
-		cfg.DownloadRelay = disk.DownloadRelay
-	}
-	return d.st.SaveConfig(cfg)
+	return d.st.UpdateConfig(func(disk *state.Config) {
+		dl := disk.DownloadRelay
+		*disk = cfg
+		if dl != "" {
+			disk.DownloadRelay = dl
+		}
+	})
 }

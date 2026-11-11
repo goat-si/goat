@@ -6,6 +6,7 @@ import * as Queue from "effect/Queue";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import type * as Fixture from "./adapter.test.ts";
+import type * as FakePiModule from "./test/fakePi.ts";
 
 export function registerPiExtensionStatusChecks({
   makeFakePi,
@@ -17,7 +18,7 @@ export function registerPiExtensionStatusChecks({
   runtimePolicy,
   layerTest,
 }: {
-  makeFakePi: typeof Fixture.makeFakePi;
+  makeFakePi: typeof FakePiModule.makeFakePi;
   openRuntime: typeof Fixture.openRuntime;
   startTurn: typeof Fixture.startTurn;
   THREAD_ID: typeof Fixture.THREAD_ID;

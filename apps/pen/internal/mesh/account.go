@@ -28,6 +28,8 @@ type Claim struct {
 	Hash string
 	// Kid is the login key the assertion was checked against.
 	Kid string
+	// Issuer is the login service URL the assertion was checked against.
+	Issuer string
 }
 
 // errLockedNow is a decision's answer when the mesh was locked between the first look and the

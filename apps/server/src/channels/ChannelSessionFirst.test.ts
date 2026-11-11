@@ -103,6 +103,49 @@ describe("session first receipts", () => {
     },
   );
 
+  it.effect.each([
+    { first: "Four.", final: "Four.", sent: ["Four."] },
+    { first: "42", final: "42", sent: ["42"] },
+    { first: "Hi!", final: "Hi! What can I do for you?", sent: ["Hi!", "What can I do for you?"] },
+    // Only a repeated whole sentence is dropped, never the start of a different one.
+    {
+      first: "First step: inspect",
+      final: "First step: inspection found nothing.",
+      sent: ["First step: inspect", "First step: inspection found nothing."],
+    },
+    {
+      first: "First step: inspect",
+      final: "First step: inspect for credentials.",
+      sent: ["First step: inspect", "First step: inspect for credentials."],
+    },
+  ])(
+    "a first line that already answered is not sent again by the final message: $final",
+    ({ first, final, sent }) => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(goatInput("Say hi", "restated-" + first), rpcContext);
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        // The session answers in its first line, reports, then closes with a message of its own.
+        harness.assistant(task, first, false, 0);
+        yield* runtime.runPass;
+        yield* runtime.settle([input.inputId]);
+        harness.assistant(task, final, false, 2);
+        harness.world.setStatus(task.worker!.threadId, 1, "completed");
+        yield* runtime.drain;
+        const { messages } = yield* botMessages;
+        const replies = messages
+          .filter((message) => message.channel?.inReplyToInputId === input.inputId)
+          .map((message) => message.text);
+        assert.deepStrictEqual(replies, sent);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("a run reconciled before its receipt commits still sends its answer once", () => {
     const harness = makeSessionHarness();
     return Effect.gen(function* () {

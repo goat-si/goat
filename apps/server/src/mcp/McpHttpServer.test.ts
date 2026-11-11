@@ -379,7 +379,7 @@ it.effect("saves full-page captures without replaying images and keeps clipping 
       const inputs = yield* serveSnapshots("mcp-fullpage-client", fullPage);
       const saved = yield* callSnapshot({ fullPage: true, save: true });
       expect(saved.isError).toBe(false);
-      expect(inputs).toEqual([{ fullPage: true, captureImage: true }]);
+      expect(inputs).toEqual([{ fullPage: true, captureImage: true, fullScreenshot: true }]);
       expect(saved.content.map((content) => content.type)).toEqual(["text"]);
       expect(saved.structuredContent).toEqual({
         url: snapshotResult.url,
@@ -401,6 +401,39 @@ it.effect("saves full-page captures without replaying images and keeps clipping 
       expect(image.content.map((content) => content.type)).toContain("image");
       expect(image.structuredContent).toBeUndefined();
       expect(JSON.stringify(image.content)).toContain('\\"clipped\\":true,\\"byteLength\\":3');
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("saves the uncapped screenshot while the agent sees the capped one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const capped =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+      const full =
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAAAAABX3VL4AAAADklEQVR4nGNgYGBgYAAAAAYAAXKCmeoAAAAASUVORK5CYII=";
+      const inputs = yield* serveSnapshots("mcp-full-resolution-client", {
+        ...snapshotResult,
+        screenshot: { mimeType: "image/png", data: capped, width: 1, height: 1 },
+        fullScreenshot: { data: full, width: 2, height: 2 },
+      });
+
+      const saved = yield* callSnapshot({ tabId: alternateTabId, save: true });
+      const { screenshotPath } = saved.structuredContent as { readonly screenshotPath: string };
+      expect(Buffer.from(yield* fileSystem.readFile(screenshotPath)).toString("base64")).toBe(full);
+      expect(saved.structuredContent).not.toHaveProperty("fullScreenshot");
+
+      const shown = yield* callSnapshot({ tabId: alternateTabId, save: true, includeImage: true });
+      expect(shown.content.at(-1)).toEqual({
+        type: "image",
+        mimeType: "image/png",
+        data: new Uint8Array(Buffer.from(capped, "base64")),
+      });
+      expect(inputs).toEqual([
+        { captureImage: true, fullScreenshot: true },
+        { captureImage: true, fullScreenshot: true },
+      ]);
     }),
   ).pipe(Effect.provide(layerTest)),
 );

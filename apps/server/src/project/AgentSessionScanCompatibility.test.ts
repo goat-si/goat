@@ -15,6 +15,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -58,6 +59,7 @@ const fixture = Effect.gen(function* () {
   const claudeHome = path.join(root, "claude");
   const codexHome = path.join(root, "codex");
   const piHome = path.join(root, "pi");
+  const mtimeMs = Date.parse("2026-08-24T12:00:00.000Z");
   const records = [
     [
       path.join(claudeHome, "projects", "shared", "claude.jsonl"),
@@ -80,6 +82,7 @@ const fixture = Effect.gen(function* () {
   for (const [file, record] of records) {
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     yield* fs.writeFileString(file, JSON.stringify(record) + "\n");
+    yield* fs.utimes(file, mtimeMs / 1000, mtimeMs / 1000);
   }
   const layer = AgentSessionScanner.layer.pipe(
     Layer.provide(
@@ -122,6 +125,7 @@ it.layer(NodeServices.layer)("scan response compatibility", (it) => {
   ])("older clients decode the scan when includePi is $name", ({ request }) =>
     Effect.gen(function* () {
       const { scanner, shared, piOnly } = yield* fixture;
+      yield* TestClock.setTime(Date.parse("2026-08-24T12:00:00.000Z"));
       const legacy = yield* scanner.scan(yield* decodeScanRequest(request));
       const decoded = yield* decodeLegacyScan(yield* encodeScanResponse(legacy));
       expect(

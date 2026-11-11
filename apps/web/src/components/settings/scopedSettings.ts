@@ -14,6 +14,7 @@ import {
   ServerSettings,
   type GoatProjectFile,
   type ServerSettingsPatch,
+  WorktreeCleanupRules,
 } from "@goat/contracts";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 import {
@@ -44,6 +45,9 @@ interface ScopedSettingsEnvironment {
 const SERVER_KEYS = new Set<string>(Object.keys(ServerSettings.fields));
 const CLIENT_KEYS = new Set<string>(Object.keys(ClientSettingsSchema.fields));
 const PROJECT_SCOPED_KEYS = new Set<string>(PROJECT_SCOPED_SERVER_SETTING_KEYS);
+// Only rule fields belong in a worktree policy; other storageCleanup keys stay server-wide.
+const WORKTREE_RULE_KEYS = new Set<string>(Object.keys(WorktreeCleanupRules.fields));
+const isWorktreeRuleKey = (key: string) => WORKTREE_RULE_KEYS.has(key);
 
 export function isProjectScopedSettingKey(key: string): key is ProjectScopedServerSettingKey {
   return PROJECT_SCOPED_KEYS.has(key);
@@ -308,9 +312,7 @@ export function planScopedSettingsPatch(
                     previous,
                     previous.worktreeCleanup != null &&
                       serverPatch.storageCleanup &&
-                      Object.keys(serverPatch.storageCleanup).some((key) =>
-                        key.startsWith("worktree"),
-                      )
+                      Object.keys(serverPatch.storageCleanup).some(isWorktreeRuleKey)
                       ? {
                           ...serverPatch,
                           worktreeCleanup: {
@@ -319,7 +321,7 @@ export function planScopedSettingsPatch(
                               ...resolveWorktreeCleanup(previous, null),
                               ...Object.fromEntries(
                                 Object.entries(serverPatch.storageCleanup).filter(([key]) =>
-                                  key.startsWith("worktree"),
+                                  isWorktreeRuleKey(key),
                                 ),
                               ),
                             },

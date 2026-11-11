@@ -10,6 +10,10 @@ If a request offers a secret provider, you can select it and enter a reference i
 value. GOAT reads the value from that provider when you answer. Login and payment card requests
 use their dedicated fields. A request ends when its agent's turn ends.
 
+On a remote or headless server, desktop approval may not be available. Sign `op` in with a
+[service account](./secrets-1password-service-account.md) or a
+[Connect server](./secrets-1password-connect.md) instead.
+
 ## Secret providers
 
 Where secret providers are enabled, add a 1Password provider in **Settings → Providers → Secret

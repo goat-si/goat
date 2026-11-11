@@ -102,7 +102,14 @@ const withChannelAdmission = (
       service,
       launch: (
         message: string,
-        extra: { readonly notifyTarget?: { readonly name: string } } = {},
+        extra: {
+          readonly notifyTarget?: { readonly name: string };
+          readonly workspaceStrategy?: {
+            readonly type: "worktree";
+            readonly baseRef: string;
+            readonly branch: string;
+          };
+        } = {},
       ) =>
         service
           .launch(
@@ -229,7 +236,10 @@ function fixture(
           } as Project),
         ),
     }),
-    Layer.mock(Folders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+    Layer.mock(Folders.ManagedProjectFolders)({
+      namedProjectsRoot: "/unused",
+      isScratchProject: () => Effect.succeed(false),
+    }),
     Layer.mock(Git.GitVcsDriver)({
       listWorktreePaths: () => Effect.succeed(["/repo", "/repo/worktree"]),
     }),
@@ -777,6 +787,38 @@ it.effect(
     );
   },
 );
+
+it.effect(
+  "a GOAT Bot launch records on its launcher whether it was coding in a worktree or a chore",
+  () => {
+    const f = fixture();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const setup = yield* withChannelAdmission(f);
+        yield* setup.launch("Stop the server on port 3774");
+        yield* setup.launch("Fix the flaky test", {
+          workspaceStrategy: { type: "worktree", baseRef: "dev", branch: "fix/flaky" },
+        });
+        expect(f.launched.map((input) => input.launchedBy?.workKind)).toEqual(["chore", "coding"]);
+      }),
+    );
+  },
+);
+
+it.effect("a launch from a person's thread records no work kind", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+    yield* service.launch(
+      scope,
+      { title: "Plain", message: "Look", standingInstructions: false },
+      { runtimeMode: "full-access", interactionMode: "default" },
+    );
+    expect(f.launched).toHaveLength(1);
+    expect(f.launched[0]?.launchedBy).toMatchObject({ via: "thread_launch" });
+    expect(f.launched[0]?.launchedBy?.workKind).toBeUndefined();
+  }).pipe(Effect.provide(f.layer));
+});
 
 it.effect(
   "a launch failure after the thread committed keeps the slot bound instead of double-spending capacity",

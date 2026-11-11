@@ -35,16 +35,18 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   beforeCompaction: Effect.Effect<void> = Effect.void,
   selectionNeedsRestart = false,
   threadOverride?: ThreadId,
+  canSteer = true,
 ) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
   const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
   const steered: string[] = [];
+  const interrupted: ProviderTurnId[] = [];
   const capabilities = {
     ...CodexProviderCapabilitiesV2,
     turns: {
       ...CodexProviderCapabilitiesV2.turns,
-      supportsActiveSteering: true,
+      supportsActiveSteering: canSteer,
       supportsSteeringByInterruptRestart: canRestart,
     },
   };
@@ -56,11 +58,11 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
       Effect.succeed({ type: selectionNeedsRestart ? "restart_session" : "apply_on_next_turn" }),
     openSession: Effect.fn("SteeringHarness.openSession")(function* (input) {
       const now = yield* DateTime.now;
-      const startTurn = Effect.fn("SteeringHarness.startTurn")(function* (
+      const turnUpdated = (
         turn: ProviderAdapter.ProviderAdapterV2TurnInput,
-      ) {
-        started.push(turn);
-        yield* Queue.offer(events, {
+        status: "running" | "interrupted",
+      ) =>
+        Queue.offer(events, {
           type: "provider_turn.updated",
           driver,
           providerTurn: {
@@ -70,11 +72,16 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
             runAttemptId: turn.attemptId,
             nativeTurnRef: { driver, nativeId: `native:${turn.attemptId}`, strength: "strong" },
             ordinal: turn.providerTurnOrdinal,
-            status: "running",
+            status,
             startedAt: now,
-            completedAt: null,
+            completedAt: status === "running" ? null : now,
           },
         });
+      const startTurn = Effect.fn("SteeringHarness.startTurn")(function* (
+        turn: ProviderAdapter.ProviderAdapterV2TurnInput,
+      ) {
+        started.push(turn);
+        yield* turnUpdated(turn, "running");
       });
       return {
         instanceId,
@@ -118,7 +125,21 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
           Effect.sync(() => {
             steered.push(turn.message.text);
           }),
-        interruptTurn: () => Effect.void,
+        interruptTurn: ({ providerTurnId }) =>
+          Effect.sync(() => {
+            interrupted.push(providerTurnId);
+          }).pipe(
+            Effect.andThen(
+              Effect.forEach(
+                started.filter(
+                  (turn) =>
+                    ProviderTurnId.make(`provider-turn:${turn.attemptId}`) === providerTurnId,
+                ),
+                (turn) => turnUpdated(turn, "interrupted"),
+                { discard: true },
+              ),
+            ),
+          ),
         respondToRuntimeRequest: () => Effect.void,
         readThreadSnapshot: () => Effect.die("unused"),
         rollbackThread: () => Effect.die("unused"),
@@ -173,7 +194,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     yield* Fiber.join(running);
     return threadId;
   });
-  return { adapter, cwd, events, started, steered, layer, startFirstTurn };
+  return { adapter, cwd, events, started, steered, interrupted, layer, startFirstTurn };
 });
 
 export const goalHarness = Effect.fn("goalHarness")(function* (

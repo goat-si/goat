@@ -123,12 +123,15 @@ function meshFor(ctx: Context, sub: string) {
   return { meshId, members };
 }
 
-async function mint(
+export async function mint(
   ctx: Context,
   device: DeviceRow,
   sub: string,
   email: string,
 ): Promise<Response> {
+  // Signing awaits; a reset of the account meanwhile must not let an assertion out (members check
+  // assertions offline), so the reset time is read again in the step that records and returns it.
+  const resetBefore = ctx.store.resetAt(sub);
   const signer = await ctx.loginKey();
   const iat = Math.floor(ctx.now / 1000);
   const assertion = await signAssertion(
@@ -145,7 +148,9 @@ async function mint(
     },
     signer.key,
   );
-  ctx.store.insertAssertion(await assertionHash(assertion), sub, device.name, iat + 600, ctx.now);
+  const hash = await assertionHash(assertion);
+  if (ctx.store.resetAt(sub) !== resetBefore) return json({ status: "denied" }, 403);
+  ctx.store.insertAssertion(hash, sub, device.name, iat + 600, ctx.now);
   return json({
     assertion,
     account: { sub, email },

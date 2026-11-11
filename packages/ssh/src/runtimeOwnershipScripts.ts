@@ -8,6 +8,7 @@ import {
   WINDOWS_PROCESS_INFO_POWERSHELL,
 } from "@goat/shared/windowsHostProcess";
 
+import { REMOTE_LAUNCH_FACTS_SCRIPT } from "./launchFactsScripts.ts";
 import { REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 
 const REMOTE_REPLACEMENT_WAIT_ATTEMPTS = 50;
@@ -446,8 +447,10 @@ LEGACY_TERMINATED=0; LEGACY_IDENTITY_LINK=; LEGACY_PUBLICATION_STARTED=0
 RETAINED_SNAPSHOT_FILE=; LEGACY_PID=; LEGACY_PORT=; LEGACY_IDENTITY=; LEGACY_VERSION=; LEGACY_UID=; LEGACY_START=
 EXPECTED_RETAINED_SHA256=@@GOAT_RETAINED_RUNNER_SHA256@@
 EXPECTED_INSTALLED_SHA256=@@GOAT_INSTALLED_EXECUTABLE_SHA256@@
+OWN_RUNTIME_VERSION=@@GOAT_OWN_RUNTIME_VERSION@@
 @@GOAT_PROTOCOL_TOKENS@@
 ${REMOTE_RUNNER_HINT_SCRIPT}
+${REMOTE_LAUNCH_FACTS_SCRIPT}
 check_retained_runner() {
   # Recovery pins the executable observed by the probe as well as the runner.
   if [ -n "$EXPECTED_INSTALLED_SHA256" ] &&
@@ -474,6 +477,11 @@ cleanup_runner_next() {
   release_recovery_lock
   release_replacement_lock
   rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore" "$RUNNER_CANDIDATE_FILE.facts"
+  # The launch's capability lookup and readiness report keep their files beside the memo.
+  rm -f "$RUNNER_CANDIDATE_FILE.facts.caps-status" "$RUNNER_CANDIDATE_FILE.facts.caps-out" \\
+    "$RUNNER_CANDIDATE_FILE.facts.caps-answer" "$RUNNER_CANDIDATE_FILE.facts.caps-answer.next" \\
+    "$RUNNER_CANDIDATE_FILE.facts.report" "$RUNNER_CANDIDATE_FILE.facts.facts-status" \\
+    "$RUNNER_CANDIDATE_FILE.facts.facts-err"
   rm -f "$STATE_DIR/run-goat.next.$$" || :
   [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
   [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
@@ -522,6 +530,7 @@ if [ "$PRESERVE_SELECTED_RUNNER" = 1 ] &&
   printf 'Retained GOAT runner changed while copying; reconnect.\\n' >&2; exit 1
 fi
 pin_runner "$RUNNER_NEXT"
+launch_facts_ask
 if ! RUNNER_VERSION_OUTPUT="$(exec_fact version "$RUNNER_NEXT" --version)"; then
   printf 'Cannot validate %s; existing runner and server were preserved.\\n' "$REQUESTED_RUNNER" >&2; exit 1
 fi
@@ -641,7 +650,9 @@ if [ "$OWNING_LAUNCH" = 1 ]; then
   fi
   check_candidate_protocol
   check_retained_runner
-  check_live_protocol
+  # Nothing since the check under the lock re-pins or changes its inputs when it found no server,
+  # and the launch asks again before it acts on the answer.
+  [ "$LIVE_STATUS" = none ] || check_live_protocol
   [ "$RECONCILING_DRAIN" != 1 ] || NEEDS_OWNED_UPGRADE=1
 @@GOAT_VERIFY_OWNED_BEFORE_PUBLICATION@@
   [ "$DEFER_NO_DRAIN" != 1 ] || emit_pending unknown drain-unavailable

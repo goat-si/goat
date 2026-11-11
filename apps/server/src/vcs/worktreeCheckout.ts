@@ -2,6 +2,8 @@
 import * as NodeFS from "node:fs";
 import { GitCommandError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
 import * as Option from "effect/Option";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
@@ -17,6 +19,44 @@ export function worktreeFolderName(branch: string, platform: NodeJS.Platform): s
   const safe = name.replace(/[\\:*?"<>|]/gu, "-").replace(/[. ]+$/u, "") || "worktree";
   return isWindowsReservedFileName(safe) ? `${safe}-branch` : safe;
 }
+
+export const generatedWorktreeNames = Effect.fn("worktreeCheckout.generatedNames")(function* (
+  branch: string,
+  repository: string,
+  platform: NodeJS.Platform,
+  includeLegacy: boolean,
+) {
+  const crypto = yield* Crypto.Crypto;
+  const hash = Effect.fn("worktreeCheckout.hash")(function* (value: string) {
+    return Hex.encode(
+      yield* crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.orDie),
+    ).slice(0, 16);
+  });
+  const name = worktreeFolderName(branch, platform);
+  let prefix = "";
+  for (const character of name) {
+    if (Buffer.byteLength(prefix + character) > 23) break;
+    prefix += character;
+  }
+  const current = `${prefix}-${yield* hash(`${repository}\0${branch}`)}`;
+  const legacy = !includeLegacy
+    ? null
+    : name.length <= 40
+      ? name
+      : `${name.slice(0, 23).replace(/[\uD800-\uDBFF]$/, "")}-${yield* hash(branch)}`;
+  return { current, legacy };
+});
+
+export const matchesLegacyWorktree = Effect.fn("worktreeCheckout.matchesLegacy")(function* (
+  fs: FileSystem.FileSystem,
+  legacy: string | null,
+  checkout: string,
+  samePath: (left: string, right: string) => boolean,
+) {
+  if (legacy === null) return false;
+  const real = yield* fs.realPath(legacy).pipe(Effect.orElseSucceed(() => legacy));
+  return samePath(checkout, legacy) || samePath(checkout, real);
+});
 
 /**
  * Paths a project keeps out of its thread worktrees, as `git sparse-checkout --no-cone`

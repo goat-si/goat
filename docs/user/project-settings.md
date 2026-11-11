@@ -298,6 +298,10 @@ merging, or when they have no commits beyond the default branch. Set settled ret
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
 if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.
+No rule except deleting the thread removes a worktree whose branch has commits that are not in the
+remote default branch (in repositories without remotes, the project's branch) unless a merged pull
+request names them, even when its files are unchanged. The cleanup results show how many such
+commits each kept worktree has. When GOAT cannot fetch the default branch, it keeps the worktree.
 Active sessions, open terminals and worktrees shared by independent threads prevent removal.
 Pinned threads are kept except when deleted. Before removing a worktree, GOAT saves a snapshot
 of tracked and non-ignored untracked changes. Turn off **Clean up worktrees with uncommitted
@@ -309,15 +313,21 @@ Merge cleanup requires a merged pull request whose commits are included in the r
 branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
 branch and the worktree is still at the pull request's last commit.
 
-Before automatic worktree cleanup starts for the first time, GOAT shows a preview. After you
-see it, cleanup can start 24 hours later; some remote environments require confirmation instead.
-The preview approves the rules and a count, not specific paths. If more worktrees become eligible,
-GOAT shows a new preview before starting. **Clean up now** confirms the preview; **Delete now**
-alone does not. Review or turn off the default rules in **Settings → Storage**.
+Automatic cleanup removes eligible worktrees as soon as it runs. To see what it would remove
+first, turn on **Preview before automatic cleanup** in **Settings → Storage**. GOAT then shows a
+preview before cleanup starts, and cleanup starts 24 hours after you see it; on a server started
+over SSH, including one GOAT installed there, it waits for **Clean up now** instead. The preview
+approves the rules and a count, not specific paths. If more worktrees become eligible, or you turn
+the preview off and on again, GOAT shows a new preview before the next cleanup; a cleanup already
+running may finish under the earlier approval. **Delete now** alone does not confirm a preview.
+Review or turn off the default rules in **Settings → Storage**.
 
 When you open a cleaned thread, choose **Restore** in its banner. Sending a message also restores
-the worktree automatically. If restoration fails, the banner offers **Start in a new worktree**;
-the saved snapshot remains available for manual recovery.
+the worktree automatically, and the thread notes what came back and what did not, such as ignored
+files or changes that were never committed. **Start in a new worktree** continues on a new branch
+started from the thread's branch; the saved snapshot remains available for manual recovery. If a
+restore stops before its setup script finishes, the banner says so and offers **Run setup now**;
+the next turn also runs it.
 
 Snapshots live in the project repository under `refs/goat/snapshots/<thread>/<time>` and are kept
 for 30 days by default; change the retention period in **Settings → Storage**. Snapshots of

@@ -1,5 +1,6 @@
 import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
+import * as PreviewDownloadCopy from "./downloadCopy.ts";
 import * as NodeZlib from "node:zlib";
 import {
   DesktopPreviewRecordingInputSchema,
@@ -3537,19 +3538,15 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     source: string,
     fileName: string,
   ) {
-    const directory = app.getPath("downloads");
-    const extension = path.extname(fileName);
-    const stem = path.basename(fileName, extension) || "download";
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const target = path.join(
-        directory,
-        attempt === 0 ? `${stem}${extension}` : `${stem} (${attempt})${extension}`,
-      );
-      if (yield* fileSystem.exists(target)) continue;
-      yield* fileSystem.copyFile(source, target);
-      shell.showItemInFolder(target);
-      return;
-    }
+    yield* PreviewDownloadCopy.copyDownload({
+      fileSystem,
+      path,
+      directory: app.getPath("downloads"),
+      source,
+      fileName,
+      onError: (cause) => new PreviewOperationError({ operation: "copyToDownloads", cause }),
+      reveal: (target) => shell.showItemInFolder(target),
+    });
   });
   const placeServerDownloads = (session: Electron.Session) => {
     if (downloadSessions.has(session)) return;

@@ -99,7 +99,7 @@ func (d *Daemon) checkAssertion(raw json.RawMessage, v *mesh.View) (mesh.Claim, 
 	if d.pending.isDenied(a.A.SignPub, d.now()) {
 		return mesh.Claim{}, errors.New("a member denied this machine; it may ask again after 24 hours")
 	}
-	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash(), Kid: b.Key.Kid}, nil
+	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash(), Kid: b.Key.Kid, Issuer: b.LoginURL}, nil
 }
 
 // queueRequest keeps an account join while the mesh is locked.
@@ -110,7 +110,7 @@ func (d *Daemon) queueRequest(card *mesh.Card, c mesh.Claim) (string, error) {
 	}
 	fp := ident.Fingerprint(noise)
 	p := Pending{ID: fp[:9], Fingerprint: fp, Name: card.C.Name, NodeID: card.C.NodeID, SignPub: card.C.SignPub,
-		Email: c.Email, Sub: c.Sub, Kid: c.Kid, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
+		Email: c.Email, Sub: c.Sub, Kid: c.Kid, Issuer: c.Issuer, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
 	if err := d.pending.add(p, d.now()); err != nil {
 		return "", err
 	}
@@ -176,18 +176,28 @@ func (d *Daemon) approve(ctx context.Context, arg string) (ApproveResult, error)
 	if err != nil {
 		return ApproveResult{}, err
 	}
+	if p.Issuer == "" || p.Kid == "" {
+		return ApproveResult{}, errors.New("this request was queued by an older pen and does not say which login service and key it signed in with; on the new machine run pen login again, then approve the new request")
+	}
+	sameBinding := func(v *mesh.View) error {
+		a := v.Account
+		if a == nil || a.Sub != p.Sub || a.LoginURL != p.Issuer || a.LoginKey.Kid != p.Kid {
+			return errors.New("the mesh is no longer bound to the account, login service and key this request signed in with; on the new machine run pen login again")
+		}
+		return nil
+	}
 	v := d.view()
-	if v.Account == nil || v.Account.Sub != p.Sub {
-		return ApproveResult{}, errors.New("the mesh is no longer bound to the account this request signed in with")
+	if err := sameBinding(v); err != nil {
+		return ApproveResult{}, err
 	}
 	if _, gone := v.Revoked[p.SignPub]; gone {
 		return ApproveResult{}, errors.New("this key was revoked")
 	}
 	// The binding is checked again with the signature, under the store's lock: an unbind or a
-	// rebind to another account or login key merged since the request was queued refuses it.
+	// rebind to another account, login service or key merged since the request was queued refuses it.
 	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now(), func(v *mesh.View) error {
-		if v.Account == nil || v.Account.Sub != p.Sub || p.Kid != "" && v.Account.LoginKey.Kid != p.Kid {
-			return errors.New("the mesh is no longer bound to the account and login key this request signed in with")
+		if err := sameBinding(v); err != nil {
+			return err
 		}
 		if _, gone := v.Revoked[p.SignPub]; gone {
 			return errors.New("this key was revoked")

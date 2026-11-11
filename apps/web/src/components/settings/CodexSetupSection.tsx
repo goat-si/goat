@@ -1,4 +1,5 @@
 import { AuthProvidersManageScope } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useEnvironmentScope } from "../../state/session";
 import {
   isAtomCommandInterrupted,
@@ -14,16 +15,8 @@ import type {
 } from "@goat/contracts";
 import { codexAuthHandoffUrl } from "@goat/shared/codexAuthHandoff";
 import { providerAuthReturnUrl } from "@goat/shared/providerAuthReturnUrl";
-import { CheckIcon, ChevronRightIcon, ExternalLinkIcon } from "~/components/solar";
-import {
-  Children,
-  useEffect,
-  useEffectEvent,
-  useId,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { CheckIcon, ExternalLinkIcon } from "~/components/solar";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
 import { useEnvironmentHttpBaseUrl } from "../../state/environments";
@@ -36,8 +29,8 @@ import { Button } from "../ui/button";
 import { ChatGptConnectionButton } from "./ChatGptConnectionButton";
 import { ChatGptUsageButton } from "./ChatGptUsageButton";
 import { ChatGptAccountPicker } from "./ChatGptAccountPicker";
+import { CodexSignInDescription, CodexWelcomeCard } from "./CodexSetupCards";
 import { Input } from "../ui/input";
-import { OpenAI } from "../Icons";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow } from "./settingsLayout";
 import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
@@ -257,6 +250,10 @@ function ManagedCodexSetup({
   const completeAuth = useAtomCommand(serverEnvironment.completeProviderAuth, options);
   const cancelAuth = useAtomCommand(serverEnvironment.cancelProviderAuth, options);
   const logoutAuth = useAtomCommand(serverEnvironment.logoutProviderAuth, options);
+  const removeAuthMethod = useAtomCommand(serverEnvironment.removeProviderAuthMethod, options);
+  const canRemoveAuthMethod = useAtomValue(
+    serverEnvironment.removeProviderAuthMethod.permissionAtom(environmentId),
+  );
   const startInstall = useAtomCommand(serverEnvironment.startProviderInstall, options);
   const cancelInstall = useAtomCommand(serverEnvironment.cancelProviderInstall, options);
   const reconnectProfile = useAtomCommand(serverEnvironment.chatGptReconnectProfile, options);
@@ -705,6 +702,12 @@ function ManagedCodexSetup({
       open={accountPickerOpen}
       methods={auth?.methods ?? []}
       onClose={() => setAccountPickerOpen(false)}
+      disabled={unavailable || busy}
+      canRemove={canRemoveAuthMethod}
+      error={error}
+      onRemove={(methodId) =>
+        void run(() => removeAuthMethod({ environmentId, input: { instanceId, methodId } }))
+      }
       onSelect={(methodId) => {
         setAccountPickerOpen(false);
         void setup(
@@ -1051,68 +1054,5 @@ export function CodexManagedRuntimeFields({
         }
       />
     </>
-  );
-}
-
-function CodexSignInDescription({
-  label = "Complete sign-in in your browser.",
-  expanded = false,
-  controls,
-  onToggle,
-}: {
-  readonly label?: string;
-  readonly expanded?: boolean;
-  readonly controls?: string;
-  readonly onToggle?: () => void;
-}) {
-  if (!onToggle) return <div className="leading-relaxed">{label}</div>;
-  return (
-    <button
-      type="button"
-      className="inline-flex items-center gap-1.5 rounded-sm text-left leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-      aria-label="Having trouble signing in?"
-      aria-expanded={expanded}
-      aria-controls={controls}
-      onClick={onToggle}
-    >
-      {label}
-      <ChevronRightIcon aria-hidden className={`size-3 shrink-0 ${expanded ? "rotate-90" : ""}`} />
-    </button>
-  );
-}
-
-function CodexWelcomeCard({
-  title,
-  description,
-  control,
-  secondaryControl,
-  children,
-}: {
-  readonly title: string;
-  readonly description: ReactNode;
-  readonly control?: ReactNode;
-  readonly secondaryControl?: ReactNode;
-  readonly children?: ReactNode;
-}) {
-  const footer = Children.toArray(children);
-  return (
-    <div className="rounded-lg border border-border bg-background px-4 py-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <OpenAI className="size-5 shrink-0 fill-foreground" />
-        <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-medium">{title}</h3>
-          <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</div>
-        </div>
-        {control || secondaryControl ? (
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 has-[button]:w-full has-[button]:flex-col-reverse has-[button]:items-end sm:has-[button]:w-auto sm:has-[button]:flex-row sm:has-[button]:items-center">
-            {secondaryControl}
-            {control}
-          </div>
-        ) : null}
-      </div>
-      {footer.length > 0 ? (
-        <div className="ml-8 mt-2 flex flex-wrap items-center gap-2">{footer}</div>
-      ) : null}
-    </div>
   );
 }

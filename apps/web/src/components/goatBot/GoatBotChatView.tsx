@@ -10,7 +10,6 @@ import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
-import { ChevronRightIcon } from "~/components/solar";
 import { GOAT_BOT_PATH, type GlobalAgentLegacyRoute } from "~/globalAgentRoute";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
@@ -31,11 +30,14 @@ import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
+import { GoatBotHeaderName } from "./GoatBotHeaderName";
+import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   canSendToGoatBot,
+  goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
   type GoatBotAvailability,
   type GoatBotRemoval,
@@ -58,6 +60,8 @@ export interface GoatBotChatViewProps {
   readonly availability: GoatBotAvailability;
   readonly canOperate: boolean;
   readonly rows: ReadonlyArray<GoatBotRow>;
+  /** A task's own conversation, for reading it in the bot's panel. */
+  readonly rowsForTask?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
   /** When GOAT Bot started reading a message it is still answering. */
   readonly replyingSince?: string | null | undefined;
   readonly onSend: (
@@ -102,6 +106,7 @@ export function GoatBotChatView({
   onSendToTask,
   attachmentSupport = null,
   onRetryInput,
+  rowsForTask,
   onDiscardInput,
   onRetryAvailability,
   legacyAgentRoute,
@@ -166,40 +171,36 @@ export function GoatBotChatView({
           {/* Equal sides center the title until the controls, which never shrink, need its space. */}
           <div aria-hidden className="flex-1 basis-0" />
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            {member ? (
-              <GoatBotSessionAvatar
-                size="md"
-                chatOpen
-                emoji={avatar}
-                waitingCount={memberWaiting}
-                threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
-                activity={reading ? { state: "reading" } : removed ? null : working}
-              />
-            ) : (
-              <GoatBotMainAvatar
-                size="md"
-                chatOpen
-                emoji={avatar}
-                activity={reading ? { state: "reading" } : removed ? null : working}
-              />
-            )}
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="goat-name-capsule truncate text-foreground">
-                {title} <ChevronRightIcon aria-hidden className="size-3" />
-              </h1>
+              <GoatBotHeaderName
+                title={title}
+                avatar={
+                  member ? (
+                    <GoatBotSessionAvatar
+                      size="sm"
+                      chatOpen
+                      emoji={avatar}
+                      waitingCount={memberWaiting}
+                      threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
+                      activity={reading ? { state: "reading" } : removed ? null : working}
+                    />
+                  ) : (
+                    <GoatBotMainAvatar
+                      size="sm"
+                      chatOpen
+                      emoji={avatar}
+                      activity={reading ? { state: "reading" } : removed ? null : working}
+                    />
+                  )
+                }
+              />
               {headerStatus ? (
                 <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
               ) : null}
             </div>
           </div>
           <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
-            {member ? (
-              <span className="text-xs text-muted-foreground">
-                {member.defaultModelSelection?.model ?? `${mainName}'s model`}
-              </span>
-            ) : (
-              <GoatBotModelPicker />
-            )}
+            {member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />}
             {bot && (
               <Button
                 variant="ghost"
@@ -317,19 +318,25 @@ export function GoatBotChatView({
             initialText={seed?.text ?? ""}
             disabled={!canSend}
             botName={title}
-            placeholder={canSend ? `Message ${title}` : `${title} isn't available`}
+            placeholder={
+              canSend
+                ? (goatBotOpenQuestionPlaceholder(rows) ?? `Message ${title}`)
+                : `${title} isn't available`
+            }
             attachmentSupport={attachmentSupport}
             onSend={onSend}
           />
         </div>
       </div>
       {bot && panelOpen && !narrow && (
-        <aside aria-label={`${title} work`} className="flex w-80 shrink-0 border-l border-border">
+        <aside aria-label={`${title} work`} className="flex w-88 shrink-0 border-l border-border">
           <GoatBotWorkPanel
             environmentId={bot.environmentId}
             threadId={bot.threadId}
             onDraft={onDraft}
             notesRefreshKey={notesRefreshKey}
+            peekRows={rowsForTask}
+            onRetryInput={onRetryInput}
           />
         </aside>
       )}
@@ -343,6 +350,8 @@ export function GoatBotChatView({
               onDraft={onDraft}
               notesRefreshKey={notesRefreshKey}
               onShowChat={() => setPanelOpen(false)}
+              peekRows={rowsForTask}
+              onRetryInput={onRetryInput}
             />
           </SheetPopup>
         </Sheet>
@@ -561,14 +570,15 @@ function GoatBotNotice({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
-      {availability.kind === "ready" && onSelectExample ? (
+      {/* The examples are coding requests for the main bot; a member's purpose says what it does. */}
+      {availability.kind === "ready" && onSelectExample && member === null ? (
         <EmptyContent>
           <div className="flex flex-col items-center gap-2">
             {EXAMPLES.map((example) => (
               <button
                 key={example}
                 type="button"
-                className="rounded-full border border-border bg-transparent px-3 py-1.5 text-sm hover:bg-goat-bubble-in"
+                className="rounded-full border border-border bg-transparent px-3 py-1.5 text-sm hover:bg-accent"
                 onClick={() => onSelectExample(example)}
               >
                 {example}

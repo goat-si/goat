@@ -112,6 +112,7 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
       goals,
       waiting,
       tracked,
+      scope: input.scope,
       onReady: (threadId) =>
         observeSurvivorNotification({
           client,
@@ -282,6 +283,15 @@ const interceptSurvivor = Effect.fnUntraced(function* (
     return false;
   const entry = waiting.get(payload.threadId);
   if (entry === undefined) return false;
+  const goal =
+    "goal" in payload && typeof payload.goal === "object" && payload.goal !== null
+      ? payload.goal
+      : undefined;
+  const activeGoal = goal !== undefined && "status" in goal && goal.status === "active";
+  // A goal GOAT paused behind the survivor must still reach the goal handlers, which publish how
+  // the thread reads; only the signal for an active goal stays here.
+  if (method === "thread/goal/cleared" || (method === "thread/goal/updated" && !activeGoal))
+    return false;
   if (signal) {
     const turn =
       "turn" in payload && typeof payload.turn === "object" && payload.turn !== null
@@ -293,11 +303,6 @@ const interceptSurvivor = Effect.fnUntraced(function* (
         ? payload.status
         : undefined;
     const idle = status && "type" in status && status.type === "idle";
-    const goal =
-      "goal" in payload && typeof payload.goal === "object" && payload.goal !== null
-        ? payload.goal
-        : undefined;
-    const activeGoal = goal && "status" in goal && goal.status === "active";
     const next: SurvivorSignal | undefined =
       (method === "turn/completed" && turnId === entry.nativeTurnId) ||
       (method === "thread/status/changed" && idle)
@@ -578,6 +583,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
     input.client.request("thread/items/list", page);
   const read = Effect.gen(function* () {
     let goalActive = false;
+    let goalStopped = false;
     const first = yield* findSurvivorTurn({ threadId, turnId, readTurns, allowConflicts: true });
     let ended = first.turn.status !== "inProgress";
     const conflicted = new Set<string>();
@@ -613,6 +619,20 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
       if (signal.type === "Goal" && !goalActive) {
         yield* entry.service.recordGoalBlock(entry.binding, entry.binding);
         goalActive = true;
+        // GOAT cannot own goal continuations across a restart, so it pauses the goal and lets the
+        // surviving turn finish its work; only when Codex refuses the pause is that turn stopped.
+        const paused = yield* input.client
+          .request("thread/goal/set", { threadId, status: "paused" })
+          .pipe(
+            Effect.as(true),
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not pause the Codex goal of a surviving turn", {
+                cause,
+              }).pipe(Effect.as(false)),
+            ),
+          );
+        if (paused) continue;
+        goalStopped = true;
         yield* entry.gate.withPermits(1)(
           interruptSurvivor({
             binding: entry.binding,
@@ -637,14 +657,14 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
       readItems,
       allowConflicts: true,
     });
-    return { result, goalActive };
+    return { result, goalStopped };
   }).pipe(
     Effect.raceFirst(
       Deferred.await(entry.lost).pipe(Effect.andThen(Effect.fail(new SurvivorSessionLost({})))),
     ),
   );
   yield* Effect.gen(function* () {
-    const { result, goalActive } = yield* read;
+    const { result, goalStopped } = yield* read;
     for (const item of result.items) {
       yield* input.emitCompletedItem({
         threadId,
@@ -670,7 +690,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
           input.context,
           status,
           result.turn.error?.message,
-          goalActive && status === "interrupted"
+          goalStopped && status === "interrupted"
             ? "Codex started a goal on this thread while GOAT was waiting; the turn that ran across the restart was stopped."
             : undefined,
         );

@@ -294,12 +294,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --color-goat-avatar: color-mix(in oklab, var(--foreground) 6%, transparent);
   --color-goat-avatar-border: color-mix(in oklab, var(--foreground) 12%, transparent);
   --color-goat-avatar-foreground: color-mix(in oklab, var(--foreground) 82%, transparent);
-  /* GOAT Bot's Messages colors stay local to its conversation. */
-  --color-goat-bubble-out-top: var(--goat-bubble-out-top);
-  --color-goat-bubble-out: var(--goat-bubble-out);
-  --color-goat-bubble-out-foreground: var(--goat-bubble-out-foreground);
-  --color-goat-bubble-in: var(--goat-bubble-in);
-  --color-goat-bubble-in-foreground: var(--goat-bubble-in-foreground);
+  /* The person's messages in GOAT Bot's conversation; mobile keeps the same values. */
+  --color-goat-person-message: var(--goat-person-message);
+  --color-goat-person-message-foreground: var(--goat-person-message-foreground);
+  /* The bot's replies: a soft neutral card that tints whichever theme it sits on. */
+  --color-goat-bot-message: color-mix(in oklab, var(--foreground) 6%, transparent);
   --color-channel-dev: var(--channel-dev);
   --color-channel-nightly: var(--channel-nightly);
   --color-error-foreground: var(--error-foreground);
@@ -755,11 +754,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   }
 }
 
-@utility goat-bubble {
-  position: relative;
-  max-width: min(75%, 34rem);
-  padding: 8px 13px;
+/* A person's message: a tailless neutral pill. One line is fully round (40px tall, 20px radius). */
+@utility goat-person-pill {
+  padding: 9px 16px;
   border-radius: 20px;
+  background: var(--color-goat-person-message);
+  color: var(--color-goat-person-message-foreground);
   font-size: 1rem;
   line-height: 1.375rem;
   /* break-word, unlike anywhere, keeps whole words in the min-content width, so short
@@ -767,8 +767,60 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   overflow-wrap: break-word;
   white-space: pre-wrap;
 
+  @media (forced-colors: active) {
+    border: 1px solid CanvasText;
+  }
+
   @media (max-width: 640px) {
     font-size: 1.0625rem;
+  }
+}
+
+/* A bot reply's text; goat-bot-card boxes it. */
+@utility goat-bot-prose {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+
+  @media (max-width: 640px) {
+    font-size: 1.0625rem;
+  }
+}
+
+/* A bot reply: a tailless gray card, the person's pill mirrored without its contrast. */
+@utility goat-bot-card {
+  padding: 8px 14px;
+  border-radius: 16px;
+  background: var(--color-goat-bot-message);
+
+  @media (forced-colors: active) {
+    border: 1px solid CanvasText;
+  }
+}
+
+/* A question choice's letter; the picked one fills with the accent. */
+@utility goat-choice-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+
+  &[data-chosen] {
+    color: var(--primary-foreground);
+    background: var(--primary);
+  }
+
+  @media (forced-colors: active) {
+    border: 1px solid CanvasText;
   }
 }
 
@@ -786,8 +838,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent);
 }
 
+/* With the bot's face inside, the capsule hugs it like a chip: 28px tall, round on the left. */
+.goat-name-capsule:has(> .goat-name-avatar) {
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+}
+
 @utility goat-message-row {
-  border-radius: 20px;
+  border-radius: 12px;
+  /* Room for the inset focus ring without moving the text off the column edge. */
+  margin-inline: -8px;
+  padding: 4px 8px;
 }
 
 @utility goat-task-title {
@@ -801,13 +862,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @utility goat-composer-field {
-  min-height: 44px;
-  border-radius: 22px;
+  min-height: 48px;
+  border-radius: 24px;
   background: var(--goat-composer-fill);
-  box-shadow: inset 0 0 0 0.5px var(--goat-hairline);
+  box-shadow:
+    inset 0 0 0 1px var(--goat-hairline),
+    0 1px 3px rgb(0 0 0 / 4%);
 
   &:focus-within {
-    box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--color-goat-bubble-out) 40%, transparent);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in oklab, var(--foreground) 24%, transparent),
+      0 1px 3px rgb(0 0 0 / 4%);
   }
 }
 
@@ -853,96 +918,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   @media (prefers-reduced-motion: reduce), (forced-colors: active) {
     animation: none;
   }
-}
-
-@utility goat-bubble-out-fill {
-  background-color: var(--color-goat-bubble-out);
-  background-image: linear-gradient(
-    to bottom,
-    var(--color-goat-bubble-out-top),
-    var(--color-goat-bubble-out)
-  );
-
-  @media (forced-colors: active) {
-    background-image: none;
-  }
-}
-
-/* The canvas-colored mask cuts a curved Messages tail from the last bubble in a group. */
-@utility goat-bubble-tail-out {
-  &::before {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    right: -7px;
-    height: 20px;
-    width: 20px;
-    background: var(--color-goat-bubble-out);
-    border-bottom-left-radius: 16px 14px;
-  }
-  &::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    right: -26px;
-    height: 20px;
-    width: 26px;
-    background: var(--background);
-    border-bottom-left-radius: 10px;
-  }
-}
-
-@utility goat-bubble-tail-in {
-  &::before {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    left: -7px;
-    height: 20px;
-    width: 20px;
-    background: var(--color-goat-bubble-in);
-    border-bottom-right-radius: 16px 14px;
-  }
-  &::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    left: -26px;
-    height: 20px;
-    width: 26px;
-    background: var(--background);
-    border-bottom-right-radius: 10px;
-  }
-}
-
-@utility goat-typing-tail {
-  &::before {
-    content: "";
-    position: absolute;
-    left: -2px;
-    bottom: -2px;
-    width: 10px;
-    height: 10px;
-    border-radius: 9999px;
-    background: var(--color-goat-bubble-in);
-  }
-  &::after {
-    content: "";
-    position: absolute;
-    left: -8px;
-    bottom: -8px;
-    width: 5px;
-    height: 5px;
-    border-radius: 9999px;
-    background: var(--color-goat-bubble-in);
-  }
-}
-
-@utility goat-reply-line {
-  border-left: 2px solid
-    color-mix(in oklab, var(--color-goat-bubble-in-foreground) 18%, transparent);
-  border-top: 0;
-  border-top-left-radius: 10px;
 }
 
 @utility visible-animate-spin {
@@ -1311,12 +1286,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 :root {
   color-scheme: light;
-  --goat-bubble-out-top: var(--blue);
-  --goat-bubble-out: var(--blue);
-  --goat-bubble-out-foreground: #fff;
-  --goat-bubble-in: #e9e9eb;
-  --goat-bubble-in-foreground: #000;
-  --goat-composer-fill: #f3f3f3;
+  /* Ink on paper in light; dark raises it to a gray pill below. */
+  --goat-person-message: var(--foreground);
+  --goat-person-message-foreground: var(--background);
+  /* A raised field on the canvas, as in Grok: white with a hairline in light. */
+  --goat-composer-fill: #ffffff;
   --goat-hairline: rgb(0 0 0 / 8%);
   --radius: 0.5rem;
   /* Neutral grays without a cool cast and an ink primary, after the ChatGPT
@@ -1406,12 +1380,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   @variant dark {
     color-scheme: dark;
     --blue: #339cff;
-    /* White on the lighter dark-mode blue falls under 3:1. */
-    --goat-bubble-out-foreground: #0d0d0d;
-    --goat-bubble-in: #3a3a3c;
-    --goat-bubble-in-foreground: #fff;
-    --goat-composer-fill: #262626;
+    --goat-composer-fill: #1f1f1f;
     --goat-hairline: rgb(255 255 255 / 10%);
+    /* In dark the person's pill is a raised gray, as in Grok, rather than a white slab. */
+    --goat-person-message: #3a3a3a;
+    --goat-person-message-foreground: var(--foreground);
     /* A near-black (not black) canvas with surfaces a visible step lighter.
        Muted text is sized for its common 60-80% alpha uses
        (text-muted-foreground/70) to stay readable; the floors are asserted in
@@ -2129,13 +2102,17 @@ code {
 
 /* Chat markdown rendering */
 
-/* GOAT Bot bubbles keep their own type and colour for the Markdown they show. */
-.goat-bubble .chat-markdown,
+/* GOAT Bot replies keep their own type and colour for the Markdown they show. */
+.goat-bot-prose .chat-markdown,
 .goat-task-summary .chat-markdown {
   font-size: inherit;
   line-height: inherit;
   color: inherit;
   white-space: normal;
+}
+
+.goat-bot-prose .chat-markdown > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, hr) {
+  max-width: 44rem;
 }
 
 .chat-markdown > :first-child {

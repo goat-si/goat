@@ -86,6 +86,42 @@ that already announced does not block the mesh; a member that never announced st
   signature would close this and is not done. A forget that the service refuses because the revoking
   node is not registered shows in `pen ls` and the dashboard instead of retrying silently.
 
+## Mesh state on disk
+
+`mesh.json` decides what may replace it, because more than one writer can hold a set for it: an older save
+of the same store, the store of a mesh this node just left (`replaceMesh`), or another process (`pen join`
+or `pen login` while no daemon runs). Under the state lock a save reads the file first: for the same mesh it
+writes the union with the file's records (records only grow), for another mesh it writes nothing unless the
+store was adopted (`Store.Adopt`), and after the file was removed (`pen leave`) it does not recreate it
+(`Store.SaveFile`). `config.json` changes read to write under the same lock (`state.UpdateConfig`).
+
+A merge reaches memory before disk. When the save fails the store knows it holds unsaved records
+(`Store.Unsaved`): no sync is acknowledged (4507) until a save succeeds, the daemon retries on every push
+and every minute, and `pen ls` shows the error until then. Meanwhile the daemon enforces the view in memory:
+a revoke it holds but could not write still closes that peer's sessions, which errs toward the revoke; a
+restart before a successful save forgets it until a member sends it again.
+
+The record space is shared: no signer has a quota, so one member can fill it with valid records (3840
+ordinary ones, then revokes to 4096), after which no member can record anything, its own revoke included.
+The remedy is a new mesh; issue #2864 tracks a bound that admitted keys cannot multiply.
+
+## Lock order
+
+Three rounds of review findings came from locks taken in the wrong order or released between a check and
+the step it guards. The daemon takes them in this order only, never back:
+
+1. The per-file save mutexes (`Store.saveMu`, `cfgSave`, `versionsSave`): one save of that file at a time.
+2. `Daemon.mu` (sessions, presence, `saveErr`), then the store's `Store.mu` (`viewChanged` and
+   `register` read the view under `Daemon.mu`). Nothing holding `Store.mu` takes `Daemon.mu`.
+3. Under `Store.mu`: the decision callbacks of `Store.AppendAsMember` and `Store.DoAsMember`, which check
+   membership, the binding and the lock against the view of that moment, burn an invite (`Invites.mu`) or
+   queue a request (`pendingBook.mu`), and sign. `Merged` callbacks run after `Store.mu` is released.
+4. The state lock (`state.Lock`, a file lock that also orders other processes) last. A save takes its
+   snapshot under `Store.mu`, releases it, then takes the state lock and does not take `Store.mu` again
+   while it holds it, since an invite burn holds `Store.mu` while it writes `offers.json`.
+
+`Daemon.meshMu` only guards which store and invite book are current and is never held across a call into them.
+
 ## Dials
 
 Kind 0x01 sessions (TCP and mesh sync) race the Noise handshake on every relay and confirm only the first

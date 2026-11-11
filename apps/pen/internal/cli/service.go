@@ -75,8 +75,13 @@ func render(tmpl string, plist bool) (string, error) {
 }
 
 func fill(tmpl string, plist bool, exe, home string) (string, error) {
-	if strings.ContainsAny(exe+home, "\x00\n\r") || !utf8.ValidString(exe+home) {
-		return "", fmt.Errorf("cannot write a service for this path (a line break or bytes that are not UTF-8): %q", exe)
+	bad := !utf8.ValidString(exe+home) || strings.ContainsFunc(exe+home, func(r rune) bool { return r < 0x20 || r == 0x7f })
+	// systemd expands $ only in arguments: the executable path keeps $$ and is not found.
+	if !plist && strings.Contains(exe, "$") {
+		bad = true
+	}
+	if bad {
+		return "", fmt.Errorf("cannot write a service that starts %q exactly (control characters, bytes that are not UTF-8, or $ in a systemd unit); install pen under a path without them", exe)
 	}
 	if plist {
 		return strings.NewReplacer("__PEN__", xmlText(exe), "__HOME__", xmlText(home)).Replace(tmpl), nil
@@ -90,10 +95,11 @@ func xmlText(s string) string {
 	return b.String()
 }
 
-// systemdWord quotes one ExecStart word: inside double quotes a backslash and a quote are
-// escaped, % starts a specifier (%%) and $ an environment variable ($$).
+// systemdWord quotes the ExecStart executable (systemd.service(5), "Command lines"): double quotes
+// keep spaces in one word, and C-style escapes inside them give a literal backslash (\\) and quote
+// (\"); systemd.unit(5), "Specifiers": %% is a literal %. A $ cannot be carried (fill refuses it).
 func systemdWord(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(s) + `"`
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(s) + `"`
 }
 
 func writeFile(path, content string) error {

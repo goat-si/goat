@@ -99,33 +99,8 @@ func RunLogin(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	cfg, err := st.LoadConfig()
+	cfg, err := startConfig(st, relayURLs, *name)
 	if err != nil {
-		return fail(stderr, err)
-	}
-	if len(relayURLs) > 0 {
-		var list []string
-		for _, u := range relayURLs {
-			list = append(list, strings.TrimRight(u, "/"))
-		}
-		if err := daemon.ValidRelays(list); err != nil {
-			return fail(stderr, err)
-		}
-		cfg.SetRelays(list)
-	}
-	if len(cfg.RelayList()) == 0 {
-		return fail(stderr, errors.New("no relay configured; pass --relay https://<relay>"))
-	}
-	if *name != "" {
-		cfg.Name = *name
-	}
-	if cfg.Name == "" {
-		cfg.Name = defaultName()
-	}
-	if !ident.ValidName(cfg.Name) {
-		return fail(stderr, fmt.Errorf("invalid name %q", cfg.Name))
-	}
-	if err := st.SaveConfig(cfg); err != nil {
 		return fail(stderr, err)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -417,6 +392,7 @@ func (l *loginRun) install(s *mesh.Store) error {
 	} else if !errors.Is(err, daemon.ErrNotRunning) {
 		return err
 	}
+	s.Adopt()
 	if err := s.SaveFile(l.st, "mesh.json"); err != nil {
 		return err
 	}

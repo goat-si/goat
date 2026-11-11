@@ -6,6 +6,7 @@ import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { openAttachmentInViewer } from "../lib/attachmentDownload";
+import { useMediaActions } from "../state/mediaActions";
 import type { ResolvedFilePreviewSource } from "./FilePreviewModal.types";
 import { MediaImagePreview } from "./MediaImagePreview";
 import { PdfPreview } from "./PdfPreview";
@@ -17,6 +18,8 @@ function PdfDocumentPreview(props: {
   readonly onRequestClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const media = useMediaActions(props.source.actionsSource);
+  const save = media.actions.find((action) => action.id === "save");
   return (
     <Modal
       animationType="slide"
@@ -32,6 +35,14 @@ function PdfDocumentPreview(props: {
           <Text className="flex-1 font-goat-semibold text-foreground" numberOfLines={1}>
             {props.source.name ?? "PDF"}
           </Text>
+          {save ? (
+            <ControlPill
+              icon="square.and.arrow.up"
+              accessibilityLabel="Save or share"
+              disabled={save.disabled || media.sharing}
+              onPress={save.run}
+            />
+          ) : null}
           <ControlPill label="Close" variant="pill" onPress={props.onRequestClose} />
         </View>
         <PdfPreview uri={props.source.uri} />

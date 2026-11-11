@@ -32,6 +32,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ThreadMessageIntake from "../orchestration-v2/ThreadMessageIntake.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
 import * as ChannelBotThreads from "./ChannelBotThreads.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -237,6 +238,38 @@ describe("creating member bots", () => {
 });
 
 describe("two bots", () => {
+  it.effect(
+    "a member's model edit is what its next turn reads; the main bot's stays a setting",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+        const bot = yield* createMember("model-edit");
+        const small = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-small" };
+        const edited = yield* members.update(
+          { botId: bot.botId, defaultModelSelection: small },
+          owner,
+        );
+        assert.deepStrictEqual(edited.defaultModelSelection, small);
+        assert.strictEqual(edited.name, "Helper");
+        assert.deepStrictEqual(yield* profiles.modelFor(ownerId, bot.botId), small);
+        const listed = (yield* members.list({}, owner)).find((each) => each.botId === bot.botId);
+        assert.deepStrictEqual(listed?.defaultModelSelection, small);
+        // A rename alone keeps the model; null returns the member to the main bot's model.
+        yield* members.update({ botId: bot.botId, name: "Builder" }, owner);
+        assert.deepStrictEqual(yield* profiles.modelFor(ownerId, bot.botId), small);
+        yield* members.update({ botId: bot.botId, defaultModelSelection: null }, owner);
+        assert.isNull(yield* profiles.modelFor(ownerId, bot.botId));
+        assert.strictEqual(
+          yield* refusal(members.update({ botId: MAIN, defaultModelSelection: small }, owner)),
+          "invalid_input",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("a member answers in its own conversation and thread, and keeps its work apart", () => {
     const harness = makeHarness();
     const identities: Array<string> = [];

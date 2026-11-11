@@ -1,4 +1,9 @@
-import { readToolSearchSetting, resolveAutoCompactWindow } from "./ClaudeCompactSettings.ts";
+import {
+  claudeCompactionOutcome,
+  readToolSearchSetting,
+  resolveAutoCompactWindow,
+} from "./ClaudeCompactSettings.ts";
+import { claimClaudeQuery } from "./ClaudeQueryClaim.ts";
 import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
@@ -15,7 +20,11 @@ export {
   ClaudeAppendSystemPromptMissingValueError,
   ClaudeSettingsLaunchArgError,
 } from "./ClaudeLaunchArgs.ts";
-import { claudeApprovalPresentation, permissionResultFromDecision } from "./ClaudeApproval.ts";
+import {
+  CLAUDE_MCP_ELICITATION_OPTIONS,
+  claudeApprovalPresentation,
+  permissionResultFromDecision,
+} from "./ClaudeApproval.ts";
 import * as Scope from "effect/Scope";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
@@ -3377,14 +3386,6 @@ export const awaitClaudeApprovalDecision = Effect.fn("awaitClaudeApprovalDecisio
   });
   return yield* Effect.raceFirst(Deferred.await(decision), cancellation);
 });
-
-// Web and mobile offer a session grant when options are omitted, and this
-// path only ever answers once.
-const CLAUDE_MCP_ELICITATION_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
-  { decision: "cancel", label: "Cancel" },
-  { decision: "decline", label: "Decline" },
-  { decision: "accept", label: "Approve" },
-];
 
 type ClaudeMcpElicitationContent = NonNullable<ElicitationResult["content"]>;
 
@@ -8480,29 +8481,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             (message.compact_result !== undefined ||
               (message.status === null && message.permissionMode === undefined))
           ) {
+            // The CLI reports a compaction it aborted for our interrupt as failed.
+            const failed =
+              message.compact_result === "failed" &&
+              !(yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             if (message.compact_result !== undefined) {
-              context.compactionFailure =
-                message.compact_result === "failed" ? { message: message.compact_error } : null;
+              context.compactionFailure = failed ? { message: message.compact_error } : null;
             }
             if (context.compaction?.status === "running") {
               const now = yield* DateTime.now;
               context.compaction = {
                 ...context.compaction,
-                status:
-                  message.compact_result === "success"
-                    ? "completed"
-                    : message.compact_result === "failed"
-                      ? "failed"
-                      : "interrupted",
-                title:
-                  message.compact_result === "success"
-                    ? "Context compacted"
-                    : message.compact_result === "failed"
-                      ? "Context compaction failed"
-                      : "Context compaction stopped",
-                ...(message.compact_result === "failed" && message.compact_error
-                  ? { summary: message.compact_error }
-                  : {}),
+                ...claudeCompactionOutcome(message.compact_result === "success", failed),
+                ...(failed && message.compact_error ? { summary: message.compact_error } : {}),
                 completedAt: now,
                 updatedAt: now,
               };
@@ -10660,8 +10651,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               heldRootFrames: [],
             };
             const attachTurn = Effect.gen(function* () {
-              querySession.lastTurn = context;
               yield* Ref.set(activeTurn, context);
+              const attached = yield* claimClaudeQuery(queryContext, querySession, context);
+              if (!attached) {
+                yield* Ref.update(activeTurn, (current) => (current === context ? null : current));
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CLAUDE_PROVIDER,
+                  detail: "Claude provider query ended before the turn could start.",
+                });
+              }
               if (
                 !isClaudeProviderContinuationTurn(turnInput) &&
                 permissionModeForClaudeRuntimePolicy(turnInput.runtimePolicy) ===
@@ -10754,15 +10752,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // Transcript reads suspend replay; hold SDK frames until the buffer is applied to preserve order.
             yield* sdkMessageLock.withPermits(1)(
               Effect.gen(function* () {
-                if (
-                  (yield* Ref.get(queryContext))?.query !== querySession.query ||
-                  querySession.stopping
-                ) {
-                  return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                    driver: CLAUDE_PROVIDER,
-                    detail: "Claude provider query ended before the continuation could start.",
-                  });
-                }
                 yield* attachTurn;
                 const drained = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
                 yield* Ref.update(requestedContinuations, (current) => {

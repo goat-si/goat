@@ -1252,7 +1252,7 @@ const make = Effect.gen(function* () {
         .sort((left, right) => right.createdAt - left.createdAt)[0] ??
       threadTabs.sort(
         (left, right) =>
-          Number(right.viewers.size > 0) - Number(left.viewers.size > 0) ||
+          Number(capacity.visible(right)) - Number(capacity.visible(left)) ||
           right.usedAt - left.usedAt,
       )[0]
     );
@@ -1344,7 +1344,7 @@ const make = Effect.gen(function* () {
     const viewport = tab.desktop ? await layoutSize(tab) : tab.page.viewportSize();
     const status = {
       available: true,
-      visible: tab.viewers.size > 0,
+      visible: capacity.visible(tab),
       tabId: tab.tabId,
       url: url === "about:blank" ? null : url,
       title: null,
@@ -1373,7 +1373,7 @@ const make = Effect.gen(function* () {
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,
-          visible: candidate.viewers.size > 0,
+          visible: capacity.visible(candidate),
           ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId }),
           session: candidate.session,
         })),
@@ -1996,7 +1996,7 @@ const make = Effect.gen(function* () {
             ServerBrowserPage.snapshot({
               ...tab,
               renderScale: tab.desktop ? "display" : RENDER_SCALE,
-              ...(input as PreviewAutomationSnapshotInput),
+              ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
               agentSessionId: request.agentSessionId,
               actionChannel: actionGate().channel,
               captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,

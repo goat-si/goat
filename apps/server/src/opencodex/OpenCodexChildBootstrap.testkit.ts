@@ -82,6 +82,8 @@ export interface Machine {
   /** Pen members' aliases, by the revision of their Pen settings and recorded keys. */
   penRevisions: Map<string, string>;
   penRevisionReadable: boolean;
+  /** Why a Pen revision read fails while it is unreadable. */
+  penRevisionError: string;
   /** Runs after a Pen revision is read and before it is answered, as a slow ssh -G would. */
   duringPenRead: Effect.Effect<void> | undefined;
   revisionReadable: boolean;
@@ -307,7 +309,9 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
                   if (hook !== undefined) yield* hook;
                   return revision;
                 })
-              : Effect.fail(new HubOcxError({ reason: "unreachable", message: "ssh -G failed" })),
+              : Effect.fail(
+                  new HubOcxError({ reason: "unreachable", message: machine.penRevisionError }),
+                ),
         }),
       ),
       Layer.provide(
@@ -489,6 +493,7 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     revisions: new Map([["lidge-ts", "rev-1"]]),
     penRevisions: new Map(),
     penRevisionReadable: true,
+    penRevisionError: "ssh -G failed",
     duringPenRead: undefined,
     revisionReadable: true,
     generations: new Map(),

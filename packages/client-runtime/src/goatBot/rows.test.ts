@@ -164,6 +164,15 @@ describe("goatBotConversationPreview", () => {
     expect(preview([])).toBeNull();
   });
 
+  it("previews a Markdown reply or message as plain text", () => {
+    expect(
+      preview([bot("b", answer, "## Done\n\n**Merged** [#42](https://x.test/42)")])?.text,
+    ).toBe("Done Merged #42");
+    expect(preview([user("u", first, "fix `rows.ts`\n- please")])?.text).toBe(
+      "You: fix rows.ts please",
+    );
+  });
+
   it("shows the latest user message without making it unread", () => {
     expect(preview([user("u", first, "Hello")])).toEqual({
       text: "You: Hello",
@@ -568,18 +577,24 @@ describe("buildGoatBotTimeline", () => {
     ).toEqual(["u4"]);
   });
 
-  it("adds a time stamp at one hour while five-minute pauses only split bubbles", () => {
+  it("adds a time stamp after fifteen quiet minutes while five-minute pauses only split groups", () => {
     const rows = buildGoatBotTimeline({
       visibleTurnItems: rowsOf([
         user("u1", "2026-10-12T12:00:00Z", "a"),
         user("u2", "2026-10-12T12:06:00Z", "b"),
-        user("u3", "2026-10-12T13:06:00Z", "c"),
+        user("u3", "2026-10-12T12:20:59Z", "c"),
+        user("u4", "2026-10-12T12:35:59Z", "d"),
       ]),
       pendingInputs: [],
       readers: readers(),
     });
-    expect(rows.map((row) => row.kind)).toEqual(["day", "user", "user", "day", "user"]);
-    expect(content(rows).map((row) => row.groupPosition)).toEqual(["single", "single", "single"]);
+    expect(rows.map((row) => row.kind)).toEqual(["day", "user", "user", "user", "day", "user"]);
+    expect(content(rows).map((row) => row.groupPosition)).toEqual([
+      "single",
+      "single",
+      "single",
+      "single",
+    ]);
   });
 
   it("distinguishes queued and accepted pending sends from committed delivery", () => {
@@ -706,6 +721,120 @@ describe("buildGoatBotTimeline", () => {
 });
 
 describe("goatBotReplyingSince", () => {
+  it("quotes the prompt only when a reply answers something other than the latest message", () => {
+    const reply = (replyToKey: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      replyToKey,
+    });
+    const asked = (requestKey: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: "2026-10-12T12:00:01Z",
+      requestKey,
+    });
+    const quotes = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          user("u1", "2026-10-12T12:00:00Z", "list the folders"),
+          bot("b1", "2026-10-12T12:00:02Z", "On it."),
+          bot("b2", "2026-10-12T12:00:04Z", "Here they are."),
+          user("u2", "2026-10-12T12:00:05Z", "and count docs"),
+          bot("b3", "2026-10-12T12:00:06Z", "Also: the folder list is final."),
+          // After a reply about the older prompt, one about the newest needs its quote again.
+          bot("b4", "2026-10-12T12:00:07Z", "There are 49 docs."),
+        ]),
+        pendingInputs: [],
+        readers: readers({
+          u1: asked("in-1"),
+          b1: reply("in-1"),
+          b2: reply("in-1"),
+          u2: asked("in-2"),
+          b3: reply("in-1"),
+          b4: reply("in-2"),
+        }),
+      }),
+    ).flatMap((row) => (row.kind === "bot" ? [row.replyTo] : []));
+    expect(quotes).toEqual([null, null, "list the folders", "and count docs"]);
+  });
+
+  it("leaves a reply to the previous prompt unquoted while the next send is pending, then quotes it once that send commits first", () => {
+    const presented = {
+      u1: { tone: "reply", readAt: null, requestKey: "in-1" },
+      u2: { tone: "reply", readAt: null, requestKey: "in-2" },
+      b1: { tone: "reply", readAt: null, requestKey: null, replyToKey: "in-1" },
+    } satisfies Record<string, GoatBotMessagePresentation>;
+    const whilePending = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          user("u1", "2026-10-12T12:00:00Z", "first"),
+          bot("b1", "2026-10-12T12:00:03Z", "About the first."),
+        ]),
+        pendingInputs: [
+          {
+            clientKey: "k2",
+            text: "second",
+            createdAt: "2026-10-12T12:00:02Z",
+            state: "sending",
+            requestKey: null,
+          },
+        ],
+        readers: readers(presented),
+      }),
+    );
+    // Pending sends sit below every committed row, so the reply still follows its prompt.
+    expect(whilePending.map((row) => row.id)).toEqual(["u1", "b1", "pending:k2"]);
+    expect(whilePending[1]).toMatchObject({ kind: "bot", replyTo: null });
+    const committed = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          user("u1", "2026-10-12T12:00:00Z", "first"),
+          user("u2", "2026-10-12T12:00:02Z", "second"),
+          bot("b1", "2026-10-12T12:00:03Z", "About the first."),
+        ]),
+        pendingInputs: [],
+        readers: readers(presented),
+      }),
+    );
+    expect(committed[2]).toMatchObject({ kind: "bot", replyTo: "first" });
+  });
+
+  it("keeps the prompt unquoted across task cards and event lines about the same request", () => {
+    const reply = (replyToKey: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      replyToKey,
+    });
+    const event = {
+      ...notice("e1", "2026-10-12T12:00:04Z"),
+      source: { kind: "goat_bot_event" },
+    } as unknown as OrchestrationV2TurnItem;
+    const quotes = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          user("u1", "2026-10-12T12:00:00Z", "count the docs"),
+          bot("b1", "2026-10-12T12:00:01Z", "Starting a task."),
+          notice("n1", "2026-10-12T12:00:02Z"),
+          bot("b2", "2026-10-12T12:00:03Z", "It is running."),
+          event,
+          bot("b3", "2026-10-12T12:00:05Z", "There are 49 docs."),
+        ]),
+        pendingInputs: [],
+        readers: readers(
+          {
+            u1: { tone: "reply", readAt: "2026-10-12T12:00:01Z", requestKey: "in-1" },
+            b1: reply("in-1"),
+            b2: reply("in-1"),
+            b3: reply("in-1"),
+          },
+          { n1: card("t1", 1) },
+        ),
+      }),
+    ).flatMap((row) => (row.kind === "bot" ? [row.replyTo] : []));
+    expect(quotes).toEqual([null, null, null]);
+  });
+
   const read = (requestKey: string, readAt: string): GoatBotMessagePresentation => ({
     tone: "reply",
     readAt,

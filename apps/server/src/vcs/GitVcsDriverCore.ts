@@ -19,12 +19,11 @@ import { GOAT_PRE_REFRESH_REF } from "@goat/contracts/legacyT3Names";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
+import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -80,7 +79,8 @@ import {
   readWorktreeRoot,
   replayPostCheckout,
   WINDOWS_CHECKOUT_SETTINGS,
-  worktreeFolderName,
+  generatedWorktreeNames,
+  matchesLegacyWorktree,
   worktreeSparseCheckoutPatterns,
 } from "./worktreeCheckout.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
@@ -96,6 +96,7 @@ import {
   parseUpstreamRefByFirstSeparator,
   sanitizeRemoteName,
 } from "./gitRemoteParsing.ts";
+import { filterBranchesForListQuery, paginateBranches } from "./gitBranchListQuery.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -145,7 +146,6 @@ const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
   SSH_ASKPASS_REQUIRE: "never",
 } satisfies NodeJS.ProcessEnv);
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
-const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
   isRepo: false,
   hasOriginRemote: false,
@@ -242,40 +242,6 @@ function parsePorcelainPath(record: string): string | null {
   if (fieldsBeforePath === undefined) return null;
   const filePath = record.split(" ").slice(fieldsBeforePath).join(" ");
   return filePath.length > 0 ? filePath : null;
-}
-
-function filterBranchesForListQuery(
-  refs: ReadonlyArray<VcsRef>,
-  query?: string,
-): ReadonlyArray<VcsRef> {
-  if (!query) {
-    return refs;
-  }
-
-  const normalizedQuery = query.toLowerCase();
-  return refs.filter((refName) => refName.name.toLowerCase().includes(normalizedQuery));
-}
-
-function paginateBranches(input: {
-  refs: ReadonlyArray<VcsRef>;
-  cursor?: number | undefined;
-  limit?: number | undefined;
-}): {
-  refs: ReadonlyArray<VcsRef>;
-  nextCursor: number | null;
-  totalCount: number;
-} {
-  const cursor = input.cursor ?? 0;
-  const limit = input.limit ?? GIT_LIST_BRANCHES_DEFAULT_LIMIT;
-  const totalCount = input.refs.length;
-  const refs = input.refs.slice(cursor, cursor + limit);
-  const nextCursor = cursor + refs.length < totalCount ? cursor + refs.length : null;
-
-  return {
-    refs,
-    nextCursor,
-    totalCount,
-  };
 }
 
 /** Git prints `C:/Users/...` where Node joins `C:\Users\...`, and NTFS folds case. */
@@ -1206,36 +1172,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     requestedBranch: string,
   ) {
-    // A branch at a parent path (such as `goat`) blocks every ref nested under it, so no suffix
-    // would help; flatten to a sibling the way temporary worktree branches already do.
-    const segments = requestedBranch.split("/");
-    let blockedByParent = false;
-    for (let index = 1; index < segments.length && !blockedByParent; index += 1) {
-      blockedByParent = yield* branchExists(cwd, segments.slice(0, index).join("/"));
+    const { stdout } = yield* executeGit(
+      "GitVcsDriver.resolveAvailableBranchName",
+      cwd,
+      ["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"],
+      { maxOutputBytes: 16 * 1024 * 1024 },
+    );
+    const branches = new Set(
+      stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((name) => name.toLowerCase()),
+    );
+    const blockedNames = new Set(branches);
+    for (const branch of branches) {
+      const parts = branch.split("/");
+      for (let i = 1; i < parts.length; i++) blockedNames.add(parts.slice(0, i).join("/"));
     }
+    const segments = requestedBranch.split("/");
+    const blockedByParent = segments.some(
+      (_, i) => i > 0 && branches.has(segments.slice(0, i).join("/").toLowerCase()),
+    );
     const desiredBranch = blockedByParent ? segments.join("-") : requestedBranch;
-    // A branch nested under the name (`goat-fix/child`) blocks it as surely as one with the name.
-    const isBranchNameTaken = (name: string) =>
-      Effect.zipWith(
-        branchExists(cwd, name),
-        runGitStdout(
-          "GitVcsDriver.branchExists",
-          cwd,
-          ["for-each-ref", "--count=1", "--format=%(refname)", `refs/heads/${name}/`],
-          true,
-        ),
-        (exists, nested) => exists || nested.trim().length > 0,
-      );
-
-    const isDesiredTaken = yield* isBranchNameTaken(desiredBranch);
-    if (!isDesiredTaken) {
+    if (!blockedNames.has(desiredBranch.toLowerCase())) {
       return desiredBranch;
     }
 
     for (let suffix = 1; suffix <= 100; suffix += 1) {
       const candidate = `${desiredBranch}-${suffix}`;
-      const isCandidateTaken = yield* isBranchNameTaken(candidate);
-      if (!isCandidateTaken) {
+      if (!blockedNames.has(candidate.toLowerCase())) {
         return candidate;
       }
     }
@@ -2565,6 +2530,54 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           env: { LC_ALL: "C" },
         }),
     });
+  // `publishes` is false only when HEAD goes to the head of its current `upstream`.
+  const resolvePushDestination = Effect.fn("resolvePushDestination")(function* (
+    cwd: string,
+    branch: string,
+    hasUpstream: boolean,
+  ) {
+    if (!hasUpstream) {
+      const remoteName = yield* resolvePushRemoteName(cwd, branch);
+      if (!remoteName) return null;
+      const branchName = yield* resolvePublishBranchName(cwd, branch);
+      return { remoteName, branchName, publishes: true, upstream: null };
+    }
+
+    const upstream = yield* resolveCurrentUpstream(cwd).pipe(Effect.orElseSucceed(() => null));
+    if (!upstream) return null;
+    // Differently named upstreams are bases, not publish targets; pushing HEAD there would write features to shared branches.
+    const isAliasOfUpstreamHead =
+      branch === upstream.branchName ||
+      (branch.endsWith(`/${upstream.branchName}`) && upstream.upstreamRef.endsWith(`/${branch}`));
+    if (isAliasOfUpstreamHead) {
+      return {
+        remoteName: upstream.remoteName,
+        branchName: upstream.branchName,
+        publishes: false,
+        upstream,
+      };
+    }
+    const publishRemoteName = yield* resolvePushRemoteName(cwd, branch).pipe(
+      Effect.orElseSucceed(() => null),
+    );
+    const branchName = yield* resolvePublishBranchName(cwd, branch);
+    return {
+      remoteName: publishRemoteName ?? upstream.remoteName,
+      branchName,
+      publishes: true,
+      upstream,
+    };
+  });
+
+  const resolvePushTarget: GitVcsDriver.GitVcsDriver["Service"]["resolvePushTarget"] = Effect.fn(
+    "resolvePushTarget",
+  )(function* (cwd, current) {
+    const destination = yield* resolvePushDestination(cwd, current.branch, current.hasUpstream);
+    return destination
+      ? { remoteName: destination.remoteName, branchName: destination.branchName }
+      : null;
+  });
+
   const pushCurrentBranch: GitVcsDriver.GitVcsDriver["Service"]["pushCurrentBranch"] = Effect.fn(
     "pushCurrentBranch",
   )(function* (cwd, fallbackBranch, options) {
@@ -2599,30 +2612,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const hasNoLocalDelta = details.aheadCount === 0 && details.behindCount === 0;
-    if (hasNoLocalDelta) {
-      if (details.hasUpstream) {
-        return {
-          status: "skipped_up_to_date" as const,
-          branch,
-          ...(details.upstreamRef ? { upstreamBranch: details.upstreamRef } : {}),
-        };
-      }
+    if (hasNoLocalDelta && details.hasUpstream) {
+      return {
+        status: "skipped_up_to_date" as const,
+        branch,
+        ...(details.upstreamRef ? { upstreamBranch: details.upstreamRef } : {}),
+      };
+    }
 
+    const destination = yield* resolvePushDestination(cwd, branch, details.hasUpstream);
+    if (hasNoLocalDelta) {
       const comparableBaseBranch = yield* resolveBaseBranchForNoUpstream(cwd, branch).pipe(
         Effect.orElseSucceed(() => null),
       );
       if (comparableBaseBranch) {
-        const publishRemoteName = yield* resolvePushRemoteName(cwd, branch).pipe(
-          Effect.orElseSucceed(() => null),
-        );
-        if (!publishRemoteName) {
+        if (!destination) {
           return {
             status: "skipped_up_to_date" as const,
             branch,
           };
         }
 
-        const publishBranch = yield* resolvePublishBranchName(cwd, branch);
         // The configured diff base can contain HEAD while the publish branch is still behind.
         const publishContainsHead = yield* executeGit(
           "GitVcsDriver.pushCurrentBranch.publishContainsHead",
@@ -2631,7 +2641,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             "merge-base",
             "--is-ancestor",
             "HEAD",
-            `refs/remotes/${publishRemoteName}/${publishBranch}`,
+            `refs/remotes/${destination.remoteName}/${destination.branchName}`,
           ],
           { allowNonZeroExit: true },
         ).pipe(
@@ -2647,93 +2657,61 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
-    if (!details.hasUpstream) {
-      const publishRemoteName = yield* resolvePushRemoteName(cwd, branch);
-      if (!publishRemoteName) {
-        return yield* new GitCommandError({
-          ...gitCommandContext({
-            operation: "GitVcsDriver.pushCurrentBranch",
-            cwd,
-            args: ["push"],
-          }),
-          detail: "Cannot push because no git remote is configured for this repository.",
+    if (!details.hasUpstream && !destination) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({
+          operation: "GitVcsDriver.pushCurrentBranch",
+          cwd,
+          args: ["push"],
+        }),
+        detail: "Cannot push because no git remote is configured for this repository.",
+      });
+    }
+
+    if (destination?.publishes) {
+      const { remoteName, branchName: publishBranch, upstream } = destination;
+      // Publishing retargets the upstream, so preserve its comparison base first.
+      if (upstream && (yield* readBranchBase(cwd, branch)) === null) {
+        yield* writeConfigValue({
+          cwd,
+          key: branchBaseConfigKey(branch),
+          value: upstream.branchName,
         });
+        if (!(yield* readConfigValue(cwd, `branch.${branch}.t3-merge-base-ref`))) {
+          yield* writeConfigValue({
+            cwd,
+            key: `branch.${branch}.t3-merge-base-ref`,
+            value: `refs/remotes/${upstream.upstreamRef}`,
+          });
+        }
       }
-      const publishBranch = yield* resolvePublishBranchName(cwd, branch);
       yield* runGit(
-        "GitVcsDriver.pushCurrentBranch.pushWithUpstream",
+        upstream
+          ? "GitVcsDriver.pushCurrentBranch.pushOwnBranch"
+          : "GitVcsDriver.pushCurrentBranch.pushWithUpstream",
         cwd,
-        ["push", "--", publishRemoteName, `HEAD:refs/heads/${publishBranch}`],
+        ["push", "--", remoteName, `HEAD:refs/heads/${publishBranch}`],
         { timeoutMs: null },
       );
       return {
         status: "pushed" as const,
         branch,
-        upstreamBranch: `${publishRemoteName}/${publishBranch}`,
-        setUpstream: yield* recordPush(cwd, branch, publishRemoteName, publishBranch),
+        upstreamBranch: `${remoteName}/${publishBranch}`,
+        setUpstream: yield* recordPush(cwd, branch, remoteName, publishBranch),
       };
     }
 
-    const currentUpstream = yield* resolveCurrentUpstream(cwd).pipe(
-      Effect.orElseSucceed(() => null),
-    );
-    if (currentUpstream) {
-      // Differently named upstreams are bases, not publish targets; pushing HEAD there would write features to shared branches.
-      const isAliasOfUpstreamHead =
-        branch === currentUpstream.branchName ||
-        (branch.endsWith(`/${currentUpstream.branchName}`) &&
-          currentUpstream.upstreamRef.endsWith(`/${branch}`));
-      if (!isAliasOfUpstreamHead) {
-        const publishRemoteName = yield* resolvePushRemoteName(cwd, branch).pipe(
-          Effect.orElseSucceed(() => null),
-        );
-        const remoteName = publishRemoteName ?? currentUpstream.remoteName;
-        const publishBranch = yield* resolvePublishBranchName(cwd, branch);
-        // Publishing retargets the upstream, so preserve its comparison base first.
-        if ((yield* readBranchBase(cwd, branch)) === null) {
-          yield* runGit(
-            "GitVcsDriver.pushCurrentBranch.recordMergeBase",
-            cwd,
-            ["config", branchBaseConfigKey(branch), currentUpstream.branchName],
-            { writesSharedConfig: true, retryConfigLock: true, env: { LC_ALL: "C" } },
-          );
-          if (!(yield* readConfigValue(cwd, `branch.${branch}.t3-merge-base-ref`))) {
-            yield* runGit(
-              "GitVcsDriver.pushCurrentBranch.recordComparisonRef",
-              cwd,
-              [
-                "config",
-                `branch.${branch}.t3-merge-base-ref`,
-                `refs/remotes/${currentUpstream.upstreamRef}`,
-              ],
-              { writesSharedConfig: true, retryConfigLock: true, env: { LC_ALL: "C" } },
-            );
-          }
-        }
-        yield* runGit(
-          "GitVcsDriver.pushCurrentBranch.pushOwnBranch",
-          cwd,
-          ["push", "--", remoteName, `HEAD:refs/heads/${publishBranch}`],
-          { timeoutMs: null },
-        );
-        return {
-          status: "pushed" as const,
-          branch,
-          upstreamBranch: `${remoteName}/${publishBranch}`,
-          setUpstream: yield* recordPush(cwd, branch, remoteName, publishBranch),
-        };
-      }
-
+    if (destination?.upstream) {
       yield* runGit(
         "GitVcsDriver.pushCurrentBranch.pushUpstream",
         cwd,
-        ["push", "--", currentUpstream.remoteName, `HEAD:refs/heads/${currentUpstream.branchName}`],
+        ["push", "--", destination.remoteName, `HEAD:refs/heads/${destination.branchName}`],
         { timeoutMs: null },
       );
       return {
         status: "pushed" as const,
         branch,
-        upstreamBranch: currentUpstream.upstreamRef,
+        upstreamBranch: destination.upstream.upstreamRef,
         setUpstream: false,
       };
     }
@@ -4023,19 +4001,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.refName);
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
     const targetBranch = input.newRefName ?? input.refName;
-    let sanitizedBranch = worktreeFolderName(targetBranch, hostPlatform);
-    if (sanitizedBranch.length > 40) {
-      const digest = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(targetBranch))
-        .pipe(Effect.orDie);
-      const prefix = sanitizedBranch.slice(0, 23).replace(/[\uD800-\uDBFF]$/, "");
-      sanitizedBranch = `${prefix}-${Hex.encode(digest).slice(0, 16)}`;
-    }
     let worktreePath = input.path === null ? null : path.resolve(input.cwd, input.path);
+    let legacyPath: string | null = null;
     const progress = options?.progress;
     if (worktreePath == null) {
       const repository = yield* resolveRepositoryPathsUncached(input.cwd);
       const repoName = path.basename(repository?.worktreeRoot ?? path.resolve(input.cwd));
+      const names = yield* generatedWorktreeNames(
+        targetBranch,
+        repository?.gitCommonDir ?? path.resolve(input.cwd),
+        hostPlatform,
+        options?.reuseExistingBranch === true && input.newRefName !== undefined,
+      ).pipe(Effect.provideService(Crypto.Crypto, crypto));
       const location = yield* resolveAvailableWorktreesDirectory(
         {
           setting: options?.worktreesDirectory ?? "",
@@ -4053,9 +4030,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           yield* progress.onWorktreesDirectoryFallback({ ...location, unavailable });
         }
       }
-      worktreePath = path.join(location.directory, repoName, sanitizedBranch);
+      worktreePath = path.join(location.directory, repoName, names.current);
+      if (names.legacy !== null) legacyPath = path.join(location.directory, repoName, names.legacy);
     }
-    const targetPath = worktreePath;
+    let targetPath = worktreePath;
     const newBranch = input.newRefName;
     const reuse = newBranch !== undefined && options?.reuseExistingBranch === true;
     const state = reuse
@@ -4066,7 +4044,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ? (state?.tip ?? null)
         : yield* readBranchTip(input.cwd, newBranch)
       : null;
-    // "reused": bind the branch's clean worktree; "added": check the existing branch out.
     let existing: "reused" | "added" | null = null;
     if (newBranch && state !== null) {
       const checkedOutAt = state.worktreePath;
@@ -4088,12 +4065,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         return yield* conflict(uniqueCommitsProblem(state.uniqueCommits, input.refName));
       }
       if (checkedOutAt !== null) {
+        const matchesLegacy = yield* matchesLegacyWorktree(
+          fileSystem,
+          legacyPath,
+          checkedOutAt,
+          (a, b) => isSameWorktreePath(a, b, hostPlatform),
+        );
         const realTarget = yield* fileSystem
           .realPath(targetPath)
           .pipe(Effect.orElseSucceed(() => targetPath));
         if (
           !isSameWorktreePath(checkedOutAt, targetPath, hostPlatform) &&
-          !isSameWorktreePath(checkedOutAt, realTarget, hostPlatform)
+          !isSameWorktreePath(checkedOutAt, realTarget, hostPlatform) &&
+          !matchesLegacy
         ) {
           return yield* conflict(
             `is checked out at ${checkedOutAt}, outside this launch's worktree folder ${targetPath}`,
@@ -4102,6 +4086,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (state.dirty) {
           return yield* conflict(`its worktree ${checkedOutAt} has uncommitted changes`);
         }
+        if (matchesLegacy) worktreePath = targetPath = checkedOutAt;
         if (existingTip !== startSha) {
           yield* runGit("GitVcsDriver.createWorktree.fastForward", checkedOutAt, [
             "merge",
@@ -5315,6 +5300,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     commit: Effect.fnUntraced(function* (cwd, subject, body, options) {
       return yield* withListRefsInvalidation(cwd, commit(cwd, subject, body, options));
     }),
+    resolvePushTarget,
     pushCurrentBranch: Effect.fnUntraced(function* (cwd, fallbackBranch, options) {
       return yield* withListRefsInvalidation(cwd, pushCurrentBranch(cwd, fallbackBranch, options));
     }),

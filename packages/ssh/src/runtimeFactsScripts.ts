@@ -3,6 +3,14 @@ import {
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
 } from "@goat/contracts/legacyT3Names";
 
+/**
+ * What a runtime whose `__ssh-helper` lacks `capabilities` writes to stderr for that flagless
+ * call, with exit status 1. Captured from 0.1.6-nightly.20261108.346 on Git Bash; apps/server
+ * pins the same text for the current CLI. Only this exact answer is recorded as "none".
+ */
+export const OLD_HELPER_CAPS_STDERR =
+  '\nERROR\n  Unknown subcommand "capabilities" for "goat __ssh-helper"\n';
+
 // Starting goat costs about 0.4 s on a host, and one reconnect used to start it dozens of times
 // for answers that cannot change while their inputs stand: those of an unchanged executable, and
 // those of one running server instance. Each answer is recorded under a key naming every input it
@@ -56,17 +64,47 @@ file_sig_set() {
   esac
 }
 file_sig() { file_sig_set "$1" && printf '%s' "$FILE_SIG"; }
+# Sets FILE_SIG and FILE_SIG2 for regular files $1 and $2 as file_sig_set does, from one stat
+# start; anything but two valid lines sets neither.
+file_sigs_set() {
+  FILE_SIG=; FILE_SIG2=
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -f "$2" ] && [ ! -L "$2" ] || return 1
+  if [ "$fact_stat" = bsd ]; then
+    sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" "$2" 2>/dev/null)" ||
+      sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" "$2" 2>/dev/null)" || return 1
+  else
+    sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" "$2" 2>/dev/null)" ||
+      sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" "$2" 2>/dev/null)" || return 1
+  fi
+  case "$sig_value" in *"$fact_nl"*) ;; *) return 1 ;; esac
+  sig_first="\${sig_value%%"$fact_nl"*}"; sig_second="\${sig_value#*"$fact_nl"}"
+  for sig_value in "$sig_first" "$sig_second"; do
+    case "$sig_value" in
+      *[!0123456789:]*|:*|*:|*::*|*:*:*:*:*:*) return 1 ;;
+      *:*:*:*:*) ;;
+      *) return 1 ;;
+    esac
+  done
+  FILE_SIG="$sig_first"; FILE_SIG2="$sig_second"
+}
 # A remembered key holds only while its executable keeps the signature and install marker it had,
-# and a remembered runner keeps its own.
+# and a remembered runner keeps its own. Their age gates hold again on a fresh clock: one stepped
+# back makes a same-second rewrite look unchanged. The clock is read after the signatures, so a
+# step back between them can only refuse.
 fact_memo_get() {
   [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
   while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
     IFS= read -r memo_exe && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
     [ "$memo_path" = "$1" ] || continue
     if [ "$memo_path" != "$memo_exe" ]; then
-      file_sig_set "$memo_path" && [ "$FILE_SIG" = "$memo_path_sig" ] || return 1
+      file_sigs_set "$memo_path" "$memo_exe" && [ "$FILE_SIG" = "$memo_path_sig" ] &&
+        [ "$FILE_SIG2" = "$memo_sig" ] || return 1
+    else
+      file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
     fi
-    file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
+    fact_clock || return 1
+    [ "$memo_path" = "$memo_exe" ] || [ "\${memo_path_sig##*:}" -lt "$fact_now" ] || return 1
+    [ "$(( fact_now - \${memo_sig##*:} ))" -ge 2 ] || return 1
     fact_slurp "\${memo_exe%/goat}/.install-complete" && [ "$FACT_TEXT" = "\${memo_name%.*}" ] || return 1
     FACT_NAME="$memo_name"; FACT_KEY="$memo_key"; return 0
   done <"$FACT_MEMO"
@@ -90,6 +128,14 @@ fact_memo_put() {
 pin_runner() { cp "$1" "\${RUNNER_CANDIDATE_FILE:?}.pin" || return 1; fact_memo_drop; }
 # Forgets every remembered key; a memo that cannot be emptied is not used again.
 fact_memo_drop() { [ -z "$FACT_MEMO" ] || true >"$FACT_MEMO" 2>/dev/null || FACT_MEMO=; }
+# Sets fact_now to the wall clock in seconds, read afresh for each check: bash 5's EPOCHSECONDS,
+# which starts no process, else date with its own status.
+fact_clock() {
+  case "\${EPOCHSECONDS:-}" in
+    ''|*[!0123456789]*) fact_now="$(date +%s)" ;;
+    *) fact_now="$EPOCHSECONDS" ;;
+  esac
+}
 # Sets FACT_NAME and FACT_KEY for running goat as $1: an installed executable, or an archive
 # runner, which execs one. An executable changed less than 2 s ago is not keyed: a second write
 # within the same second would leave its ctime unchanged.
@@ -112,7 +158,7 @@ exec_fact_key() {
   valid_version "$fact_version" && [ "$fact_exe" = "$fact_versions/$fact_version/goat" ] || return 1
   file_sig_set "$fact_exe" || return 1
   fact_sig="$FILE_SIG"
-  fact_now="$(date +%s)"
+  fact_clock || return 1
   [ "$(( fact_now - \${fact_sig##*:} ))" -ge 2 ] || return 1
   # A runner installs a version without its marker instead of running it.
   fact_slurp "$fact_versions/$fact_version/.install-complete" && [ "$FACT_TEXT" = "$fact_version" ] || return 1
@@ -131,7 +177,7 @@ prune_removed_facts() (
   for fact_file in "$GOAT_FACTS_DIR"/*; do
     [ ! -L "$fact_file" ] && [ -f "$fact_file" ] || continue
     fact_base="\${fact_file##*/}"
-    case "$fact_base" in version.*|own.*|commit.*|scopes.*|live.*|compat.*) ;; *) continue ;; esac
+    case "$fact_base" in version.*|own.*|commit.*|scopes.*|live.*|compat.*|caps.*) ;; *) continue ;; esac
     case "$fact_base" in *.exe|*.runner) ;; *) continue ;; esac
     fact_version="\${fact_base#*.}"; fact_version="\${fact_version%.*}"
     valid_version "$fact_version" || continue
@@ -155,9 +201,39 @@ fact_valid() {
         case "$1" in compatible|update-required|client-too-old) ;; *) exit 1 ;; esac
         [ "$2" = 1 ] || exit 1
         case "$3" in ''|-|*[!A-Za-z0-9-]*) exit 1 ;; *) ;; esac) ;;
+    caps) caps_valid "$2" ;;
     *) return 1 ;;
   esac
 }
+# True for "caps v1" followed by none or some of the combined calls a host script knows, each at
+# most once and separated by single spaces.
+caps_valid() {
+  case "$1" in "caps v1") return 0 ;; "caps v1 "*) caps_rest="\${1#caps v1 }" ;; *) return 1 ;; esac
+  caps_seen=" "
+  while :; do
+    caps_word="\${caps_rest%% *}"
+    case "$caps_word" in pick-port-protocol|facts|wait-ready-report) ;; *) return 1 ;; esac
+    case "$caps_seen" in *" $caps_word "*) return 1 ;; esac
+    caps_seen="$caps_seen$caps_word "
+    [ "$caps_rest" != "$caps_word" ] || return 0
+    caps_rest="\${caps_rest#* }"
+  done
+}
+# Sets FRAME_ANSWER to what a combined call earlier in this script answered for question $1 under
+# key $2 ("ok <tokens>" or "fail <word>"), and fails when it left nothing there. These memo
+# records have an empty path, which no exec key lookup matches.
+frame_memo_get() {
+  FRAME_ANSWER=
+  [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
+  while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
+    IFS= read -r memo_answer && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
+    [ -z "$memo_path" ] && [ "$memo_name" = "$1" ] && [ "$memo_key" = "$2" ] || continue
+    FRAME_ANSWER="$memo_answer"; return 0
+  done <"$FACT_MEMO"
+  return 1
+}
+# Prints FRAME_ANSWER's tokens, or fails as the separate call would have for a failed question.
+frame_memo_answer() { case "$FRAME_ANSWER" in "ok "*) printf '%s\\n' "\${FRAME_ANSWER#ok }" ;; *) return 1 ;; esac; }
 fact_get() {
   [ -n "$1" ] && [ -n "$2" ] && [ -f "$GOAT_FACTS_DIR/$1" ] && [ ! -L "$GOAT_FACTS_DIR/$1" ] || return 1
   { IFS= read -r fact_recorded && IFS= read -r fact_value; } <"$GOAT_FACTS_DIR/$1" || return 1
@@ -169,7 +245,8 @@ fact_put() {
   case "$2$3" in *"$fact_nl"*) return 0 ;; esac
   (
     umask 077
-    [ ! -L "$GOAT_FACTS_DIR" ] && mkdir -p "$GOAT_FACTS_DIR" &&
+    # mkdir -p changes nothing for an existing directory; skipping it saves a process start.
+    [ ! -L "$GOAT_FACTS_DIR" ] && { [ -d "$GOAT_FACTS_DIR" ] || mkdir -p "$GOAT_FACTS_DIR"; } &&
       fact_tmp="$(mktemp "$GOAT_FACTS_DIR/.fact.XXXXXX")" || exit 0
     printf '%s\\n%s\\n' "$2" "$3" >"$fact_tmp" && mv -f "$fact_tmp" "$GOAT_FACTS_DIR/$1" || rm -f "$fact_tmp"
   ) 2>/dev/null || true
@@ -179,6 +256,11 @@ fact_put() {
 # (column 4 after an optional status letter), with a start shown to the second today and to the
 # day before; the whole row, executable path included, is the key. A server GOAT restarts still
 # misses: it rewrites the runtime record, whose startedAt and instanceId are in the key.
+# Rows are read with shell builtins, as the awk program they replace read them: ps's status is
+# ignored, a leading status letter is dropped and fields join with one space. WINPIDs compare as
+# numbers, as awk compared them: digits without their leading zeros. Any other numeric spelling
+# (5678.0, +5678) or more than 15 digits, beyond which awk's doubles can equate two of them, makes
+# the lookup a miss; ps -W prints neither.
 fact_process_starts() {
   FACT_START=; FACT_START2=
   if [ "$fact_windows" = 0 ]; then
@@ -186,15 +268,38 @@ fact_process_starts() {
     [ -z "$2" ] || FACT_START2="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$2" 2>/dev/null)" || FACT_START2=
     return 0
   fi
-  ps_rows="$(ps -W 2>/dev/null | awk -v a="$1" -v b="$2" '
-    NR > 1 {
-      if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 }
-      if ($4 == a && ra == "") { $1 = $1; ra = $0 }
-      if (b != "" && $4 == b && rb == "") { $1 = $1; rb = $0 }
-    }
-    END { print ra; print rb }')" || return 0
-  FACT_START="\${ps_rows%%"$fact_nl"*}"
-  case "$ps_rows" in *"$fact_nl"*) FACT_START2="\${ps_rows#*"$fact_nl"}" ;; esac
+  ps_odd=
+  fact_pid_number "$1" || ps_odd=1; ps_a="$FACT_TEXT"
+  fact_pid_number "$2" || ps_odd=1; ps_b="$FACT_TEXT"
+  ps_rows="$(ps -W 2>/dev/null)" || :
+  case "$ps_rows" in *"$fact_nl"*) ps_rows="\${ps_rows#*"$fact_nl"}" ;; *) return 0 ;; esac
+  case "$-" in *f*) ps_glob= ;; *) ps_glob=1; set -f ;; esac
+  ps_ifs="$IFS"; IFS="$fact_nl"
+  for ps_row in $ps_rows; do
+    IFS=" 	"
+    set -- $ps_row
+    case "\${1:-}" in ''|*[!0123456789]*) [ "$#" = 0 ] || shift ;; esac
+    fact_pid_number "\${4:-}" || ps_odd=1
+    [ -n "$FACT_START" ] || [ "$FACT_TEXT" != "$ps_a" ] || FACT_START="$*"
+    [ -z "$ps_b" ] || [ -n "$FACT_START2" ] || [ "$FACT_TEXT" != "$ps_b" ] || FACT_START2="$*"
+  done
+  IFS="$ps_ifs"; [ -z "$ps_glob" ] || set +f
+  [ -z "$ps_odd" ] || { FACT_START=; FACT_START2=; }
+}
+# Sets FACT_TEXT to $1 as awk compares it with a PID: digits lose their leading zeros, and other
+# text stays as it is. False for text awk might read as another number, and for more than 15
+# digits, which a double may not hold exactly.
+fact_pid_number() {
+  FACT_TEXT="$1"
+  case "$1" in
+    '') return 0 ;;
+    *[!0123456789]*)
+      case "$1" in *[0123456789]*|[+-]*) return 1 ;; esac
+      return 0 ;;
+  esac
+  FACT_TEXT="\${1#"\${1%%[!0]*}"}"
+  [ -n "$FACT_TEXT" ] || FACT_TEXT=0
+  case "$FACT_TEXT" in ????????????????*) return 1 ;; esac
 }
 # Sets FACT_TEXT to the digits after the last JSON name $1 (quoted) in $2 that a colon and a
 # number follow, as sed -n 's/.*NAME[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' finds them.
@@ -215,6 +320,8 @@ exec_fact() {
   fact_kind="$1"; shift
   exec_fact_key "$1" || true
   fact_name="$fact_kind.$FACT_NAME"; fact_key="$FACT_KEY"
+  # A question the probe's combined call answered keeps that answer, even over a recorded one.
+  if frame_memo_get "frame-$fact_kind" "$1|$fact_name|$fact_key"; then frame_memo_answer || return 1; return 0; fi
   if fact_get "$fact_name" "$fact_key"; then return 0; fi
   fact_out="$("$@")" || return 1
   if [ -n "$fact_key" ] && exec_fact_key "$1" && [ "$FACT_KEY" = "$fact_key" ]; then
@@ -280,11 +387,16 @@ live_fact() {
   if live_none_absent "$2" "$3" "$4"; then
     if [ -n "$FACT_MEMO" ] && exec_fact_key "$1"; then
       live_none_key="$FACT_NAME $FACT_KEY"
+      if frame_memo_get frame-live "$1|$2|$3|$4|$live_none_key|absent"; then frame_memo_answer || return 1; return 0; fi
       if live_none_get "$live_none_key"; then return 0; fi
     fi
   else
     live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
     fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
+    # A live question the probe's combined call failed stays failed, even over a recorded answer.
+    if frame_memo_get frame-live "$1|$2|$3|$4|\${FACT_NAME:+$FACT_NAME $fact_live}|$fact_key"; then
+      frame_memo_answer || return 1; return 0
+    fi
     if fact_get "$fact_name" "$fact_key"; then return 0; fi
   fi
   fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
@@ -306,8 +418,11 @@ live_fact() {
 # $6 is the PID the live answer named; it is recorded only for the record's own process.
 compat_fact() {
   live_fact_key "$1" "$3" "$4" "$5" || FACT_KEY=
+  compat_frame_key="$1|$3|$4|$5|\${FACT_NAME:+$FACT_NAME $fact_live}|$FACT_KEY|$2"
   fact_name="compat.$FACT_NAME"; fact_key="$FACT_KEY"
   [ -z "$fact_key" ] || fact_key="$fact_key|$2"
+  # A compat question the probe's combined call failed stays failed, even over a recorded answer.
+  if frame_memo_get frame-compat "$compat_frame_key"; then frame_memo_answer || return 1; return 0; fi
   if fact_get "$fact_name" "$fact_key"; then return 0; fi
   fact_out="$("$1" __ssh-helper compat --port "$2")" || return 1
   if [ -n "$fact_key" ] && live_fact_key "$1" "$3" "$4" "$5" && [ "$FACT_KEY|$2" = "$fact_key" ] &&

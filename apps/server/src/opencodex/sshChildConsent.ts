@@ -14,6 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
@@ -44,6 +45,10 @@ export type SshChildConsent =
   | { readonly state: "granted"; readonly grant: SshChildGrant; readonly person: HubPerson }
   /** `dropped`: the grant is void and gone; otherwise it could not be checked and stays. */
   | { readonly state: "revoked"; readonly dropped: boolean; readonly message: string };
+
+/** Why an alias's SSH settings could not be read: a Pen read names its own reason. */
+const unreadMessage = (alias: string, error: PlatformError.PlatformError | HubOcxError) =>
+  error._tag === "HubOcxError" ? error.message : `GOAT could not read ${alias}'s SSH settings.`;
 
 const storageFailure = () =>
   new OrchestratorMcpFailure({
@@ -131,7 +136,15 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
         message: "Only an SSH host GOAT set up has this setting; cloud machines follow the hub's.",
       });
     if (!enabled) return yield* drop(alias);
-    const revision = yield* options.revision(alias).pipe(Effect.mapError(storageFailure));
+    const revision = yield* options.revision(alias).pipe(
+      Effect.mapError(
+        (error) =>
+          new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            message: unreadMessage(alias, error),
+          }),
+      ),
+    );
     if (revision === undefined)
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
@@ -161,10 +174,10 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
       dropped: false,
       message,
     });
-    const revision = yield* options.revision(alias).pipe(Effect.option);
-    if (Option.isNone(revision))
-      return unchecked(`GOAT could not read ${alias}'s SSH settings; it tries again next time.`);
-    if (revision.value !== grant.revision) {
+    const revision = yield* options.revision(alias).pipe(Effect.result);
+    if (Result.isFailure(revision))
+      return unchecked(`${unreadMessage(alias, revision.failure)} GOAT tries again next time.`);
+    if (revision.success !== grant.revision) {
       // Forgotten, added again or re-pinned: consent given for the old alias does not carry over.
       yield* drop(alias, grant.grantId).pipe(Effect.ignore({ log: true }));
       return { state: "none" } satisfies SshChildConsent;

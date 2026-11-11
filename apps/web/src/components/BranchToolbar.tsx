@@ -46,6 +46,7 @@ import {
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { openAddProjectToMachine } from "./AddProjectToMachineDialog";
 import { type AddProjectTarget, useAddProjectTargets } from "../hooks/useAddProjectTargets";
+import { type MachineWithoutProject, machineArrivalLabel } from "../lib/runOnArrival";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import {
@@ -81,7 +82,7 @@ export interface BranchToolbarHandle {
 }
 
 const EMPTY_SSH_OPTIONS: ReadonlyArray<SavedSshWorktreeOption> = [];
-const EMPTY_ENVIRONMENTS: readonly EnvironmentOption[] = [];
+const EMPTY_MACHINES: readonly MachineWithoutProject[] = [];
 
 interface BranchToolbarProps {
   sshDestination?: DraftSshDestination | null | undefined;
@@ -112,8 +113,8 @@ interface BranchToolbarProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
-  /** Connected machines without this project, listed disabled under Run on. */
-  environmentsWithoutProject?: readonly EnvironmentOption[];
+  /** Connected machines without this project; picking one brings the project there. */
+  environmentsWithoutProject?: readonly MachineWithoutProject[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   composerControlsHostRef?: (element: HTMLDivElement | null) => void;
   contextStripVisible?: boolean;
@@ -170,7 +171,8 @@ interface RunContextSelectorProps {
   envModeLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[] | undefined;
-  environmentsWithoutProject: readonly EnvironmentOption[];
+  environmentsWithoutProject: readonly MachineWithoutProject[];
+  onArriveOnMachine: ((machine: MachineWithoutProject) => void) | undefined;
   showEnvironmentPicker: boolean;
   showEnvironmentIndicator: boolean;
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
@@ -204,6 +206,7 @@ const RunContextSelector = memo(function RunContextSelector({
   onSshDestinationChange,
   addTargets,
   onAddToMachine,
+  onArriveOnMachine,
 }: RunContextSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const activeEnvironment =
@@ -397,12 +400,21 @@ const RunContextSelector = memo(function RunContextSelector({
                 ))}
               </MenuRadioGroup>
               {environmentsWithoutProject.map((env) => (
-                <MenuItem key={env.environmentId} disabled>
+                <MenuItem
+                  key={env.environmentId}
+                  disabled={envLocked || !onArriveOnMachine || env.arrival.kind === "unavailable"}
+                  closeOnClick
+                  onClick={() => onArriveOnMachine?.(env)}
+                >
                   <span className="flex min-w-0 items-center gap-1.5">
                     <EnvironmentMachineIcon kind={env.machine} className="size-3" />
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate">{env.label}</span>
-                      <span className="text-muted-foreground text-xs">Project not added here</span>
+                      <span className="truncate text-muted-foreground text-xs">
+                        {onArriveOnMachine
+                          ? machineArrivalLabel(env.arrival)
+                          : "Project not added here"}
+                      </span>
                     </span>
                   </span>
                 </MenuItem>
@@ -648,7 +660,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   availableEnvironments,
-  environmentsWithoutProject = EMPTY_ENVIRONMENTS,
+  environmentsWithoutProject = EMPTY_MACHINES,
   onEnvironmentChange,
   composerControlsHostRef,
   contextStripVisible = true,
@@ -670,6 +682,15 @@ export const BranchToolbar = memo(function BranchToolbar({
   const addTargets = useAddProjectTargets(activeProject, availableEnvironments);
   const onAddToMachine = (targetEnvironmentId: EnvironmentId | null) =>
     openAddProjectToMachine({ projectRef: activeProjectRef, targetEnvironmentId });
+  // A clone moves the draft like any machine switch; SSH is the Work on SSH choice for that host.
+  const onArriveOnMachine =
+    onEnvironmentChange === undefined
+      ? undefined
+      : (machine: MachineWithoutProject) => {
+          if (machine.arrival.kind === "clone") onEnvironmentChange(machine.environmentId);
+          else if (machine.arrival.kind === "ssh")
+            onSshDestinationChange?.(machine.arrival.destination);
+        };
   // A project on one machine still gets the picker when it can be added to another.
   const hasMultipleEnvironments =
     (availableEnvironments?.length ?? 0) > 1 ||
@@ -715,6 +736,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onEnvModeChange={onEnvModeChange}
             addTargets={addTargets}
             onAddToMachine={onAddToMachine}
+            onArriveOnMachine={onArriveOnMachine}
           />
         ) : null}
         {panelSection !== "workspace" ? (
@@ -771,6 +793,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onEnvModeChange={onEnvModeChange}
             addTargets={addTargets}
             onAddToMachine={onAddToMachine}
+            onArriveOnMachine={onArriveOnMachine}
           />
         </div>
       ) : null}
@@ -792,6 +815,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                 availableEnvironments={availableEnvironments}
                 environmentsWithoutProject={environmentsWithoutProject}
                 {...(showEnvironmentPicker ? { onEnvironmentChange } : {})}
+                {...(showEnvironmentPicker && onArriveOnMachine ? { onArriveOnMachine } : {})}
                 {...(addTargets.length > 0 ? { onAddToMachine: () => onAddToMachine(null) } : {})}
               />
               {showGitControls ? (

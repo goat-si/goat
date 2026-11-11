@@ -60,6 +60,7 @@ vi.mock("../state/session", () => ({
   useEnvironmentScope: () => true,
   readEnvironmentScope: () => true,
   readPreparedConnection: () => null,
+  usePreparedConnection: () => null,
 }));
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: () => async () => ({ _tag: "Success" }),

@@ -58,8 +58,9 @@ export const WorktreeCleanup = Schema.NullOr(
 export type WorktreeCleanup = typeof WorktreeCleanup.Type;
 
 /**
- * Automatic worktree removal starts only after a person saw this preview (activatesAt, a day
- * later) or confirmed it. SSH-provisioned servers never start on their own: activatesAt stays null.
+ * With worktreeCleanupPreview on, automatic worktree removal starts only after a person saw this
+ * preview (activatesAt, a day later) or confirmed it. SSH-provisioned servers then never start on
+ * their own: activatesAt stays null.
  */
 export const WorktreeCleanupPreview = Schema.Struct({
   /** A response names the preview it answers; a larger planned set starts a new preview. */
@@ -135,6 +136,8 @@ export const StorageCleanupSettings = Schema.Struct({
   worktreeKeepRecent: WorktreeKeepRecent.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKTREE_KEEP_RECENT)),
   ),
+  /** Opt-in: automatic worktree removal waits for a person to see or confirm a preview first. */
+  worktreeCleanupPreview: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Days a removed worktree's snapshot ref is kept; null keeps it until its thread is deleted. */
   worktreeSnapshotDays: StorageRetentionDays.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKTREE_SNAPSHOT_DAYS)),
@@ -192,6 +195,7 @@ export const StorageCleanupSettingsPatch = Schema.Struct({
   worktreeOnArchive: Schema.optionalKey(Schema.Boolean),
   worktreeSnapshotChanges: Schema.optionalKey(Schema.Boolean),
   worktreeKeepRecent: Schema.optionalKey(WorktreeKeepRecent),
+  worktreeCleanupPreview: Schema.optionalKey(Schema.Boolean),
   worktreeSnapshotDays: Schema.optionalKey(StorageRetentionDays),
   browserArtifactsAfterDays: Schema.optionalKey(StorageRetentionDays),
   logsAfterDays: Schema.optionalKey(StorageRetentionDays),

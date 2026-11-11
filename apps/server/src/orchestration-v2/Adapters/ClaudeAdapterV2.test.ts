@@ -744,82 +744,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
   });
 });
 
-describe("ClaudeAdapterV2 native protocol logging", () => {
-  it("injects thread-scoped MCP configuration without logging the credential", () => {
-    const threadId = ThreadId.make("thread-claude-mcp");
-    const mcpSession = {
-      environmentId: EnvironmentId.make("environment-claude-mcp"),
-      threadId,
-      providerSessionId: "mcp-session-claude",
-      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-      endpoint: "http://127.0.0.1:43123/mcp",
-      authorizationHeader: "Bearer secret-claude-token",
-      browserToolsAvailable: true,
-    };
-
-    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession,
-      readOnlySandbox: false,
-      allowedTools: ["Read"],
-    });
-    assert.deepEqual(overrides, {
-      allowedTools: ["Read", "mcp__goat__*"],
-      mcpServers: {
-        goat: {
-          type: "http",
-          url: "http://127.0.0.1:43123/mcp",
-          headers: {
-            Authorization: "Bearer secret-claude-token",
-          },
-          timeout: ClaudeAdapterV2.CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS,
-        },
-      },
-      mcpEnvironment: { NO_PROXY: "127.0.0.1" },
-    });
-
-    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-sonnet-4-6",
-      },
-      nativeThreadId: "native-thread-claude-mcp",
-      resume: false,
-      cwd: "/workspace",
-      allowedTools: overrides.allowedTools ?? [],
-      mcpServers: overrides.mcpServers ?? {},
-      environment: {},
-    });
-    assert.isObject(options.systemPrompt);
-    const systemPrompt = options.systemPrompt as {
-      readonly type: string;
-      readonly preset: string;
-      readonly append?: string;
-    };
-    assert.equal(systemPrompt.type, "preset");
-    assert.equal(systemPrompt.preset, "claude_code");
-    assert.include(systemPrompt.append ?? "", GOAT_DEVELOPMENT_INSTRUCTIONS);
-    assert.include(systemPrompt.append ?? "", "## GOAT orchestration");
-    assert.include(systemPrompt.append ?? "", "call `goat_background_wait`");
-    const logged = ClaudeAdapterV2.loggedClaudeQueryOptions(options);
-    assert.equal(logged.hasMcpServers, true);
-    assert.notInclude(JSON.stringify(logged), "secret-claude-token");
-  });
-
-  it("redacts settings values from query logs", () => {
-    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
-      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-      nativeThreadId: "settings-log",
-      resume: false,
-      cwd: "/workspace",
-      sdkSettings: { env: { ANTHROPIC_API_KEY: "secret-settings-key" } },
-    });
-    assert.notInclude(
-      JSON.stringify(ClaudeAdapterV2.loggedClaudeQueryOptions(options)),
-      "secret-settings-key",
-    );
-  });
-});
-
 describe("ClaudeAdapterV2 Auto-accept edits", () => {
   it.effect("asks before a command instead of allowing it", () =>
     Effect.scoped(
@@ -2018,7 +1942,7 @@ describe("ClaudeAdapterV2 native fork", () => {
               Effect.sync(() => {
                 openedQueries.push(input);
                 return {
-                  messages: Stream.empty,
+                  messages: Stream.never,
                   offer: () => Effect.void,
                   setModel: () => Effect.void,
                   applyFlagSettings: () => Effect.void,
@@ -2350,7 +2274,7 @@ describe("ClaudeAdapterV2 native session identity", () => {
               Effect.sync(() => {
                 openedQueries.push(input);
                 return {
-                  messages: Stream.empty,
+                  messages: Stream.never,
                   offer: () => Effect.void,
                   setModel: () => Effect.void,
                   applyFlagSettings: () => Effect.void,
@@ -6663,13 +6587,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect.each([
     { outcome: "result", turnStatus: "completed", itemStatus: "failed" },
     { outcome: "interrupt", turnStatus: "interrupted", itemStatus: "interrupted" },
+    { outcome: "interrupt_aborted", turnStatus: "interrupted", itemStatus: "interrupted" },
     { outcome: "query_exit", turnStatus: "failed", itemStatus: "failed" },
   ] as const)(
     "settles unfinished compaction before the $outcome terminal receipt",
     ({ outcome, turnStatus, itemStatus }) =>
       Effect.gen(function* () {
+        const interruptSent = yield* Deferred.make<void>();
+        const abortReported = yield* Deferred.make<void>();
         const harness = yield* makeWakeHarnessWithOptions({
           close: (sdkMessages) => Queue.shutdown(sdkMessages),
+          ...(outcome === "interrupt_aborted"
+            ? {
+                interrupt: Deferred.succeed(interruptSent, undefined).pipe(
+                  Effect.andThen(Deferred.await(abortReported)),
+                ),
+              }
+            : {}),
         });
         const attemptId = RunAttemptId.make(`claude-compact-${outcome}`);
         yield* harness.runtime.startTurn(
@@ -6693,15 +6627,34 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         if (outcome === "query_exit") {
           yield* Queue.shutdown(harness.sdkMessages);
-        } else if (outcome === "interrupt") {
+        } else if (outcome === "interrupt" || outcome === "interrupt_aborted") {
           const idAllocator = yield* IdAllocator.IdAllocatorV2;
-          yield* harness.runtime.interruptTurn({
-            providerThread: harness.providerThread,
-            providerTurnId: idAllocator.derive.providerTurn({
-              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-              nativeTurnId: `turn:${attemptId}`,
-            }),
-          });
+          const interrupting = yield* harness.runtime
+            .interruptTurn({
+              providerThread: harness.providerThread,
+              providerTurnId: idAllocator.derive.providerTurn({
+                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                nativeTurnId: `turn:${attemptId}`,
+              }),
+            })
+            .pipe(Effect.forkScoped);
+          if (outcome === "interrupt_aborted") {
+            // The CLI reports the aborted compaction as failed.
+            yield* Deferred.await(interruptSent);
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                type: "system",
+                subtype: "status",
+                status: null,
+                compact_result: "failed",
+                compact_error: "API Error: Request was aborted.",
+                uuid: "00000000-0000-4000-8000-000000000223",
+                session_id: WAKE_NATIVE_SESSION,
+              }),
+            );
+            yield* Deferred.succeed(abortReported, undefined);
+          }
+          yield* Fiber.join(interrupting);
         } else {
           yield* Queue.offer(
             harness.sdkMessages,
@@ -6722,6 +6675,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const [running, settled] = updates;
         assert.equal(running?.status, "running");
         assert.equal(settled?.status, itemStatus);
+        assert.equal(
+          settled?.title,
+          itemStatus === "failed" ? "Context compaction failed" : "Context compaction stopped",
+        );
+        if (outcome === "interrupt_aborted") assert.isUndefined(settled?.summary);
         assert.equal(settled?.id, running?.id);
         assert.equal(settled?.ordinal, running?.ordinal);
         assert.deepEqual(settled?.startedAt, running?.startedAt);

@@ -294,11 +294,12 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
       : scopeThreadRef(worker.environmentId, worker.threadId);
   const shell = useThreadShell(workerRef);
   const projection = useResidentThreadProjection(workerRef);
-  return goatBotActivity({
+  const activity = goatBotActivity({
     reading: false,
     task,
     worker: workerRef === null ? null : { shell: shell?.source ?? null, projection },
   });
+  return activity === null || task === null ? activity : { ...activity, title: task.chip.title };
 }
 
 /**
@@ -543,6 +544,8 @@ export function useGoatBotSession(
       readers: goatBotItemReaders,
       knownTaskIds,
       ...(selectedTask === undefined ? {} : { taskId: selectedTask }),
+      // Work cards leave the chat only where the bot's work list can open every task.
+      conversationOnly: capabilities?.goatBotTaskThreads === true,
     });
   const rows = rowsForTask(taskId);
   const sendable =

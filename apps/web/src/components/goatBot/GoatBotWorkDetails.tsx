@@ -1,18 +1,48 @@
-import { groupBotWork } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import { groupBotWork, resolveRemoteBotWork } from "@goat/client-runtime/goatBot";
+import type { BotRemoteWork, BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
+import { Atom } from "effect/reactivity";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
+
+const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:no-environment"));
+
+/** A thread the bot launched on another machine: a link while this client can open it there. */
+function GoatBotRemoteWork({ item }: { item: BotRemoteWork }) {
+  const openable = useAtomValue(
+    item.environmentId === undefined
+      ? NOT_OPENABLE
+      : channelEnvironment.remoteWorkOpenable(item.environmentId),
+  );
+  const target = resolveRemoteBotWork(
+    item,
+    (environmentId) => environmentId === item.environmentId && openable,
+  );
+  if (target.kind === "unavailable")
+    return (
+      <span className="rounded-full border border-border px-2 py-1">
+        {target.host} · Unavailable
+      </span>
+    );
+  return (
+    <Link to="/$environmentId/$threadId" params={target.ref} className="underline">
+      Open work thread on {target.host}
+    </Link>
+  );
+}
 
 export function GoatBotWorkDetails({
   environmentId,
   taskId,
   rows,
+  remoteWork,
 }: {
   environmentId: EnvironmentId;
   taskId: ChannelTaskId;
   rows: readonly BotThreadRow[];
+  remoteWork: readonly BotRemoteWork[];
 }) {
   const environment = useEnvironment(environmentId);
   const supported =
@@ -23,7 +53,7 @@ export function GoatBotWorkDetails({
       ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [taskId] } })
       : null,
   );
-  const work = groupBotWork(rows, query.data?.groups ?? [], environmentId);
+  const work = groupBotWork(rows, query.data?.groups ?? [], environmentId, remoteWork);
   const task = [...work.inProgress, ...work.done].find((entry) => entry.row.task.taskId === taskId);
   if (!task) return null;
   return (
@@ -42,6 +72,9 @@ export function GoatBotWorkDetails({
         >
           Open work thread
         </Link>
+      ))}
+      {task.remote.map((item) => (
+        <GoatBotRemoteWork key={item.childWorkId} item={item} />
       ))}
       {task.truncated && <span>More work is available.</span>}
       {query.error && <span>Couldn't load subagents.</span>}

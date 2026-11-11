@@ -1,10 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  goatBotName,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
   isRetryableTaskStatus,
   presentTaskStatus,
+  resolveRemoteBotWork,
   retryRefusalText,
   taskAttemptLabel,
   type GoatBotWaitingTurn,
@@ -18,30 +20,77 @@ import {
 import type {
   BotId,
   BotProfile,
+  BotRemoteWork,
   ChannelTaskId,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
+import { Atom } from "effect/reactivity";
 import { useEffect, useState, type ReactNode } from "react";
-import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { useNowMinuteMs } from "../../lib/clock";
 import { uuidv4 } from "../../lib/uuid";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import { MobileBotComputer } from "./MobileBotComputer";
+import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { GoatBotMemberModelAndroidMenu } from "./GoatBotMemberModelAndroidMenu";
+import {
+  goatBotMemberModelHeaderItem,
+  goatBotMemberModelHeaderKey,
+} from "./goatBotMemberModelHeader";
+import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
+import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
-const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
+// The machines running work show under Tasks, so four short labels fit one row as text.
+const tabs = ["Tasks", "Routines", "Memory", "Library"] as const;
+
+const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("mobile-goat-bot-remote-work:none"));
+
+/** A thread the bot launched on another machine: openable while this phone is connected there. */
+function MobileBotRemoteWork(props: {
+  readonly item: BotRemoteWork;
+  readonly onOpenThread: (thread: {
+    readonly environmentId: EnvironmentId;
+    readonly id: ThreadId;
+  }) => void;
+}) {
+  const { item } = props;
+  const openable = useAtomValue(
+    item.environmentId === undefined
+      ? NOT_OPENABLE
+      : channelEnvironment.remoteWorkOpenable(item.environmentId),
+  );
+  const target = resolveRemoteBotWork(
+    item,
+    (environmentId) => environmentId === item.environmentId && openable,
+  );
+  if (target.kind === "unavailable")
+    return <Text className="text-foreground-muted">{target.host} · Unavailable</Text>;
+  const { ref } = target;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      className="min-h-[44px] justify-center"
+      onPress={() => props.onOpenThread({ environmentId: ref.environmentId, id: ref.threadId })}
+    >
+      <Text className="text-foreground underline">Open work thread on {target.host}</Text>
+    </Pressable>
+  );
+}
 
 export function MobileBotWork(props: {
   readonly taskId?: ChannelTaskId;
@@ -56,6 +105,7 @@ export function MobileBotWork(props: {
   /** A member bot's work; the main bot's when absent. */
   readonly member?: {
     readonly botId: BotId;
+    readonly environmentId: EnvironmentId;
     readonly threadId: ThreadId;
     readonly name: string;
     readonly defaultModelSelection: BotProfile["defaultModelSelection"];
@@ -64,6 +114,8 @@ export function MobileBotWork(props: {
   readonly turnsWaiting?: ReadonlyArray<GoatBotWaitingTurn>;
   /** What the chat calls this bot. */
   readonly botName?: string;
+  /** The bot's profile picture, shown at the top of the sheet. */
+  readonly botAvatar?: string | null | undefined;
   /** The main bot, named on a member's inherited model. */
   readonly main?: Pick<BotProfile, "name"> | null;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
@@ -81,6 +133,8 @@ export function MobileBotWork(props: {
   const enabled = selected?.connected === true && capabilities?.goatBotTaskThreads === true;
   const member = props.member ?? null;
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
+  // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
+  const memberModel = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const threads = useEnvironmentQuery(
     environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
       ? channelEnvironment.listBotThreads({
@@ -101,7 +155,7 @@ export function MobileBotWork(props: {
       : null,
   );
   const work = environmentId
-    ? groupBotWork(rows, children.data?.groups ?? [], environmentId)
+    ? groupBotWork(rows, children.data?.groups ?? [], environmentId, threads.data?.remoteWork)
     : { inProgress: [], done: [] };
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
@@ -169,7 +223,7 @@ export function MobileBotWork(props: {
             >
               <Text className="text-danger-foreground">Couldn't load task. Try again</Text>
             </Pressable>
-          ) : threads.isPending || !threads.isSuccess ? (
+          ) : threads.data === null ? (
             <Text className="text-foreground-muted">Loading task…</Text>
           ) : !task ? (
             <Text className="text-foreground-muted">Task not found.</Text>
@@ -217,6 +271,13 @@ export function MobileBotWork(props: {
                   <Text className="text-foreground underline">Open work thread</Text>
                 </Pressable>
               ))}
+              {task.remote.map((item) => (
+                <MobileBotRemoteWork
+                  key={item.childWorkId}
+                  item={item}
+                  onOpenThread={props.onOpenThread}
+                />
+              ))}
               {task.subagents.map((agent) => (
                 <Text key={agent.childWorkId} className="text-foreground-muted">
                   {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
@@ -229,15 +290,35 @@ export function MobileBotWork(props: {
           ) : null}
           {props.taskCard}
         </View>
+      ) : Platform.OS === "ios" ? (
+        // The chat's header carries Work on its trailing side, like the web header's button.
+        <NativeStackScreenOptions
+          optionsVersion={`${botName}:${goatBotMemberModelHeaderKey(memberModel)}`}
+          options={{
+            unstable_headerRightItems: () => [
+              withNativeGlassHeaderItem({
+                accessibilityLabel: `Open ${botName} work`,
+                identifier: "goat-bot-work",
+                label: "Work",
+                onPress: () => setOpen(true),
+                type: "button" as const,
+              }),
+              ...(memberModel ? [goatBotMemberModelHeaderItem(memberModel)] : []),
+            ],
+          }}
+        />
       ) : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Open ${botName} work`}
-          onPress={() => setOpen(true)}
-          className="min-h-[44px] self-end justify-center px-4 py-2"
-        >
-          <Text className="text-foreground">Work</Text>
-        </Pressable>
+        <View className="flex-row items-center justify-end">
+          {memberModel ? <GoatBotMemberModelAndroidMenu menu={memberModel} /> : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${botName} work`}
+            onPress={() => setOpen(true)}
+            className="min-h-[44px] justify-center px-4 py-2"
+          >
+            <Text className="text-foreground">Work</Text>
+          </Pressable>
+        </View>
       )}
       <Modal
         visible={open}
@@ -262,34 +343,42 @@ export function MobileBotWork(props: {
             automaticallyAdjustKeyboardInsets
             keyboardShouldPersistTaps="handled"
           >
-            <MobileBotStatusCard
-              environmentId={environmentId}
-              member={member}
-              botName={botName}
-              main={props.main ?? null}
-              rows={
-                !enabled
-                  ? "unavailable"
-                  : threads.error
-                    ? "failed"
-                    : threads.isSuccess
-                      ? rows
-                      : null
-              }
-              refreshRows={threads.refresh}
-              turnsWaiting={props.turnsWaiting ?? []}
-              onOpenChat={() => setOpen(false)}
-              onOpenTask={(id) => {
-                setOpen(false);
-                props.onOpenTask(id);
-              }}
-            />
+            <View>
+              <View className="items-center gap-2 pt-2 pb-4">
+                <GoatBotFaceAvatar state="idle" size={56} emoji={props.botAvatar} />
+                <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
+                  {botName}
+                </Text>
+              </View>
+              <MobileBotStatusCard
+                environmentId={environmentId}
+                member={member}
+                botName={botName}
+                main={props.main ?? null}
+                rows={
+                  !enabled
+                    ? "unavailable"
+                    : threads.error
+                      ? "failed"
+                      : threads.isSuccess
+                        ? rows
+                        : null
+                }
+                refreshRows={threads.refresh}
+                turnsWaiting={props.turnsWaiting ?? []}
+                onOpenChat={() => setOpen(false)}
+                onOpenTask={(id) => {
+                  setOpen(false);
+                  props.onOpenTask(id);
+                }}
+              />
+            </View>
             {/* One row that scrolls sideways, so large text does not stack the tabs. */}
             <View className="bg-screen py-2">
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerClassName="gap-4"
+                contentContainerClassName="grow justify-center gap-1"
               >
                 {tabs.map((name) => (
                   <Pressable
@@ -299,11 +388,13 @@ export function MobileBotWork(props: {
                     onPress={() => setTab(name)}
                     className={
                       tab === name
-                        ? "min-h-[44px] justify-center rounded-md bg-thread-selected px-3"
-                        : "min-h-[44px] justify-center px-3"
+                        ? "min-h-[44px] justify-center rounded-full bg-goat-bot-message px-4"
+                        : "min-h-[44px] justify-center px-4"
                     }
                   >
-                    <Text className="text-foreground">{name}</Text>
+                    <Text className={tab === name ? "text-foreground" : "text-foreground-muted"}>
+                      {name}
+                    </Text>
                   </Pressable>
                 ))}
               </ScrollView>
@@ -321,25 +412,33 @@ export function MobileBotWork(props: {
                   </Text>
                 </Pressable>
               ) : null}
+              {tab === "Tasks" && enabled && threads.error ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={threads.refresh}
+                  className="min-h-[44px] justify-center"
+                >
+                  <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
+                </Pressable>
+              ) : null}
+              {/* Known tasks stay listed through a refresh and a failed one; only a read that
+                  succeeded with nothing in it says there are no tasks. */}
               {tab === "Tasks" ? (
                 !enabled ? (
                   <Text className="text-foreground-muted">
                     Tasks are unavailable while {botName} is offline or unsupported.
                   </Text>
-                ) : threads.error ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={threads.refresh}
-                    className="min-h-[44px] justify-center"
-                  >
-                    <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
-                  </Pressable>
-                ) : threads.isPending || !threads.isSuccess ? (
-                  <Text className="text-foreground-muted">Loading tasks…</Text>
+                ) : threads.data === null ? (
+                  threads.error ? null : (
+                    <Text className="text-foreground-muted">Loading tasks…</Text>
+                  )
                 ) : work.inProgress.length + work.done.length === 0 ? (
-                  <Text className="text-foreground-muted">
-                    No tasks yet. Ask {botName} to start work.
-                  </Text>
+                  threads.error ? null : (
+                    <MobileBotPanelEmpty
+                      title="No tasks yet"
+                      next={`Ask ${botName} in chat to start work.`}
+                    />
+                  )
                 ) : (
                   (
                     [
@@ -349,7 +448,7 @@ export function MobileBotWork(props: {
                   ).map(([label, tasks]) => (
                     <View key={label} className="gap-2 py-2">
                       <Text className="font-semibold text-foreground">{label}</Text>
-                      {tasks.map(({ row }) => (
+                      {tasks.map(({ row, threads }) => (
                         <View key={row.task.taskId}>
                           <Pressable
                             accessibilityRole="button"
@@ -384,6 +483,36 @@ export function MobileBotWork(props: {
                               </Pressable>
                             ) : null,
                           )}
+                          {/* The task's worker and other launches no row lists: lists leave them to the bot. */}
+                          {threads
+                            .filter(
+                              (thread) =>
+                                !rows.some(
+                                  (coding) =>
+                                    coding.kind === "coding" &&
+                                    coding.environmentId === thread.environmentId &&
+                                    coding.threadId === thread.threadId,
+                                ),
+                            )
+                            .map((thread) => (
+                              <Pressable
+                                key={thread.environmentId + ":" + thread.threadId}
+                                accessibilityRole="button"
+                                accessibilityLabel={"Work thread: " + row.task.title}
+                                className="ml-4 min-h-[44px] justify-center"
+                                onPress={() => {
+                                  setOpen(false);
+                                  props.onOpenThread({
+                                    environmentId: thread.environmentId,
+                                    id: thread.threadId,
+                                  });
+                                }}
+                              >
+                                <Text numberOfLines={1} className="text-foreground-muted">
+                                  Work thread
+                                </Text>
+                              </Pressable>
+                            ))}
                         </View>
                       ))}
                     </View>
@@ -428,9 +557,10 @@ export function MobileBotWork(props: {
                     />
                   ))
                 ) : (
-                  <Text className="text-foreground-muted">
-                    Ask {botName} in chat to set up a routine.
-                  </Text>
+                  <MobileBotPanelEmpty
+                    title="No routines yet"
+                    next={`Ask ${botName} in chat to set up a routine.`}
+                  />
                 )
               ) : null}
               {tab === "Memory" ? (
@@ -459,13 +589,16 @@ export function MobileBotWork(props: {
                   supported={capabilities?.goatBotLibrary === true}
                 />
               ) : null}
-              {tab === "Computer" ? (
-                <MobileBotComputer
-                  environmentId={environmentId}
-                  connected={selected?.connected === true}
-                  botId={member?.botId ?? null}
-                  botName={botName}
-                />
+              {tab === "Tasks" && work.inProgress.length > 0 ? (
+                <View className="mt-6 gap-1">
+                  <Text className="text-xs font-medium text-foreground-muted">Machines</Text>
+                  <MobileBotComputer
+                    environmentId={environmentId}
+                    connected={selected?.connected === true}
+                    botId={member?.botId ?? null}
+                    botName={botName}
+                  />
+                </View>
               ) : null}
             </View>
           </ScrollView>

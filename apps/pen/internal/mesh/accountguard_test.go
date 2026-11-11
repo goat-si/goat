@@ -262,3 +262,40 @@ func TestALockOrUnbindMergedBeforeTheSignatureIsHonoured(t *testing.T) {
 		}
 	}
 }
+
+// W1: an inviter that moved to another mesh (its store retired by replaceMesh) while a join waited
+// for the card signs nothing and burns nothing; the joiner is refused and told to get a new invite.
+func TestAnInviteJoinToAStoreRetiredMeanwhileIsRefused(t *testing.T) {
+	f, j := detID(1), detID(3)
+	b, found := newMesh(t, f)
+	s := NewStore(nil, b.meshID)
+	if _, err := s.Merge([]*Record{found}); err != nil {
+		t.Fatal(err)
+	}
+	iv, _ := LoadInvites(nil)
+	inv, err := iv.Create(time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, cli := pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	served := make(chan error, 1)
+	go func() {
+		_, err := ServeJoin(ctx, srv, j.NoisePub, Admission{ID: f, Store: s, Invites: iv, InviteID: inv.ID,
+			Now: func() time.Time { s.Retire(); return time.Now() }})
+		served <- err
+	}()
+	_, _, err = Join(ctx, cli, j, "j")
+	<-served
+	var refused *RefusedError
+	if !errors.As(err, &refused) || !refused.NotMember {
+		t.Fatalf("the joiner got %v, want a refusal telling it the invite was not used", err)
+	}
+	if _, ok := iv.Lookup(inv.ID, time.Now()); !ok {
+		t.Fatal("the retired mesh's invite was burned")
+	}
+	if s.Len() != 1 {
+		t.Fatalf("the retired store holds %d records, want only the founding one", s.Len())
+	}
+}

@@ -307,7 +307,7 @@ describe("ACP Registry probe", () => {
     },
   );
 
-  it("bounds and de-duplicates advertised commands", () => {
+  it("keeps every distinct advertised command and de-duplicates the rest", () => {
     const commands = normalizeAcpRegistryCommands([
       {
         name: "create_plan",
@@ -319,9 +319,11 @@ describe("ACP Registry probe", () => {
         name: `command_${index}`,
         description: "",
       })),
+      { name: "$late-skill", description: "Advertised after 128 commands" },
     ]);
 
-    expect(commands.slashCommands).toHaveLength(128);
+    expect(commands.slashCommands).toHaveLength(141);
+    expect(commands.slashCommands.at(-1)).toEqual({ name: "command_139" });
     expect(commands.slashCommands[0]).toEqual({
       name: "create_plan",
       description: "Create a plan",
@@ -330,7 +332,15 @@ describe("ACP Registry probe", () => {
     expect(
       commands.slashCommands.filter((command) => command.name.toLowerCase() === "create_plan"),
     ).toHaveLength(1);
-    expect(commands.skills).toEqual([]);
+    expect(commands.skills.map((skill) => skill.name)).toEqual(["late-skill"]);
+  });
+
+  it("stops at 1,024 distinct commands so one agent cannot grow the probe without bound", () => {
+    const commands = normalizeAcpRegistryCommands(
+      Array.from({ length: 1_100 }, (_, index) => ({ name: "command_" + index, description: "" })),
+    );
+    expect(commands.slashCommands).toHaveLength(1_024);
+    expect(commands.slashCommands.at(-1)).toEqual({ name: "command_1023" });
   });
 
   it("routes dollar-prefixed ACP commands to the provider skill menu", () => {

@@ -36,21 +36,25 @@ async function renderFaces() {
   }
   const root = createRoot(document.createElement("div"));
   const show = (faces: ReadonlyArray<FaceProps>) =>
-    act(async () =>
+    act(async () => {
+      // Only faces still mounted report; an unmounted one must not keep its last answer.
+      moving.clear();
       root.render(
         <StrictMode>
           {faces.map((face) => (
             <Face key={face.name} {...face} />
           ))}
         </StrictMode>,
-      ),
-    );
+      );
+    });
   const movers = () => [...moving].filter(([, turn]) => turn).map(([name]) => name);
   return { show, movers, [Symbol.asyncDispose]: () => act(async () => root.unmount()) };
 }
 
 const header = { name: "header", rank: FACE_MOTION_RANK.header } as const;
 const roster = { name: "roster", rank: FACE_MOTION_RANK.list } as const;
+// The chat's progress line ranks above its header (GoatBotProgressFace).
+const progress = { name: "progress", rank: FACE_MOTION_RANK.header + 1 } as const;
 
 describe("useMobileGoatBotFaceMotion", () => {
   it("moves only the chat header when the header and the roster both show work, then hands over", async () => {
@@ -65,6 +69,39 @@ describe("useMobileGoatBotFaceMotion", () => {
       { ...header, state: "finished" },
     ]);
     expect(faces.movers()).toEqual(["roster"]);
+  });
+
+  it("gives the progress line's face the motion over the header, and hands it back when the line leaves", async () => {
+    await using faces = await renderFaces();
+    await faces.show([
+      { ...header, state: "working" },
+      { ...progress, state: "working" },
+    ]);
+    expect(faces.movers()).toEqual(["progress"]);
+    // Scrolled out of view: the line releases its claim.
+    await faces.show([
+      { ...header, state: "working" },
+      { ...progress, state: "working", onScreen: false },
+    ]);
+    expect(faces.movers()).toEqual(["header"]);
+    await faces.show([
+      { ...header, state: "working" },
+      { ...progress, state: "working" },
+    ]);
+    expect(faces.movers()).toEqual(["progress"]);
+    // The work ends and the line unmounts while it holds the motion.
+    await faces.show([{ ...header, state: "working" }]);
+    expect(faces.movers()).toEqual(["header"]);
+    try {
+      env.reduced = true;
+      await faces.show([
+        { ...header, state: "working" },
+        { ...progress, state: "working" },
+      ]);
+      expect(faces.movers()).toEqual([]);
+    } finally {
+      env.reduced = false;
+    }
   });
 
   it("holds still under reduce motion, in the background, on an unfocused screen or off screen", async () => {

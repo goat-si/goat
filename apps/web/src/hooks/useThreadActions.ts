@@ -455,6 +455,9 @@ export function useThreadActions() {
         expireThreadUndos(target, [...LIST_PLACEMENT_UNDO_KINDS, "archive"]);
         refreshArchivedThreadsForEnvironment(target.environmentId);
         useGlobalAgentStore.getState().clearIfThread(target);
+        releaseComposerDraftUploads(target);
+        clearComposerDraftForThread(target);
+        clearTerminalUiState(target);
         clearDeletedThreadPanelState(target);
       }
       return result;
@@ -933,14 +936,14 @@ export function useThreadActions() {
       (result) => result._tag === "Success",
     );
 
-  const confirmAndDeleteThread = async (target: ScopedThreadRef) => {
+  const confirmAndDeleteThread = async (target: ScopedThreadRef, knownTitle?: string) => {
     const permissionFailure = threadOperationFailure(target);
     if (permissionFailure) return permissionFailure;
     const localApi = readLocalApi();
     const resolved = resolveThreadTarget(target);
 
     if (confirmThreadDelete && localApi) {
-      const title = resolved?.thread.title ?? "this thread";
+      const title = resolved?.thread.title ?? knownTitle ?? "this thread";
       const confirmationResult = await settlePromise(() =>
         localApi.dialogs.confirm(
           [

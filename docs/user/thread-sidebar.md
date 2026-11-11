@@ -63,9 +63,19 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
+In Projects view, drag a thread onto the composer to mention it; threads cannot be
+reordered within the project list.
 
 When GOAT Bot is enabled, **Bots** lists the main bot and, on supported servers,
 its task and coding threads. Use a task's menu to pin it, mark it done, or mark it read.
+
+The thread list leaves out what the bots run for themselves: each bot's conversation, a task's
+worker, and threads a bot starts outside a worktree, such as stopping a server. Open those from
+the bot's task. Coding a bot sends to its own worktree stays in the list, marked
+**from GOAT Bot**. Work a bot starts on another machine over SSH leaves the list only while this
+device is connected to that machine; otherwise it stays, and the task names the host as
+unavailable. Search still finds every thread, and **Show GOAT Bot threads** in Settings
+lists them all on that device.
 
 A task opens its own conversation beside the main chat on a wide screen, or in place
 of the chat on a narrow one; messages you send there stay with that task. To always

@@ -26,7 +26,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient } from "effect/http";
-import type { AcpError } from "effect-acp/errors";
+import * as AcpErrors from "effect-acp/errors";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import {
@@ -47,6 +47,7 @@ import {
   type AntigravityAuthConfig,
 } from "../antigravityAuthSupport.ts";
 import {
+  antigravityCliSessionMode,
   antigravityModelOptions,
   antigravityThinkingConfig,
   makeAntigravityAcpRuntime,
@@ -79,6 +80,21 @@ import { discoverAntigravitySkills, resolveAntigravityUserHome } from "./Antigra
 const DRIVER = ProviderDriverKind.make("antigravity");
 const decodeSettings = Schema.decodeSync(AntigravitySettings);
 const isNodeRuntimeUnavailableError = Schema.is(NodeRuntimeUnavailableError);
+const isAcpRequestError = Schema.is(AcpErrors.AcpRequestError);
+const isAcpErrorDetails = Schema.is(Schema.Struct({ details: Schema.String }));
+const REFRESH_FAILED =
+  "Could not refresh Antigravity models. The previous model list is unchanged.";
+const PYTHON_SOCKS_REQUIRED = "python-socks is required to use a SOCKS proxy";
+
+// Keep upstream diagnostics in cause; only recognized, fixed text reaches clients.
+function refreshFailureDetail(cause: unknown) {
+  return isAcpRequestError(cause) &&
+    cause.operation === "receive-response" &&
+    isAcpErrorDetails(cause.data) &&
+    cause.data.details.includes(PYTHON_SOCKS_REQUIRED)
+    ? `${REFRESH_FAILED} Antigravity reported: ${PYTHON_SOCKS_REQUIRED}`
+    : REFRESH_FAILED;
+}
 
 export type AntigravityDriverEnv =
   | AntigravityInstallation.AntigravityInstallation
@@ -185,7 +201,7 @@ export const AntigravityDriver: ProviderDriver<
       input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
     ): Effect.fn.Return<
       AcpSessionRuntime.AcpSessionRuntime["Service"],
-      AcpError | ProviderSetupError,
+      AcpErrors.AcpError | ProviderSetupError,
       Scope.Scope
     > {
       if (authConfigIssue !== null) {
@@ -270,6 +286,9 @@ export const AntigravityDriver: ProviderDriver<
       }).pipe(Effect.provideService(Crypto.Crypto, crypto));
       return {
         ...runtime,
+        ...(executable.harnessPath === null
+          ? { setMode: (modeId: string) => runtime.setMode(antigravityCliSessionMode(modeId)) }
+          : {}),
         start: () =>
           runtime
             .start()
@@ -520,7 +539,7 @@ export const AntigravityDriver: ProviderDriver<
                 : cause._tag === "ProviderSetupError" &&
                     (cause.operation === "configure" || cause.operation === "start")
                   ? cause.detail
-                  : "Could not refresh Antigravity models. The previous model list is unchanged.",
+                  : refreshFailureDetail(cause),
               cause,
             }),
       ),

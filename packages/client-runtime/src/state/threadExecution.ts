@@ -516,6 +516,50 @@ export interface RunStopPresentation {
   readonly cloud: boolean;
 }
 
+/** What stopping a held turn does besides ending it; shown before a person confirms. */
+export const HELD_TURN_STOP_NOTE =
+  "Stopping it also pauses this thread's Codex goal, so Codex starts no more goal turns until you resume the goal.";
+
+export interface RunStartHoldPresentation {
+  readonly runId: ThreadStructure["runs"][number]["id"];
+  readonly reason: NonNullable<ThreadStructure["runs"][number]["startHold"]>["reason"];
+  readonly nativeTurnId: string | undefined;
+  readonly title: string;
+  readonly description: string;
+}
+
+/** The newest starting run that waits for another Codex turn on the thread, and why. */
+export function presentRunStartHold(
+  runs: ThreadStructure["runs"],
+): RunStartHoldPresentation | null {
+  let held: ThreadStructure["runs"][number] | null = null;
+  for (const run of runs)
+    if (
+      run.status === "starting" &&
+      run.startHold !== undefined &&
+      run.ordinal > (held?.ordinal ?? -1)
+    )
+      held = run;
+  const hold = held?.startHold;
+  if (held === null || hold === undefined) return null;
+  const turn = hold.nativeTurnId === undefined ? "a turn" : `turn ${hold.nativeTurnId}`;
+  return hold.reason === "restart_survivor"
+    ? {
+        runId: held.id,
+        reason: hold.reason,
+        nativeTurnId: hold.nativeTurnId,
+        title: "Waiting for the turn from before the restart",
+        description: `Codex is still working on ${turn}, which began before GOAT restarted. This message starts when it ends.`,
+      }
+    : {
+        runId: held.id,
+        reason: hold.reason,
+        nativeTurnId: hold.nativeTurnId,
+        title: "Waiting for another Codex turn",
+        description: `Codex is working on ${turn} that no message here started, such as a goal continuation. This message starts when it ends.`,
+      };
+}
+
 /**
  * A Stop the provider has not finished yet. It stays `stopping` while the agent winds down,
  * since some providers confirm the request before the turn actually ends. On a run that

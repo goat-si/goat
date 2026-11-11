@@ -383,6 +383,12 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   "pending_request.list": { scope: "launched", hosts: ["box"] },
   "provider.host_matrix": { localOnly: false },
   "host.status": { local: null },
+  "html.preview": { html: "<!doctype html><html><body>probe</body></html>" },
+  "html.render": {
+    html: "<!doctype html><html><body>probe</body></html>",
+    title: "Probe",
+    height: 300,
+  },
   // A sampled patch names no setting, which is refused before access matters.
   "environment.settings_read": {},
   "environment.settings_update": { patch: { branchNamePrefix: "goat/" } },

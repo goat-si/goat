@@ -67,7 +67,10 @@ vi.mock("@effect/atom-react", async (original) => ({
   useAtomValue: () => true,
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => actions.update }));
-vi.mock("~/localApi", () => ({ readLocalApi: () => ({ contextMenu: { show: actions.show } }) }));
+vi.mock("~/localApi", () => {
+  const api = () => ({ contextMenu: { show: actions.show } });
+  return { readLocalApi: api, ensureLocalApi: api };
+});
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     updateTaskView: { permissionAtom: () => null },
@@ -77,6 +80,7 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 vi.mock("../ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children, render }: { children: ReactNode; render?: ReactElement }) =>
     render ? cloneElement(render, {}, children) : <>{children}</>,
@@ -197,15 +201,11 @@ it("expands and collapses older task rows", async () => {
   }
 });
 
-it("labels task status and explains an empty bot roster", async () => {
+it("labels task status", async () => {
   useGlobalAgentStore.getState().setMode("bot");
   // The router is mocked to exercise the roster independently.
   await using screen = await render(<GoatBotSidebarTabs />, { router: false });
   await expect.element(screen.getByRole("img", { name: "Needs your input" })).toBeInTheDocument();
-  const saved = rows.splice(0);
-  await screen.rerender(<GoatBotSidebarTabs />);
-  await expect.element(screen.getByText("Work Helper starts will appear here.")).toBeVisible();
-  rows.push(...saved);
 });
 
 it("opens the task actions with the keyboard and returns focus on Escape", async () => {

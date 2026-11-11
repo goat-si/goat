@@ -196,7 +196,7 @@ export function GoatBotComposer({
             aria-label="Send"
             disabled={!canSubmit}
             className={cn(
-              "goat-bubble-out-fill flex size-7 shrink-0 items-center justify-center rounded-full text-goat-bubble-out-foreground",
+              "flex size-7 shrink-0 items-center justify-center rounded-full bg-goat-person-message text-goat-person-message-foreground",
               trimmed.length === 0 && attachments.length === 0 && "invisible",
             )}
           >

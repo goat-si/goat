@@ -350,11 +350,10 @@ export function environmentMcpUrl(input: {
     (route) => connectionRouteId(route.target) === connectedRouteId,
   );
   if (connectedRoute?.target._tag === "HubProxyConnectionTarget") return null;
+  const relayMcpUrl = input.relayHttpBaseUrl ? mcpUrlFromBase(input.relayHttpBaseUrl) : null;
+  if (relayMcpUrl !== null) return relayMcpUrl;
   for (const route of connectedRoute ? [connectedRoute, ...routes] : routes) {
-    const httpBaseUrl =
-      route.target._tag === "RelayConnectionTarget"
-        ? (input.relayHttpBaseUrl ?? null)
-        : routeHttpBaseUrl(route);
+    const httpBaseUrl = routeHttpBaseUrl(route);
     const mcpUrl = httpBaseUrl === null ? null : mcpUrlFromBase(httpBaseUrl);
     if (mcpUrl !== null) return mcpUrl;
   }
