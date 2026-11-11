@@ -6,11 +6,16 @@ export interface SideChatParent {
 }
 
 /**
- * Null for a thread that is not a side chat. Otherwise the parent to link, or no parent when its
- * shell is missing, not loaded yet, archived, deleted or from another environment.
+ * Null for a thread that is not a side chat, including a subagent that copied its parent's side
+ * chat link. Otherwise the parent to link, or no parent when its shell is missing, not loaded yet,
+ * archived, deleted or from another environment.
  */
 export function sideChatMarker(
-  thread: { readonly environmentId: string; readonly sideChatOf?: string | null },
+  thread: {
+    readonly environmentId: string;
+    readonly sideChatOf?: string | null;
+    readonly lineage: { readonly relationshipToParent: string | null };
+  },
   candidate: {
     readonly environmentId: string;
     readonly id: string;
@@ -19,7 +24,7 @@ export function sideChatMarker(
     readonly deletedAt?: string | null;
   } | null,
 ): { readonly parent: SideChatParent | null } | null {
-  if (thread.sideChatOf == null) return null;
+  if (thread.sideChatOf == null || thread.lineage.relationshipToParent === "subagent") return null;
   const live =
     candidate !== null &&
     candidate.environmentId === thread.environmentId &&

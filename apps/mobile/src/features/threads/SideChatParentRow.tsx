@@ -12,7 +12,7 @@ const ROW_CLASS_NAME =
 
 /** Names the thread a side chat belongs to; tapping the name opens that thread. */
 export function SideChatParentRow(props: {
-  readonly thread: Pick<EnvironmentThreadShell, "environmentId" | "sideChatOf">;
+  readonly thread: Pick<EnvironmentThreadShell, "environmentId" | "sideChatOf" | "lineage">;
 }) {
   const { environmentId, sideChatOf } = props.thread;
   const parentShell = useQuietThreadShell(

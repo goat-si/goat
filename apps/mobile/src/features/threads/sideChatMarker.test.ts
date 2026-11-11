@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { sideChatMarker } from "./sideChatMarker";
 
-const sideChat = { environmentId: "env-a", sideChatOf: "parent" };
+const sideChat = {
+  environmentId: "env-a",
+  sideChatOf: "parent",
+  lineage: { relationshipToParent: null },
+};
 const parent = {
   environmentId: "env-a",
   id: "parent",
@@ -12,8 +16,17 @@ const parent = {
 
 describe("sideChatMarker", () => {
   it("marks nothing on a thread that is not a side chat", () => {
-    expect(sideChatMarker({ environmentId: "env-a", sideChatOf: null }, parent)).toBeNull();
-    expect(sideChatMarker({ environmentId: "env-a" }, parent)).toBeNull();
+    expect(sideChatMarker({ ...sideChat, sideChatOf: null }, parent)).toBeNull();
+    expect(
+      sideChatMarker({ environmentId: "env-a", lineage: sideChat.lineage }, parent),
+    ).toBeNull();
+  });
+
+  // Subagents copy their parent thread, side chat link included.
+  it("marks nothing on a subagent of a side chat", () => {
+    expect(
+      sideChatMarker({ ...sideChat, lineage: { relationshipToParent: "subagent" } }, parent),
+    ).toBeNull();
   });
 
   it("links a live parent by its title and reference", () => {
