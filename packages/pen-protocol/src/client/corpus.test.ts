@@ -71,7 +71,7 @@ function runHttp(context: HttpContext, pieces: ReadonlyArray<Uint8Array>) {
     bodyCap: 8 * 1024 * 1024,
   });
   const events: Array<ResponseEvent> = [];
-  for (const piece of pieces) events.push(...parser.push(piece));
+  for (const piece of pieces) parser.push(piece, events);
   if (context.eof === true) events.push(...parser.finish());
   const head = events.find((event) => event.type === "head");
   const end = events.find((event) => event.type === "end");

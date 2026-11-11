@@ -2,7 +2,13 @@
 // One request at a time per stream; reuse only after a cleanly delimited response; no automatic retry.
 import { ByteBuffer, utf8Encode } from "./bytes.ts";
 import { PenError } from "./errors.ts";
-import { HTTP1_LIMITS, type HeaderList, ResponseParser, serializeRequest } from "./http1.ts";
+import {
+  HTTP1_LIMITS,
+  type HeaderList,
+  type ResponseEvent,
+  ResponseParser,
+  serializeRequest,
+} from "./http1.ts";
 import type { Clock, Timer } from "./runtime.ts";
 import type { PenStream } from "./stream.ts";
 
@@ -353,7 +359,16 @@ class PenFetcher {
     for (;;) {
       const chunk = await slot.read();
       stillLive();
-      const events = chunk === null ? parser.finish() : parser.push(chunk);
+      // Events decoded before a malformed byte are handled before the error, so a sink sees the same bytes however
+      // the stream split the response.
+      const events: Array<ResponseEvent> = [];
+      let failure: { readonly error: unknown } | undefined;
+      try {
+        if (chunk === null) events.push(...parser.finish());
+        else parser.push(chunk, events);
+      } catch (error) {
+        failure = { error };
+      }
       for (const event of events) {
         if (event.type === "head") {
           head = { status: event.status, statusText: event.reason, headers: event.headers };
@@ -380,6 +395,7 @@ class PenFetcher {
           return head;
         }
       }
+      if (failure !== undefined) throw failure.error;
     }
   }
 }

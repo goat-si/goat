@@ -468,4 +468,22 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     await expect(t.fetch(ORIGIN + "/a")).rejects.toBeInstanceOf(PenError);
     expect(t.pairs[0]?.server.closeCode()).toBe(1000);
   });
+
+  it.each([
+    ["in one piece", ["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhiX"]],
+    [
+      "split before the bad byte",
+      ["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhi", "X"],
+    ],
+  ])("a sink gets the same body before a framing error, the response %s", async (_name, pieces) => {
+    const t = setup();
+    const written: Array<string> = [];
+    const sink = { cap: 16, write: (bytes: Uint8Array) => void written.push(latin1(bytes)) };
+    const pending = t.toSink(ORIGIN + "/file", undefined, sink);
+    const server = await t.stream(1);
+    await request(server);
+    for (const piece of pieces) server.write(piece);
+    await expect(pending).rejects.toMatchObject({ code: "http1/H27" });
+    expect(written).toEqual(["hi"]);
+  });
 });

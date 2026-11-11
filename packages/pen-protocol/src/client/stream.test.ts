@@ -30,7 +30,7 @@ const data = (bytes: Uint8Array) => {
 };
 
 /** A stream over a real Noise session; the test plays the Pen node on the other side. */
-async function connected() {
+async function connected(options: { readonly beforeStream?: ReadonlyArray<Uint8Array> } = {}) {
   const clock = new ManualClock();
   const fake = fakeFactory();
   const pending = openSession({
@@ -57,6 +57,8 @@ async function connected() {
   });
   socket.receive(reply.message2);
   const { session } = await pending;
+  // Records the node sends before the stream takes the session are held by the session.
+  for (const plaintext of options.beforeStream ?? []) socket.receive(reply.send.seal(plaintext));
   const stream = openStream(session);
   let read = 2; // message 1 and the key confirmation
   reply.recv.open(socket.binarySent()[1] ?? new Uint8Array());
@@ -146,6 +148,13 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     expect(c.stream.stats().uncredited).toBe(64 * KiB);
     await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
     expect(await c.stream.closed).toBe(1006);
+  });
+
+  it("records held before the stream opens stop at a bad one: DATA after it is never read", async () => {
+    const c = await connected({ beforeStream: [Uint8Array.of(9), data(Uint8Array.of(1, 2, 3))] });
+    expect(c.socket.closedWith).toBe(4400);
+    expect(c.stream.stats().buffered).toBe(0);
+    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
   });
 
   it("a writer waits at the 512 KiB window and resumes when CREDIT arrives", async () => {

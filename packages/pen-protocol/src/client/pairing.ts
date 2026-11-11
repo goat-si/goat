@@ -117,8 +117,17 @@ export function encodePairQr(fields: PairQrFields): Uint8Array {
   return concatBytes(head, ...relays.flatMap((relay) => [Uint8Array.of(relay.length), relay]));
 }
 
+/** The longest payload parameter: unpadded base64url of PAIR_QR_MAX bytes. */
+const PAIR_LINK_PAYLOAD_MAX = Math.ceil((PAIR_QR_MAX * 4) / 3);
+
 function payloadOf(input: string | Uint8Array): Uint8Array {
   if (input instanceof Uint8Array) return input;
+  // A scanned link is bounded before anything is matched or decoded: a long one costs nothing to refuse.
+  const prefixMax =
+    Math.max(...PAIR_LINK_SCHEMES.map((scheme) => scheme.length)) + "://pair?pen=".length;
+  if (input.length > prefixMax + PAIR_LINK_PAYLOAD_MAX) {
+    throw qrError("length", "a pairing QR is 88 to 216 bytes");
+  }
   const match = /^([a-z-]+):\/\/pair\?pen=([A-Za-z0-9_-]+)$/.exec(input);
   const scheme = match?.[1];
   const bytes = match?.[2] === undefined ? null : fromBase64Url(match[2]);

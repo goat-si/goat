@@ -3,7 +3,7 @@ import httpCases from "../../vectors/http1-malformed.json" with { type: "json" }
 import wsCases from "../../vectors/websocket-malformed.json" with { type: "json" };
 import { fromHex } from "./bytes.ts";
 import { PenError } from "./errors.ts";
-import { ResponseParser } from "./http1.ts";
+import { ResponseParser, type ResponseEvent } from "./http1.ts";
 import { decodeInto } from "./testing/frames.ts";
 import { seededRandom } from "./testing/seededRandom.ts";
 import { FrameDecoder, type FrameEvent } from "./websocket.ts";
@@ -161,13 +161,13 @@ describe("fixed-seed fuzzing (design 10.2 exit criterion)", () => {
           bodyCap: 64 * 1024,
         });
         return {
-          push: (bytes, out) => out.push(...parser.push(bytes)),
+          push: (bytes, out) => parser.push(bytes, out),
           finish: (out) => out.push(...parser.finish()),
-        };
+        } satisfies Target<ResponseEvent>;
       };
     },
-    // A failed response is dropped whole by the fetch adapter, so only the error must not depend on the split.
-    false,
+    // The fetch adapter hands body bytes to a sink as they come, so events before an error count too.
+    true,
   );
 
   property(

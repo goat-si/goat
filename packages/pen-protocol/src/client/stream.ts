@@ -103,11 +103,12 @@ class Stream implements PenStream {
   constructor(session: SecureSession) {
     this.session = session;
     this.closed = session.closed;
-    session.onRecord((record) => this.#onRecord(record));
     session.onClose((code) => {
       this.#closeCode = code;
       this.#wake();
     });
+    // The close observer comes first, so a held record that closes the session stops the ones after it.
+    session.onRecord((record) => this.#onRecord(record));
   }
 
   stats(): PenStreamStats {

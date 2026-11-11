@@ -107,7 +107,11 @@ export class SecureSession {
   /** Takes the session's records, held ones first. */
   onRecord(handler: (plaintext: Uint8Array) => void): void {
     this.#onRecord = handler;
-    for (const record of this.#held.splice(0)) handler(record);
+    // A held record that ends the session (a protocol error) ends the drain too: nothing after it is delivered.
+    for (const record of this.#held.splice(0)) {
+      if (this.#closedCode !== undefined) break;
+      handler(record);
+    }
     this.#heldBytes = 0;
   }
 

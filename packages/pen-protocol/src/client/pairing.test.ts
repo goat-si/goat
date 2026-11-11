@@ -144,6 +144,18 @@ describe("pairing QR (design 9.1, 9.3)", () => {
     expect(refusal(layout({ expiresAt: now - 60 }))).toBe("accepted");
   });
 
+  it("a link of the largest QR (288 payload characters) decodes; a longer or very long link is refused as too long", () => {
+    const long = (label: string) => "https://" + label + "x".repeat(53 - label.length) + ".io";
+    const largest = encodePairQr({ ...fields, relays: [long("a"), long("b")] });
+    const largestLink = link(largest, "goat-preview");
+    expect(largestLink.length).toBe("goat-preview://pair?pen=".length + 288);
+    expect(
+      decodePairQr(largestLink, { ...options, compiledRelays: [long("a"), long("b")] }).relays,
+    ).toHaveLength(2);
+    expect(refusal(link(Uint8Array.of(...largest, 0)))).toBe("qr/length");
+    expect(refusal("goat://pair?pen=" + "A".repeat(4_000_000))).toBe("qr/length");
+  });
+
   it.each([
     ["the pairingUrl link of Tailscale pairing", "goat://pair?pairingUrl=https%3A%2F%2Fhost"],
     ["both parameters", link(layout({})) + "&pairingUrl=x"],

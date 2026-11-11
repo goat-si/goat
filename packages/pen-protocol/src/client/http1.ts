@@ -99,10 +99,15 @@ export class ResponseParser {
     return bytes.slice();
   }
 
-  push(bytes: Uint8Array): Array<ResponseEvent> {
+  /**
+   * Decodes bytes, appending each event to out as it is decoded. When a later byte is malformed the events before it
+   * stay in out, whatever the input's split, and the error is thrown.
+   */
+  push(bytes: Uint8Array, out: Array<ResponseEvent> = []): Array<ResponseEvent> {
     if (this.#error !== undefined) throw this.#error;
     try {
-      return this.#push(bytes);
+      this.#push(bytes, out);
+      return out;
     } catch (error) {
       if (error instanceof PenError) this.#error = error;
       throw error;
@@ -121,8 +126,7 @@ export class ResponseParser {
     throw this.#error;
   }
 
-  #push(bytes: Uint8Array): Array<ResponseEvent> {
-    const events: Array<ResponseEvent> = [];
+  #push(bytes: Uint8Array, events: Array<ResponseEvent>): void {
     let at = 0;
     while (at < bytes.length) {
       switch (this.#phase) {
@@ -185,7 +189,6 @@ export class ResponseParser {
           break;
       }
     }
-    return events;
   }
 
   #end(events: Array<ResponseEvent>, delimiter: "length" | "chunked" | "none" | "upgrade"): void {
