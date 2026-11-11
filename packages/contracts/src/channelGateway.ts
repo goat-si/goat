@@ -326,6 +326,12 @@ export const ChannelGetBotStatusResult = Schema.Struct({
       author: Schema.Literals(["bot", "person"]),
     }),
   ),
+  /**
+   * Whether the bot's tasks are going, for a roster row. `active`: a task is received,
+   * dispatching or running and the chat would not say it waits on the person; an automatic
+   * usage-limit pause is not active. Absent from servers before it existed.
+   */
+  tasks: Schema.optionalKey(Schema.Struct({ active: Schema.Boolean })),
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 

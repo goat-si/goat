@@ -314,7 +314,7 @@ describe("GOAT bot boundary (scenario 6)", () => {
     return Effect.gen(function* () {
       const bots = yield* ChannelBotRegistry.ChannelBotRegistry;
       // Before any ensure there is no bot, and asking does not make one.
-      assert.deepStrictEqual(yield* bots.status(owner), { bot: null, waitingCount: 0 });
+      assert.include(yield* bots.status(owner), { bot: null, waitingCount: 0 });
       assert.lengthOf(harness.world.launches, 0);
 
       yield* setupBot;
@@ -345,7 +345,7 @@ describe("GOAT bot boundary (scenario 6)", () => {
 
       // Both channels contribute to the owner's waiting count.
       assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 2);
-      const { latest, ...status } = yield* bots.status(owner);
+      const { latest, tasks: _tasks, ...status } = yield* bots.status(owner);
       const bot = { environmentId, projectId: scratchProjectId, threadId: botThreadId };
       assert.deepStrictEqual([status, latest?.text], [{ bot, waitingCount: 2 }, "On it."]);
     }).pipe(Effect.provide(harness.layer));

@@ -276,8 +276,11 @@ const make = Effect.gen(function* () {
       const bot = (yield* ledger.getBotById(owner.ownerId, botId))?.bot ?? null;
       const readThrough = yield* botReadThrough(bot);
       const waitingCount = yield* ledger.countWaitingTasks(owner.ownerId, readThrough, botId);
+      const tasks = { active: yield* ledger.botHasActiveTasks(owner.ownerId, botId) };
       const latest = yield* latestMessage(bot);
-      return latest === undefined ? { bot, waitingCount } : { bot, waitingCount, latest };
+      return latest === undefined
+        ? { bot, waitingCount, tasks }
+        : { bot, waitingCount, tasks, latest };
     }).pipe(Effect.mapError(persistence));
 
   return ChannelBotRegistry.of({ ensure, ensureForReport, status });

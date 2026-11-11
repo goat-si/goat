@@ -12,6 +12,21 @@ export const waitingTaskCondition = (sql: SqlClient.SqlClient) => sql`(status = 
     SELECT 1 FROM json_each(task_json, '$.observed.needsYou')
     WHERE json_extract(value, '$.kind') = 'approval')))`;
 
+/**
+ * Whether one of a bot's tasks is going: received, dispatching or running, with nothing the chat
+ * would say it waits on the person for (goatBotTaskWaitsOnPerson in client-runtime activity.ts):
+ * no open question, no worker need, and no usage-limit pause, automatic or not.
+ */
+export const botActiveTasksStatement = (
+  sql: SqlClient.SqlClient,
+  input: { readonly ownerId: string; readonly botId: string },
+) => sql<{ readonly active: number }>`SELECT EXISTS (SELECT 1 FROM channel_tasks
+  WHERE owner_id = ${input.ownerId} AND bot_id = ${input.botId}
+    AND status IN ('received', 'dispatching', 'running')
+    AND COALESCE(json_array_length(task_json, '$.openQuestions'), 0) = 0
+    AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) = 0
+    AND json_extract(task_json, '$.observed.usageLimitResetAt') IS NULL) AS active`;
+
 /** One thing a task asks of the person that the open asks list can show. */
 export type WaitingAsk =
   | { readonly kind: "question"; readonly askedAt: string; readonly question: ChannelOpenQuestion }
