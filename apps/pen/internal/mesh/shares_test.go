@@ -2,7 +2,9 @@ package mesh
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"testing"
 
@@ -189,8 +191,8 @@ func TestASharedSaveKeepsRecordsAnotherProcessWroteWithinTheShares(t *testing.T)
 	}
 }
 
-// A revoke that arrives before its subject's admit is kept once the admit arrives, as when the admit
-// comes first: the kept set does not depend on arrival order.
+// A revoke that arrives before its subject's admit is kept, as when the admit comes first: the kept set
+// does not depend on arrival order.
 func TestARevokeArrivingBeforeItsSubjectsAdmitIsKept(t *testing.T) {
 	f, o, x := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, f)
@@ -265,7 +267,6 @@ func TestRecordsOfASignerThatLostItsAdmitPoolTheSameEverywhere(t *testing.T) {
 	}
 }
 
-
 // Two processes that each save records within a share, but together more than it, leave the file with
 // the share's smallest hashes: the merged save applies the shares to the union.
 func TestASharedSaveOfTwoProcessesKeepsOnlyTheShareOfTheirUnion(t *testing.T) {
@@ -300,6 +301,19 @@ func TestASharedSaveOfTwoProcessesKeepsOnlyTheShareOfTheirUnion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw, err := os.ReadFile(st.Path("mesh.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Records []json.RawMessage `json:"records"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if want := 2 + ShareOrdinary; len(file.Records) != want {
+		t.Fatalf("mesh.json holds %d records, want %d: the save did not apply the shares", len(file.Records), want)
+	}
 	sorted := slices.Clone(names)
 	sortByHash(sorted)
 	for i, r := range sorted {
@@ -308,4 +322,3 @@ func TestASharedSaveOfTwoProcessesKeepsOnlyTheShareOfTheirUnion(t *testing.T) {
 		}
 	}
 }
-
