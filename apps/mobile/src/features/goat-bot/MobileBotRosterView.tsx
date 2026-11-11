@@ -26,6 +26,7 @@ import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
 import { useMobileMemberWaitingCount } from "./useMobileMemberStatus";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
+import { MobileNeedsYouStrip } from "./MobileNeedsYouStrip";
 
 /** Servers without member bots keep New bot disabled. */
 const ignorePress = () => undefined;
@@ -131,6 +132,11 @@ export function MobileBotRosterView(props: {
       onMomentumScrollEnd={settle}
     >
       {props.header}
+      <MobileNeedsYouStrip
+        bots={props.bots}
+        mainRevision={`${props.preview ?? ""}|${props.unread === true}`}
+        onOpenBot={props.onOpenBot}
+      />
       {props.bots.map((bot) => {
         const key = bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`;
         const selected = props.selectedKey === key;
