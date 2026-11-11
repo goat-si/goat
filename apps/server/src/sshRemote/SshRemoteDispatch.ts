@@ -238,18 +238,21 @@ export interface SshHostToolCall {
   readonly requireHostRoutable?: true;
 }
 
+type SshRuntimeUpdateOptions = {
+  readonly confirmReplacement: boolean;
+  /** The runtime process a person approved stopping; used only with confirmReplacement. */
+  readonly forceReplace?: SshTunnel.SshEnvironmentEnsureOptions["forceReplace"];
+  readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
+  readonly operationId?: string;
+  readonly generation?: number;
+};
 export class SshRemoteDispatch extends Context.Service<
   SshRemoteDispatch,
   {
     readonly runtimeStatus: (host: string) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
     readonly runtimeUpdate: (
       host: string,
-      options: {
-        readonly confirmReplacement: boolean;
-        readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
-        readonly operationId?: string;
-        readonly generation?: number;
-      },
+      options: SshRuntimeUpdateOptions,
     ) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
     readonly beginSetupOperation: (
       host: string,
@@ -591,12 +594,7 @@ const make = Effect.gen(function* () {
 
   const runtimeUpdate = Effect.fn("SshRemoteDispatch.runtimeUpdate")(function* (
     host: string,
-    options: {
-      readonly confirmReplacement: boolean;
-      readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
-      readonly operationId?: string;
-      readonly generation?: number;
-    },
+    options: SshRuntimeUpdateOptions,
   ) {
     const target = yield* resolveHost(host);
     if (options.operationId !== undefined) {
@@ -614,6 +612,7 @@ const make = Effect.gen(function* () {
         issuePairingToken: false,
         refreshRuntime: true,
         confirmReplacement: options.confirmReplacement,
+        forceReplace: options.forceReplace,
         ...(options.onPhase === undefined ? {} : { onPhase: options.onPhase }),
       }),
     ).pipe(Effect.result);

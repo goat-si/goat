@@ -16,6 +16,7 @@ export function buildRemoteRuntimeProbeScript(
   _keepExistingRunner = false,
   recordReconnect = false,
   ownRuntimeVersion?: string,
+  reportReplaceTarget = false,
 ): string {
   return `set -eu
 V=${shellSingleQuote(version)}
@@ -302,6 +303,28 @@ esac
 ready=false
 if ready_version "$V"; then ready=true; fi
 ${
+  reportReplaceTarget
+    ? `# The recorded runtime process, alive and this user's: a forced update names it to a person. Only
+# the status probe asks, and only for a runtime that is not the requested one.
+replace_target() {
+  fact_slurp "$state/pid" || return 0; replace_pid="$FACT_TEXT"
+  fact_slurp "$state/port" || return 0; replace_port="$FACT_TEXT"
+  valid_positive "$replace_pid" && valid_port "$replace_port" && kill -0 "$replace_pid" 2>/dev/null || return 0
+  set -f; set -- $(ps -o uid= -p "$replace_pid" 2>/dev/null)
+  [ "$#" = 1 ] && [ "$1" = "$(id -u)" ] || return 0
+  set -- $(LC_ALL=C TZ=UTC ps -o lstart= -p "$replace_pid" 2>/dev/null)
+  [ "$#" = 5 ] || return 0
+  case "$*" in
+    *[!A-Za-z0-9:\\ ]*) ;;
+    *) live_fields="$live_fields$(printf ',"replaceTarget":{"pid":%s,"port":%s,"startedAt":"%s"}' "$replace_pid" "$replace_port" "$*")" ;;
+  esac
+}
+if [ "$platform" != win32 ] && [ -n "$state_key" ] &&
+   { [ "$live_status" != live ] || [ "\${live_version:-}" != "$V" ]; }; then replace_target; fi
+`
+    : ""
+}
+${
   recordReconnect
     ? `# A byte-identical answer alone would miss a rebuilt binary or a changed ownership record.
 reconnect_key=
@@ -368,6 +391,8 @@ const decodeRemoteRuntimeProbeFields = Schema.decodeEffect(
       liveDrain: Schema.optionalKey(Schema.Boolean),
       /** The live server is GOAT's managed runtime whose launch records were lost; see `managed_orphan`. */
       liveAdoptable: Schema.optionalKey(Schema.Boolean),
+      /** The recorded runtime process; decoded leniently by replaceTargetOf. */
+      replaceTarget: Schema.optionalKey(Schema.Unknown),
     }),
   ),
 );
