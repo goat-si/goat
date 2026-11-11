@@ -356,3 +356,31 @@ exec /usr/bin/awk "$@"
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement after a lost drain",
+  () => {
+    it.live(
+      "an approved forced update replaces a runtime left behind by an unconfirmed drain",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture(unverified);
+          // A drain whose outcome was never confirmed leaves its fence for the same runtime.
+          yield* f.fs.writeFileString(`${f.state}/draining`, "drained-instance\n");
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+          });
+          assert.isTrue(
+            Result.isSuccess(result),
+            String(Result.isFailure(result) && result.failure),
+          );
+          if (Result.isSuccess(result))
+            assert.equal(result.success.version, ARCHIVE.archiveVersion);
+          assert.isFalse(isAlive(f.pid));
+          assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
