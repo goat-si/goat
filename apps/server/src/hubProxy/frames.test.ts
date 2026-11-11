@@ -488,3 +488,23 @@ it("4c: a session without a project makes the node's own scratch project", () =>
     requiredScope: "orchestration:operate",
   });
 });
+it("an operate client may fork a thread through the hub, which still refuses a raw fork", () => {
+  const fork = refuseProxiedCall(
+    ["orchestration:read", "orchestration:operate"],
+    "orchestration.forkThread",
+    { workspace: { type: "worktree" } },
+  );
+  expect(fork).toBeUndefined();
+  expect(admit("orchestration.forkThread", {})).toMatchObject({
+    requiredScope: "orchestration:operate",
+  });
+  expect(
+    operate({
+      type: "thread.fork",
+      commandId: "c-fork",
+      sourceThreadId: "t1",
+      targetThreadId: "t2",
+      sourcePoint: { type: "latest_stable" },
+    }),
+  ).toMatchObject({ requiredScope: "hub:proxy" });
+});

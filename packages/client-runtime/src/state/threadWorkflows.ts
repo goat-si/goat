@@ -3,6 +3,8 @@ import {
   isCompactionCommandMessage,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ProviderCapabilities,
+  type RunId,
+  type ThreadId,
 } from "@goat/contracts";
 import { copySorted } from "@goat/shared/Array";
 
@@ -201,4 +203,51 @@ export function canForkProjectedAssistantItem(input: {
 export function canDetachThreadProviderSession(projection: Projection): boolean {
   const session = resolveThreadProviderSession(projection);
   return session !== null && session.status !== "stopped" && session.status !== "error";
+}
+export interface ThreadForkAvailability {
+  readonly canFork: boolean;
+  readonly canForkIntoWorktree: boolean;
+  /** Selects the label "Fork thread in same worktree". */
+  readonly inWorktree: boolean;
+  /** Why the fork entry is disabled; null when it is offered. */
+  readonly reason: string | null;
+}
+
+/** Advisory: what the fork entry points offer for a thread. The server decides. */
+export function threadForkAvailability(input: {
+  readonly thread: {
+    readonly sideChatOf?: ThreadId | null;
+    readonly latestRunId: RunId | null;
+    readonly worktreePath: string | null;
+  };
+  readonly capabilities: { readonly threadForkWorkspace?: boolean };
+  /** Null when the client does not know the project's state. */
+  readonly project: { readonly isGitRepository: boolean; readonly isScratch: boolean } | null;
+  readonly cloud: boolean;
+  readonly viaHubProxy: boolean;
+}): ThreadForkAvailability {
+  const inWorktree = input.thread.worktreePath !== null;
+  const unavailable = (reason: string): ThreadForkAvailability => ({
+    canFork: false,
+    canForkIntoWorktree: false,
+    inWorktree,
+    reason,
+  });
+  if (input.thread.sideChatOf != null) return unavailable("A side chat cannot be forked.");
+  if (input.thread.latestRunId === null) {
+    return unavailable("This thread has no turn to fork from yet.");
+  }
+  const serverForks = input.capabilities.threadForkWorkspace === true;
+  // The hub admits orchestration.forkThread but never a raw thread.fork.
+  if (!serverForks && input.viaHubProxy)
+    return unavailable("Update this server to fork from here.");
+  return {
+    canFork: true,
+    canForkIntoWorktree:
+      serverForks &&
+      !input.cloud &&
+      (input.project === null || (input.project.isGitRepository && !input.project.isScratch)),
+    inWorktree,
+    reason: null,
+  };
 }
