@@ -2,9 +2,11 @@ import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
+  goatBotAccent,
   goatBotName,
   goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
+  type GoatBotAccent,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
@@ -114,6 +116,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly botName?: string;
   /** The bot's profile avatar, shown beside its name. */
   readonly botEmoji?: string | null | undefined;
+  /** A member bot's color for the person's messages; the theme's without one. */
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const { row } = props;
   const botName = props.botName ?? "GOAT Bot";
@@ -147,16 +151,17 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   }
   if (row.kind === "user") {
     const time = goatBotTime(row.createdAt);
+    const onAccent = props.accent ? { color: props.accent.foreground } : null;
     return (
       <View className="items-end gap-1" style={{ marginTop }}>
-        <GoatBotPersonPill>
+        <GoatBotPersonPill accent={props.accent}>
           <View className="gap-1">
             {row.text ? (
               <Text
                 selectable
                 accessibilityLabel={time ? `You, ${time}: ${row.text}` : `You: ${row.text}`}
                 className="text-goat-person-message-foreground"
-                style={bodyText}
+                style={{ ...bodyText, ...onAccent }}
               >
                 {row.text}
               </Text>
@@ -166,7 +171,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
                 key={file.id}
                 numberOfLines={1}
                 className="text-goat-person-message-foreground"
-                style={{ opacity: 0.85, ...bodyText }}
+                style={{ opacity: 0.85, ...bodyText, ...onAccent }}
               >
                 {(file.type === "image" ? "Photo · " : "File · ") + file.name}
               </Text>
@@ -251,6 +256,8 @@ export function GoatBotScreen(props: {
   const title = goatBotName(member ?? props.main ?? null);
   const copy = availabilityCopy(mainName, title);
   const botEmoji = member ? mobileGoatBotMemberPicture(member) : props.main?.avatar;
+  // A member bot's color carries the person's messages and Send; the main bot keeps the theme's.
+  const accent = goatBotAccent(member);
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -374,6 +381,7 @@ export function GoatBotScreen(props: {
           environmentId={session.historyEnvironmentId}
           botName={title}
           botEmoji={botEmoji}
+          accent={accent}
         />
       ),
     [
@@ -390,6 +398,7 @@ export function GoatBotScreen(props: {
       session.historyEnvironmentId,
       title,
       botEmoji,
+      accent,
     ],
   );
   // A drafted request (New routine, Ask to change or forget) fills only an empty message box.
@@ -704,10 +713,24 @@ export function GoatBotScreen(props: {
               }}
             >
               <View
-                className="items-center justify-center bg-composer-send"
-                style={{ width: 28, height: 28, borderRadius: 14 }}
+                className={
+                  accent
+                    ? "items-center justify-center"
+                    : "items-center justify-center bg-composer-send"
+                }
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  ...(accent ? { backgroundColor: accent.background } : {}),
+                }}
               >
-                <Text className="text-xl font-semibold text-white">↑</Text>
+                <Text
+                  className="text-xl font-semibold text-white"
+                  style={accent ? { color: accent.foreground } : undefined}
+                >
+                  ↑
+                </Text>
               </View>
             </Pressable>
           ) : null}

@@ -42,7 +42,17 @@ vi.mock("./GoatBotTaskRow", () => ({
     </button>
   ),
 }));
-import { MobileBotTaskList } from "./MobileBotTaskList";
+import { mobileBotTaskListItems } from "./MobileBotTaskList";
+
+function TaskList(props: Parameters<typeof mobileBotTaskListItems>[0]) {
+  return (
+    <>
+      {mobileBotTaskListItems(props).map((item) => (
+        <div key={item.key}>{item.node}</div>
+      ))}
+    </>
+  );
+}
 
 const at = "2026-11-11T02:00:00.000Z";
 const decode = Schema.decodeUnknownSync(BotThreadRow);
@@ -93,7 +103,7 @@ afterEach(async () => {
   root = undefined;
   alert.mockClear();
 });
-async function show(props: Partial<Parameters<typeof MobileBotTaskList>[0]> = {}) {
+async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]> = {}) {
   const calls = {
     open: vi.fn(),
     peek: vi.fn(),
@@ -103,7 +113,7 @@ async function show(props: Partial<Parameters<typeof MobileBotTaskList>[0]> = {}
   root ??= createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotTaskList
+      <TaskList
         botName="GOAT Bot"
         work={work([])}
         rows={[]}

@@ -40,12 +40,17 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 			// not delete every file: delete what is left first, and only then the service. With no
 			// identity and no left marker nothing of a node is here: only the task or unit goes.
 			// A daemon that holds daemon.lock but does not answer still runs here; it does its own leave.
-			if release, err := state.TryLock(st.Path("daemon.lock")); errors.Is(err, state.ErrLocked) {
+			// Any other lock error leaves the daemon's state unknown, so nothing is deleted either.
+			release, err := state.TryLock(st.Path("daemon.lock"))
+			switch {
+			case errors.Is(err, state.ErrLocked):
 				fmt.Fprintf(stderr, "pen: a pen daemon still runs here (it holds %s) but does not answer; the %s service is kept. Run pen down, then pen leave again.\n", st.Path("daemon.lock"), mode)
 				return 1
-			} else if err == nil {
-				release()
+			case err != nil:
+				fmt.Fprintf(stderr, "pen: cannot check whether a pen daemon still runs here (%v); the %s service is kept\n", err, mode)
+				return 1
 			}
+			release()
 			if leaveResumes != nil {
 				leaveResumes()
 			}
