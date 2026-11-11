@@ -866,7 +866,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       classify: (record) => classify(record),
       warn,
       // Re-read under the gate: a fence written while the group was classified keeps the record.
-      retire: (record, threadId) =>
+      retire: (record, threadId, keep) =>
         recordGate.withPermit(
           Effect.suspend(() => {
             const current = fences.get(record.name);
@@ -874,7 +874,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             const fenced = [...(current.goalBlocks ?? []), ...(current.stopObligations ?? [])];
             if ([...failedFences.values(), ...fenced.map((f) => f.threadId)].includes(threadId))
               return Effect.succeed("own" as const);
-            if (fenced.length > 0) return Effect.succeed("kept" as const);
+            if (keep || fenced.length > 0) return Effect.succeed("kept" as const);
             return removeRecordUnlocked(current).pipe(Effect.as("removed" as const));
           }),
         ),

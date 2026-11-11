@@ -364,13 +364,20 @@ it.effect("a record still spawning is never given up", () =>
 );
 
 it.effect.each([
-  ["another thread", "thread-goal"],
-  ["the opening thread", "thread-other"],
+  ["another thread", "thread-goal", false],
+  ["the opening thread", "thread-other", false],
+  ["the opening thread beside another thread's fence", "thread-other", true],
 ] as const)(
   "a fence written for %s while the exited group is classified keeps the record",
-  ([_case, fencedThread]) =>
+  ([_case, fencedThread, fencedBefore]) =>
     Effect.gen(function* () {
-      const kept = recordFixture("codex-333333333333", 1010, sessionA);
+      const earlier = [{ threadId: "thread-earlier", nativeThreadId: "native-earlier" }];
+      const kept = recordFixture(
+        "codex-333333333333",
+        1010,
+        sessionA,
+        fencedBefore ? { goalBlocks: earlier } : {},
+      );
       const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
       gone.add(kept.pgid);
       const paused = yield* Deferred.make<void>();

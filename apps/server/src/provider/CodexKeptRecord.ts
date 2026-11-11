@@ -20,8 +20,12 @@ export interface KeptRecordOpen {
 
 type KeptRecordDecision =
   | { readonly type: "connect" }
-  | { readonly type: "retire"; readonly record: DetachedAppServerRecord }
-  | { readonly type: "unlist" }
+  | {
+      readonly type: "retire";
+      readonly record: DetachedAppServerRecord;
+      /** Fences or survivor bindings guard other threads, so the record stays (unlisted). */
+      readonly keep: boolean;
+    }
   | { readonly type: "refuse"; readonly detail: string };
 
 const settled = (classification: DetachedClassification) =>
@@ -115,17 +119,21 @@ const decideKeptRecord = Effect.fn("CodexDetachedAppServers.decideKeptRecord")(f
     ...input.survivorThreads,
   ]);
   if (guarded.has(input.threadId)) return { type: "refuse", detail: ownTurn(record) } as const;
-  return guarded.size > 0 ? ({ type: "unlist" } as const) : ({ type: "retire", record } as const);
+  return { type: "retire", record, keep: guarded.size > 0 } as const;
 });
 
 /** Applies the decision: "connect" leaves the record for connectExisting; the others free the session to spawn. */
 export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(function* <E>(
   input: Omit<Parameters<typeof decideKeptRecord>[0], "globallyBlocked"> & {
     readonly globallyBlocked: Effect.Effect<string | undefined>;
-    /** Removes the record unless a fence arrived meanwhile: "own" when it guards this thread. */
+    /**
+     * Re-reads the record's fences under the record gate: "own" when one guards this thread,
+     * "kept" when others are guarded (or keep), otherwise removes it.
+     */
     readonly retire: (
       record: DetachedAppServerRecord,
       threadId: ThreadId,
+      keep: boolean,
     ) => Effect.Effect<"removed" | "kept" | "own", E>;
     readonly unlist: Effect.Effect<unknown>;
   },
@@ -137,12 +145,10 @@ export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(
   if (decision.type === "refuse")
     return yield* new CodexDetachedAppServerError({ detail: decision.detail });
   if (decision.type === "connect") return "connect" as const;
-  if (decision.type === "retire") {
-    const retired = yield* input.retire(decision.record, input.threadId);
-    if (retired === "own")
-      return yield* new CodexDetachedAppServerError({ detail: ownTurn(decision.record) });
-    if (retired === "removed") return "retire" as const;
-  }
+  const retired = yield* input.retire(decision.record, input.threadId, decision.keep);
+  if (retired === "own")
+    return yield* new CodexDetachedAppServerError({ detail: ownTurn(decision.record) });
+  if (retired === "removed") return "retire" as const;
   yield* input.unlist;
   return "unlist" as const;
 });
