@@ -113,12 +113,12 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
     needs: scope
     runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || matrix.task == 'test-windows' && 30 || 60 }}
+    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || (matrix.task == 'test-windows' || matrix.task == 'test-pen-windows') && 30 || 60 }}
     strategy:
       fail-fast: false
       # Tasks: check, typecheck, test, test-packages, test-ssh, test-desktop, test-contracts, test-client-runtime,
       # test-mobile, test-shared, test-ingest, test-memory-growth, test-windows,
-      # smoke-linux-computer-use, test-pen, build, and test-server in
+      # smoke-linux-computer-use, test-pen, test-pen-windows, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
       # one to four for the related files goat-scope picked. A quick run has check, typecheck,
       # test-changed, and related server shards when its server tests outgrow one job. Each entry
@@ -408,6 +408,21 @@ jobs:
       - name: Pen sign-in mesh
         if: matrix.task == 'test-pen'
         run: apps/pen/scripts/loginnode.sh
+
+      # Pen on hosted Windows: the Go suite (no -race, which needs cgo there) and the PowerShell
+      # install check, the twin of installcheck.sh. The image's go switches to apps/pen/go.mod's toolchain.
+      - name: Pen Go vet and tests on Windows
+        if: matrix.task == 'test-pen-windows'
+        shell: bash
+        run: |
+          go -C apps/pen version
+          go -C apps/pen vet ./...
+          go -C apps/pen test -count=1 ./...
+
+      - name: Pen install check on Windows
+        if: matrix.task == 'test-pen-windows'
+        shell: pwsh
+        run: apps/pen/scripts/installcheck.ps1
 
       - name: Pen protocol, relay and login Workers
         if: matrix.task == 'test-pen'

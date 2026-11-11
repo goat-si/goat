@@ -92,10 +92,8 @@ func RunLogin(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if err := clearLeft(st); err != nil {
-		return fail(stderr, err)
-	}
-	id, _, err := st.EnsureIdentity()
+	// As pen join: the left marker goes in the same state-lock hold that makes the identity.
+	id, _, err := st.EnsureIdentityClearing(daemon.LeftMarker)
 	if err != nil {
 		return fail(stderr, err)
 	}

@@ -81,7 +81,9 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pen pipe:", err)
 		return 255
 	}
-	pos, err := parse(newFlags("pipe", stderr), args)
+	fs := newFlags("pipe", stderr)
+	home := fs.String("home", "", "state directory instead of PEN_HOME (ssh on Windows runs ProxyCommand without a shell)")
+	pos, err := parse(fs, args)
 	if err != nil {
 		return 255
 	}
@@ -92,7 +94,12 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return die(err)
 	}
-	st, err := openState()
+	var st *state.Store
+	if *home != "" {
+		st, err = state.OpenDir(*home)
+	} else {
+		st, err = openState()
+	}
 	if err != nil {
 		return die(err)
 	}

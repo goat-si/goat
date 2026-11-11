@@ -20,12 +20,12 @@ type serviceCall struct {
 // fakeSystemd puts a pen.service unit under a scratch HOME and records service commands.
 func fakeSystemd(t *testing.T) (home string, calls *[]serviceCall) {
 	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "penh")
+	home, err := os.MkdirTemp(tmpRoot(), "penh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("PEN_HOME", "")
 	if err := writeFile(unitPath(), "[Service]\nRestart=always\n"); err != nil {
 		t.Fatal(err)
@@ -43,7 +43,20 @@ func fakeSystemd(t *testing.T) (home string, calls *[]serviceCall) {
 }
 
 func TestLeaveThatFailsKeepsTheServiceAndSaysSo(t *testing.T) {
-	_, calls := fakeSystemd(t)
+	home, calls := fakeSystemd(t)
+	// A stopped node that has not left: pen leave cannot reach its daemon. (With no node here at all,
+	// or one that already left, pen leave removes the service instead.)
+	st, err := state.OpenDir(filepath.Join(home, ".pen"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := st.EnsureIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mesh.Found(st, id, "a", 1); err != nil {
+		t.Fatal(err)
+	}
 	var out, errOut bytes.Buffer
 	if code := RunLeave(nil, &out, &errOut); code != 1 {
 		t.Fatalf("exit %d, want 1", code)

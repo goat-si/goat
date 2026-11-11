@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 // DefaultKnownHosts is ~/.ssh/pen/known_hosts.
@@ -54,10 +55,25 @@ func (d *Daemon) hostKeysLoop(ctx context.Context) {
 // LoginUser is this process's OS login name when it is a valid hostkeys user, else "".
 func LoginUser() string {
 	u, err := user.Current()
-	if err != nil || !mesh.ValidUser(u.Username) {
+	if err != nil {
 		return ""
 	}
-	return u.Username
+	name := loginName(u.Username)
+	if !mesh.ValidUser(name) {
+		return ""
+	}
+	return name
+}
+
+// localAccountName is the ssh login of a Windows account (COMPUTER\name): the name, lowercased, when
+// the account belongs to this computer; "" for a domain account, whose login would need name@domain,
+// which a hostkeys user cannot carry.
+func localAccountName(account, computer string) string {
+	i := strings.LastIndex(account, `\`)
+	if i < 0 || !strings.EqualFold(account[:i], computer) {
+		return ""
+	}
+	return strings.ToLower(account[i+1:])
 }
 
 // checkHostKeys signs a hostkeys record when the local sshd keys or the login user differ from the
@@ -113,7 +129,7 @@ func (d *Daemon) writeKnownHosts() {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), d.opt.KnownHosts)
+		err = state.Replace(tmp.Name(), d.opt.KnownHosts)
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
