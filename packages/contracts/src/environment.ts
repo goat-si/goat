@@ -86,6 +86,7 @@ export const ServerSelfUpdateCapability = Schema.Literals([
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  modelCatalogRefresh: Schema.optionalKey(Schema.Boolean),
   freshContext: Schema.optionalKey(Schema.Boolean),
   memoryHubProtocolVersion: Schema.optionalKey(Schema.Int),
   memory: Schema.optionalKey(

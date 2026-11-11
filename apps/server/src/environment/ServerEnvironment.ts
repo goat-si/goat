@@ -251,6 +251,7 @@ export const make = Effect.gen(function* () {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       freshContext: true,
+      modelCatalogRefresh: true,
       // The core and owner memory RPC groups are always installed by ws.ts.
       memory: {
         protocolVersion: 1,
