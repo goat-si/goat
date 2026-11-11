@@ -811,7 +811,7 @@ ownership_unverified() {
 @@GOAT_LEGACY_IDENTITY@@
 @@GOAT_RUNNER_SETUP@@
 IDENTITY_NEXT="$STATE_DIR/identity.next.$$"
-trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$"; exit "$runner_exit"' EXIT
+trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$"; [ -z "\${FORCED_STOPPED_PID:-}" ] || forced_exit_note "$runner_exit"; exit "$runner_exit"' EXIT
 GOAT_ARCHIVE_MODE=@@GOAT_ARCHIVE_MODE@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
@@ -1065,6 +1065,7 @@ while [ -z "$REMOTE_PORT" ]; do
   printf '%s\\n' "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$IDENTITY_NEXT"
   mv "$IDENTITY_NEXT" "$STATE_DIR/identity"
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
+  forced_record_start "$REMOTE_PID"
   printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
   printf 'managed\\n' >"$MANAGED_FILE"
   launch_caps_begin

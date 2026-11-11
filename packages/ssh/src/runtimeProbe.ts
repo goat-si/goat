@@ -314,6 +314,18 @@ replace_target() {
   [ "$#" = 1 ] && [ "$1" = "$(id -u)" ] || return 0
   set -- $(LC_ALL=C TZ=UTC ps -o lstart= -p "$replace_pid" 2>/dev/null)
   [ "$#" = 5 ] || return 0
+  # Only a process GOAT can show it started: the start time it recorded at launch, or the exact
+  # launch command it recorded (a Node entry may run behind a wrapper, so it ends the command).
+  if ! fact_file_is "$state/started" "$*"; then
+    replace_start="$*"
+    fact_file_is "$state/managed" managed && fact_slurp "$state/identity" && [ -n "$FACT_TEXT" ] || return 0
+    replace_command="$(ps -o command= -p "$replace_pid" 2>/dev/null)" || return 0
+    case "$FACT_TEXT" in
+      "$HOME/.goat/runtime/goat/versions/"*) [ "$replace_command" = "$FACT_TEXT" ] || return 0 ;;
+      *) case "$replace_command" in *" $FACT_TEXT") ;; *) return 0 ;; esac ;;
+    esac
+    set -- $replace_start
+  fi
   case "$*" in
     *[!A-Za-z0-9:\\ ]*) ;;
     *) live_fields="$live_fields$(printf ',"replaceTarget":{"pid":%s,"port":%s,"startedAt":"%s"}' "$replace_pid" "$replace_port" "$*")" ;;

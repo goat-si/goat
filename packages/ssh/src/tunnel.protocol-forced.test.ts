@@ -512,7 +512,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         ].join("\n");
         const bin = `${f.test}/deep-bin`;
         yield* f.fs.makeDirectory(bin);
-        // The table shows the spawned process at the end of a chain forty processes deep.
+        // The table shows the spawned process at the end of a chain forty processes deep, and its
+        // parent read agrees, as for a real chain.
         yield* f.fs.writeFileString(
           `${bin}/ps`,
           `#!/bin/sh
@@ -521,6 +522,7 @@ if [ "$*" = "-A -o pid= -o ppid= -o uid= -o lstart=" ]; then
 ${rows}
   exit 0
 fi
+if [ "$*" = "-o ppid= -p ${deepPid}" ]; then echo ${chain.at(-1)}; exit 0; fi
 exec "$HOME/.test/identity-bin/ps" "$@"
 `,
         );
