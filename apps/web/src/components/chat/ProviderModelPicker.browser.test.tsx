@@ -287,3 +287,42 @@ it("persists a composer trait pick after recording its draft options", async () 
     ]?.options,
   ).toContainEqual({ id: "reasoningEffort", value: "high" });
 });
+
+it("lets a Pi model select an advertised service tier", async () => {
+  const change = vi.fn();
+  await using screen = await render(
+    <TraitsPicker
+      provider={ProviderDriverKind.make("pi")}
+      instanceId={ProviderInstanceId.make("pi")}
+      model="openai/test-model"
+      models={[
+        {
+          slug: "openai/test-model",
+          name: "Test model",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "serviceTier",
+                label: "Service Tier",
+                type: "select",
+                currentValue: "default",
+                options: [
+                  { id: "default", label: "Standard", isDefault: true },
+                  { id: "priority", label: "Fast" },
+                  { id: "ultrafast", label: "Ultrafast" },
+                ],
+              },
+            ],
+          },
+        },
+      ]}
+      planModeEnabled={false}
+      isComposerOwned
+      onModelOptionsChange={change}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Reasoning:/ }));
+  await userEvent.click(page.getByRole("button", { name: "Fast", exact: true }));
+  expect(change).toHaveBeenCalledWith([{ id: "serviceTier", value: "priority" }]);
+});
