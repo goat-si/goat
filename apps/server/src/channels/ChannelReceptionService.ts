@@ -110,7 +110,7 @@ import {
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
-import { personMessageClaim } from "./channelPersonMessage.ts";
+import { verifiedAnswerClaim } from "./channelPersonMessage.ts";
 import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import {
@@ -914,6 +914,18 @@ const make = Effect.gen(function* () {
       }
 
       if (origin.kind === "goat" && !routine) {
+        // The same checks as the accepted copy, so both revisions say the same thing.
+        const named =
+          message.intent !== "report" && message.taskId !== undefined
+            ? yield* ledger.getTask(message.taskId).pipe(Effect.orElseSucceed(() => undefined))
+            : undefined;
+        const target =
+          named !== undefined &&
+          named.ownerId === requester.ownerId &&
+          named.task.conversationId === conversationId &&
+          mayDirect(requester, message.connectionId, named.task)
+            ? named
+            : undefined;
         yield* timeline
           .record({
             threadId: origin.threadId,
@@ -929,10 +941,8 @@ const make = Effect.gen(function* () {
                   kind: "inbound",
                   inputId,
                   clientMessageId: message.externalMessageId,
-                  ...(message.intent !== "report" && message.taskId !== undefined
-                    ? { taskId: message.taskId }
-                    : {}),
-                  ...personMessageClaim(message),
+                  ...(target === undefined ? {} : { taskId: target.task.taskId }),
+                  ...verifiedAnswerClaim({ message, requester, conversationId, task: target }),
                   readAt: stored.snapshot.readAt ?? readAt,
                 },
               },

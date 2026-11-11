@@ -622,8 +622,12 @@ export function buildGoatBotTimeline(input: {
         options: open === false ? NO_OPTIONS : (presentation?.options ?? NO_OPTIONS),
         ...(hasOptions ? { choices: presentation?.options ?? NO_OPTIONS } : {}),
         // Only a server that names the question also routes an answer sent to its task.
-        ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
-        ...(open === true && presentation?.taskId && taskQuestion !== undefined
+        // A task's own question names itself, so a pick answers it even before its card
+        // arrives; the server refuses one for a question that has closed.
+        ...((open === true || (taskQuestion !== undefined && open === null)) && presentation?.taskId
+          ? { answerTaskId: presentation.taskId }
+          : {}),
+        ...(open !== false && presentation?.taskId && taskQuestion !== undefined
           ? { answerQuestionId: taskQuestion }
           : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
@@ -707,6 +711,15 @@ export function buildGoatBotTimeline(input: {
 
   const ordered = [...committed, ...pending];
   const orderedIndex = new Map(ordered.map((row, index) => [row.id, index]));
+  // Each task question's first own send still on its way (queued or sending), found once.
+  const sendingByQuestion = new Map<string, number>();
+  for (const entry of input.pendingInputs) {
+    if (entry.questionId === undefined) continue;
+    if (entry.state !== "queued" && entry.state !== "sending") continue;
+    const at = orderedIndex.get("pending:" + entry.clientKey);
+    if (at !== undefined && !sendingByQuestion.has(entry.questionId))
+      sendingByQuestion.set(entry.questionId, at);
+  }
   // Choices answer the question they came with. The task's card says when that question closed,
   // and it stays open until then; without a card, anything the user sent since answers it. A send
   // that failed answers nothing. A later question of the same conversation takes the replies after
@@ -732,11 +745,7 @@ export function buildGoatBotTimeline(input: {
       const decidedAt = answerRowByQuestion.get(taskQuestion);
       const decided = decidedAt === undefined ? undefined : ordered[decidedAt];
       // Until the record names the answer, the person's own send to it still on its way.
-      const sending = input.pendingInputs.find(
-        (entry) => entry.questionId === taskQuestion && entry.state !== "failed",
-      );
-      const sendingRow =
-        sending === undefined ? undefined : orderedIndex.get(`pending:${sending.clientKey}`);
+      const sendingRow = sendingByQuestion.get(taskQuestion);
       const answer =
         decided?.kind === "user"
           ? decided

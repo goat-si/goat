@@ -49,7 +49,7 @@ import type * as DocumentText from "../provider/DocumentText.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import type { ChannelConnectionOwner, ChannelIngressContext } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
-import { personMessageClaim } from "./channelPersonMessage.ts";
+import { verifiedAnswerClaim } from "./channelPersonMessage.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -470,7 +470,12 @@ const make = Effect.gen(function* () {
               kind: "inbound",
               inputId: result.inputId,
               clientMessageId: input.externalMessageId,
-              ...personMessageClaim(input),
+              ...verifiedAnswerClaim({
+                message: input,
+                requester,
+                conversationId: result.conversationId,
+                task: target,
+              }),
               ...(validatedTaskId === undefined ? {} : { taskId: validatedTaskId }),
             },
           },

@@ -68,7 +68,7 @@ const question = (
   second: number,
   taskId: string,
   questionId: string,
-  kind: "task" | undefined = "task",
+  kind: "task" | null = "task",
 ) =>
   item({
     id,
@@ -83,7 +83,7 @@ const question = (
       taskId,
       questionId,
       options: ["Keep", "Clear"],
-      ...(kind === undefined ? {} : { questionKind: kind }),
+      ...(kind === null ? {} : { questionKind: kind }),
     },
   });
 
@@ -248,7 +248,7 @@ describe("a task question's answer comes from what the server recorded", () => {
     const items = [
       card("task-1", 2, [], [{ questionId: "q1", inputId: "in-u1" }]),
       question("b1", 1, "task-1", "q1"),
-      question("b0", 2, "task-2", "legacy", undefined),
+      question("b0", 2, "task-2", "legacy", null),
       person("u1", 3, "Keep", { taskId: "task-1" }),
     ];
     const decided = chat(items);
@@ -257,5 +257,23 @@ describe("a task question's answer comes from what the server recorded", () => {
     const stillSending = chat(items.slice(1, 3), [sending("k", 3, "Keep", "q1")]);
     expect(bot(stillSending, "b0")).not.toHaveProperty("answer");
     expect(bot(stillSending, "b1")).toMatchObject({ answer: "Keep", answerSending: true });
+  });
+});
+
+describe("a task question whose card has not arrived", () => {
+  it("still names its task and question, so a pick answers it and no other", () => {
+    // Two tasks offer the same choice; neither card has reached the chat yet.
+    const rows = chat([question("bA", 1, "task-1", "qA"), question("bB", 2, "task-2", "qB")]);
+    expect(bot(rows, "bA")).toMatchObject({ answerTaskId: "task-1", answerQuestionId: "qA" });
+    expect(bot(rows, "bB")).toMatchObject({ answerTaskId: "task-2", answerQuestionId: "qB" });
+  });
+
+  it("shows a send the server already took as a plain message until its record says more", () => {
+    const rows = chat(
+      [card("task-1", 1, ["q1"]), question("b1", 1, "task-1", "q1")],
+      [sending("k", 2, "Keep", "q1", "accepted")],
+    );
+    expect(ids(rows)).toEqual(["b1", "pending:k"]);
+    expect(bot(rows, "b1")).not.toHaveProperty("answer");
   });
 });

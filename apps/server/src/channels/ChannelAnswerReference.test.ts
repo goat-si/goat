@@ -3,7 +3,9 @@ import type { ChannelQuestionId, ChannelTaskId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import { verifiedAnswerClaim } from "./channelPersonMessage.ts";
 import {
   botMessages,
   goatInput,
@@ -98,4 +100,56 @@ describe("which person message answered a task's question", () => {
       ]);
     }).pipe(Effect.provide(harness.layer));
   });
+});
+
+describe("the reference the server stands behind", () => {
+  it.effect(
+    "names a question only for its own task, owner and conversation while it is open",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        const { gateway, runtime, task, questionId, options } = yield* askedTask;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const stored = yield* ledger.getTask(task.taskId);
+        const asked = yield* ledger.getInput(task.originInputId);
+        const requester = asked?.requester;
+        const message = {
+          intent: "answer" as const,
+          taskId: task.taskId,
+          questionId,
+          connectionId: "goat",
+        };
+        const claim = (overrides: Partial<Parameters<typeof verifiedAnswerClaim>[0]> = {}) =>
+          verifiedAnswerClaim({
+            message,
+            requester,
+            conversationId: task.conversationId,
+            task: stored,
+            ...overrides,
+          }).answersQuestionId;
+        assert.strictEqual(claim(), questionId);
+        // Another task's question, another owner, another conversation: nothing to stand behind.
+        assert.isUndefined(
+          claim({ message: { ...message, questionId: "other-question" as ChannelQuestionId } }),
+        );
+        assert.isUndefined(
+          claim({ requester: { ...requester!, ownerId: "environment:stranger" } }),
+        );
+        assert.isUndefined(claim({ conversationId: "conversation:elsewhere" }));
+        // Once the question is answered it is closed, and a later answer to it names nothing.
+        yield* gateway.ingest(answer(options[0]!, "first", task.taskId, questionId), rpcContext);
+        yield* runtime.drain;
+        const again = yield* gateway.ingest(
+          answer(options[0]!, "late", task.taskId, questionId),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const late = yield* personMessage("late");
+        assert.isUndefined(
+          late?.type === "user_message" ? late.channel?.answersQuestionId : "missing",
+        );
+        assert.isDefined(again.inputId);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
