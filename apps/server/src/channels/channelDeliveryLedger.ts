@@ -17,6 +17,8 @@ const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOut
 const isLedgerError = Schema.is(ChannelLedgerError);
 const mapError = (detail: string) => (cause: unknown) =>
   isLedgerError(cause) ? cause : new ChannelLedgerError({ reason: "persistence", detail, cause });
+/** How long after its input a reply receipt may still go out. */
+const RECEIPT_DEADLINE_MS = 60_000;
 /** Interim messages one claim may set aside before it commits and lets the worker come back. */
 const SET_ASIDE_PER_CLAIM = 50;
 
@@ -44,7 +46,7 @@ export const deliveryLedger = (
     last_error_code = 'receipt_deadline', updated_at = ${now}
     WHERE state IN ('pending', 'delivering') AND EXISTS (
       SELECT 1 FROM channel_inbox i WHERE channel_outbox.cause_key = 'reply:' || i.input_id
-        AND i.accepted_at <= ${DateTime.formatIso(DateTime.makeUnsafe(Date.parse(now) - 60_000))})
+        AND i.accepted_at <= ${DateTime.formatIso(DateTime.makeUnsafe(Date.parse(now) - RECEIPT_DEADLINE_MS))})
     RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
       last_error_code, state`;
     yield* Effect.forEach(
@@ -137,7 +139,7 @@ export const deliveryLedger = (
                     Effect.gen(function* () {
                       const message = decodeOutbound(row.message_json);
                       if (
-                        isInterimMessage(row, message) &&
+                        (yield* isInterimMessage(sql, row, message)) &&
                         (yield* interimAlreadyHeard(sql, row))
                       ) {
                         yield* sql`UPDATE channel_outbox SET state = 'superseded',
@@ -156,7 +158,10 @@ export const deliveryLedger = (
                         attempts: row.attempts,
                         ...(inbox[0] === undefined
                           ? {}
-                          : { receiptDeadline: Date.parse(inbox[0].accepted_at) + 60_000 }),
+                          : {
+                              receiptDeadline:
+                                Date.parse(inbox[0].accepted_at) + RECEIPT_DEADLINE_MS,
+                            }),
                       };
                     }),
                 );
@@ -188,10 +193,29 @@ export const deliveryLedger = (
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
-            const marked = yield* sql<{ readonly delivery_id: string }>`UPDATE channel_outbox
-              SET send_started_at = ${input.now}
+            const handOverNow = DateTime.formatIso(yield* DateTime.now);
+            const [row] = yield* sql<{
+              readonly cause_key: string;
+              readonly input_id: string | null;
+            }>`SELECT cause_key, input_id FROM channel_outbox
               WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
-                AND attempts = ${input.attempt} RETURNING delivery_id`;
+                AND attempts = ${input.attempt}`;
+            if (row === undefined) return false;
+            // Only a reply receipt has a deadline; it is looked up by its input id.
+            if (row.input_id !== null && row.cause_key === "reply:" + row.input_id) {
+              const deadline = DateTime.formatIso(
+                DateTime.makeUnsafe(Date.parse(handOverNow) - RECEIPT_DEADLINE_MS),
+              );
+              const expired = yield* sql<{ readonly input_id: string }>`SELECT input_id
+                FROM channel_inbox WHERE input_id = ${row.input_id}
+                  AND accepted_at <= ${deadline}`;
+              if (expired.length > 0) return false;
+            }
+            const marked = yield* sql<{ readonly delivery_id: string }>`UPDATE channel_outbox
+              SET send_started_at = ${handOverNow}
+              WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
+                AND attempts = ${input.attempt}
+              RETURNING delivery_id`;
             return marked.length > 0;
           }),
         )

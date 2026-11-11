@@ -388,9 +388,30 @@ it("asks a question in one card with lettered choices and sends the pick to its 
     [...view.container.querySelectorAll("button")].map((button) =>
       button.getAttribute("aria-label"),
     ),
-  ).toEqual(["A. Yes", "B. Later"]);
+  ).toEqual(["A. Yes", "B. Later", "Something else"]);
   await view.click("B. Later");
-  expect(onSend).toHaveBeenCalledWith("Later", "task-1");
+  // An older server names no question, so the pick goes to the task alone.
+  expect(onSend).toHaveBeenCalledWith("Later", "task-1", undefined);
+});
+
+it("ends an open question with a Something else row that hands over to the composer", async () => {
+  h = createNativeMemoryHarness();
+  const onSomethingElse = vi.fn();
+  const onSend = vi.fn(() => true);
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      onSend={onSend}
+      onSomethingElse={onSomethingElse}
+      row={bot({ tone: "question", text: "Deploy now?", options: ["Yes", "Later"] })}
+    />,
+  );
+  await view.render();
+  expect(view.container.textContent).toContain("CSomething else");
+  await view.click("Something else");
+  expect(onSomethingElse).toHaveBeenCalledTimes(1);
+  expect(onSend).not.toHaveBeenCalled();
 });
 
 it("keeps an answered question's card with the question and only the picked choice", async () => {
@@ -432,7 +453,7 @@ it("offers no pick while the bot cannot take a message", async () => {
   );
   await view.render();
   const buttons = [...view.container.querySelectorAll("button")];
-  expect(buttons.map((button) => button.disabled)).toEqual([true, true]);
+  expect(buttons.map((button) => button.disabled)).toEqual([true, true, true]);
   await view.click("A. Yes");
   expect(onSend).not.toHaveBeenCalled();
 });
@@ -583,7 +604,7 @@ describe("a question in the chat folds to the answer the person sent", () => {
     );
     expect(text).toContain("Which one?");
     expect(text).not.toContain("Sending…");
-    expect(buttons).toEqual(["A. CI fix", "B. Release"]);
+    expect(buttons).toEqual(["A. CI fix", "B. Release", "Something else"]);
   });
 
   it("leaves a later message its own once the task closed the question", async () => {
@@ -617,6 +638,30 @@ describe("a question in the chat folds to the answer the person sent", () => {
     expect(text).toContain("BRelease");
     expect(text).not.toContain("CI fix");
     expect(buttons).toEqual([]);
+  });
+
+  it("keeps a task's choices open after a typed reply until its card drops the question", async () => {
+    const typed = (openQuestionIds: ReadonlyArray<string>) =>
+      shown(
+        questionFrom({
+          items: [cardItem, askedItem, sentItem("Neither, wait for Monday")],
+          messages: {
+            b1: taskQuestion,
+            u1: { tone: "reply", readAt: null, requestKey: "in-1" },
+          },
+          cards: { n1: taskCard(openQuestionIds) },
+        }),
+      );
+    expect((await typed(["q-pick"])).buttons).toEqual([
+      "A. CI fix",
+      "B. Release",
+      "Something else",
+    ]);
+    await view.unmount();
+    h.dispose();
+    const closed = await typed([]);
+    expect(closed.text).toContain("Which one?");
+    expect(closed.buttons).toEqual([]);
   });
 });
 

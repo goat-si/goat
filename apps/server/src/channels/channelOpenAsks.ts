@@ -13,7 +13,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { approvalCard } from "./channelApprovalCards.ts";
 import { approvalRequestDetail, nativeQuestionText } from "./channelNativeQuestionCards.ts";
-import { waitingTaskCondition } from "./channelWaitingTasks.ts";
+import { type WaitingAsk, waitingAsks, waitingTaskCondition } from "./channelWaitingTasks.ts";
 
 /** Waiting tasks read per request; more set `truncated`. */
 const CANDIDATE_LIMIT = 200;
@@ -41,27 +41,23 @@ const approvalWords = (task: ChannelTask, approval: ChannelTaskApprovalRef, kind
   }).text;
 
 /** Everything one waiting task asks of the person, in the words its card or chip uses. */
-const asksOf = (botId: BotId, task: ChannelTask): Array<Draft> => {
+const draftOf = (botId: BotId, task: ChannelTask, waiting: WaitingAsk): Draft => {
   const base = { botId, taskId: task.taskId };
-  const ended = task.status === "completed" || task.status === "failed";
-  const drafts: Array<Draft> = ended
-    ? []
-    : task.openQuestions.map((question) => ({
+  const { askedAt } = waiting;
+  switch (waiting.kind) {
+    case "question":
+      return {
         ask: {
           ...base,
-          kind: "question" as const,
-          text: question.text,
-          askedAt: question.askedAt,
-          questionId: question.questionId,
+          kind: "question",
+          text: waiting.question.text,
+          askedAt,
+          questionId: waiting.question.questionId,
         },
-      }));
-  for (const need of task.observed?.needsYou ?? []) {
-    // Finished work can still hold an approval; nothing else it waited on is open.
-    if (ended && need.kind !== "approval") continue;
-    const askedAt = need.since;
-    if (need.kind === "approval" && need.approval !== undefined) {
-      const approval = need.approval;
-      drafts.push({
+      };
+    case "approval": {
+      const approval = waiting.ref;
+      return {
         ask: {
           ...base,
           kind: "approval",
@@ -72,10 +68,11 @@ const asksOf = (botId: BotId, task: ChannelTask): Array<Draft> => {
         ...(approval.host === undefined
           ? { lookup: { kind: "approval", task, ref: approval } }
           : {}),
-      });
-    } else if (need.kind === "question" && need.question !== undefined) {
-      const question = need.question;
-      drafts.push({
+      };
+    }
+    case "native_question": {
+      const question = waiting.ref;
+      return {
         ask: {
           ...base,
           kind: "question",
@@ -84,24 +81,40 @@ const asksOf = (botId: BotId, task: ChannelTask): Array<Draft> => {
           requestId: question.requestId,
         },
         ...(question.host === undefined ? { lookup: { kind: "question", ref: question } } : {}),
-      });
-    } else if (need.kind === "sign_in") {
-      drafts.push({
+      };
+    }
+    case "sign_in":
+      return {
         ask: { ...base, kind: "sign_in", text: task.title + " needs you to sign in", askedAt },
-      });
-    } else if (need.kind === "usage_limit") {
-      drafts.push({
+      };
+    case "usage_limit":
+      return {
         ask: {
           ...base,
           kind: "usage_limit",
           text: task.title + " is paused on a usage limit",
           askedAt,
         },
-      });
-    }
+      };
   }
-  return drafts;
 };
+
+const asksOf = (botId: BotId, task: ChannelTask): Array<Draft> =>
+  waitingAsks(task).map((waiting) => draftOf(botId, task, waiting));
+
+/**
+ * The live bots' waiting tasks that ask something, newest ask first, so neither deleted bots nor
+ * old updates use the limit. `newest_ask_at` is null for a task with nothing to show.
+ */
+export const openAskCandidates = (
+  sql: SqlClient.SqlClient,
+  input: { readonly ownerId: string; readonly botIds: ReadonlySet<string> },
+) => sql<{ readonly bot_id: string; readonly task_json: string }>`
+    SELECT bot_id, task_json FROM channel_tasks
+    WHERE owner_id = ${input.ownerId} AND bot_id IN ${sql.in([...input.botIds])}
+      AND newest_ask_at IS NOT NULL AND ${waitingTaskCondition(sql)}
+    ORDER BY newest_ask_at DESC, updated_at DESC
+    LIMIT ${CANDIDATE_LIMIT + 1}`;
 
 /**
  * What the owner's bots wait on the person for, newest first: at most `limit`, with
@@ -115,24 +128,7 @@ export const listOpenAsks = Effect.fn("channel.listOpenAsks")(function* (input: 
   readonly botIds: ReadonlySet<string>;
   readonly limit?: number;
 }) {
-  const { sql } = input;
-  // Only live bots' tasks, newest ask first, so neither deleted bots nor old updates use the limit.
-  const ended = sql`status IN ('completed', 'failed')`;
-  const rows = yield* sql<{ readonly bot_id: string; readonly task_json: string }>`
-    SELECT bot_id, task_json FROM channel_tasks
-    WHERE owner_id = ${input.ownerId} AND bot_id IN ${sql.in([...input.botIds])}
-      AND ${waitingTaskCondition(sql)}
-    ORDER BY (
-      SELECT MAX(asked_at) FROM (
-        SELECT json_extract(question.value, '$.askedAt') AS asked_at
-        FROM json_each(task_json, '$.openQuestions') AS question WHERE NOT ${ended}
-        UNION ALL
-        SELECT json_extract(need.value, '$.since')
-        FROM json_each(task_json, '$.observed.needsYou') AS need
-        WHERE NOT ${ended} OR json_extract(need.value, '$.kind') = 'approval'
-      )
-    ) DESC, updated_at DESC
-    LIMIT ${CANDIDATE_LIMIT + 1}`;
+  const rows = yield* openAskCandidates(input.sql, input);
   const drafts = rows
     .slice(0, CANDIDATE_LIMIT)
     .flatMap((row) => asksOf(row.bot_id as BotId, decodeTask(row.task_json)))
