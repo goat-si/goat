@@ -1,0 +1,35 @@
+diff --git a/dist/index.js b/dist/index.js
+index 3105ebe97ddd7add6c4257602029ea58e7a11fd0..f2113fc593b15219507ecb3243067166790d15b8 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1171,6 +1171,10 @@ class PlaywrightBrowserProvider {
+ 			};
+ 		}
+ 		// the tester unmocks by path, but the route is registered by the full url
++		function isGoneRouteError(error) {
++			const message = error instanceof Error ? error.message : String(error);
++			return message.includes("has been collected") || message.includes("Target page, context or browser has been closed");
++		}
+ 		function predicateKey(sessionId, url) {
+ 			return `${sessionId}:${new URL(url, "http://localhost").href}`;
+ 		}
+@@ -1189,6 +1193,7 @@ class PlaywrightBrowserProvider {
+ 				sessionIds.set(sessionId, ids);
+ 				idPredicates.set(key, predicate);
+ 				await page.context().route(predicate, async (route) => {
++					try {
+ 					if (module.type === "manual") {
+ 						const exports = Object.keys(await module.resolve());
+ 						const body = createManualModuleSource(module.url, exports);
+@@ -1237,6 +1242,11 @@ class PlaywrightBrowserProvider {
+ 							headers: { Location: url.href }
+ 						});
+ 					} else ;
++					} catch (error) {
++						// The page moved on while module.resolve() ran, so Playwright collected the route.
++						if (isGoneRouteError(error)) return;
++						throw error;
++					}
+ 				});
+ 			},
+ 			delete: async (sessionId, id) => {
