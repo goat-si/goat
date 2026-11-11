@@ -1,7 +1,14 @@
-import { hasGoatBotMarkdown, splitGoatBotTextLinks } from "@goat/client-runtime/goatBot";
+import {
+  goatBotReplyRepository,
+  hasGoatBotMarkdown,
+  splitGoatBotTextLinks,
+} from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 
 import ChatMarkdown from "../ChatMarkdown";
+import { goatBotReplyMarkdownPlugins } from "./goatBotReplyMarkdown";
+
+const WEB_ADDRESS = /https?:\/\//iu;
 
 /**
  * Bot text. Markdown renders like a chat message in the bubble's type; plain text stays as
@@ -15,7 +22,8 @@ export function GoatBotLinkedText({
   /** Where the shown history lives, so its thread links open there. */
   readonly environmentId: EnvironmentId | null;
 }) {
-  if (hasGoatBotMarkdown(text)) {
+  // A web address renders as a link chip with its site's icon, which needs the Markdown path.
+  if (hasGoatBotMarkdown(text) || WEB_ADDRESS.test(text)) {
     return (
       <ChatMarkdown
         text={text}
@@ -23,6 +31,7 @@ export function GoatBotLinkedText({
         environmentId={environmentId ?? undefined}
         fileActions={false}
         lineBreaks
+        extraRemarkPlugins={goatBotReplyMarkdownPlugins(goatBotReplyRepository(text))}
       />
     );
   }

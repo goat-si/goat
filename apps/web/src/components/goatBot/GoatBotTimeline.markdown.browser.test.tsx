@@ -121,3 +121,31 @@ it("names the conversation and an update after the renamed main bot", async () =
   await expect.element(screen.getByRole("list", { name: "Conversation with Goaty" })).toBeVisible();
   await expect.element(screen.getByText("Goaty · Update")).toBeVisible();
 });
+
+it("shows a pull request link as its short reference and links a bare one to the reply's repository", async () => {
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[
+        bot("prs", "Merged https://github.com/goat-si/goat/pull/2851 after CI. #2816 follows it."),
+        bot(
+          "two",
+          "See https://github.com/other/repo/pull/7 and https://github.com/b/two/pull/2, not #3.",
+        ),
+      ]}
+    />,
+  );
+  await expect
+    .element(screen.getByRole("link", { name: "#2851", exact: true }))
+    .toHaveAttribute("href", "https://github.com/goat-si/goat/pull/2851");
+  await expect
+    .element(screen.getByRole("link", { name: "#2816", exact: true }))
+    .toHaveAttribute("href", "https://github.com/goat-si/goat/issues/2816");
+  await expect
+    .element(screen.getByRole("link", { name: "other/repo#7", exact: true }))
+    .toHaveAttribute("href", "https://github.com/other/repo/pull/7");
+  await expect.element(screen.getByRole("link", { name: "b/two#2", exact: true })).toBeVisible();
+  // Two repositories in one reply: a bare number could mean either, so it stays text.
+  expect(screen.getByRole("link", { name: "#3", exact: true }).query()).toBeNull();
+});
