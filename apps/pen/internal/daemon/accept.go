@@ -126,7 +126,10 @@ func (d *Daemon) serveTCP(ctx context.Context, sec *session.Secure) {
 	}
 	tc := conn.(*net.TCPConn)
 	defer tc.Close()
-	stream.Splice(ctx, sec, tc, tc, tc.CloseWrite)
+	if err := stream.Splice(ctx, sec, tc, tc, tc.CloseWrite); err != nil && !stream.Delivered(err) {
+		// The peer's stream stopped short of its FIN: the service reads a reset, not a clean end.
+		tc.SetLinger(0)
+	}
 }
 
 func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure, l *live) {

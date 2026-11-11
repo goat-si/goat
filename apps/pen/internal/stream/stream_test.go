@@ -155,3 +155,43 @@ func TestDataPastTheWindowCloses4408(t *testing.T) {
 		}
 	}
 }
+
+func TestALinkCutAfterThePeersFinWasWrittenOutIsDelivered(t *testing.T) {
+	a, b := relay.Pipe()
+	pr, pw := io.Pipe() // this side never ends its own direction
+	defer pw.Close()
+	var got bytes.Buffer
+	halfClosed := make(chan struct{})
+	errc := make(chan error, 1)
+	go func() {
+		errc <- stream.Splice(context.Background(), b, pr, &got, func() error { close(halfClosed); return nil })
+	}()
+	a.Send(append([]byte{stream.TypeData}, "reply"...))
+	a.Send([]byte{stream.TypeFin})
+	<-halfClosed
+	a.Close(4404)
+	err := <-errc
+	if relay.CodeOf(err) != 4404 || !stream.Delivered(err) {
+		t.Fatalf("got %v, delivered %v; want 4404 and delivered, the peer's whole stream was written", err, stream.Delivered(err))
+	}
+	if got.String() != "reply" {
+		t.Fatalf("wrote %q", got.String())
+	}
+}
+
+func TestALinkCutAfterThePeersFinButBeforeItsDataWasWrittenOutIsNotDelivered(t *testing.T) {
+	a, b := relay.Pipe()
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	open := make(chan struct{})
+	defer close(open) // releases the writer still holding the peer's DATA
+	errc := make(chan error, 1)
+	go func() { errc <- stream.Splice(context.Background(), b, pr, &gated{open: open}, nil) }()
+	a.Send(append([]byte{stream.TypeData}, "reply"...))
+	a.Send([]byte{stream.TypeFin})
+	a.Close(4404)
+	err := <-errc
+	if relay.CodeOf(err) != 4404 || stream.Delivered(err) {
+		t.Fatalf("got %v, delivered %v; want 4404 and not delivered, the peer's DATA was never written", err, stream.Delivered(err))
+	}
+}

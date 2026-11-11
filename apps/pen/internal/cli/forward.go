@@ -127,8 +127,14 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 				mu.Unlock()
 			}()
 			lc := localConn{tc}
-			if err := stream.Splice(ctx, tr.link(sec), lc, lc, lc.CloseWrite); err != nil && !wasRevoked.Load() && !clientGone(err) {
-				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
+			if err := stream.Splice(ctx, tr.link(sec), lc, lc, lc.CloseWrite); err != nil {
+				if !stream.Delivered(err) {
+					// The peer's stream stopped short of its FIN: the client reads a reset, not a clean end.
+					tc.SetLinger(0)
+				}
+				if !wasRevoked.Load() && !clientGone(err) {
+					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
+				}
 			}
 		}()
 	}

@@ -37,6 +37,19 @@ type Link interface {
 
 var errProtocol = &relay.CloseError{Code: wire.CodeCrypto}
 
+// deliveredError is a Splice error that came after the peer's whole stream had reached w.
+type deliveredError struct{ err error }
+
+func (e *deliveredError) Error() string { return e.err.Error() }
+func (e *deliveredError) Unwrap() error { return e.err }
+
+// Delivered reports whether err is from a Splice that had already written everything the peer
+// sent, up to its FIN, to w: what w's reader holds is complete, and only the other direction was cut.
+func Delivered(err error) bool {
+	var d *deliveredError
+	return errors.As(err, &d)
+}
+
 // Splice copies r into the session and the session into w. It ends cleanly (nil) when both sides
 // sent FIN and the peer's data reached w; closeWrite (may be nil) half-closes w at the peer's FIN.
 // On error it closes the link and returns at once; the caller closes r and w to release the copy.
@@ -59,6 +72,12 @@ func Splice(ctx context.Context, link Link, r io.Reader, w io.Writer, closeWrite
 				code = wire.CodeOffline
 			}
 			link.Close(code)
+			s.mu.Lock()
+			delivered := s.delivered
+			s.mu.Unlock()
+			if delivered {
+				return &deliveredError{err}
+			}
 			return err
 		}
 	}
@@ -78,6 +97,8 @@ type splice struct {
 	queue    [][]byte
 	peerFin  bool
 	sentFin  bool
+	// delivered: the peer sent FIN and all its DATA was written to w.
+	delivered bool
 }
 
 func (s *splice) fail(err error) {
@@ -224,6 +245,7 @@ func (s *splice) writer(w io.Writer, closeWrite func() error) error {
 			return nil
 		}
 		if len(s.queue) == 0 {
+			s.delivered = true
 			s.mu.Unlock()
 			break
 		}
