@@ -188,8 +188,18 @@ it("on a narrow screen the work sheet closes and the composer holds the draft", 
   await openMemory(screen);
   await userEvent.click(page.getByRole("button", { name: "Ask to forget" }));
   await expect.element(page.getByRole("tab", { name: "Library" })).not.toBeInTheDocument();
-  await expect.element(composer(screen)).toHaveValue(goatBotForgetNoteMessage(note.text));
+  const field = composer(screen);
+  const drafted = goatBotForgetNoteMessage(note.text);
+  await expect.element(field).toHaveValue(drafted);
+  // The person edits and sends from the keyboard, so the caret waits at the end of the draft.
+  await expect.element(field).toHaveFocus();
+  expect((field.element() as HTMLTextAreaElement).selectionStart).toBe(drafted.length);
   expect(onSend).not.toHaveBeenCalled();
+  // Opening and dismissing the sheet afterwards still returns focus to the chip.
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await userEvent.click(chip);
+  await userEvent.click(page.getByRole("button", { name: "Close" }));
+  await expect.element(chip).toHaveFocus();
 });
 
 const botRow = (text: string): GoatBotRow => ({
