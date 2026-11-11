@@ -18,8 +18,8 @@ under its own name and purpose from its next conversation session.
 - Edit any bot, including the main one, from its row menu (long press on mobile), its name at the
   top of its chat, or **Settings → GOAT Bot → Profile**. A new name also changes how the main bot
   introduces itself in Slack and iMessage.
-- An added bot's model can change in its edit dialog or from the model button at the top of its
-  chat; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
+- An added bot's model can change in its edit dialog or from the model button in its message
+  box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
   bot's model again.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
@@ -49,7 +49,8 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
-**Work** in the bot's header opens the bot's home. **Home** is one page: a status note when
+The bot's name at the top of its chat opens the bot's home, where **Edit bot** changes its name,
+face, purpose and model. **Home** is one page: a status note when
 something needs fixing, the machines its work runs on, its tasks, and its routines. Selecting a
 task shows its conversation right there, beside the chat; **Go to thread** opens it in full.
 **Library** holds the files the bot saved and its memory.

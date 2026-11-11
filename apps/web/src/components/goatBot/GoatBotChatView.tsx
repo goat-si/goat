@@ -30,7 +30,6 @@ import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
-import { GoatBotHeaderName } from "./GoatBotHeaderName";
 import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
@@ -130,6 +129,7 @@ export function GoatBotChatView({
   const canSend = !removed && canSendToGoatBot(availability, canOperate);
   const acceptsFiles = canSend && attachmentSupport !== null;
   const composerRef = useRef<GoatBotComposerHandle>(null);
+  const homeRef = useRef<HTMLButtonElement>(null);
   const onDraft = canSend
     ? (text: string) => {
         if (narrow) setPanelOpen(false);
@@ -168,14 +168,20 @@ export function GoatBotChatView({
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
-          {/* Equal sides center the title until the controls, which never shrink, need its space. */}
           <div aria-hidden className="flex-1 basis-0" />
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <GoatBotHeaderName
-                title={title}
-                avatar={
-                  member ? (
+            <h1 className="flex min-w-0">
+              <button
+                type="button"
+                ref={homeRef}
+                aria-label={`${title} home`}
+                aria-expanded={panelOpen}
+                disabled={!bot}
+                onClick={() => setPanelOpen((open) => !open)}
+                className="goat-name-capsule max-w-full min-w-0 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              >
+                <span className="goat-name-avatar flex shrink-0">
+                  {member ? (
                     <GoatBotSessionAvatar
                       size="sm"
                       chatOpen
@@ -191,28 +197,16 @@ export function GoatBotChatView({
                       emoji={avatar}
                       activity={reading ? { state: "reading" } : removed ? null : working}
                     />
-                  )
-                }
-              />
-              {headerStatus ? (
-                <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
-              ) : null}
-            </div>
+                  )}
+                </span>
+                <span className="min-w-0 truncate">{title}</span>
+              </button>
+            </h1>
+            {headerStatus ? (
+              <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
+            ) : null}
           </div>
-          <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
-            {member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />}
-            {bot && (
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label={`Toggle ${title} work panel`}
-                aria-expanded={panelOpen}
-                onClick={() => setPanelOpen((open) => !open)}
-              >
-                Work
-              </Button>
-            )}
-          </div>
+          <div aria-hidden className="flex-1 basis-0" />
         </WorkspacePageHeader>
         {availability.kind === "offline" ||
         availability.kind === "home_offline" ||
@@ -324,6 +318,9 @@ export function GoatBotChatView({
                 : `${title} isn't available`
             }
             attachmentSupport={attachmentSupport}
+            modelPicker={
+              member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />
+            }
             onSend={onSend}
           />
         </div>
@@ -342,7 +339,7 @@ export function GoatBotChatView({
       )}
       {bot && narrow && (
         <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
-          <SheetPopup>
+          <SheetPopup finalFocus={homeRef}>
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
               environmentId={bot.environmentId}
