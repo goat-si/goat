@@ -808,15 +808,9 @@ func TestDownDuringServiceStartLeavesTheNodeDown(t *testing.T) {
 			defer rs.Close()
 			st, _ := windowsHome(t, func(string, []string) error { return nil })
 			serviceOS = osName
-			bin := t.TempDir()
-			name := "systemctl"
-			if osName == "darwin" {
-				name = "launchctl"
-			}
-			if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			oldFound := serviceManagerFound
+			t.Cleanup(func() { serviceManagerFound = oldFound })
+			serviceManagerFound = func(string) bool { return true }
 			soloNode(t, st, rs.URL)
 			fakeTaskClock(t)
 			paused, resume := make(chan struct{}), make(chan struct{})
