@@ -52,6 +52,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
 import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
+
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 
 import {
@@ -95,7 +96,7 @@ import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
-import { refuseSideChatWithoutThread } from "./useSideChatCommand";
+
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 
 function NewTaskWorkspaceIcon(props: {
@@ -755,7 +756,6 @@ export function NewTaskDraftScreen(props: {
     ) {
       return null;
     }
-    if (refuseSideChatWithoutThread(draft.text)) return null;
     if (
       environmentConnected &&
       isModelSelectionUnavailable(

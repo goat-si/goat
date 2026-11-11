@@ -123,13 +123,6 @@ function rememberPendingSideChat(
   reconcileEnvironment(environmentId, appAtomRegistry.get(stateAtom));
 }
 
-/** A new draft has no thread to ask about yet, so its `/side` must not become a first message. */
-export function refuseSideChatWithoutThread(text: string): boolean {
-  if (parseSideChatCommand(text) === null) return false;
-  Dialog.alert("Side chat needs a thread", "Send a first message, then ask a side question.");
-  return true;
-}
-
 export function useSideChatCommand() {
   const fork = useAtomCommand(threadEnvironment.forkAsSideChat, { reportFailure: false });
   const create = useAtomCommand(threadEnvironment.create, { reportFailure: false });

@@ -32,6 +32,11 @@ const mocks = vi.hoisted(() => ({
   retargetDraft: vi.fn(),
   writeSettings: vi.fn(),
   writeText: vi.fn(),
+  alert: vi.fn(),
+  queued: vi.fn(),
+  flushWrite: vi.fn(),
+  release: vi.fn(),
+  clearDraft: vi.fn(),
 }));
 vi.mock("../../state/atom-registry", () => ({
   appAtomRegistry: {
@@ -68,7 +73,7 @@ vi.mock("../../state/project-grouping", () => ({
 vi.mock("./use-legacy-plan-mode-enabled", () => ({
   useLegacyPlanModeState: () => ({ enabled: false, loaded: true }),
 }));
-vi.mock("../../components/ui/Dialog", () => ({ alert: vi.fn() }));
+vi.mock("../../components/ui/Dialog", () => ({ alert: mocks.alert }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   useSavedRemoteConnections: () => ({ savedConnectionsById: {} }),
@@ -89,7 +94,7 @@ vi.mock("../../state/use-composer-drafts", () => ({
   setComposerDraftText: mocks.writeText,
   useStickyComposerModelSelection: () => null,
   isNewTaskDraftKey: (key: string) => key.startsWith("new-task:"),
-  clearComposerDraft: vi.fn(),
+  clearComposerDraft: mocks.clearDraft,
   appendComposerDraftAttachments: vi.fn(),
   removeComposerDraftAttachment: vi.fn(),
   replaceComposerDraftAttachments: vi.fn(),
@@ -102,17 +107,17 @@ vi.mock("../../state/use-composer-drafts", () => ({
 
 vi.mock("../../lib/useThreadContextHosts", () => ({ useThreadContextHosts: () => new Map() }));
 vi.mock("../../state/thread-outbox", () => ({
-  flattenQueuedThreadMessages: () => [],
-  threadOutboxManager: {},
+  flattenQueuedThreadMessages: () => mocks.queued() ?? [],
+  threadOutboxManager: { queuedMessagesByThreadKeyAtom: Atom.make({}) },
 }));
 vi.mock("../../state/use-thread-outbox", () => ({
   holdEditingQueuedMessage: vi.fn(),
-  releaseEditingQueuedMessage: vi.fn(),
+  releaseEditingQueuedMessage: mocks.release,
   useThreadOutboxMessages: () => [],
 }));
 vi.mock("../../state/pending-task-editor-writes", () => ({
   capturePendingTaskEditorWriteBaseline: vi.fn(),
-  flushPendingTaskEditorWrite: vi.fn(),
+  flushPendingTaskEditorWrite: mocks.flushWrite,
 }));
 vi.mock("../../state/peerLinks", () => ({ useLinkedEnvironments: () => new Map() }));
 vi.mock("../../state/project-has-threads", () => ({ useProjectHasThreads: () => false }));
@@ -378,4 +383,52 @@ it("uses cached repository capability and branch defaults while offline", async 
   await screen.render(true);
   expect(screen.current.draftKey).toBe(draftKey);
   expect(screen.current.selectedBranchName).toBe("main");
+});
+
+const firstMessage = {
+  threadId: "thread-1",
+  commandId: "command-1",
+  messageId: "message-1",
+  createdAt: "2026-11-11T00:00:00Z",
+};
+
+it("builds no first message from a new draft that asks /side, and says why", async () => {
+  using screen = setup();
+  await screen.render(true);
+  const selection = { instanceId: "codex", model: "gpt-5" };
+  act(() => mocks.writeSettings(screen.current.draftKey, { modelSelection: selection }));
+  act(() => screen.current.setPrompt("Add a clamp helper"));
+  expect(screen.current.buildPendingTaskMessage(firstMessage)).not.toBeNull();
+  act(() => screen.current.setPrompt("/side what changed?"));
+  expect(screen.current.buildPendingTaskMessage(firstMessage)).toBeNull();
+  expect(mocks.alert).toHaveBeenCalledWith(
+    "Side chat needs a thread",
+    "Send a first message, then ask a side question.",
+  );
+});
+
+it("keeps a queued task edited to /side on hold with its draft when the editor closes", async () => {
+  using screen = setup();
+  mocks.flushWrite.mockResolvedValue(true);
+  mocks.queued.mockReturnValue([
+    {
+      ...firstMessage,
+      environmentId: "one",
+      text: "Add a clamp helper",
+      attachments: [],
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      creation: { projectId: "a", workspaceMode: "local", branch: null, worktreePath: null },
+    },
+  ]);
+  await screen.render(true);
+  await act(async () => void screen.current.beginEditingPendingTask("message-1"));
+  act(() => screen.current.setPrompt("/side what changed?"));
+  await act(async () => screen.current.cancelEditingPendingTask());
+  expect(mocks.flushWrite).not.toHaveBeenCalled();
+  expect(mocks.release).not.toHaveBeenCalledWith("message-1");
+  expect(mocks.clearDraft).not.toHaveBeenCalledWith("pending-task:message-1");
+  expect(screen.snapshot("pending-task:message-1").text).toBe("/side what changed?");
+  expect(mocks.alert).toHaveBeenCalledWith("Side chat needs a thread", expect.any(String));
 });
