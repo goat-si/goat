@@ -3,6 +3,7 @@ import {
   type ChannelBotRef,
   type ChannelIngestInput,
   type ChannelListBotThreadsInput,
+  type ChannelQuestionId,
   type ChannelTaskId,
   type ChatAttachment,
   type EnvironmentId,
@@ -336,13 +337,15 @@ export function createChannelEnvironmentAtoms<R, E>(
  * instead of a second message.
  */
 export function goatBotIngestInput(input: {
-  readonly bot: ChannelBotRef;
+  readonly bot: Pick<ChannelBotRef, "environmentId" | "threadId">;
   readonly text: string;
   /** Uploads this server already holds; the gateway refuses any other file. */
   readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly clientMessageId: string;
   readonly receivedAt: string;
   readonly taskId?: ChannelTaskId;
+  /** With taskId: the card's question this answers, sent as an answer the server checks. */
+  readonly questionId?: ChannelQuestionId;
 }): ChannelIngestInput {
   return {
     kind: "goat",
@@ -359,8 +362,11 @@ export function goatBotIngestInput(input: {
     text: input.text,
     attachments: input.attachments ?? [],
     receivedAt: input.receivedAt,
-    intent: "message",
-    ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+    ...(input.taskId === undefined
+      ? { intent: "message" as const }
+      : input.questionId === undefined
+        ? { intent: "message" as const, taskId: input.taskId }
+        : { intent: "answer" as const, taskId: input.taskId, questionId: input.questionId }),
   };
 }
 

@@ -1,5 +1,10 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { type ChannelBotArtifact, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import {
+  type ChannelBotArtifact,
+  ChannelQuestionId,
+  ChannelTaskId,
+  type EnvironmentId,
+} from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
 
@@ -75,7 +80,14 @@ export interface GoatBotChatViewProps {
     attachments?: ReadonlyArray<GoatBotDraftAttachment>,
   ) => boolean | void;
   /** Sends an answer to the task whose question offered it. */
-  readonly onSendToTask?: ((taskId: ChannelTaskId, text: string) => boolean | void) | undefined;
+  readonly onSendToTask?:
+    | ((
+        taskId: ChannelTaskId,
+        text: string,
+        attachments?: ReadonlyArray<never>,
+        questionId?: ChannelQuestionId,
+      ) => boolean | void)
+    | undefined;
   /** What GOAT Bot's server takes with a message; null when it takes no files. */
   readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
   readonly onRetryInput: (clientKey: string) => void;
@@ -375,9 +387,16 @@ export function GoatBotChatView({
                   onDiscard={onDiscardInput}
                   onPick={
                     canSend
-                      ? (answer, taskId) =>
+                      ? (answer, taskId, questionId) =>
                           taskId !== undefined && onSendToTask !== undefined
-                            ? onSendToTask(ChannelTaskId.make(taskId), answer)
+                            ? onSendToTask(
+                                ChannelTaskId.make(taskId),
+                                answer,
+                                [],
+                                questionId === undefined
+                                  ? undefined
+                                  : ChannelQuestionId.make(questionId),
+                              )
                             : onSend(answer)
                       : undefined
                   }

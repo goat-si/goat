@@ -156,6 +156,7 @@ function GoatBotSidebarPreview({
     taskId: null,
     knownTaskIds: work.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
     conversationOnly: work.supported,
+    answerReferences: true,
   });
   const preview = goatBotConversationPreview({
     rows,

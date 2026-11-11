@@ -97,7 +97,7 @@ export function GoatBotTimeline({
   readonly onOpenHome?: (() => void) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
+  readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
 }) {
   const { copyToClipboard } = useCopyToClipboard();
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
