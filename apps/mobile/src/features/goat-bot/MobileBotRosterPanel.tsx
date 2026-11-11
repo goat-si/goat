@@ -10,7 +10,10 @@ import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
-import { useMobileGoatBotMemberModelEditable } from "./useMobileGoatBotMemberModel";
+import {
+  useMobileGoatBotColorEditable,
+  useMobileGoatBotMemberModelEditable,
+} from "./useMobileGoatBotMemberModel";
 import { uuidv4 } from "../../lib/uuid";
 
 export function MobileBotRoster(props: {
@@ -124,6 +127,9 @@ function BotSheet(props: {
   // Only a member has a model of its own; the main bot's is the GOAT Bot model setting.
   const memberModelEditable = useMobileGoatBotMemberModelEditable(props.environmentId).editable;
   const modelEditable = memberModelEditable && sheet.mode === "edit" && sheet.bot.role === "member";
+  // Only a member has a colour; the main bot keeps the theme's neutral.
+  const colorSupported = useMobileGoatBotColorEditable(props.environmentId);
+  const colorEditable = colorSupported && (sheet.mode === "create" || sheet.bot.role === "member");
   if (sheet.mode === "edit") {
     const modelChanged = modelEditable && !sameModel(model, initialModel);
     return (
@@ -132,6 +138,7 @@ function BotSheet(props: {
         initial={sheet.bot}
         canSubmit={manage.canEdit}
         extraChanged={modelChanged}
+        colorEditable={colorEditable}
         onClose={props.onClose}
         onSubmit={(changes) => manage.update(sheet.bot, changes, modelChanged ? model : undefined)}
       >
@@ -151,6 +158,7 @@ function BotSheet(props: {
       mode="create"
       initial={{ name: "", avatar: null, purpose: "" }}
       canSubmit={manage.canCreate}
+      colorEditable={colorEditable}
       onClose={props.onClose}
       onSubmit={async (changes) => {
         const created = await manage.create(changes, model, clientRequestId);
@@ -161,6 +169,8 @@ function BotSheet(props: {
           name: changes.name ?? "",
           avatar: changes.avatar ?? "",
           purpose: changes.purpose ?? "",
+          // A create sends no key for Neutral; offered swatches mean the choice is known.
+          ...(colorEditable ? { color: changes.color ?? null } : {}),
         });
         const modelMissed = memberModelEditable && !sameModel(model, created.defaultModelSelection);
         if (Object.keys(missed).length === 0 && !modelMissed) {
@@ -169,13 +179,21 @@ function BotSheet(props: {
         }
         const failure = await manage.update(created, missed, modelMissed ? model : undefined);
         if (failure !== null) return failure;
-        props.onCreated({
+        const next = {
           ...created,
           name: missed.name ?? created.name,
           avatar: missed.avatar === undefined ? created.avatar : missed.avatar,
           purpose: missed.purpose ?? created.purpose,
           ...(modelMissed ? { defaultModelSelection: model } : {}),
-        });
+        };
+        const { color: _storedColor, ...neutral } = next;
+        props.onCreated(
+          missed.color === undefined
+            ? next
+            : missed.color === null
+              ? neutral
+              : { ...next, color: missed.color },
+        );
         return null;
       }}
     >
