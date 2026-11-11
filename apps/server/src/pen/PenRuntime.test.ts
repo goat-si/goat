@@ -504,7 +504,11 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
         const changes = yield* Queue.unbounded<ServerSettings>();
         const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
         const runtime = yield* env.startWith({
-          settings: { ...base, streamChanges: Stream.fromQueue(changes) },
+          settings: {
+            ...base,
+            streamChanges: Stream.fromQueue(changes),
+            subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
+          },
         });
         yield* runtime.replaceTrustRoot(person, env.root);
         const first = yield* Queue.take(env.registrations);
@@ -521,6 +525,24 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
         expect((yield* Queue.take(env.registrations)).port).toBeGreaterThan(0);
         expect(yield* Queue.size(env.registrations)).toBe(0);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("an edit stored while startup registers fences that generation once startup ends", () =>
+    Effect.gen(function* () {
+      const env = yield* setup({ stored: true });
+      const hold = yield* Deferred.make<void>();
+      env.holds.push(hold);
+      const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+      const starting = yield* env.start.pipe(Effect.forkScoped({ startImmediately: true }));
+      const first = yield* Queue.take(env.registrations);
+      // The test settings publish no notification, so only startup's own reconcile can see this.
+      yield* base.updateSettings({ pen: { ...env.root, nodeId: member("q") } });
+      yield* Deferred.succeed(hold, undefined);
+      const runtime = yield* Fiber.join(starting);
+      expect(yield* Deferred.isDone(first.lost)).toBe(true);
+      expect(yield* runtime.status).toMatchObject({ state: "off" });
+      expect(yield* Queue.size(env.registrations)).toBe(0);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("confirmations run one at a time and leave only the last confirmed root running", () =>
@@ -569,7 +591,7 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
       yield* Fiber.join(confirmB);
       const first = yield* Queue.take(env.registrations);
       const last = yield* Queue.take(env.registrations);
-      yield* Deferred.await(first.lost);
+      expect(yield* Deferred.isDone(first.lost)).toBe(true);
       expect(yield* Deferred.isDone(last.lost)).toBe(false);
       expect(yield* runtime.status).toMatchObject({ state: "listening", port: last.port });
       expect(yield* Queue.size(env.registrations)).toBe(0);
@@ -583,7 +605,11 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
       const waits = yield* Queue.unbounded<void>();
       const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
       const runtime = yield* env.startWith({
-        settings: { ...base, streamChanges: Stream.fromQueue(changes) },
+        settings: {
+          ...base,
+          streamChanges: Stream.fromQueue(changes),
+          subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
+        },
         onTransitionWait: Queue.offer(waits, undefined).pipe(Effect.asVoid),
       });
       yield* runtime.replaceTrustRoot(person, env.root);
@@ -624,7 +650,9 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
         const token = yield* proxyToken(first.port, first.key, member("a"));
         const sessionId = yield* sessionIdOf(token, member("a")).pipe(Effect.provide(env.services));
         failing = true;
-        yield* runtime.replaceTrustRoot(person, null);
+        expect((yield* Effect.flip(runtime.replaceTrustRoot(person, null))).reason).toContain(
+          "could not all be withdrawn",
+        );
         yield* Deferred.await(first.lost);
         expect(yield* runtime.status).toMatchObject({
           state: "off",
@@ -653,7 +681,11 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
       const changes = yield* Queue.unbounded<ServerSettings>();
       const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
       const runtime = yield* env.startWith({
-        settings: { ...base, streamChanges: Stream.fromQueue(changes) },
+        settings: {
+          ...base,
+          streamChanges: Stream.fromQueue(changes),
+          subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
+        },
       });
       const confirm = yield* runtime
         .replaceTrustRoot(person, env.root)

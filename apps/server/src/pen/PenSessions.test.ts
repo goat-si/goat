@@ -20,7 +20,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PenEnablement from "./PenEnablement.ts";
 import { layerTest as layerEnablement } from "./PenEnablement.testkit.ts";
 import * as PenSessionsModule from "./PenSessions.ts";
-import { agentScopes, PEN_SESSION_LIMITS, PenSessions } from "./PenSessions.ts";
+import { PEN_SESSION_LIMITS, PenSessions } from "./PenSessions.ts";
 
 const peer = (nodeId = "node-a"): PenPeer => ({
   meshId: "mesh-1",
@@ -79,34 +79,55 @@ it.layer(NodeServices.layer)(
           const pen = yield* PenSessions;
           const sessions = yield* SessionStore.SessionStore;
           yield* pen.setGeneration(1);
-          for (const access of ["read-only", "approval-required", "auto", "full-access"] as const)
-            for (const settingsWrite of [false, true])
-              for (const providersManage of [false, true]) {
-                const body = agent({ access, settingsWrite, providersManage, memory: "read" });
-                const issued = yield* pen.issue(live(), body);
-                const verified = yield* sessions.verify(issued.token, live());
-                expect(verified.scopes.includes("settings:write")).toBe(settingsWrite);
-                expect(verified.scopes.includes("providers:manage")).toBe(providersManage);
-                expect(verified.scopes.includes("orchestration:approve")).toBe(false);
-                expect(verified.scopes.includes("memory:read")).toBe(true);
-                expect(verified.scopes.includes("memory:write")).toBe(false);
-                expect(verified.childSetupPurpose).toBeUndefined();
-                expect(verified.principalKind).toBe("outside_client");
-                expect([...verified.scopes].toSorted()).toEqual(
-                  [
-                    ...agentScopes({
-                      kind: "agent",
-                      access,
-                      memory: "read",
-                      settingsWrite,
-                      providersManage,
-                    }),
-                  ].toSorted(),
-                );
-                expect(yield* sessions.readActiveScopes(verified.sessionId)).toEqual(
-                  verified.scopes,
-                );
-              }
+          // Written out by hand, independent of agentScopes: what each access grants before the
+          // two explicit flags, and the runtime ceiling the session carries.
+          const byAccess = {
+            "read-only": { scopes: ["orchestration:read"], ceiling: undefined },
+            "approval-required": {
+              scopes: ["orchestration:read", "orchestration:operate"],
+              ceiling: "approval-required",
+            },
+            "auto-accept-edits": {
+              scopes: ["orchestration:read", "orchestration:operate"],
+              ceiling: "auto-accept-edits",
+            },
+            auto: { scopes: ["orchestration:read", "orchestration:operate"], ceiling: "auto" },
+            "full-access": {
+              scopes: ["orchestration:read", "orchestration:operate", "source-control:write"],
+              ceiling: "full-access",
+            },
+          } as const;
+          const byMemory = {
+            none: [],
+            read: ["memory:read"],
+            read_write: ["memory:read", "memory:write"],
+          } as const;
+          for (const access of Object.keys(byAccess) as ReadonlyArray<keyof typeof byAccess>)
+            for (const memory of Object.keys(byMemory) as ReadonlyArray<keyof typeof byMemory>)
+              for (const settingsWrite of [false, true])
+                for (const providersManage of [false, true]) {
+                  const issued = yield* pen.issue(
+                    live(),
+                    agent({ access, memory, settingsWrite, providersManage }),
+                  );
+                  const verified = yield* sessions.verify(issued.token, live());
+                  const expected = [
+                    ...byAccess[access].scopes,
+                    ...byMemory[memory],
+                    ...(settingsWrite ? ["settings:write"] : []),
+                    ...(providersManage ? ["providers:manage"] : []),
+                  ];
+                  const label = access + " " + memory + " " + settingsWrite + " " + providersManage;
+                  expect([...verified.scopes].toSorted(), label).toEqual(expected.toSorted());
+                  expect(verified.runtimeModeCeiling, label).toBe(byAccess[access].ceiling);
+                  expect(verified.scopes.includes("orchestration:approve")).toBe(false);
+                  expect(verified.childSetupPurpose).toBeUndefined();
+                  expect(verified.principalKind).toBe("outside_client");
+                  expect(verified.subject).toBe("mcp-client");
+                  expect(yield* sessions.readActiveScopes(verified.sessionId)).toEqual(
+                    verified.scopes,
+                  );
+                }
           const proxy = yield* pen.issue(
             live(),
             JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),

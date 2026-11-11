@@ -56,7 +56,7 @@ const refusal = (code: PenSessionRefusal["code"], message: string) =>
  * Exactly what an agent request asks for: its access and memory, with settings write and provider
  * management only when asked. Approvals and Child setup cannot be expressed.
  */
-export const agentScopes = (
+const agentScopes = (
   request: typeof AgentRequest.Type,
 ): ReadonlyArray<AuthEnvironmentScopeType> => {
   const memory: ReadonlyArray<"memory:read" | "memory:write"> =

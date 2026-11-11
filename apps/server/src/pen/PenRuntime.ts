@@ -228,29 +228,32 @@ export const make = Effect.fn("PenRuntime.make")(function* (
       Effect.andThen(transitions.withPermits(1)(effect)),
     );
 
+  // A pen value changed outside replaceTrustRoot (a hand edit) is fenced when observed and
+  // stays off until a person confirms a root again (design §7). The stored value decides, so a
+  // late notification of an earlier confirmation is not mistaken for an edit.
+  const reconcile = transition(
+    Effect.gen(function* () {
+      const stored = yield* settings.getSettings.pipe(Effect.option);
+      if (stored._tag === "None")
+        return yield* fence("The Pen trust root could not be read; confirm it again.");
+      const next = stored.value.pen;
+      if (sameRoot(yield* Ref.get(desired), next)) return;
+      yield* Ref.set(desired, next);
+      yield* fence("The Pen trust root changed outside its confirmation; confirm it again.");
+    }),
+  );
+
+  // Subscribe before the startup read, so an edit while startup registers is never missed.
+  const changes = yield* settings.subscribeChanges;
   // No Pen-bound session survives a restart, before any listener accepts.
   yield* revokeEvery;
   const initial = (yield* settings.getSettings.pipe(Effect.orDie)).pen;
   yield* Ref.set(desired, initial);
   if (initial !== null) yield* transition(start(initial));
   yield* Effect.addFinalizer(() => fence("GOAT is stopping."));
-
-  // A pen value changed outside replaceTrustRoot (a hand edit) is fenced when observed and
-  // stays off until a person confirms a root again (design §7). The stored value decides, so a
-  // late notification of an earlier confirmation is not mistaken for an edit.
-  yield* settings.streamChanges.pipe(
-    Stream.runForEach(() =>
-      transition(
-        Effect.gen(function* () {
-          const stored = yield* settings.getSettings.pipe(Effect.option);
-          if (stored._tag === "None") return;
-          const next = stored.value.pen;
-          if (sameRoot(yield* Ref.get(desired), next)) return;
-          yield* Ref.set(desired, next);
-          yield* fence("The Pen trust root changed outside its confirmation; confirm it again.");
-        }),
-      ),
-    ),
+  yield* reconcile;
+  yield* changes.pipe(
+    Stream.runForEach(() => reconcile),
     Effect.forkScoped,
   );
 
@@ -273,6 +276,8 @@ export const make = Effect.fn("PenRuntime.make")(function* (
               yield* settings.updateSettings({ pen: root });
             }),
           );
+          if (root === null && (yield* Ref.get(unrevoked)))
+            return yield* new PenTrustRootError({ reason: UNREVOKED });
           if (root !== null && !(yield* start(root))) {
             const now = yield* Ref.get(status);
             return yield* new PenTrustRootError({
