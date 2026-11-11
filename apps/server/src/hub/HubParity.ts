@@ -19,7 +19,7 @@ import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { localOpenCodexRoutes } from "./localRoutes.ts";
+import { builtInCodexWiring, localOpenCodexRoutes } from "./localRoutes.ts";
 import { parityVerdict } from "./parity.ts";
 
 const INTERVAL_MS = 30 * 60 * 1000;
@@ -49,12 +49,13 @@ const make = Effect.gen(function* () {
     if (!snapshot.parityEvidence) return snapshot;
     const configured = yield* settings.getSettings.pipe(Effect.option);
     if (configured._tag === "None") return snapshot;
-    const wiring = localOpenCodexRoutes({
-      instances: configured.value.providerInstances,
-      providers: yield* providers.getProviders,
-      environment,
-      port: snapshot.runtime.port,
-    }).map(({ status, reason }) => ({ status, reason }));
+    const instances = configured.value.providerInstances;
+    const listed = yield* providers.getProviders;
+    const port = snapshot.runtime.port;
+    const wiring = [
+      ...localOpenCodexRoutes({ instances, providers: listed, environment, port }),
+      ...builtInCodexWiring({ instances, providers: listed, port }),
+    ].map(({ status, reason }) => ({ status, reason }));
     return { ...snapshot, parityEvidence: { ...snapshot.parityEvidence, wiring } };
   }).pipe(Effect.withSpan("HubParity.readLocal"));
 
@@ -63,7 +64,7 @@ const make = Effect.gen(function* () {
     scope: McpInvocationScope,
   ) {
     const home = yield* readLocal;
-    const remote = yield* hosts
+    const read = hosts
       .readOnHost(
         scope,
         {
@@ -91,15 +92,21 @@ const make = Effect.gen(function* () {
           return Effect.succeed(undefined);
         }),
       );
-    const entry = remote?.hosts.find(({ host }) => host === null);
+    // A fresh sample from the device itself, never a stale last-known one.
+    const fresh = (remote: typeof GoatHostStatusResult.Type | undefined) => {
+      const entry = remote?.hosts.find(({ host }) => host === null);
+      return entry?.reachability === "ok" && !entry.lastKnown
+        ? entry.metrics?.opencodex
+        : undefined;
+    };
+    // A loaded host or a cold Pen route can miss one read (G9, G14); a second read decides.
+    const device = fresh(yield* read) ?? fresh(yield* read);
     const checkedAt = yield* Clock.currentTimeMillis;
     const result = parityVerdict({
       deviceAlias,
       checkedAt,
       home,
-      ...(entry?.reachability === "ok" && !entry.lastKnown && entry.metrics?.opencodex
-        ? { device: entry.metrics.opencodex }
-        : {}),
+      ...(device === undefined ? {} : { device }),
     });
     yield* Ref.update(known, (current) => new Map(current).set(deviceAlias, result));
     return result;
