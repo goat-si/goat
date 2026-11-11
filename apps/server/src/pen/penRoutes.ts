@@ -33,7 +33,7 @@ const proxyRead: ReadonlyArray<PenRouteGrant> = [
 const ROUTES: ReadonlyArray<PenRoute> = [
   {
     methods: READ,
-    path: path(String.raw`/\.well-known/(goat|t3)/environment`),
+    path: path(String.raw`/\.well-known/goat/environment`),
     grants: [{ credential: "none" }],
     query: "none",
     upgrade: false,
