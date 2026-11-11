@@ -804,7 +804,7 @@ implementation to check message 1, message 2 and h. stream.json (v1.3, generated
 framing records (DATA, FIN, CREDIT) and records a receiver must refuse, each with its close code; `records` is always
 an array, and `fill` and `fillSize`, when present, mean that many DATA records of that many zero bytes are sent before
 `records`. The client and pairing reject cases in service.json are for a v1.3 reader of those forms (GOAT's, lane
-Q-S): it must refuse every one. The TS tests here check only that each carries a MAC right for its bytes and that the
+Q-S): it must refuse every one. The TS tests here check only that each carries a MAC right for its bytes, except the wrong-MAC cases, and that the
 v1.2 member-only reader refuses both valid new forms.
 
 ## Change log
