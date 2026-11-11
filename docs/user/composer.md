@@ -356,8 +356,8 @@ answers never enter the thread's history. On web and desktop, the question opens
 in a **Side chat** tab in the right panel. Send `/side` alone, use the side chat button
 in the thread header, or press `Mod+/` to open or close the tab. On mobile, `/side` is
 in the `/` menu at the start of a message in an existing thread, and the side chat opens
-as its own screen; `/side` alone opens it without asking anything, and `/btw` works the
-same way.
+as its own screen that names the thread it belongs to; tap that name to open the thread.
+`/side` alone opens it without asking anything, and `/btw` works the same way.
 
 The side chat starts from the conversation up to the last finished turn, and every
 question you send it also carries the thread's current state: whether it is working,
