@@ -147,3 +147,73 @@ it.effect("stores each task's newest showable ask, as the open asks list reads i
     assert.isNull(backfilled.get("unreadable"));
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect("completes on malformed tasks, keeping the readable asks of a mixed one", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 138 });
+    yield* sql`INSERT INTO channel_conversations
+      (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
+      VALUES ('c1', 'o1', 'slack', 'slack-1', 'k1', 'now')`;
+    const valid = task("valid", "running", { questions: ["01:00"] });
+    const question = valid.openQuestions[0];
+    const stored: ReadonlyArray<readonly [string, string, string | null]> = [
+      [
+        "mixed-questions",
+        JSON.stringify({ ...valid, openQuestions: ["oops", 42, null, question] }),
+        at("01:00"),
+      ],
+      [
+        "mixed-needs",
+        JSON.stringify({
+          ...valid,
+          openQuestions: [],
+          observed: {
+            pullRequests: [],
+            needsYou: [
+              "oops",
+              7,
+              { kind: "approval", since: at("04:00"), approval: "x" },
+              {
+                kind: "sign_in",
+                since: at("06:00"),
+              },
+            ],
+          },
+        }),
+        at("06:00"),
+      ],
+      ["questions-object", JSON.stringify({ ...valid, openQuestions: { a: question } }), null],
+      [
+        "questions-null",
+        JSON.stringify({
+          ...valid,
+          openQuestions: null,
+          observed: { pullRequests: [], needsYou: [{ kind: "usage_limit", since: at("05:00") }] },
+        }),
+        at("05:00"),
+      ],
+      ["needs-string", JSON.stringify({ ...valid, observed: { needsYou: "oops" } }), at("01:00")],
+      ["no-observed", JSON.stringify(valid), at("01:00")],
+      ["not-json", "{not json", null],
+      ["scalar-json", JSON.stringify("just a string"), null],
+    ];
+    for (const [taskId, json] of stored) {
+      yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
+        generation, task_json, created_at, updated_at)
+        VALUES (${taskId}, 'o1', 'c1', 'running', 1, 1, ${json}, 'now', 'now')`;
+    }
+
+    yield* runMigrations({ toMigrationInclusive: 139 });
+    const backfilled = new Map(
+      (yield* sql<{ readonly task_id: string; readonly newest_ask_at: string | null }>`
+          SELECT task_id, newest_ask_at FROM channel_tasks`).map((row) => [
+        row.task_id,
+        row.newest_ask_at,
+      ]),
+    );
+    for (const [taskId, , expected] of stored) {
+      assert.strictEqual(backfilled.get(taskId), expected, taskId);
+    }
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
