@@ -13,7 +13,7 @@ import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
-import type { MobileCheckInDraft } from "./mobileCheckInDraft";
+import type { MobileCheckInDraft, MobileCheckInDraftUpdate } from "./mobileCheckInDraft";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
 /** The bot's routines on its home: the check-in form, then each bound routine with its switch. */
@@ -28,7 +28,7 @@ export function MobileBotRoutines(props: {
   readonly rows: ReadonlyArray<BotRoutineRow>;
   /** The check-in being set up, kept by the Home list across its cell unmounting. */
   readonly checkInDraft: MobileCheckInDraft;
-  readonly onCheckInDraftChange: (draft: MobileCheckInDraft) => void;
+  readonly onCheckInDraftChange: MobileCheckInDraftUpdate;
 }) {
   const { environmentId, botName } = props;
   return (

@@ -3,7 +3,9 @@ import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { BotThreadRow, ChannelTaskId } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import { AsyncResult } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
@@ -70,6 +72,8 @@ const state = vi.hoisted(() => ({
   workRevision: null as string | null,
   hidden: [] as string[],
   machinesKey: undefined as string | undefined,
+  // The check-in save the form starts; a test settles it when it chooses.
+  upsert: vi.fn<() => Promise<unknown>>(),
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) => (atom === "openable" ? state.remoteOpenable : true),
@@ -99,7 +103,20 @@ vi.mock("../../state/channels", () => ({
   },
 }));
 vi.mock("../../state/server", () => ({
-  serverEnvironment: { scheduledTasksLive: () => "routines" },
+  serverEnvironment: {
+    scheduledTasksLive: () => "routines",
+    upsertScheduledTask: { label: "upsert", permissionAtom: () => "permission", run: state.upsert },
+  },
+}));
+vi.mock("../../state/entities", () => ({
+  useThreadShell: () => ({ id: "bot", projectId: "bot-project", modelSelection: null }),
+}));
+vi.mock("@expo/ui/community/datetime-picker", () => ({
+  DateTimePicker: (props: { onValueChange: (event: unknown, date: Date) => void }) => (
+    <button onClick={() => props.onValueChange(undefined, new Date(2026, 10, 11, 7, 30))}>
+      Set 07:30
+    </button>
+  ),
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
@@ -164,19 +181,6 @@ vi.mock("./MobileBotLibrary", () => ({ MobileBotLibrary: () => <p>bot files</p> 
 vi.mock("./MobileBotMemory", () => ({
   MobileBotMemory: (props: { onDraft?: (text: string) => void }) => (
     <button onClick={() => props.onDraft?.("Remember this")}>Draft a note</button>
-  ),
-}));
-vi.mock("./MobileBotCheckInForm", () => ({
-  MobileBotCheckInForm: (props: {
-    draft?: { timeOfDay: string };
-    onDraftChange?: (draft: { timeOfDay: string }) => void;
-  }) => (
-    <button
-      aria-label="check-in form"
-      onClick={() => props.onDraftChange?.({ ...props.draft, timeOfDay: "07:30" })}
-    >
-      {`check-in form ${props.draft?.timeOfDay ?? ""}`}
-    </button>
   ),
 }));
 vi.mock("./goatBotHomeMode", () => ({
@@ -309,7 +313,7 @@ it("shows the bot's machines, work and routines on Home, and files and notes in 
     "Work",
     "Check the disks",
     "Routines",
-    "check-in form",
+    "Check in on me",
   ])
     expect(container.textContent).toContain(text);
   await press("Library");
@@ -550,13 +554,60 @@ it("reads the machines again when the bot's work changes outside its listed task
 it("keeps a check-in being edited when its entry scrolls away and back", async () => {
   state.rows = [task("t1", "Check the disks", "worker-1")];
   await open();
-  await press("check-in form");
-  expect(container.textContent).toContain("check-in form 07:30");
+  await press("Check in on me");
+  await press("Check-in time, 09:00");
+  await press("Set 07:30");
+  expect(button("Check-in time, 07:30")).toBeDefined();
   const routines = ["routines", "routines-label"];
   state.hidden = routines;
   await open();
-  expect(container.textContent).not.toContain("check-in form");
+  expect(button("Check-in time, 07:30")).toBeUndefined();
   state.hidden = [];
   await open();
-  expect(container.textContent).toContain("check-in form 07:30");
+  expect(button("Check-in time, 07:30")).toBeDefined();
+});
+
+function pendingSave() {
+  let settle: (result: unknown) => void = () => {};
+  state.upsert.mockReset();
+  state.upsert.mockReturnValue(
+    new Promise((resolve) => {
+      settle = resolve;
+    }),
+  );
+  return (result: unknown) => act(async () => settle(result));
+}
+
+it("a check-in edited while its save is still running keeps the edit when the save finishes", async () => {
+  const settle = pendingSave();
+  await open();
+  await press("Check in on me");
+  await press("Save");
+  expect(button("Save")?.disabled).toBe(true);
+  // The entry scrolls away and back while the save runs, and the person changes the time.
+  state.hidden = ["routines", "routines-label"];
+  await open();
+  state.hidden = [];
+  await open();
+  expect(button("Save")?.disabled).toBe(true);
+  await press("Check-in time, 09:00");
+  await press("Set 07:30");
+  await settle(AsyncResult.success({ task: {} }));
+  expect(button("Check-in time, 07:30")).toBeDefined();
+  expect(button("Save")?.disabled).toBe(false);
+});
+
+it("a check-in save that fails after its entry scrolled away shows why when the entry returns", async () => {
+  const settle = pendingSave();
+  await open();
+  await press("Check in on me");
+  await press("Save");
+  state.hidden = ["routines", "routines-label"];
+  await open();
+  await settle(AsyncResult.failure(Cause.fail(new Error("Denied"))));
+  state.hidden = [];
+  await open();
+  expect(container.textContent).toContain("Couldn't save the check-in: Denied");
+  // Saving again is allowed once the failed save is over.
+  expect(button("Save")?.disabled).toBe(false);
 });

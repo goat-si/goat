@@ -47,7 +47,11 @@ import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskL
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { MobileBotRoutines } from "./MobileBotRoutines";
-import { MOBILE_CHECK_IN_DRAFT } from "./mobileCheckInDraft";
+import {
+  MOBILE_CHECK_IN_DRAFT,
+  type MobileCheckInDraft,
+  type MobileCheckInDraftUpdate,
+} from "./mobileCheckInDraft";
 
 // Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
@@ -149,10 +153,17 @@ export function MobileBotWork(props: {
   const open = props.open ?? ownOpen;
   const setOpen = props.onOpenChange ?? setOwnOpen;
   const [tab, setTab] = useState<(typeof tabs)[number]>("Home");
-  // The check-in being set up lives here: its virtualized cell can unmount while the person scrolls.
-  const checkInThread = home.botRef?.threadId ?? null;
-  const [checkIn, setCheckIn] = useState({ thread: checkInThread, draft: MOBILE_CHECK_IN_DRAFT });
-  const checkInDraft = checkIn.thread === checkInThread ? checkIn.draft : MOBILE_CHECK_IN_DRAFT;
+  // The check-in being set up, and its save, live here for this bot on this machine: its
+  // virtualized cell can unmount while the person scrolls or a save is still running.
+  // A save that finishes after the sheet moved to another bot settles that bot's draft only.
+  const checkInScope = JSON.stringify([environmentId, member?.threadId ?? home.botRef?.threadId]);
+  const [checkIns, setCheckIns] = useState<Readonly<Record<string, MobileCheckInDraft>>>({});
+  const checkInDraft = checkIns[checkInScope] ?? MOBILE_CHECK_IN_DRAFT;
+  const updateCheckIn: MobileCheckInDraftUpdate = (update) =>
+    setCheckIns((current) => ({
+      ...current,
+      [checkInScope]: update(current[checkInScope] ?? MOBILE_CHECK_IN_DRAFT),
+    }));
   const peekEntry =
     peekTaskId === null
       ? null
@@ -375,14 +386,15 @@ export function MobileBotWork(props: {
         <MobileBotRoutines
           environmentId={environmentId}
           connected={selected?.connected === true}
-          botThreadId={home.botRef?.threadId ?? null}
+          // The bot this home shows: a member's own conversation, not the main bot's.
+          botThreadId={routineThreadId}
           botName={botName}
           tasks={routines.data?.tasks ?? null}
           error={Boolean(routines.error)}
           onRetry={routines.refresh}
           rows={boundRoutines}
           checkInDraft={checkInDraft}
-          onCheckInDraftChange={(draft) => setCheckIn({ thread: checkInThread, draft })}
+          onCheckInDraftChange={updateCheckIn}
         />
       ),
     });

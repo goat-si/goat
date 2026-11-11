@@ -104,7 +104,7 @@ export function mobileBotTaskListItems(props: {
     items.push(label(`section:${section}`, section));
     for (const { row, threads } of tasks) {
       items.push({
-        key: `task:${row.task.taskId}`,
+        key: JSON.stringify(["task", row.task.taskId]),
         render: () => (
           <View>
             <Pressable
@@ -143,7 +143,12 @@ export function mobileBotTaskListItems(props: {
       // Each work thread is an entry of its own, so a task with many threads mounts only those in view.
       for (const thread of threads) {
         items.push({
-          key: `task:${row.task.taskId}:thread:${thread.environmentId}:${thread.threadId}`,
+          key: JSON.stringify([
+            "task-thread",
+            row.task.taskId,
+            thread.environmentId,
+            thread.threadId,
+          ]),
           render: () => {
             const coding = props.rows.find(
               (candidate) =>
@@ -177,7 +182,7 @@ export function mobileBotTaskListItems(props: {
   if (others.length > 0) items.push(label("section:other", "Other threads"));
   for (const row of others) {
     items.push({
-      key: `thread:${row.environmentId}:${row.threadId}`,
+      key: JSON.stringify(["thread", row.environmentId, row.threadId]),
       render: () => (
         <Pressable
           accessibilityRole="button"
@@ -195,7 +200,7 @@ export function mobileBotTaskListItems(props: {
   if (earlier.length > 0) items.push(label("section:earlier", "Earlier in chat"));
   for (const card of earlier) {
     items.push({
-      key: `earlier:${card.key}`,
+      key: JSON.stringify(["earlier", card.key]),
       render: () => (
         <GoatBotTaskRow
           card={card}
