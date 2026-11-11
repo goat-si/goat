@@ -2975,6 +2975,11 @@ export function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
 }
 
+export function resolveWindowsHelperChannel(version: string): "stable" | "nightly" | "preview" {
+  if (isDesktopPreviewVersion(version)) return "preview";
+  return resolveDesktopUpdateChannel(version) === "nightly" ? "nightly" : "stable";
+}
+
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
 }
@@ -4276,7 +4281,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     yield* stageWindowsComputerUseHelper({
       repoRoot,
       stageResourcesDir,
-      channel: resolveDesktopUpdateChannel(appVersion) === "nightly" ? "nightly" : "stable",
+      channel: resolveWindowsHelperChannel(appVersion),
       arch: options.arch === "arm64" ? "arm64" : "x64",
       helperDir: options.computerUseHelperDir,
       signed: options.signed,

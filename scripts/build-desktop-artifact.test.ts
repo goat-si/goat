@@ -72,6 +72,7 @@ import {
   LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
   resolveOptionalMacPasskeySigningConfiguration,
   resolveDesktopProductName,
+  resolveWindowsHelperChannel,
   resolveResourceMonitorRustTargets,
   resolveVp,
   VpNotFoundError,
@@ -2110,6 +2111,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "GOAT");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "GOAT (Nightly)");
+  });
+
+  it("builds a local Windows helper with the identity its desktop channel expects", () => {
+    assert.equal(resolveWindowsHelperChannel("0.0.17"), "stable");
+    assert.equal(resolveWindowsHelperChannel("0.0.17-nightly.20260413.42"), "nightly");
+    assert.equal(resolveWindowsHelperChannel("0.0.41-preview.20260912.1589"), "preview");
+    assert.equal(resolveWindowsHelperChannel("0.0.33-pr.8182.1"), "preview");
   });
 
   it("limits Electron locales and excludes separately packaged resources", () => {
