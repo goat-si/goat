@@ -8,6 +8,7 @@ import {
   OrchestratorMcpFailure,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import { CHILD_EXPECT_LINK_VERSION, childSyncsByLink } from "@goat/shared/opencodexRelease";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
@@ -136,6 +137,11 @@ export const makeChildConnection = Effect.fn("OpenCodexChildReady.makeChildConne
                 "conflict",
                 "Child is already connected or its role is unknown.",
               );
+            if (op.kind === "sync" && !childSyncsByLink(executable.version))
+              return yield* refused(
+                "provider_unavailable",
+                `OpenCodex here is older than ${CHILD_EXPECT_LINK_VERSION}, so it cannot sync bound to one link.`,
+              );
             const args =
               op.kind === "connectHubClient"
                 ? [
@@ -147,7 +153,9 @@ export const makeChildConnection = Effect.fn("OpenCodexChildReady.makeChildConne
                   ]
                 : op.kind === "disconnect"
                   ? ["disconnect", "--json"]
-                  : ["restart"];
+                  : op.kind === "sync"
+                    ? ["sync", "--expect-link", op.expectedLinkId]
+                    : ["restart"];
             yield* deps.invalidateProof(input.homeEnvironmentId);
             yield* authorize(input, scope);
             // Output is discarded: a process may echo its stdin.

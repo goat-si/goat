@@ -107,11 +107,11 @@ it.effect("a busy device defers the join's sync, and the repair ladder does not 
 
 it.effect("a connection that moved during the join's sync is reported, never as synced", () =>
   Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED, syncExit: 91 });
+    const hub = yield* setup({ pin: PINNED, syncExit: 5 });
     const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
     const sync = result.steps.find(({ step }) => step === "sync");
-    expect(sync?.outcome).toBe("failed");
-    expect(sync?.detail).toContain("changed");
+    expect(sync?.outcome).toBe("deferred");
+    expect(sync?.detail).toContain("not connected over");
     expect(result.state).toBe("degraded");
   }),
 );
@@ -133,7 +133,7 @@ it.effect("a join whose parity is unproven says which checks are unproven", () =
 
 it.effect("a guarded join sync that failed is not retried by the ladder's unguarded sync", () =>
   Effect.gen(function* () {
-    const hub = yield* setup({ pin: PINNED, syncExit: 91, verdicts: [verdict(["P6"]), verdict()] });
+    const hub = yield* setup({ pin: PINNED, syncExit: 5, verdicts: [verdict(["P6"]), verdict()] });
     yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
     expect(hub.calls).not.toContain("device mac-studio sync");
   }),
@@ -153,7 +153,6 @@ it.effect("a join whose new link was replaced before its sync is not reported li
   Effect.gen(function* () {
     const hub = yield* setup({
       pin: PINNED,
-      syncExit: 90,
       replacedDuringSync: "lnk_aaaaaaaaaaaaaaaa",
     });
     const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
@@ -168,5 +167,23 @@ it.effect("a join whose new link is gone from the Home record is not reported li
     const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
     expect(result.state).toBe("degraded");
     expect(result.message).toContain("could not confirm");
+  }),
+);
+
+it.effect("consent withdrawn while link add runs stops the join's sync", () =>
+  Effect.gen(function* () {
+    let consenting = true;
+    const hub = yield* setup({ pin: PINNED, onLinkAdd: () => (consenting = false) });
+    const person = {
+      sessionId: "person",
+      scopes: ["orchestration:operate", "settings:write"] as const,
+    };
+    const result = yield* hub.membership.joinWithConsent(
+      scope,
+      "mac-studio",
+      Effect.sync(() => (consenting ? { ...person, scopes: [...person.scopes] } : undefined)),
+    );
+    expect(hub.calls.filter((call) => call.startsWith("sync "))).toEqual([]);
+    expect(result.steps.find(({ step }) => step === "sync")?.outcome).toBe("deferred");
   }),
 );

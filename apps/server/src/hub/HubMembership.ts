@@ -318,7 +318,7 @@ const make = Effect.gen(function* () {
       });
     }
     steps.push({ step: "link_add", outcome: "ok", detail: linkId });
-    const synced = yield* syncOverLink(alias, linkId, scope);
+    const synced = yield* syncOverLink(alias, linkId, caller.connection);
     steps.push(synced.step);
     const verified = yield* ladder(
       scope,

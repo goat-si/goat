@@ -26,9 +26,9 @@ export const hubEntries = {
     verb: "child_connection",
     name: "goat_hub_child_connection",
     toolkit: "hostStatus",
-    summary: "Connect, disconnect or restart this Child's OpenCodex connection.",
+    summary: "Connect, disconnect, restart or sync this Child's OpenCodex connection.",
     description:
-      "Connect this machine's OpenCodex to a Hub, disconnect it, or restart it. Needs an ordinary live hub.manage session and refuses every opencodex-child-setup session. A pairing code reaches OpenCodex only on stdin.",
+      "Connect this machine's OpenCodex to a Hub, disconnect it, restart it, or sync it bound to one link (ocx sync --expect-link, OpenCodex 2.93.0 or later, only while no turn runs). Needs an ordinary live hub.manage session and refuses every opencodex-child-setup session. A pairing code reaches OpenCodex only on stdin.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,

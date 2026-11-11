@@ -29,6 +29,11 @@ export const parseOpenCodexVersion = (text: string) =>
 export const supportedOpenCodexVersion = (version: string) =>
   parseSemver(version) !== null && compareSemverVersions(version, CHILD_MINIMUM_VERSION) >= 0;
 
+/** The first OpenCodex whose `ocx sync --expect-link` binds a sync to one link; OpenCodex gates it here too. */
+export const CHILD_EXPECT_LINK_VERSION = "2.93.0";
+export const childSyncsByLink = (version: string) =>
+  parseSemver(version) !== null && compareSemverVersions(version, CHILD_EXPECT_LINK_VERSION) >= 0;
+
 /** The reviewed archive for this machine; undefined when GOAT pins none for it. */
 export const resolveOpenCodexRelease = (
   platform: string,
