@@ -32,54 +32,62 @@
   and lineage are read from the kept `found` and `admit` records, never from a record's past. A record
   that does not fit is kept as a bare hash while a kept record names it, or dropped. Nodes of the old
   epoch and the new one do not sync.
-- **Reasons.** A lineage cannot be multiplied by admitting more keys, since every key it admits joins it.
+- **Reasons.** A lineage cannot be multiplied by admitting more keys, since every key it admits joins it,
+  and its number is fixed by the founder's invite, so records arriving later never renumber it.
   Shares chosen by a fixed key of each record make the kept set the same on every node once they have
   exchanged records. Reading admission from the kept admits, and having each record name its own
   previous record, means a left-out record of another lineage changes nothing about an honest record.
 
 ## Rule
 
-- **Introducer.** A key's introducer is the kept `found` or `admit` whose card subject is that key; of
-  several, the one with the smallest raw hash. A key without one is not introduced. A record is admissible
-  when its signer is introduced and, for a `revoke`, each subject is too. The view still decides what a
-  record does at its turn; this only replaces the storage check "introduced in its past".
-- **Depth.** The founder's depth is 0; a key's depth is its introducer's signer's depth plus 1.
-- **Lineage.** The founder is lineage 0. The founder's admits, ordered by the founder's counter `n` then
-  raw hash, put their subjects in lineages 1 to 15 in that order; later ones put their subjects in
-  lineage 0. Any other key is in the lineage of its introducer's signer. A record is charged to its
-  signer's lineage.
+- **Introducer.** A key's introducer is the kept `admit` naming it whose signer is introduced at the
+  shallowest depth; of several there, the one with the smallest raw hash (the founder introduces itself).
+  An admit names its signer as the card's inviter, so a card cannot be replayed by another member. A key
+  without an introducer is not introduced. A record is admissible when its signer is introduced and, for
+  a `revoke`, each subject is too. The view still decides what a record does at its turn; this only
+  replaces the storage check "introduced in its past".
+- **Depth.** The founder's depth is 0; a key's depth is its introducer's signer's depth plus 1. A key
+  admitting itself, or admitted again deeper, keeps its shallowest introduction.
+- **Lineage.** The founder alone is lineage 0. A key the founder admits is in lineage
+  1 + (SHA-256 of its invite nonce) mod 15: the founder chose the nonce, and no other record changes it.
+  Any other key is in the lineage of its introducer's signer. A record is charged to its signer's lineage.
 - **Own chain.** A record with `n > 1` names its signer's record `n - 1` directly in `prev`, or has no
   effect. Its effect then depends on nothing another signer's records do.
-- **Shares.** Per lineage: 220 records of other types, 16 `revoke` or `lock` records, and 16 `admit`
-  records signed by keys other than the founder. The founder's own admits share 64 places. Total
-  16 x 252 + 64 = 4096. Within a share a node keeps the smallest records by a fixed key: raw hash, and
-  for admits (depth, raw hash), so an admit never displaces a shallower one.
+- **Shares.** Per lineage: 160 records of other types, 16 `lock` records, 16 `admit` records signed by
+  keys other than the founder, and 56 revoke places. The founder's own admits share 64 places, kept by
+  the founder's counter `n` then raw hash, so a later admit never displaces an earlier one. A revoke place
+  holds one revoke per (subject, compromised), the smallest of each, and a lineage keeps the 56 smallest of
+  those. Otherwise a share keeps its smallest records by raw hash, admits by (depth, raw hash). A full set
+  is 16 x 248 + 64 + the found record = 4033 records, so it fits a 4096-hash `have`.
 - **Kept, bare and dropped.** A record outside its share is dropped; one whose signer has no admit yet
   waits in the bounded pool. A record's parents need not be present: a hash a kept record names without
   its record is kept bare, has no effect, and counts as present in canonical order.
 
 ## Convergence and bound
 
-- **Same set on every node.** Compute level by level. The founder's admits depend on nothing but the
-  candidates, so every node that has exchanged them keeps the same 64. Each further depth depends only on
-  the kept admits above it, and within a share a deeper admit never displaces a shallower one, so the kept
-  admits, the introducers, depths and lineages are the same on every node. Other records only need their
-  signer's introducer and lineage, so each share's kept records are the same k smallest. Bare hashes
-  follow from the kept records. A node replaces a kept record only by a smaller one and keeps offering
-  what it keeps, so exchanging records reaches that set whatever the arrival order.
-- **Bound.** At most 4096 records with bodies, plus bare hashes named by them (at most 64 each).
+- **Same set on nodes that exchange records.** Compute level by level. The founder's admits and their
+  lineages depend only on those admits; each further depth depends only on the kept admits above it, and
+  a deeper admit never displaces a shallower one, so introducers, depths and lineages are the same on
+  every node holding the same admits. Other records need only their signer's introducer and lineage, and
+  each share keeps a fixed number by a fixed key, so the kept set is a function of the records a node
+  holds. Nodes offer each other what they keep, so after an exchange they hold and keep the same set,
+  whatever the arrival order. A record every node dropped does not come back if room opens later; with
+  lineages fixed by nonce, an honest lineage's room does not move.
+- **Bound.** At most 4033 records with bodies, plus bare hashes named by them (at most 64 each).
   Candidates outside the shares are dropped, so a flood of forks costs the sender, not the receivers.
-- **A revoke always fits.** A member in another lineage records the revoke within its own lineage's
-  16 revoke places. The founder can always revoke. Members sharing the filler's lineage cannot, until
-  someone outside it revokes the filler.
+- **A revoke fits.** A member in another lineage, or the founder, records the revoke in its own lineage's
+  revoke places, where the filler cannot write. It fails only if that lineage already holds 56 smaller
+  revokes of other subjects. Members sharing the filler's lineage cannot, until someone outside it
+  revokes the filler.
 - **Honest history.** A record left out of another lineage's share changes no honest record: admission
   and lineage come from kept admits, and an honest record's own chain is named directly.
 - **What a hostile member can do.** Fill its own lineage, so honest keys in that lineage lose records
-  with large hashes. A hostile founder can fill lineage 0 and the founder admits; the remedy for a hostile
-  founder is still a new mesh.
-- **Honest limit.** A lineage that legitimately signs more than 220 other records (renames, host key
-  changes over years) loses the ones with the largest hashes, not its oldest. Lineage compaction is
-  follow-up work if that happens in practice.
+  with large hashes, and pull a key that signs a second card into its lineage (that key consented). A
+  hostile founder can fill lineage 0 and the founder admits; the remedy for a hostile founder is still a new
+  mesh.
+- **Honest limits.** A lineage that legitimately signs more than 160 other records (renames, host key
+  changes over years), or revokes more than 56 machines, loses the ones with the largest hashes. Two of the
+  founder's machines can share a lineage by nonce. Lineage compaction is follow-up work if that happens.
 
 ## Compatibility
 
@@ -96,8 +104,8 @@
 Each step lands as its own pull request, starting with a test that fails on `dev`.
 
 1. Introducers, depths and lineages of a record set (`apps/pen/internal/mesh`): a key admitted by a
-   member of lineage 3 is in lineage 3; the founder's 16th admit's subject is in lineage 0; the result
-   does not depend on the order records are given in.
+   member joins its lineage; a founder's admit's lineage does not move when other admits are missing; a
+   self-admit does not move a key; the result does not depend on the order records are given in.
 2. Shares and bare hashes in `Store`, behind the new epoch: the same candidates delivered in opposite
    orders, then exchanged, give the same kept set and bare hashes; an honest record naming a filler's
    left-out record is kept; a flood of one lineage's records keeps its share and drops the rest.
@@ -109,7 +117,7 @@ Each step lands as its own pull request, starting with a test that fails on `dev
 
 ## Tradeoffs
 
-- A founder starts at most 15 lineages; later direct admits share the founder's.
+- 15 lineages below the founder; two of the founder's machines can share one, chosen by their invites.
 - Mixed old and new nodes do not sync; members upgrade before a mesh moves.
 - Honest members in the filler's own lineage lose records until it is revoked.
 - Bare hashes add a second kind of stored entry to the set, the save file and sync.
