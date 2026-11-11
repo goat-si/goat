@@ -7,7 +7,7 @@ import {
   goatBotReplyMayNameFile,
 } from "@goat/client-runtime/goatBot";
 import type { ChannelBotArtifact, EnvironmentId } from "@goat/contracts";
-import { createContext, use, useEffect, useEffectEvent, useState } from "react";
+import { createContext, memo, use, useEffect, useEffectEvent, useState } from "react";
 
 import { FileIcon, FileTextIcon, ImageIcon } from "~/components/solar";
 import { channelEnvironment } from "~/state/channels";
@@ -16,7 +16,8 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import ChatMarkdown from "../ChatMarkdown";
-import { afterLastChunkRequest } from "./goatBotFileReads";
+import { queuePreviewRead } from "./goatBotFileReads";
+import { GOAT_BOT_PREVIEW_REMARK_PLUGINS } from "./goatBotPreviewMarkdown";
 
 /** The bot's server and how to open one of its Library files; null outside a bot chat. */
 export const GoatBotOpenFileContext = createContext<{
@@ -32,7 +33,11 @@ type Preview =
   | null;
 
 /** Cards under a bot reply for each Library file it names, so the person can open it. */
-export function GoatBotReplyFiles({ text }: { readonly text: string }) {
+export const GoatBotReplyFiles = memo(function GoatBotReplyFiles({
+  text,
+}: {
+  readonly text: string;
+}) {
   const files = use(GoatBotOpenFileContext);
   const environmentId = files?.environmentId ?? null;
   const configs = useServerConfigs();
@@ -43,9 +48,9 @@ export function GoatBotReplyFiles({ text }: { readonly text: string }) {
   const listing = useEnvironmentQuery(
     wanted ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null,
   );
-  if (!wanted || files === null || listing.data === null) return null;
-  const named = goatBotReplyFiles(text, listing.data.artifacts);
-  if (named.length === 0) return null;
+  const artifacts = wanted ? (listing.data?.artifacts ?? null) : null;
+  const named = artifacts === null ? [] : goatBotReplyFiles(text, artifacts);
+  if (files === null || named.length === 0) return null;
   return (
     <div className="flex w-full max-w-[min(100%,34rem)] flex-col gap-2 pt-1.5">
       {named.map((file) => (
@@ -58,7 +63,7 @@ export function GoatBotReplyFiles({ text }: { readonly text: string }) {
       ))}
     </div>
   );
-}
+});
 
 function GoatBotFileCard({
   environmentId,
@@ -74,16 +79,17 @@ function GoatBotFileCard({
   const read = useAtomCommand(channelEnvironment.readBotArtifact, { reportFailure: false });
   const [preview, setPreview] = useState<Preview>(null);
   const readFirstChunk = useEffectEvent(() =>
-    afterLastChunkRequest(environmentId, () =>
+    queuePreviewRead(environmentId, () =>
       read({ environmentId, input: { relativePath: file.relativePath } }),
     ),
   );
-  // oxlint-disable-next-line goat/react-effect-budget -- The first chunk arrives after render; an image's URL is let go when the card goes.
+  // oxlint-disable-next-line goat/react-effect-budget -- The first chunk arrives after render; a card that goes leaves the queue and lets its image URL go.
   useEffect(() => {
     let cancelled = false;
     let url: string | null = null;
-    void readFirstChunk().then((answer) => {
-      if (cancelled || answer._tag !== "Success") return;
+    const pending = readFirstChunk();
+    void pending.result.then((answer) => {
+      if (cancelled || answer === null || answer._tag !== "Success") return;
       const next = botArtifactPreview(answer.value);
       if (next?.kind === "image") {
         url = URL.createObjectURL(new Blob([next.bytes], { type: next.mimeType }));
@@ -94,6 +100,7 @@ function GoatBotFileCard({
     });
     return () => {
       cancelled = true;
+      pending.cancel();
       if (url !== null) URL.revokeObjectURL(url);
     };
   }, []);
@@ -118,7 +125,13 @@ function GoatBotFileCard({
           {preview?.kind === "image" ? (
             <img src={preview.url} alt="" className="size-full object-cover" />
           ) : preview?.kind === "markdown" ? (
-            <ChatMarkdown text={preview.text} cwd={undefined} fileActions={false} />
+            <ChatMarkdown
+              text={preview.text}
+              cwd={undefined}
+              fileActions={false}
+              parseRawHtml={false}
+              extraRemarkPlugins={GOAT_BOT_PREVIEW_REMARK_PLUGINS}
+            />
           ) : preview !== null ? (
             <span className="font-mono leading-5 whitespace-pre-wrap text-muted-foreground">
               {preview.text}

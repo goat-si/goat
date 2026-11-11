@@ -6,7 +6,13 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import "../../index.css";
 
-const state = vi.hoisted(() => ({ listed: 0, reads: [] as Array<string> }));
+const state = vi.hoisted(() => ({
+  listed: 0,
+  reads: [] as Array<string>,
+  // Saved files by path: their type and contents; summary.md unless a test sets others.
+  files: new Map<string, { readonly mimeType: string; readonly text: string }>(),
+}));
+const SUMMARY = { mimeType: "text/markdown", text: "# Weekly summary\nThree merged." };
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/hooks/useSettings")>()),
   usePrimarySettings: () => "system",
@@ -33,13 +39,14 @@ vi.mock("~/state/query", async (original) => ({
       data:
         atom === "artifacts"
           ? {
-              artifacts: [
-                {
-                  relativePath: "reports/summary.md",
-                  size: 30,
-                  modifiedAt: "2026-11-07T10:00:00.000Z",
-                },
-              ],
+              artifacts: (state.files.size === 0
+                ? ["reports/summary.md"]
+                : [...state.files.keys()]
+              ).map((relativePath) => ({
+                relativePath,
+                size: 30,
+                modifiedAt: "2026-11-07T10:00:00.000Z",
+              })),
               truncated: false,
             }
           : null,
@@ -57,13 +64,14 @@ vi.mock("~/state/use-atom-command", async (original) => ({
     () =>
     async ({ input }: { input: { relativePath: string } }) => {
       state.reads.push(input.relativePath);
-      const bytes = new TextEncoder().encode("# Weekly summary\nThree merged.");
+      const file = state.files.get(input.relativePath) ?? SUMMARY;
+      const bytes = new TextEncoder().encode(file.text);
       return {
         _tag: "Success",
         value: {
           status: "chunk",
           relativePath: input.relativePath,
-          mimeType: "text/markdown",
+          mimeType: file.mimeType,
           size: bytes.length,
           offset: 0,
           bytesBase64: Base64.encode(bytes),
@@ -92,6 +100,7 @@ const reply = (id: string, text: string): GoatBotRow => ({
 it("a reply naming a saved file shows its card with a preview, which opens the file", async () => {
   state.listed = 0;
   state.reads = [];
+  state.files = new Map();
   const open = vi.fn();
   await using screen = await render(
     <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open }}>
@@ -119,6 +128,7 @@ it("a reply naming a saved file shows its card with a preview, which opens the f
 it("a reply whose code names no file asks the server for nothing", async () => {
   state.listed = 0;
   state.reads = [];
+  state.files = new Map();
   await using screen = await render(
     <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
       <GoatBotTimeline rows={[reply("plain", "Run `vp test` next.")]} onRetry={() => {}} />
@@ -128,4 +138,86 @@ it("a reply whose code names no file asks the server for nothing", async () => {
   await expect.element(screen.getByText(/next\./)).toBeVisible();
   expect(state.listed).toBe(0);
   expect(state.reads).toEqual([]);
+});
+
+const remote = "https://tracker.example.com";
+
+/** Every element that would fetch something, and every resource the page requested from there. */
+function fetchedFrom(card: Element) {
+  const elements = [
+    ...card.querySelectorAll("img, video, audio, source, iframe, object, embed, picture, image, a"),
+  ].filter((element) => !(element.getAttribute("src") ?? "").startsWith("blob:"));
+  const requests = performance
+    .getEntriesByType("resource")
+    .filter((entry) => entry.name.startsWith(remote));
+  return { elements: elements.map((element) => element.outerHTML), requests };
+}
+
+it("a saved file's preview loads nothing the file names, only its words", async () => {
+  state.listed = 0;
+  state.reads = [];
+  state.files = new Map([
+    [
+      "reports/tracked.md",
+      {
+        mimeType: "text/markdown",
+        text: [
+          "# Tracked report",
+          "",
+          `![tracking pixel](${remote}/pixel.png)`,
+          "",
+          `<img src="${remote}/raw.png" alt="raw">`,
+          "",
+          `See [the vendor site](${remote}/page) and ![chart][c].`,
+          "",
+          `![clip](${remote}/clip.mp4)`,
+          "",
+          `[c]: ${remote}/chart.png`,
+        ].join("\n"),
+      },
+    ],
+  ]);
+  await using screen = await render(
+    <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+      <GoatBotTimeline rows={[reply("saved", "Saved `reports/tracked.md`.")]} onRetry={() => {}} />
+    </GoatBotOpenFileContext>,
+    { router: false }, // The reply has no links; the file's links must not become any.
+  );
+  await expect.element(screen.getByText("Tracked report")).toBeInTheDocument();
+  const card = screen.getByRole("button", { name: "Open tracked.md" }).element().parentElement;
+  if (card === null) throw new Error("expected the file card");
+  expect(card.textContent).toContain("tracking pixel");
+  expect(card.textContent).toContain("See the vendor site and chart.");
+  expect(card.textContent).not.toContain("<img");
+  expect(fetchedFrom(card)).toEqual({ elements: [], requests: [] });
+});
+
+it("an SVG preview is drawn as an image, so its scripts and external references never run", async () => {
+  state.listed = 0;
+  state.reads = [];
+  state.files = new Map([
+    [
+      "charts/plot.svg",
+      {
+        mimeType: "image/svg+xml",
+        text: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image href="${remote}/svg.png" width="10" height="10"/><script>document.title = "ran"</script></svg>`,
+      },
+    ],
+  ]);
+  const title = document.title;
+  await using screen = await render(
+    <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+      <GoatBotTimeline rows={[reply("saved", "Saved `charts/plot.svg`.")]} onRetry={() => {}} />
+    </GoatBotOpenFileContext>,
+    { router: false }, // This reply has no links.
+  );
+  const card = screen.getByRole("button", { name: "Open plot.svg" }).element().parentElement;
+  if (card === null) throw new Error("expected the file card");
+  await vi.waitFor(() => expect(card.querySelector("img")?.getAttribute("src")).toMatch(/^blob:/));
+  const image = card.querySelector("img");
+  await vi.waitFor(() => expect(image?.complete).toBe(true));
+  // The file is never put in the page as markup: only the card's own icon is an svg.
+  expect(card.querySelector("[inert] svg, script")).toBeNull();
+  expect(document.title).toBe(title);
+  expect(fetchedFrom(card)).toEqual({ elements: [], requests: [] });
 });

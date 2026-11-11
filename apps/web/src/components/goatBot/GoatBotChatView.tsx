@@ -211,7 +211,11 @@ export function GoatBotChatView({
       ? viewing
       : null;
   const [dragActive, setDragActive] = useState(false);
-  const fileOpening = bot ? { environmentId: bot.environmentId, open: openFile } : null;
+  // One value per bot server, so the reply file cards under every message skip re-rendering.
+  const openFileStable = useStableCallback(openFile);
+  const botEnvironmentId = bot?.environmentId ?? null;
+  const fileOpening =
+    botEnvironmentId === null ? null : { environmentId: botEnvironmentId, open: openFileStable };
   if (!acceptsFiles && dragActive) setDragActive(false);
   const addDroppedFiles = useStableCallback((files: File[]) =>
     composerRef.current?.addFiles(files),
