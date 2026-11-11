@@ -1,12 +1,20 @@
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect } from "@effect/vitest";
-import { EnvironmentId, type SshHostResult, type SshHostStatus } from "@goat/contracts";
+import {
+  EnvironmentId,
+  TurnItemId,
+  handoffSummary,
+  type SshHostResult,
+  type SshHostStatus,
+} from "@goat/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import * as MaintenanceAudit from "../../maintenance/MaintenanceAudit.ts";
+import * as Handoffs from "../../handoffs/Handoffs.ts";
 import * as ServerConfig from "../../config.ts";
 import type { McpInvocationScope } from "../../mcp/McpInvocationContext.ts";
 import { dependencies } from "./SshHostSetupTestkit.ts";
@@ -33,10 +41,15 @@ export const invocation: McpInvocationScope = {
   reauthorize: () => Effect.void,
 };
 
-export const fixture = Effect.gen(function* () {
-  let snapshot: SshHostResult = { kind: "ok", status: stopped };
+export const fixtureWith = Effect.fnUntraced(function* (initial: SshHostStatus = stopped) {
+  let snapshot: SshHostResult = { kind: "ok", status: initial };
   const events: string[] = [];
   const updates: { host: string; confirmReplacement: boolean }[] = [];
+  const approvals: Array<{
+    readonly title: string;
+    readonly reason: string;
+    readonly args: unknown;
+  }> = [];
   const fs = yield* FileSystem.FileSystem.pipe(Effect.provide(NodeServices.layer));
   const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-audit-" });
   const config = yield* ServerConfig.ServerConfig.pipe(
@@ -82,6 +95,29 @@ export const fixture = Effect.gen(function* () {
       SshHostSetup.layer.pipe(
         Layer.provide(Layer.succeed(MaintenanceAudit.MaintenanceAudit, audit)),
         Layer.provide(dispatch),
+        Layer.provide(
+          Layer.mock(Handoffs.Handoffs)({
+            completedSshContinuations: Effect.succeed([]),
+            resolvedSshOutcomes: Effect.succeed([]),
+            create: (input) =>
+              Effect.sync(() => {
+                approvals.push({ title: input.title, reason: input.reason, args: input.args });
+                return handoffSummary({
+                  handoffId: TurnItemId.make("handoff:ssh"),
+                  kind: input.kind,
+                  title: input.title,
+                  reason: input.reason,
+                  requestedBy: input.requestedBy,
+                  target: input.target,
+                  dedupeKey: "test",
+                  state: "pending",
+                  expiresAt: input.expiresAt ?? null,
+                  createdAt: DateTime.makeUnsafe(0),
+                  actor: { type: "agent", threadId: input.requestedBy.threadId },
+                });
+              }),
+          }),
+        ),
         Layer.provide(dependencies),
       ),
     ),
@@ -95,5 +131,14 @@ export const fixture = Effect.gen(function* () {
         events.push("authorize");
       }),
   };
-  return { setup, scope, events, updates, journal: `${config.stateDir}/maintenance-audit.jsonl` };
+  return {
+    setup,
+    scope,
+    events,
+    updates,
+    approvals,
+    journal: `${config.stateDir}/maintenance-audit.jsonl`,
+  };
 });
+
+export const fixture = fixtureWith();

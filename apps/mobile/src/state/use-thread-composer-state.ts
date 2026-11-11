@@ -589,14 +589,13 @@ export function useThreadComposerState() {
       return null;
     }
     if (
-      beforeDispatch === undefined &&
-      (await sideChatCommand({
+      await sideChatCommand({
         thread,
         threadKey,
         text: draft.text,
         hasAttachmentsOrContext: attachments.length > 0 || (draft.context?.records.length ?? 0) > 0,
         connected: selectedEnvironmentRuntime?.connectionState === "connected",
-      }))
+      })
     )
       return null;
     // Recovery preserves over-cap attachments; require trimming or outbox delivery would reject indefinitely.

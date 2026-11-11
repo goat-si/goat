@@ -97,7 +97,15 @@ export interface Fixture {
   /** Home `ocx hub invite` exit; 0 mints a code. */
   readonly inviteExit?: number;
   readonly connectExit?: number;
-  readonly addExit?: { readonly code: number; readonly phase: string };
+  readonly addExit?: { readonly code: number; readonly phase?: string; readonly message?: string };
+  /** OpenCodex's own message for a refused device connection change, by kind. */
+  readonly deviceMessage?: Readonly<Record<string, string>>;
+  /** Whether the device's GOAT found its OpenCodex executable and listener in agreement. */
+  readonly deviceHealthy?: boolean;
+  /** Another link replaces the join's new one under the alias before parity reads it. */
+  readonly replacedAfterAdd?: string;
+  /** The join's new link is gone from the Home before parity reads it. */
+  readonly removedAfterAdd?: boolean;
   /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
   readonly releases?: OpenCodexReleaseCatalog;
   /** Home `ocx link status` fails; "forbidden" is OpenCodex's 403 in Hub mode (opencodex#8184). */
@@ -259,9 +267,14 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                 const kind =
                   operation.kind === "disconnect" ? ["disconnect", "--json"] : ["restart"];
                 const { code } = yield* device(alias, kind);
+                const message = fixture.deviceMessage?.[operation.kind];
                 return {
                   code,
                   stdout: "",
+                  ...(message === undefined ? {} : { message }),
+                  ...(fixture.deviceHealthy === undefined
+                    ? {}
+                    : { deviceHealthy: fixture.deviceHealthy }),
                   ...(fixture.reportedRole === undefined
                     ? {}
                     : { deviceRole: fixture.reportedRole }),
@@ -314,6 +327,9 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
           verify: (alias) =>
             Effect.sync(() => {
               calls.push(`verify ${alias}`);
+              if (fixture.replacedAfterAdd !== undefined)
+                links.set(alias, fixture.replacedAfterAdd);
+              if (fixture.removedAfterAdd === true) links.delete(alias);
               return (
                 (verdicts.length > 1 ? verdicts.shift() : undefined) ?? verdicts[0] ?? verdict()
               );

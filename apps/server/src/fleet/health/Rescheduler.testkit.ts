@@ -14,7 +14,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as HostPowerMonitor from "../../background/HostPowerMonitor.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import Migration0087 from "../../persistence/Migrations/102_FleetHealth.ts";
-import Migration0139 from "../../persistence/Migrations/139_PlacementAdmission.ts";
+import Migration0140 from "../../persistence/Migrations/140_PlacementAdmission.ts";
 import { layer as PlacementAttemptsLayer } from "../admission/PlacementAttempts.ts";
 import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
 import * as PlacementPlacer from "../admission/PlacementPlacer.ts";
@@ -398,7 +398,7 @@ const layerFor = (
     Layer.provideMerge(
       // A restart reopens the same file; the tables already exist then.
       Layer.effectDiscard(
-        Effect.ignore(Migration0087).pipe(Effect.andThen(Effect.ignore(Migration0139))),
+        Effect.ignore(Migration0087).pipe(Effect.andThen(Effect.ignore(Migration0140))),
       ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename }))),
     ),
     Layer.provideMerge(

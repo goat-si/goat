@@ -17,6 +17,10 @@ const screenSession = vi.hoisted(() => ({
   workTaskId: undefined as string | undefined,
   homeOpen: false,
   chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
+  send: vi.fn((_text: string, _attachments?: unknown) => true),
+  answer: vi.fn((_text: string, _taskId?: string, _questionId?: string) => true),
+  // What the home sheet calls to fill the message box (New routine, a note's change).
+  draft: null as null | ((text: string) => boolean),
 }));
 // Event lines resolve their routine or task against the home's reads, which these tests do not load.
 vi.mock("./useGoatBotEventTargets", () => ({
@@ -28,10 +32,12 @@ vi.mock("./MobileBotWork", () => ({
     taskCard?: ReactNode;
     chatTasks?: ReadonlyArray<{ readonly key: string }>;
     open?: boolean;
+    onDraft?: (text: string) => boolean;
   }) => {
     screenSession.workTaskId = props.taskId;
     screenSession.homeOpen = props.open ?? false;
     screenSession.chatTasks = props.chatTasks ?? [];
+    screenSession.draft = props.onDraft ?? null;
     return <section aria-label="Task header">{props.taskCard}</section>;
   },
 }));
@@ -124,15 +130,25 @@ vi.mock("react-native", () => ({
   Pressable: ({
     children,
     style,
+    className,
     accessibilityLabel,
+    disabled,
     onPress,
   }: {
     children?: ReactNode;
     style?: unknown;
+    className?: string;
     accessibilityLabel?: string;
+    disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel} onClick={onPress}>
+    <button
+      data-style={JSON.stringify(style)}
+      data-class={className}
+      aria-label={accessibilityLabel}
+      disabled={disabled}
+      onClick={onPress}
+    >
       {children}
     </button>
   ),
@@ -167,11 +183,12 @@ vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => mod
 vi.mock("./useMobileGoatBotMemberModel", () => ({
   useMobileGoatBotMemberModelMenu: () => models.member,
 }));
-vi.mock("./GoatBotModelPill", () => ({
-  GoatBotModelPill: (props: { menu: { label: string; opens: boolean } }) => (
-    <button aria-label="Model" data-opens={String(props.menu.opens)}>
-      {props.menu.label}
-    </button>
+// The real model pill renders; only the native menu it opens stands in, as a box that keeps its style.
+vi.mock("../../components/ui/Menu", () => ({
+  Menu: (props: { children?: ReactNode; style?: unknown }) => (
+    <div data-box="model-menu" data-style={JSON.stringify(props.style ?? null)}>
+      {props.children}
+    </div>
   ),
 }));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
@@ -253,7 +270,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
       rows: screenSession.rows,
       canSend: true,
       attachmentSupport: { maxUploadBytes: null },
-      onSend: () => true,
+      onSend: screenSession.send,
+      onAnswer: screenSession.answer,
       onRetryInput: () => {},
       replyingSince: null,
       activity: screenSession.activity,

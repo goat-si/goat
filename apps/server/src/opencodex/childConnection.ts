@@ -16,6 +16,7 @@ import type * as UpdateHost from "../hub/OpenCodexUpdateHost.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type * as ProcessRunner from "../processRunner.ts";
 import type * as Inventory from "./OpenCodexInventory.ts";
+import { ocxMessage } from "./ocxMessage.ts";
 
 const refused = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
@@ -177,6 +178,9 @@ export const makeChildConnection = Effect.fn("OpenCodexChildReady.makeChildConne
                 : undefined,
             );
             const after = yield* deps.readDevice(address);
+            // Only OpenCodex's known sentences; connectHubClient's output is never read.
+            const message =
+              code !== 0 && op.kind !== "connectHubClient" ? ocxMessage(output.stderr) : undefined;
             return {
               ...address,
               operationId: input.operationId,
@@ -184,6 +188,7 @@ export const makeChildConnection = Effect.fn("OpenCodexChildReady.makeChildConne
               code,
               healthy: after.healthy,
               role: after.device.connection.role,
+              ...(message === undefined ? {} : { message }),
             } satisfies ChildReadyConnectionResult;
           }),
         ),

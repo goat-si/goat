@@ -23,7 +23,7 @@ import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import { makeHubConsent } from "./HubConsent.ts";
-import { Added, Connection, decodeJson, Health, LinkStatus, Probe } from "./hubOcxJson.ts";
+import { Added, Connection, decodeJson, LinkStatus, Probe } from "./hubOcxJson.ts";
 import * as HubParity from "./HubParity.ts";
 import {
   childConnectionAdmission,
@@ -33,11 +33,15 @@ import {
   SAFE_ALIAS,
   type OcxOutput,
 } from "./HubOcx.ts";
+import { makeLeaveSteps } from "./hubLeave.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
+  deviceExit,
   hubDeviceResult as result,
   linkStatusUnreadable,
   phaseMessage,
+  withRoutingAdvice,
+  withUnproven,
 } from "./hubDeviceResult.ts";
 import { joinPreflight } from "./hubJoinPreflight.ts";
 import { revokeHubClientKey } from "./hubRevokeKey.ts";
@@ -201,13 +205,14 @@ const make = Effect.gen(function* () {
     };
   });
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
+  const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
 
   const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
     const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
     const offered = output.code === 0 ? decodeJson(Probe, output.stdout) : undefined;
     return offered?.alias === alias
       ? { ok: true as const, ...offered }
-      : { ok: false as const, phase: output.phase };
+      : { ok: false as const, phase: output.phase, message: output.message };
   });
 
   const unreachable = (error: HubOcxError) => ({
@@ -237,7 +242,7 @@ const make = Effect.gen(function* () {
             Effect.map((output: OcxOutput) =>
               output.code === 0
                 ? { outcome: "ok" as const }
-                : { outcome: "failed" as const, detail: phaseMessage(output.phase) },
+                : { outcome: "failed" as const, detail: phaseMessage(output) },
             ),
             Effect.catch((error) => Effect.succeed(unreachable(error))),
           );
@@ -262,7 +267,7 @@ const make = Effect.gen(function* () {
           Effect.map((output: OcxOutput) =>
             output.code === 0
               ? { outcome: "ok" as const }
-              : { outcome: "failed" as const, detail: `ocx ${rung.step} exited ${output.code}.` },
+              : { outcome: "failed" as const, detail: deviceExit(rung.step, output) },
           ),
           Effect.catch((error) => Effect.succeed(unreachable(error))),
         );
@@ -302,9 +307,9 @@ const make = Effect.gen(function* () {
     const linkId = added.code === 0 ? decodeJson(Added, added.stdout)?.linkId : undefined;
     if (caller.provisioning) yield* provisioned.finishAdd(alias, linkId, homeLinks());
     if (linkId === undefined) {
-      steps.push({ step: "link_add", outcome: "failed", detail: phaseMessage(added.phase) });
+      steps.push({ step: "link_add", outcome: "failed", detail: phaseMessage(added) });
       yield* audit(caller, `hub.${action}`, alias, "failed", decisionId);
-      return result(action, alias, "failed", phaseMessage(added.phase), steps, {
+      return result(action, alias, "failed", phaseMessage(added), steps, {
         transport: "remote-link",
       });
     }
@@ -318,101 +323,32 @@ const make = Effect.gen(function* () {
       yield* parity.verify(alias, scope),
       steps,
     );
-    const state = finalState(verified);
+    // When P2 holds, parity ties the Child to the Home's current record; it must be this link.
+    const recorded = (yield* homeLinks())?.links.find((entry) => entry.alias === alias)?.id;
+    const changed = recorded !== undefined && recorded !== linkId;
+    // An unreadable or missing record is no proof either.
+    const moved = changed || recorded !== linkId;
+    const checked = finalState(verified);
+    const state = moved && checked === "child" ? "degraded" : checked;
     yield* audit(caller, `hub.${action}`, alias, state, decisionId);
     return result(
       action,
       alias,
       state,
-      state === "child"
-        ? `${alias} is linked to this Home.`
-        : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
+      withRoutingAdvice(
+        state === "child"
+          ? withUnproven(`${alias} is linked to this Home.`, verified)
+          : moved && checked === "child"
+            ? changed
+              ? `${alias} is linked, but its connection changed during the join, so this link is not proven in use.`
+              : `${alias} is linked, but this Home could not confirm its record of the new link.`
+            : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
+        alias,
+        verified,
+      ),
       steps,
       { parity: verified, transport: "remote-link" },
     );
-  });
-
-  /**
-   * Device side first. The Home's own revoke runs a remote `ocx disconnect` whose failure
-   * restarts the tunnel (OCX-9), so the Home is touched only after the device is standalone.
-   */
-  const leaveDevice = Effect.fn("HubMembership.leaveDevice")(function* (
-    alias: string,
-    member: string,
-    admission: HubChildConnectionAdmission,
-    steps: HubDeviceStep[],
-  ) {
-    // The device's GOAT runs both under its idle fence, bound to the membership seen here.
-    let reported: OcxOutput["deviceRole"];
-    for (const kind of ["disconnect", "restart"] as const) {
-      const operation = { kind, expectedLinkId: member };
-      const ran = yield* ocx.connection(alias, operation, DEVICE_TIMEOUT_MS, admission).pipe(
-        Effect.map((output: OcxOutput) => {
-          reported = output.deviceRole;
-          return output.code === 0
-            ? { outcome: "ok" as const }
-            : { outcome: "failed" as const, detail: `ocx ${kind} exited ${output.code}.` };
-        }),
-        Effect.catch((error) => Effect.succeed(unreachable(error))),
-      );
-      steps.push({ step: kind, ...ran });
-      if (ran.outcome !== "ok") return ran.detail;
-    }
-    // A native Windows device has no shell for /healthz; its own GOAT already read the role.
-    if (reported === "standalone") {
-      steps.push({ step: "health", outcome: "ok", detail: "Device answers as standalone." });
-      return undefined;
-    }
-    const body = yield* ocx.deviceHealth(alias);
-    const health = body === undefined ? undefined : decodeJson(Health, body);
-    // A standalone or Home runtime omits role; anything else still describes the link.
-    const standalone =
-      health?.service === "opencodex" &&
-      (health.role === undefined || health.role === "standalone");
-    const detail = standalone
-      ? "Device answers as standalone."
-      : health === undefined
-        ? reported === undefined
-          ? "Device /healthz did not answer after the restart."
-          : `Device reports role ${reported} after the restart.`
-        : `Device /healthz still reports role ${health.role}.`;
-    steps.push({ step: "health", outcome: standalone ? "ok" : "failed", detail });
-    return standalone ? undefined : detail;
-  });
-
-  /** Forced revoke skips the remote cleanup the device step already did; then prove it is gone. */
-  const revokeOnHome = Effect.fn("HubMembership.revokeOnHome")(function* (
-    alias: string,
-    record: { readonly id: string; readonly tunnelPort?: number | undefined },
-    steps: HubDeviceStep[],
-  ) {
-    const revoked = yield* ocx.home(
-      ["link", "revoke", "--link-id", record.id, "--force", "--yes", "--json"],
-      HOME_TIMEOUT_MS,
-    );
-    if (revoked.code !== 0 && revoked.phase !== "link_not_found") {
-      steps.push({ step: "revoke", outcome: "failed", detail: phaseMessage(revoked.phase) });
-      return false;
-    }
-    steps.push({ step: "revoke", outcome: "ok", detail: record.id });
-    const status = yield* homeLinks();
-    const recorded =
-      status === undefined ||
-      status.links.some((entry) => entry.id === record.id || entry.alias === alias);
-    const tunnels = yield* ocx.homeTunnels(alias, record.tunnelPort);
-    const gone = !recorded && tunnels === 0;
-    steps.push({
-      step: "link_removed",
-      outcome: gone ? "ok" : "failed",
-      detail: gone
-        ? "No link record or ssh -R tunnel remains."
-        : recorded
-          ? "ocx link status still lists the link, or could not be read."
-          : tunnels === undefined
-            ? "This Home's ssh tunnels could not be listed."
-            : `${tunnels} ssh -R tunnel for the link is still running.`,
-    });
-    return gone;
   });
 
   const homeUnavailable = (
@@ -508,7 +444,7 @@ const make = Effect.gen(function* () {
         "join",
         alias,
         finalState(verified),
-        `${alias} is already a Hub client; nothing was changed.`,
+        withUnproven(`${alias} is already a Hub client; nothing was changed.`, verified),
         steps,
         { parity: verified, transport },
       );
@@ -535,7 +471,7 @@ const make = Effect.gen(function* () {
       const detail =
         handoff.phase === undefined
           ? `ocx hub invite exited ${handoff.exit}. This machine must run OpenCodex in Hub mode with hub.dataPublicOrigin and hub.managementPublicOrigin set.`
-          : phaseMessage(handoff.phase);
+          : phaseMessage(handoff);
       steps.push({ step: "invite", outcome: "failed", detail });
       yield* audit(caller, "hub.join", alias, "failed", decisionId);
       return result("join", alias, "failed", detail, steps, { transport });
@@ -568,7 +504,7 @@ const make = Effect.gen(function* () {
       alias,
       state,
       state === "child"
-        ? `${alias} is a Hub client of this hub.`
+        ? withUnproven(`${alias} is a Hub client of this hub.`, verified)
         : `${alias} is connected, but ${verified.failingCheckIds.join(", ")} still fail.`,
       steps,
       { parity: verified, transport },
@@ -609,7 +545,14 @@ const make = Effect.gen(function* () {
           "join",
           alias,
           finalState(verified),
-          `${alias} is already linked; nothing was changed. Use ${goatCallText("hub.device_repair")} if checks fail.`,
+          withRoutingAdvice(
+            withUnproven(
+              `${alias} is already linked; nothing was changed. Use ${goatCallText("hub.device_repair")} if checks fail.`,
+              verified,
+            ),
+            alias,
+            verified,
+          ),
           steps,
           { parity: verified, transport: "remote-link" },
         );
@@ -642,8 +585,8 @@ const make = Effect.gen(function* () {
       if (platform !== undefined) yield* ocx.device(alias, ["--version"], DEVICE_TIMEOUT_MS);
       const offered = yield* probe(alias);
       if (!offered.ok) {
-        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });
-        return result("join", alias, "failed", phaseMessage(offered.phase), steps, { transport });
+        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered) });
+        return result("join", alias, "failed", phaseMessage(offered), steps, { transport });
       }
       steps.push({
         step: "probe",
@@ -820,8 +763,8 @@ const make = Effect.gen(function* () {
         if (record === undefined) return yield* invalid(`${alias} has no link to re-create.`);
         const offered = yield* probe(alias);
         if (!offered.ok) {
-          steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });
-          return result("repair", alias, "failed", phaseMessage(offered.phase), steps);
+          steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered) });
+          return result("repair", alias, "failed", phaseMessage(offered), steps);
         }
         steps.push({
           step: "probe",
@@ -865,7 +808,7 @@ const make = Effect.gen(function* () {
           "repair",
           alias,
           "child",
-          "No parity check fails; nothing to repair.",
+          withUnproven("No parity check fails; nothing to repair.", initial),
           steps,
           {
             parity: initial,
@@ -874,9 +817,16 @@ const make = Effect.gen(function* () {
       const repaired = yield* ladder(scope, caller, alias, record?.id, initial, steps);
       if (!failing(repaired)) {
         yield* audit(caller, "hub.repair", alias, "child", undefined);
-        return result("repair", alias, "child", `${alias} is repaired.`, steps, {
-          parity: repaired,
-        });
+        return result(
+          "repair",
+          alias,
+          "child",
+          withUnproven(`${alias} is repaired.`, repaired),
+          steps,
+          {
+            parity: repaired,
+          },
+        );
       }
       const exhausted = `Steps 1-3 left ${repaired.failingCheckIds.join(", ")} failing.`;
       if (record === undefined || steps.some(({ outcome }) => outcome === "deferred")) {
@@ -894,7 +844,7 @@ const make = Effect.gen(function* () {
       }
       const offered = yield* probe(alias);
       if (!offered.ok) {
-        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });
+        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered) });
         yield* audit(caller, "hub.repair", alias, "failed", undefined);
         return result("repair", alias, "failed", exhausted, steps, { parity: repaired });
       }

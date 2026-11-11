@@ -32,7 +32,7 @@ import {
 } from "./GoalWorkerRuntime.ts";
 
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import Migration0139 from "../../persistence/Migrations/139_PlacementAdmission.ts";
+import Migration0140 from "../../persistence/Migrations/140_PlacementAdmission.ts";
 import * as PlacementAttempts from "../admission/PlacementAttempts.ts";
 import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
 import * as PlacementPlacer from "../admission/PlacementPlacer.ts";
@@ -308,7 +308,7 @@ export const layerFor = (seen: Seen, options: { readonly placement?: boolean } =
               Layer.provideMerge(PlacementAttempts.layer),
               Layer.provide(dispatch),
               Layer.provideMerge(
-                Layer.effectDiscard(Effect.ignore(Migration0139)).pipe(
+                Layer.effectDiscard(Effect.ignore(Migration0140)).pipe(
                   Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
                 ),
               ),

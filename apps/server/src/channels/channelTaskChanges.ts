@@ -1,3 +1,4 @@
+import { ChannelGatewayError } from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -12,8 +13,11 @@ import * as Stream from "effect/Stream";
 export interface ChannelTaskChanges {
   /** Owners whose tasks a committed write changed. */
   readonly announce: (ownerIds: Iterable<string>) => Effect.Effect<void>;
-  /** Revision 0 at once, then one more for each window of changes to this owner's tasks. */
-  readonly revisions: (ownerId: string) => Stream.Stream<number>;
+  /**
+   * Revision 0 at once, then one more for each window of changes to this owner's tasks. Fails with
+   * stream_unavailable when the server holds as many streams as it allows.
+   */
+  readonly revisions: (ownerId: string) => Stream.Stream<number, ChannelGatewayError>;
   /**
    * Runs a write and announces its owners once it committed. Inside a caller's transaction it
    * announces nothing: that caller announces after its own commit, the outermost one.
@@ -29,10 +33,40 @@ export interface ChannelTaskChanges {
  * revision when it closes, so a steady stream of changes still reports once per window.
  */
 export const TASK_CHANGES_COALESCE = Duration.millis(250);
+/** Change streams one server holds open, across every connection. */
+const MAX_TASK_CHANGE_STREAMS = 512;
+/** Change streams one connection holds open; a client shares one per server. */
+export const MAX_TASK_CHANGE_STREAMS_PER_CONNECTION = 4;
+
+/** Why a client gets no task change stream; it reads on open and focus instead, never retrying. */
+export const streamUnavailable = () => new ChannelGatewayError({ reason: "stream_unavailable" });
+
+/** Admits at most limit open streams; one over it fails with stream_unavailable. */
+export const makeStreamLimit = (limit: number) => {
+  let open = 0;
+  return <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E | ChannelGatewayError, R> =>
+    Stream.unwrap(
+      Effect.acquireRelease(
+        Effect.suspend(() =>
+          open >= limit
+            ? Effect.fail(streamUnavailable())
+            : Effect.sync(() => {
+                open += 1;
+              }),
+        ),
+        () =>
+          Effect.sync(() => {
+            open -= 1;
+          }),
+      ).pipe(Effect.as(stream)),
+    );
+};
 
 export const makeChannelTaskChanges = Effect.fn("makeChannelTaskChanges")(function* (
   sql: SqlClient.SqlClient,
+  maxStreams: number = MAX_TASK_CHANGE_STREAMS,
 ) {
+  const limited = makeStreamLimit(maxStreams);
   // One mark per subscriber, held only for its owner: a change sets it, and changes while it is
   // set add nothing, so a slow subscriber holds one pending "read again" and never misses it.
   const marks = new Map<string, Set<Queue.Queue<void>>>();
@@ -65,12 +99,14 @@ export const makeChannelTaskChanges = Effect.fn("makeChannelTaskChanges")(functi
     announce,
     // Subscribed before revision 0 goes out, so nothing announced after a client saw 0 is missed.
     revisions: (ownerId) =>
-      Stream.unwrap(
-        Effect.map(subscribe(ownerId), (mark) =>
-          Stream.fromEffectRepeat(windowClosed(mark)).pipe(
-            Stream.scan(
-              () => 0,
-              (revision) => revision + 1,
+      limited(
+        Stream.unwrap(
+          Effect.map(subscribe(ownerId), (mark) =>
+            Stream.fromEffectRepeat(windowClosed(mark)).pipe(
+              Stream.scan(
+                () => 0,
+                (revision) => revision + 1,
+              ),
             ),
           ),
         ),

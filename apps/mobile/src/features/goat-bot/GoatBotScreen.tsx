@@ -12,6 +12,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import {
   type BotProfile,
+  ChannelQuestionId,
   ChannelTaskId,
   type EnvironmentId,
   type GoatBotEventSubject,
@@ -68,6 +69,11 @@ import {
   goatBotRowGap,
   goatBotTime,
 } from "./GoatBotMessageParts";
+import {
+  GoatBotAnsweringChip,
+  type GoatBotAnswerTarget,
+  useGoatBotAnswering,
+} from "./GoatBotAnsweringChip";
 import { GoatBotModelPill } from "./GoatBotModelPill";
 import { goatBotModelPillMenu } from "./goatBotModelPillMenu";
 import { GoatBotReplyCards } from "./GoatBotReplyCards";
@@ -113,7 +119,13 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly row: GoatBotRow;
   readonly canSend: boolean;
   /** Sends an answer, to the task whose question offered it when the row names one. */
-  readonly onSend: (answer: string, taskId?: ChannelTaskId) => boolean;
+  readonly onSend: (
+    answer: string,
+    taskId?: ChannelTaskId,
+    questionId?: ChannelQuestionId,
+  ) => boolean;
+  /** A question's Something else: the message box answers it, or takes a plain message. */
+  readonly onSomethingElse?: ((target: GoatBotAnswerTarget | null) => void) | undefined;
   readonly onRetry: (key: string) => void;
   readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
@@ -254,11 +266,32 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         <GoatBotQuestionCard
           row={row}
           canAnswer={props.canSend}
+          accent={props.accent}
           onPick={(answer) =>
             props.onSend(
               answer,
               row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
+              row.answerQuestionId === undefined
+                ? undefined
+                : ChannelQuestionId.make(row.answerQuestionId),
             )
+          }
+          onSomethingElse={
+            props.onSomethingElse
+              ? () =>
+                  props.onSomethingElse?.(
+                    row.answerTaskId === undefined
+                      ? null
+                      : {
+                          rowId: row.id,
+                          taskId: ChannelTaskId.make(row.answerTaskId),
+                          ...(row.answerQuestionId === undefined
+                            ? {}
+                            : { questionId: ChannelQuestionId.make(row.answerQuestionId) }),
+                          question: row.text,
+                        },
+                  )
+              : undefined
           }
         >
           {renderText(row.text)}
@@ -409,21 +442,33 @@ export function GoatBotScreen(props: {
       hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
     [hidesTaskCards, session.rows],
   );
-  // The "New" line and its pill belong to the main chat, whose visits the route records.
-  const unread = useGoatBotUnread(
-    visibleRows,
-    taskId !== undefined || member !== null ? null : props.readSnapshot,
-  );
+  // The "New" line and its pill belong to a bot's chat, whose visits the route records.
+  const unread = useGoatBotUnread(visibleRows, taskId !== undefined ? null : props.readSnapshot);
   const listRef = useRef<LegendListRef>(null);
   const { clear: clearUnread } = unread;
   const { onAnswer: answer } = session;
   const onAnswer = useCallback(
-    (text: string, answerTask?: ChannelTaskId) => {
-      const sent = answer(text, answerTask);
+    (text: string, answerTask?: ChannelTaskId, questionId?: ChannelQuestionId) => {
+      const sent = answer(text, answerTask, questionId);
       if (sent) clearUnread();
       return sent;
     },
     [answer, clearUnread],
+  );
+  // Something else hands a question to the message box, which then answers it until sent.
+  const inputRef = useRef<TextInputInstance>(null);
+  const answering = useGoatBotAnswering(
+    visibleRows,
+    JSON.stringify([member?.botId ?? null, taskId ?? null]),
+  );
+  const startAnswering = answering.start;
+  const onSomethingElse = useCallback(
+    (target: GoatBotAnswerTarget | null) => {
+      // The row used decides: its question, or none for a question no task asked.
+      startAnswering(target);
+      inputRef.current?.focus();
+    },
+    [startAnswering],
   );
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
@@ -442,6 +487,7 @@ export function GoatBotScreen(props: {
           row={item}
           canSend={session.canSend}
           onSend={onAnswer}
+          onSomethingElse={onSomethingElse}
           onRetry={session.onRetryInput}
           onDiscard={session.onDiscardInput}
           onSelectThread={onSelectThread}
@@ -458,6 +504,7 @@ export function GoatBotScreen(props: {
       unread.dividerFocused,
       session.canSend,
       onAnswer,
+      onSomethingElse,
       session.onRetryInput,
       session.onDiscardInput,
       onSelectThread,
@@ -471,7 +518,6 @@ export function GoatBotScreen(props: {
       accent,
     ],
   );
-  const inputRef = useRef<TextInputInstance>(null);
   // Photos still being read after the picker closed; they join the message when they arrive.
   const [intake, setIntake] = useState(0);
   // Where the caret goes once the home sheet has gone, after a request filled the box from it.
@@ -500,11 +546,25 @@ export function GoatBotScreen(props: {
       return false;
     }
     setText(request);
+    // A drafted request is its own message, never an answer to a question.
+    answering.stop();
     if (homeOpen) focusOnDismiss.current = request.length;
     else focusInput(request.length);
     return true;
   };
+  const answerBlockedByFiles = answering.target !== null && (attachments.length > 0 || intake > 0);
   const send = () => {
+    // An answer to a question goes to its task as words alone.
+    const target = answering.target;
+    if (target !== null) {
+      if (answerBlockedByFiles) return;
+      if (onAnswer(text.trim(), target.taskId, target.questionId)) {
+        answering.stop();
+        setText("");
+        setInputHeight(44);
+      }
+      return;
+    }
     if (session.onSend(text, attachments)) {
       unread.clear();
       for (const release of draftFiles.current.values()) release();
@@ -525,7 +585,9 @@ export function GoatBotScreen(props: {
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
   const hasDraft = text.trim().length > 0 || attachments.length > 0;
-  const canSubmit = session.canSend && hasDraft;
+  const canSubmit =
+    session.canSend &&
+    (answering.target === null ? hasDraft : text.trim().length > 0 && !answerBlockedByFiles);
   const modelMenu = goatBotModelPillMenu(memberModelMenu, mainModelMenu, member !== null);
   const chatTasks = useMemo(
     () =>
@@ -749,6 +811,13 @@ export function GoatBotScreen(props: {
           attachments={attachments}
           onRemove={removeAttachment}
         />
+        {answering.target !== null ? (
+          <GoatBotAnsweringChip
+            target={answering.target}
+            blockedByFiles={answerBlockedByFiles}
+            onStop={answering.stop}
+          />
+        ) : null}
         {/* Two rows on a phone: the field, then attach, model and send under the thumb. */}
         <TextInput
           ref={inputRef}

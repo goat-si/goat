@@ -58,7 +58,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
-import { waitingTaskCondition } from "./channelWaitingTasks.ts";
+import { newestAskAt, waitingTaskCondition } from "./channelWaitingTasks.ts";
 export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
@@ -848,7 +848,7 @@ const make = Effect.gen(function* () {
           version = ${next.version},
           generation = ${next.generation},
           worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = ${encodeTask(next)},
+          task_json = ${encodeTask(next)}, newest_ask_at = ${newestAskAt(next)},
           updated_at = ${next.updatedAt},
           pending_answer_message_id = ${pendingAnswer},
           completion_hold = ${hold}
@@ -882,10 +882,11 @@ const make = Effect.gen(function* () {
       const inserted = yield* sql<{ readonly task_id: string }>`
         INSERT INTO channel_tasks (
           task_id, owner_id, conversation_id, status, version, generation, task_json,
-          created_at, updated_at, bot_id
+          created_at, updated_at, bot_id, newest_ask_at
         ) SELECT
           ${task.taskId}, ${ownerId}, ${task.conversationId}, ${task.status}, ${task.version},
-          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}, bot_id
+          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}, bot_id,
+          ${newestAskAt(task)}
         FROM channel_inbox WHERE input_id = ${task.originInputId} AND owner_id = ${ownerId}
         RETURNING task_id
       `;

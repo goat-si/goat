@@ -4,6 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
+import { registerMenuAction } from "../shortcuts/dispatcher";
 import { openCommandPalette } from "../commandPaletteBus";
 
 const decode = Schema.decodeSync(BotProfile);
@@ -61,4 +62,14 @@ it("keeps added bots out of the empty palette, however many there are, and finds
   expect(page.getByRole("option", { name: /Open Helper/ }).elements()).toHaveLength(0);
   await act(() => openCommandPalette({ query: "helper 12" }));
   await expect.element(page.getByRole("option", { name: /Open Helper 12/ })).toBeVisible();
+});
+
+it("offers the next bot ask command in the palette", async () => {
+  setup();
+  const run = vi.fn();
+  using _action = { [Symbol.dispose]: registerMenuAction("goatBot.nextAsk", run) };
+  await using _screen = await render(<CommandPalette>{null}</CommandPalette>, { router: "/" });
+  await act(() => openCommandPalette({ query: "next bot ask" }));
+  await userEvent.click(page.getByRole("option", { name: /Open next bot ask/ }));
+  expect(run).toHaveBeenCalledOnce();
 });
