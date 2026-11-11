@@ -133,11 +133,7 @@ export function MobileBotRosterView(props: {
       onMomentumScrollEnd={settle}
     >
       {props.header}
-      <MobileNeedsYouStrip
-        bots={props.bots}
-        mainRevision={`${props.preview ?? ""}|${props.unread === true}`}
-        onOpenBot={props.onOpenBot}
-      />
+      <MobileNeedsYouStrip bots={props.bots} onOpenBot={props.onOpenBot} />
       {props.bots.map((bot) => {
         const key = bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`;
         const selected = props.selectedKey === key;

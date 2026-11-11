@@ -106,7 +106,7 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
 // Each member's own waiting count, as channel.getBotStatus answers it for that bot.
-// The strip has its own tests and reads live bot status.
+// The strip has its own tests and reads the server's open asks.
 vi.mock("./MobileNeedsYouStrip", () => ({ MobileNeedsYouStrip: () => null }));
 vi.mock("./useMobileMemberStatus", () => ({
   useMobileMemberWaitingCount: (bot: { botId: string }) => (bot.botId === "research" ? 2 : 0),
