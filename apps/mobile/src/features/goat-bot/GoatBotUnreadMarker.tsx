@@ -38,6 +38,7 @@ export function useGoatBotUnread(
   const [settled, setSettled] = useState<string | null>(null);
   const [above, setAbove] = useState(false);
   const [focusDivider, setFocusDivider] = useState(false);
+  const [dividerShown, setDividerShown] = useState(false);
   // Rows marked in this visit, so a card that changes again stays marked where it was.
   const [kept, setKept] = useState<{ visit: string | null; ids: ReadonlySet<string> }>({
     visit: null,
@@ -69,6 +70,7 @@ export function useGoatBotUnread(
   const onViewable = useCallback(
     (indexes: ReadonlyArray<number>) => {
       if (dividerIndex < 0 || indexes.length === 0) return;
+      setDividerShown(indexes.includes(dividerIndex));
       if (indexes.includes(dividerIndex)) {
         setAbove(false);
         setSettled(visit);
@@ -94,8 +96,8 @@ export function useGoatBotUnread(
     onViewable,
     settle,
     jump,
-    /** The divider takes accessibility focus once it is on screen after a jump. */
-    focusDivider,
+    /** The divider takes accessibility focus after a jump, once the list shows it. */
+    focusDivider: focusDivider && dividerShown,
     dividerFocused,
     clear,
   };

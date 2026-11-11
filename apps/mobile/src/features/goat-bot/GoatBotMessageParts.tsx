@@ -207,7 +207,16 @@ export function GoatBotPersonCaption(props: {
   );
 }
 
-const PERSON_WAITS = /^(Waiting|Paused)/u;
+// The waits goatBotActivity reports; a task's own streamed update can also begin "Waiting…", and
+// is a working step, so a wait is one of these exact lines and each is heard once.
+const PERSON_WAITS: ReadonlySet<string> = new Set([
+  "Waiting for your approval",
+  "Waiting for your answer",
+  "Waiting for you to sign in",
+  "Waiting for you",
+  "Waiting on other work",
+  "Paused on a usage limit",
+]);
 
 /**
  * What the bot is doing now, under the last message: its face and one muted line. The words get the
@@ -225,7 +234,7 @@ export function GoatBotActivityLine(props: {
 }) {
   const label = useScaledTextRole("label");
   const { activity } = props;
-  const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
+  const waits = activity.state === "working" && PERSON_WAITS.has(activity.text);
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
   // Screen readers hear when the bot starts or reads, not each working step, and what it waits on:

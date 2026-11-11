@@ -370,6 +370,8 @@ export function GoatBotScreen(props: {
   );
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
+  const focusDivider = unread.focusDivider;
+  const listExtraData = useMemo(() => ({ accent, focusDivider }), [accent, focusDivider]);
   const renderItem = useCallback(
     ({ item }: { item: GoatBotChatItem }) =>
       item.kind === "unread" ? (
@@ -571,8 +573,9 @@ export function GoatBotScreen(props: {
             unread.onViewable(viewableItems.map((entry) => entry.index))
           }
           renderItem={renderItem}
-          // Rows are memoized by key and data; a new accent must reach the pills already shown.
-          extraData={accent}
+          // Rows are memoized by key, data and this: a new accent must reach the pills already shown,
+          // and the "New" line must learn when to take VoiceOver focus.
+          extraData={listExtraData}
           initialScrollAtEnd
           maintainScrollAtEnd
           alignItemsAtEnd
