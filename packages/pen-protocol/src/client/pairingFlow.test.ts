@@ -583,6 +583,45 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     expect(t.stored()?.current).toBeUndefined();
   });
 
+  it("a probe that fails after minutes is followed by one probe at once, then 30 s waits: never a burst of catch-up probes", async () => {
+    const pendingKey = generateX25519(() => new Uint8Array(32).fill(7));
+    const t = setup({
+      record: {
+        pending: {
+          key: {
+            privateKey: toBase64Url(pendingKey.privateKey),
+            publicKey: toBase64Url(pendingKey.publicKey),
+          },
+          stage: "post-202",
+          server: { nodeId: NODE, noisePub: "x", relays: [] },
+          startedAt: 0,
+        },
+      },
+    });
+    const done = retryChecking(t.deps, NODE);
+    await t.when("probe");
+    // The first probe hangs for five minutes, then fails (a 4401 or 4404 from the race, say).
+    t.clock.advance(5 * 60_000);
+    const settle = async (probes: number) => {
+      const timers = t.clock.delays().length;
+      await Promise.race([t.when("probe", probes + 1), t.clock.whenTimersSet(timers + 1)]);
+    };
+    t.probes[0]?.answer.resolve({ issued: false });
+    await settle(1);
+    expect(t.probes).toHaveLength(2);
+    // That one fails at once: the next waits a full 30 s from its start.
+    t.probes[1]?.answer.resolve({ issued: false });
+    await settle(2);
+    expect(t.probes).toHaveLength(2);
+    expect(t.clock.delays().at(-1)).toBe(PROBE_INTERVAL_MS);
+    t.clock.advance(PROBE_INTERVAL_MS - 1);
+    expect(t.probes).toHaveLength(2);
+    t.clock.advance(1);
+    await t.when("probe", 3);
+    t.probes[2]?.answer.resolve({ issued: true });
+    expect(await done).toEqual({ tag: "paired", deviceId: null });
+  });
+
   it("Checking stops at a discard: a negative probe neither probes again nor reports over a newer attempt", async () => {
     const t = setup();
     const done = runPairing(t.deps, qr);

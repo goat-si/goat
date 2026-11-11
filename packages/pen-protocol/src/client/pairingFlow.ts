@@ -439,7 +439,9 @@ async function checking(
     }
     const attempt = pending.key.publicKey;
     const key = loadKey(pending.key);
-    for (let at = start; ; at += PROBE_INTERVAL_MS) {
+    for (;;) {
+      // Each probe starts at least 30 s after the one before it, so a slow probe that fails is not followed by a burst.
+      const probeStart = deps.clock.now();
       const result = past
         ? "expired"
         : await Promise.race([
@@ -460,13 +462,14 @@ async function checking(
       }
       // A discard or a newer attempt during the probe or the wait ends this Checking without a word.
       if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
-      const next = at + PROBE_INTERVAL_MS;
+      const next = probeStart + PROBE_INTERVAL_MS;
       if (next >= until) {
         await expired;
         if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
         return finish(deps, { tag: "not-confirmed" });
       }
-      await sleep(deps.clock, next - deps.clock.now());
+      const wait = next - deps.clock.now();
+      if (wait > 0) await sleep(deps.clock, wait);
       if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
     }
   } finally {

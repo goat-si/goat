@@ -15,6 +15,7 @@ export class ManualClock implements Clock {
   #waiters: Array<() => void> = [];
   #delays: Array<number> = [];
   #delayWaiters: Array<{ ms: number; count: number; resolve: () => void }> = [];
+  #setWaiters: Array<{ count: number; resolve: () => void }> = [];
 
   constructor(start = 0) {
     this.#now = start;
@@ -34,6 +35,12 @@ export class ManualClock implements Clock {
     this.#timers.push(timer);
     for (const wake of this.#waiters.splice(0)) wake();
     this.#delays.push(ms);
+    for (const waiter of this.#setWaiters.slice()) {
+      if (this.#delays.length >= waiter.count) {
+        this.#setWaiters.splice(this.#setWaiters.indexOf(waiter), 1);
+        waiter.resolve();
+      }
+    }
     for (const waiter of this.#delayWaiters.slice()) {
       if (this.#delays.filter((delay) => delay === waiter.ms).length >= waiter.count) {
         this.#delayWaiters.splice(this.#delayWaiters.indexOf(waiter), 1);
@@ -62,6 +69,17 @@ export class ManualClock implements Clock {
   whenTimer(ms: number, count = 1): Promise<void> {
     if (this.#delays.filter((delay) => delay === ms).length >= count) return Promise.resolve();
     return new Promise((resolve) => this.#delayWaiters.push({ ms, count, resolve }));
+  }
+
+  /** The delay of every timer set so far, in order. */
+  delays(): ReadonlyArray<number> {
+    return this.#delays.slice();
+  }
+
+  /** Resolves once this many timers, of any delay, have been set since the clock was made. */
+  whenTimersSet(count: number): Promise<void> {
+    if (this.#delays.length >= count) return Promise.resolve();
+    return new Promise((resolve) => this.#setWaiters.push({ count, resolve }));
   }
 
   /** Moves time forward, running every timer due on the way, in order. */
