@@ -51,6 +51,8 @@ interface UpdateEverythingDialogProps {
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
   /** Machines are still looking for provider updates, so more rows can appear. */
   readonly checking?: boolean;
+  /** Machines whose provider update check failed, as "label: reason". */
+  readonly checkFailures?: ReadonlyArray<string>;
 }
 
 export function UpdateEverythingDialog({
@@ -59,6 +61,7 @@ export function UpdateEverythingDialog({
   everything,
   onConfirm,
   checking = false,
+  checkFailures = [],
 }: UpdateEverythingDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -70,6 +73,7 @@ export function UpdateEverythingDialog({
               status={null}
               onConfirm={onConfirm}
               checking={checking}
+              checkFailures={checkFailures}
             />
           ) : (
             <LocalOpenCodexDialog
@@ -77,6 +81,7 @@ export function UpdateEverythingDialog({
               everything={everything}
               onConfirm={onConfirm}
               checking={checking}
+              checkFailures={checkFailures}
             />
           )
         ) : null}
@@ -94,6 +99,7 @@ function LocalOpenCodexDialog({
   readonly everything: DialogEverything;
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
   readonly checking: boolean;
+  readonly checkFailures: ReadonlyArray<string>;
 }) {
   const result = useAtomValue(hostStatusAtom(environmentId, { local: true }));
   const hosts = Option.getOrNull(AsyncResult.value(result))?.hosts ?? [];
@@ -106,11 +112,13 @@ function DialogWithOpenCodex({
   status,
   onConfirm,
   checking,
+  checkFailures,
 }: {
   readonly everything: DialogEverything;
   readonly status: OpenCodexUpdateStatus | null;
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
   readonly checking: boolean;
+  readonly checkFailures: ReadonlyArray<string>;
 }) {
   const runtimes = buildRuntimesTab({
     providerMachines: everything.providerMachines,
@@ -130,6 +138,7 @@ function DialogWithOpenCodex({
       runtimes={runtimes}
       onConfirm={onConfirm}
       checking={checking}
+      checkFailures={checkFailures}
       runtimesFooter={
         everything.localEnvironmentId === null ? null : (
           <div className="mt-2 flex items-center gap-3 border-t pt-2">
@@ -153,6 +162,7 @@ export function UpdateDialogView({
   onConfirm,
   runtimesFooter = null,
   checking = false,
+  checkFailures = [],
 }: {
   readonly app: UpdateDialogTab;
   readonly runtimes: UpdateDialogTab;
@@ -161,6 +171,7 @@ export function UpdateDialogView({
   readonly runtimesFooter?: ReactNode;
   /** Machines are still looking for provider updates, so more rows can appear. */
   readonly checking?: boolean;
+  readonly checkFailures?: ReadonlyArray<string>;
 }) {
   const tabs: Record<UpdateTab, UpdateDialogTab> = { app, runtimes };
   const [tab, setTab] = useState<UpdateTab>(() =>
@@ -202,9 +213,17 @@ export function UpdateDialogView({
             <UpdateTabRows
               name={name}
               tab={tabs[name]}
+              partial={name === "runtimes" && checkFailures.length > 0}
               unchecked={unchecked[name]}
               onToggle={(id, checked) => toggle(name, id, checked)}
             />
+            {name === "runtimes"
+              ? checkFailures.map((line) => (
+                  <p key={line} className="py-1 text-destructive-foreground text-xs">
+                    Could not check {line}
+                  </p>
+                ))
+              : null}
             {name === "runtimes" ? runtimesFooter : null}
           </div>
         </TabsPanel>
@@ -225,11 +244,14 @@ export function UpdateDialogView({
 function UpdateTabRows({
   name,
   tab,
+  partial,
   unchecked,
   onToggle,
 }: {
   readonly name: UpdateTab;
   readonly tab: UpdateDialogTab;
+  /** Some machines did not answer, so an empty list does not mean there is nothing to update. */
+  readonly partial: boolean;
   readonly unchecked: ReadonlySet<string>;
   readonly onToggle: (id: string, checked: boolean) => void;
 }) {
@@ -237,7 +259,11 @@ function UpdateTabRows({
     <div className="max-h-[min(22rem,50dvh)] overflow-y-auto overscroll-contain">
       {tab.rows.length === 0 ? (
         <p className="py-3 text-muted-foreground text-sm">
-          {name === "app" ? "Every connected server matches this Mac." : "No runtime updates."}
+          {name === "app"
+            ? "Every connected server matches this Mac."
+            : partial
+              ? "No runtime updates on the machines that answered."
+              : "No runtime updates."}
         </p>
       ) : (
         <ul className="divide-y divide-border">

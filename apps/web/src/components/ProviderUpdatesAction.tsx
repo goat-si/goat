@@ -28,9 +28,9 @@ export function useCheckProviderUpdates() {
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
-  const inFlight = useRef<Promise<void> | null>(null);
+  const inFlight = useRef<Promise<ReadonlyArray<string>> | null>(null);
 
-  const check = async (quiet: boolean) => {
+  const check = async (quiet: boolean): Promise<ReadonlyArray<string>> => {
     const failures = await Promise.all(
       environments
         .filter(
@@ -46,7 +46,7 @@ export function useCheckProviderUpdates() {
         }),
     );
     const lines = failures.flat();
-    if (quiet || lines.length === 0) return;
+    if (quiet || lines.length === 0) return lines;
     toastManager.add(
       stackedThreadToast({
         type: "error",
@@ -54,6 +54,7 @@ export function useCheckProviderUpdates() {
         description: <span className="whitespace-pre-line">{lines.join("\n")}</span>,
       }),
     );
+    return lines;
   };
 
   // A repeat click must not start a second model rediscovery while one is running.

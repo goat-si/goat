@@ -252,6 +252,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
   const [providerCheck, setProviderCheck] = useState<"button" | "dialog" | null>(null);
+  const [providerCheckFailures, setProviderCheckFailures] = useState<ReadonlyArray<string>>([]);
   const isCheckingProviders = providerCheck === "button";
   const [isConfirmingEverything, setIsConfirmingEverything] = useState(false);
   const [checkAnimationKey, setCheckAnimationKey] = useState(0);
@@ -365,7 +366,10 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       setIsConfirmingEverything(true);
       // Machines that still cache an older latest version add their rows while the dialog is open.
       setProviderCheck("dialog");
-      void checkProviderUpdates({ quiet: true }).finally(() => setProviderCheck(null));
+      setProviderCheckFailures([]);
+      void checkProviderUpdates({ quiet: true })
+        .then(setProviderCheckFailures)
+        .finally(() => setProviderCheck(null));
       return;
     }
 
@@ -500,6 +504,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       everything={everything}
       onConfirm={(selection) => void runEverything(selection)}
       checking={providerCheck === "dialog"}
+      checkFailures={providerCheckFailures}
     />
   );
 
