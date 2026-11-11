@@ -21,7 +21,8 @@
     "./client/http1": "./src/client/http1.ts",
     "./client/websocket": "./src/client/websocket.ts",
     "./client/pen-fetch": "./src/client/penFetch.ts",
-    "./client/pen-websocket": "./src/client/penWebSocket.ts"
+    "./client/pen-websocket": "./src/client/penWebSocket.ts",
+    "./testing/loopback-node": "./src/client/testing/loopbackNode.ts"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",
