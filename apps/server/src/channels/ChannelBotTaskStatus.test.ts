@@ -144,6 +144,16 @@ const chipStatuses = (threadId: ThreadId) =>
     return new Map([...newest].map(([taskId, chip]) => [taskId, chip.status]));
   });
 
+/** How many messages, the person's or the bot's, a conversation holds. */
+const messageCount = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const { turnItems } = yield* threads.getThreadRecords(threadId, ["turnItems"]);
+    return turnItems.filter(
+      (item) => item.type === "user_message" || item.type === "assistant_message",
+    ).length;
+  });
+
 const finishWork = (harness: ReturnType<typeof makeHarness>, taskId: string) =>
   Effect.gen(function* () {
     const ledger = yield* ChannelLedger.ChannelLedger;
@@ -295,7 +305,7 @@ describe("bot status tasks", () => {
   });
 
   it.effect(
-    "each task start and end moves the member conversation with a chip of the new status",
+    "a task's end and its retried start move the member conversation through the task's chip alone",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -304,16 +314,13 @@ describe("bot status tasks", () => {
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         const member = yield* createMember("fresh");
         const thread = member.sessionThreadId;
-        const before = yield* projectionUpdatedAt(thread);
+        const task = yield* startTask(thread, member.botId, "fresh work", "f-1");
         const mainBefore = yield* projectionUpdatedAt(botThreadId);
         const mainChips = yield* chipStatuses(botThreadId);
+        const running = yield* projectionUpdatedAt(thread);
+        const messages = yield* messageCount(thread);
 
-        yield* TestClock.adjust("1 minute");
-        const task = yield* startTask(thread, member.botId, "fresh work", "f-1");
-        assert.strictEqual((yield* chipStatuses(thread)).get(task.taskId), "running");
-        const started = yield* projectionUpdatedAt(thread);
-        assert.isTrue(started! > before!, started + " after " + before);
-
+        // The end: no one writes in the conversation, so only the chip can move it.
         yield* TestClock.adjust("1 minute");
         const stored = (yield* ledger.getTask(task.taskId))!;
         yield* commitTransition(ledger, stored, {
@@ -323,13 +330,46 @@ describe("bot status tasks", () => {
         yield* runtime.drain;
         assert.strictEqual((yield* chipStatuses(thread)).get(task.taskId), "failed");
         const ended = yield* projectionUpdatedAt(thread);
-        assert.isTrue(ended! > started!, ended + " after " + started);
+        assert.isTrue(ended! > running!, ended + " after " + running);
+        const afterEnd = yield* messageCount(thread);
+
+        // A start with no message from the person: retrying the failed task.
+        yield* TestClock.adjust("1 minute");
+        const failed = (yield* ledger.getTask(task.taskId))!;
+        yield* commitTransition(ledger, failed, {
+          type: "task.retry.requested",
+          payload: { generation: failed.task.generation + 1 },
+        });
+        yield* runtime.drain;
+        const status = yield* ledgerStatus(task.taskId);
+        assert.include(["received", "dispatching", "running"], status);
+        assert.strictEqual((yield* chipStatuses(thread)).get(task.taskId), status);
+        const restarted = yield* projectionUpdatedAt(thread);
+        assert.isTrue(restarted! > ended!, restarted + " after " + ended);
+        assert.deepStrictEqual([afterEnd, yield* messageCount(thread)], [messages, messages]);
 
         assert.strictEqual(yield* projectionUpdatedAt(botThreadId), mainBefore);
         assert.deepStrictEqual(yield* chipStatuses(botThreadId), mainChips);
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("an unreadable task document leaves the status read standing and is not active", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const member = yield* createMember("broken");
+      const task = yield* startTask(member.sessionThreadId, member.botId, "broken", "m-1");
+      yield* sql`UPDATE channel_tasks SET status = 'received', task_json = '{not json'
+        WHERE task_id = ${task.taskId}`;
+      const status = yield* statusOf(member.botId);
+      assert.deepStrictEqual(
+        [status.bot?.threadId, status.waitingCount, status.tasks],
+        [member.sessionThreadId, 0, { active: false }],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("reads one bot's going tasks through the owner, bot and status index alone", () => {
     const harness = makeHarness();
