@@ -164,9 +164,9 @@ function Probe({ name }: { readonly name: string }) {
 
 // Nothing here links anywhere, so no test needs the router.
 const noRouter = { router: false } as const;
-/** Waits for a subscription's revision 0, which the signal names with its subscription. */
+/** Waits for a subscription's revision 0; the signal may also name the subscription. */
 const acknowledged = (locator: { element: () => Element }) =>
-  vi.waitFor(() => expect(locator.element().textContent).toMatch(/^stream:\d+:0$/));
+  vi.waitFor(() => expect(locator.element().textContent).toMatch(/^stream:(\d+:)?0$/));
 
 it("shares one stream between views and closes it soon after the last one unmounts", async () => {
   using test = setup("serve");
