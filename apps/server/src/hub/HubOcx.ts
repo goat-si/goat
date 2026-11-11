@@ -519,11 +519,13 @@ const make = Effect.gen(function* () {
       result.kind !== operation.kind
     )
       return yield* refused(`${alias} answered for another connection change.`);
+    // The Child is another machine: its text passes only as one of OpenCodex's known sentences.
+    const message = result.message === undefined ? undefined : ocxMessage(result.message);
     return {
       code: result.code,
       stdout: "",
       deviceHealthy: result.healthy,
-      ...(result.message === undefined ? {} : { message: result.message }),
+      ...(message === undefined ? {} : { message }),
       ...(result.role === undefined ? {} : { deviceRole: result.role }),
     } satisfies OcxOutput;
   });
