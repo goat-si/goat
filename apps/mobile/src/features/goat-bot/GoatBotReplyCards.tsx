@@ -3,7 +3,7 @@ import { View } from "react-native";
 
 import { GoatBotCard } from "./GoatBotMessageParts";
 import { GoatBotTableCard } from "./GoatBotTableCard";
-import { splitGoatBotReply } from "./goatBotReplyParts";
+import { goatBotReplyPartKeys, splitGoatBotReply } from "./goatBotReplyParts";
 
 /**
  * A bot reply as cards: its words, then each table in a card of its own, then the words after it.
@@ -18,16 +18,7 @@ export function GoatBotReplyCards(props: {
   readonly footer?: ReactNode;
 }) {
   const parts = useMemo(() => splitGoatBotReply(props.text), [props.text]);
-  // A part is named by its words, and by how often those words came before, as a reply may repeat.
-  const keys = useMemo(() => {
-    const seen = new Map<string, number>();
-    return parts.map((part) => {
-      const words = part.kind === "table" ? part.markdown : part.text;
-      const count = seen.get(words) ?? 0;
-      seen.set(words, count + 1);
-      return `${part.kind}:${count}:${words}`;
-    });
-  }, [parts]);
+  const keys = useMemo(() => goatBotReplyPartKeys(props.text, parts), [parts, props.text]);
   if (parts.length === 1 && parts[0]?.kind === "prose") {
     return (
       <GoatBotCard>

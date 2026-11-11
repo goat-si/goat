@@ -679,6 +679,32 @@ describe("a reply with a table", () => {
     expect(h.announcements.slice(3)).toEqual([]);
   });
 
+  it("keeps a reply whole when a list item or quote defines one of its links", async () => {
+    for (const definition of ["- [x]: https://example.com", "> [x]: https://example.com"]) {
+      await render(bot({ text: ["See [notes][x].", "", ...table, "", definition].join("\n") }));
+      expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
+      await view.unmount();
+      h.dispose();
+    }
+    await render(bot({ text: "x" }));
+  });
+
+  it("keeps a table card in place while the reply streams on", async () => {
+    clipboard.copy.mockClear();
+    const opening = ["Done.", "", ...table].join("\n");
+    await render(bot({ text: opening }));
+    await view.click("Copy table");
+    expect(view.container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+    await view.rerender(
+      <GoatBotTimelineRow
+        {...props}
+        row={bot({ text: `${opening} more\n\nAnd a closing line.` })}
+      />,
+    );
+    // The same card is still there, so its feedback is too.
+    expect(view.container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+  });
+
   it("gives every table its own card, and keeps a question in one card", async () => {
     await render(bot({ text: [...table, "", "Then:", "", ...table].join("\n") }));
     expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(2);

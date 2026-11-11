@@ -22,9 +22,10 @@ const RAW_HTML: ReadonlyArray<readonly [RegExp, RegExp]> = [
   [/^ {0,3}<![A-Za-z]/, />/],
   [/^ {0,3}<!\[CDATA\[/, /\]\]>/],
 ];
-// A link reference definition's label (its destination may follow on the next line): its links may
-// sit in another part, so such replies stay whole.
-const REFERENCE_DEFINITION = /^ {0,3}\[(?:[^\]\\]|\\.)+\]:/m;
+// A link reference definition's label, at any indent and inside list items or block quotes (its
+// destination may follow on the next line): its links may sit in another part, so such replies
+// stay whole.
+const REFERENCE_DEFINITION = /^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*\[(?:[^\]\\]|\\.)+\]:/m;
 
 /** How many cells a table row has, counting pipes a backslash does not escape. */
 function cellCount(line: string): number {
@@ -123,4 +124,19 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
   }
   flushProse();
   return parts.length === 0 ? [{ kind: "prose", text }] : parts;
+}
+
+/** A key for each part: where it starts in the reply, which stays put while the reply streams on. */
+export function goatBotReplyPartKeys(
+  text: string,
+  parts: ReadonlyArray<GoatBotReplyPart>,
+): ReadonlyArray<string> {
+  let from = 0;
+  return parts.map((part) => {
+    const words = part.kind === "table" ? part.markdown : part.text;
+    const at = text.indexOf(words, from);
+    const start = at < 0 ? from : at;
+    from = at < 0 ? from : at + words.length;
+    return `${part.kind}:${start}`;
+  });
 }
