@@ -22,21 +22,30 @@ const commandId = (input: HandoffReadInput, status: string) =>
   CommandId.make(`handoff:${input.handoffId}:withdraw-wake:${status}:${NodeCrypto.randomUUID()}`);
 
 /**
- * Cancels an approval's "approved" wake while it still waits in the queue: the approval was used
- * in the turn that asked, so the wake's "call again" would only meet "already used".
+ * Withdraws an approval's "approved" wake before the agent reads it: the approval was used, so
+ * its "call again" would only meet "already used". A queued wake is cancelled; one whose turn is
+ * still preparing or starting, because the asking turn ended meanwhile, is interrupted.
  */
-export const cancelQueuedApprovalWake = Effect.fn("Handoffs.cancelQueuedApprovalWake")(function* (
+export const withdrawApprovalWake = Effect.fn("Handoffs.withdrawApprovalWake")(function* (
   threads: ThreadManagement.ThreadManagementService["Service"],
   input: HandoffReadInput,
 ) {
   const run = yield* approvedWakeRun(threads, input);
-  if (run?.status !== "queued") return;
-  yield* threads.dispatch({
-    type: "queued-run.cancel",
-    commandId: commandId(input, run.status),
-    threadId: input.threadId,
-    runId: run.id,
-  });
+  if (run?.status === "queued")
+    yield* threads.dispatch({
+      type: "queued-run.cancel",
+      commandId: commandId(input, run.status),
+      threadId: input.threadId,
+      runId: run.id,
+    });
+  else if (run?.status === "preparing" || run?.status === "starting")
+    yield* threads.dispatch({
+      type: "run.interrupt",
+      commandId: commandId(input, run.status),
+      threadId: input.threadId,
+      runId: run.id,
+      reason: "The approval this turn was woken for was already used.",
+    });
 });
 
 /**

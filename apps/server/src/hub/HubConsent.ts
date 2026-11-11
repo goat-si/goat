@@ -104,6 +104,13 @@ export const makeHubConsent = Effect.gen(function* () {
       return yield* invalid("That decision is still open; call again once it is answered.");
     if (item.status !== "answered" || item.answer !== "approve")
       return yield* invalid("That decision was not approved.");
+    // The inbox expires only open decisions; an answered one lapses here, like a handoff.
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (
+      item.expiresAt !== null &&
+      DateTime.toEpochMillis(DateTime.makeUnsafe(item.expiresAt)) <= now
+    )
+      return yield* invalid("That decision expired. Call again without decisionId to ask again.");
     const rows = yield* sql<{
       readonly answered_by: string | null;
       readonly binding: string | null;

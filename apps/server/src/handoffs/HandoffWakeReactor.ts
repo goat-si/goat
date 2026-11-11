@@ -45,7 +45,7 @@ import {
 } from "../provider/ProviderSettingsProgress.ts";
 import { forkParked } from "../serverActivation.ts";
 import { approvalUsed } from "./approvalConsumption.ts";
-import { cancelQueuedApprovalWake } from "./approvalWakeWithdraw.ts";
+import { withdrawApprovalWake } from "./approvalWakeWithdraw.ts";
 import * as Handoffs from "./Handoffs.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -307,7 +307,7 @@ const make = Effect.gen(function* () {
         yield* dispatchWake(threadId, wake);
         // A use that landed during the dispatch found no queued wake to withdraw; do it here.
         if (yield* used)
-          yield* cancelQueuedApprovalWake(threads, { threadId, handoffId: handoff.handoffId });
+          yield* withdrawApprovalWake(threads, { threadId, handoffId: handoff.handoffId });
         return;
       }
       if (

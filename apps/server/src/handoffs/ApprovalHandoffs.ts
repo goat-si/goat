@@ -21,7 +21,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { approvalUsed, consumeApproval, markApprovalUsed } from "./approvalConsumption.ts";
-import { cancelQueuedApprovalWake } from "./approvalWakeWithdraw.ts";
+import { withdrawApprovalWake } from "./approvalWakeWithdraw.ts";
 import * as Handoffs from "./Handoffs.ts";
 
 type Binding = Readonly<Record<string, unknown>>;
@@ -145,7 +145,7 @@ const make = Effect.gen(function* () {
         input.action,
       ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
       // The change already happened; a wake left queued only repeats the same "call again".
-      yield* cancelQueuedApprovalWake(threads, {
+      yield* withdrawApprovalWake(threads, {
         threadId: input.threadId,
         handoffId: TurnItemId.make(input.handoffId),
       }).pipe(

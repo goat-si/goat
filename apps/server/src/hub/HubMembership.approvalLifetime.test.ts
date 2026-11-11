@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 
 import { scope, setup, threadScope, verdict } from "./HubMembership.testkit.ts";
 
@@ -73,5 +74,19 @@ it.effect("a re-link approval does not cover a link that was replaced after it w
       .pipe(Effect.flip);
     expect(refused.message).toContain("does not cover this change");
     expect(hub.calls.some((call) => call.includes("link revoke"))).toBe(false);
+  }),
+);
+
+it.effect("an answered inbox approval stops covering its change once it expires", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ addFails: true });
+    const asked = yield* hub.membership.join(scope, { deviceAlias: "lidge-ts" });
+    yield* hub.approve(asked.decisionId!);
+    const input = { deviceAlias: "lidge-ts", decisionId: asked.decisionId! };
+    expect((yield* hub.membership.join(scope, input)).state).toBe("failed");
+    yield* TestClock.adjust("25 hours");
+    const expired = yield* hub.membership.join(scope, input).pipe(Effect.flip);
+    expect(expired.message).toContain("expired");
+    expect(linkAdds(hub.calls)).toHaveLength(1);
   }),
 );

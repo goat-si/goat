@@ -148,6 +148,41 @@ it.effect("an approval used while its wake is being sent withdraws that wake onc
   ),
 );
 
+it.effect("an approval used as its asking turn ends does not start a call-again turn", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // The turn uses the approval and ends before the wake is dispatched, so the wake would
+      // start at once instead of waiting in the queue.
+      world.outage.beforeWake = world.approvals
+        .markUsed({ threadId, handoffId: summary.handoffId, action: "hub.join" })
+        .pipe(
+          Effect.andThen(
+            world.orchestrator.dispatch({
+              type: "thread.stop",
+              commandId: CommandId.make("stop-asking-turn"),
+              threadId,
+            }),
+          ),
+          Effect.andThen(world.worker.drain()),
+          Effect.orDie,
+        );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      yield* world.worker.drain();
+      const run = (yield* world.orchestrator.getThreadProjection(threadId)).runs.find(
+        (candidate) =>
+          candidate.userMessageId === "message:handoff-wake:" + summary.handoffId + ":completed",
+      );
+      expect(["cancelled", "interrupted"]).toContain(run?.status);
+    }),
+  ),
+);
+
 it.effect("tells the agent to finish an approved storage cleanup with an argument it accepts", () =>
   withWorld((world) =>
     Effect.gen(function* () {
