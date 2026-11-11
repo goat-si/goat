@@ -1,5 +1,6 @@
 import { hasGoatBotMarkdown, splitGoatBotTextLinks } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
+import type { PluggableList } from "unified";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { GOAT_BOT_REPLY_MARKDOWN_PLUGINS } from "./goatBotReplyMarkdown";
@@ -13,13 +14,17 @@ const WEB_ADDRESS = /https?:\/\//iu;
 export function GoatBotLinkedText({
   text,
   environmentId,
+  markdownPlugins,
 }: {
   readonly text: string;
   /** Where the shown history lives, so its thread links open there. */
   readonly environmentId: EnvironmentId | null;
+  /** A card of a split reply passes the whole reply's link context. */
+  readonly markdownPlugins?: PluggableList;
 }) {
   // A web address renders as a link chip with its site's icon, which needs the Markdown path.
-  if (hasGoatBotMarkdown(text) || WEB_ADDRESS.test(text)) {
+  // A card of a split reply is Markdown, and reads bare references against the whole reply.
+  if (markdownPlugins !== undefined || hasGoatBotMarkdown(text) || WEB_ADDRESS.test(text)) {
     return (
       <ChatMarkdown
         text={text}
@@ -27,7 +32,7 @@ export function GoatBotLinkedText({
         environmentId={environmentId ?? undefined}
         fileActions={false}
         lineBreaks
-        extraRemarkPlugins={GOAT_BOT_REPLY_MARKDOWN_PLUGINS}
+        extraRemarkPlugins={markdownPlugins ?? GOAT_BOT_REPLY_MARKDOWN_PLUGINS}
       />
     );
   }
