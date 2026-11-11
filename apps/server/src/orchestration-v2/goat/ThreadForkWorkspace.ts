@@ -57,6 +57,8 @@ export class ThreadForkWorkspaceService extends Context.Service<
 >()("goat/orchestration-v2/goat/ThreadForkWorkspace/ThreadForkWorkspaceService") {}
 
 const isForkError = Schema.is(OrchestrationV2ThreadForkError);
+const MAX_FORKS_IN_FLIGHT = 4;
+const MAX_CALLERS_PER_FORK = 4;
 
 const errorText = (cause: unknown): string =>
   cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause);
@@ -90,20 +92,38 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
 
   // One in-flight fork per commandId, so a retry racing the first call cannot make a second checkout.
+  // Both limits refuse before any Git work starts.
   const inFlight = new Map<CommandId, { readonly lock: Semaphore.Semaphore; holders: number }>();
-  const singleFlight = <A, E, R>(commandId: CommandId, effect: Effect.Effect<A, E, R>) =>
+  const singleFlight = <A, E, R>(
+    input: ThreadForkWorkspaceInput,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | OrchestrationV2ThreadForkError, R> =>
     Effect.acquireUseRelease(
-      Effect.sync(() => {
-        const entry = inFlight.get(commandId) ?? { lock: Semaphore.makeUnsafe(1), holders: 0 };
+      Effect.suspend(() => {
+        const existing = inFlight.get(input.commandId);
+        if (
+          existing === undefined
+            ? inFlight.size >= MAX_FORKS_IN_FLIGHT
+            : existing.holders >= MAX_CALLERS_PER_FORK
+        ) {
+          return Effect.fail(
+            refuse(
+              input,
+              "fork_failed",
+              "GOAT is preparing several forks already. Try again shortly.",
+            ),
+          );
+        }
+        const entry = existing ?? { lock: Semaphore.makeUnsafe(1), holders: 0 };
         entry.holders += 1;
-        inFlight.set(commandId, entry);
-        return entry;
+        inFlight.set(input.commandId, entry);
+        return Effect.succeed(entry);
       }),
       (entry) => entry.lock.withPermits(1)(effect),
       (entry) =>
         Effect.sync(() => {
           entry.holders -= 1;
-          if (entry.holders === 0) inFlight.delete(commandId);
+          if (entry.holders === 0) inFlight.delete(input.commandId);
         }),
     );
 
@@ -124,11 +144,8 @@ const make = Effect.gen(function* () {
       ...(extra.cause === undefined ? {} : { cause: extra.cause }),
     });
 
-  const readTarget = (threadId: ThreadId) =>
-    threads.getThreadRecords(threadId, []).pipe(
-      Effect.map((projection) => projection.thread),
-      Effect.option,
-    );
+  /** The thread's shell, null when it does not exist; fails when the read itself fails. */
+  const readTarget = (threadId: ThreadId) => threads.getThreadShell(threadId);
 
   const replay = Effect.fn("ThreadForkWorkspace.replay")(function* (
     input: ThreadForkWorkspaceInput,
@@ -144,9 +161,9 @@ const make = Effect.gen(function* () {
     if (receipt.value.status === "rejected") {
       return yield* refuse(input, "fork_failed", receipt.value.error ?? "The fork was refused.");
     }
-    const target = yield* readTarget(receipt.value.threadId);
-    const worktreePath = Option.isSome(target) ? target.value.worktreePath : null;
-    const branch = Option.isSome(target) ? target.value.branch : null;
+    const target = yield* readTarget(receipt.value.threadId).pipe(Effect.orElseSucceed(() => null));
+    const worktreePath = target?.worktreePath ?? null;
+    const branch = target?.branch ?? null;
     return Option.some<OrchestrationV2ThreadForkResult>({
       sequence: receipt.value.resultSequence,
       targetThreadId: receipt.value.threadId,
@@ -391,18 +408,20 @@ const make = Effect.gen(function* () {
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
               // The event sink commits before it publishes, so a failure here may follow a committed fork.
-              const receipt = yield* receipts
-                .getByCommandId(input.commandId)
-                .pipe(Effect.orElseSucceed(() => Option.none()));
-              const target = yield* readTarget(input.targetThreadId);
-              if (Option.isSome(receipt) && receipt.value.status === "accepted") {
-                return receipt.value.resultSequence;
+              // Only reads that succeeded can prove a refusal; a failed read keeps the checkout.
+              const receipt = yield* receipts.getByCommandId(input.commandId).pipe(
+                Effect.map((value) => ({ read: true as const, value })),
+                Effect.orElseSucceed(() => ({ read: false as const })),
+              );
+              const target = yield* readTarget(input.targetThreadId).pipe(
+                Effect.map((value) => ({ read: true as const, value })),
+                Effect.orElseSucceed(() => ({ read: false as const })),
+              );
+              const stored = receipt.read ? receipt.value : Option.none();
+              if (Option.isSome(stored) && stored.value.status === "accepted") {
+                return stored.value.resultSequence;
               }
-              if (
-                Option.isNone(receipt) &&
-                Option.isSome(target) &&
-                target.value.worktreePath === worktreePath
-              ) {
+              if (target.read && target.value?.worktreePath === worktreePath) {
                 return yield* refuse(
                   input,
                   "fork_failed",
@@ -410,16 +429,16 @@ const make = Effect.gen(function* () {
                   { retainedWorktreePath: worktreePath, cause: Cause.squash(cause) },
                 );
               }
-              const definite =
-                (Option.isSome(receipt) && receipt.value.status === "rejected") ||
-                (Option.isNone(receipt) && Option.isNone(target));
-              if (definite && !Cause.hasInterruptsOnly(cause)) {
+              const refused =
+                (Option.isSome(stored) && stored.value.status === "rejected") ||
+                (receipt.read && Option.isNone(stored) && target.read && target.value === null);
+              if (refused && !Cause.hasInterruptsOnly(cause)) {
                 yield* removeCreated;
                 return yield* refuse(
                   input,
                   "fork_failed",
-                  Option.isSome(receipt) && receipt.value.error !== null
-                    ? receipt.value.error
+                  Option.isSome(stored) && stored.value.error !== null
+                    ? stored.value.error
                     : errorText(Cause.squash(cause)),
                   { cause: Cause.squash(cause) },
                 );
@@ -478,7 +497,7 @@ const make = Effect.gen(function* () {
 
   const fork = Effect.fn("ThreadForkWorkspace.fork")(function* (input: ThreadForkWorkspaceInput) {
     return yield* singleFlight(
-      input.commandId,
+      input,
       Effect.gen(function* () {
         const replayed = yield* replay(input);
         if (Option.isSome(replayed)) return replayed.value;
