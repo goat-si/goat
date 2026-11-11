@@ -339,6 +339,8 @@ export interface ThreadFeedProps {
   readonly dispatchingMessageId: MessageId | null;
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
   readonly environmentId: EnvironmentId;
+  /** The environment is not connected, so its handoff cards cannot be answered yet. */
+  readonly offline?: boolean;
   readonly threadId: ThreadId;
   /** Null while the thread's creation is queued: reading detail then caches a not-found as deleted. */
   readonly detailRef: ScopedThreadRef | null;
@@ -1184,6 +1186,7 @@ function renderFeedEntry(
   props: Pick<
     ThreadFeedProps,
     | "environmentId"
+    | "offline"
     | "onUseArtifactTemplate"
     | "skills"
     | "dispatchingMessageId"
@@ -1351,6 +1354,7 @@ function renderFeedEntry(
           environmentId={props.environmentId}
           handoff={projected.item.handoff}
           inherited={projected.visibility !== "local"}
+          offline={props.offline}
         />
       );
     return (
@@ -3190,6 +3194,7 @@ export const ThreadFeed = memo(function ThreadFeed({
           <FeedEntryShimmerContext value={info.index}>
             {renderFeedEntry(info, {
               environmentId: props.environmentId,
+              offline: props.offline,
               dispatchingMessageId: props.dispatchingMessageId,
               onEditPendingMessage: props.onEditPendingMessage,
               onUseArtifactTemplate: props.onUseArtifactTemplate,

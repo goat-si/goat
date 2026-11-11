@@ -323,21 +323,22 @@ export function createDecisionInboxAtoms(input: {
 
   /**
    * A thread's open approval handoffs for its composer. Reading it keeps the environment's feed
-   * subscribed, which lists every one; a server without that list falls back to loaded items.
+   * subscribed, which lists every one. Only a loaded feed that cannot list them (an older server)
+   * falls back to the thread's loaded items, since reading those loads the thread.
    */
   const openApprovalsAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     let value: ReadonlyArray<Handoff> = [];
     return Atom.make((get) => {
-      const handoffs = (
-        input.feedAtom === undefined ? null : get(input.feedAtom(ref.environmentId))
-      )?.handoffs;
+      const feed = input.feedAtom === undefined ? null : get(input.feedAtom(ref.environmentId));
       const next =
-        handoffs === undefined
-          ? get(input.details.pendingHandoffsAtom(ref))
-          : handoffs.flatMap((entry) =>
-              entry.handoff.requestedBy.threadId === ref.threadId ? [entry.handoff] : [],
-            );
+        feed === null
+          ? []
+          : feed.handoffs === undefined
+            ? get(input.details.pendingHandoffsAtom(ref))
+            : feed.handoffs.flatMap((entry) =>
+                entry.handoff.requestedBy.threadId === ref.threadId ? [entry.handoff] : [],
+              );
       if (!arrayElementsEqual(value, next)) value = next;
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`decision-inbox-open-approvals:${key}`));

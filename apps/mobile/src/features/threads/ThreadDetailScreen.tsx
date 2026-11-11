@@ -840,8 +840,7 @@ function ThreadDetailBody(
     jumpMessageId !== null &&
     selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === jumpMessageId);
   const historyForJump = props.historyControls;
-  // History down to the message in one request; another page if it is not
-  // there yet.
+  // History down to the message in one request; another page if it is not there yet.
   const loadEarlierForJump = useEffectEvent(() => {
     if (jumpMessageId !== null) historyForJump?.onLoadThrough(jumpMessageId);
   });
@@ -1412,6 +1411,7 @@ function ThreadDetailBody(
             <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
               <ThreadFeed
                 environmentId={props.environmentId}
+                offline={props.connectionStateLabel !== "connected"}
                 threadId={props.selectedThread.id}
                 detailRef={props.selectedThreadDetailRef}
                 workspaceRoot={props.threadCwd}
