@@ -13,6 +13,9 @@ const route = vi.hoisted(() => ({
   visit: vi.fn(),
   snapshot: undefined as GoatBotVisitSnapshot | null | undefined,
   threadId: "bot-thread",
+  member: null as null | { botId: string; environmentId: string; sessionThreadId: string },
+  memberPreview: null as null | { unread: boolean; at: string },
+  previewRefs: [] as unknown[],
 }));
 vi.mock("react-native", () => ({
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
@@ -35,9 +38,20 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
     botRef: { environmentId: "env", threadId: route.threadId },
   }),
 }));
-vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => route.preview }));
+vi.mock("./useMobileBotPreview", () => ({
+  useMobileBotPreview: (ref: { threadId: string } | null) => {
+    route.previewRefs.push(ref);
+    return route.member !== null && ref?.threadId === route.member.sessionThreadId
+      ? route.memberPreview
+      : route.preview;
+  },
+}));
 vi.mock("./useMobileBotRoster", () => ({
-  useMobileGoatBotMember: () => ({ member: null, main: null, missing: false }),
+  useMobileGoatBotMember: (botId?: string) => ({
+    member: botId === undefined ? null : route.member,
+    main: null,
+    missing: false,
+  }),
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => ({ canManage: false }) }));
 vi.mock("./GoatBotScreen", () => ({
@@ -135,4 +149,45 @@ it("keeps its own read position for a server that does not track visits", async 
   expect(route.snapshot).toMatchObject({ readUpTo: at(3), newestAtOpen: at(7) });
   expect(route.visit).not.toHaveBeenCalled();
   await view.unmount();
+});
+it("records a member chat's visit against the member's own conversation while it is seen", async () => {
+  Object.assign(route, { focused: true, foreground: true, active: true, threadId: "main-thread" });
+  route.visit.mockClear();
+  route.member = { botId: "scout", environmentId: "env", sessionThreadId: "scout-thread" };
+  route.shell = { lastVisitedAt: at(1) };
+  route.preview = { unread: true, at: at(3) };
+  route.memberPreview = { unread: true, at: at(5) };
+  const root = createRoot(document.createElement("div"));
+  const member = { route: { params: { botId: "scout" } } } as unknown as RouteProps;
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  // The member's newest message is read, in its own conversation; the main chat is not touched.
+  expect(route.visit).toHaveBeenCalledTimes(1);
+  expect(route.visit).toHaveBeenCalledWith(
+    expect.objectContaining({ input: { threadId: "scout-thread", visitedAt: at(5) } }),
+  );
+  // Control Center opens (inactive, still in the foreground) and Scout replies: not read.
+  route.visit.mockClear();
+  route.active = false;
+  route.memberPreview = { unread: true, at: at(6) };
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).not.toHaveBeenCalled();
+  // Back: the reply is read now.
+  route.active = true;
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).toHaveBeenCalledWith(
+    expect.objectContaining({ input: { threadId: "scout-thread", visitedAt: at(6) } }),
+  );
+  // Not seen in the background, and nothing more to mark once read.
+  route.visit.mockClear();
+  route.foreground = false;
+  route.memberPreview = { unread: true, at: at(7) };
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).not.toHaveBeenCalled();
+  route.foreground = true;
+  route.memberPreview = { unread: false, at: at(7) };
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+  route.member = null;
+  route.memberPreview = null;
 });

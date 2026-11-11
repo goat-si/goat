@@ -30,6 +30,9 @@ vi.mock("react-native", () => ({
   Alert: { alert: state.alert },
 }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
+vi.mock("./useMobileGoatBotHomeMode", () => ({
+  useMobileGoatBotHomeMode: () => ({ botRef: null }),
+}));
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
     bots: [],
