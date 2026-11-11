@@ -74,6 +74,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
   "src/features/goat-bot/GoatBotScreen.memory.test.tsx",
   "src/features/goat-bot/GoatBotTimelineRow.test.tsx",
+  "src/features/goat-bot/GoatBotTimelineRow.links.test.tsx",
   "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
   "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
