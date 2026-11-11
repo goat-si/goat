@@ -65,6 +65,31 @@ func TestNoServiceDaemonIsNotAChildOfTheCommandThatStartedIt(t *testing.T) {
 	}
 }
 
+// #2864: the first pen up founds a mesh of the shared epoch (ADR-0026), whose record space is shared out
+// by admission lineage.
+func TestTheFirstPenUpFoundsAMeshOfTheSharedEpoch(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st := tmpStore(t)
+	t.Setenv("PEN_TEST_MAIN", "1")
+	t.Setenv("PEN_HOME", st.Dir)
+	t.Setenv("PEN_SERVICE", "none")
+	t.Setenv("PEN_HOSTKEYS", "none")
+	t.Setenv("PEN_SSH_DIR", filepath.Join(st.Dir, "ssh"))
+	var out, errOut bytes.Buffer
+	if code := RunUp([]string{"--no-service", "--relay", rs.URL, "--name", "t"}, &out, &errOut); code != 0 {
+		t.Fatalf("pen up exit %d: %s", code, errOut.String())
+	}
+	t.Cleanup(func() { RunDown(nil, io.Discard, io.Discard) })
+	s, err := mesh.Load(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Shared() {
+		t.Fatal("pen up founded a version 1 mesh")
+	}
+}
+
 func TestDownReturnsOnlyOnceTheDaemonHasExited(t *testing.T) {
 	rs := relaytest.New()
 	defer rs.Close()

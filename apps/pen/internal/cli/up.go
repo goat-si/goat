@@ -98,7 +98,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		return refused(err)
 	}
 	if _, err := mesh.Load(st); errors.Is(err, os.ErrNotExist) {
-		if _, err := mesh.Found(st, id, cfg.Name, time.Now().UnixMilli()); err != nil {
+		if _, err := mesh.FoundV(mesh.EpochShared, st, id, cfg.Name, time.Now().UnixMilli()); err != nil {
 			return fail(stderr, err)
 		}
 	} else if err != nil {
