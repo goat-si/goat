@@ -8,11 +8,15 @@ import {
   advanceGoatBotFace,
   faceHoldStep,
   goatBotFace,
+  goatBotFaceSpoken,
   goatBotFaceTasks,
+  goatBotRowFaceSignals,
   type GoatBotFaceInput,
   type GoatBotFaceTaskItem,
   type GoatBotFaceShell,
+  type GoatBotRowStatus,
 } from "./face.ts";
+import { GOAT_BOT_READING_LIMIT_MS } from "./rows.ts";
 
 const T0 = Date.parse("2026-11-07T10:00:00.000Z");
 const at = (ms: number) => DateTime.makeUnsafe(ms);
@@ -327,3 +331,50 @@ function chip(
     },
   } as unknown as GoatBotFaceTaskItem;
 }
+
+describe("goatBotRowFaceSignals", () => {
+  const latest = (author: "person" | "bot", ms: number) => ({
+    text: "is main green?",
+    at: DateTime.formatIso(at(ms)),
+    author,
+  });
+  const rowFace = (status: GoatBotRowStatus, now: number) => {
+    const { activity, waitingCount, tasks } = goatBotRowFaceSignals(status, now);
+    return goatBotFace({ activity, waitingCount, tasks, shell: shell() }, now).state;
+  };
+
+  it("reads a person's unanswered message until the reading limit, then stops", () => {
+    const status = { waitingCount: 0, latest: latest("person", T0) };
+    expect(rowFace(status, T0 + 1_000)).toBe("reading");
+    expect(goatBotRowFaceSignals(status, T0 + 1_000).readingUntil).toBe(
+      T0 + GOAT_BOT_READING_LIMIT_MS,
+    );
+    expect(rowFace(status, T0 + GOAT_BOT_READING_LIMIT_MS)).toBe("idle");
+  });
+
+  it("stops reading as soon as the bot's reply is the newest message", () => {
+    const answered = { waitingCount: 0, latest: latest("bot", T0 + 2_000) };
+    expect(rowFace(answered, T0 + 3_000)).toBe("idle");
+    expect(goatBotRowFaceSignals(answered, T0 + 3_000).readingUntil).toBeNull();
+  });
+
+  it("leaves the tasks unknown when the status has no working flag, as today's servers send", () => {
+    expect(goatBotRowFaceSignals({ waitingCount: 0 }, T0).tasks).toBeNull();
+    expect(rowFace({ waitingCount: 0, working: true }, T0)).toBe("working");
+    expect(rowFace({ waitingCount: 0, working: false }, T0)).toBe("idle");
+  });
+
+  it("shows waiting over working and over reading", () => {
+    expect(rowFace({ waitingCount: 1, working: true }, T0)).toBe("waiting");
+    expect(rowFace({ waitingCount: 1, latest: latest("person", T0) }, T0 + 1_000)).toBe("waiting");
+  });
+});
+
+describe("goatBotFaceSpoken", () => {
+  it("says waiting once, with the count, when a row also counts what waits", () => {
+    expect(goatBotFaceSpoken("waiting", 2)).toBe("2 waiting for you");
+    expect(goatBotFaceSpoken("waiting", 0)).toBe("Waiting for you");
+    expect(goatBotFaceSpoken("reading", 0)).toBe("Reading");
+    expect(goatBotFaceSpoken("idle", 0)).toBeNull();
+  });
+});
