@@ -52,10 +52,7 @@ function buildModelPickerSearchText(model: ModelPickerSearchableModel): string {
   );
 }
 
-export function scoreModelPickerSearch(
-  model: ModelPickerSearchableModel,
-  query: string,
-): number | null {
+function scoreModelPickerSearch(model: ModelPickerSearchableModel, query: string): number | null {
   const tokens = normalizeSearchQuery(query)
     .split(/\s+/u)
     .filter((token) => token.length > 0);

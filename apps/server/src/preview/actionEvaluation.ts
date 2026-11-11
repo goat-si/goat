@@ -10,7 +10,7 @@ export const requireEvaluationChannel = (
   return gate.channel;
 };
 
-export const evaluationExpired = (
+const evaluationExpired = (
   channel: ActionChannel,
   reject: (cause: unknown) => void,
   timeoutMs: number,
