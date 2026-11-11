@@ -31,6 +31,7 @@ vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
   useBotThreads: () => ({
     rows: mocks.rows,
+    remoteWork: [],
     supported: true,
     loaded: mocks.threads.loaded,
     failed: mocks.threads.failed,
@@ -218,6 +219,28 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   await expect
     .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
     .toHaveFocus();
+  // The return applies once: coming back to Home from Library leaves focus on the tab.
+  await userEvent.click(screen.getByRole("tab", { name: "Library" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
+});
+
+it("steps back from a peek to its row with Escape", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+      onOpenFile={() => {}}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await expect.element(screen.getByRole("button", { name: /Back to Home from/ })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
+    .toHaveFocus();
 });
 
 it("closes the peek when the task leaves the bot's work", async () => {
@@ -242,6 +265,8 @@ it("closes the peek when the task leaves the bot's work", async () => {
   );
   await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  // Focus was on Back, which is gone; it lands on Home instead of the page.
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   // The task coming back does not reopen a peek nobody asked for.
   setup([], [], [runningTask]);
   await screen.rerender(
@@ -253,6 +278,31 @@ it("closes the peek when the task leaves the bot's work", async () => {
     />,
   );
   await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
+});
+
+it("leaves focus in the composer when a peeked task leaves the list", async () => {
+  setup([], [], [runningTask]);
+  const panel = () => (
+    <>
+      <textarea aria-label="Message GOAT Bot" />
+      <GoatBotWorkPanel
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        peekRows={() => []}
+        onOpenFile={() => {}}
+      />
+    </>
+  );
+  await using screen = await render(panel());
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  const composer = screen.getByRole("textbox", { name: "Message GOAT Bot" });
+  await userEvent.click(composer);
+  await userEvent.keyboard("still typing");
+  setup([]);
+  await screen.rerender(panel());
+  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(composer).toHaveFocus();
+  await expect.element(composer).toHaveValue("still typing");
 });
 
 it("says the task list is loading, not empty, before the first read answers", async () => {
