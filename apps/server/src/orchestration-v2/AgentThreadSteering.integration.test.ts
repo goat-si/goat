@@ -401,6 +401,105 @@ it.effect("an agent's message to a starting turn joins it once the turn runs", (
   ),
 );
 
+it.effect("a queued message without a model starts on the queued selection ahead of it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, events, started, layer } = yield* harness("queued-model", {
+        supportsActiveSteering: true,
+      });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        yield* startTarget(cwd, started);
+        yield* reportRunning(events, started[0]!);
+        const selected = { ...modelSelection, model: "model-picked-ahead" };
+        for (const [id, selection] of [
+          ["picked", selected],
+          ["implicit", undefined],
+        ] as const) {
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(id),
+            threadId,
+            messageId: MessageId.make(`message:${id}`),
+            text: id,
+            attachments: [],
+            ...(selection === undefined ? {} : { modelSelection: selection }),
+            dispatchMode: { type: "queue_after_active" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+        }
+        const queued = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(
+          queued.runs.find((run) => run.userMessageId === MessageId.make("message:implicit"))
+            ?.modelSelection,
+          selected,
+        );
+        yield* reportCompleted(events, started[0]!);
+        yield* worker.drain();
+        yield* orchestrator.resumeQueuedRuns;
+        yield* worker.drain();
+        assert.deepEqual(started[1]?.modelSelection, selected);
+        yield* reportRunning(events, started[1]!);
+        yield* reportCompleted(events, started[1]!);
+        yield* worker.drain();
+        yield* orchestrator.resumeQueuedRuns;
+        yield* worker.drain();
+        assert.equal(started[2]?.message.messageId, MessageId.make("message:implicit"));
+        assert.deepEqual(started[2]?.modelSelection, selected);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("keeps a buffered provider wake on its originating model behind a queued pick", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, events, started, layer } = yield* harness("queued-provider-wake-model", {
+        supportsActiveSteering: true,
+      });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        yield* startTarget(cwd, started);
+        yield* reportRunning(events, started[0]!);
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("pick"),
+          threadId,
+          messageId: MessageId.make("message:pick"),
+          text: "pick",
+          attachments: [],
+          modelSelection: { ...modelSelection, model: "new-model" },
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("wake"),
+          threadId,
+          messageId: MessageId.make("message:wake"),
+          text: "Background activity updated",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "provider",
+          notification: {
+            source: { kind: "background_task" },
+            outcome: "updated",
+            summary: "Background activity updated",
+          },
+        });
+        const wake = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === MessageId.make("message:wake"),
+        );
+        assert.deepEqual(wake?.modelSelection, modelSelection);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 it.effect("an agent's message starts an idle thread", () =>
   Effect.scoped(
     Effect.gen(function* () {
