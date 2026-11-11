@@ -12,6 +12,10 @@ import {
 } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
+import { it as effectIt, assert } from "@effect/vitest";
 import { sealAssistantTextEvent } from "./Adapters/AssistantTextBoundary.ts";
 
 const assistantEvent = (text: string): ProviderAdapter.ProviderAdapterV2Event => ({
@@ -37,6 +41,63 @@ const assistantEvent = (text: string): ProviderAdapter.ProviderAdapterV2Event =>
     text,
     streaming: true,
   },
+});
+
+effectIt.effect("publishes an idle paragraph but waits while its text keeps growing", () =>
+  Effect.gen(function* () {
+    const filter = makeAssistantStreamingFilter("paragraph");
+    const now = Clock.currentTimeMillis;
+    assert.isNull(filter(assistantEvent("One"), yield* now));
+    yield* TestClock.adjust("600 millis");
+    assert.isNull(filter(assistantEvent("One more"), yield* now));
+    yield* TestClock.adjust("600 millis");
+    assert.deepEqual(filter.takeIdleFlushes(yield* now), []);
+    yield* TestClock.adjust("200 millis");
+    assert.deepEqual(filter.takeIdleFlushes(yield* now), [assistantEvent("One more")]);
+  }),
+);
+
+it("never reopens a finalized snapshot when an old idle deadline fires", () => {
+  const filter = makeAssistantStreamingFilter("paragraph");
+  const pending = assistantEvent("Partial");
+  expect(filter(pending, 0)).toBeNull();
+  if (pending.type !== "turn_item.updated") throw new Error("Expected assistant item");
+  const final = {
+    ...pending,
+    turnItem: { ...pending.turnItem, text: "Finished", streaming: false },
+  };
+  expect(filter(final, 400)).toEqual(final);
+  expect(filter.takeIdleFlushes(800)).toEqual([]);
+});
+
+it("preserves receipt gating and only releases the remainder in paragraph mode", () => {
+  const filter = makeAssistantStreamingFilter("paragraph", { receiptLine: true });
+  expect(filter(assistantEvent("Receiving"), 0)).toBeNull();
+  expect(filter.takeIdleFlushes(800)).toEqual([]);
+  expect(filter(assistantEvent("Receiving\nWorking"), 900)).toMatchObject({
+    turnItem: { text: "Receiving\n" },
+  });
+  expect(filter.takeIdleFlushes(1700)).toMatchObject([
+    { turnItem: { text: "Receiving\nWorking" } },
+  ]);
+  const turn = makeAssistantStreamingFilter("turn", { receiptLine: true });
+  turn(assistantEvent("Receiving\nWorking"), 0);
+  expect(turn.takeIdleFlushes(5000)).toEqual([]);
+});
+
+it("does not shrink a snapshot after an idle flush and still permits rewrites", () => {
+  const filter = makeAssistantStreamingFilter("paragraph");
+  expect(filter(assistantEvent("First\n\nunfinished"), 0)).toMatchObject({
+    turnItem: { text: "First\n\n" },
+  });
+  filter.takeIdleFlushes(800);
+  expect(filter(assistantEvent("First\n\nunfinished more"), 1300)).toBeNull();
+  expect(filter.takeIdleFlushes(2100)).toMatchObject([
+    { turnItem: { text: "First\n\nunfinished more" } },
+  ]);
+  expect(filter(assistantEvent("Rewritten\n\n"), 2600)).toMatchObject({
+    turnItem: { text: "Rewritten\n\n" },
+  });
 });
 
 it.each(["paragraph", "turn"] as const)(

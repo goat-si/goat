@@ -69,30 +69,52 @@ export function splitBufferedAssistantText(text: string): { ready: string; rest:
   return { ready: text.slice(0, boundary), rest: text.slice(boundary) };
 }
 
+const ASSISTANT_IDLE_FLUSH_MS = 800;
+
+type Event = ProviderAdapter.ProviderAdapterV2Event;
+type Track = { text: string; at: number; held: Event | null; dueAt: number };
+
+function streamedText(event: Event) {
+  if (event.type === "message.updated" && event.message.role === "assistant") return event.message;
+  if (
+    event.type === "turn_item.updated" &&
+    (event.turnItem.type === "assistant_message" || event.turnItem.type === "reasoning")
+  )
+    return event.turnItem;
+  return null;
+}
+
+function withText(event: Event, text: string): Event {
+  if (event.type === "message.updated") return { ...event, message: { ...event.message, text } };
+  if (
+    event.type === "turn_item.updated" &&
+    (event.turnItem.type === "assistant_message" || event.turnItem.type === "reasoning")
+  )
+    return { ...event, turnItem: { ...event.turnItem, text } };
+  return event;
+}
+
 export function makeAssistantStreamingFilter(
   mode: ResponseStreamingMode,
   options?: { readonly receiptLine: boolean },
 ) {
-  const delivered = new Map<string, { text: string; at: number }>();
+  const tracks = new Map<string, Track>();
   let receiptItem: string | null = null;
   let receiptText: string | null = null;
-  return (
-    event: ProviderAdapter.ProviderAdapterV2Event,
-    now: number,
-  ): ProviderAdapter.ProviderAdapterV2Event | null => {
+  let nextDueAt: number | null = null;
+  const track = (key: string, value: Track) => {
+    tracks.set(key, value);
+    if (value.held !== null && (nextDueAt === null || value.dueAt < nextDueAt))
+      nextDueAt = value.dueAt;
+  };
+  const filter = (event: Event, now: number): Event | null => {
     if (
       event.type === "node.updated" &&
       event.node.kind === "assistant_message" &&
       event.node.status === "running"
     )
       return null;
-    const message =
-      event.type === "message.updated" && event.message.role === "assistant"
-        ? event.message
-        : event.type === "turn_item.updated" &&
-            (event.turnItem.type === "assistant_message" || event.turnItem.type === "reasoning")
-          ? event.turnItem
-          : null;
+    const message = streamedText(event);
     if (!message) return event;
     const key = `${event.type}:${message.id}`;
     const assistant =
@@ -112,24 +134,59 @@ export function makeAssistantStreamingFilter(
       }
     }
     if (!message.streaming) {
-      delivered.delete(key);
+      tracks.delete(key);
       return event;
     }
+    const previous = tracks.get(key);
     const firstReceipt =
-      receiptItem === String(message.id) && receiptText !== null && !delivered.has(key);
+      receiptItem === String(message.id) &&
+      receiptText !== null &&
+      (previous === undefined || previous.at === Number.NEGATIVE_INFINITY);
     if (mode === "turn" && !firstReceipt) return null;
-    const previous = delivered.get(key);
-    if (!firstReceipt && previous && now - previous.at < 400) return null;
+    const delivered = previous?.text ?? "";
+    const hold = () => {
+      const canFlush =
+        mode === "paragraph" &&
+        !(options?.receiptLine && assistant && root && receiptText === null);
+      track(key, {
+        text: delivered,
+        at: previous?.at ?? Number.NEGATIVE_INFINITY,
+        held: canFlush && message.text !== delivered ? event : null,
+        dueAt: now + ASSISTANT_IDLE_FLUSH_MS,
+      });
+      return null;
+    };
+    if (!firstReceipt && previous && now - previous.at < 400) return hold();
     const ready = firstReceipt ? receiptText : splitBufferedAssistantText(message.text).ready;
-    if (!ready || ready === previous?.text) return null;
-    delivered.set(key, { text: ready, at: now });
-    if (event.type === "message.updated")
-      return { ...event, message: { ...event.message, text: ready } };
-    if (
-      event.type === "turn_item.updated" &&
-      (event.turnItem.type === "assistant_message" || event.turnItem.type === "reasoning")
-    )
-      return { ...event, turnItem: { ...event.turnItem, text: ready } };
-    return event;
+    if (!ready || delivered.startsWith(ready)) return hold();
+    track(key, {
+      text: ready,
+      at: now,
+      held: mode === "paragraph" && ready !== message.text ? event : null,
+      dueAt: now + ASSISTANT_IDLE_FLUSH_MS,
+    });
+    return withText(event, ready);
   };
+  return Object.assign(filter, {
+    nextIdleFlushAt: () => nextDueAt,
+    takeIdleFlushes(now: number): ReadonlyArray<Event> {
+      const due: Event[] = [];
+      nextDueAt = null;
+      for (const [key, current] of tracks) {
+        if (current.held === null) continue;
+        if (current.dueAt > now) {
+          if (nextDueAt === null || current.dueAt < nextDueAt) nextDueAt = current.dueAt;
+          continue;
+        }
+        due.push(current.held);
+        tracks.set(key, {
+          text: streamedText(current.held)?.text ?? current.text,
+          at: now,
+          held: null,
+          dueAt: now,
+        });
+      }
+      return due;
+    },
+  });
 }
