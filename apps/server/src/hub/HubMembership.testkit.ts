@@ -106,6 +106,8 @@ export interface Fixture {
   readonly syncExit?: number;
   /** Another link replaces the join's new one under the alias while the join syncs. */
   readonly replacedDuringSync?: string;
+  /** The join's new link is removed from the Home while the join syncs. */
+  readonly removedDuringSync?: boolean;
   /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
   readonly releases?: OpenCodexReleaseCatalog;
   /** Home `ocx link status` fails; "forbidden" is OpenCodex's 403 in Hub mode (opencodex#8184). */
@@ -300,6 +302,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                 calls.push(`sync ${alias} ${options.linkId}`);
                 if (fixture.replacedDuringSync !== undefined)
                   links.set(alias, fixture.replacedDuringSync);
+                if (fixture.removedDuringSync === true) links.delete(alias);
                 return { code: fixture.syncExit ?? 0, stdout: "" };
               }),
             directAlias: () =>

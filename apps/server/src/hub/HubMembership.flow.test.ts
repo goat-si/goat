@@ -160,3 +160,11 @@ it.effect("a join whose new link was replaced before its sync is not reported li
     expect(result.state).toBe("degraded");
   }),
 );
+
+it.effect("a join whose new link is gone from the Home record is not reported linked", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, removedDuringSync: true });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(result.state).toBe("degraded");
+  }),
+);

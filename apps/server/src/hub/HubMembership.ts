@@ -331,7 +331,8 @@ const make = Effect.gen(function* () {
     );
     // Parity ties the Child to the Home's current record; the record must be this join's link.
     const recorded = (yield* homeLinks())?.links.find((entry) => entry.alias === alias)?.id;
-    const moved = synced.moved || (recorded !== undefined && recorded !== linkId);
+    // An unreadable or missing record is no proof either.
+    const moved = synced.moved || recorded !== linkId;
     const checked = finalState(verified);
     const state = moved && checked === "child" ? "degraded" : checked;
     yield* audit(caller, `hub.${action}`, alias, state, decisionId);
