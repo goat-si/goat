@@ -61,6 +61,8 @@ const state = vi.hoisted(() => ({
   draft: vi.fn(),
   openTask: vi.fn(),
   openThread: vi.fn(),
+  workRevision: null as string | null,
+  machinesKey: undefined as string | undefined,
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) => (atom === "openable" ? state.remoteOpenable : true),
@@ -145,7 +147,12 @@ vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
 vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => <p>status card</p> }));
-vi.mock("./MobileBotComputer", () => ({ MobileBotComputer: () => <p>bot computer</p> }));
+vi.mock("./MobileBotComputer", () => ({
+  MobileBotComputer: (props: { workKey?: string }) => {
+    state.machinesKey = props.workKey;
+    return <p>bot computer</p>;
+  },
+}));
 vi.mock("./MobileBotLibrary", () => ({ MobileBotLibrary: () => <p>bot files</p> }));
 vi.mock("./MobileBotMemory", () => ({
   MobileBotMemory: (props: { onDraft?: (text: string) => void }) => (
@@ -234,6 +241,8 @@ afterEach(async () => {
     detail: null,
     messages: [],
     life: [],
+    workRevision: null,
+    machinesKey: undefined,
   });
   state.draft.mockClear();
   state.openTask.mockClear();
@@ -250,6 +259,7 @@ async function open(taskId?: string) {
         onOpenTask={state.openTask}
         onOpenThread={state.openThread}
         onDraft={state.draft}
+        workRevision={state.workRevision}
       />,
     ),
   );
@@ -504,4 +514,15 @@ it("opens a thread linked in a peeked message", async () => {
   await press("Check the disks");
   await press("Link in: See [it](goat-thread://v1/linked)");
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "linked" });
+});
+
+it("reads the machines again when the bot's work changes outside its listed tasks", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  state.workRevision = "task-9:1";
+  await open();
+  const listed = state.machinesKey;
+  // The row list stops at the newest 100 tasks; the conversation's work records cover the rest.
+  state.workRevision = "task-9:2";
+  await open();
+  expect(state.machinesKey).not.toBe(listed);
 });

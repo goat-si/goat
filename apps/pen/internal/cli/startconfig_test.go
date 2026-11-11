@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -21,8 +22,23 @@ func TestAStartKeepsARelayChangeMadeWhileItRan(t *testing.T) {
 		st.UpdateConfig(func(c *state.Config) { c.SetRelays([]string{"https://one.example", "https://two.example"}) })
 	}
 	defer func() { afterConfigRead = nil }()
+	called := false
+	duringConfigUpdate = func() {
+		called = true
+		unlock, err := state.TryLock(st.Path("state.lock"))
+		if unlock != nil {
+			unlock()
+		}
+		if !errors.Is(err, state.ErrLocked) {
+			t.Errorf("config read-to-write step must hold the state lock; TryLock: %v", err)
+		}
+	}
+	defer func() { duringConfigUpdate = nil }()
 	if _, err := startConfig(st, nil, "b"); err != nil {
 		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("config read-to-write hook did not run")
 	}
 	got, err := st.LoadConfig()
 	if err != nil {

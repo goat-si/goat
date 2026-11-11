@@ -101,9 +101,9 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
   const { McpInvocationContext } = await fromRepo<{ readonly McpInvocationContext: unknown }>(
     "apps/server/src/mcp/McpInvocationContext.ts",
   );
-  const { NodeHttpServer } = await fromServer<{
-    readonly NodeHttpServer: { readonly layerTest: Layer };
-  }>("@effect/platform-node");
+  const { layerTestLoopback } = await fromRepo<{ readonly layerTestLoopback: Layer }>(
+    "packages/shared/src/testing/loopbackHttpServer.ts",
+  );
   const runtime = ManagedRuntime.make(
     kit.catalog.pipe(
       LayerModule.provide(kit.dependencies),
@@ -149,7 +149,7 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
           http.listTools("caller"),
         ),
         Effect.scoped,
-        Effect.provide(NodeHttpServer.layerTest),
+        Effect.provide(layerTestLoopback),
       ),
     );
   const tools = await withServer((server) => server.tools.map(({ tool }) => tool));

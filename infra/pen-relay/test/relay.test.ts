@@ -315,6 +315,19 @@ describe("pen relay session ids at the u32 boundary", () => {
     await relay?.stop();
   });
 
+  it("evicts the first pending session across the sid wrap", async () => {
+    const node = await readyNode(relay);
+    const pending: Array<{ c: Client; sid: number }> = [];
+    for (let i = 0; i < Limits.PENDING_MAX; i++) pending.push(await session(relay, node));
+    const ninth = client(relay.url, node.nodeId);
+    const closed = await node.expect(FrameType.Close);
+    expect(closed.sid).toBe(pending[0]?.sid);
+    expect(readClose(closed.payload)).toBe(CloseCode.Caps);
+    await node.expect(FrameType.Open);
+    expect(await pending[0]?.c.closed).toBe(CloseCode.Caps);
+    ninth.close(1000);
+  });
+
   // readyNode's probe client takes 4294967294.
   it("the counter wraps from 0xffffffff to 1 and DATA still routes both ways on both sides of the wrap", async () => {
     const node = await readyNode(relay);

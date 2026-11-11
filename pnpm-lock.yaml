@@ -308,7 +308,7 @@ overrides:
   '@react-native-menu/menu': 2.0.0
   '@react-navigation/native-stack': 7.21.0
   dbus-next: 0.10.2
-  node-pty: 1.2.0-beta.15
+  node-pty: 1.2.0-beta.18
   react-native-gesture-handler: 3.3.0
   react-native-reanimated: 4.7.1
   react-native-keyboard-controller: 1.22.8
@@ -414,7 +414,7 @@ patchedDependencies:
   micromark-extension-gfm-table@2.1.1: 9ad23a530e45d9f83cba1da8654fe16d5af8b59d5c73d5c7a7c91fd25b9be1d8
   micromark-extension-llm-math@3.1.0: 4eeb9d9e27ebc75e98795e21c0719005483dad7d233055698257f7d10e91603b
   micromark@4.0.2: cb79edde7eca83bbcaaafb6ceb7b044b81b987314cde4910823b15257ecada67
-  node-pty@1.2.0-beta.15: fb2b00ef0be0b46333460edfebd0e9122b2313b0d92cff4316e973a7f64b31c5
+  node-pty@1.2.0-beta.18: 72dfe9970b485752c9f0ded954dfcc3299a17d33cf74bafcfc0929558222c801
   react-native-gesture-handler@3.3.0: abe20e1d1c23549297cbbc818e14fe479b41455930d9663135d6b40fe359b626
   react-native-image-viewing@0.2.2: 4aa038d541c7ddcc8f1437eb3e7b4f769f61de78e7f91b53f9805dfca608474d
   react-native-keyboard-controller@1.22.8: b69e3b55b4c46d17e96e83fb550fbf704af340233db61e8bd88835dc3861838d
@@ -1015,8 +1015,8 @@ importers:
         specifier: 'catalog:'
         version: 6.2.2
       node-pty:
-        specifier: 1.2.0-beta.15
-        version: 1.2.0-beta.15(patch_hash=fb2b00ef0be0b46333460edfebd0e9122b2313b0d92cff4316e973a7f64b31c5)
+        specifier: 1.2.0-beta.18
+        version: 1.2.0-beta.18(patch_hash=72dfe9970b485752c9f0ded954dfcc3299a17d33cf74bafcfc0929558222c801)
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
@@ -11224,8 +11224,8 @@ packages:
   node-mock-http@1.0.5:
     resolution: {integrity: sha512-KQyt/wLjG3TAc7DOUhpqWzgd4ERxR80JOlTK5VE5R1S12IaPVN5qkj4klBce9HPG1Njuup4Sb5bljaT34lIyjw==}
 
-  node-pty@1.2.0-beta.15:
-    resolution: {integrity: sha512-vORSzHXi4Ofl7HemVWpuudLqCPdaQb4LfpRCUpE5HPxhp4JYscl8zZwxh11p26v2wvW24WMwnMfLjhRLixrfxA==}
+  node-pty@1.2.0-beta.18:
+    resolution: {integrity: sha512-3Rej3788OnasAwoSmTZhlCeUraJ9CQldtL5b571b9+3Nv47+PaxA5VPIGOOs+16OYQePTrC1Lrs8a9/df5WPRg==}
 
   node-readfiles@0.2.0:
     resolution: {integrity: sha512-SU00ZarexNlE4Rjdm83vglt5Y9yiQ+XI1XpflWlb7q7UTN1JUItm69xMeiQCTxtTfnzt+83T8Cx+vI2ED++VDA==}
@@ -22239,7 +22239,7 @@ snapshots:
 
   node-mock-http@1.0.5: {}
 
-  node-pty@1.2.0-beta.15(patch_hash=fb2b00ef0be0b46333460edfebd0e9122b2313b0d92cff4316e973a7f64b31c5):
+  node-pty@1.2.0-beta.18(patch_hash=72dfe9970b485752c9f0ded954dfcc3299a17d33cf74bafcfc0929558222c801):
     dependencies:
       node-addon-api: 7.1.1
 

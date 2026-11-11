@@ -21,7 +21,7 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if taskTurnApplies() {
-		// As pen down: take the turn before looking for the task, so a start in flight finishes first.
+		// Take the turn before looking for the service, so a start in flight finishes first.
 		release, err := taskTurn(st, "pen leave", stderr)
 		if err != nil {
 			return fail(stderr, err)

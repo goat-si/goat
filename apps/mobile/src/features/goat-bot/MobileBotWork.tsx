@@ -88,6 +88,8 @@ export function MobileBotWork(props: {
   readonly taskCardInfo?: Pick<GoatBotTaskCard, "title" | "statusLabel"> | null;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly notesRefreshKey?: string | undefined;
+  /** Changes with every task record in the bot's conversation, including tasks past the list. */
+  readonly workRevision?: string | null | undefined;
 }) {
   const home = useMobileGoatBotHomeMode();
   const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
@@ -273,7 +275,7 @@ export function MobileBotWork(props: {
           connected={selected?.connected === true}
           botId={member?.botId ?? null}
           botName={botName}
-          workKey={workKey}
+          workKey={`${workKey}#${props.workRevision ?? ""}`}
         />
       ),
     });
