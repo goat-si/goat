@@ -128,13 +128,16 @@ it("a reply naming a saved file shows its card with a preview, which opens the f
   expect(state.listed).toBeGreaterThan(0);
 });
 
-it("a reply whose code names no file asks the server for nothing", async () => {
+it("a reply whose code no listed file can match asks the server for nothing", async () => {
   state.listed = 0;
   state.reads = [];
   state.files = new Map();
   await using screen = await render(
     <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
-      <GoatBotTimeline rows={[reply("plain", "Run `vp test` next.")]} onRetry={() => {}} />
+      <GoatBotTimeline
+        rows={[reply("plain", "Set `HOST:PORT` in `.env` next.")]}
+        onRetry={() => {}}
+      />
     </GoatBotOpenFileContext>,
     { router: false }, // This reply has no links.
   );

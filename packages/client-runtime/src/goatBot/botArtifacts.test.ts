@@ -368,8 +368,10 @@ describe("files a reply names", () => {
   });
 
   it("an older server's listing without its folder gives full paths no card", () => {
-    expect(named(`${root}/reports/summary.md`, undefined)).toEqual([]);
-    expect(named("reports/summary.md", undefined)).toEqual(["reports/summary.md"]);
+    const text = `Saved \`${root}/reports/summary.md\` and \`chart.png\`.`;
+    expect(goatBotReplyFiles(text, files, undefined).map((file) => file.relativePath)).toEqual([
+      "chart.png",
+    ]);
   });
 
   it("a Windows server's folder matches with either separator", () => {
