@@ -33,6 +33,8 @@ it("keeps mise offline for probes and never treats its error version as the CLI 
   expect(providerProbeEnvironment(environment)).toEqual({
     PATH: "/bin",
     MISE_OFFLINE: "1",
+    MISE_AUTO_INSTALL: "0",
+    MISE_NOT_FOUND_AUTO_INSTALL: "0",
     npm_config_offline: "true",
     NPM_CONFIG_OFFLINE: "true",
     UV_OFFLINE: "1",
@@ -50,6 +52,13 @@ it("keeps mise offline for probes and never treats its error version as the CLI 
   expect(isMissingMiseToolResult({ code: 1, stdout: "", stderr: "tool reported an error" })).toBe(
     false,
   );
+  expect(
+    isMissingMiseToolResult({
+      code: 1,
+      stdout: "",
+      stderr: "mise ERROR No version is set for shim: claude",
+    }),
+  ).toBe(true);
   expect(
     isMissingProbeToolResult({ code: 1, stdout: "", stderr: "npm error code ENOTCACHED" }),
   ).toBe(true);

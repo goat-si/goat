@@ -21,7 +21,10 @@ import * as Result from "effect/Result";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
-import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
+import {
+  isMissingProbeToolResult,
+  providerProbeEnvironment,
+} from "@goat/provider-core/server/snapshotProbe";
 
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
@@ -283,6 +286,16 @@ export function acpRegistryProbeFailure(
   authMethods: ReadonlyArray<AcpRegistryProbeAuthMethod> = [],
   authAction?: AcpRegistryUrlAuthAction,
 ): AcpRegistryOperationError {
+  if (
+    error._tag === "AcpProcessExitedError" &&
+    isMissingProbeToolResult({ code: error.code ?? 1, stdout: "", stderr: error.stderr ?? "" })
+  ) {
+    return new AcpRegistryOperationError({
+      reason: "runner_unavailable",
+      message: "The ACP agent executable is not installed or not available.",
+      cause: error,
+    });
+  }
   const detail = error._tag === "AcpTransportError" && error.detail ? error.detail : error.message;
   const authenticationFailed =
     (error._tag === "AcpRequestError" && error.code === -32000) ||

@@ -411,6 +411,8 @@ describe("acpRegistrySnapshotReadiness", () => {
       expect(receivedEnvironment).toEqual({
         ...environment,
         MISE_OFFLINE: "1",
+        MISE_AUTO_INSTALL: "0",
+        MISE_NOT_FOUND_AUTO_INSTALL: "0",
         npm_config_offline: "true",
         NPM_CONFIG_OFFLINE: "true",
         UV_OFFLINE: "1",

@@ -112,7 +112,9 @@ export function isMissingMiseToolResult(result: CommandResult): boolean {
   return (
     result.code !== 0 &&
     /\bmise\b/i.test(output) &&
-    /not installed|not found|no versions found|failed to install/i.test(output)
+    /not installed|not found|no versions found|no version is set for shim|is not a mise bin|failed to install/i.test(
+      output,
+    )
   );
 }
 

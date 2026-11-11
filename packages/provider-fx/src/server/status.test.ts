@@ -82,7 +82,10 @@ describe("checkFxProviderStatus", () => {
       let installed = false;
       const spawner = ChildProcessSpawner.make((command) => {
         const offline =
-          ChildProcess.isStandardCommand(command) && command.options.env?.MISE_OFFLINE === "1";
+          ChildProcess.isStandardCommand(command) &&
+          command.options.env?.MISE_OFFLINE === "1" &&
+          command.options.env?.MISE_AUTO_INSTALL === "0" &&
+          command.options.env?.MISE_NOT_FOUND_AUTO_INSTALL === "0";
         if (!offline) installed = true;
         return Effect.succeed(
           offline
