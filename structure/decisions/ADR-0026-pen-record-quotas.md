@@ -54,8 +54,10 @@
   1 + (the first two bytes of SHA-256 of its invite nonce's text, big-endian) mod 15: the founder chose the nonce, and no other record changes it.
   Any other key is in the lineage of its introducer's signer. A record is charged to its signer's lineage.
 - **Own chain.** A record with `n > 1` names its signer's record `n - 1` directly in `prev`, or has no
-  effect. Its effect then depends on nothing another signer's records do. When a share dropped record
-  `n - 1`, naming its hash, now bare, suffices; a node remembers its last record's hash for this. Every
+  effect. Its effect then depends on nothing another signer's records do. When no record `n - 1` is
+  held, naming a bare hash suffices; a node remembers its last record's hash for this. Nothing can tell a
+  dropped record's hash from an invented one, so a signer can skip its own counters this way, which gains
+  it nothing it could not sign with a proper chain. Every
   record also names the found or admit records that introduced its signer (every admit naming a key
   carries a card that key signed), so replay orders it after its signer's admission even when records
   between them were dropped. A record names at most 8 heads besides: dropped records leave many, and 64

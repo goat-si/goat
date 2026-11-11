@@ -13,6 +13,12 @@ func (s *Store) learnVersion(recs []*Record) {
 		if r != nil && r.Verify() == nil && r.B.Type == TypeFound && MeshIDOf(r) == s.MeshID {
 			s.version = r.B.V
 			s.shares = s.shares || r.B.V == EpochShared
+			// Records pooled before the version was known may be of the other one.
+			for _, e := range s.pool {
+				if !s.belongs(e.r) {
+					s.poolRemove(e.r)
+				}
+			}
 			return
 		}
 	}
@@ -109,11 +115,6 @@ func (s *Store) mergeShared(recs []*Record) []*Record {
 		cands = append(cands, r)
 	}
 	for _, e := range s.pool {
-		// A record pooled before the store learned the mesh's version may be of another one.
-		if !s.belongs(e.r) {
-			s.poolRemove(e.r)
-			continue
-		}
 		cands = append(cands, e.r)
 	}
 	seen := map[string]bool{}
