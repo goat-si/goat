@@ -20,6 +20,9 @@ function seeds(
     .filter((bytes) => bytes.length <= MAX_SEED);
 }
 
+/** Bytes that edit a length: an ASCII digit or a WebSocket length marker (125, 126, 127) or the 0xff high byte. */
+const LENGTH_EDITS = [0x30, 0x31, 0x35, 0x39, 0x7d, 0x7e, 0x7f, 0xff];
+
 function mutate(rand: Rand, input: Uint8Array, pool: ReadonlyArray<Uint8Array>): Uint8Array {
   const bytes = [...input];
   for (let n = 1 + rand.int(4); n > 0; n--) {
@@ -43,11 +46,7 @@ function mutate(rand: Rand, input: Uint8Array, pool: ReadonlyArray<Uint8Array>):
       }
       case 4:
         // Length-field edits: digits in HTTP heads, length bytes in frames.
-        bytes.splice(
-          at,
-          0,
-          ...[0x30 + rand.int(10), 0x7e, 0x7f, 0xff][rand.int(4)]!.toString().split("").map(Number),
-        );
+        bytes.splice(at, 0, LENGTH_EDITS[rand.int(LENGTH_EDITS.length)] ?? 0);
         break;
       default:
         bytes.splice(at, 0, ...[13, 10, 13, 10].slice(rand.int(4)));
@@ -125,6 +124,16 @@ function property<T>(
 }
 
 describe("fixed-seed fuzzing (design 10.2 exit criterion)", () => {
+  it("the length-field mutation inserts the intended single bytes", () => {
+    const rand = seededRandom(0xf022_0004);
+    const seen = new Set<number>();
+    for (let i = 0; i < 4000; i++) {
+      const out = mutate(rand, new Uint8Array(0), [new Uint8Array(0)]);
+      if (out.length === 1) seen.add(out[0] ?? -1);
+    }
+    for (const byte of LENGTH_EDITS) expect(seen.has(byte), "0x" + byte.toString(16)).toBe(true);
+  });
+
   const httpPool = seeds(httpCases.cases as never);
   const wsPool = seeds(wsCases.cases as never);
 

@@ -163,6 +163,103 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     expect(server.closeCode()).toBe(1000);
   });
 
+  it("H42: a whole response the server sends between exchanges is never taken as the next request's response", async () => {
+    const t = setup();
+    const first = t.fetch(ORIGIN + "/a");
+    const server = await t.stream(1);
+    await request(server);
+    server.write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\na");
+    expect(await (await first).text()).toBe("a");
+    // Queued before the second request exists: it must close the stream, not answer the next request.
+    server.write("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nforged");
+    await server.whenClosed();
+    expect(server.closeCode()).toBe(1000);
+    const second = t.fetch(ORIGIN + "/b");
+    const next = await t.stream(2);
+    await request(next);
+    next.write("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nreal");
+    expect(await (await second).text()).toBe("real");
+    expect(latin1(server.written())).not.toContain("GET /b");
+  });
+
+  it("H42: the server ending the stream while idle makes the next request open a new stream", async () => {
+    const t = setup();
+    const first = t.fetch(ORIGIN + "/a");
+    const server = await t.stream(1);
+    await request(server);
+    server.write("HTTP/1.1 204 No Content\r\n\r\n");
+    await first;
+    server.end();
+    await server.whenClosed();
+    const second = t.fetch(ORIGIN + "/b");
+    const next = await t.stream(2);
+    await request(next);
+    next.write("HTTP/1.1 204 No Content\r\n\r\n");
+    expect((await second).status).toBe(204);
+  });
+
+  it("an abort while a request waits its turn sends nothing for it", async () => {
+    const t = setup();
+    const controller = new AbortController();
+    const first = t.fetch(ORIGIN + "/a");
+    const queued = t.fetch(ORIGIN + "/b", {
+      method: "POST",
+      body: "mutation",
+      signal: controller.signal,
+    });
+    const server = await t.stream(1);
+    await request(server);
+    controller.abort();
+    await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+    server.write("HTTP/1.1 204 No Content\r\n\r\n");
+    await first;
+    const third = t.fetch(ORIGIN + "/c");
+    await written(server, "GET /c ");
+    server.write("HTTP/1.1 204 No Content\r\n\r\n");
+    await third;
+    expect(latin1(server.written())).not.toContain("/b");
+  });
+
+  it("an abort while the stream is opening sends nothing and closes the stream that opens late", async () => {
+    const clock = new ManualClock();
+    let finishOpen!: (stream: ReturnType<typeof memoryStreamPair>["client"]) => void;
+    const opening = new Promise<ReturnType<typeof memoryStreamPair>["client"]>((resolve) => {
+      finishOpen = resolve;
+    });
+    let opened!: () => void;
+    const openCalled = new Promise<void>((resolve) => {
+      opened = resolve;
+    });
+    const fetch = makePenFetch({
+      origin: ORIGIN,
+      clock,
+      openStream: () => {
+        opened();
+        return opening;
+      },
+    });
+    const controller = new AbortController();
+    const pending = fetch(ORIGIN + "/a", { method: "POST", body: "x", signal: controller.signal });
+    await openCalled;
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    const pair = memoryStreamPair();
+    finishOpen(pair.client);
+    await pair.server.whenClosed();
+    expect(pair.server.written()).toHaveLength(0);
+  });
+
+  it("a Request's own body is sent", async () => {
+    const t = setup();
+    const pending = t.fetch(new Request(ORIGIN + "/echo", { method: "POST", body: "hello" }));
+    const server = await t.stream(1);
+    const sent = await request(server, 5);
+    expect(sent).toContain("Content-Length: 5\r\n");
+    expect(sent.endsWith("\r\n\r\nhello")).toBe(true);
+    server.write("HTTP/1.1 204 No Content\r\n\r\n");
+    await pending;
+  });
+
   it("H43: after a malformed response the stream is closed and the request is not retried", async () => {
     const t = setup();
     const pending = t.fetch(ORIGIN + "/a");

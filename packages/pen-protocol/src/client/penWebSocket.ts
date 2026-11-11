@@ -205,6 +205,9 @@ class PenWebSocket implements PenWebSocketLike {
         }
       }
       if (this.#finished) return;
+      // The stream ended with no close frame: an abnormal closure (RFC 6455 section 7.1.5).
+      if (chunk === null)
+        throw new PenError("ws/W25", "the stream ended without a close frame", { closeCode: 1006 });
       chunk = await stream.read();
     }
   }

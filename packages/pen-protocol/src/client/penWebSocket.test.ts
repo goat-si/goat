@@ -200,6 +200,17 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
     expect(toHex(c.framesSent()[0]?.payload ?? new Uint8Array())).toBe("0fa0");
   });
 
+  it("the stream ending between frames closes the socket once with 1006", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.server.write("\x81\x02hi");
+    c.server.end();
+    await c.whenEvent("close");
+    expect(c.events.map((e) => e.type)).toEqual(["open", "message", "error", "close"]);
+    expect(c.events.at(-1)).toMatchObject({ code: 1006 });
+  });
+
   it("a malformed server frame fails the socket with the rule's close code", async () => {
     const c = await connected();
     c.accept();

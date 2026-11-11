@@ -80,6 +80,8 @@ export function memoryStreamPair() {
       },
       clientEnded: () => toServer.ended,
       closeCode: () => closeCode,
+      /** Resolves once the client closed the stream. */
+      whenClosed: () => closed.then(() => undefined),
     },
   };
 }
