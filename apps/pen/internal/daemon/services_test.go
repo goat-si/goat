@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +105,8 @@ type program struct {
 	// ended without a verified line 3.
 	identities chan []byte
 	raw        chan []byte
+	// accepts counts every connection the node made to the program.
+	accepts atomic.Int64
 }
 
 func newProgram(t *testing.T, name string, key []byte) *program {
@@ -126,6 +129,7 @@ func (p *program) serve() {
 			if err != nil {
 				return
 			}
+			p.accepts.Add(1)
 			go p.handle(c)
 		}
 	}()
@@ -433,18 +437,15 @@ func TestAMemberIsDeliveredAndANonMemberGets4401WithoutADial(t *testing.T) {
 		t.Fatalf("member: %q, %v", got, err)
 	}
 	<-p.identities
+	dialed := p.accepts.Load()
 	stranger, _ := ident.Generate(nil)
 	noise, _ := ident.DecodeKey(memberNamed(t, a, "a").NoisePub)
 	_, err = openMember(ctx, []string{rs.URL}, stranger, a.d.NodeID(), noise, session.Payload{V: 1, Stream: "service", Name: "goat"})
 	if relay.CodeOf(err) != wire.CodeNotAdmitted {
 		t.Fatalf("non-member got %v, want 4401 before message 2", err)
 	}
-	select {
-	case got := <-p.raw:
-		t.Fatalf("the program was dialed for a non-member: %q", got)
-	case got := <-p.identities:
-		t.Fatalf("the program was delivered a non-member: %s", got)
-	default:
+	if n := p.accepts.Load(); n != dialed {
+		t.Fatalf("the node dialed the program %d more time(s) for a non-member", n-dialed)
 	}
 }
 

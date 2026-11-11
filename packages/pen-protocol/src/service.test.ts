@@ -36,7 +36,7 @@ describe("service vectors (CONTRACT Services v1.2)", () => {
     }
   });
 
-  it("every malformed or misdirected line 3 is refused, each with a MAC that is right for its bytes", () => {
+  it("every malformed or misdirected line 3 is refused; all but the wrong-MAC case carry a MAC right for their bytes", () => {
     for (const reject of vector.rejectLine3) {
       expect(() => verifyServiceIdentity(bytes(reject.line), pin), reject.why).toThrow();
     }
