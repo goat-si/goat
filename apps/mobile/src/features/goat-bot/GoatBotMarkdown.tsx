@@ -2,7 +2,7 @@ import type { GoatBotReplyRepository } from "@goat/client-runtime/goatBot";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { EnvironmentId } from "@goat/contracts";
 import { useCallback, useMemo } from "react";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { markdownLinkIcon } from "../../lib/markdownLinkIcons";
@@ -88,6 +88,8 @@ export function GoatBotMarkdown(props: {
       }}
       onLinkPress={openLink}
       linkCustomization={linkCustomization}
+      // iOS draws its own link menu, titled with the link's words: its first row names the address.
+      fileContextMenu={Platform.OS === "ios" ? goatBotLinkMenu : undefined}
       onLinkLongPress={(href) => showGoatBotLinkActions(href, () => openLink(href))}
     />
   );
@@ -101,4 +103,16 @@ export function GoatBotMarkdown(props: {
       <View className="min-w-0 flex-1">{markdown}</View>
     </View>
   );
+}
+
+function goatBotLinkMenu(href: string) {
+  return {
+    title: href,
+    actions: [
+      { id: "goat-bot-link-address", title: href, disabled: true },
+      { id: "enriched-open-link", title: "Open link" },
+      { id: "enriched-copy-link", title: "Copy link" },
+      { id: "enriched-share-link", title: "Share link" },
+    ],
+  };
 }
