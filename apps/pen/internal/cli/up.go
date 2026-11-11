@@ -135,6 +135,9 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	printStatus(stdout, s)
+	if note := startNote(mode, *noService); note != "" {
+		fmt.Fprintln(stderr, note) // stderr: pen join and pen login discard pen up's stdout
+	}
 	return 0
 }
 

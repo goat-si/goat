@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -21,7 +22,7 @@ const launchdLabel = "si.goat.pen"
 // serviceMode picks systemd --user, launchd, a Windows logon task or none (a detached child). A
 // non-default state directory never gets a service, so test and scratch homes cannot replace the real one.
 func serviceMode(noService bool, st *state.Store) string {
-	if noService || os.Getenv("PEN_SERVICE") == "none" || os.Getenv("PEN_HOME") != "" {
+	if serviceOptedOut(noService) {
 		return "none"
 	}
 	switch serviceOS {
@@ -37,6 +38,34 @@ func serviceMode(noService bool, st *state.Store) string {
 		return "task" // schtasks.exe ships with every Windows 10 and 11
 	}
 	return "none"
+}
+
+func serviceOptedOut(noService bool) bool {
+	return noService || os.Getenv("PEN_SERVICE") == "none" || os.Getenv("PEN_HOME") != ""
+}
+
+// startNote is what pen up adds after a start that will not survive on its own: no service manager
+// answered, or systemd stops the user's services at logout because lingering is off.
+func startNote(mode string, noService bool) string {
+	switch {
+	case mode == "none" && !serviceOptedOut(noService) && serviceOS != "windows":
+		exe, err := exePath()
+		if err != nil {
+			exe = "pen"
+		}
+		return "pen: no service manager answered (systemctl --user), so nothing starts Pen again if it stops or this machine restarts. Add this line to a script that runs at startup: " + shellQuote(exe) + " up"
+	case mode == "systemd":
+		name := os.Getenv("USER")
+		if u, err := user.Current(); err == nil && name == "" {
+			name = u.Username
+		}
+		linger, err := output("loginctl", "show-user", strconv.Itoa(os.Getuid()), "--property=Linger", "--value")
+		if err != nil || strings.TrimSpace(linger) != "no" {
+			return "" // unknown without logind: say nothing rather than guess
+		}
+		return "pen: lingering is off, so systemd stops Pen when your last session on this machine ends. Keep it running with: sudo loginctl enable-linger " + name
+	}
+	return ""
 }
 
 // serviceManagerFound reports whether systemd --user or launchctl answers here (a variable for tests).
@@ -153,6 +182,14 @@ var run = func(name string, args ...string) error {
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// output is run for a command whose answer pen reads.
+var output = func(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	return string(out), err
 }
 
 func guiDomain() string { return "gui/" + strconv.Itoa(os.Getuid()) }

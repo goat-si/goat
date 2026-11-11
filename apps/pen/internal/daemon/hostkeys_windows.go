@@ -16,6 +16,11 @@ func defaultHostKeyGlob() string {
 	return filepath.Join(dir, "ssh", "ssh_host_*_key.pub")
 }
 
+// hostKeysFix grants Authenticated Users (S-1-5-11) read access to the public keys only.
+func hostKeysFix(glob string) string {
+	return "in an administrator PowerShell run icacls '" + glob + "' /grant '*S-1-5-11:(R)', then pen down and pen up, or wait up to an hour"
+}
+
 // loginName maps COMPUTER\name to name for a local account (the NetBIOS computer name is the domain
 // part Windows gives local accounts).
 func loginName(account string) string {

@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -22,13 +24,18 @@ func DefaultKnownHosts() (string, error) {
 	return filepath.Join(h, ".ssh", "pen", "known_hosts"), nil
 }
 
-// ReadHostKeys returns the sshd public keys matching glob as sorted "type base64" lines (at most 8).
-func ReadHostKeys(glob string) []string {
+// ReadHostKeys returns the sshd public keys matching glob as sorted "type base64" lines (at most 8),
+// and the read errors of matching files it could not read.
+func ReadHostKeys(glob string) (keys, unreadable []string) {
 	paths, _ := filepath.Glob(glob)
-	var keys []string
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				err = pe.Err
+			}
+			unreadable = append(unreadable, p+" ("+err.Error()+")")
 			continue
 		}
 		f := strings.Fields(string(b))
@@ -41,7 +48,7 @@ func ReadHostKeys(glob string) []string {
 	if len(keys) > 8 {
 		keys = keys[:8]
 	}
-	return keys
+	return keys, unreadable
 }
 
 func (d *Daemon) hostKeysLoop(ctx context.Context) {
@@ -79,7 +86,8 @@ func localAccountName(account, computer string) string {
 // checkHostKeys signs a hostkeys record when the local sshd keys or the login user differ from the
 // latest one.
 func (d *Daemon) checkHostKeys(ctx context.Context) {
-	keys := ReadHostKeys(d.opt.HostKeyGlob)
+	keys, unreadable := ReadHostKeys(d.opt.HostKeyGlob)
+	d.noteHostKeys(unreadable)
 	self, ok := d.view().Members[d.selfKey()]
 	if !ok || slices.Equal(self.HostKeys, keys) && self.User == d.sshUser {
 		return
@@ -90,6 +98,22 @@ func (d *Daemon) checkHostKeys(ctx context.Context) {
 	}
 	d.viewChanged()
 	d.pushAll(ctx)
+}
+
+// noteHostKeys keeps the unreadable key files for pen ls and logs them when they change. Pen never
+// asks the local sshd for its keys instead: another local user could answer on that port.
+func (d *Daemon) noteHostKeys(unreadable []string) {
+	msg := ""
+	if len(unreadable) > 0 {
+		msg = "cannot read " + strings.Join(unreadable, "; ") + ": those keys are not published, so ssh pen-<name> from other members can fail host key checking; " + hostKeysFix(d.opt.HostKeyGlob)
+	}
+	d.mu.Lock()
+	changed := msg != d.hostKeysErr
+	d.hostKeysErr = msg
+	d.mu.Unlock()
+	if changed && msg != "" {
+		d.opt.Logf("hostkeys: %s", msg)
+	}
 }
 
 // writeKnownHosts writes pen-<name>,pen-<nodeId> lines for every member's host keys. Writers are
