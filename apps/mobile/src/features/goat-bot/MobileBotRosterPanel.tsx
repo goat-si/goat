@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
+import { botProfileChanges } from "@goat/client-runtime/state/channels";
 import type { BotProfile, ChannelTaskId } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
 import { MobileBotProfileSheet } from "./MobileBotProfileSheet";
@@ -89,6 +90,7 @@ export function MobileBotRoster(props: {
         unread={preview?.unread}
         onOpenBot={props.onOpenBot}
         onOpenTask={props.onOpenTask}
+        onUnknownBot={roster.refreshBots ?? undefined}
         visible={props.visible}
       />
       {sheet !== null && roster.environmentId !== null ? (
@@ -120,10 +122,8 @@ function BotSheet(props: {
   const [model, setModel] = useState<BotProfile["defaultModelSelection"]>(initialModel);
   const [clientRequestId] = useState(uuidv4);
   // Only a member has a model of its own; the main bot's is the GOAT Bot model setting.
-  const modelEditable =
-    useMobileGoatBotMemberModelEditable(props.environmentId).editable &&
-    sheet.mode === "edit" &&
-    sheet.bot.role === "member";
+  const memberModelEditable = useMobileGoatBotMemberModelEditable(props.environmentId).editable;
+  const modelEditable = memberModelEditable && sheet.mode === "edit" && sheet.bot.role === "member";
   if (sheet.mode === "edit") {
     const modelChanged = modelEditable && !sameModel(model, initialModel);
     return (
@@ -153,9 +153,29 @@ function BotSheet(props: {
       canSubmit={manage.canCreate}
       onClose={props.onClose}
       onSubmit={async (changes) => {
-        const result = await manage.create(changes, model, clientRequestId);
-        if (typeof result === "string") return result;
-        props.onCreated(result);
+        const created = await manage.create(changes, model, clientRequestId);
+        if (typeof created === "string") return created;
+        // Every try sends the same request id, so after a create the server kept but the phone saw
+        // fail, a retry gets that first bot back; the edits made since still have to reach it.
+        const missed = botProfileChanges("edit", created, {
+          name: changes.name ?? "",
+          avatar: changes.avatar ?? "",
+          purpose: changes.purpose ?? "",
+        });
+        const modelMissed = memberModelEditable && !sameModel(model, created.defaultModelSelection);
+        if (Object.keys(missed).length === 0 && !modelMissed) {
+          props.onCreated(created);
+          return null;
+        }
+        const failure = await manage.update(created, missed, modelMissed ? model : undefined);
+        if (failure !== null) return failure;
+        props.onCreated({
+          ...created,
+          name: missed.name ?? created.name,
+          avatar: missed.avatar === undefined ? created.avatar : missed.avatar,
+          purpose: missed.purpose ?? created.purpose,
+          ...(modelMissed ? { defaultModelSelection: model } : {}),
+        });
         return null;
       }}
     >

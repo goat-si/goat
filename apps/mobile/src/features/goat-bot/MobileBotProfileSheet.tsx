@@ -36,6 +36,7 @@ export function MobileBotProfileSheet(props: {
   const blankName = name.trim() === "";
   // A missing name is pointed out once the person leaves the field or saves, not while they start.
   const [nameChecked, setNameChecked] = useState(false);
+  const [nameTyped, setNameTyped] = useState(false);
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<TextInputInstance>(null);
   const saveDisabled = busy || !props.canSubmit;
@@ -107,10 +108,14 @@ export function MobileBotProfileSheet(props: {
             value={name}
             maxLength={64}
             editable={!busy}
-            onChangeText={setName}
-            // Leaving a name the person never typed in, say to open More, is not a mistake yet.
+            onChangeText={(next) => {
+              setName(next);
+              setNameTyped(true);
+            }}
+            // Leaving a name the person never typed in, say to open More, is not a mistake yet; one
+            // typed and cleared again is.
             onBlur={() => {
-              if (name !== props.initial.name) setNameChecked(true);
+              if (nameTyped) setNameChecked(true);
             }}
             className={INPUT}
           />
