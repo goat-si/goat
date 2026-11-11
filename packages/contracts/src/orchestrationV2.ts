@@ -16,7 +16,7 @@ import {
 export * from "./orchestrationV2Notification.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
-import { Handoff, HandoffJson, HandoffActor } from "./handoff.ts";
+import { Handoff, HandoffJson, HandoffActor, HandoffKind } from "./handoff.ts";
 import { HandoffTransitionCommand } from "./handoffTransitionCommand.ts";
 import {
   MemoryCurrentAccess,
@@ -2065,6 +2065,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   /** False for async questions the run keeps working past. Absent from older servers. */
   blocking: Schema.optional(Schema.Boolean),
+  /** Set when the request is a waiting human handoff; older servers omit it. */
+  handoff: Schema.optionalKey(Schema.Struct({ kind: HandoffKind, title: Schema.String })),
 });
 export type OrchestrationV2PendingRuntimeRequestSummary =
   typeof OrchestrationV2PendingRuntimeRequestSummary.Type;

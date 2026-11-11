@@ -1,5 +1,9 @@
 import type { EnvironmentId, OrchestrationV2ThreadShell, Project, ThreadId } from "@goat/contracts";
-import { isSideChatThread } from "@goat/contracts";
+import {
+  isPendingApprovalRequest,
+  isPendingUserInputRequest,
+  isSideChatThread,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { backgroundWorkHoldsCompletion } from "./orchestrationV2PendingBackgroundWork.ts";
@@ -78,7 +82,9 @@ export function projectThreadAwarenessV2(
       ? "Review the completed task."
       : phase === "failed"
         ? "The agent run failed."
-        : undefined;
+        : phase === "waiting_for_approval"
+          ? thread.pendingRuntimeRequest?.handoff?.title
+          : undefined;
   return {
     environmentId,
     threadId: thread.id,
@@ -98,17 +104,13 @@ function resolveThreadAwarenessPhaseV2(
 ): AgentAwarenessPhase | null {
   const runStatus = thread.activityRunStatus ?? thread.status;
   if (
-    thread.pendingRuntimeRequest?.kind === "user_input" &&
-    (thread.pendingRuntimeRequest.blocking !== false ||
+    isPendingUserInputRequest(thread.pendingRuntimeRequest) &&
+    (thread.pendingRuntimeRequest?.blocking !== false ||
       !(runStatus === "preparing" || runStatus === "starting" || runStatus === "running"))
   ) {
     return "waiting_for_input";
   }
-  if (
-    thread.pendingRuntimeRequest !== null &&
-    thread.pendingRuntimeRequest.kind !== "user_input" &&
-    thread.pendingRuntimeRequest.kind !== "auth_refresh"
-  ) {
+  if (isPendingApprovalRequest(thread.pendingRuntimeRequest)) {
     return "waiting_for_approval";
   }
   switch (runStatus) {

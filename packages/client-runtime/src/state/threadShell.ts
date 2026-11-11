@@ -8,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import {
   isGoatBotConversationThreadId,
+  isPendingApprovalRequest,
   isProviderNativeSubagentThread,
   isSideChatThread,
   OrchestrationV2ThreadShell,
@@ -66,7 +67,7 @@ function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentReq
   ) {
     return null;
   }
-  return kind === "user_input" ? "user_input" : "approval";
+  return isPendingApprovalRequest(thread.pendingRuntimeRequest) ? "approval" : "user_input";
 }
 
 export function pendingSubagentRequestsByThread(

@@ -626,3 +626,68 @@ it.effect.each([
     assert.equal(all.threads.length, 4);
   }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect.each([
+  ["sql", layerSql],
+  ["memory", ProjectionStore.layerMemory],
+] as const)(
+  "%s: a waiting approval handoff makes the thread shell report a pending approval",
+  ([, testLayer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = yield* createThread("approval-handoff");
+      const runId = yield* createRun(threadId, "running");
+      const handoffId = TurnItemId.make("waiting-approval");
+      const title = `Join pen-lidge to the hub ${"x".repeat(300)}`;
+      yield* store.apply({
+        id: EventId.make("event:waiting-approval"),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        occurredAt: now,
+        payload: {
+          threadId,
+          runId,
+          nodeId: NodeId.make("node:waiting-approval"),
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          status: "waiting",
+          title: null,
+          completedAt: null,
+          id: handoffId,
+          ordinal: 1,
+          startedAt: now,
+          updatedAt: now,
+          type: "human_handoff",
+          handoff: {
+            handoffId,
+            kind: "approval",
+            title,
+            reason: "Its model requests will go through this Mac.",
+            requestedBy: { threadId, providerInstanceId, path: "hub.device_join" },
+            target: { environmentId: EnvironmentId.make("test"), path: "hub.device_join" },
+            dedupeKey: "test",
+            state: "pending",
+            expiresAt: null,
+            createdAt: now,
+            actor: { type: "agent", threadId },
+          },
+        },
+      });
+      const shell = (yield* store.getShellSnapshot()).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      const projection = yield* store.getThreadProjection(threadId);
+      for (const candidate of [shell, ProjectionStore.threadShellFromProjection(projection)]) {
+        assert.equal(candidate?.pendingRuntimeRequest?.id, handoffId);
+        // Older clients keep reading user_input; the handoff field marks it as an approval.
+        assert.equal(candidate?.pendingRuntimeRequest?.kind, "user_input");
+        assert.deepEqual(candidate?.pendingRuntimeRequest?.handoff, {
+          kind: "approval",
+          title: title.slice(0, 160),
+        });
+      }
+    }).pipe(Effect.provide(testLayer)),
+);

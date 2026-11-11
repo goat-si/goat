@@ -243,4 +243,24 @@ describe("projectThreadAwarenessV2", () => {
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
   });
+
+  it("reports a waiting approval handoff as an approval named by its title", () => {
+    const state = projectThreadAwarenessV2({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: v2Thread({
+        status: "waiting",
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make("handoff-1"),
+          kind: "user_input",
+          createdAt: updatedAt,
+          blocking: true,
+          handoff: { kind: "approval", title: "Join pen-lidge to the hub" },
+        },
+      }),
+    });
+    expect(state?.phase).toBe("waiting_for_approval");
+    expect(state?.headline).toBe("Approval needed");
+    expect(state?.detail).toBe("Join pen-lidge to the hub");
+  });
 });
