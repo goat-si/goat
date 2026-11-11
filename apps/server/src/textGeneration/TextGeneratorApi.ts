@@ -15,9 +15,27 @@ const MAX_CONCURRENT_REQUESTS = 8;
 const TIMEOUT = "120 seconds";
 let activeRequests = 0;
 
+class ApiStatusError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super("model API request failed");
+    this.status = status;
+  }
+}
+
+function statusDetail(status: number): string {
+  if (status === 401 || status === 403) return "The model API rejected its credential.";
+  if (status === 404) return "The model API could not find the endpoint or model.";
+  if (status === 429) return "The model API is rate-limiting requests.";
+  return `The model API returned HTTP ${status}.`;
+}
+
 async function readBoundedJson(response: Response): Promise<unknown> {
   const length = Number(response.headers.get("content-length"));
-  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error("response too large");
+  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw new Error("response too large");
+  }
   if (!response.body) throw new Error("empty response");
   const reader = response.body.getReader();
   const buffer = new Uint8Array(MAX_RESPONSE_BYTES);
@@ -74,10 +92,10 @@ export const apiTextGeneration = (
   secretProviders: ServerSettings["secretProviders"],
 ) => {
   const run: TextGenerationOperations.Runner = (request) => {
-    const failure = () =>
+    const failure = (detail = "The configured model API could not generate text.") =>
       new TextGenerationError({
         operation: request.operation,
-        detail: "The configured model API could not generate text.",
+        detail,
       });
     return Effect.tryPromise({
       try: async (signal) => {
@@ -113,22 +131,23 @@ export const apiTextGeneration = (
           });
           if (!response.ok) {
             await response.body?.cancel();
-            throw new Error("API rejected request");
+            throw new ApiStatusError(response.status);
           }
           const text = replyText(config.kind, await readBoundedJson(response));
           if (!text) throw new Error("API returned no text");
-          return key ? text.replaceAll(key, "[redacted]") : text;
+          return text;
         } finally {
           activeRequests--;
         }
       },
-      catch: failure,
+      catch: (cause) =>
+        failure(cause instanceof ApiStatusError ? statusDetail(cause.status) : undefined),
     }).pipe(
       Effect.timeout(TIMEOUT),
-      Effect.mapError(failure),
+      Effect.catchTags({ TimeoutError: () => Effect.fail(failure("The model API timed out.")) }),
       Effect.flatMap((text) =>
         TextGenerationOperations.decodeJsonReply(request, "The configured model API", text).pipe(
-          Effect.mapError(failure),
+          Effect.mapError(() => failure("The model API returned invalid structured output.")),
         ),
       ),
     );

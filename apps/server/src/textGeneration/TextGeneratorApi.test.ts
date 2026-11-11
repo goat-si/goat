@@ -66,6 +66,27 @@ it.effect("uses the configured API generator for a thread title", () =>
   }),
 );
 
+it.effect("does not alter structured output when the API key is a short value", () =>
+  Effect.gen(function* () {
+    using _fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        choices: [{ finish_reason: "stop", message: { content: '{"title":"Repair login"}' } }],
+      }),
+    );
+    const shortKeySettings = {
+      ...settings,
+      textGenerators: { [instanceId]: { ...settings.textGenerators[instanceId], apiKey: "i" } },
+    };
+    const generation = yield* TextGeneration.make.pipe(
+      Effect.provideService(ServerSettings.ServerSettingsService, {
+        getSettings: Effect.succeed(shortKeySettings),
+      } as never),
+      Effect.provide(services),
+    );
+    expect(yield* generation.generateThreadTitle(title)).toEqual({ title: "Repair login" });
+  }),
+);
+
 it.effect("uses a key materialized from real settings storage for title generation", () =>
   Effect.gen(function* () {
     using fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -202,7 +223,7 @@ it.effect("returns a sanitized API error through the caller's existing failure p
     const error = yield* Effect.flip(generation.generateThreadTitle(title));
     expect(error._tag).toBe("TextGenerationError");
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(error.detail).toBe("The configured model API could not generate text.");
+    expect(error.detail).toBe("The model API rejected its credential.");
     expect(JSON.stringify(error)).not.toContain(key);
     const logs: unknown[] = [];
     yield* Effect.logWarning("Thread title generation failed", { cause: error }).pipe(
@@ -238,6 +259,20 @@ it.effect("rejects oversized streamed API replies", () =>
     const error = yield* Effect.flip(generation.generateThreadTitle(title));
     expect(error._tag).toBe("TextGenerationError");
     expect(JSON.stringify(error)).not.toContain(key);
+  }),
+);
+
+it.effect("cancels an API reply whose declared size exceeds the limit", () =>
+  Effect.gen(function* () {
+    const cancelled = vi.fn();
+    using _fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new ReadableStream({ cancel: cancelled }), {
+        headers: { "content-length": String(2 * 1024 * 1024 + 1) },
+      }),
+    );
+    const generation = yield* TextGeneration.make.pipe(Effect.provide(services));
+    yield* Effect.flip(generation.generateThreadTitle(title));
+    expect(cancelled).toHaveBeenCalledOnce();
   }),
 );
 
