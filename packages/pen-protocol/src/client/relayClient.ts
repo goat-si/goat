@@ -111,8 +111,8 @@ class Link implements RelayLink {
   #resolvePong!: () => void;
   #resolveClosed!: (code: number) => void;
   #state: "connecting" | "open" | "closed" = "connecting";
-  /** Set once this side asks for a close: a held-message drain stops even if the link had closed already. */
-  #closing = false;
+  /** Counts this side's close requests: one made during a held-message drain stops it, closed link or not. */
+  #closeRequests = 0;
   #closeCode = 1006;
   #received = 0;
   #acked = 0;
@@ -236,12 +236,13 @@ class Link implements RelayLink {
     this.#receiver = receiver;
     this.#onClose = onClose;
     const closedBefore = this.#state === "closed";
+    const requests = this.#closeRequests;
     const held = this.#held.splice(0);
     this.#heldBytes = 0;
-    // Messages that arrived before a close are still handed over; once the receiver asks for a close (or throws),
-    // the rest are not, even if the link had closed already. A close during the drain told onClose through #finish.
+    // Messages that arrived before a close (either side's) are still handed over; once the receiver asks for a close
+    // during the drain (or throws), the rest are not. A close during the drain told onClose through #finish.
     for (const message of held) {
-      if (this.#closing || (!closedBefore && this.#state === "closed")) break;
+      if (this.#closeRequests !== requests || (!closedBefore && this.#state === "closed")) break;
       this.#deliver(receiver, message);
     }
     if (closedBefore) this.#notifyClose();
@@ -349,7 +350,7 @@ class Link implements RelayLink {
   }
 
   close(code: number): void {
-    this.#closing = true;
+    this.#closeRequests += 1;
     if (this.#state === "closed") return;
     this.#closeSocket(this.#state === "connecting" ? undefined : code);
     this.#finish(code, true);
@@ -357,7 +358,7 @@ class Link implements RelayLink {
 
   /** Ends the link after the socket refused a send: 1006 locally, and the socket is closed with no code. */
   #abort(): void {
-    this.#closing = true;
+    this.#closeRequests += 1;
     if (this.#state === "closed") return;
     this.#closeSocket(undefined);
     this.#finish(1006, true);

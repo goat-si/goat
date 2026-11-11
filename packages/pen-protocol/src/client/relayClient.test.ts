@@ -66,6 +66,16 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(seen).toEqual([1]);
   });
 
+  it("a link this side closed before attach still hands over what arrived first", async () => {
+    const { socket, link } = await opened();
+    socket.receive(Uint8Array.of(1));
+    socket.receive(Uint8Array.of(2));
+    link.close(1000);
+    const seen: Array<number> = [];
+    link.attach((message) => seen.push(message[0] ?? -1));
+    expect(seen).toEqual([1, 2]);
+  });
+
   it.each(["held", "live"] as const)(
     "a receiver that throws on a %s message is reported, closes the link 1011 and gets nothing more",
     async (when) => {

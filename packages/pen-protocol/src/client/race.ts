@@ -59,8 +59,8 @@ export class SecureSession {
   #onRecord: ((plaintext: Uint8Array) => void) | undefined;
   #onClose: Array<(code: number) => void> = [];
   #closedCode: number | undefined;
-  /** Set by close(): a held record that ends the session stops the drain even when the link had closed already. */
-  #closing = false;
+  /** Counts close() calls: one made during the held-record drain stops it, even when the link had closed already. */
+  #closeRequests = 0;
 
   constructor(link: RelayLink, keys: SessionKeys) {
     this.link = link;
@@ -116,8 +116,10 @@ export class SecureSession {
     // Records that arrived before an earlier close are still handed over (the peer sent them first); a held record
     // that ends the session now (a protocol error, a throwing receiver) ends the drain: nothing after it is delivered.
     const closedBefore = this.#closedCode !== undefined;
+    const requests = this.#closeRequests;
     for (const record of this.#held.splice(0)) {
-      if (this.#closing || (!closedBefore && this.#closedCode !== undefined)) break;
+      if (this.#closeRequests !== requests || (!closedBefore && this.#closedCode !== undefined))
+        break;
       this.#deliver(handler, record);
     }
     this.#heldBytes = 0;
@@ -137,7 +139,7 @@ export class SecureSession {
   }
 
   close(code: number): void {
-    this.#closing = true;
+    this.#closeRequests += 1;
     this.link.close(code);
   }
 }

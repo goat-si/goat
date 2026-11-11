@@ -34,6 +34,7 @@ async function connected(
   options: {
     readonly beforeStream?: ReadonlyArray<Uint8Array>;
     readonly closeBefore?: number;
+    readonly closeLocallyBefore?: number;
   } = {},
 ) {
   const clock = new ManualClock();
@@ -65,6 +66,7 @@ async function connected(
   // Records the node sends before the stream takes the session are held by the session.
   for (const plaintext of options.beforeStream ?? []) socket.receive(reply.send.seal(plaintext));
   if (options.closeBefore !== undefined) socket.remoteClose(options.closeBefore);
+  if (options.closeLocallyBefore !== undefined) session.close(options.closeLocallyBefore);
   const stream = openStream(session);
   let read = 2; // message 1 and the key confirmation
   reply.recv.open(socket.binarySent()[1] ?? new Uint8Array());
@@ -157,12 +159,14 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
   });
 
   it("DATA and FIN that arrived before the session closed are still read when the stream opens after the close", async () => {
-    const c = await connected({
-      beforeStream: [data(Uint8Array.of(1, 2, 3)), record(1)],
-      closeBefore: 1000,
-    });
-    expect(await c.stream.read()).toEqual(Uint8Array.of(1, 2, 3));
-    expect(await c.stream.read()).toBeNull();
+    for (const close of [{ closeBefore: 1000 }, { closeLocallyBefore: 1000 }]) {
+      const c = await connected({
+        beforeStream: [data(Uint8Array.of(1, 2, 3)), record(1)],
+        ...close,
+      });
+      expect(await c.stream.read()).toEqual(Uint8Array.of(1, 2, 3));
+      expect(await c.stream.read()).toBeNull();
+    }
   });
 
   it("after an earlier close too, a bad held record stops the drain: DATA after it is never read", async () => {
