@@ -10,17 +10,8 @@ import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-ru
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
-import { NavigationContext, NavigationRouteContext, useNavigation } from "@react-navigation/native";
-import {
-  use,
-  useDeferredValue,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useNavigation } from "@react-navigation/native";
+import { use, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Keyboard, Platform, useWindowDimensions, View } from "react-native";
 import { KeyboardController, useKeyboardState } from "react-native-keyboard-controller";
 import Animated, {
@@ -38,6 +29,7 @@ import {
   deriveLayout,
   type VerticalHinge,
   deriveWorkspacePaneLayout,
+  nativeInspectorColumnWidth,
   isPrimarySidebarPinned,
   isWorkspaceListPath,
   type WorkspaceAuxiliaryPaneRole,
@@ -114,58 +106,7 @@ export function useAdaptiveWorkspacePaneRole(role: WorkspaceAuxiliaryPaneRole) {
   useFocusEffect(() => activateAuxiliaryPaneRole(role));
 }
 
-/** Capture inspector navigation contexts. Register on focus events because frozen blurred screens may never clean up. */
-export function useRegisterWorkspaceInspector(render: (() => ReactNode) | undefined) {
-  const { registerWorkspaceInspector } = useAdaptiveWorkspaceLayout();
-  const navigation = use(NavigationContext);
-  const route = use(NavigationRouteContext);
-
-  const wrappedRender = (() => {
-    if (render === undefined) {
-      return undefined;
-    }
-    return () => (
-      <NavigationContext.Provider value={navigation}>
-        <NavigationRouteContext.Provider value={route}>{render()}</NavigationRouteContext.Provider>
-      </NavigationContext.Provider>
-    );
-  })();
-
-  const focusedRef = useRef(false);
-  const deactivateRef = useRef<(() => void) | null>(null);
-
-  const syncRegistration = useEffectEvent(() => {
-    if (!focusedRef.current || wrappedRender === undefined) {
-      deactivateRef.current?.();
-      return;
-    }
-    deactivateRef.current = registerWorkspaceInspector(wrappedRender);
-  });
-
-  useFocusEffect(() => {
-    focusedRef.current = true;
-    syncRegistration();
-    return () => {
-      focusedRef.current = false;
-      syncRegistration();
-    };
-  });
-
-  useEffect(() => {
-    if (focusedRef.current) {
-      syncRegistration();
-    }
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Changed pane content replaces its existing native workspace registration.
-  }, [wrappedRender]);
-
-  useEffect(
-    () => () => {
-      deactivateRef.current?.();
-      deactivateRef.current = null;
-    },
-    [],
-  );
-}
+export { useRegisterWorkspaceInspector } from "./useRegisterWorkspaceInspector";
 
 export function AdaptiveWorkspaceLayout(props: {
   readonly children: ReactNode;
@@ -225,6 +166,7 @@ function AdaptiveWorkspaceLayoutContent(
     number | null
   >(null);
   const [fileInspectorPreferredVisible, setFileInspectorPreferredVisible] = useState(true);
+  const [nativeInspectorFraction, setNativeInspectorFraction] = useState(0.4);
   const [fileInspectorPreferredWidth, setFileInspectorPreferredWidth] = useState<number | null>(
     null,
   );
@@ -303,6 +245,13 @@ function AdaptiveWorkspaceLayoutContent(
     [baseLayout, hinge, navigationRailWidth, viewportWidth],
   );
   const width = viewportWidth - navigationRailWidth;
+  const horizontalSafeArea =
+    (nativeMetrics?.safeArea.left ?? 0) + (nativeMetrics?.safeArea.right ?? 0);
+  const nativeInspectorWidth = nativeInspectorColumnWidth({
+    viewportWidth,
+    horizontalSafeArea,
+    fraction: nativeInspectorFraction,
+  });
   // The sidebar stays mounted under a workspace page, so its list is ready on the way back.
   const shouldRenderPrimarySidebar = layout.usesSplitView;
   const fileInspector = useMemo(
@@ -335,6 +284,8 @@ function AdaptiveWorkspaceLayoutContent(
         layout,
         viewportWidth: width,
         nativeWorkspace,
+        nativeInspectorWidth,
+        horizontalSafeArea,
         primarySidebarPreferredVisible: showPrimarySidebar,
         auxiliaryPanePreferredVisible,
         auxiliaryPaneRole,
@@ -346,6 +297,8 @@ function AdaptiveWorkspaceLayoutContent(
       auxiliaryPanePreferredWidth,
       layout,
       nativeWorkspace,
+      nativeInspectorWidth,
+      horizontalSafeArea,
       showPrimarySidebar,
       width,
     ],
@@ -824,7 +777,12 @@ function AdaptiveWorkspaceLayoutContent(
       >
         <AdaptiveWorkspaceContext value={contextValue}>
           <NativeWorkspaceInspectorContext
-            value={{ render: workspaceInspector?.render, visible: inspectorColumnTargetWidth > 0 }}
+            value={{
+              render: workspaceInspector?.render,
+              visible: inspectorColumnTargetWidth > 0,
+              widthFraction: nativeInspectorFraction,
+              setWidthFraction: setNativeInspectorFraction,
+            }}
           >
             {props.children}
           </NativeWorkspaceInspectorContext>
