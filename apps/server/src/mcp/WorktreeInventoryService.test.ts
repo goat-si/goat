@@ -456,6 +456,27 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("a worktree whose check was interrupted still counts in remaining", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c", "d"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(Effect.interrupt);
+      const interrupted = yield* Effect.exit(service.cleanup({ dryRun: false }));
+      expect(interrupted._tag).toBe("Failure");
+
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+      const next = yield* service.cleanup({ dryRun: false });
+      expect(next.kept).toHaveLength(2);
+      expect(next.remaining).toBe(2);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("never deletes the default branch, even with force", () =>
     Effect.gen(function* () {
       const { service, fs, run, repo } = yield* fixture;
