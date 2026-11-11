@@ -67,6 +67,13 @@ export interface PlaceInput<E> {
 
 export interface PlacementAdmissionShape {
   readonly place: <E>(input: PlaceInput<E>) => Effect.Effect<PlacementAnswer>;
+  /**
+   * What a request refused before admission learns from its key: null only when this key was
+   * never admitted here (no row, above the watermark), so the refusal proves nothing started.
+   */
+  readonly unseen: (
+    key: PlacementKey,
+  ) => Effect.Effect<Exclude<PlacementAnswer, { readonly _tag: "Started" }> | null>;
 }
 
 export class PlacementAdmission extends Context.Service<
@@ -309,7 +316,21 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  return PlacementAdmission.of({ place });
+  const unseen = Effect.fn("PlacementAdmission.unseen")(
+    function* (key: PlacementKey) {
+      const { row, watermark } = yield* store.lookup(key);
+      // The stored request passed these checks, so this one differs from it.
+      if (row !== null) return { _tag: "Conflicting" } as const;
+      if (key.issuedAt <= watermark) return { _tag: "Refused", refusal: "expired" } as const;
+      return null;
+    },
+    Effect.catchTags({
+      PlacementStoreError: (error) =>
+        Effect.succeed({ _tag: "StoreUnavailable", message: error.message } as const),
+    }),
+  );
+
+  return PlacementAdmission.of({ place, unseen });
 });
 
 export const layer = Layer.effect(PlacementAdmission, make);

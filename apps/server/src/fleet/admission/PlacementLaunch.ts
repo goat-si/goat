@@ -204,19 +204,8 @@ const make = Effect.gen(function* () {
             code: "invalid_request",
           },
         );
-      if (input.references !== undefined && input.references.length > 0)
-        return yield* refusal(
-          "placement_invalid",
-          "A placed launch cannot carry repository references.",
-          {
-            code: "invalid_request",
-          },
-        );
-      if (input.message === undefined || input.message.trim() === "")
-        return yield* refusal("placement_no_message", "A placed launch needs a message.", {
-          code: "invalid_request",
-        });
       const issuedAt = issuedAtMillis(placement.issuedAt);
+      // No admitted key has an unreadable issuedAt, so this key never started here.
       if (issuedAt === undefined)
         return yield* refusal(
           "placement_invalid",
@@ -225,6 +214,32 @@ const make = Effect.gen(function* () {
             code: "invalid_request",
           },
         );
+      const key = {
+        placer: placerOf(scope),
+        ownerKey: placement.ownerKey,
+        attempt: placement.attempt,
+        issuedAt,
+      };
+      // An invalid request is definite only for a key never admitted here; otherwise its key answers.
+      const invalid = (classification: string, message: string) =>
+        admission
+          .unseen(key)
+          .pipe(
+            Effect.flatMap((known) =>
+              Effect.fail(
+                known === null
+                  ? refusal(classification, message, { code: "invalid_request" })
+                  : refusalForAnswer(known),
+              ),
+            ),
+          );
+      if (input.references !== undefined && input.references.length > 0)
+        return yield* invalid(
+          "placement_invalid",
+          "A placed launch cannot carry repository references.",
+        );
+      if (input.message === undefined || input.message.trim() === "")
+        return yield* invalid("placement_no_message", "A placed launch needs a message.");
       const digest = yield* placementDigest({
         parameters: input,
         fieldNames: FIELD_NAMES,
@@ -245,12 +260,7 @@ const make = Effect.gen(function* () {
         }),
       );
       const answer = yield* admission.place({
-        key: {
-          placer: placerOf(scope),
-          ownerKey: placement.ownerKey,
-          attempt: placement.attempt,
-          issuedAt,
-        },
+        key,
         digest,
         launch: run,
       });

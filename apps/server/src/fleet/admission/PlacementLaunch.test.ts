@@ -160,6 +160,41 @@ describe("goat_thread_launch with placement on the target", () => {
   );
 
   it.effect(
+    "a request refused as invalid answers from its key: a started key reads conflicting and may have started, a key never seen is a definite refusal",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        const { calls, run } = yield* runner;
+        yield* PlacementLaunch.launchPlaced(client(), params(), run);
+        for (const change of [
+          { message: undefined },
+          { message: "  " },
+          { references: [{ kind: "thread", threadId: "thread-x" }] },
+        ]) {
+          const failure = yield* failureOf(client(), params(change), run);
+          assert.deepStrictEqual(
+            [failure.classification, failure.mayHaveStarted],
+            ["placement_conflicting", true],
+            JSON.stringify(change),
+          );
+        }
+        const unseen = yield* failureOf(
+          client(),
+          params({
+            message: undefined,
+            placement: { ownerKey: "goal:g1:other", attempt: 0, issuedAt: ISSUED },
+          }),
+          run,
+        );
+        assert.deepStrictEqual(
+          [unseen.classification, unseen.mayHaveStarted],
+          ["placement_no_message", false],
+        );
+        assert.strictEqual((yield* Ref.get(calls)).length, 1);
+      }).pipe(Effect.provide(targetLayer())),
+  );
+
+  it.effect(
     "the same key with a changed message, memory grant ceiling, interaction mode or report setting is conflicting; an identical retry joins",
     () =>
       Effect.gen(function* () {

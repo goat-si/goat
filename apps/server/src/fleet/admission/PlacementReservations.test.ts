@@ -427,6 +427,28 @@ describe("prune and the watermark", () => {
       }).pipe(Effect.provide(store())),
   );
 
+  it.effect(
+    "a retained row below the watermark still answers its key: the row is read before the watermark",
+    () =>
+      Effect.gen(function* () {
+        const reservations = yield* PlacementReservations;
+        const kept = yield* admitted(key("kept", T0));
+        const later = yield* admitted(key("later", T0 + 5 * DAY), { now: T0 + 5 * DAY });
+        yield* reservations.finalize({ commandId: later, epoch: EPOCH, reason: "failed" });
+        const result = yield* reservations.prune(T0 + 5 * DAY + RETAIN_MS + 1);
+        assert.deepStrictEqual(result, { deleted: 1, watermark: T0 + 5 * DAY });
+        const answer = yield* reservations.admit(admitInput(key("kept", T0), { now: T0 + 1 }));
+        assert.deepStrictEqual(
+          [answer._tag, answer._tag === "Known" ? answer.reservation.commandId : null],
+          ["Known", kept],
+        );
+        const changed = yield* reservations.admit(
+          admitInput(key("kept", T0), { now: T0 + 1, digest: "digest-2" }),
+        );
+        assert.strictEqual(changed._tag, "Conflicting");
+      }).pipe(Effect.provide(store())),
+  );
+
   it.effect("a missing watermark fails closed and is never re-created", () =>
     Effect.gen(function* () {
       const reservations = yield* PlacementReservations;

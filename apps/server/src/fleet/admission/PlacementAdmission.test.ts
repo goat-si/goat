@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - each test gets a scratch database folder.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { type CommandId, ThreadId } from "@goat/contracts";
+import { CommandId, RunId, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -20,7 +20,7 @@ import { countHostThreads } from "../../mcp/hostStatusModel.ts";
 import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import { makeHarness } from "../../orchestration-v2/testkit/ThreadLaunchHarness.ts";
-import { launchInput } from "../../orchestration-v2/testkit/threadLaunchInput.ts";
+import { launchInput, projectId } from "../../orchestration-v2/testkit/threadLaunchInput.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as FleetHostStates from "../health/FleetHostStates.ts";
 import * as Admission from "./PlacementAdmission.ts";
@@ -148,6 +148,35 @@ describe("placement admission on the target", () => {
         assert.strictEqual(yield* runningCount, 1);
         // Counted now through the live projection: still full for a new key.
         assert.deepStrictEqual(yield* place(key("c"), other), { _tag: "Refused", refusal: "full" });
+      }).pipe(Effect.provide(admission(1))),
+  );
+
+  it.effect(
+    "a counted placement's slot frees when its run ends: a new key is admitted while the counted row stays",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        const first = yield* makeLauncher();
+        const started = yield* place(key("a"), first);
+        if (started._tag !== "Started") return assert.fail("not started: " + started._tag);
+        const other = yield* makeLauncher();
+        assert.deepStrictEqual(yield* place(key("b"), other), { _tag: "Refused", refusal: "full" });
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        yield* threads.interruptThread({
+          projectId,
+          commandId: CommandId.make("interrupt:" + started.threadId),
+          threadId: ThreadId.make(started.threadId),
+          runId: RunId.make(started.runId),
+          reason: "the work ended",
+        });
+        assert.strictEqual(yield* runningCount, 0);
+        assert.strictEqual((yield* place(key("c"), other))._tag, "Started");
+        const store = yield* Reservations.PlacementReservations;
+        const row = yield* store.get(placementCommandId(key("a")));
+        assert.deepStrictEqual(
+          [row?.state, row?.threadId, row?.runId],
+          ["counted", started.threadId, started.runId],
+        );
       }).pipe(Effect.provide(admission(1))),
   );
 
