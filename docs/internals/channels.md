@@ -62,9 +62,13 @@ two generations. Reads change nothing, so a reception retried after a crash read
   ([`channelBotNoteTabEdits.ts`](../../apps/server/src/channels/channelBotNoteTabEdits.ts)), so
   changing those sentences changes the server's contract too. A change appends the new note with a
   replaces marker; a forget rewrites `memory.md` without the note, the notes it replaced and quotes
-  of them. Both run under the lock reception saves notes with, but notes-change workers edit the
-  file by hand outside it, so a write racing a forget can be lost or bring removed words back; the
-  forget reads the file once more and says so when it sees that.
+  of them. The quoted words address a note only when exactly one current note reads them, spacing
+  collapsed; otherwise nothing changes and the person is asked which note they mean. Lines are
+  never moved or reordered to pick one: a correction binds to the nearest earlier note in force
+  with its replaces text, so moving a line changes what other corrections replace. Both run under
+  the lock reception saves notes with, but notes-change workers edit the file by hand outside it,
+  so a write racing a forget can be lost or bring removed words back; the forget reads the file
+  once more and says so when it sees that.
 - **Work.** A `work` read matches the owner's 200 most recently updated tasks by task id, a
   linked pull request (by repository and number when the question names a repository), or shared
   words, and returns each task's request, result, machine, open questions and pull requests with
