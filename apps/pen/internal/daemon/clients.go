@@ -103,6 +103,9 @@ func claimLocked(l *live) bool {
 // closeOwned closes what an owner claimed: the local connection and the relay session, after any commit and identity
 // line in progress; then it signals closed.
 func (d *Daemon) closeOwned(l *live, code uint16) {
+	if d.opt.ClientClosing != nil {
+		d.opt.ClientClosing()
+	}
 	l.gate.Lock()
 	if l.conn != nil {
 		l.conn.Close()
@@ -179,6 +182,9 @@ func (k liveLink) Close(code uint16) error {
 // serveClient delivers a confirmed client session to the program of the registration that admitted it.
 func (d *Daemon) serveClient(ctx context.Context, sec *session.Secure, a clientAdmission) {
 	l := &live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec, client: true, reg: a.reg, closed: make(chan struct{})}
+	if d.opt.ClientEnded != nil {
+		defer d.opt.ClientEnded()
+	}
 	if !d.registerClient(l) {
 		sec.Close(wire.CodeNotAdmitted)
 		return

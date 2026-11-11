@@ -68,6 +68,11 @@ type Options struct {
 	PresenceDone func()
 	// ServiceEnded, when set, is told the id of each service registration once it has ended (tests).
 	ServiceEnded func(id string)
+	// ClientClosing, when set, runs when the owner of a client session's close starts closing it, before it takes
+	// the session's gate (tests).
+	ClientClosing func()
+	// ClientEnded, when set, runs when a client session's goroutine is done with it (tests).
+	ClientEnded func()
 }
 
 // Daemon is one running node.
