@@ -104,6 +104,8 @@ export interface Fixture {
   readonly deviceHealthy?: boolean;
   /** Exit of the guarded `ocx sync` over a link; one of SYNC_EXIT when the guard refused. */
   readonly syncExit?: number;
+  /** Another link replaces the join's new one under the alias while the join syncs. */
+  readonly replacedDuringSync?: string;
   /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
   readonly releases?: OpenCodexReleaseCatalog;
   /** Home `ocx link status` fails; "forbidden" is OpenCodex's 403 in Hub mode (opencodex#8184). */
@@ -296,6 +298,8 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
             syncDevice: (alias, options) =>
               Effect.sync(() => {
                 calls.push(`sync ${alias} ${options.linkId}`);
+                if (fixture.replacedDuringSync !== undefined)
+                  links.set(alias, fixture.replacedDuringSync);
                 return { code: fixture.syncExit ?? 0, stdout: "" };
               }),
             directAlias: () =>

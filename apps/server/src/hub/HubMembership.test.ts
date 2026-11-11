@@ -29,6 +29,7 @@ it.effect("an owner joins a pinned device: GOAT's pin becomes --expect-fingerpri
       `home link add mac-studio --expect-fingerprint ${PINNED} --json`,
       "sync mac-studio lnk_fedcba9876543210",
       "verify mac-studio",
+      "home link status --json",
     ]);
     expect(yield* hub.audit).toEqual([
       { action: "hub.join", target: "mac-studio", outcome: "started", decision_id: null },

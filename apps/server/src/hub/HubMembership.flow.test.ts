@@ -148,3 +148,15 @@ it.effect("after the join's guarded sync ran, the ladder never syncs again ungua
     ]);
   }),
 );
+
+it.effect("a join whose new link was replaced before its sync is not reported linked", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      pin: PINNED,
+      syncExit: 90,
+      replacedDuringSync: "lnk_aaaaaaaaaaaaaaaa",
+    });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(result.state).toBe("degraded");
+  }),
+);
