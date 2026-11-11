@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 )
@@ -27,7 +26,7 @@ func Dir() (string, error) {
 	return filepath.Join(h, ".pen"), nil
 }
 
-// Open opens (and creates, 0700) the state directory.
+// Open opens (and creates, private to this user) the state directory.
 func Open() (*Store, error) {
 	d, err := Dir()
 	if err != nil {
@@ -36,12 +35,13 @@ func Open() (*Store, error) {
 	return OpenDir(d)
 }
 
-// OpenDir opens a specific directory.
+// OpenDir opens a specific directory and makes it private to this user: mode 0700, or on Windows a
+// protected DACL with one ACE for this user that its files inherit.
 func OpenDir(d string) (*Store, error) {
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(d, 0o700); err != nil {
+	if err := restrictDir(d); err != nil {
 		return nil, err
 	}
 	return &Store{Dir: d}, nil
@@ -78,7 +78,7 @@ func (s *Store) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.Path(name)); err != nil {
+	if err := Replace(tmp, s.Path(name)); err != nil {
 		return err
 	}
 	ok = true
@@ -109,24 +109,29 @@ func (s *Store) ReadJSON(name string, v any) (bool, error) {
 	return true, nil
 }
 
-// Lock takes the exclusive writer lock (flock on state.lock) and returns its release.
+// ErrLocked means another process holds the lock.
+var ErrLocked = errors.New("state: locked by another process")
+
+// Lock takes the exclusive writer lock on state.lock, waiting for it, and returns its release.
 func (s *Store) Lock() (func(), error) {
-	f, err := os.OpenFile(s.Path("state.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	return lockPath(s.Path("state.lock"), true)
+}
+
+// TryLock takes an exclusive lock on path without waiting (ErrLocked when another process holds it).
+// The lock lasts until the release or the process ends.
+func TryLock(path string) (func(), error) { return lockPath(path, false) }
+
+func lockPath(path string, wait bool) (func(), error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	for {
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
-		if !errors.Is(err, syscall.EINTR) {
-			break
-		}
-	}
-	if err != nil {
+	if err := lockFile(f, wait); err != nil {
 		f.Close()
 		return nil, err
 	}
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		unlockFile(f)
 		f.Close()
 	}, nil
 }
@@ -156,11 +161,24 @@ func (s *Store) LoadIdentity() (*ident.Identity, error) {
 
 // EnsureIdentity loads the identity or creates one. created reports a new identity.
 func (s *Store) EnsureIdentity() (id *ident.Identity, created bool, err error) {
+	return s.EnsureIdentityClearing("")
+}
+
+// EnsureIdentityClearing is EnsureIdentity that first removes the file marker (unless ""), in the same
+// hold of the state lock: pen up, pen join and pen login start a node again by clearing the left marker
+// and making its identity in one step, so a pen leave that deletes a node's files only while the
+// marker is present (FinishLeave, under the same lock) cannot delete the new node's.
+func (s *Store) EnsureIdentityClearing(marker string) (id *ident.Identity, created bool, err error) {
 	unlock, err := s.Lock()
 	if err != nil {
 		return nil, false, err
 	}
 	defer unlock()
+	if marker != "" {
+		if err := os.Remove(s.Path(marker)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, false, err
+		}
+	}
 	id, err = s.LoadIdentity()
 	if err == nil {
 		return id, false, nil

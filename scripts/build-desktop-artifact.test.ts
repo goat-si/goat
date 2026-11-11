@@ -5,6 +5,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createPackageWithOptions, extractFile, listPackage, statFile } from "@electron/asar";
 import { vi } from "vite-plus/test";
 import * as CuaRelease from "@goat/shared/cuaDriverRelease";
+import { isNightlyDesktopVersion } from "../apps/desktop/src/updates/updateChannels.ts";
+import { renderWindowsBuildInfo } from "./build-computer-use-helper-windows.ts";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
@@ -21,6 +23,12 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
+  DESKTOP_FILE_EXCLUSIONS,
+  LINUX_FILE_EXCLUSIONS,
+  MAC_FILE_EXCLUSIONS,
+} from "./desktop-artifact-file-exclusions.ts";
+import { PINNED_DRIVER_FILES } from "./build-computer-use-helper-windows.ts";
+import {
   buildDesktopBundles,
   copyDesktopBuildArtifacts,
   DesktopBuildManifestRestoreError,
@@ -29,7 +37,6 @@ import {
   parseWslRuntimeArchiveMembers,
   readWorkspaceConfig,
   createBuildConfig,
-  DESKTOP_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   UnsupportedDesktopBuildArchitectureError,
@@ -65,10 +72,9 @@ import {
   DESKTOP_EXTRA_RESOURCES,
   LINUX_CAPTURE_EXTRA_RESOURCES,
   LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
-  LINUX_FILE_EXCLUSIONS,
-  MAC_FILE_EXCLUSIONS,
   resolveOptionalMacPasskeySigningConfiguration,
   resolveDesktopProductName,
+  resolveWindowsHelperChannel,
   resolveResourceMonitorRustTargets,
   resolveVp,
   VpNotFoundError,
@@ -307,6 +313,11 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     path.join(resourcesDir, "resource-monitor/goat-resource-monitor.exe"),
     "monitor",
   );
+  const helperDir = path.join(resourcesDir, "computer-use-helper");
+  yield* fs.makeDirectory(path.join(helperDir, "cua-driver"), { recursive: true });
+  yield* fs.writeFileString(path.join(helperDir, "GOAT Computer Use.exe"), "helper");
+  for (const file of PINNED_DRIVER_FILES)
+    yield* fs.writeFileString(path.join(helperDir, "cua-driver", file), file);
   yield* fs.makeDirectory(path.join(resourcesDir, "screen-code"), { recursive: true });
   yield* fs.writeFile(path.join(resourcesDir, "screen-code/quickjs.wasm"), SCREEN_WASM_BYTES);
   const appExecutableName = "t3code.exe";
@@ -353,6 +364,23 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     appExecutableName,
   } as const;
 });
+
+/** The packaged payload check, for the fixture's shape and the differences a test needs. */
+const validateFixture = (
+  fixture: { readonly stageDistDir: string; readonly appExecutableName: string },
+  options?: {
+    readonly targetArch?: "x64" | "arm64";
+    readonly appVersion?: string;
+    readonly expectWslRuntime?: boolean;
+  },
+) =>
+  validateWindowsPackagedPayload({
+    stageDistDir: fixture.stageDistDir,
+    appExecutableName: fixture.appExecutableName,
+    targetArch: options?.targetArch ?? "x64",
+    appVersion: options?.appVersion ?? WINDOWS_PAYLOAD_FIXTURE_VERSION,
+    expectWslRuntime: options?.expectWslRuntime ?? false,
+  });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it.effect(
@@ -402,48 +430,41 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect.each(["linux", "win"] as const)(
-    "stages the Cua %s compressed release at the desktop host path",
-    (platform) =>
-      Effect.gen(function* () {
-        const h = yield* makeCuaStageFixture(platform);
-        yield* h.fs.writeFile(h.archivePath, h.archive);
-        const resources = yield* h.stage("release");
-        const destination = h.path.join(resources, "cua-driver");
-        assert.equal(h.requests(), 0);
-        const companions =
-          platform === "win"
-            ? ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"]
-            : [
-                "cua-driver",
-                "cua-cursor-theme",
-                "wayland-helper/README.md",
-                "wayland-helper/install.sh",
-                "wayland-helper/winrects@cua/metadata.json",
-                "wayland-helper/winrects@cua/extension.js",
-              ];
-        assert.deepStrictEqual(
-          (yield* h.fs.readDirectory(destination)).sort(),
-          platform === "win"
-            ? [...companions].sort()
-            : ["cua-cursor-theme", "cua-driver", "wayland-helper"],
-        );
-        for (const member of companions) {
-          assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
+  it.effect("stages the Cua Linux compressed release at the desktop host path", () =>
+    Effect.gen(function* () {
+      const h = yield* makeCuaStageFixture("linux");
+      yield* h.fs.writeFile(h.archivePath, h.archive);
+      const resources = yield* h.stage("release");
+      const destination = h.path.join(resources, "cua-driver");
+      assert.equal(h.requests(), 0);
+      const companions = [
+        "cua-driver",
+        "cua-cursor-theme",
+        "wayland-helper/README.md",
+        "wayland-helper/install.sh",
+        "wayland-helper/winrects@cua/metadata.json",
+        "wayland-helper/winrects@cua/extension.js",
+      ];
+      assert.deepStrictEqual((yield* h.fs.readDirectory(destination)).sort(), [
+        "cua-cursor-theme",
+        "cua-driver",
+        "wayland-helper",
+      ]);
+      for (const member of companions) {
+        assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
+      }
+      if ((yield* HostProcess.Platform) !== "win32") {
+        for (const executable of [
+          h.path.join(destination, "cua-driver"),
+          h.path.join(destination, "cua-cursor-theme"),
+        ]) {
+          assert.equal((yield* h.fs.stat(executable)).mode & 0o777, 0o755);
         }
-        if ((yield* HostProcess.Platform) !== "win32" && platform !== "win") {
-          const executables = [
-            h.path.join(destination, "cua-driver"),
-            h.path.join(destination, "cua-cursor-theme"),
-          ];
-          for (const executable of executables) {
-            assert.equal((yield* h.fs.stat(executable)).mode & 0o777, 0o755);
-          }
-        }
-      }).pipe(Effect.scoped),
+      }
+    }).pipe(Effect.scoped),
   );
 
-  it.effect("Cua Windows SDK and driver fit the packaged 80 loose-file budget", () =>
+  it.effect("Cua Windows SDK and helper fit the packaged 80 loose-file budget", () =>
     Effect.gen(function* () {
       const h = yield* makeCuaStageFixture("win");
       const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: false });
@@ -483,17 +504,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           unpack: globs.length === 1 ? globs[0]! : `{${globs.join(",")}}`,
         }),
       );
-      yield* h.fs.writeFile(h.archivePath, h.archive);
-      const staged = yield* h.stage("driver");
-      yield* h.fs.copy(h.path.join(staged, "cua-driver"), h.path.join(resources, "cua-driver"));
       yield* h.fs.makeDirectory(h.path.join(resources, "screen-code"), { recursive: true });
       yield* h.fs.writeFile(h.path.join(resources, "screen-code/quickjs.wasm"), SCREEN_WASM_BYTES);
-      const result = yield* validateWindowsPackagedPayload({
-        stageDistDir: fixture.stageDistDir,
-        appExecutableName: fixture.appExecutableName,
-        targetArch: "x64",
-        appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-      }).pipe(Effect.provideService(HostProcess.Platform, "linux"));
+      const result = yield* validateFixture(fixture).pipe(
+        Effect.provideService(HostProcess.Platform, "linux"),
+      );
       assert.isAtMost(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
       assert.includeMembers(result.unpackedFiles, natives);
       for (const file of javascript) {
@@ -1182,20 +1197,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           copyUnpackedNatives: true,
           wslRuntime: "valid",
         });
-        const beforeBundle = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        });
+        const beforeBundle = yield* validateFixture(fixture);
         yield* stageWindowsSshRuntimeFixture(fixture.packagedAppDir);
-        const result = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-          expectWslRuntime: true,
-        });
+        const result = yield* validateFixture(fixture, { expectWslRuntime: true });
         assert.equal(result.fileCount, beforeBundle.fileCount + 6);
         yield* validatePackagedSshRuntimeArchives({
           stageDistDir: fixture.stageDistDir,
@@ -1233,11 +1237,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             targetArch,
             ptyPrebuildArch: targetArch,
           });
-          const result = yield* validateWindowsPackagedPayload({
-            stageDistDir: fixture.stageDistDir,
-            appExecutableName: fixture.appExecutableName,
+          const result = yield* validateFixture(fixture, {
             targetArch,
-            appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
             expectWslRuntime: true,
           });
 
@@ -1257,11 +1258,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             targetArch,
             ptyPrebuildArch: targetArch === "x64" ? "arm64" : "x64",
           });
-          const error = yield* validateWindowsPackagedPayload({
-            stageDistDir: fixture.stageDistDir,
-            appExecutableName: fixture.appExecutableName,
+          const error = yield* validateFixture(fixture, {
             targetArch,
-            appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
             expectWslRuntime: true,
           }).pipe(Effect.flip);
 
@@ -1278,10 +1276,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           copyUnpackedNatives: true,
           wslRuntime: "valid",
         });
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
+        const error = yield* validateFixture(fixture, {
           appVersion: "9.9.9",
           expectWslRuntime: true,
         }).pipe(Effect.flip);
@@ -1296,13 +1291,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-          expectWslRuntime: true,
-        }).pipe(Effect.flip);
+        const error = yield* validateFixture(fixture, { expectWslRuntime: true }).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "wsl-runtime-missing");
@@ -1317,13 +1306,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           copyUnpackedNatives: true,
           wslRuntime: "missing-pty",
         });
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-          expectWslRuntime: true,
-        }).pipe(Effect.flip);
+        const error = yield* validateFixture(fixture, { expectWslRuntime: true }).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "wsl-runtime-invalid");
@@ -1342,13 +1325,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           copyUnpackedNatives: true,
           wslRuntime: "bad-digest",
         });
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-          expectWslRuntime: true,
-        }).pipe(Effect.flip);
+        const error = yield* validateFixture(fixture, { expectWslRuntime: true }).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "wsl-runtime-invalid");
@@ -1377,12 +1354,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
-        yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        });
+        yield* validateFixture(fixture);
 
         const primaryProbe = commands.find(
           (command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1",
@@ -1472,12 +1444,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
-        yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "arm64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        });
+        yield* validateFixture(fixture, { targetArch: "arm64" });
 
         assert.isFalse(
           commands.some(
@@ -1512,12 +1479,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const executablePath = path.join(fixture.packagedAppDir, fixture.appExecutableName);
         yield* fs.remove(executablePath);
 
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "arm64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        }).pipe(Effect.flip);
+        const error = yield* validateFixture(fixture, { targetArch: "arm64" }).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPrimaryNativeProbeError);
         assert.equal(error.executablePath, executablePath);
@@ -1536,12 +1498,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: false });
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        }).pipe(Effect.flip);
+        const error = yield* validateFixture(fixture).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "unpacked-native-missing");
@@ -1565,12 +1522,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         yield* fs.remove(nativePath);
         yield* fs.makeDirectory(nativePath);
 
-        const nativeError = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        }).pipe(Effect.flip);
+        const nativeError = yield* validateFixture(fixture).pipe(Effect.flip);
         assert.instanceOf(nativeError, WindowsPackagedPayloadValidationError);
         assert.equal(nativeError.reason, "unpacked-native-missing");
         assert.deepStrictEqual(nativeError.missingFiles, [
@@ -1586,16 +1538,35 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         yield* fs.remove(resourceMonitorPath);
         yield* fs.makeDirectory(resourceMonitorPath);
 
-        const resourceMonitorError = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        }).pipe(Effect.flip);
+        const resourceMonitorError = yield* validateFixture(fixture).pipe(Effect.flip);
         assert.instanceOf(resourceMonitorError, WindowsPackagedPayloadValidationError);
         assert.equal(resourceMonitorError.reason, "resource-monitor-missing");
         assert.deepStrictEqual(resourceMonitorError.missingFiles, [
           "resource-monitor/goat-resource-monitor.exe",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("rejects a Windows payload whose computer use helper is not whole", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const validate = () => validateFixture(fixture);
+        // The helper runs the driver it pins, so a payload without one cannot start.
+        yield* fs.remove(
+          path.join(
+            fixture.packagedAppDir,
+            "resources/computer-use-helper/cua-driver/cua-driver.exe",
+          ),
+        );
+        const error = yield* validate().pipe(Effect.flip);
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "computer-use-helper-missing");
+        assert.deepStrictEqual(error.missingFiles, [
+          "computer-use-helper/cua-driver/cua-driver.exe",
         ]);
       }),
     ),
@@ -1611,14 +1582,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           wslRuntime: "valid",
         });
         yield* stageWindowsSshRuntimeFixture(fixture.packagedAppDir);
-        const validate = () =>
-          validateWindowsPackagedPayload({
-            stageDistDir: fixture.stageDistDir,
-            appExecutableName: fixture.appExecutableName,
-            targetArch: "x64",
-            appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-            expectWslRuntime: true,
-          });
+        const validate = () => validateFixture(fixture, { expectWslRuntime: true });
         const initial = yield* validate();
         const limit = WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
         for (let count = initial.fileCount; count < limit; count++) {
@@ -1668,12 +1632,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           copyUnpackedNatives: true,
           serverEntrySource: 'import "goat-deliberately-missing-package";\n',
         });
-        yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "arm64",
-          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-        });
+        yield* validateFixture(fixture, { targetArch: "arm64" });
       }),
     ).pipe(
       Effect.provide(
@@ -2156,6 +2115,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "GOAT (Nightly)");
   });
 
+  it("builds a local Windows helper with the identity its desktop channel expects", () => {
+    for (const version of [
+      "0.0.17",
+      "0.0.17-nightly.20260413.42",
+      "0.0.41-preview.20260912.1589",
+      "0.0.33-pr.8182.1",
+    ]) {
+      // The packaged desktop expects this identity (DesktopEnvironment's channel, ComputerUseHelper's handshake).
+      const expected = CuaRelease.computerUseHelperBundleIdForChannel(
+        isNightlyDesktopVersion(version) ? "nightly" : "stable",
+      );
+      const helper = renderWindowsBuildInfo({
+        channel: resolveWindowsHelperChannel(version),
+        version,
+        pins: [],
+        allowAnyParent: true,
+      });
+      assert.include(helper, `HelperId = "${expected}";`, version);
+    }
+  });
+
   it("limits Electron locales and excludes separately packaged resources", () => {
     assert.deepStrictEqual(DESKTOP_ELECTRON_LANGUAGES, ["en-US"]);
     for (const resource of [
@@ -2235,12 +2215,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
       ]);
       assert.deepStrictEqual(win.extraResources, [
-        ...DESKTOP_EXTRA_RESOURCES,
+        ...DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
+        { from: "apps/desktop/prod-resources/computer-use-helper", to: "computer-use-helper" },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
         ...WSL_RUNTIME_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(winWithoutWslRuntime.extraResources, [
-        ...DESKTOP_EXTRA_RESOURCES,
+        ...DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
+        { from: "apps/desktop/prod-resources/computer-use-helper", to: "computer-use-helper" },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, {

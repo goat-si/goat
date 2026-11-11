@@ -50,6 +50,7 @@ const EXAMPLES = [
 ] as const;
 
 export interface GoatBotChatViewProps {
+  readonly unreadSince?: string | null | undefined;
   /** The bot's server supports task threads, so task chips render as task-thread pills. */
   readonly supportsTaskThreads?: boolean | undefined;
   /** The bot's server runs failed or stopped work again when a person asks. */
@@ -95,6 +96,7 @@ export interface GoatBotChatViewProps {
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
 export function GoatBotChatView({
+  unreadSince,
   supportsTaskThreads = false,
   supportsTaskRetry = false,
   availability,
@@ -132,9 +134,24 @@ export function GoatBotChatView({
   const acceptsFiles = canSend && attachmentSupport !== null;
   const composerRef = useRef<GoatBotComposerHandle>(null);
   const homeRef = useRef<HTMLButtonElement>(null);
+  // Why the narrow sheet last closed: a draft action leaves focus in the message box and a file
+  // takes focus itself; plain dismissal returns focus to the chip that opened the sheet.
+  const sheetClosedFor = useRef<"draft" | "file" | null>(null);
+  const sheetFinalFocus = () => {
+    const reason = sheetClosedFor.current;
+    sheetClosedFor.current = null;
+    if (reason === "file") return false;
+    const field = reason === "draft" ? composerRef.current?.field() : null;
+    if (!field) return homeRef.current ?? true;
+    field.setSelectionRange(field.value.length, field.value.length);
+    return field;
+  };
   const onDraft = canSend
     ? (text: string) => {
-        if (narrow) setPanelOpen(false);
+        if (narrow) {
+          sheetClosedFor.current = "draft";
+          setPanelOpen(false);
+        }
         composerRef.current?.replaceText(text);
       }
     : undefined;
@@ -146,19 +163,12 @@ export function GoatBotChatView({
     readonly file: ChannelBotArtifact;
   } | null>(null);
   const fileOpener = useRef<HTMLElement | null>(null);
-  // A file opened from the narrow sheet takes focus itself; the closing sheet leaves it there.
-  const fileOpenedFromSheet = useRef(false);
-  const sheetFinalFocus = () => {
-    const opened = fileOpenedFromSheet.current;
-    fileOpenedFromSheet.current = false;
-    return opened ? false : (homeRef.current ?? true);
-  };
   const openFile = bot
     ? (file: ChannelBotArtifact) => {
         fileOpener.current =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
         if (narrow) {
-          fileOpenedFromSheet.current = true;
+          sheetClosedFor.current = "file";
           setPanelOpen(false);
         }
         setViewing({ environmentId: bot.environmentId, threadId: bot.threadId, file });
@@ -322,7 +332,9 @@ export function GoatBotChatView({
               // History stays readable while the bot is unavailable; only sending stops.
               <GoatBotTimeline
                 rows={rows}
+                unreadSince={unreadSince}
                 environmentId={environmentId}
+                onOpenHome={bot ? () => setPanelOpen(true) : undefined}
                 taskThreads={supportsTaskThreads}
                 retryEnvironmentId={supportsTaskRetry ? environmentId : null}
                 replyingSince={removed ? null : replyingSince}

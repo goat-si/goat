@@ -18,6 +18,9 @@ var serviceUnit string
 //go:embed install/si.goat.pen.plist
 var launchdPlist string
 
+//go:embed install/pen-task.xml
+var taskXML string
+
 const usage = `usage: pen <command> [flags]
 
   up [--relay URL]... [--name N] [--foreground] [--no-service]   start this node (founds a mesh the first time)
@@ -47,7 +50,7 @@ const usage = `usage: pen <command> [flags]
 type verb func(args []string, stdout, stderr io.Writer) int
 
 func main() {
-	cli.Version, cli.ServiceUnit, cli.LaunchdPlist = version, serviceUnit, launchdPlist
+	cli.Version, cli.ServiceUnit, cli.LaunchdPlist, cli.TaskXML = version, serviceUnit, launchdPlist, taskXML
 	verbs := map[string]verb{
 		"up": cli.RunUp, "down": cli.RunDown, "invite": cli.RunInvite, "join": cli.RunJoin, "ls": cli.RunLs,
 		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,

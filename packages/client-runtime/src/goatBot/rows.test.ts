@@ -197,13 +197,13 @@ describe("goatBotConversationPreview", () => {
     });
   });
 
-  it("tracks a card revision after visit even when a user message is displayed last", () => {
+  it("previews a card revision after visit even when a user message is displayed last", () => {
     const initial = card("task", 1, "Working");
     const revised = { ...card("task", 2, "Done"), updatedAt: answer };
     const items = [notice("n1", first), user("u", visit, "Thanks"), notice("n2", answer)];
     expect(preview(items, visit, false, { n1: initial, n2: revised })).toEqual({
-      text: "You: Thanks",
-      at: "2026-10-12T12:02:00.000Z",
+      text: "Done: Task task",
+      at: answer,
       unread: true,
     });
     expect(preview([notice("n1", first)], null, false, { n1: revised })).toEqual({

@@ -744,4 +744,152 @@ describe("a conversation-only main chat", () => {
     });
     expect(content(rows).map((row) => row.id)).toEqual(["ask", "ack", "asks", "done"]);
   });
+
+  const outcome = (
+    taskId: string,
+    taskGeneration: number | null = 1,
+  ): GoatBotMessagePresentation => ({
+    tone: "result",
+    readAt: null,
+    requestKey: null,
+    taskId,
+    taskGeneration,
+  });
+  const ended = (key: string, sourceLabel: string | null = null): GoatBotTaskCard => ({
+    ...card(key, 2, "Done"),
+    tone: "success",
+    ended: true,
+    summary: "17.8k stars.",
+    sourceLabel,
+  });
+
+  it("keeps the card of finished work whose outcome was never told in the chat", () => {
+    // A GOAT task that finished before outcomes became messages, and a Slack request whose
+    // result went to Slack: either card is the only place the chat shows how the work ended.
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([
+        notice("old", "2026-10-12T12:00:00Z"),
+        notice("slack", "2026-10-12T12:00:01Z"),
+      ]),
+      pendingInputs: [],
+      readers: readers({}, { old: ended("t-old"), slack: ended("t-slack", "Slack · Jun") }),
+      taskId: null,
+      knownTaskIds: ["t-old", "t-slack"],
+      conversationOnly: true,
+    });
+    expect(content(rows).map((row) => row.id)).toEqual(["old", "slack"]);
+  });
+
+  it("tells a task's outcome once in the chat and once in the task's own view", () => {
+    const items = rowsOf([
+      notice("card", "2026-10-12T12:00:00Z"),
+      bot("done", "2026-10-12T12:00:01Z", "17.8k stars."),
+    ]);
+    const view = (taskId: string | null, knownTaskIds: ReadonlyArray<string>) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: items,
+          pendingInputs: [],
+          readers: readers({ done: outcome("t1") }, { card: ended("t1") }),
+          taskId,
+          knownTaskIds,
+          conversationOnly: true,
+        }),
+      ).map((row) => row.id);
+    expect(view(null, ["t1"])).toEqual(["done"]);
+    // While the work list loads or fails the card is the way to the task, so it tells the outcome.
+    expect(view(null, [])).toEqual(["card"]);
+    expect(view("t1", ["t1"])).toEqual(["card"]);
+  });
+
+  it("keeps a retried task's one card until its own attempt's ending is told", () => {
+    // The server keeps one card per task and updates it in place: after a retry that ended without
+    // a message yet, the card is the second attempt's ending and the failure message the first's.
+    const retried = {
+      ...ended("t1"),
+      revision: 4,
+      generation: 2,
+      summary: "Fixed on the second try.",
+    };
+    const firstFailure = { ...outcome("t1", 1), tone: "failure" as const };
+    const view = (taskId: string | null, told: ReadonlyArray<string>) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: rowsOf([
+            notice("card", "2026-10-12T12:00:00Z"),
+            bot("first-told", "2026-10-12T12:00:01Z", "It failed."),
+            ...told.map((id) => bot(id, "2026-10-12T12:03:00Z", "Fixed.")),
+          ]),
+          pendingInputs: [],
+          readers: readers(
+            {
+              "first-told": firstFailure,
+              "second-told": outcome("t1", 2),
+              "unmarked-told": outcome("t1", null),
+            },
+            { card: retried },
+          ),
+          taskId,
+          knownTaskIds: ["t1"],
+          conversationOnly: true,
+        }),
+      ).map((row) => row.id);
+    expect(view(null, [])).toEqual(["card", "first-told"]);
+    expect(view("t1", [])).toEqual(["card", "first-told"]);
+    // The delayed narration of the second attempt arrives.
+    expect(view(null, ["second-told"])).toEqual(["first-told", "second-told"]);
+    expect(view("t1", ["second-told"])).toEqual(["card", "first-told"]);
+    // A server that does not name the attempt: the card stays, the message too.
+    expect(view(null, ["unmarked-told"])).toEqual(["card", "first-told", "unmarked-told"]);
+  });
+
+  it("keeps a result that arrives before its task's final card, next to the progress card", () => {
+    const items = rowsOf([
+      notice("progress", "2026-10-12T12:00:00Z"),
+      bot("done", "2026-10-12T12:00:05Z", "17.8k stars."),
+    ]);
+    const progress = { ...card("t1", 2, "Working"), ended: false, summary: "Cloned the repo." };
+    const view = (taskId: string | null) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: items,
+          pendingInputs: [],
+          readers: readers({ done: outcome("t1") }, { progress }),
+          taskId,
+          knownTaskIds: ["t1"],
+          conversationOnly: true,
+        }),
+      ).map((row) => row.id);
+    expect(view("t1")).toEqual(["progress", "done"]);
+    expect(view(null)).toEqual(["done"]);
+  });
+
+  it("previews a card that changed after later messages by when it changed", () => {
+    const rows: GoatBotRow[] = [
+      {
+        kind: "task",
+        id: "card",
+        createdAt: "2026-10-12T12:00:00Z",
+        card: { ...ended("t1"), updatedAt: "2026-10-12T12:10:00Z", title: "Count the stars" },
+        firstInGroup: true,
+        groupPosition: "single",
+      },
+      {
+        kind: "bot",
+        id: "later",
+        text: "Anything else?",
+        createdAt: "2026-10-12T12:05:00Z",
+        tone: "reply",
+        proactive: false,
+        replyTo: null,
+        options: [],
+        firstInGroup: true,
+        groupPosition: "single",
+      },
+    ];
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })).toMatchObject({
+      text: "Done: Count the stars",
+      at: "2026-10-12T12:10:00Z",
+    });
+  });
 });

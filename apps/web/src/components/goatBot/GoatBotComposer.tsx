@@ -28,6 +28,8 @@ export interface GoatBotComposerHandle {
   /** Puts a drafted message in the box, keeping staged files; the person still sends it. */
   replaceText(text: string): void;
   focus(): void;
+  /** The message field, for focus that must land after something else closes. */
+  field(): HTMLTextAreaElement | null;
 }
 
 /**
@@ -124,6 +126,7 @@ export function GoatBotComposer({
     focus() {
       textareaRef.current?.focus();
     },
+    field: () => textareaRef.current,
   }));
   const remove = (id: string) => {
     releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));

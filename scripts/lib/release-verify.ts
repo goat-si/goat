@@ -162,10 +162,11 @@ export function isMachO(bytes: Uint8Array): boolean {
 
 // D-10: artifacts carry no GOAT sources, source maps, build-machine paths or repository links.
 // Third-party code (node_modules, Electron's framework and its Windows/Linux runtime beside
-// resources/, the vendored Cua Driver) ships its own sources, maps and CI paths, so those checks
-// skip it. This machine's home, workspace and checkout paths fail anywhere they appear.
+// resources/, the vendored Cua Driver on Linux and inside the Windows computer use helper) ships
+// its own sources, maps and CI paths, so those checks skip it. This machine's home, workspace and
+// checkout paths fail anywhere they appear.
 const thirdParty =
-  /(?:^|\/)node_modules\/|\/Contents\/Frameworks\/|\/[Rr]esources\/cua-driver\/|(?:^|\/)(?:(?:win|linux)(?:-[a-z0-9]+)?-unpacked|__appImage-[a-z0-9]+)\/(?!resources\/)/;
+  /(?:^|\/)node_modules\/|\/Contents\/Frameworks\/|\/[Rr]esources\/(?:computer-use-helper\/)?cua-driver\/|(?:^|\/)(?:(?:win|linux)(?:-[a-z0-9]+)?-unpacked|__appImage-[a-z0-9]+)\/(?!resources\/)/;
 // GOAT's own workspace packages stay GOAT code even when they land in node_modules.
 const goatPackage = /(?:^|\/)node_modules\/@goat\//;
 // Bundlers copy dependency WebAssembly (the office previews' Rust crates) into client/assets.

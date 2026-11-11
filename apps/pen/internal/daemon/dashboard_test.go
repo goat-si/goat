@@ -143,9 +143,8 @@ func TestDashboardFragmentTokenExchangesForABearerOnce(t *testing.T) {
 	clk.ms.Store(time.Now().UnixMilli())
 	a := founder(t, ctx, rs, "a", clk)
 	d, tok := openDash(t, a)
-	fi, err := os.Stat(a.st.Path(DashboardFile))
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("redirect file: %v %v", fi, err)
+	if private, err := state.OwnerOnly(a.st.Path(DashboardFile)); err != nil || !private {
+		t.Fatalf("redirect file is not private to its owner: %v", err)
 	}
 	page, _ := os.ReadFile(a.st.Path(DashboardFile))
 	if !strings.Contains(string(page), d.base+"/#t="+tok) {

@@ -71,16 +71,25 @@ vi.mock("react-native", () => ({
     className,
     testID,
     onLayout,
+    accessibilityLiveRegion,
+    accessibilityLabel,
   }: {
     children?: ReactNode;
     style?: unknown;
     className?: string;
     testID?: string;
     onLayout?: LayoutHandler;
+    accessibilityLiveRegion?: string;
+    accessibilityLabel?: string;
   }) => {
     if (testID && onLayout) layouts.set(testID, onLayout);
     return (
-      <div data-style={JSON.stringify(style)} data-class={className}>
+      <div
+        data-style={JSON.stringify(style)}
+        data-class={className}
+        data-live={accessibilityLiveRegion}
+        aria-label={accessibilityLabel}
+      >
         {children}
       </div>
     );
@@ -149,6 +158,7 @@ vi.mock("./GoatBotModelPill", () => ({
     </button>
   ),
 }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -488,6 +498,33 @@ it("moves the progress line only while at least half of it shows, whatever moved
   } finally {
     screenSession.activity = null;
     await view.unmount();
+  }
+});
+
+it("announces only whether the bot works, reads or waits, not every step it takes", async () => {
+  const live = async (activity: GoatBotActivity) => {
+    screenSession.activity = activity;
+    const view = await render(<GoatBotScreen visible />);
+    const region = view.container.querySelector("[data-live]");
+    const result = {
+      label: region?.getAttribute("aria-label"),
+      holdsStep: region?.textContent?.includes(activity.text) ?? false,
+      showsStep: view.container.textContent?.includes(activity.text) ?? false,
+    };
+    await view.unmount();
+    return result;
+  };
+  try {
+    const first = await live({ state: "working", text: "Copying files" });
+    const second = await live({ state: "working", text: "Run df -h" });
+    expect(first).toEqual({ label: "GOAT Bot is working", holdsStep: false, showsStep: true });
+    expect(second.label).toBe(first.label);
+    expect((await live({ state: "reading", text: "Reading" })).label).toBe("GOAT Bot is reading");
+    expect((await live({ state: "working", text: "Waiting for your answer" })).label).toBe(
+      "GOAT Bot is waiting for you",
+    );
+  } finally {
+    screenSession.activity = null;
   }
 });
 

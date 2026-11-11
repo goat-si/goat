@@ -74,6 +74,7 @@ vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => nul
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotModelPill", () => ({ GoatBotModelPill: () => null }));
 // The header chip opens the home; it renders as a button here.
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("./GoatBotFace", () => ({
   GoatBotHeaderFace: (props: { title: string; onPress?: () => void }) =>
     props.onPress ? (

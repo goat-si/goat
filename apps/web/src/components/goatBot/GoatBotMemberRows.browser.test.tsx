@@ -18,6 +18,7 @@ const server = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   busy: false,
   toasts: [] as Array<{ title: string; description?: string }>,
+  latest: {} as Record<string, { text: string; at: string; author: "bot" | "person" }>,
 }));
 const publish = () => {
   for (const listener of server.listeners) listener();
@@ -85,7 +86,12 @@ vi.mock("../ui/toast", () => ({
   },
 }));
 vi.mock("./GoatBotAvatar", () => ({ GoatBotSessionAvatar: () => null }));
-vi.mock("./useGoatBotMemberStatus", () => ({ useGoatBotMemberWaitingCount: () => 0 }));
+vi.mock("./useGoatBotMemberStatus", () => ({
+  useGoatBotMemberStatus: (bot: BotProfile) => ({
+    waitingCount: 0,
+    latest: server.latest[bot.botId],
+  }),
+}));
 vi.mock("../ui/sidebar", () => ({
   SidebarGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SidebarMenu: ({ children }: { children: ReactNode }) => <ul>{children}</ul>,
@@ -128,6 +134,7 @@ function setup() {
   server.bots = [profile("research", "Research")];
   server.busy = false;
   server.toasts = [];
+  server.latest = {};
 }
 
 it("hides a member under Hidden bots and shows it again", async () => {
@@ -179,4 +186,22 @@ it("moves a deleted member to Deleted bots and restores it", async () => {
   await userEvent.click(restore);
   await expect.element(page.getByRole("link", { name: "Research" })).toBeVisible();
   await expect.element(page.getByText("Deleted bots")).not.toBeInTheDocument();
+});
+
+it("a member's row shows its newest message, the person's prefixed with You, else its purpose", async () => {
+  setup();
+  server.bots = [
+    { ...profile("research", "Research"), purpose: "Reads papers." },
+    { ...profile("builds", "Builds"), purpose: "Checks builds." },
+    { ...profile("fresh", "Fresh"), purpose: "Brand new." },
+  ];
+  server.latest = {
+    research: { text: "Found **three** papers.", at: "2026-11-07T01:00:00.000Z", author: "bot" },
+    builds: { text: "is main green?", at: "2026-11-07T01:00:00.000Z", author: "person" },
+  };
+  await using screen = await render(<Roster />, { router: false });
+  await expect.element(screen.getByText("Found three papers.")).toBeVisible();
+  await expect.element(screen.getByText("You: is main green?")).toBeVisible();
+  await expect.element(screen.getByText("Brand new.")).toBeVisible();
+  expect(screen.getByText("Reads papers.").query()).toBeNull();
 });

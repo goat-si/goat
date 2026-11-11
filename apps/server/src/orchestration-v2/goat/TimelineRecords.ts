@@ -279,7 +279,10 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
         const turnItem: OrchestrationV2TurnItem = {
           ...base,
           type: "notification",
-          source: { kind: "goat_bot_event" },
+          source: {
+            kind: "goat_bot_event",
+            ...(entry.subject === undefined ? {} : { subject: entry.subject }),
+          },
           outcome: "updated",
           summary: entry.text,
         };

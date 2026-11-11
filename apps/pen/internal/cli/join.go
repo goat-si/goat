@@ -35,10 +35,9 @@ func RunJoin(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if err := clearLeft(st); err != nil {
-		return fail(stderr, err)
-	}
-	id, _, err := st.EnsureIdentity()
+	// Starting a node here again: clear the left marker and make the identity in one hold of the
+	// state lock, so a resumed pen leave (FinishLeave) cannot delete the new node's files.
+	id, _, err := st.EnsureIdentityClearing(daemon.LeftMarker)
 	if err != nil {
 		return fail(stderr, err)
 	}
