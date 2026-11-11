@@ -223,6 +223,8 @@ const make = Effect.gen(function* () {
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const lastCheckStart = new Map<string, number>();
   let checkSequence = 0;
+  // Worktrees checked since remaining last reached 0: a repeat skips counting them, so it ends.
+  const checkedThisRound = new Set<string>();
 
   const real = (target: string) =>
     fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
@@ -841,10 +843,13 @@ const make = Effect.gen(function* () {
     for (const fact of facts) {
       if (fact.entry.main) continue;
       if (!dryRun && (yield* Clock.currentTimeMillis) >= deadline) {
-        remaining++;
+        if (!checkedThisRound.has(fact.entry.path)) remaining++;
         continue;
       }
-      lastCheckStart.set(fact.entry.path, ++checkSequence);
+      if (!dryRun) {
+        lastCheckStart.set(fact.entry.path, ++checkSequence);
+        checkedThisRound.add(fact.entry.path);
+      }
       const entry = { path: fact.entry.path, branch: fact.entry.branch };
       const blocker = sweepBlocker(fact);
       if (blocker !== null) {
@@ -872,6 +877,7 @@ const make = Effect.gen(function* () {
         }),
       );
     }
+    if (!dryRun && remaining === 0) checkedThisRound.clear();
     return { dryRun, removed, kept, remaining };
   });
 

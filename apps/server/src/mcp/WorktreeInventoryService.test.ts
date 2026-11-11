@@ -417,6 +417,25 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("repeated sweeps reach remaining 0 when slow kept worktrees outlast one budget", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c", "d"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const remaining = [];
+      for (let i = 0; i < 2; i++)
+        remaining.push((yield* service.cleanup({ dryRun: false })).remaining);
+      expect(remaining).toEqual([2, 0]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("never deletes the default branch, even with force", () =>
     Effect.gen(function* () {
       const { service, fs, run, repo } = yield* fixture;
