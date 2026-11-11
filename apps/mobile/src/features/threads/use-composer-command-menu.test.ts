@@ -201,4 +201,23 @@ describe("mobile /fork command", () => {
     expect(intercept("/usage-limits", 1)).toBeNull();
     expect(intercept("hello")).toBeNull();
   });
+  it("hides a provider's own /fork where GOAT's /fork takes the command", () => {
+    const provider = {
+      driver: ProviderDriverKind.make("codex"),
+      showInteractionModeToggle: true,
+      slashCommands: [{ name: "fork", description: "Codex fork" }],
+    };
+    const ids = (reservesFork: boolean) =>
+      buildComposerSlashCommandItems({
+        query: "fork",
+        atMessageStart: true,
+        hasThread: true,
+        offersFork: false,
+        reservesFork,
+        allowInteractionMode: true,
+        selectedProviderStatus: provider,
+      }).map((item) => item.id);
+    expect(ids(true)).toEqual([]);
+    expect(ids(false)).toEqual(["pcmd:fork"]);
+  });
 });

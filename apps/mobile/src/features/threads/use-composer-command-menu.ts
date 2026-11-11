@@ -106,6 +106,8 @@ export function buildComposerSlashCommandItems(input: {
   readonly offersUsageLimits?: boolean;
   readonly offersSideChat?: boolean;
   readonly offersFork?: boolean;
+  /** Send runs /fork as GOAT's command here, so a provider's /fork would never reach it. */
+  readonly reservesFork?: boolean;
   readonly allowInteractionMode: boolean;
   readonly selectedProviderStatus: Pick<
     ServerProvider,
@@ -168,6 +170,7 @@ export function buildComposerSlashCommandItems(input: {
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
+    if (command.name === "fork" && input.reservesFork) continue;
     if (command.name === USAGE_LIMITS_COMMAND.name && input.offersUsageLimits && !input.hasThread) {
       continue;
     }
@@ -268,6 +271,7 @@ export function useComposerCommandMenu({
   offersUsageLimits = false,
   offersSideChat = false,
   offersFork = false,
+  reservesFork = false,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
@@ -306,6 +310,7 @@ export function useComposerCommandMenu({
   readonly offersSideChat?: boolean;
   /** The thread can be forked; the caller decides availability. */
   readonly offersFork?: boolean;
+  readonly reservesFork?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
@@ -452,6 +457,7 @@ export function useComposerCommandMenu({
           thread?.lineage?.relationshipToParent !== "subagent",
         offersUsageLimits,
         offersFork: offersFork && hasThread && onFork !== undefined,
+        reservesFork: reservesFork && hasThread,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus
           ? {

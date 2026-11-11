@@ -553,6 +553,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     hasThread: !props.isDraft,
     offersSideChat: props.canOperateThread && queuedEdit === null,
     offersFork: composerFork.offersFork,
+    reservesFork: composerFork.interceptsFork,
     onFork: composerFork.startFork,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
