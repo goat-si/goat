@@ -12,7 +12,9 @@
     "./client/runtime": "./src/client/runtime.ts",
     "./client/bytes": "./src/client/bytes.ts",
     "./client/crypto": "./src/client/crypto.ts",
-    "./client/noise": "./src/client/noise.ts"
+    "./client/noise": "./src/client/noise.ts",
+    "./client/pairing": "./src/client/pairing.ts",
+    "./client/pairing-flow": "./src/client/pairingFlow.ts"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",
@@ -27,6 +29,7 @@
     "@noble/hashes": "catalog:"
   },
   "devDependencies": {
+    "@goat/shared": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

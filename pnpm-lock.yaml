@@ -1727,6 +1727,9 @@ importers:
         specifier: 'catalog:'
         version: 1.8.0
     devDependencies:
+      '@goat/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
