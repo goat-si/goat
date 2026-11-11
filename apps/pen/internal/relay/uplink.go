@@ -25,6 +25,11 @@ var errSilent = errors.New("relay sent nothing for two ping intervals")
 // AuthTimeout bounds the wait for the relay's challenge.
 const AuthTimeout = 10 * time.Second
 
+// MaxSessions bounds the live sessions one uplink carries. A relay that keeps the contract admits
+// at most 8 pending and 32 active sessions per node, so only one that ignores it gets here; the
+// node then refuses the OPEN (4429) instead of holding a session's state for each one it is sent.
+const MaxSessions = 64
+
 // Uplink is the node's authenticated socket at /v1/node/<nodeId>; it demuxes relay sessions.
 type Uplink struct {
 	RelayURL string
@@ -284,12 +289,19 @@ func (m *mux) readLoop(accept chan Conn, received int) error {
 			c := &muxConn{m: m, sid: f.SID, in: newInbox()}
 			m.mu.Lock()
 			_, dup := m.sessions[f.SID]
-			if !dup {
+			full := !dup && len(m.sessions) >= MaxSessions
+			if !dup && !full {
 				m.sessions[f.SID] = c
 			}
 			m.mu.Unlock()
 			if dup {
 				return m.protocolError(fmt.Errorf("OPEN for live sid %d", f.SID))
+			}
+			if full {
+				if err := m.write(wire.CloseFrame(f.SID, wire.CodeCaps)); err != nil {
+					return err
+				}
+				continue
 			}
 			select {
 			case accept <- c:
