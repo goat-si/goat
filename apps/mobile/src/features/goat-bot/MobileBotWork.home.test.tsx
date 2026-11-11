@@ -2,7 +2,7 @@ import { useState } from "react";
 import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow, ChannelTaskId } from "@goat/contracts";
+import { BotId, BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
@@ -681,4 +681,38 @@ it("Cancel during a check-in save never lets that save close a newer draft or st
   await settle(AsyncResult.success({ task: {} }));
   expect(button("Save")?.disabled).toBe(false);
   expect(button("Sun")?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("keeps a check-in being set up with the bot it was set up for, so another bot's Home starts its own", async () => {
+  await open();
+  await press("Check in on me");
+  await press("Check-in time, 09:00");
+  await press("Set 07:30");
+  const scout = {
+    botId: BotId.make("scout"),
+    environmentId: EnvironmentId.make("env"),
+    threadId: ThreadId.make("scout-thread"),
+    name: "Scout",
+    defaultModelSelection: null,
+  };
+  const show = (member: typeof scout | null) =>
+    act(async () =>
+      root?.render(
+        <WorkWithChip
+          visible
+          member={member}
+          onOpenTask={state.openTask}
+          onOpenThread={state.openThread}
+          onDraft={state.draft}
+          workRevision={state.workRevision}
+        />,
+      ),
+    );
+  // Scout's Home shows no check-in being set up, and none at 07:30.
+  await show(scout);
+  expect(button("Check-in time, 07:30")).toBeUndefined();
+  expect(button("Check in on me")).toBeDefined();
+  // Back on GOAT Bot's Home, its check-in is still at 07:30.
+  await show(null);
+  expect(button("Check-in time, 07:30")).toBeDefined();
 });
