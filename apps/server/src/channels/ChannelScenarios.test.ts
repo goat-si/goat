@@ -156,7 +156,7 @@ describe("GOAT bot boundary (scenario 6)", () => {
     "OpenCodex has 17.8k stars: https://github.com/example/opencodex\nNOT RUN: separate tests.";
   const trailers = ["NOT RUN:", "Reported tests:", "GOAT check:"];
 
-  it.effect("shows a GOAT Bot task's result once, on its card, without agent trailers", () => {
+  it.effect("tells a GOAT Bot task's result once in the chat, without trailers", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -169,9 +169,9 @@ describe("GOAT bot boundary (scenario 6)", () => {
       harness.world.setStatus(task.worker!.threadId, 1, "completed", starSummary);
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
-      const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
-      assert.notInclude(texts, "17.8k");
-      for (const trailer of trailers) assert.notInclude(texts, trailer);
+      const told = (yield* botMessages).messages.filter((m) => m.text.includes("17.8k"));
+      assert.strictEqual(told.map((m) => m.channel?.kind).join(), "result");
+      assert.notMatch(told[0]!.text, new RegExp("^(" + trailers.join("|") + ")", "mu"));
       const card = yield* latestCard;
       assert.strictEqual(card?.status, "completed");
       assert.include(card?.summary ?? "", "17.8k stars");

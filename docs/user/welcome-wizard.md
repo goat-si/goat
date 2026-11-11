@@ -53,9 +53,10 @@ are listed first, newest activity on top. When the remote is on GitHub, the
 group shows the repository as `owner/name`. Clones with the same remote share
 one group. Directories that are not git repositories sit under "Other folders".
 
-The default selection includes git repositories active within the import window
-(30 days by default) with at least three conversations. Use the checkboxes, or
-"Select all" and "Select none", to change the selection. Linked worktrees of
+The default selection includes every project with a conversation active within
+the import window (30 days by default), including folders that are not git
+repositories. Use the checkboxes, or "Select all" and "Select none", to change
+the selection. Linked worktrees of
 bare repositories can be offered as separate projects. Other linked git
 worktrees, Codex scratch directories under `Documents/Codex`, and anything under
 `Downloads` are not offered.
@@ -65,8 +66,10 @@ projects it found and warns when projects or conversations may be missing.
 
 Imported projects include Claude, Codex and Pi conversations active within the
 window chosen under **Import conversations from**: 30 days by default, 90 days,
-12 months, or all time. The window applies to the default selection and to the
-history GOAT imports. You can continue those conversations in GOAT. Pi is off
+12 months, or all time. The window applies to the conversation counts, the
+default selection and the history GOAT imports. For Codex, GOAT also reads
+conversations whose rollout files Codex has pruned but still keeps in its local
+thread history. You can continue those conversations in GOAT. Pi is off
 by default: enable it in Settings, then open `/welcome` to import its sessions.
 Pi sessions are read from each enabled Pi provider's session directory, which
 follows `PI_CODING_AGENT_SESSION_DIR` and `PI_CODING_AGENT_DIR` in its
@@ -83,8 +86,8 @@ message text and metadata it keeps need more than 32 MiB of memory. Tool output
 does not count toward that limit. It ignores malformed records and skips
 unreadable or unparseable conversations.
 
-Each import attempt reads up to 100 conversation files and 4 GiB per project,
-with up to 100,000 input records. Run import again to continue a large batch.
+Each import attempt reads up to 100 conversations and 4 GiB per project, with up
+to 100,000 input records. Run import again to continue a large batch.
 Completed conversations are not imported again. You can continue without the
 remaining history.
 

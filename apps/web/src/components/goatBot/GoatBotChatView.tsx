@@ -1,16 +1,17 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import { type ChannelBotArtifact, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
+import { cn } from "~/lib/utils";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
+import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
-import { ChevronRightIcon } from "~/components/solar";
 import { GOAT_BOT_PATH, type GlobalAgentLegacyRoute } from "~/globalAgentRoute";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
@@ -31,11 +32,13 @@ import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
+import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   canSendToGoatBot,
+  goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
   type GoatBotAvailability,
   type GoatBotRemoval,
@@ -58,6 +61,8 @@ export interface GoatBotChatViewProps {
   readonly availability: GoatBotAvailability;
   readonly canOperate: boolean;
   readonly rows: ReadonlyArray<GoatBotRow>;
+  /** A task's own conversation, for reading it in the bot's panel. */
+  readonly rowsForTask?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
   /** When GOAT Bot started reading a message it is still answering. */
   readonly replyingSince?: string | null | undefined;
   readonly onSend: (
@@ -102,6 +107,7 @@ export function GoatBotChatView({
   onSendToTask,
   attachmentSupport = null,
   onRetryInput,
+  rowsForTask,
   onDiscardInput,
   onRetryAvailability,
   legacyAgentRoute,
@@ -125,6 +131,7 @@ export function GoatBotChatView({
   const canSend = !removed && canSendToGoatBot(availability, canOperate);
   const acceptsFiles = canSend && attachmentSupport !== null;
   const composerRef = useRef<GoatBotComposerHandle>(null);
+  const homeRef = useRef<HTMLButtonElement>(null);
   const onDraft = canSend
     ? (text: string) => {
         if (narrow) setPanelOpen(false);
@@ -132,6 +139,44 @@ export function GoatBotChatView({
       }
     : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
+  // A Library file open in place of the conversation, for the bot it was opened from.
+  const [viewing, setViewing] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly threadId: string;
+    readonly file: ChannelBotArtifact;
+  } | null>(null);
+  const fileOpener = useRef<HTMLElement | null>(null);
+  const openFile = bot
+    ? (file: ChannelBotArtifact) => {
+        fileOpener.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        if (narrow) setPanelOpen(false);
+        setViewing({ environmentId: bot.environmentId, threadId: bot.threadId, file });
+      }
+    : () => {};
+  const closeFile = () => {
+    setViewing(null);
+    const opener = fileOpener.current;
+    fileOpener.current = null;
+    // Focus returns to the Library row; on a narrow screen its sheet is gone, so to the composer.
+    if (opener?.isConnected) opener.focus();
+    else composerRef.current?.focus();
+  };
+  // Another bot, or this one moved to another server, closes the file for good; a bot that is
+  // only briefly unavailable keeps it.
+  if (
+    viewing !== null &&
+    bot !== null &&
+    (viewing.environmentId !== bot.environmentId || viewing.threadId !== bot.threadId)
+  ) {
+    setViewing(null);
+  }
+  const shownFile =
+    viewing !== null &&
+    viewing.environmentId === bot?.environmentId &&
+    viewing.threadId === bot.threadId
+      ? viewing
+      : null;
   const [dragActive, setDragActive] = useState(false);
   if (!acceptsFiles && dragActive) setDragActive(false);
   const addDroppedFiles = useStableCallback((files: File[]) =>
@@ -163,55 +208,45 @@ export function GoatBotChatView({
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
-          {/* Equal sides center the title until the controls, which never shrink, need its space. */}
           <div aria-hidden className="flex-1 basis-0" />
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            {member ? (
-              <GoatBotSessionAvatar
-                size="md"
-                chatOpen
-                emoji={avatar}
-                waitingCount={memberWaiting}
-                threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
-                activity={reading ? { state: "reading" } : removed ? null : working}
-              />
-            ) : (
-              <GoatBotMainAvatar
-                size="md"
-                chatOpen
-                emoji={avatar}
-                activity={reading ? { state: "reading" } : removed ? null : working}
-              />
-            )}
-            <div className="flex min-w-0 items-center gap-2">
-              <h1 className="goat-name-capsule truncate text-foreground">
-                {title} <ChevronRightIcon aria-hidden className="size-3" />
-              </h1>
-              {headerStatus ? (
-                <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
-            {member ? (
-              <span className="text-xs text-muted-foreground">
-                {member.defaultModelSelection?.model ?? `${mainName}'s model`}
-              </span>
-            ) : (
-              <GoatBotModelPicker />
-            )}
-            {bot && (
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label={`Toggle ${title} work panel`}
+            <h1 className="flex min-w-0">
+              <button
+                type="button"
+                ref={homeRef}
+                aria-label={`${title} home`}
                 aria-expanded={panelOpen}
+                disabled={!bot}
                 onClick={() => setPanelOpen((open) => !open)}
+                className="goat-name-capsule max-w-full min-w-0 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               >
-                Work
-              </Button>
-            )}
+                <span className="goat-name-avatar flex shrink-0">
+                  {member ? (
+                    <GoatBotSessionAvatar
+                      size="sm"
+                      chatOpen
+                      emoji={avatar}
+                      waitingCount={memberWaiting}
+                      threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
+                      activity={reading ? { state: "reading" } : removed ? null : working}
+                    />
+                  ) : (
+                    <GoatBotMainAvatar
+                      size="sm"
+                      chatOpen
+                      emoji={avatar}
+                      activity={reading ? { state: "reading" } : removed ? null : working}
+                    />
+                  )}
+                </span>
+                <span className="min-w-0 truncate">{title}</span>
+              </button>
+            </h1>
+            {headerStatus ? (
+              <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
+            ) : null}
           </div>
+          <div aria-hidden className="flex-1 basis-0" />
         </WorkspacePageHeader>
         {availability.kind === "offline" ||
         availability.kind === "home_offline" ||
@@ -263,49 +298,60 @@ export function GoatBotChatView({
           {...(acceptsFiles ? dropHandlers : {})}
         >
           {dragActive ? <WorkspaceFileDropOverlay /> : null}
-          {rows.length > 0 ? (
-            // History stays readable while the bot is unavailable; only sending stops.
-            <GoatBotTimeline
-              rows={rows}
-              environmentId={environmentId}
-              taskThreads={supportsTaskThreads}
-              retryEnvironmentId={supportsTaskRetry ? environmentId : null}
-              replyingSince={removed ? null : replyingSince}
-              onRetry={onRetryInput}
-              onDiscard={onDiscardInput}
-              onPick={
-                canSend
-                  ? (answer, taskId) =>
-                      taskId !== undefined && onSendToTask !== undefined
-                        ? onSendToTask(ChannelTaskId.make(taskId), answer)
-                        : onSend(answer)
-                  : undefined
-              }
+          {shownFile !== null ? (
+            <GoatBotFileViewer
+              key={`${shownFile.file.relativePath}:${shownFile.file.modifiedAt}`}
+              environmentId={shownFile.environmentId}
+              file={shownFile.file}
+              onClose={closeFile}
             />
-          ) : removal !== null ? (
-            <GoatBotRemovedNotice
-              removal={removal}
-              availability={availability}
-              onRetryAvailability={onRetryAvailability}
-              canOpenCurrentBot={canOpenCurrentBot}
-              onUnarchive={onUnarchive}
-              onRestore={member ? onRestore : undefined}
-              memberName={member?.name ?? null}
-              onCheckAgain={onCheckAgain}
-            />
-          ) : (
-            <GoatBotNotice
-              availability={availability}
-              homeMove={homeMove}
-              onRetryAvailability={onRetryAvailability}
-              legacyAgentRoute={legacyAgentRoute}
-              onSelectExample={
-                canSend
-                  ? (text) => setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
-                  : undefined
-              }
-            />
-          )}
+          ) : null}
+          {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
+          <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
+            {rows.length > 0 ? (
+              // History stays readable while the bot is unavailable; only sending stops.
+              <GoatBotTimeline
+                rows={rows}
+                environmentId={environmentId}
+                taskThreads={supportsTaskThreads}
+                retryEnvironmentId={supportsTaskRetry ? environmentId : null}
+                replyingSince={removed ? null : replyingSince}
+                onRetry={onRetryInput}
+                onDiscard={onDiscardInput}
+                onPick={
+                  canSend
+                    ? (answer, taskId) =>
+                        taskId !== undefined && onSendToTask !== undefined
+                          ? onSendToTask(ChannelTaskId.make(taskId), answer)
+                          : onSend(answer)
+                    : undefined
+                }
+              />
+            ) : removal !== null ? (
+              <GoatBotRemovedNotice
+                removal={removal}
+                availability={availability}
+                onRetryAvailability={onRetryAvailability}
+                canOpenCurrentBot={canOpenCurrentBot}
+                onUnarchive={onUnarchive}
+                onRestore={member ? onRestore : undefined}
+                memberName={member?.name ?? null}
+                onCheckAgain={onCheckAgain}
+              />
+            ) : (
+              <GoatBotNotice
+                availability={availability}
+                homeMove={homeMove}
+                onRetryAvailability={onRetryAvailability}
+                legacyAgentRoute={legacyAgentRoute}
+                onSelectExample={
+                  canSend
+                    ? (text) => setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                    : undefined
+                }
+              />
+            )}
+          </div>
           {ready && !canOperate ? (
             <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">
               You can read this chat but can't send messages.
@@ -317,25 +363,36 @@ export function GoatBotChatView({
             initialText={seed?.text ?? ""}
             disabled={!canSend}
             botName={title}
-            placeholder={canSend ? `Message ${title}` : `${title} isn't available`}
+            placeholder={
+              canSend
+                ? (goatBotOpenQuestionPlaceholder(rows) ?? `Message ${title}`)
+                : `${title} isn't available`
+            }
             attachmentSupport={attachmentSupport}
+            modelPicker={
+              member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />
+            }
             onSend={onSend}
           />
         </div>
       </div>
       {bot && panelOpen && !narrow && (
-        <aside aria-label={`${title} work`} className="flex w-80 shrink-0 border-l border-border">
+        <aside aria-label={`${title} work`} className="flex w-88 shrink-0 border-l border-border">
           <GoatBotWorkPanel
             environmentId={bot.environmentId}
             threadId={bot.threadId}
             onDraft={onDraft}
             notesRefreshKey={notesRefreshKey}
+            peekRows={rowsForTask}
+            onRetryInput={onRetryInput}
+            openFile={shownFile?.file.relativePath ?? null}
+            onOpenFile={openFile}
           />
         </aside>
       )}
       {bot && narrow && (
         <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
-          <SheetPopup>
+          <SheetPopup finalFocus={homeRef}>
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
               environmentId={bot.environmentId}
@@ -343,6 +400,10 @@ export function GoatBotChatView({
               onDraft={onDraft}
               notesRefreshKey={notesRefreshKey}
               onShowChat={() => setPanelOpen(false)}
+              peekRows={rowsForTask}
+              onRetryInput={onRetryInput}
+              openFile={shownFile?.file.relativePath ?? null}
+              onOpenFile={openFile}
             />
           </SheetPopup>
         </Sheet>
@@ -561,14 +622,15 @@ function GoatBotNotice({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
-      {availability.kind === "ready" && onSelectExample ? (
+      {/* The examples are coding requests for the main bot; a member's purpose says what it does. */}
+      {availability.kind === "ready" && onSelectExample && member === null ? (
         <EmptyContent>
           <div className="flex flex-col items-center gap-2">
             {EXAMPLES.map((example) => (
               <button
                 key={example}
                 type="button"
-                className="rounded-full border border-border bg-transparent px-3 py-1.5 text-sm hover:bg-goat-bubble-in"
+                className="rounded-full border border-border bg-transparent px-3 py-1.5 text-sm hover:bg-accent"
                 onClick={() => onSelectExample(example)}
               >
                 {example}

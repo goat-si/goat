@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
+import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
 /** The machines GOAT Bot's running work uses, from its task list. */
 export function MobileBotComputer(props: {
@@ -60,10 +61,10 @@ export function MobileBotComputer(props: {
   const groups = botComputers(tasks.data.tasks);
   if (groups.length === 0)
     return (
-      <View className="gap-1">
-        <Text className="text-foreground">No work is running right now.</Text>
-        <Text className="text-foreground-muted">Machines {botName} works on will appear here.</Text>
-      </View>
+      <MobileBotPanelEmpty
+        title="No work running"
+        next={`Machines ${botName} works on will appear here.`}
+      />
     );
   return (
     <View className="gap-4 py-2">

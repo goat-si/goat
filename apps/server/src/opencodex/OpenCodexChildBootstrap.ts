@@ -140,11 +140,19 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serviceScope = yield* Scope.Scope;
   const stateFile = path.join(config.stateDir, STATE_FILE);
+  // A Pen member is an SSH host whose alias Pen writes, not GOAT; consent binds to Pen's record.
+  const aliasRevision = (alias: string) =>
+    ssh.aliasRevision(alias).pipe(
+      Effect.filterOrElse(
+        (revision): revision is string => revision !== undefined,
+        () => ocx.penAliasRevision(alias),
+      ),
+    );
   const consents = yield* makeSshChildConsent({
     directory: config.stateDir,
     file: path.join(config.stateDir, CONSENT_FILE),
     sessions: yield* SessionStore.SessionStore,
-    revision: ssh.aliasRevision,
+    revision: aliasRevision,
   });
   const writing = yield* Semaphore.make(1);
   const jobs = new Map<string, Fiber.Fiber<Status | undefined>>();
@@ -746,8 +754,19 @@ const make = Effect.gen(function* () {
   )(function* (alias) {
     if (!SAFE_ALIAS.test(alias) || hasCloudMachineAliasPrefix(alias) || !(yield* hubEnabled))
       return undefined;
-    const revision = yield* ssh.aliasRevision(alias).pipe(Effect.orElseSucceed(() => undefined));
-    if (revision === undefined) return undefined;
+    // A removal an earlier read could not save is saved first, whatever this read finds.
+    yield* consents.flush.pipe(Effect.ignore({ log: true }));
+    // Read first: the alias read below waits, and a grant given meanwhile is not this read's to end.
+    const before = yield* consents.held(alias);
+    const read = yield* aliasRevision(alias).pipe(Effect.option);
+    // Unreadable proves nothing, so the grant stays. A read that sees the alias gone ends it, so
+    // the name needs a person again; one gone and back between two reads, unchanged, keeps it.
+    if (Option.isNone(read)) return undefined;
+    if (read.value === undefined) {
+      if (before !== undefined)
+        yield* consents.retire(alias, before.grantId).pipe(Effect.ignore({ log: true }));
+      return undefined;
+    }
     if ((yield* consents.held(alias)) === undefined) return false;
     // Reconciled on every read, so a signed-out or expired session turns the switch off and the
     // host says why, without waiting for its next setup. A Child stays one.

@@ -9,6 +9,7 @@ import { Image, Modal, Pressable, Text, View } from "react-native";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
 import { type ImagePreview, openBotLibraryFile } from "./openBotLibraryFile";
+import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
 const withoutKey = (record: Readonly<Record<string, string>>, key: string) =>
   Object.fromEntries(Object.entries(record).filter(([entry]) => entry !== key));
@@ -101,7 +102,9 @@ export function MobileBotLibrary(props: {
     );
   if (files.data === null) return <Text className="text-foreground-muted">Loading files…</Text>;
   if (files.data.artifacts.length === 0)
-    return <Text className="text-foreground-muted">Files {botName} saves will appear here.</Text>;
+    return (
+      <MobileBotPanelEmpty title="No files yet" next={`Files ${botName} saves will appear here.`} />
+    );
   return (
     <View className="gap-1 py-2">
       {files.data.truncated ? (

@@ -203,6 +203,12 @@ The next turn GOAT starts in that thread reloads the conversation so GOAT tools
 work again, which also stops background terminals from before the restart, such
 as a dev server.
 
+A message you send while such a turn still runs waits for it, and so does one sent
+while Codex runs a turn no message started, such as a goal continuation. The thread
+says which Codex turn the message waits for. For a turn no message started,
+**Stop that turn** ends it so the message starts. It also pauses the thread's
+Codex goal, so Codex starts no more goal turns until you resume the goal.
+
 ## Give each thread its own Codex app-server
 
 On macOS and Linux, **Settings → General → Codex app-servers** controls how many

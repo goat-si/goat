@@ -129,9 +129,8 @@ it("lists notes newest first with their date and says how GOAT Bot uses them", a
 it("says when there are no notes yet, and a member's tab says they are shared", async () => {
   setup({ data: { revision: null, notes: [], truncated: false } });
   await render({ member: true });
-  expect(container.textContent).toContain(
-    "No notes yet. Ask GOAT Bot to remember a standing rule.",
-  );
+  expect(container.textContent).toContain("No notes yet");
+  expect(container.textContent).toContain("Ask GOAT Bot to remember a standing rule.");
   expect(container.textContent).toContain(
     "Every bot on this computer shares these notes with GOAT Bot.",
   );
@@ -340,7 +339,7 @@ it.each([
   await render();
   expect(container.textContent).toContain(PARTIAL);
   expect(container.textContent).toContain(body);
-  expect(container.textContent).not.toContain("No notes yet.");
+  expect(container.textContent).not.toContain("No notes yet");
 });
 
 it("says when every note has been replaced", async () => {

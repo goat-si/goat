@@ -8,6 +8,25 @@ import { WorktreeCleanupPreviewState } from "./WorktreeCleanupPreviewState.ts";
 import * as Live from "./WorktreeCleanupPreviewStateLive.ts";
 
 const day = 86_400_000;
+it.effect("forgets an activated preview on reset, so the next evaluation asks again", () =>
+  Effect.gen(function* () {
+    yield* migration;
+    const state = yield* Effect.provide(WorktreeCleanupPreviewState, Live.layer);
+    const input = { nowMs: 0, plannedCount: 1, requiresConfirmation: true };
+    const first = yield* state.evaluate(input);
+    yield* state.respond({ previewId: first.preview?.id ?? "", response: "confirm", nowMs: 1 });
+    assert.isTrue((yield* state.evaluate({ ...input, nowMs: 2 })).apply);
+    yield* state.reset;
+    const again = yield* state.evaluate({ ...input, nowMs: 3 });
+    assert.isFalse(again.apply);
+    assert.notEqual(again.preview?.id, first.preview?.id);
+  }).pipe(
+    Effect.provide(
+      Layer.merge(NodeSqliteClient.layer({ filename: ":memory:" }), NodeServices.layer),
+    ),
+  ),
+);
+
 it.effect(
   "persists acknowledgements, rejects stale generations, and gates SSH until confirmation",
   () =>

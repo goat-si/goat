@@ -1,7 +1,19 @@
-import type { GoatBotDelivery } from "./rows.ts";
+import type { GoatBotDelivery, GoatBotRow } from "./rows.ts";
 
 /** A send the server refused. The chat renders it with the bot's current name. */
 export const GOAT_BOT_NOT_ACCEPTED = "not_accepted";
+
+/** A question's choices read A, B, C…; past Z they count on as numbers. */
+export function goatBotChoiceLetter(index: number): string {
+  return index < 26 ? String.fromCharCode(65 + index) : String(index + 1);
+}
+
+/** The composer's hint while a question in view still takes a pick; null otherwise. */
+export function goatBotOpenQuestionPlaceholder(rows: ReadonlyArray<GoatBotRow>): string | null {
+  return rows.some((row) => row.kind === "bot" && row.options.length > 0)
+    ? "Answer, or ask something else"
+    : null;
+}
 
 export function goatBotRejectionText(reason: string | undefined, botName: string): string {
   return reason === GOAT_BOT_NOT_ACCEPTED
@@ -40,25 +52,38 @@ const older = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
 });
 
+/** Whole local-calendar days from `iso` to now; null for an unreadable time. */
+function calendarDaysAgo(iso: string, nowMs: number): { date: Date; days: number } | null {
+  // @effect-diagnostics-next-line globalDate:off - stamps follow the device's local calendar.
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  // @effect-diagnostics-next-line globalDate:off - stamps follow the device's local calendar.
+  const now = new Date(nowMs);
+  const calendarDay = (value: Date) =>
+    Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
+  return { date, days: Math.round((calendarDay(now) - calendarDay(date)) / 86_400_000) };
+}
+
+/** "Today", "Yesterday", a weekday within the week, or the date, on the device's calendar. */
+export function goatBotDayLabel(iso: string, nowMs: number): string {
+  const at = calendarDaysAgo(iso, nowMs);
+  if (at === null) return "";
+  if (at.days === 0) return "Today";
+  if (at.days === 1) return "Yesterday";
+  if (at.days > 1 && at.days <= 6) return weekday.format(at.date);
+  return older.format(at.date);
+}
+
 /** A local-calendar stamp, repeated after a long pause even on the same day. */
 export function goatBotStampParts(
   iso: string,
   nowMs: number,
   formatTime: (iso: string) => string,
 ): { lead: string; time: string } {
-  // @effect-diagnostics-next-line globalDate:off - stamps follow the device's local calendar.
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return { lead: "", time: "" };
-  // @effect-diagnostics-next-line globalDate:off - stamps follow the device's local calendar.
-  const now = new Date(nowMs);
-  const calendarDay = (value: Date) =>
-    Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
-  const days = Math.round((calendarDay(now) - calendarDay(date)) / 86_400_000);
-  const time = formatTime(iso);
-  if (days === 0) return { lead: "Today", time };
-  if (days === 1) return { lead: "Yesterday", time };
-  if (days > 1 && days <= 6) return { lead: weekday.format(date), time };
-  return { lead: `${older.format(date)} at`, time };
+  const at = calendarDaysAgo(iso, nowMs);
+  if (at === null) return { lead: "", time: "" };
+  const lead = goatBotDayLabel(iso, nowMs);
+  return { lead: at.days >= 0 && at.days <= 6 ? lead : `${lead} at`, time: formatTime(iso) };
 }
 
 export function formatGoatBotStamp(

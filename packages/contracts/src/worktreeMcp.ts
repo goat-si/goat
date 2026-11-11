@@ -226,6 +226,12 @@ export const WorktreeMcpCleanupResult = Schema.Struct({
     description: "Removed worktrees, or with dryRun the ones that would be removed.",
   }),
   kept: Schema.Array(WorktreeMcpCleanupEntry),
+  remaining: Schema.optional(
+    NonNegativeInt.annotate({
+      description:
+        "Worktrees this sweep did not check because it reached its time limit; they are in neither removed nor kept. Call again while it is above 0 and the last call removed something.",
+    }),
+  ),
   host: resultHost,
 });
 export type WorktreeMcpCleanupResult = typeof WorktreeMcpCleanupResult.Type;

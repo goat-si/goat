@@ -1,9 +1,11 @@
-import type {
-  BotThreadRow,
-  ChannelChildWork,
-  ChannelChildWorkGroup,
-  EnvironmentId,
-  ThreadId,
+import {
+  isGoatBotConversationThreadId,
+  type BotRemoteWork,
+  type BotThreadRow,
+  type ChannelChildWork,
+  type ChannelChildWorkGroup,
+  type EnvironmentId,
+  type ThreadId,
 } from "@goat/contracts";
 
 export interface BotWorkTask {
@@ -19,6 +21,8 @@ export interface BotWorkTask {
     readonly environmentId: EnvironmentId;
     readonly threadId: ThreadId;
   }>;
+  /** Threads it launched on other machines; resolveRemoteBotWork says which can be opened. */
+  readonly remote: ReadonlyArray<BotRemoteWork>;
   readonly truncated: boolean;
 }
 
@@ -26,6 +30,7 @@ export function groupBotWork(
   rows: ReadonlyArray<BotThreadRow>,
   groups: ReadonlyArray<ChannelChildWorkGroup>,
   environmentId: EnvironmentId,
+  remoteWork: ReadonlyArray<BotRemoteWork> = [],
 ): { readonly inProgress: ReadonlyArray<BotWorkTask>; readonly done: ReadonlyArray<BotWorkTask> } {
   const groupByTask = new Map(groups.map((group) => [group.taskId, group]));
   const inProgress: BotWorkTask[] = [];
@@ -43,6 +48,9 @@ export function groupBotWork(
         threads.push({ environmentId: env, threadId });
       }
     };
+    // Lists leave the worker to the bot, so its task opens it; a bot turn's worker is the chat.
+    if (row.worker !== undefined && !isGoatBotConversationThreadId(row.worker.threadId))
+      addThread(row.worker.environmentId, row.worker.threadId);
     for (const coding of rows) {
       if (coding.kind === "coding" && coding.taskId === row.task.taskId)
         addThread(coding.environmentId, coding.threadId);
@@ -62,7 +70,8 @@ export function groupBotWork(
         addThread(environmentId, child.destination.threadId);
       }
     }
-    const task = { row, subagents, threads, truncated: group?.truncated ?? false };
+    const remote = remoteWork.filter((item) => item.taskId === row.task.taskId);
+    const task = { row, subagents, threads, remote, truncated: group?.truncated ?? false };
     (row.view.doneAt !== null || ["completed", "failed", "cancelled"].includes(row.task.status)
       ? done
       : inProgress

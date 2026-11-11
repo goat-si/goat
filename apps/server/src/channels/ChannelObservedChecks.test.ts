@@ -15,10 +15,12 @@ import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { fakeLaunchWakes } from "./testkit/launchWakesFake.ts";
 import {
   botMessages,
+  goatInput,
   linkSlackUser,
   makeHarness,
   onlyTask,
   resultsTo,
+  rpcContext,
   setupBot,
   slackContext,
   slackInput,
@@ -44,13 +46,15 @@ const events = Effect.gen(function* () {
   );
 });
 
-const start = (harness: ReturnType<typeof makeHarness>) =>
+const start = (harness: ReturnType<typeof makeHarness>, from: "slack" | "goat" = "slack") =>
   Effect.gen(function* () {
     yield* setupBot;
     yield* linkSlackUser();
     const gateway = yield* ChannelGateway.ChannelGateway;
     const runtime = yield* ChannelRuntime.ChannelRuntime;
-    yield* gateway.ingest(slackInput("do: verify the change", "observed-check"), slackContext);
+    if (from === "slack")
+      yield* gateway.ingest(slackInput("do: verify the change", "observed-check"), slackContext);
+    else yield* gateway.ingest(goatInput("do: verify the change", "observed-check"), rpcContext);
     yield* runtime.drain;
     const task = yield* onlyTask;
     const threadId = task.worker!.threadId;
@@ -224,6 +228,27 @@ describe("channel check evidence", () => {
       );
     },
   );
+
+  it.effect("tells a GOAT Bot chat a check that finished after the result", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, threadId, runId } = yield* start(harness, "goat");
+      harness.world.setStatus(threadId, 1, "completed", "Done.");
+      yield* runtime.drain;
+      yield* storeCheck(threadId, runId);
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      // The chat shows no task card, so the late check arrives as a message beside the result.
+      const told = (yield* botMessages).messages.filter((m) =>
+        m.text.startsWith("Verification for "),
+      );
+      assert.deepStrictEqual(
+        told.map((m) => m.channel?.kind),
+        ["result"],
+      );
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
 
   it.effect("records no-check disposition without inventing a pass", () => {
     const harness = makeHarness();

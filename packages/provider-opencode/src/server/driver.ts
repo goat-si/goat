@@ -32,6 +32,7 @@ import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
 import { loadOpenCode2Catalog } from "./openCode2Catalog.ts";
 import {
   checkOpenCodeProviderStatus,
+  loadOpenCode2GlobalSkills,
   loadOpenCode2Workspace,
   makeOpenCode2ModelLoader,
   makePendingOpenCodeProvider,
@@ -336,6 +337,22 @@ export const OpenCodeDriver: ProviderDriver<
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
       openCode2Server.withConnection(({ client }) => loadOpenCode2Catalog(client, host.paths.cwd)),
     );
+    // No location: OpenCode answers with the machine's global skills, which hold for every cwd.
+    const loadOpenCode2Skills = loadOpenCode2GlobalSkills(
+      openCode2Server.withConnection(({ client }) =>
+        client.skill.list().pipe(
+          Effect.map((list) => list.data),
+          Effect.mapError(
+            (cause) =>
+              new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "skill.list",
+                detail: "The OpenCode server could not list its skills.",
+                cause,
+              }),
+          ),
+        ),
+      ),
+    );
     const listOpenCode2Workspace = (cwd: string) =>
       openCode2Server.withConnection(({ client, events }) =>
         Effect.gen(function* () {
@@ -410,6 +427,7 @@ export const OpenCodeDriver: ProviderDriver<
           host.paths.cwd,
           runtimeProbe.refresh,
           loadOpenCode2Models,
+          loadOpenCode2Skills,
         ).pipe(
           Effect.annotateLogs({ providerInstanceId: instanceId }),
           Effect.annotateSpans({ providerInstanceId: instanceId }),

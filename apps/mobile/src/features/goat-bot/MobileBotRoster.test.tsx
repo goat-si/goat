@@ -1,11 +1,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { BotThreadRow } from "@goat/contracts";
-import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
-  update: vi.fn(async () => {}),
   alert: vi.fn(),
   members: null as null | Record<string, unknown>,
   manage: {
@@ -21,14 +18,17 @@ const state = vi.hoisted(() => ({
   sheet: null as null | {
     mode: string;
     onSubmit: (changes: object) => Promise<string | null>;
+    onClose: () => void;
+    extraChanged?: boolean;
   },
+  modelEditable: true,
+  pickModel: null as null | ((model: object | null) => void),
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   Alert: { alert: state.alert },
 }));
-vi.mock("../../state/entities", () => ({ useNavigationThreadShells: () => [] }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
@@ -36,65 +36,40 @@ vi.mock("./useMobileBotRoster", () => ({
     groups: { main: null, members: [], hidden: [], deleted: [] },
     supportsMembers: true,
     environmentId: "env",
-    children: { rows: [], hasMore: false },
     slackEnabled: false,
-    update: state.update,
-    showMore: () => {},
     error: null,
   }),
 }));
 vi.mock("./MobileBotRosterView", () => ({
-  MobileBotRosterView: (props: {
-    onLongPressTask: (row: typeof task) => void;
-    members?: Record<string, unknown>;
-  }) => {
+  MobileBotRosterView: (props: { members?: Record<string, unknown> }) => {
     state.members = props.members ?? null;
-    return <button onClick={() => props.onLongPressTask(task)}>Menu</button>;
+    return null;
   },
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => state.manage }));
-vi.mock("./MobileNewBotModel", () => ({ MobileNewBotModel: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({
+  useMobileGoatBotMemberModelEditable: () => ({ editable: state.modelEditable }),
+}));
+vi.mock("./MobileNewBotModel", () => ({
+  MobileNewBotModel: (props: { onChange: (model: object | null) => void }) => {
+    state.pickModel = props.onChange;
+    return null;
+  },
+}));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "request-1" }));
 vi.mock("./MobileBotProfileSheet", () => ({
   MobileBotProfileSheet: (props: {
     mode: string;
     onSubmit: (changes: object) => Promise<string | null>;
+    onClose: () => void;
+    extraChanged?: boolean;
+    children?: React.ReactNode;
   }) => {
     state.sheet = props;
-    return null;
+    return <>{props.children}</>;
   },
 }));
 import { MobileBotRoster } from "./MobileBotRosterPanel";
-const at = "2026-11-04T10:00:00.000Z";
-const task = Schema.decodeUnknownSync(BotThreadRow)({
-  kind: "task",
-  task: { taskId: "task", title: "Review", status: "waiting_input", updatedAt: at },
-  view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
-  lastActivityAt: at,
-  unread: true,
-  mainMessagesSinceQuiet: 0,
-});
-it("sends reversible view changes and read-through from the task menu", async () => {
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
-  );
-  await act(async () => container.querySelector("button")?.click());
-  const actions = state.alert.mock.calls[0]?.[2] as Array<{ onPress?: () => void }>;
-  await act(async () => {
-    actions[0]?.onPress?.();
-    actions[1]?.onPress?.();
-    actions[2]?.onPress?.();
-  });
-  expect(state.update.mock.calls).toEqual([
-    [{ taskId: "task", pinned: true }],
-    [{ taskId: "task", done: true }],
-    [{ taskId: "task", readThrough: at }],
-  ]);
-  await act(async () => root.unmount());
-});
-
 const member = { botId: "research", name: "Research", hidden: false };
 type Choice = { text: string; onPress?: () => void };
 const choices = () => state.alert.mock.calls.at(-1)?.[2] as Array<Choice>;
@@ -107,9 +82,7 @@ it("hides a member, and deletes it only after the person confirms", async () => 
   state.alert.mockClear();
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
-  );
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
   const members = state.members as { onLongPressBot: (entry: object) => void };
   await act(async () => members.onLongPressBot({ kind: "member", profile: member }));
   expect(choices().map((choice) => choice.text)).toEqual(["Edit", "Hide", "Delete", "Cancel"]);
@@ -130,9 +103,7 @@ it("restores a deleted member after the person confirms", async () => {
   state.alert.mockClear();
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
-  );
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
   const members = state.members as {
     canRestore: boolean;
     onRestoreDeleted: (bot: object) => void;
@@ -148,9 +119,7 @@ it("creates a bot from New bot with one request id and opens its conversation", 
   const opened = vi.fn();
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} onOpenChild={() => {}} />),
-  );
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
   const members = state.members as { onNewBot: () => void };
   await act(async () => members.onNewBot());
   expect(state.sheet?.mode).toBe("create");
@@ -166,5 +135,43 @@ it("creates a bot from New bot with one request id and opens its conversation", 
     kind: "member",
     profile: { botId: "research", name: "Research" },
   });
+  await act(async () => root.unmount());
+});
+
+it("changes a member's model from Edit only where its server takes the change", async () => {
+  state.alert.mockClear();
+  state.manage.update.mockClear();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  const members = state.members as { onLongPressBot: (entry: object) => void };
+  const profile = { ...member, role: "member", defaultModelSelection: null };
+  const luna = { instanceId: "codex", model: "luna" };
+  const edit = async () => {
+    state.pickModel = null;
+    await act(async () => members.onLongPressBot({ kind: "member", profile }));
+    await act(async () => choose("Edit"));
+  };
+
+  await edit();
+  expect(state.sheet?.extraChanged).toBe(false);
+  await act(async () => state.pickModel?.(luna));
+  // A model alone is a change worth saving.
+  expect(state.sheet?.extraChanged).toBe(true);
+  await act(async () => {
+    await state.sheet?.onSubmit({});
+  });
+  expect(state.manage.update).toHaveBeenLastCalledWith(profile, {}, luna);
+  await act(async () => state.sheet?.onClose());
+
+  // An older server drops the model, so the sheet neither offers nor sends one.
+  state.modelEditable = false;
+  await edit();
+  expect(state.pickModel).toBeNull();
+  await act(async () => {
+    await state.sheet?.onSubmit({ name: "Research 2" });
+  });
+  expect(state.manage.update).toHaveBeenLastCalledWith(profile, { name: "Research 2" }, undefined);
+  state.modelEditable = true;
   await act(async () => root.unmount());
 });

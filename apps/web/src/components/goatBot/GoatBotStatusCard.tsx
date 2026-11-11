@@ -55,6 +55,7 @@ export function GoatBotStatusCard({
   onShowChat,
   className,
   botName,
+  quietWhenReady = false,
 }: {
   readonly environmentId: EnvironmentId | null;
   readonly member: BotProfile | null;
@@ -65,6 +66,8 @@ export function GoatBotStatusCard({
   readonly className?: string;
   /** The bot this card describes. Settings passes the main bot; a chat uses the open one. */
   readonly botName?: string;
+  /** Show nothing while every line is fine, as the bot's home does. */
+  readonly quietWhenReady?: boolean;
 }) {
   const openName = useGoatBotName();
   const mainBotName = useGoatBotMainName();
@@ -132,6 +135,7 @@ export function GoatBotStatusCard({
     canConfigureSlack,
     now,
   });
+  if (quietWhenReady && diagnostics.lines.every((line) => line.tone === "ok")) return null;
   return (
     <section aria-label={`${name} status`} className={cn("space-y-2 text-sm", className)}>
       <p className="font-semibold">{diagnostics.title}</p>

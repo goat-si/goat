@@ -26,6 +26,10 @@
 // smoke-linux-computer-use builds the Linux computer use helper and runs its live smoke on a
 // private Xvfb display, hosted only since it installs packages: in lane=all, and on a pull request
 // that changes one of LINUX_COMPUTER_USE_PATHS.
+//
+// test-pen runs Pen's suites (the Go node, its install and mesh scripts, and the protocol, relay
+// and login packages) in lane=all and whenever a pull request changes PEN_PATHS. The Go module has
+// no package.json, so path prefixes select it rather than the workspace graph.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -83,6 +87,19 @@ const LINUX_COMPUTER_USE_PATHS = [
   "scripts/lib/computer-use-helper-linux-manifest.ts",
 ];
 const LINUX_COMPUTER_USE_TASK = "smoke-linux-computer-use";
+/** Pen's directories; a change under one selects test-pen, which owns their suites. */
+const PEN_PATHS = ["apps/pen/", "packages/pen-protocol/", "infra/pen-relay/", "infra/pen-login/"];
+/** The CI files that define test-pen; changing them runs it too. */
+const PEN_CI_FILES = [".github/workflows/goat-ci.yml", ".github/scripts/goat-ci-scope.cjs"];
+/** Root files the Pen TypeScript packages resolve through: the dependency catalog and lockfile,
+ * the shared tsconfig and the root Vitest config their test configs merge. */
+const PEN_SHARED_FILES = [
+  "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
+  "tsconfig.base.json",
+  "vite.config.ts",
+];
+const PEN_TASK = "test-pen";
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
 /** CI script tests use node:test, not Vitest. */
@@ -145,6 +162,7 @@ const TASKS = [
   "test-memory-growth",
   WINDOWS_TASK,
   LINUX_COMPUTER_USE_TASK,
+  PEN_TASK,
   "build",
   "test-server",
 ];
@@ -164,6 +182,7 @@ const HOSTED_TASKS = new Set([
   "test-shared",
   "test-ingest",
   LINUX_COMPUTER_USE_TASK,
+  PEN_TASK,
 ]);
 
 /** Workspace packages each task tests or builds. A change in their dependency closure selects the task. */
@@ -181,7 +200,11 @@ const TASK_ROOTS = {
 };
 
 /** Package directories whose suites a task of their own runs, so test-packages leaves them out. */
-const OWNED_SUITES = new Set([...Object.values(TASK_ROOTS).flat(), "infra/ingest"]);
+const OWNED_SUITES = new Set([
+  ...Object.values(TASK_ROOTS).flat(),
+  "infra/ingest",
+  ...PEN_PATHS.map((dir) => dir.slice(0, -1)),
+]);
 
 /** packages/* directories test-packages covers; a change in their dependency closure selects it. */
 const packageSuiteDirs = (workspace) =>
@@ -228,6 +251,7 @@ const isWindowsSensitive = (file) =>
   [...WINDOWS_SUITES, ...WINDOWS_TRIGGERS].some((prefix) => file.startsWith(prefix));
 const isLinuxComputerUse = (file) =>
   LINUX_COMPUTER_USE_PATHS.some((prefix) => file.startsWith(prefix));
+const isPen = (file) => PEN_PATHS.some((prefix) => file.startsWith(prefix));
 
 /** Prose that only the check task (formatting) reads. */
 function isDocument(file) {
@@ -441,6 +465,11 @@ function selectTasks(
     // The ingest Worker's suite covers its SQL and config and the shared allowlist.
     if (INGEST_SUITE_TRIGGER.test(file)) choose("test-ingest", file);
     if (suiteDirs.some((dir) => file.startsWith(dir))) choose(PACKAGES_TASK, file);
+    if (isPen(file)) {
+      choose(PEN_TASK, file);
+      choose("typecheck", file);
+      continue;
+    }
     if (TYPECHECK_ONLY_RE.test(file)) {
       choose("typecheck", file);
       continue;
@@ -639,6 +668,10 @@ function quickRun(changed, root) {
   if (placed !== undefined) reasons.set("typecheck", placed);
   const code = changed.filter((file) => CODE_RE.test(file));
   let tests = [...testsForChanges(root, code, changed)].sort();
+  // Pen's suites need their own setup (wrangler dev, Go), so test-pen runs them whole.
+  const penTest = tests.find(isPen);
+  if (penTest !== undefined) reasons.set(PEN_TASK, penTest);
+  tests = tests.filter((file) => !isPen(file));
   let server = { mode: "none", files: [], shards: 0, reason: "quick run", reached: new Map() };
   const serverTests = tests.filter(isServerTest);
   const weights = readServerWeights(root);
@@ -742,6 +775,13 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
   if (!tasks.has(LINUX_COMPUTER_USE_TASK) && linuxChange !== undefined) {
     tasks.add(LINUX_COMPUTER_USE_TASK);
     reasons.set(LINUX_COMPUTER_USE_TASK, linuxChange);
+  }
+  const penChange = changed.find(
+    (file) => isPen(file) || PEN_CI_FILES.includes(file) || PEN_SHARED_FILES.includes(file),
+  );
+  if (penChange !== undefined) {
+    tasks.add(PEN_TASK);
+    reasons.set(PEN_TASK, penChange);
   }
   return {
     ...result,

@@ -1,7 +1,7 @@
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { BotProfile, BotThreadRow } from "@goat/contracts";
+import { BotProfile } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 type Rect = readonly [number, number, number, number];
@@ -97,8 +97,8 @@ vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => <span /> }));
 const face = vi.hoisted(() => ({ items: [] as ReadonlyArray<object> }));
 vi.mock("./GoatBotFace", () => ({
-  GoatBotFaceAvatar: (props: { motion: object | null }) => (
-    <span data-motion={props.motion ? "moving" : "still"} />
+  GoatBotFaceAvatar: (props: { motion: object | null; emoji?: string | null }) => (
+    <span data-motion={props.motion ? "moving" : "still"} data-picture={props.emoji ?? ""} />
   ),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
@@ -144,15 +144,6 @@ vi.mock("../../components/ui/Button", () => ({
 import { MobileBotRosterView, MobileHomeSegments } from "./MobileBotRosterView";
 
 const at = "2026-11-04T10:00:00.000Z";
-const decodeRow = Schema.decodeUnknownSync(BotThreadRow);
-const task = decodeRow({
-  kind: "task",
-  task: { taskId: "task", title: "Review", status: "waiting_input", updatedAt: at },
-  view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
-  lastActivityAt: at,
-  unread: true,
-  mainMessagesSinceQuiet: 0,
-});
 const decodeProfile = Schema.decodeUnknownSync(BotProfile);
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
@@ -179,149 +170,28 @@ it("switches both segments and exposes the selected state", async () => {
   expect(bots?.getAttribute("aria-pressed")).toBe("false");
 });
 
-it("renders the main bot, child task and disabled creation action", async () => {
+it("lists only bots: the main bot as a tile with its latest message, and no task or thread rows", async () => {
   const open = vi.fn();
   root = createRoot(container);
   await act(async () =>
     root?.render(
       <MobileBotRosterView
         bots={[{ kind: "main", profile: null }]}
-        rows={[task]}
-        hasMore
-        hiddenCount={2}
         slackEnabled
         preview="Latest reply"
         unread
-        onOpenBot={() => {}}
-        onOpenChild={open}
-        onLongPressTask={() => {}}
-        onShowMore={() => {}}
+        onOpenBot={open}
       />,
     ),
   );
-  expect(container.textContent).toContain("GOAT Bot  ·  Main  ·  Slack");
-  expect(container.textContent).toContain("Review");
-  expect(container.textContent).toContain("Needs your input");
-  expect(container.textContent).toContain("Show more");
+  expect(container.textContent).toContain("GOAT Bot");
+  expect(container.textContent).toContain("Latest reply");
+  expect(container.textContent).toContain("Also in Slack");
+  expect(container.textContent).not.toContain("Show more");
   expect(container.querySelector("button:disabled")?.textContent).toContain("Coming soon");
-  const taskButton = [...container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Review"),
-  );
-  await act(async () => taskButton?.click());
-  expect(open).toHaveBeenCalledWith(task);
-});
-
-it("shows Done for a task marked done", async () => {
-  if (task.kind !== "task") throw new Error("Expected a task");
-  const done = { ...task, view: { ...task.view, doneAt: at } };
-  root = createRoot(container);
-  await act(async () =>
-    root?.render(
-      <MobileBotRosterView
-        bots={[{ kind: "main", profile: null }]}
-        rows={[done]}
-        hasMore={false}
-        slackEnabled={false}
-        onOpenBot={() => {}}
-        onOpenChild={() => {}}
-        onLongPressTask={() => {}}
-        onShowMore={() => {}}
-      />,
-    ),
-  );
-  expect(container.textContent).toContain("Done");
-  expect(container.querySelector('[aria-label="Review, Done, unread"]')).not.toBeNull();
-});
-
-it("shows roster empty copy only without child rows", async () => {
-  const props = {
-    bots: [{ kind: "main" as const, profile: null }],
-    hasMore: false,
-    slackEnabled: false,
-    onOpenBot: () => {},
-    onOpenChild: () => {},
-    onLongPressTask: () => {},
-    onShowMore: () => {},
-  };
-  root = createRoot(container);
-  await act(async () => root?.render(<MobileBotRosterView {...props} rows={[]} />));
-  expect(container.textContent).toContain("Work GOAT Bot starts will appear here.");
-  await act(async () => root?.render(<MobileBotRosterView {...props} rows={[task]} />));
-  expect(container.textContent).not.toContain("Work GOAT Bot starts will appear here.");
-});
-
-it("exposes task actions and expands and collapses hidden rows", async () => {
-  const action = vi.fn();
-  function Harness() {
-    const [expanded, setExpanded] = React.useState(false);
-    return (
-      <MobileBotRosterView
-        bots={[{ kind: "main", profile: null }]}
-        rows={[task]}
-        hasMore={!expanded}
-        expanded={expanded}
-        hiddenCount={2}
-        slackEnabled={false}
-        onOpenBot={() => {}}
-        onOpenChild={() => {}}
-        onLongPressTask={() => {}}
-        onTaskAction={action}
-        onShowMore={() => setExpanded(!expanded)}
-      />
-    );
-  }
-  root = createRoot(container);
-  await act(async () => root?.render(<Harness />));
-  const row = [...container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Review"),
-  );
-  await act(async () =>
-    row?.dispatchEvent(new KeyboardEvent("keydown", { key: "read", bubbles: true })),
-  );
-  expect(action).toHaveBeenCalledWith(task, "read");
-  const more = [...container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Show more"),
-  );
-  expect(more?.getAttribute("aria-expanded")).toBe("false");
-  await act(async () => more?.click());
-  expect(more?.textContent).toContain("Show less");
-  expect(more?.getAttribute("aria-expanded")).toBe("true");
-  await act(async () => more?.click());
-  expect(more?.textContent).toContain("Show more (2)");
-});
-
-it("marks the selected coding thread with its own status", async () => {
-  const coding = decodeRow({
-    kind: "coding",
-    taskId: "task",
-    environmentId: "env",
-    threadId: "thread",
-    title: "Code",
-    state: "bound",
-    lastActivityAt: at,
-  });
-  root = createRoot(container);
-  await act(async () =>
-    root?.render(
-      <MobileBotRosterView
-        bots={[{ kind: "main", profile: null }]}
-        rows={[coding]}
-        hasMore={false}
-        slackEnabled={false}
-        selectedKey="coding:env:thread"
-        codingStatuses={new Map([["coding:env:thread", "working"]])}
-        onOpenBot={() => {}}
-        onOpenChild={() => {}}
-        onLongPressTask={() => {}}
-        onShowMore={() => {}}
-      />,
-    ),
-  );
-  const row = [...container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Code"),
-  );
-  expect(row?.getAttribute("aria-label")).toBe("Code, Working");
-  expect(row?.getAttribute("aria-pressed")).toBe("true");
+  const tile = container.querySelector('[aria-label="GOAT Bot, unread"]') as HTMLButtonElement;
+  await act(async () => tile.click());
+  expect(open).toHaveBeenCalledWith({ kind: "main", profile: null });
 });
 
 it("shows the waiting face on the main bot for a waiting task the roster hides", async () => {
@@ -339,13 +209,8 @@ it("shows the waiting face on the main bot for a waiting task the roster hides",
       root?.render(
         <MobileBotRosterView
           bots={[{ kind: "main", profile: null }]}
-          rows={[]}
-          hasMore={false}
           slackEnabled={false}
           onOpenBot={() => {}}
-          onOpenChild={() => {}}
-          onLongPressTask={() => {}}
-          onShowMore={() => {}}
         />,
       ),
     );
@@ -372,13 +237,8 @@ describe("the roster's main face", () => {
   ];
   const props = {
     bots: [{ kind: "main" as const, profile: null }],
-    rows: [],
-    hasMore: false,
     slackEnabled: false,
     onOpenBot: () => {},
-    onOpenChild: () => {},
-    onLongPressTask: () => {},
-    onShowMore: () => {},
   };
   const motion = () => container.querySelector("[data-motion]")?.getAttribute("data-motion");
 
@@ -467,13 +327,8 @@ it("ignores a layout change while the roster scrolls", async () => {
       root?.render(
         <MobileBotRosterView
           bots={[{ kind: "main", profile: null }]}
-          rows={[]}
-          hasMore={false}
           slackEnabled={false}
           onOpenBot={() => {}}
-          onOpenChild={() => {}}
-          onLongPressTask={() => {}}
-          onShowMore={() => {}}
         />,
       ),
     );
@@ -529,14 +384,9 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
           { kind: "main", profile: null },
           { kind: "member", profile: research },
         ]}
-        rows={[]}
-        hasMore={false}
         slackEnabled={false}
         selectedKey="bot:research"
         onOpenBot={open}
-        onOpenChild={() => {}}
-        onLongPressTask={() => {}}
-        onShowMore={() => {}}
         members={{
           hidden: [quiet],
           deleted: [gone],
@@ -555,6 +405,10 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
     );
   expect(button("Research")?.getAttribute("aria-pressed")).toBe("true");
   expect(button("Research")?.querySelector('[aria-label="2 waiting for you"]')).not.toBeNull();
+  // A member without an emoji shows its initial, so it is told apart from the main bot's face.
+  expect(button("Research")?.querySelector("[data-picture]")?.getAttribute("data-picture")).toBe(
+    "R",
+  );
   expect(container.textContent).not.toContain("Coming soon");
   await act(async () => button("New bot")?.click());
   expect(newBot).toHaveBeenCalledOnce();
@@ -599,13 +453,8 @@ it("offers no restore on a deleted bot to someone who cannot manage bots", async
     root?.render(
       <MobileBotRosterView
         bots={[{ kind: "main", profile: null }]}
-        rows={[]}
-        hasMore={false}
         slackEnabled={false}
         onOpenBot={() => {}}
-        onOpenChild={() => {}}
-        onLongPressTask={() => {}}
-        onShowMore={() => {}}
         members={{
           hidden: [],
           deleted: [gone],

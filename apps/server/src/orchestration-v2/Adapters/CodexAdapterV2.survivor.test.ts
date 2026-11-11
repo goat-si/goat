@@ -39,7 +39,9 @@ import {
 import {
   CODEX_TEST_MODEL_SELECTION,
   CODEX_TEST_RUNTIME_POLICY,
+  lastPublishedGoal,
   makeCodexTestTurnInput,
+  makeCodexThreadGoal,
   makeReplayServerConfig,
 } from "./CodexAdapterV2.testkit.ts";
 
@@ -69,6 +71,7 @@ const runScenario = (
     | "conflict-finished-goal"
     | "goal"
     | "goal-newer"
+    | "goal-paused"
     | "goal-release"
     | "goal-cleared"
     | "goal-burst"
@@ -101,6 +104,8 @@ const runScenario = (
       nativeThreadId: "native-thread",
       nativeTurnId: "native-turn",
     };
+    const goalFor = (status: "active" | "paused") =>
+      makeCodexThreadGoal({ threadId: binding.nativeThreadId, status });
     const transcript = makeCodexReplayTranscript({
       scenario,
       entries: codexReplayPreamble({
@@ -354,6 +359,18 @@ const runScenario = (
                   }
                   if (method === "thread/read" && mode === "guard-child")
                     return { thread: { parentThreadId: binding.nativeThreadId } };
+                  if (method === "thread/goal/set") {
+                    if (mode !== "goal-paused")
+                      return yield* CodexErrors.CodexAppServerRequestError.internalError(
+                        "goal pause unavailable",
+                      );
+                    assert.equal((params as { status: string }).status, "paused");
+                    order.push("pause");
+                    goalStatus = "paused";
+                    for (const handler of notifications.get("thread/goal/updated") ?? [])
+                      yield* handler({ threadId: binding.nativeThreadId, goal: goalFor("paused") });
+                    return { goal: goalFor("paused") };
+                  }
                   if (method === "thread/goal/get") {
                     goalReads++;
                     if (stallGoalRead) {
@@ -626,11 +643,11 @@ const runScenario = (
       for (const handler of notifications.get("thread/goal/updated") ?? []) {
         yield* handler({
           threadId: binding.nativeThreadId,
-          goal: { status: "active" },
+          goal: goalFor("active"),
           ...(mode === "goal-newer" ? { turnId: "other-turn" } : {}),
         });
       }
-      status = "interrupted";
+      status = mode === "goal-paused" ? "completed" : "interrupted";
       for (const handler of notifications.get("turn/completed") ?? []) {
         yield* handler({
           threadId: binding.nativeThreadId,
@@ -769,6 +786,18 @@ const runScenario = (
         return;
       }
     }
+    if (mode === "goal-paused") {
+      const terminal = events.find((e) => e.type === "turn.terminal");
+      assert.equal(terminal?.status, "completed");
+      assert.deepEqual(order, ["goal", "pause"]);
+      assert.notInclude(requests, "turn/interrupt");
+      const threadGoal = lastPublishedGoal(events);
+      assert.equal(threadGoal?.status, "paused");
+      assert.equal(threadGoal?.objective, "test");
+      yield* Deferred.await(goalCleared);
+      yield* service.ensureAdmission(threadId);
+      return;
+    }
     if (goalMode) {
       const terminal = events.find((e) => e.type === "turn.terminal");
       assert.equal(terminal?.status, "failed");
@@ -785,15 +814,7 @@ const runScenario = (
           "Codex started a goal on this thread while GOAT was waiting; the turn that ran across the restart was stopped.",
         );
       if (mode === "goal-release" || mode === "goal-cleared" || mode === "goal-burst") {
-        const goal = {
-          threadId: binding.nativeThreadId,
-          objective: "test",
-          status: "active",
-          tokensUsed: 0,
-          timeUsedSeconds: 0,
-          createdAt: 1,
-          updatedAt: 1,
-        };
+        const goal = goalFor("active");
         assert.isTrue(goalBlocked);
         if (mode === "goal-cleared") {
           goalStatus = "none";
@@ -907,8 +928,11 @@ it.effect("a newer turn found after the survivor finished is fenced until it end
 it.effect("a newer turn with an active goal keeps a goal block after its fence clears", () =>
   runScenario("conflict-finished-goal"),
 );
-it.effect("an active goal is blocked and the survivor fails after native interruption", () =>
+it.effect("an unpausable active goal stops the survivor by native interruption", () =>
   runScenario("goal"),
+);
+it.effect("an active goal is paused and the survivor turn keeps its work and completes", () =>
+  runScenario("goal-paused"),
 );
 
 it.effect("a descendant request is rejected and its native turn fenced", () =>

@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { BotId, BotProfile, BotRole } from "./botProfile.ts";
+import { BotColor, BotId, BotProfile, BotRole } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
@@ -10,7 +10,12 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ChannelChildWork, ChannelChildWorkState } from "./channelChildWork.ts";
+import {
+  ChannelChildWork,
+  ChannelChildWorkId,
+  ChannelChildWorkState,
+  GoatBotWorkKind,
+} from "./channelChildWork.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   ChannelActorRef,
@@ -316,12 +321,18 @@ export const ChannelBotSummary = Schema.Struct({
 export const ChannelBotListResult = Schema.Struct({ bots: Schema.Array(ChannelBotSummary) });
 export type ChannelBotListResult = typeof ChannelBotListResult.Type;
 
-/** Changes only the keys sent. A null avatar returns the bot to its default face. */
+/**
+ * Changes only the keys sent; null clears an avatar, a member's model or its color. The main bot
+ * refuses a model (a setting) and a color. A model needs `goatBotMemberModelEdit`, a color
+ * `goatBotProfileColor`; older servers drop either key.
+ */
 export const ChannelUpdateBotInput = Schema.Struct({
   botId: BotId,
   name: Schema.optionalKey(BotProfile.fields.name),
   avatar: Schema.optionalKey(BotProfile.fields.avatar),
   purpose: Schema.optionalKey(BotProfile.fields.purpose),
+  defaultModelSelection: Schema.optionalKey(BotProfile.fields.defaultModelSelection),
+  color: Schema.optionalKey(Schema.NullOr(BotColor)),
 });
 export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
 
@@ -332,6 +343,8 @@ export const ChannelCreateBotInput = Schema.Struct({
   avatar: BotProfile.fields.avatar,
   purpose: BotProfile.fields.purpose,
   defaultModelSelection: BotProfile.fields.defaultModelSelection,
+  /** Read by servers with `goatBotProfileColor`; absent leaves the bot neutral. */
+  color: Schema.optionalKey(BotColor),
 });
 export type ChannelCreateBotInput = typeof ChannelCreateBotInput.Type;
 export const ChannelSetBotHiddenInput = Schema.Struct({ botId: BotId, hidden: Schema.Boolean });
@@ -378,6 +391,8 @@ export const BotThreadRow = Schema.Union([
     lastActivityAt: IsoDateTime,
     unread: Schema.Boolean,
     mainMessagesSinceQuiet: NonNegativeInt,
+    /** The task's worker thread on this machine, which this row opens. */
+    worker: Schema.optional(Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId })),
   }),
   Schema.Struct({
     kind: Schema.Literal("coding"),
@@ -387,14 +402,36 @@ export const BotThreadRow = Schema.Union([
     title: Schema.optional(Schema.String),
     state: ChannelChildWorkState,
     lastActivityAt: IsoDateTime,
+    /** Absent when the launch recorded none and its project does not say. */
+    workKind: Schema.optional(GoatBotWorkKind),
   }),
 ]);
 export type BotThreadRow = typeof BotThreadRow.Type;
+/**
+ * A thread the bot launched on another machine over SSH. It is not a row: its host is this
+ * machine's SSH alias, so only the destination's own environment id, once the launch was
+ * acknowledged, can open it from a client.
+ */
+export const BotRemoteWork = Schema.Struct({
+  childWorkId: ChannelChildWorkId,
+  taskId: ChannelTaskId,
+  /** The bot thread that launched it, which the destination records as its launcher. */
+  callerThreadId: ThreadId,
+  host: TrimmedNonEmptyString,
+  state: ChannelChildWorkState,
+  lastActivityAt: IsoDateTime,
+  threadId: Schema.optional(ThreadId),
+  environmentId: Schema.optional(EnvironmentId),
+  workKind: Schema.optional(GoatBotWorkKind),
+});
+export type BotRemoteWork = typeof BotRemoteWork.Type;
 export const ChannelListBotThreadsInput = Schema.Struct({ botId: Schema.optionalKey(BotId) });
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
   mainMessageCount: NonNegativeInt,
+  /** Absent from servers before it; clients read that as none. */
+  remoteWork: Schema.optional(Schema.Array(BotRemoteWork)),
 });
 export type ChannelListBotThreadsResult = typeof ChannelListBotThreadsResult.Type;
 

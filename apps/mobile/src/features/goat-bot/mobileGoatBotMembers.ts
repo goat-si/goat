@@ -1,4 +1,17 @@
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
+import { goatBotAvatarEmoji } from "@goat/client-runtime/goatBot";
+
+/**
+ * A member's picture: its emoji, else its name's first letter, so members are told apart from
+ * each other and from the main bot's face, as on web.
+ */
+export function mobileGoatBotMemberPicture(
+  bot: Pick<BotProfile, "avatar" | "name">,
+): string | null {
+  return (
+    goatBotAvatarEmoji(bot.avatar) ?? Array.from(bot.name.trim())[0]?.toLocaleUpperCase() ?? null
+  );
+}
 
 // Conversation threads of active member bots, per environment. The send queue reads it at dispatch
 // time; the roster and an open member screen write it. Kept apart so the roster needs no session code.

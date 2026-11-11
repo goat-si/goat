@@ -106,6 +106,13 @@ export function WorktreeCleanupSection({
         emptyLabel="Until the thread is deleted"
         onSave={(value) => write({ worktreeSnapshotDays: value })}
       />
+      <SettingsSwitchRow
+        label="Preview before automatic cleanup"
+        subtitle="Cleanup waits until you have seen what it would remove."
+        value={settings.worktreeCleanupPreview}
+        disabled={!allowed}
+        onValueChange={(value) => write({ worktreeCleanupPreview: value })}
+      />
       {preview ? (
         <>
           <View className="p-4">

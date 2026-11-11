@@ -1,5 +1,6 @@
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestsOf } from "../threadPullRequests.ts";
+import { isGoatBotLaunch } from "../goatBot/visibility.ts";
 import type {
   ThreadLinkedPullRequest,
   EnvironmentId,
@@ -430,4 +431,15 @@ export function formatWorkingDurationLabel(elapsedMs: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/**
+ * What a thread row says about where the thread came from: the outside agent a cloud run came
+ * via, or GOAT Bot for coding it sent, which stays in lists beside people's threads.
+ */
+export function threadOriginLabel(
+  source: Pick<EnvironmentThreadShell["source"], "externalLauncher" | "launchedBy">,
+): string | null {
+  if (source.externalLauncher) return "via " + source.externalLauncher;
+  return isGoatBotLaunch(source.launchedBy) ? "from GOAT Bot" : null;
 }

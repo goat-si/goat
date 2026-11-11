@@ -48,6 +48,7 @@ vi.mock("~/globalAgentRoute", () => ({
   isGoatBotRoute: () => state.active,
 }));
 vi.mock("~/threadRoutes", () => ({ resolveThreadRouteTarget: () => null }));
+vi.mock("./useBotRoster", () => ({ useBotThreads: () => ({ rows: [], supported: false }) }));
 vi.mock("./GoatBotMemberRows", () => ({ GoatBotMainMenu: () => null }));
 vi.mock("@tanstack/react-router", () => ({
   useLocation: ({

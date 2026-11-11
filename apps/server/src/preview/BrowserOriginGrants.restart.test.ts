@@ -444,133 +444,140 @@ it.effect.each([
   }).pipe(Effect.scoped),
 );
 
-it.effect("a concurrent failure with no current host fences unknown generations", () =>
-  Effect.gen(function* () {
-    const oldStopStarted = yield* Deferred.make<void>();
-    const releaseOldStop = yield* Deferred.make<void>();
-    const replacementExited = yield* Deferred.make<void>();
-    const replacementStopped = yield* Deferred.make<void>();
-    const firstReady = yield* Deferred.make<void>();
-    const replacementReady = yield* Deferred.make<void>();
-    const thirdProbeFinished = yield* Deferred.make<void>();
-    const base = Layer.mergeAll(
-      ServerSettings.layerTest({ enableCua: true }),
-      Layer.mock(ServerEnvironment.ServerEnvironment)({
-        getDescriptor: Effect.succeed(
-          decodeDescriptor({
-            environmentId: EnvironmentId.make("environment:test"),
-            label: "Test",
-            platform: { os: "linux", arch: "x64" },
-            serverVersion: "test",
-            capabilities: { repositoryIdentity: true },
-          }),
-        ),
-      }),
-      manifestLayer,
-      Layer.succeed(BrowserClaimBind, {
-        bind: (request) => Effect.succeed(bound(request.windowId)),
-      }),
-    );
-    const context = yield* Layer.build(Grants.layer.pipe(Layer.provideMerge(base)));
-    const grants = Context.get(context, Grants.BrowserOriginGrants);
-    const manifest = Context.get(context, BrowserClaimManifest);
-    let starts = 0;
-    let failWrites = false;
-    const driver = yield* CuaDriver.make(
-      () =>
-        Effect.sync(() => {
-          const generation = ++starts;
-          return {
-            start: Effect.succeed({ command: "/fake", args: [], environment: [] }),
-            stop:
-              generation === 1
-                ? Deferred.succeed(oldStopStarted, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseOldStop)),
-                  )
-                : generation === 2
-                  ? Deferred.succeed(replacementStopped, undefined).pipe(Effect.asVoid)
-                  : Effect.void,
-            waitForExit: generation === 2 ? Deferred.await(replacementExited) : Effect.never,
-            hostGeneration: () => generation,
-            stoppedGeneration: () => (generation === 1 ? undefined : generation),
-          };
-        }),
-      Effect.succeed({ capability: "available", reason: "test", environment: [] }),
-      {
-        publishBrowserManifest: () =>
-          failWrites ? Effect.fail(new NarrowingWriteFailure()) : Effect.succeed(hash),
-        readBrowserConfig: () =>
-          Effect.succeed({
-            capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
-          }),
-        probeBrowserClaims: () =>
-          (starts === 3
-            ? Deferred.succeed(thirdProbeFinished, undefined).pipe(Effect.asVoid)
-            : Effect.void
-          ).pipe(
-            Effect.as({
-              tools: [
-                { name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } },
-              ],
+it.effect(
+  "a concurrent failure with no current host lets the next probed host restore claims",
+  () =>
+    Effect.gen(function* () {
+      const oldStopStarted = yield* Deferred.make<void>();
+      const releaseOldStop = yield* Deferred.make<void>();
+      const replacementExited = yield* Deferred.make<void>();
+      const replacementStopped = yield* Deferred.make<void>();
+      const firstReady = yield* Deferred.make<void>();
+      const replacementReady = yield* Deferred.make<void>();
+      const thirdProbeFinished = yield* Deferred.make<void>();
+      const base = Layer.mergeAll(
+        ServerSettings.layerTest({ enableCua: true }),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({
+          getDescriptor: Effect.succeed(
+            decodeDescriptor({
+              environmentId: EnvironmentId.make("environment:test"),
+              label: "Test",
+              platform: { os: "linux", arch: "x64" },
+              serverVersion: "test",
+              capabilities: { repositoryIdentity: true },
             }),
           ),
-        setDriverCapability: (value) =>
-          grants
-            .setDriverCapability(value)
-            .pipe(
-              Effect.andThen(
-                value && starts === 1
-                  ? Deferred.succeed(firstReady, undefined).pipe(Effect.asVoid)
-                  : value && starts === 2
-                    ? Deferred.succeed(replacementReady, undefined).pipe(Effect.asVoid)
+        }),
+        manifestLayer,
+        Layer.succeed(BrowserClaimBind, {
+          bind: (request) => Effect.succeed(bound(request.windowId)),
+        }),
+      );
+      const context = yield* Layer.build(Grants.layer.pipe(Layer.provideMerge(base)));
+      const grants = Context.get(context, Grants.BrowserOriginGrants);
+      const manifest = Context.get(context, BrowserClaimManifest);
+      let starts = 0;
+      let failWrites = false;
+      const driver = yield* CuaDriver.make(
+        () =>
+          Effect.sync(() => {
+            const generation = ++starts;
+            return {
+              start: Effect.succeed({ command: "/fake", args: [], environment: [] }),
+              stop:
+                generation === 1
+                  ? Deferred.succeed(oldStopStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseOldStop)),
+                    )
+                  : generation === 2
+                    ? Deferred.succeed(replacementStopped, undefined).pipe(Effect.asVoid)
                     : Effect.void,
-              ),
+              waitForExit: generation === 2 ? Deferred.await(replacementExited) : Effect.never,
+              hostGeneration: () => generation,
+              stoppedGeneration: () => (generation === 1 ? undefined : generation),
+            };
+          }),
+        Effect.succeed({ capability: "available", reason: "test", environment: [] }),
+        {
+          publishBrowserManifest: () =>
+            failWrites ? Effect.fail(new NarrowingWriteFailure()) : Effect.succeed(hash),
+          readBrowserConfig: () =>
+            Effect.succeed({
+              capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+            }),
+          probeBrowserClaims: () =>
+            (starts === 3
+              ? Deferred.succeed(thirdProbeFinished, undefined).pipe(Effect.asVoid)
+              : Effect.void
+            ).pipe(
+              Effect.as({
+                tools: [
+                  { name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } },
+                ],
+              }),
             ),
-      },
-    ).pipe(Effect.provideContext(context));
-    if (!driver.publishBrowserManifest || !driver.readBrowserConfig || !driver.fenceBrowserManifest)
-      return assert.fail("missing manifest driver");
-    yield* manifest.install(
-      driver.publishBrowserManifest,
-      driver.readBrowserConfig,
-      driver.fenceBrowserManifest,
-      driver.afterBrowserFenceFailure,
-      driver.markBrowserFence,
-    );
-    yield* driver.acquire;
-    yield* Deferred.await(firstReady);
-    assert.equal((yield* grants.claim(input)).agentResult.status, "attached");
-    failWrites = true;
-    const firstStop = yield* grants
-      .stop(threadId)
-      .pipe(Effect.forkChild({ startImmediately: true }));
-    yield* Deferred.await(oldStopStarted);
-    failWrites = false;
-    yield* driver.acquire;
-    yield* Deferred.await(replacementReady);
-    assert.equal((yield* grants.claim({ ...input, windowId: 8 })).agentResult.status, "attached");
-    yield* Deferred.succeed(replacementExited, undefined);
-    yield* Deferred.await(replacementStopped);
-    yield* manifest.install(
-      driver.publishBrowserManifest,
-      Effect.succeed({
-        capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
-      }),
-      driver.fenceBrowserManifest,
-      driver.afterBrowserFenceFailure,
-      driver.markBrowserFence,
-    );
-    yield* grants.setDriverCapability(true);
-    assert.equal((yield* grants.claim({ ...input, windowId: 9 })).agentResult.status, "attached");
-    failWrites = true;
-    yield* grants.revoke(threadId, input.origin);
-    yield* Deferred.succeed(releaseOldStop, undefined);
-    yield* Fiber.join(firstStop);
-    failWrites = false;
-    yield* driver.acquire;
-    yield* Deferred.await(thirdProbeFinished);
-    assert.equal((yield* grants.request({ ...input, windowId: 9 })).status, "refused");
-  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true), Effect.scoped),
+          setDriverCapability: (value) =>
+            grants
+              .setDriverCapability(value)
+              .pipe(
+                Effect.andThen(
+                  value && starts === 1
+                    ? Deferred.succeed(firstReady, undefined).pipe(Effect.asVoid)
+                    : value && starts === 2
+                      ? Deferred.succeed(replacementReady, undefined).pipe(Effect.asVoid)
+                      : Effect.void,
+                ),
+              ),
+        },
+      ).pipe(Effect.provideContext(context));
+      if (
+        !driver.publishBrowserManifest ||
+        !driver.readBrowserConfig ||
+        !driver.fenceBrowserManifest
+      )
+        return assert.fail("missing manifest driver");
+      yield* manifest.install(
+        driver.publishBrowserManifest,
+        driver.readBrowserConfig,
+        driver.fenceBrowserManifest,
+        driver.afterBrowserFenceFailure,
+        driver.markBrowserFence,
+      );
+      yield* driver.acquire;
+      yield* Deferred.await(firstReady);
+      assert.equal((yield* grants.claim(input)).agentResult.status, "attached");
+      failWrites = true;
+      const firstStop = yield* grants
+        .stop(threadId)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(oldStopStarted);
+      failWrites = false;
+      yield* driver.acquire;
+      yield* Deferred.await(replacementReady);
+      assert.equal((yield* grants.claim({ ...input, windowId: 8 })).agentResult.status, "attached");
+      yield* Deferred.succeed(replacementExited, undefined);
+      yield* Deferred.await(replacementStopped);
+      yield* manifest.install(
+        driver.publishBrowserManifest,
+        Effect.succeed({
+          capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+        }),
+        driver.fenceBrowserManifest,
+        driver.afterBrowserFenceFailure,
+        driver.markBrowserFence,
+      );
+      yield* grants.setDriverCapability(true);
+      assert.equal((yield* grants.claim({ ...input, windowId: 9 })).agentResult.status, "attached");
+      failWrites = true;
+      yield* grants.revoke(threadId, input.origin);
+      yield* Deferred.succeed(releaseOldStop, undefined);
+      yield* Fiber.join(firstStop);
+      failWrites = false;
+      yield* driver.acquire;
+      yield* Deferred.await(thirdProbeFinished);
+      assert.deepEqual(yield* grants.claimsFor(threadId), []);
+      assert.equal((yield* grants.request({ ...input, windowId: 9 })).status, "pending");
+    }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true), Effect.scoped),
 );
 
 it.effect("an older failed fence preserves a newer probed host and its live claim", () =>

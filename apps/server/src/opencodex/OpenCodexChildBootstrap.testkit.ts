@@ -31,7 +31,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import { makeHubConsentGenerations } from "../hub/hubConsentGenerations.ts";
-import { type DevicePlatform, HubOcx } from "../hub/HubOcx.ts";
+import { type DevicePlatform, HubOcx, HubOcxError } from "../hub/HubOcx.ts";
 import { fleetSnapshot } from "../hub/parity.testkit.ts";
 import * as Settings from "../serverSettings.ts";
 import type { SshAliasEvent, SshAliasListener } from "../sshRemote/SshAliasEvents.ts";
@@ -79,6 +79,13 @@ export interface Machine {
   autoJoin: boolean;
   /** SSH hosts GOAT set up, by the revision of their config and pinned key. */
   revisions: Map<string, string>;
+  /** Pen members' aliases, by the revision of their Pen settings and recorded keys. */
+  penRevisions: Map<string, string>;
+  penRevisionReadable: boolean;
+  /** Why a Pen revision read fails while it is unreadable. */
+  penRevisionError: string;
+  /** Runs after a Pen revision is read and before it is answered, as a slow ssh -G would. */
+  duringPenRead: Effect.Effect<void> | undefined;
   revisionReadable: boolean;
   /** Bumped by each Forget, as SshHostSetup does. */
   generations: Map<string, number>;
@@ -293,6 +300,18 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
             Effect.sync(() => (machine.nativeWindows ? undefined : machine.platform)),
           ensureDeviceRuntime: () =>
             Effect.suspend(() => machine.duringEnsure).pipe(Effect.as(machine.runtime)),
+          penAliasRevision: (alias) =>
+            machine.penRevisionReadable
+              ? Effect.gen(function* () {
+                  const revision = machine.penRevisions.get(alias);
+                  const hook = machine.duringPenRead;
+                  machine.duringPenRead = undefined;
+                  if (hook !== undefined) yield* hook;
+                  return revision;
+                })
+              : Effect.fail(
+                  new HubOcxError({ reason: "unreachable", message: machine.penRevisionError }),
+                ),
         }),
       ),
       Layer.provide(
@@ -472,6 +491,10 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     hubEvents: yield* Queue.unbounded<string>(),
     autoJoin: true,
     revisions: new Map([["lidge-ts", "rev-1"]]),
+    penRevisions: new Map(),
+    penRevisionReadable: true,
+    penRevisionError: "ssh -G failed",
+    duringPenRead: undefined,
     revisionReadable: true,
     generations: new Map(),
     sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),

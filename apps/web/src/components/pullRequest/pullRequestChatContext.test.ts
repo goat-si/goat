@@ -6,6 +6,14 @@ import {
   buildAskAboutPullRequestHandoff,
   buildPullRequestCommentContext,
 } from "./pullRequestDetail.logic";
+import { bounded } from "./pullRequestChatContext";
+
+describe("bounding review text", () => {
+  it("does not split a surrogate pair at the cut", () => {
+    // The emoji starts exactly at the cut, so its halves straddle it.
+    expect(bounded(`${"x".repeat(996)}😀 and more of the review.`)).toBe(`${"x".repeat(996)}...`);
+  });
+});
 
 describe("adding a remark to the chat", () => {
   const pullRequest = { number: 42, url: "https://github.com/goat-si/goat/pull/42" };

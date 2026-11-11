@@ -1,0 +1,18 @@
+// The Pen login service. Deploy from this directory with `pnpm run deploy` after setting the secrets
+// GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and LOGIN_SIGNING_KEY; see README.md.
+{
+  "name": "pen-login",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "account_id": "88fe49abfe560e75daf6b53b0398bed8",
+  "workers_dev": true,
+  "preview_urls": false,
+  // Request logs would hold every sign-in's address and account.
+  "observability": { "enabled": false },
+  "durable_objects": { "bindings": [{ "name": "LOGIN", "class_name": "Login" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Login"] }],
+  "vars": {
+    // Tests point GOOGLE_DISCOVERY and GOOGLE_ISSUER at a fake issuer; both count only for requests to localhost.
+    "GOOGLE_ISSUER": "https://accounts.google.com",
+  },
+}

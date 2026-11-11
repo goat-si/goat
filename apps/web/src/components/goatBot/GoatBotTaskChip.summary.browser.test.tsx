@@ -26,6 +26,7 @@ vi.mock(import("../../state/entities"), async (original) => ({
 }));
 
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
+import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 
 const card: GoatBotTaskCard = {
   key: "task",
@@ -46,7 +47,7 @@ const card: GoatBotTaskCard = {
 };
 
 it("renders a task result's Markdown summary in its card", async () => {
-  await using screen = await render(<GoatBotTaskChip card={card} tail={false} />);
+  await using screen = await render(<GoatBotTaskChip card={card} />);
   await expect.element(screen.getByText("통과 (3/3)")).toBeVisible();
   const summary = screen.container.querySelector(".goat-task-summary");
   expect([...(summary?.querySelectorAll("strong") ?? [])].map((node) => node.textContent)).toEqual([
@@ -55,4 +56,19 @@ it("renders a task result's Markdown summary in its card", async () => {
   ]);
   expect(summary?.querySelectorAll("li")).toHaveLength(2);
   expect(summary?.textContent).not.toContain("**");
+});
+
+it("keeps thread links in the summary where the card's own thread control is hidden", async () => {
+  const linked = { ...card, summary: "See [the report](goat-thread://v1/report-thread)." };
+  await using screen = await render(
+    <GoatBotTaskTargetHidden value>
+      <GoatBotTaskChip card={linked} />
+    </GoatBotTaskTargetHidden>,
+  );
+  await expect
+    .element(screen.getByRole("link", { name: "Thread, the report" }))
+    .toHaveAttribute("href", "/worker-home/report-thread");
+  expect(screen.container.querySelector("button")).toBeNull();
+  await screen.rerender(<GoatBotTaskChip card={linked} />);
+  expect(screen.container.querySelector("button")).not.toBeNull();
 });

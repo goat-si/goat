@@ -40,6 +40,15 @@ const bot: GoatBotRow = {
   firstInGroup: true,
   groupPosition: "single",
 };
+const answered = {
+  ...bot,
+  id: "answered",
+  text: "Short or detailed?",
+  options: [],
+  choices: ["Short", "Detailed"],
+  answer: "Short",
+  answerIndex: 0,
+} as GoatBotRow;
 const task: GoatBotRow = {
   kind: "task",
   id: "task",
@@ -74,20 +83,28 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("links each sent user and bot message to its own time slot, excluding failed sends and task cards", async () => {
+it("links each sent user and bot message, answered questions included, to a time it can show, and skips failed sends and task cards", async () => {
   await act(() =>
     root.render(
-      <GoatBotTimeline rows={[user("sent"), user("failed", true), bot, task]} onRetry={() => {}} />,
+      <GoatBotTimeline
+        rows={[user("sent"), user("failed", true), bot, answered, task]}
+        onRetry={() => {}}
+      />,
     ),
   );
   const messages = [...container.querySelectorAll("li[aria-describedby]")];
-  expect(messages).toHaveLength(2);
+  expect(messages).toHaveLength(3);
   for (const message of messages) {
     const timeId = message.getAttribute("aria-describedby");
     const time = [...message.querySelectorAll("time")].find((item) => item.id === timeId);
     expect(message.getAttribute("tabindex")).toBe("0");
     expect(time?.dateTime).toBe(createdAt);
-    expect(time?.className).toContain("max-[360px]:sr-only");
+  }
+  for (const text of ["Reply", "Short or detailed?"]) {
+    const botTime = [...container.querySelectorAll("li")]
+      .find((item) => item.textContent?.includes(text))
+      ?.querySelector("time");
+    expect(botTime?.classList.contains("sr-only")).toBe(false);
   }
   const failed = [...container.querySelectorAll("li")].find((item) =>
     item.textContent?.includes("Not Delivered"),

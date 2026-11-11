@@ -1,4 +1,5 @@
 import { retryDelayMs } from "../retryJitter.ts";
+import { makeRefusalGrace } from "./remoteRefusalGrace.ts";
 import * as AutomationHold from "../automationHold.ts";
 // @effect-diagnostics nodeBuiltinImport:off - generate private read keys and identify the origin machine.
 import * as NodeCrypto from "node:crypto";
@@ -740,6 +741,7 @@ const make = Effect.gen(function* () {
     let backoff = 5_000;
     let hostFailures = 0;
     let outageNotified = false;
+    const grace = makeRefusalGrace(deleteIntentHeld(id));
     while (true) {
       const keepDraining = yield* Effect.gen(function* () {
         const r = yield* load(id);
@@ -791,6 +793,7 @@ const make = Effect.gen(function* () {
             (error.reason === "host_unavailable" || error.reason === "ssh_failed")
           ) {
             hostFailures += 1;
+            yield* grace.outage;
             if (r.kind === "task" && hostFailures >= 3 && !outageNotified) {
               yield* threads
                 .dispatch({
@@ -821,6 +824,7 @@ const make = Effect.gen(function* () {
             return true;
           }
           hostFailures = 0;
+          if (yield* grace.retry) return true;
           if (r.kind === "task") {
             const gone =
               error instanceof SshRemoteDispatch.SshRemoteDispatchError &&

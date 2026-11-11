@@ -240,6 +240,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
   goatBotProfileEdit: Schema.optionalKey(Schema.Boolean),
+  /** `channel.updateBot` takes a member's `defaultModelSelection`. Older servers drop the key. */
+  goatBotMemberModelEdit: Schema.optionalKey(Schema.Boolean),
+  /** `channel.createBot` and `channel.updateBot` store a member's `color`. Older servers drop it. */
+  goatBotProfileColor: Schema.optionalKey(Schema.Boolean),
   /** Server creates, hides, deletes and restores member bots, each with its own conversation. */
   goatBotMembers: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listChildWork`. */

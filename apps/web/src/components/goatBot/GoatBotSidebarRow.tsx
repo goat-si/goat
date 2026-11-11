@@ -36,6 +36,7 @@ import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { GoatBotMainMenu } from "./GoatBotMemberRows";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
+import { useBotThreads } from "./useBotRoster";
 
 type GoatBotReadMenuProps = ReturnType<typeof useGoatBotReadMenu>;
 
@@ -146,10 +147,15 @@ function GoatBotSidebarPreview({
   const localLastVisitedAt = useUiStateStore(
     (state) => state.threadLastVisitedAtById[scopedThreadKey(threadRef)],
   );
+  // The preview reads the chat as it shows: no cards for the tasks its work list opens.
+  const work = useBotThreads(botRef.environmentId, null);
   const rows = buildGoatBotTimeline({
     visibleTurnItems: items,
     pendingInputs: [],
     readers: goatBotItemReaders,
+    taskId: null,
+    knownTaskIds: work.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+    conversationOnly: work.supported,
   });
   const preview = goatBotConversationPreview({
     rows,
@@ -213,7 +219,7 @@ function GoatBotConversationRow({
           />
         ) : null}
       </span>
-      <GoatBotMainAvatar size="sm" place="list" emoji={avatar} />
+      <GoatBotMainAvatar size="md" place="list" emoji={avatar} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <span
@@ -261,6 +267,8 @@ function GoatBotConversationRow({
           ) : null}
         </span>
       </span>
+      {/* Room for the row's options button, which sits over the right edge. */}
+      <span aria-hidden className="w-5 shrink-0 group-data-[collapsible=icon]:hidden" />
     </SidebarMenuButton>
   );
 }

@@ -1,7 +1,7 @@
 import type { HubDeviceTransport } from "@goat/contracts";
 import { WINDOWS_REMOTE_LINK_UNPINNED } from "@goat/shared/opencodexRelease";
 
-import type { DevicePlatform } from "./HubOcx.ts";
+import type { DeviceAnswer } from "./HubOcx.ts";
 
 const WINDOWS_REFUSAL = `${WINDOWS_REMOTE_LINK_UNPINNED} Join it as a Hub-mode client with transport hub-client.`;
 const PLATFORM_LABEL = { windows: "Windows", posix: "POSIX", unknown: "Platform unknown" };
@@ -13,10 +13,16 @@ const PLATFORM_LABEL = { windows: "Windows", posix: "POSIX", unknown: "Platform 
  */
 export const joinPreflight = (
   alias: string,
-  platform: DevicePlatform | undefined,
+  platform: DeviceAnswer | undefined,
   requested: HubDeviceTransport | undefined,
   windowsPinned: boolean,
 ): { readonly ok: boolean; readonly transport: HubDeviceTransport; readonly detail: string } => {
+  if (platform === "unreachable")
+    return {
+      ok: false,
+      transport: requested ?? "remote-link",
+      detail: `${alias} could not be reached over SSH. Check that it is awake and reachable, then join again.`,
+    };
   if (platform === undefined && requested === "hub-client")
     return {
       ok: false,

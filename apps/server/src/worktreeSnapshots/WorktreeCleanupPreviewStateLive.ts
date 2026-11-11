@@ -71,6 +71,11 @@ const make = Effect.gen(function* () {
       );
       if (rows.length === 0) return yield* new StaleCleanupPreviewError({ previewId });
     }),
+    reset: sql`DELETE FROM worktree_cleanup_preview`.pipe(
+      Effect.asVoid,
+      Effect.orDie,
+      Effect.withSpan("WorktreeCleanupPreviewState.reset"),
+    ),
   });
 });
 export const layer = Layer.effect(WorktreeCleanupPreviewState, make);

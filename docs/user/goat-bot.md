@@ -5,15 +5,22 @@ its own task threads, and reports back in the same conversation. Choose **Bots**
 on web and desktop, or the Bots segment on mobile Home. To reach it from Slack or iMessage, see
 [Slack](./slack.md).
 
+The conversation holds only what you and the bot say: its answers, its questions, a line while it
+works and how the work ended. On web and desktop, the tasks it starts open from **Work** in the
+bot's header, where each one has its own view.
+
 ## Bots
 
 The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with a
 name, an emoji, a purpose and a model, and its own conversation and task list. A bot answers
 under its own name and purpose from its next conversation session.
 
-- Edit any bot, including the main one, from its row menu (long press on mobile) or **Settings →
-  GOAT Bot → Profile**. A new name also changes how the main bot introduces itself in Slack and
-  iMessage.
+- Edit any bot, including the main one, from its row menu (long press on mobile), its name at the
+  top of its chat, or **Settings → GOAT Bot → Profile**. A new name also changes how the main bot
+  introduces itself in Slack and iMessage.
+- An added bot's model can change in its edit dialog or from the model button in its message
+  box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
+  bot's model again.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
   history. A bot with open tasks can't be deleted until they finish or you stop them.
@@ -42,16 +49,20 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
-**Work** in the bot's header opens its status, tasks, routines, memory, library and computers.
+The bot's name at the top of its chat opens the bot's home, where **Edit bot** changes its name,
+face, purpose and model. **Home** is one page: a status note when
+something needs fixing, the machines its work runs on, its tasks, and its routines. Selecting a
+task shows its conversation right there, beside the chat; **Go to thread** opens it in full.
+**Library** holds the files the bot saved and its memory.
 
-- **Status** says whether the bot can work right now and why not: the machine it answers on, its
-  model, open and waiting work, and Slack. Each problem comes with the action that fixes it when
-  you're allowed to take it.
+- The status note says why the bot can't work right now: the machine it answers on, its model,
+  open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
+  allowed to take it. The full status stays in **Settings → GOAT Bot**.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
   hours you choose: the bot looks over its tasks and writes only when something needs you. A
   routine whose last run failed shows **Run now**.
-- A task that failed or that you stopped shows **Retry** on its card and in its task view; each
+- A task that failed or that you stopped shows **Retry** in its task view; each
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not
   retried from here: check it on that computer, then ask the bot again.
@@ -67,7 +78,7 @@ move when the window is hidden or when your system asks to reduce motion.
   file itself is unchanged.
 - **Library** lists the files the bot saved, newest first. Images and text open in place; other
   files download, or open the share sheet on mobile. Files over 20 MB don't open.
-- **Computer** shows which machines the bot's running tasks use.
+- **Machines** shows which machines the bot's running tasks use.
 
 ## Going back to an older GOAT
 

@@ -1,5 +1,13 @@
-import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { afterEach, expect, it, vi } from "vite-plus/test";
+import {
+  buildGoatBotTimeline,
+  type GoatBotMessagePresentation,
+  type GoatBotPendingInput,
+  type GoatBotRow,
+  type GoatBotTaskCard,
+} from "@goat/client-runtime/goatBot";
+import { MessageId, type OrchestrationV2TurnItem, ThreadId, TurnItemId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
   renderNative,
@@ -10,9 +18,28 @@ const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFo
 
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
-vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
-// The native Markdown renderer cannot load under Vitest.
-vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
+vi.mock("./GoatBotFace", async () => {
+  const { Text } = await import("react-native");
+  return {
+    GoatBotHeaderFace: () => null,
+    GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
+      <Text>{`face:${props.state}:${props.inView}|`}</Text>
+    ),
+  };
+});
+vi.mock("./GoatBotShimmerText", async () => {
+  const { Text } = await import("react-native");
+  return {
+    GoatBotShimmerText: (props: { label: string; animate: boolean }) => (
+      <Text>{`shimmer:${props.label}:${props.animate}`}</Text>
+    ),
+  };
+});
+// The native Markdown renderer cannot load under Vitest; its source text stands in for it.
+vi.mock("./GoatBotMarkdown", async () => {
+  const { Text } = await import("react-native");
+  return { GoatBotMarkdown: (props: { text: string }) => <Text>{`md[${props.text}]`}</Text> };
+});
 vi.mock("./GoatBotComposerAttachments", () => ({
   GoatBotAttachButton: () => null,
   GoatBotAttachmentStrip: () => null,
@@ -35,7 +62,8 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
-vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: appearance.mode,
@@ -43,6 +71,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 import { GoatBotTimelineRow } from "./GoatBotScreen";
+import { GoatBotActivityLine, goatBotTime } from "./GoatBotMessageParts";
 
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -99,24 +128,24 @@ it("shows time in a same-day pause stamp", async () => {
   expect(view.container.textContent).toMatch(/\d/);
 });
 
-it("keeps the receipt on only the marked user row", async () => {
+it("ends a person's group with its time and keeps read receipts out of the transcript", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(
     h,
     <GoatBotTimelineRow
       {...props}
-      row={user({ state: "read", readAt: "2026-10-12T09:41:00Z" }, false)}
+      row={user({ state: "read", readAt: "2026-10-12T09:41:00Z" }, true)}
     />,
   );
   await view.render();
   expect(view.container.textContent).not.toContain("Read");
-  await view.rerender(
-    <GoatBotTimelineRow
-      {...props}
-      row={user({ state: "read", readAt: "2026-10-12T09:41:00Z" }, true)}
-    />,
-  );
-  expect(view.container.textContent).toContain("Read");
+  expect(view.container.textContent).toMatch(/^Hello.*\d/);
+  await view.rerender(<GoatBotTimelineRow {...props} row={user({ state: "delivered" }, true)} />);
+  expect(view.container.textContent).not.toContain("Delivered");
+  await view.rerender(<GoatBotTimelineRow {...props} row={user({ state: "sending" }, true)} />);
+  expect(view.container.textContent).toContain("Sending…");
+  await view.rerender(<GoatBotTimelineRow {...props} row={user({ state: "queued" }, true)} />);
+  expect(view.container.textContent).toContain("Waiting to send");
 });
 
 it("offers retry only for a recoverable failure", async () => {
@@ -138,20 +167,36 @@ it("offers retry only for a recoverable failure", async () => {
   expect(view.container.textContent).toContain("Retry");
 });
 
-it("labels only the first proactive bubble in a group", async () => {
+it("labels the first of the bot's unprompted updates and leaves its replies unheaded", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(h, <GoatBotTimelineRow {...props} row={bot({ proactive: true })} />);
   await view.render();
   expect(view.container.textContent).toContain("GOAT Bot · Update");
   await view.rerender(<GoatBotTimelineRow {...props} row={bot({ proactive: false })} />);
-  expect(view.container.textContent).not.toContain("GOAT Bot · Update");
+  expect(view.container.textContent).not.toContain("GOAT Bot");
   await view.rerender(
     <GoatBotTimelineRow
       {...props}
       row={bot({ proactive: true, firstInGroup: false, groupPosition: "last" })}
     />,
   );
-  expect(view.container.textContent).not.toContain("GOAT Bot · Update");
+  expect(view.container.textContent).not.toContain("GOAT Bot");
+});
+
+it("shows the time under the last reply of a bot group, answered questions included", async () => {
+  const time = goatBotTime("2026-10-12T09:40:00Z");
+  h = createNativeMemoryHarness();
+  view = renderNative(h, <GoatBotTimelineRow {...props} row={bot()} />);
+  await view.render();
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(
+    <GoatBotTimelineRow {...props} row={bot({ answer: "Short", options: [] } as never)} />,
+  );
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(
+    <GoatBotTimelineRow {...props} row={bot({ firstInGroup: true, groupPosition: "first" })} />,
+  );
+  expect(view.container.textContent).not.toContain(time);
 });
 
 it("names a member bot on its update and leaves a reply unlabeled", async () => {
@@ -169,7 +214,37 @@ it("names a member bot on its update and leaves a reply unlabeled", async () => 
   expect(view.container.textContent).not.toContain("· Update");
 });
 
-it("opens the task represented by a task thread pill", async () => {
+it("ends a bot group with its time when the group's last row is a task card", async () => {
+  const time = goatBotTime("2026-10-12T09:41:00Z");
+  h = createNativeMemoryHarness();
+  const task = (groupPosition: "last" | "middle"): GoatBotRow => ({
+    kind: "task",
+    id: "card",
+    createdAt: "2026-10-12T09:41:00Z",
+    firstInGroup: false,
+    groupPosition,
+    card: {
+      key: "task-1",
+      revision: 1,
+      updatedAt: "2026-10-12T09:41:00Z",
+      title: "Check disks",
+      statusLabel: "Running",
+      tone: "active",
+      sourceLabel: null,
+      summary: null,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  });
+  view = renderNative(h, <GoatBotTimelineRow {...props} row={task("last")} />);
+  await view.render();
+  expect(view.container.textContent).toContain(time);
+  await view.rerender(<GoatBotTimelineRow {...props} row={task("middle")} />);
+  expect(view.container.textContent).not.toContain(time);
+});
+
+it("opens the task represented by a task row", async () => {
   h = createNativeMemoryHarness();
   const onSelectTask = vi.fn();
   view = renderNative(
@@ -200,7 +275,7 @@ it("opens the task represented by a task thread pill", async () => {
     />,
   );
   await view.render();
-  await view.click("Task thread · Check disks · Running");
+  await view.click("Check disks. Running. Open task");
   expect(onSelectTask).toHaveBeenCalledWith("task-1");
 });
 it("shows a bot event as a centered note line", async () => {
@@ -221,4 +296,316 @@ it("shows a bot event as a centered note line", async () => {
   );
   await view.render();
   expect(view.container.textContent).toBe("Routine Check in paused");
+});
+
+describe("the progress line under the last message", () => {
+  it("shows the working step beside a moving face, with no timer or disclosure", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "working", text: "Copying files" }}
+        inView
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:working:true|shimmer:Copying files:true");
+  });
+
+  it("reads with the reading face and the sweep", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "reading", text: "Reading your message" }}
+        inView
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:reading:true|shimmer:Reading your message:true");
+  });
+
+  it("holds a wait on the person still: the waiting face and plain text", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "working", text: "Waiting for your answer" }}
+        inView
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:waiting:true|Waiting for your answer");
+  });
+
+  it("stops the face and the sweep when the line is out of view", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "working", text: "Copying files" }}
+        inView={false}
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:working:false|shimmer:Copying files:false");
+  });
+});
+
+it("asks a question in one card with lettered choices and sends the pick to its task", async () => {
+  h = createNativeMemoryHarness();
+  const onSend = vi.fn(() => true);
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      onSend={onSend}
+      row={bot({
+        tone: "question",
+        text: "Deploy now?",
+        options: ["Yes", "Later"],
+        answerTaskId: "task-1",
+      })}
+    />,
+  );
+  await view.render();
+  expect(view.container.textContent).toContain("Deploy now?");
+  expect(
+    [...view.container.querySelectorAll("button")].map((button) =>
+      button.getAttribute("aria-label"),
+    ),
+  ).toEqual(["A. Yes", "B. Later"]);
+  await view.click("B. Later");
+  expect(onSend).toHaveBeenCalledWith("Later", "task-1");
+});
+
+it("keeps an answered question's card with the question and only the picked choice", async () => {
+  h = createNativeMemoryHarness();
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      row={bot({
+        tone: "question",
+        text: "Deploy now?",
+        options: [],
+        choices: ["Yes", "Later"],
+        answer: "Later",
+        answerIndex: 1,
+      })}
+    />,
+  );
+  await view.render();
+  const text = view.container.textContent ?? "";
+  expect(text).toContain("Deploy now?");
+  expect(text).toContain("BLater");
+  expect(text).not.toContain("Yes");
+  expect(text).not.toContain("Answered");
+  expect(view.container.querySelectorAll("button")).toHaveLength(0);
+});
+
+it("offers no pick while the bot cannot take a message", async () => {
+  h = createNativeMemoryHarness();
+  const onSend = vi.fn(() => true);
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      canSend={false}
+      onSend={onSend}
+      row={bot({ tone: "question", text: "Deploy now?", options: ["Yes", "Later"] })}
+    />,
+  );
+  await view.render();
+  const buttons = [...view.container.querySelectorAll("button")];
+  expect(buttons.map((button) => button.disabled)).toEqual([true, true]);
+  await view.click("A. Yes");
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+// Turn items for the shared timeline, so these tests read the answered state the way the screen does.
+const at = (second: number) => `2026-10-12T12:00:0${second}Z`;
+function turnBase(id: string, second: number) {
+  const time = DateTime.makeUnsafe(at(second));
+  return {
+    id: TurnItemId.make(id),
+    threadId: ThreadId.make("thread-bot"),
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "completed" as const,
+    title: null,
+    startedAt: time,
+    completedAt: time,
+    updatedAt: time,
+  };
+}
+const askedItem = {
+  ...turnBase("b1", 1),
+  type: "assistant_message",
+  messageId: MessageId.make("m-b1"),
+  text: "Which one?",
+  streaming: false,
+} satisfies OrchestrationV2TurnItem;
+const sentItem = (text: string) =>
+  ({
+    ...turnBase("u1", 2),
+    type: "user_message",
+    messageId: MessageId.make("m-u1"),
+    inputIntent: "turn_start",
+    text,
+    attachments: [],
+    createdBy: "user",
+    creationSource: "mobile",
+  }) satisfies OrchestrationV2TurnItem;
+const cardItem = {
+  ...turnBase("n1", 0),
+  type: "notification",
+  source: { kind: "background_task" },
+  outcome: "updated",
+  summary: "Work updated",
+} satisfies OrchestrationV2TurnItem;
+const question: GoatBotMessagePresentation = {
+  tone: "question",
+  readAt: null,
+  requestKey: null,
+  options: ["CI fix", "Release"],
+};
+const taskQuestion: GoatBotMessagePresentation = {
+  ...question,
+  taskId: "proposal",
+  questionId: "q-pick",
+};
+const taskCard = (openQuestionIds: ReadonlyArray<string>): GoatBotTaskCard => ({
+  key: "proposal",
+  revision: 2,
+  updatedAt: at(0),
+  title: "Pick a fix",
+  statusLabel: "Working",
+  tone: "active",
+  sourceLabel: null,
+  summary: null,
+  attentionLabel: null,
+  pullRequests: [],
+  target: { kind: "none", label: "Pick a fix" },
+  askInChat: true,
+  openQuestionIds,
+});
+const sending = (text: string, state: GoatBotPendingInput["state"]): GoatBotPendingInput => ({
+  clientKey: "c1",
+  text,
+  createdAt: at(2),
+  state,
+  requestKey: null,
+});
+
+function questionFrom(input: {
+  readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly pending?: ReadonlyArray<GoatBotPendingInput>;
+  readonly messages?: Record<string, GoatBotMessagePresentation>;
+  readonly cards?: Record<string, GoatBotTaskCard>;
+}): GoatBotRow {
+  const messages = input.messages ?? { b1: question };
+  const rows = buildGoatBotTimeline({
+    visibleTurnItems: input.items.map((item, position) => ({
+      position,
+      visibility: "local",
+      sourceThreadId: item.threadId,
+      sourceItemId: item.id,
+      item,
+    })),
+    pendingInputs: [...(input.pending ?? [])],
+    readers: {
+      message: (item) => messages[item.id] ?? null,
+      taskCard: (item) => input.cards?.[item.id] ?? null,
+    },
+    taskId: null,
+  });
+  const row = rows.find((entry) => entry.id === "b1");
+  if (row === undefined) throw new Error("The question row is missing.");
+  return row;
+}
+
+describe("a question in the chat folds to the answer the person sent", () => {
+  const shown = async (row: GoatBotRow) => {
+    h = createNativeMemoryHarness();
+    view = renderNative(h, <GoatBotTimelineRow {...props} row={row} />);
+    await view.render();
+    return {
+      text: view.container.textContent ?? "",
+      buttons: [...view.container.querySelectorAll("button")].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+    };
+  };
+
+  it("shows a pick on its way as the chosen row, sending, under the kept question", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({ items: [askedItem], pending: [sending("Release", "sending")] }),
+    );
+    expect(text).toContain("Which one?");
+    expect(text).toContain("BReleaseSending…");
+    expect(text).not.toContain("CI fix");
+    expect(buttons).toEqual([]);
+  });
+
+  it("keeps only the question when the reply was typed, leaving the reply its own message", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({ items: [askedItem, sentItem("Neither, wait for Monday")] }),
+    );
+    expect(text).toContain("Which one?");
+    expect(text).not.toContain("Neither, wait for Monday");
+    expect(text).not.toContain("Answered");
+    expect(buttons).toEqual([]);
+  });
+
+  it("keeps the choices when the answer failed to send", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({ items: [askedItem], pending: [sending("Release", "failed")] }),
+    );
+    expect(text).toContain("Which one?");
+    expect(text).not.toContain("Sending…");
+    expect(buttons).toEqual(["A. CI fix", "B. Release"]);
+  });
+
+  it("leaves a later message its own once the task closed the question", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({
+        items: [cardItem, askedItem, sentItem("Release")],
+        messages: {
+          b1: taskQuestion,
+          u1: { tone: "reply", readAt: at(2), requestKey: "in-1", taskId: "proposal" },
+        },
+        cards: { n1: taskCard([]) },
+      }),
+    );
+    expect(text).toContain("Which one?");
+    expect(text).not.toContain("Release");
+    expect(buttons).toEqual([]);
+  });
+
+  it("folds a pick sent while the task's card still lists the question into that question", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({
+        items: [cardItem, askedItem, sentItem("Release")],
+        messages: {
+          b1: taskQuestion,
+          u1: { tone: "reply", readAt: null, requestKey: "in-1", taskId: "proposal" },
+        },
+        cards: { n1: taskCard(["q-pick"]) },
+      }),
+    );
+    expect(text).toContain("Which one?");
+    expect(text).toContain("BRelease");
+    expect(text).not.toContain("CI fix");
+    expect(buttons).toEqual([]);
+  });
 });

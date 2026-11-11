@@ -8,6 +8,7 @@
  * @module slackMessageFormatting
  */
 import { chunkFenceAware } from "./slackMessageChunking.ts";
+import { markdownTablesToLists } from "../channelTables.ts";
 
 /** Slack recommends keeping message text under this length. */
 export const SLACK_TEXT_LIMIT = 4000;
@@ -95,7 +96,8 @@ export function formatSlackOutboundMessages(input: {
       ? `<@${input.mentionUserId}> `
       : "";
   const room = SLACK_TEXT_LIMIT - mention.length;
-  const pieces = fittingPieces(input.text.trim(), room);
+  const text = markdownTablesToLists(input.text.trim(), { bullet: "•", boldFirst: true });
+  const pieces = fittingPieces(text, room);
   const kept =
     pieces.length <= SLACK_MAX_MESSAGES
       ? pieces

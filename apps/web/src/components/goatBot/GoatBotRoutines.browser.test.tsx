@@ -53,7 +53,13 @@ it("Check in on me saves a weekday-morning routine in the bot's chat, then stops
   setup();
   mocks.upsert.mockResolvedValue(AsyncResult.success({ task: savedCheckIn }));
   await using screen = await render(
-    <GoatBotRoutines environmentId={environmentId} threadId={threadId} tasks={[]} error={null} />,
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[]}
+      error={null}
+      onRetry={() => {}}
+    />,
   );
   await userEvent.click(screen.getByRole("button", { name: "Check in on me" }));
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -77,6 +83,7 @@ it("Check in on me saves a weekday-morning routine in the bot's chat, then stops
       threadId={threadId}
       tasks={[savedCheckIn]}
       error={null}
+      onRetry={() => {}}
     />,
   );
   await expect.element(screen.getByText("Weekdays at 09:00 · Not scheduled")).toBeVisible();
@@ -89,7 +96,13 @@ it("a refused save keeps the check-in form open and shows why", async () => {
   setup();
   mocks.upsert.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Denied"))));
   await using screen = await render(
-    <GoatBotRoutines environmentId={environmentId} threadId={threadId} tasks={[]} error={null} />,
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[]}
+      error={null}
+      onRetry={() => {}}
+    />,
   );
   await userEvent.click(screen.getByRole("button", { name: "Check in on me" }));
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -124,6 +137,7 @@ it("offers Run now only for a routine whose last run failed, one run per tap", a
       threadId={threadId}
       tasks={[failedRoutine, fineRoutine]}
       error={null}
+      onRetry={() => {}}
     />,
   );
   const runNow = screen.getByRole("button", { name: "Run now" });
@@ -146,6 +160,7 @@ it("a refused Run now says why", async () => {
       threadId={threadId}
       tasks={[failedRoutine]}
       error={null}
+      onRetry={() => {}}
     />,
   );
   await userEvent.click(screen.getByRole("button", { name: "Run now" }));
