@@ -112,6 +112,7 @@ it.effect("a connection that moved during the join's sync is reported, never as 
     const sync = result.steps.find(({ step }) => step === "sync");
     expect(sync?.outcome).toBe("failed");
     expect(sync?.detail).toContain("changed");
+    expect(result.state).toBe("degraded");
   }),
 );
 

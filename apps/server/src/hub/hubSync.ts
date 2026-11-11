@@ -18,21 +18,38 @@ export const makeLinkSync = (ocx: HubOcx["Service"]) =>
     linkId: string,
     scope: McpInvocationScope,
   ) {
-    const failed = (detail: string): HubDeviceStep => ({ step: "sync", outcome: "failed", detail });
+    // moved: the device left this link during the sync, so the join cannot report it linked.
+    const failed = (detail: string, moved = false) => ({
+      step: { step: "sync", outcome: "failed", detail } satisfies HubDeviceStep,
+      moved,
+    });
     if ((yield* ocx.runningTurns(alias, scope)) !== 0)
       return {
-        step: "sync",
-        outcome: "deferred",
-        detail: "A turn is running there, or its activity is unknown, so GOAT did not sync.",
-      } satisfies HubDeviceStep;
+        step: {
+          step: "sync",
+          outcome: "deferred",
+          detail: "A turn is running there, or its activity is unknown, so GOAT did not sync.",
+        } satisfies HubDeviceStep,
+        moved: false,
+      };
     return yield* ocx.syncDevice(alias, { linkId, restartCodex: false }, SYNC_TIMEOUT_MS).pipe(
-      Effect.map((output): HubDeviceStep =>
+      Effect.map((output) =>
         output.code === 0
-          ? { step: "sync", outcome: "ok", detail: `ocx sync ran over ${linkId}.` }
+          ? {
+              step: {
+                step: "sync",
+                outcome: "ok",
+                detail: `ocx sync ran over ${linkId}.`,
+              } satisfies HubDeviceStep,
+              moved: false,
+            }
           : output.code === SYNC_EXIT.notConnected
             ? failed(`${alias} is not connected over ${linkId} yet.`)
             : output.code === SYNC_EXIT.connectionChanged
-              ? failed("The connection changed during ocx sync, so it is not reported synced.")
+              ? failed(
+                  "The connection changed during ocx sync, so it is not reported synced.",
+                  true,
+                )
               : failed(deviceExit("sync", output)),
       ),
       Effect.catch((error) => Effect.succeed(failed(error.message))),

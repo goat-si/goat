@@ -319,7 +319,7 @@ const make = Effect.gen(function* () {
     }
     steps.push({ step: "link_add", outcome: "ok", detail: linkId });
     const synced = yield* syncOverLink(alias, linkId, scope);
-    steps.push(synced);
+    steps.push(synced.step);
     const verified = yield* ladder(
       scope,
       caller,
@@ -329,7 +329,8 @@ const make = Effect.gen(function* () {
       steps,
       true,
     );
-    const state = finalState(verified);
+    const checked = finalState(verified);
+    const state = synced.moved && checked === "child" ? "degraded" : checked;
     yield* audit(caller, `hub.${action}`, alias, state, decisionId);
     return result(
       action,
@@ -337,7 +338,9 @@ const make = Effect.gen(function* () {
       state,
       state === "child"
         ? withUnproven(`${alias} is linked to this Home.`, verified)
-        : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
+        : synced.moved && checked === "child"
+          ? `${alias} is linked, but its connection changed during the sync, so this link is not proven in use.`
+          : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
       steps,
       { parity: verified, transport: "remote-link" },
     );
