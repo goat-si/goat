@@ -54,6 +54,7 @@ const runtimePolicy = {
 } satisfies ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 const threadA = ThreadId.make("thread-settings-a");
 const threadB = ThreadId.make("thread-settings-b");
+const threadC = ThreadId.make("thread-settings-c");
 /** A retiring process stops within one probe after its work ends; idle sessions wait 30 minutes. */
 const retireProbe = "5 seconds";
 
@@ -286,6 +287,7 @@ const sharedSession = Effect.gen(function* () {
   const threads = {
     [threadA]: appThread(threadA, projectId, now),
     [threadB]: appThread(threadB, projectId, now),
+    [threadC]: appThread(threadC, projectId, now),
   };
   for (const thread of Object.values(threads))
     yield* eventSink.write({
@@ -679,6 +681,24 @@ it.effect("a start that never registers stops holding the process once it expire
       fixture.catalog.push(addedModel);
       yield* TestClock.adjust(Retirement.TURN_OPEN_TTL_MS);
       yield* open(threadB, addedModel);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("a refused turn leaves no start behind; the next newer-model turn restarts at once", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open, runTurn } = yield* sharedSession;
+      const turn = yield* runTurn(threadA).pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(fixture.turnStarted);
+      fixture.catalog.push(addedModel);
+      assert.isTrue(Exit.isFailure(yield* open(threadB, addedModel).pipe(Effect.exit)));
+
+      yield* Deferred.succeed(fixture.endTurn, undefined);
+      yield* Fiber.join(turn);
+      yield* open(threadC, addedModel);
       assert.strictEqual(yield* Ref.get(fixture.opens), 2);
     }).pipe(Effect.provide(layer(fixture)));
   }),

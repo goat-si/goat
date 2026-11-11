@@ -73,8 +73,8 @@ export interface RetirableSession {
   readonly busyTurns: ReadonlySet<string>;
   /** Advances with session activity; a release removes the entry only while it still matches. */
   readonly idleGeneration: number;
-  /** Threads whose turn-start open returned but whose turn is not busy yet, with when they opened. */
-  readonly turnOpensAtMs: ReadonlyMap<string, number>;
+  /** Threads whose turn-start open returned but whose turn is not busy yet. */
+  readonly turnOpens: ReadonlyMap<string, TurnOpen>;
   readonly runtime: Pick<
     ProviderAdapter.ProviderAdapterV2SessionRuntime,
     | "instanceId"
@@ -103,12 +103,25 @@ export const restartRequired = (retired: Retirement, runningTurns: number, model
     ...(model === undefined || !isModelRefusal(retired) ? {} : { model, modelStatus: retired }),
   });
 
-export const withoutTurnOpen = <K extends string>(opens: ReadonlyMap<K, number>, threadId: K) => {
-  if (!opens.has(threadId)) return opens;
+/** One turn-start open; `id` keeps a failed attempt from clearing a newer one on the same thread. */
+export interface TurnOpen {
+  readonly at: number;
+  readonly id: number;
+}
+
+export const withoutTurnOpen = <K extends string>(
+  opens: ReadonlyMap<K, TurnOpen>,
+  threadId: K,
+  id?: number,
+) => {
+  const open = opens.get(threadId);
+  if (open === undefined || (id !== undefined && open.id !== id)) return opens;
   const next = new Map(opens);
   next.delete(threadId);
   return next;
 };
+
+const isStarting = (open: TurnOpen, now: number) => now - open.at < TURN_OPEN_TTL_MS;
 
 /** Refuses a turn on a process, however it was opened, that cannot run the turn's model. */
 export const refuseUnready = Effect.fnUntraced(function* <E>(
@@ -175,7 +188,7 @@ export const make = <
    */
   const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
     providerSessionId: ProviderSessionId,
-    turn?: { readonly model: string; readonly threadId: string },
+    turn?: { readonly model: string; readonly threadId: string; readonly id: number },
   ) {
     const key = String(providerSessionId);
     const model = turn?.model;
@@ -186,8 +199,10 @@ export const make = <
       yield* Ref.update(input.sessions, (current) => {
         const entry = current.get(key);
         if (entry === undefined) return current;
-        const turnOpensAtMs = new Map(entry.turnOpensAtMs).set(turn.threadId, openedAt);
-        return new Map(current).set(key, { ...entry, turnOpensAtMs });
+        const turnOpens = new Map(
+          [...entry.turnOpens].filter(([, open]) => isStarting(open, openedAt)),
+        ).set(turn.threadId, { at: openedAt, id: turn.id });
+        return new Map(current).set(key, { ...entry, turnOpens });
       });
     }
     const releaseIdle = Effect.fnUntraced(function* (
@@ -198,8 +213,8 @@ export const make = <
       if (latest.busyTurns.size > 0) return busy;
       // Another thread's turn opened here and has not registered yet; releasing would fail its start.
       const now = yield* Clock.currentTimeMillis;
-      const starting = [...latest.turnOpensAtMs].some(
-        ([threadId, openedAt]) => threadId !== turn?.threadId && now - openedAt < TURN_OPEN_TTL_MS,
+      const starting = [...latest.turnOpens].some(
+        ([threadId, open]) => threadId !== turn?.threadId && isStarting(open, now),
       );
       if (busy !== "retiring" && starting) return busy;
       // Activity seen while the probes below yield keeps the session, as it does for idle release.
@@ -266,5 +281,26 @@ export const make = <
     );
   });
 
-  return { retireIfStale, follow };
+  let turnOpenIds = 0;
+  /** Removes a turn-start open that failed or was interrupted before its turn registered. */
+  const clearTurnOpen = (
+    providerSessionId: ProviderSessionId,
+    turn: { readonly threadId: string; readonly id: number } | undefined,
+  ) =>
+    Ref.update(input.sessions, (current) => {
+      if (turn === undefined) return current;
+      const key = String(providerSessionId);
+      const entry = current.get(key);
+      if (entry === undefined) return current;
+      const turnOpens = withoutTurnOpen(entry.turnOpens, turn.threadId, turn.id);
+      return turnOpens === entry.turnOpens
+        ? current
+        : new Map(current).set(key, { ...entry, turnOpens });
+    });
+
+  /** A new turn-start open for `model`, or none when the open does not start a turn. */
+  const turnFor = <T extends string>(model: string | undefined, threadId: T) =>
+    model === undefined ? undefined : { model, threadId, id: ++turnOpenIds };
+
+  return { retireIfStale, follow, clearTurnOpen, turnFor };
 };

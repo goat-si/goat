@@ -317,7 +317,7 @@ interface LiveSessionEntry {
   readonly idleGeneration: number;
   readonly busyTurns: ReadonlySet<string>;
   readonly busyTurnByThread: ReadonlyMap<ThreadId, string>;
-  readonly turnOpensAtMs: ReadonlyMap<ThreadId, number>;
+  readonly turnOpens: ReadonlyMap<ThreadId, Retirement.TurnOpen>;
   readonly lastActivityAtMs: number;
   readonly idleFiber: Fiber.Fiber<void, never> | null;
   readonly pinnedSinceMs: number | null;
@@ -1818,7 +1818,7 @@ export const layerWithOptions = (
                 ...entry,
                 busyTurns: new Set(entry.busyTurns).add(turnKey),
                 busyTurnByThread: new Map(entry.busyTurnByThread).set(threadId, turnKey),
-                turnOpensAtMs: Retirement.withoutTurnOpen(entry.turnOpensAtMs, threadId),
+                turnOpens: Retirement.withoutTurnOpen(entry.turnOpens, threadId),
                 idleFiber: null,
                 lastActivityAtMs: now,
                 pinnedSinceMs: null,
@@ -2604,6 +2604,7 @@ export const layerWithOptions = (
                 cause,
               });
             const model = input.startsTurn === true ? input.modelSelection.model : undefined;
+            const turn = retirement.turnFor(model, input.threadId);
             return sessionOpen
               .withLock(
                 input.providerSessionId,
@@ -2628,8 +2629,6 @@ export const layerWithOptions = (
                   );
                   let settled = yield* settle;
                   if (Option.getOrUndefined(settled) !== undefined) {
-                    const turn =
-                      model === undefined ? undefined : { model, threadId: input.threadId };
                     const retired = yield* retirement.retireIfStale(input.providerSessionId, turn);
                     const latest = (yield* Ref.get(sessions)).get(key);
                     // The idle probe may release a retiring session before this read.
@@ -2781,7 +2780,7 @@ export const layerWithOptions = (
                       idleGeneration: 0,
                       busyTurns: new Set(),
                       busyTurnByThread: new Map(),
-                      turnOpensAtMs: new Map(model === undefined ? [] : [[input.threadId, now]]),
+                      turnOpens: new Map(turn ? [[input.threadId, { at: now, id: turn.id }]] : []),
                       lastActivityAtMs: now,
                       idleFiber: null,
                       pinnedSinceMs: null,
@@ -2841,7 +2840,10 @@ export const layerWithOptions = (
                   );
                 }),
               )
-              .pipe(Effect.tap((runtime) => Retirement.refuseUnready(runtime, model, openError)));
+              .pipe(
+                Effect.tap((runtime) => Retirement.refuseUnready(runtime, model, openError)),
+                Effect.onError(() => retirement.clearTurnOpen(input.providerSessionId, turn)),
+              );
           }),
         isLive: (providerSessionId) =>
           Ref.get(sessions).pipe(
