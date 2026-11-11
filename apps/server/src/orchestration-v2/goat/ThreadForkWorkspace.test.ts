@@ -181,15 +181,14 @@ const layerFakes = (world: World) =>
     }),
     Layer.mock(ProjectService.ProjectService)({
       getById: () =>
-        Effect.succeed(
-          Option.some({
-            id: projectId,
-            workspaceRoot: world.repo,
-            scripts: [],
-          } as unknown as Project),
-        ),
+        Effect.succeedSome({
+          id: projectId,
+          workspaceRoot: world.repo,
+          scripts: [],
+        } as unknown as Project),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+      namedProjectsRoot: NodePath.join(world.root, "projects"),
       isScratchProject: () => Effect.succeed(world.scratch),
     }),
     Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
@@ -203,7 +202,10 @@ const layerFakes = (world: World) =>
           return { status: "no-script" } as const;
         }),
     }),
-    Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({ refreshStatus: () => Effect.void }),
+    Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
+      // The fork only asks for a refresh; nothing reads the status here.
+      refreshStatus: () => Effect.succeed({ isRepo: true } as never),
+    }),
   );
 
 const forkIn = (

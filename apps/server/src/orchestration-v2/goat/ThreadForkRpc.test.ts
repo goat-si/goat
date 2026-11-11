@@ -51,9 +51,8 @@ it.effect("a refused fork reaches the client as a decodable fork error with its 
 
     // What the WebSocket carries: the RPC's declared error union, encoded to JSON and back.
     const codec = Schema.toCodecJson(WsOrchestrationV2ForkThreadRpc.errorSchema);
-    const decoded = Schema.decodeUnknownSync(codec)(
-      JSON.parse(JSON.stringify(Schema.encodeUnknownSync(codec)(error))),
-    );
+    const encoded = yield* Schema.encodeUnknownEffect(codec)(error);
+    const decoded = yield* Schema.decodeUnknownEffect(codec)(JSON.parse(JSON.stringify(encoded)));
     assert.equal(decoded._tag, "OrchestrationV2ThreadForkError");
     if (decoded._tag !== "OrchestrationV2ThreadForkError") return;
     assert.equal(decoded.reason, "uncommitted_unsupported");
