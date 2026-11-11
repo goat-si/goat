@@ -236,8 +236,9 @@ export function GoatBotComposer({
             type="submit"
             aria-label="Send"
             disabled={!canSubmit}
+            data-accent={canSubmit ? "true" : "false"}
             className={cn(
-              "flex size-7 shrink-0 items-center justify-center rounded-full bg-goat-person-message text-goat-person-message-foreground",
+              "goat-bot-send flex size-7 shrink-0 items-center justify-center rounded-full",
               trimmed.length === 0 && attachments.length === 0 && "invisible",
             )}
           >
