@@ -85,8 +85,17 @@ vi.mock("../ui/sidebar", () => ({
   useSidebar: () => ({ isMobile: false, setOpenMobile: vi.fn() }),
 }));
 vi.mock("../ui/badge", () => ({
-  Badge: ({ children, ...props }: { children: ReactNode; "aria-label"?: string }) => (
-    <b aria-label={props["aria-label"]}>{children}</b>
+  Badge: ({
+    children,
+    ...props
+  }: {
+    children: ReactNode;
+    "aria-label"?: string;
+    "aria-hidden"?: boolean;
+  }) => (
+    <b aria-label={props["aria-label"]} aria-hidden={props["aria-hidden"]}>
+      {children}
+    </b>
   ),
 }));
 vi.mock("~/state/entities", () => ({

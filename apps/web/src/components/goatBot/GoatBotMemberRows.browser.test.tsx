@@ -10,7 +10,7 @@ import {
 } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
-import { render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import "~/index.css";
 
 const server = vi.hoisted(() => ({
@@ -234,4 +234,34 @@ it("says waiting once, with the count, on a member whose tasks wait for the pers
   const link = screen.getByRole("link", { name: /^2 waiting for you\s*Research/ });
   await expect.element(link).toBeVisible();
   await expect.element(link).not.toHaveAccessibleName(/waiting[\s\S]*waiting/i);
+});
+
+it("a member row stops reading once the bot answers, and once the reading limit passes", async () => {
+  setup();
+  const start = Date.parse("2026-11-07T01:00:00.000Z");
+  const at = (ms: number) => new Date(start + ms).toISOString();
+  using _now = vi.spyOn(Date, "now").mockReturnValue(start + 30_000);
+  server.latest = { research: { text: "is main green?", at: at(0), author: "person" } };
+  await using screen = await render(<Roster />, { router: false });
+  const named = (name: RegExp) => screen.getByRole("link", { name }).query();
+  await expect.element(screen.getByRole("link", { name: /^Reading\s*Research/ })).toBeVisible();
+  using _timers = fakeTimers();
+  vi.setSystemTime(start + 30_000);
+  const status = async (latest: (typeof server.latest)[string]) => {
+    server.latest = { research: latest };
+    server.bots = [...server.bots];
+    await act(() => publish());
+  };
+  // The bot's reply becomes the newest message; the face holds its last state for 1.2 s.
+  await status({ text: "Yes, it is green.", at: at(31_000), author: "bot" });
+  await act(() => vi.advanceTimersByTime(1_300));
+  expect(named(/^Reading/)).toBeNull();
+  expect(named(/^Research/)).not.toBeNull();
+  // A new message the bot never answers reads until the 90 s limit, then stops.
+  await status({ text: "and the nightly?", at: at(32_000), author: "person" });
+  await act(() => vi.advanceTimersByTime(1_300));
+  expect(named(/^Reading\s*Research/)).not.toBeNull();
+  await act(() => vi.advanceTimersByTime(90_000));
+  expect(named(/^Reading/)).toBeNull();
+  expect(named(/^Research/)).not.toBeNull();
 });

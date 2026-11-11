@@ -64,6 +64,8 @@ export function GoatBotAvatar({
   const picture = goatBotAvatarEmoji(emoji);
   const signal = state === undefined ? null : goatBotAvatarSignal(state, picture !== null);
   const fill = picture !== null ? accent : null;
+  // On a color the letter keeps its contrast, so a sleeping member dims the whole circle instead.
+  const dimCircle = signal?.dimmed === true && fill !== null;
   // An emoji has no eyes to move, so it never takes the one moving face.
   const { watch, motion: eyeMotion } = useGoatBotFaceMotion(
     picture === null ? state : undefined,
@@ -79,6 +81,7 @@ export function GoatBotAvatar({
       className={cn(
         "relative inline-flex shrink-0 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar text-goat-avatar-foreground",
         fill !== null && "border-transparent",
+        dimCircle && "opacity-60",
         signal?.ring && RING[signal.ring],
         CIRCLE[size],
         className,
@@ -87,7 +90,11 @@ export function GoatBotAvatar({
       {picture !== null ? (
         <span
           aria-hidden
-          className={cn("leading-none select-none", EMOJI[size], signal?.dimmed && "opacity-50")}
+          className={cn(
+            "leading-none select-none",
+            EMOJI[size],
+            signal?.dimmed && !dimCircle && "opacity-50",
+          )}
         >
           {picture}
         </span>
