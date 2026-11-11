@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 // For servers that do not track visits: how far the person read each main chat in this app run.
 const localReads = new Map<string, string>();
@@ -70,9 +70,10 @@ export function useGoatBotVisitSnapshot(input: {
     input.focused && focus.focused && input.conversation !== null
       ? `${input.conversation}:${focus.visit}`
       : null;
-  const [snapshot, setSnapshot] = useState<(GoatBotVisitSnapshot & { paused: boolean }) | null>(
-    null,
-  );
+  // `seen` is the newest message the person could see, as of the last render they were reading.
+  const [snapshot, setSnapshot] = useState<
+    (GoatBotVisitSnapshot & { paused: boolean; seen: string | null }) | null
+  >(null);
   const reading = input.reading !== false;
   if (key !== null && snapshot?.key !== key && input.loaded) {
     setSnapshot({
@@ -81,22 +82,32 @@ export function useGoatBotVisitSnapshot(input: {
       newestAtOpen: input.newestAt,
       away: [],
       paused: false,
+      seen: input.newestAt,
     });
   } else if (key !== null && snapshot?.key === key) {
-    // Stepping away starts an interval after the newest message seen; it grows while away.
+    // Stepping away starts an interval after the newest message seen before this render, so a
+    // reply that lands as the person steps away is inside it; the interval grows while away.
     const away = snapshot.away ?? [];
     const last = away.at(-1);
     if (!reading && !snapshot.paused) {
       setSnapshot({
         ...snapshot,
         paused: true,
-        away: [...away, { after: input.newestAt, upTo: input.newestAt }],
+        away: [...away, { after: snapshot.seen, upTo: input.newestAt }],
       });
     } else if (!reading && last !== undefined && last.upTo !== input.newestAt) {
       setSnapshot({ ...snapshot, away: [...away.slice(0, -1), { ...last, upTo: input.newestAt }] });
-    } else if (reading && snapshot.paused) {
-      setSnapshot({ ...snapshot, paused: false });
+    } else if (reading && (snapshot.paused || snapshot.seen !== input.newestAt)) {
+      setSnapshot({ ...snapshot, paused: false, seen: input.newestAt });
     }
   }
-  return key !== null && snapshot?.key === key ? snapshot : null;
+  const current = key !== null && snapshot?.key === key ? snapshot : null;
+  const readUpTo = current?.readUpTo ?? null;
+  const newestAtOpen = current?.newestAtOpen ?? null;
+  const away = current?.away;
+  // What the screen reads changes only with the visit's boundaries, not with each reply seen.
+  return useMemo(
+    () => (key === null || away === undefined ? null : { key, readUpTo, newestAtOpen, away }),
+    [key, readUpTo, newestAtOpen, away],
+  );
 }

@@ -74,3 +74,12 @@ it("keeps a moment away apart from the opening boundary, so a reply read before 
   expect(back?.away).toEqual([{ after: "N2", upTo: "N3" }]);
   await view.unmount();
 });
+
+it("counts a reply that arrives in the same moment the person steps away as unread", async () => {
+  const view = await mount({ ...base, reading: true });
+  await view.show({ ...base, reading: true });
+  // Control Center opens as the reply lands: the person never saw N2.
+  const away = await view.show({ ...base, reading: false, newestAt: "N2" });
+  expect(away?.away).toEqual([{ after: "N1", upTo: "N2" }]);
+  await view.unmount();
+});
