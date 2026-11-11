@@ -8,6 +8,7 @@ import {
   memo,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -37,8 +38,10 @@ import {
   type FleetVector,
 } from "./fleetDrag";
 import {
+  fleetGraphSize,
   layoutFleet,
   orbitEdge,
+  type FleetLayout,
   type FleetLayoutAgent,
   type FleetLayoutMachine,
   type FleetPoint,
@@ -58,6 +61,8 @@ const AGENT_RADIUS = 11;
 /** The status mark sits on the machine's ring, lower right, like an avatar's presence dot. */
 const STATUS_OFFSET = Math.round(MACHINE_RADIUS * Math.SQRT1_2);
 const THIS_MACHINE = "This machine";
+/** A card-coloured outline under label text, so an edge passing behind a label leaves it legible. */
+const LABEL_HALO = "stroke-card stroke-3 [paint-order:stroke] [stroke-linejoin:round]";
 
 type HeatedTier = Exclude<FleetHeatTier, "normal">;
 
@@ -374,6 +379,11 @@ const add = (point: FleetPoint, offset: FleetVector | undefined, share = 1): Fle
 
 const truncate = (text: string, max: number) =>
   text.length > max ? text.slice(0, max - 1) + "…" : text;
+/** Machine names often differ only at the end (vm-01, vm-02), so a cut keeps both ends. */
+const truncateName = (text: string, max: number) =>
+  text.length > max
+    ? text.slice(0, Math.ceil((max - 1) / 2)) + "…" + text.slice(-Math.floor((max - 1) / 2))
+    : text;
 
 function workSummary(work: { running: number; attention: number; reported: number }): string {
   const parts = [
@@ -400,6 +410,14 @@ interface PlacedMachine {
   readonly agents: ReadonlyArray<PlacedAgent>;
 }
 
+/** The graph's size and orbit spots. A hook of its own, so pulling a node does not lay out again. */
+function useFleetLayout(machines: FleetSnapshot["machines"]) {
+  const [wrapperRef, containerWidth] = useElementWidth();
+  const { width, height } = fleetGraphSize(machines.length, containerWidth);
+  const layout = containerWidth > 0 ? layoutFleet(machines, width, height) : null;
+  return { wrapperRef, containerWidth, width, height, layout };
+}
+
 export const FleetGraph = memo(function FleetGraph(props: {
   readonly snapshot: FleetSnapshot;
   readonly connections: ReadonlyMap<string, FleetConnection>;
@@ -414,7 +432,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
   const { snapshot, connections, currentMachineId, selectedMachineId, onSelectMachine, heat } =
     props;
   const slow = props.slowMachineIds;
-  const [wrapperRef, width] = useElementWidth();
+  const { wrapperRef, containerWidth, width, height, layout } = useFleetLayout(snapshot.machines);
   const svgRef = useRef<SVGSVGElement>(null);
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const paint = useHeatPaint();
@@ -423,9 +441,12 @@ export const FleetGraph = memo(function FleetGraph(props: {
   const primaryHalo = haloBase + "-primary";
   usePauseWhileHidden(svgRef);
   const { offsets, press, move, release } = usePullableNodes(svgRef, width, reduced);
-  // Below 340 the orbits cannot keep labels apart; see ORBIT_GAP in fleetLayout.
-  const height = width < 640 ? 360 : Math.max(340, Math.min(420, Math.round(width * 0.42)));
-  const layout = width > 0 ? layoutFleet(snapshot.machines, width, height) : null;
+  // A graph wider than its card scrolls, and opens with Main in view.
+  // oxlint-disable-next-line goat/react-effect-budget -- the scroll position is DOM state React does not own
+  useLayoutEffect(() => {
+    const element = wrapperRef.current;
+    if (element !== null) element.scrollLeft = (width - containerWidth) / 2;
+  }, [wrapperRef, width, containerWidth]);
   const machinesById = new Map(snapshot.machines.map((machine) => [machine.id, machine]));
   // Where every node is drawn this frame: its orbit spot plus any pull.
   const placed =
@@ -475,8 +496,11 @@ export const FleetGraph = memo(function FleetGraph(props: {
     },
   });
 
-  return (
-    <div ref={wrapperRef} className="fleet-graph relative w-full">
+  const graph = (
+    <div
+      className="fleet-graph relative w-full"
+      style={containerWidth > 0 && width > containerWidth ? { width } : undefined}
+    >
       {layout === null ? (
         <div style={{ height }} />
       ) : (
@@ -638,8 +662,12 @@ export const FleetGraph = memo(function FleetGraph(props: {
                           : "+" + agent.layout.aggregate!.count}
                       </text>
                     )}
-                    <text y={labelY} textAnchor="middle" className="fill-muted-foreground text-4xs">
-                      {truncate(label, 18)}
+                    <text
+                      y={labelY}
+                      textAnchor="middle"
+                      className={cn("fill-muted-foreground text-4xs", LABEL_HALO)}
+                    >
+                      {truncate(label, layout.labelChars.agent)}
                     </text>
                   </g>
                 );
@@ -666,6 +694,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
                   current={currentMachineId === entry.layout.id}
                   selected={selectedMachineId === entry.layout.id}
                   reduced={reduced}
+                  labelChars={layout.labelChars}
                   onSelect={onSelectMachine}
                   handlers={nodeHandlers(machineKey(entry.layout.id), () =>
                     onSelectMachine(entry.layout.id!),
@@ -698,6 +727,11 @@ export const FleetGraph = memo(function FleetGraph(props: {
           </svg>
         </>
       )}
+    </div>
+  );
+  return (
+    <div ref={wrapperRef} className="w-full overflow-x-auto">
+      {graph}
     </div>
   );
 });
@@ -756,6 +790,7 @@ function MachineNode(props: {
   readonly current: boolean;
   readonly selected: boolean;
   readonly reduced: boolean;
+  readonly labelChars: FleetLayout["labelChars"];
   readonly onSelect: (machineId: string) => void;
   readonly handlers: NodeHandlers;
 }) {
@@ -875,17 +910,24 @@ function MachineNode(props: {
       <text
         y={MACHINE_RADIUS + 13}
         textAnchor="middle"
-        className={cn("text-3xs font-medium", quiet ? "fill-muted-foreground" : "fill-foreground")}
+        className={cn(
+          "text-3xs font-medium",
+          LABEL_HALO,
+          quiet ? "fill-muted-foreground" : "fill-foreground",
+        )}
       >
-        {truncate(machine.label, 18)}
+        {(props.labelChars.keepNameEnds ? truncateName : truncate)(
+          machine.label,
+          props.labelChars.name,
+        )}
       </text>
       {sub === null ? null : (
         <text
           y={MACHINE_RADIUS + 24}
           textAnchor="middle"
-          className="fill-muted-foreground text-4xs"
+          className={cn("fill-muted-foreground text-4xs", LABEL_HALO)}
         >
-          {truncate(sub, 22)}
+          {truncate(sub, props.labelChars.subtitle)}
         </text>
       )}
     </g>
