@@ -11,7 +11,7 @@ $go = if ($env:GO) { $env:GO } else { 'go' }
 $work = Join-Path ([IO.Path]::GetTempPath()) ('peni-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
 $relayProcs = @()
-$nodes = @('z', 'a', 'b', 'd', 'e', 'c')
+$nodes = @('z', 'a', 'b', 'd', 'e', 'f', 'c')
 $savedTemp = @{ TMP = $env:TMP; TEMP = $env:TEMP }
 
 function Fail([string]$msg) { throw "FAIL: $msg" }
@@ -42,9 +42,16 @@ function Start-Relay([int]$port, [string]$public) {
 	return $p
 }
 
-function Inst([string]$n, [string[]]$rest) {
+# Inst runs install.ps1 for node n. With -LockTmp its TEMP denies this user deleting anything created in
+# it, so install.ps1 cannot remove its download.
+function Inst([string]$n, [string[]]$rest, [switch]$LockTmp) {
 	$dir = Join-Path $work $n
 	New-Item -ItemType Directory -Force -Path (Join-Path $dir 'tmp') | Out-Null
+	if ($LockTmp) {
+		$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+		& icacls (Join-Path $dir 'tmp') /deny "*$($sid):(OI)(CI)(DE,DC)" | Out-Null
+		if ($LASTEXITCODE -ne 0) { Fail "icacls could not lock $n's TEMP" }
+	}
 	# install.ps1 downloads into a folder under TEMP; it must be gone also when install.ps1 ends by running pen.
 	$env:TMP = Join-Path $dir 'tmp'
 	$env:TEMP = $env:TMP
@@ -137,6 +144,14 @@ try {
 	if (Test-Path (Join-Path $work 'e\bin\pen.exe')) { Fail 'a binary was installed from a SHA256SUMS that lists it twice' }
 	Write-Output 'ok: a SHA256SUMS that lists the archive twice stops install.ps1'
 
+	# A download install.ps1 cannot remove stops it before it runs pen: here --up must not found a mesh.
+	[IO.File]::WriteAllText($sums, $good)
+	$stopped = $false
+	try { Inst 'f' @('--name', 'f', '--up') -LockTmp | Out-Null } catch { $stopped = "$_" -match 'could not remove its download' }
+	if (-not $stopped) { Fail 'install.ps1 went on although it could not remove its download' }
+	if (Test-Path (Join-Path $work 'f\.pen\mesh.json')) { Fail 'install.ps1 started pen although its download was left behind' }
+	Write-Output 'ok: a download install.ps1 cannot remove stops it before pen starts'
+
 	Set-Content -Path $sums -Value @("$zero  pen-windows-amd64.exe.gz", "$zero  pen-windows-arm64.exe.gz")
 	$refused = $false
 	try { Inst 'c' @('--name', 'c') | Out-Null } catch { $refused = "$_" -match 'checksum mismatch' }
@@ -155,5 +170,10 @@ try {
 	foreach ($v in @('PEN_HOME', 'PEN_INSTALL_DIR', 'PEN_HOSTKEYS', 'PEN_SSH_DIR')) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 	$env:TMP = $savedTemp.TMP
 	$env:TEMP = $savedTemp.TEMP
+	$locked = Join-Path $work 'f\tmp'
+	if (Test-Path $locked) {
+		$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+		& icacls $locked /remove:d "*$sid" /T /C | Out-Null
+	}
 	Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
