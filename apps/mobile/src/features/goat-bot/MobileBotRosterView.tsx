@@ -4,6 +4,7 @@ import {
   FACE_MOTION_RANK,
   goatBotAvatarEmoji,
   goatBotFaceLabel,
+  goatBotAccent,
 } from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
 import {
@@ -323,6 +324,7 @@ function MemberRowContent({ bot }: { readonly bot: BotProfile }) {
         size={40}
         motion={null}
         emoji={mobileGoatBotMemberPicture(bot)}
+        accent={goatBotAccent(bot)}
       />
       <BotRowText name={bot.name} waitingCount={waitingCount} />
     </>

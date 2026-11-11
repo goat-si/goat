@@ -202,7 +202,12 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   return (
     <View className="gap-1.5" style={{ marginTop }}>
       {row.firstInGroup && row.proactive ? (
-        <GoatBotUpdateLabel at={row.createdAt} name={botName} emoji={props.botEmoji} />
+        <GoatBotUpdateLabel
+          at={row.createdAt}
+          name={botName}
+          emoji={props.botEmoji}
+          accent={props.accent}
+        />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
       {row.options.length > 0 || row.answer !== undefined ? (
@@ -430,6 +435,7 @@ export function GoatBotScreen(props: {
           activity={session.activity ?? null}
           title={title}
           emoji={botEmoji}
+          accent={accent}
           onPress={taskId ? undefined : openHome}
           {...(member
             ? {
@@ -451,6 +457,7 @@ export function GoatBotScreen(props: {
               <GoatBotChipFace
                 activity={session.activity ?? null}
                 emoji={botEmoji}
+                accent={accent}
                 {...(member
                   ? {
                       conversation: {
@@ -479,6 +486,7 @@ export function GoatBotScreen(props: {
           turnsWaiting={session.turnsWaiting}
           botName={title}
           botAvatar={botEmoji}
+          botAccent={accent}
           main={props.main ?? null}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
@@ -591,6 +599,7 @@ export function GoatBotScreen(props: {
                   activity={session.activity}
                   botName={title}
                   emoji={botEmoji}
+                  accent={accent}
                   inView={footerInView}
                 />
               </View>

@@ -7,6 +7,7 @@ import {
   presentTaskStatus,
   retryRefusalText,
   taskAttemptLabel,
+  type GoatBotAccent,
   type GoatBotTaskCard,
   type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
@@ -78,6 +79,8 @@ export function MobileBotWork(props: {
   readonly botName?: string;
   /** The bot's profile picture, shown at the top of the sheet. */
   readonly botAvatar?: string | null | undefined;
+  /** A member's color for its face. */
+  readonly botAccent?: GoatBotAccent | null | undefined;
   /** The main bot, named on a member's inherited model. */
   readonly main?: Pick<BotProfile, "name"> | null;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
@@ -210,7 +213,12 @@ export function MobileBotWork(props: {
       node: (
         <View>
           <View className="items-center gap-2 pt-2 pb-4">
-            <GoatBotFaceAvatar state="idle" size={56} emoji={props.botAvatar} />
+            <GoatBotFaceAvatar
+              state="idle"
+              size={56}
+              emoji={props.botAvatar}
+              accent={props.botAccent}
+            />
             <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
               {botName}
             </Text>
