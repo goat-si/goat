@@ -22,6 +22,8 @@ consumes it only through OpenSSH: `pen ssh-config --install` writes `Host pen-<n
 - `infra/pen-login` is the Google sign-in service: a Worker and one global Durable Object holding device codes and
   the account-to-mesh registry. It signs 10-minute assertions with `LOGIN_SIGNING_KEY`.
 
+> Decision record: [ADR-0026](decisions/ADR-0026-pen-record-quotas.md) (a mesh's record space is shared out by admission lineage; planned)
+
 ## State
 
 A node keeps its state under `PEN_HOME` (default `~/.pen`, 0700, or an owner-only DACL on Windows): `identity.json` (0600, the node's keys),
