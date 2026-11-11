@@ -25,8 +25,10 @@ type holderEntry struct {
 // dropped, and the holder's connection is closed, which ends the registration.
 type holderQueue struct {
 	conn net.Conn
-	// wmu holds one write at a time, so failWith's line never splits another.
+	// wmu holds one write at a time, so failWith's line never splits another; broken (guarded by wmu) is set once a
+	// write failed, possibly part way through a line, after which nothing more is written.
 	wmu     sync.Mutex
+	broken  bool
 	mu      sync.Mutex
 	entries []*holderEntry
 	failed  bool
@@ -116,7 +118,12 @@ func (q *holderQueue) run() {
 			return
 		}
 		q.wmu.Lock()
-		_, err := q.conn.Write(e.line)
+		var err error
+		if q.broken {
+			err = net.ErrClosed
+		} else if _, err = q.conn.Write(e.line); err != nil {
+			q.broken = true
+		}
 		q.wmu.Unlock()
 		q.mu.Lock()
 		if len(q.entries) > 0 && q.entries[0] == e {
@@ -137,7 +144,8 @@ func (q *holderQueue) fail() {
 }
 
 // failWith makes the queue terminal, writes last (when not nil) after any write in progress and without waiting on
-// unready entries, then closes the holder's connection. Each write is bounded by the control write deadline.
+// unready entries, then closes the holder's connection. Each write is bounded by the control write deadline. After a
+// failed write it writes nothing, so a partial line is never followed by another.
 func (q *holderQueue) failWith(last []byte) {
 	q.once.Do(func() {
 		q.mu.Lock()
@@ -150,7 +158,9 @@ func (q *holderQueue) failWith(last []byte) {
 		close(q.dead)
 		if last != nil {
 			q.wmu.Lock()
-			q.conn.Write(last)
+			if !q.broken {
+				q.conn.Write(last)
+			}
 			q.wmu.Unlock()
 		}
 		q.conn.Close()

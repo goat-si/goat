@@ -22,9 +22,9 @@ const (
 	inviteBudget    = 4
 	maxInviteAhead  = 10 * time.Minute
 	maxSafeInteger  = 1<<53 - 1
-	clientsOpName       = "service.clients"
-	inviteOpName        = "service.invite"
-	cancelOpName  = "service.invite.cancel"
+	clientsOpName   = "service.clients"
+	inviteOpName    = "service.invite"
+	cancelOpName    = "service.invite.cancel"
 	clientsService  = "goat"
 	refusedNotGoat  = "only the goat registration holds clients and invites"
 	refusedReplaced = "the registration ended"

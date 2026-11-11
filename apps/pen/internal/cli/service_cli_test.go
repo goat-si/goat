@@ -485,3 +485,49 @@ func TestSSHConfigKeepsEveryNameBlockAsItWasEvenANameThatEqualsANodeID(t *testin
 		t.Fatalf("pen-dup changed:\n%s", g)
 	}
 }
+
+func TestServiceRegisterForwardsOpsAndPrintsEachAnswerBeforeItExitsAtTheEndOfStdin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a, _ := meshOfTwo(t, ctx, rs)
+	key := make([]byte, 32)
+	rand.Read(key)
+	port := echoProgram(t, "goat", key)
+	t.Setenv("PEN_HOME", a.Dir)
+	ops := `{"op":"service.clients","gen":1,"clients":[]}` + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n"
+	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + ops + `{"op":"partial"`)
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if rc := RunService([]string{"register", "goat", "--port", strconv.Itoa(port)}, &out, &errOut); rc != 0 {
+		t.Fatalf("exit %d, stderr %q", rc, errOut.String())
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], "pen-service v1 registered goat ") ||
+		lines[1] != `{"gen":1,"t":"clients"}` || !strings.Contains(lines[2], `"t":"refused"`) {
+		t.Fatalf("stdout %q: want the registered line, then one answer per forwarded op and nothing for the partial line", out.String())
+	}
+}
+
+func TestServiceRegisterRefusesToForwardAnOpLineOver4096Bytes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a, _ := meshOfTwo(t, ctx, rs)
+	key := make([]byte, 32)
+	rand.Read(key)
+	port := echoProgram(t, "goat", key)
+	t.Setenv("PEN_HOME", a.Dir)
+	long := `{"op":"service.clients","gen":1,"clients":[]` + strings.Repeat(" ", 4096) + "}\n"
+	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + long)
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if rc := RunService([]string{"register", "goat", "--port", strconv.Itoa(port)}, &out, &errOut); rc != 2 {
+		t.Fatalf("exit %d, stdout %q, stderr %q; want 2", rc, out.String(), errOut.String())
+	}
+	if strings.Count(out.String(), "\n") != 1 {
+		t.Fatalf("stdout %q: the long line was forwarded", out.String())
+	}
+}
