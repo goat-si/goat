@@ -90,6 +90,8 @@ type storeFile struct {
 	Pool    []*Record `json:"pool"`
 	SelfN   uint64    `json:"selfN"`
 	Shares  bool      `json:"shares,omitempty"`
+	// version is the store's mesh version at the snapshot, for checking the file's records.
+	version int
 }
 
 // NewStore is an empty set for meshID; st may be nil for an unpersisted set.
@@ -183,8 +185,11 @@ func FromJoin(st *state.Store, meshID string, recs []*Record) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) belongs(r *Record) bool {
-	if s.version != 0 && r.B.V != s.version {
+func (s *Store) belongs(r *Record) bool { return s.belongsTo(r, s.version) }
+
+// belongsTo is belongs for a mesh of version (0 when not known yet); it reads no mutable field.
+func (s *Store) belongsTo(r *Record, version int) bool {
+	if version != 0 && r.B.V != version {
 		return false
 	}
 	if r.B.Type == TypeFound {
@@ -427,7 +432,7 @@ func (s *Store) SaveFile(st *state.Store, name string) error {
 	gen, adopt, known := s.changes, s.adopt, s.onDisk[name]
 	// The pool is not persisted (contract "Records").
 	recs := s.all()
-	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, Pool: []*Record{}, Shares: s.shares}
+	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, Pool: []*Record{}, Shares: s.shares, version: s.version}
 	s.mu.Unlock()
 	if s.afterSnapshot != nil {
 		s.afterSnapshot()
@@ -470,23 +475,26 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 		return ErrRemoved
 	case ok && disk.MeshID != s.MeshID && !adopt:
 		return ErrReplaced
-	case ok && disk.MeshID == s.MeshID && f.Shares:
-		// Under shares a record the set let go stays gone: no union with the file.
-		f.SelfN = max(f.SelfN, disk.SelfN)
 	case ok && disk.MeshID == s.MeshID:
 		have := make(map[string]bool, len(recs))
 		for _, r := range recs {
 			have[r.Hash] = true
 		}
 		for _, r := range disk.Records {
-			if r != nil && !have[HashOf(r.Body)] && r.Verify() == nil && s.belongs(r) {
+			if r != nil && !have[HashOf(r.Body)] && r.Verify() == nil && s.belongsTo(r, f.version) {
 				recs = append(recs, r)
 			}
 		}
 		f.SelfN = max(f.SelfN, disk.SelfN)
 	}
 	if f.Shares {
-		f.Records = canonicalOrder(recs, bareOf(byHashOf(recs)))
+		// Another process may have written records this store has not seen: keep the shares of both.
+		kept, _ := selectShares(recs)
+		recs = recs[:0]
+		for _, r := range kept {
+			recs = append(recs, r)
+		}
+		f.Records = canonicalOrder(recs, bareOf(kept))
 	} else {
 		f.Records = CanonicalOrder(recs)
 	}
