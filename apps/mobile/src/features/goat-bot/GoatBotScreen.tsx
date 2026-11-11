@@ -1,5 +1,5 @@
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
-import { LegendList } from "@legendapp/list/react-native";
+import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotName,
@@ -53,6 +53,13 @@ import {
 } from "./GoatBotMessageParts";
 import { GoatBotReplyCards } from "./GoatBotReplyCards";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
+import {
+  type GoatBotChatItem,
+  GoatBotUnreadDividerRow,
+  GoatBotUnreadPill,
+  useGoatBotUnread,
+} from "./GoatBotUnreadMarker";
+import type { GoatBotVisitSnapshot } from "./useGoatBotVisitSnapshot";
 import { goatBotChatRows } from "./goatBotChatRows";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
@@ -63,7 +70,7 @@ import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
-const rowKey = (row: GoatBotRow) => row.id;
+const rowKey = (item: GoatBotChatItem) => item.id;
 function availabilityCopy(mainName: string, openName: string) {
   return {
     ready: "Answers here, works in its own threads",
@@ -216,6 +223,8 @@ export function GoatBotScreen(props: {
   readonly taskId?: ChannelTaskId;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
+  /** Where the person had read the main chat up to when this visit began. */
+  readonly readSnapshot?: GoatBotVisitSnapshot | null;
   /** The main bot's profile, which names its chat; absent before the server keeps profiles. */
   readonly main?: BotProfile | null;
   /** Restores a deleted member; absent when this person may not manage bots. */
@@ -307,26 +316,53 @@ export function GoatBotScreen(props: {
     Object.assign(listMetrics.current, next);
     setFooterInView(goatBotFooterInView(listMetrics.current));
   }, []);
+  // The shared rows decide which work cards the main chat keeps (conversationOnly): only work the
+  // home lists and whose ending the chat told leaves it. A task's own view has its card above.
+  const hidesTaskCards = taskId !== undefined;
+  const visibleRows = useMemo(
+    () =>
+      hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
+    [hidesTaskCards, session.rows],
+  );
+  // The "New" line and its pill belong to the main chat, whose visits the route records.
+  const unread = useGoatBotUnread(
+    visibleRows,
+    taskId !== undefined || member !== null ? null : props.readSnapshot,
+  );
+  const listRef = useRef<LegendListRef>(null);
+  const { clear: clearUnread } = unread;
+  const { onAnswer: answer } = session;
+  const onAnswer = useCallback(
+    (text: string, answerTask?: ChannelTaskId) => {
+      const sent = answer(text, answerTask);
+      if (sent) clearUnread();
+      return sent;
+    },
+    [answer, clearUnread],
+  );
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const renderItem = useCallback(
-    ({ item }: { item: GoatBotRow }) => (
-      <GoatBotTimelineRow
-        row={item}
-        canSend={session.canSend}
-        onSend={session.onAnswer}
-        onRetry={session.onRetryInput}
-        onDiscard={session.onDiscardInput}
-        onSelectThread={onSelectThread}
-        onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
-        environmentId={session.historyEnvironmentId}
-        botName={title}
-        botEmoji={botEmoji}
-      />
-    ),
+    ({ item }: { item: GoatBotChatItem }) =>
+      item.kind === "unread" ? (
+        <GoatBotUnreadDividerRow />
+      ) : (
+        <GoatBotTimelineRow
+          row={item}
+          canSend={session.canSend}
+          onSend={onAnswer}
+          onRetry={session.onRetryInput}
+          onDiscard={session.onDiscardInput}
+          onSelectThread={onSelectThread}
+          onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
+          environmentId={session.historyEnvironmentId}
+          botName={title}
+          botEmoji={botEmoji}
+        />
+      ),
     [
       session.canSend,
-      session.onAnswer,
+      onAnswer,
       session.onRetryInput,
       session.onDiscardInput,
       onSelectThread,
@@ -340,6 +376,7 @@ export function GoatBotScreen(props: {
   );
   const send = () => {
     if (session.onSend(text, attachments)) {
+      unread.clear();
       for (const release of draftFiles.current.values()) release();
       draftFiles.current.clear();
       setText("");
@@ -358,14 +395,6 @@ export function GoatBotScreen(props: {
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
-  // The shared rows decide which work cards the main chat keeps (conversationOnly): only work the
-  // home lists and whose ending the chat told leaves it. A task's own view has its card above.
-  const hidesTaskCards = taskId !== undefined;
-  const visibleRows = useMemo(
-    () =>
-      hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
-    [hidesTaskCards, session.rows],
-  );
   const chatTasks = useMemo(
     () =>
       taskId === undefined && session.supportsTaskThreads
@@ -474,54 +503,80 @@ export function GoatBotScreen(props: {
           {homeError}
         </Text>
       ) : null}
-      <LegendList
-        renderScrollComponent={NativeScrollView}
-        style={{ flex: 1 }}
-        data={visibleRows}
-        keyExtractor={rowKey}
-        renderItem={renderItem}
-        initialScrollAtEnd
-        maintainScrollAtEnd
-        alignItemsAtEnd
-        keyboardShouldPersistTaps="handled"
-        // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
-        contentInsetAdjustmentBehavior="automatic"
-        contentInsetStartAdjustment={listTopInset}
-        contentContainerStyle={{ padding: GOAT_BOT_LIST_PADDING }}
-        scrollEventThrottle={100}
-        onScroll={(event) => {
-          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-          measureList({
-            offsetY: contentOffset.y,
-            viewportHeight: layoutMeasurement.height,
-            contentHeight: contentSize.height,
-          });
-        }}
-        onContentSizeChange={(_width, height) => measureList({ contentHeight: height })}
-        onLayout={(event) => measureList({ viewportHeight: event.nativeEvent.layout.height })}
-        ListEmptyComponent={
-          <Text className="py-6 text-center text-foreground-muted">
-            {taskId
-              ? "Messages for this task will appear here."
-              : `Ask ${title} for anything. It answers here and starts work in its own threads.`}
-          </Text>
-        }
-        ListFooterComponent={
-          !taskId && session.activity ? (
-            <View
-              testID="goat-bot-progress-line"
-              onLayout={(event) => measureList({ footerHeight: event.nativeEvent.layout.height })}
-            >
-              <GoatBotActivityLine
-                activity={session.activity}
-                botName={title}
-                emoji={botEmoji}
-                inView={footerInView}
-              />
-            </View>
-          ) : null
-        }
-      />
+      <View style={{ flex: 1 }}>
+        <LegendList
+          renderScrollComponent={NativeScrollView}
+          style={{ flex: 1 }}
+          ref={listRef}
+          data={unread.items}
+          keyExtractor={rowKey}
+          onViewableItemsChanged={({ viewableItems }) =>
+            unread.onViewable(viewableItems.map((entry) => entry.index))
+          }
+          renderItem={renderItem}
+          initialScrollAtEnd
+          maintainScrollAtEnd
+          alignItemsAtEnd
+          keyboardShouldPersistTaps="handled"
+          // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
+          contentInsetAdjustmentBehavior="automatic"
+          contentInsetStartAdjustment={listTopInset}
+          contentContainerStyle={{ padding: GOAT_BOT_LIST_PADDING }}
+          scrollEventThrottle={100}
+          onScroll={(event) => {
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            measureList({
+              offsetY: contentOffset.y,
+              viewportHeight: layoutMeasurement.height,
+              contentHeight: contentSize.height,
+            });
+          }}
+          onContentSizeChange={(_width, height) => measureList({ contentHeight: height })}
+          onLayout={(event) => measureList({ viewportHeight: event.nativeEvent.layout.height })}
+          ListEmptyComponent={
+            <Text className="py-6 text-center text-foreground-muted">
+              {taskId
+                ? "Messages for this task will appear here."
+                : `Ask ${title} for anything. It answers here and starts work in its own threads.`}
+            </Text>
+          }
+          ListFooterComponent={
+            !taskId && session.activity ? (
+              <View
+                testID="goat-bot-progress-line"
+                onLayout={(event) => measureList({ footerHeight: event.nativeEvent.layout.height })}
+              >
+                <GoatBotActivityLine
+                  activity={session.activity}
+                  botName={title}
+                  emoji={botEmoji}
+                  inView={footerInView}
+                />
+              </View>
+            ) : null
+          }
+        />
+        {unread.pill !== null ? (
+          <View
+            pointerEvents="box-none"
+            style={{ position: "absolute", left: 0, right: 0, top: topInset }}
+          >
+            <GoatBotUnreadPill
+              count={unread.pill}
+              onPress={() => {
+                unread.settle();
+                void listRef.current?.scrollToIndex({
+                  index: unread.dividerIndex,
+                  viewPosition: 0,
+                  viewOffset: topInset,
+                  animated: true,
+                });
+              }}
+              onDismiss={unread.settle}
+            />
+          </View>
+        ) : null}
+      </View>
       <Animated.View
         className="gap-2 border-t border-border px-4 pt-2"
         style={composerPaddingStyle}
