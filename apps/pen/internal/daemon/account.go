@@ -170,6 +170,8 @@ type ApproveResult struct {
 	Results []PushResult `json:"results"`
 }
 
+var beforeAccountAdmit func()
+
 // approve admits a queued request (by full fingerprint, or an id one request matches).
 func (d *Daemon) approve(ctx context.Context, arg string) (ApproveResult, error) {
 	p, err := d.pending.find(arg, d.now())
@@ -192,6 +194,9 @@ func (d *Daemon) approve(ctx context.Context, arg string) (ApproveResult, error)
 	}
 	if _, gone := v.Revoked[p.SignPub]; gone {
 		return ApproveResult{}, errors.New("this key was revoked")
+	}
+	if beforeAccountAdmit != nil {
+		beforeAccountAdmit()
 	}
 	// The binding is checked again with the signature, under the store's lock: an unbind or a
 	// rebind to another account, login service or key merged since the request was queued refuses it.
