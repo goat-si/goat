@@ -74,7 +74,9 @@ const make = Effect.gen(function* () {
   const wake = yield* ChannelWake.ChannelWake;
   const scope = yield* Effect.scope;
   const receipts = new Set<Fiber.Fiber<void, unknown>>();
+  // Claims wait while a failed hand-over is still being released; the release runs on another fiber.
   let releasing = 0;
+  const releasesPending = () => releasing > 0;
 
   /**
    * Records the hand-over just before an external send; a restart before it sends the row again,
@@ -120,6 +122,8 @@ const make = Effect.gen(function* () {
                 releasing -= 1;
               }),
             ),
+            // Any other failure leaves the row to restart recovery, as before.
+            Effect.ignore,
           );
           yield* wake.wake;
           return false;
@@ -182,7 +186,7 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     let handled = 0;
-    while (handled < MAX_PER_PASS && releasing === 0) {
+    while (handled < MAX_PER_PASS && !releasesPending()) {
       const [row] = yield* ledger.claimDueDeliveries({
         owner,
         now: DateTime.formatIso(yield* DateTime.now),
@@ -209,7 +213,7 @@ const make = Effect.gen(function* () {
 
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
     let handled = yield* deliverReceipts(owner);
-    while (handled < MAX_PER_PASS && releasing === 0) {
+    while (handled < MAX_PER_PASS && !releasesPending()) {
       const claimed = yield* ledger.claimDue({
         owner,
         now: DateTime.formatIso(yield* DateTime.now),

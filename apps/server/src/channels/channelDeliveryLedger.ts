@@ -17,6 +17,8 @@ const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOut
 const isLedgerError = Schema.is(ChannelLedgerError);
 const mapError = (detail: string) => (cause: unknown) =>
   isLedgerError(cause) ? cause : new ChannelLedgerError({ reason: "persistence", detail, cause });
+/** How long after its input a reply receipt may still go out. */
+const RECEIPT_DEADLINE_MS = 60_000;
 /** Interim messages one claim may set aside before it commits and lets the worker come back. */
 const SET_ASIDE_PER_CLAIM = 50;
 
@@ -44,7 +46,7 @@ export const deliveryLedger = (
     last_error_code = 'receipt_deadline', updated_at = ${now}
     WHERE state IN ('pending', 'delivering') AND EXISTS (
       SELECT 1 FROM channel_inbox i WHERE channel_outbox.cause_key = 'reply:' || i.input_id
-        AND i.accepted_at <= ${DateTime.formatIso(DateTime.makeUnsafe(Date.parse(now) - 60_000))})
+        AND i.accepted_at <= ${DateTime.formatIso(DateTime.makeUnsafe(Date.parse(now) - RECEIPT_DEADLINE_MS))})
     RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
       last_error_code, state`;
     yield* Effect.forEach(
@@ -156,7 +158,10 @@ export const deliveryLedger = (
                         attempts: row.attempts,
                         ...(inbox[0] === undefined
                           ? {}
-                          : { receiptDeadline: Date.parse(inbox[0].accepted_at) + 60_000 }),
+                          : {
+                              receiptDeadline:
+                                Date.parse(inbox[0].accepted_at) + RECEIPT_DEADLINE_MS,
+                            }),
                       };
                     }),
                 );
@@ -190,7 +195,7 @@ export const deliveryLedger = (
             yield* fence(input.owner);
             const handOverNow = DateTime.formatIso(yield* DateTime.now);
             const deadline = DateTime.formatIso(
-              DateTime.makeUnsafe(Date.parse(handOverNow) - 60_000),
+              DateTime.makeUnsafe(Date.parse(handOverNow) - RECEIPT_DEADLINE_MS),
             );
             const marked = yield* sql<{ readonly delivery_id: string }>`UPDATE channel_outbox
               SET send_started_at = ${handOverNow}
