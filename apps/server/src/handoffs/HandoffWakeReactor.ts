@@ -44,6 +44,7 @@ import {
   type ProviderSettingsOutcome,
 } from "../provider/ProviderSettingsProgress.ts";
 import { forkParked } from "../serverActivation.ts";
+import { approvalUsed } from "./approvalConsumption.ts";
 import * as Handoffs from "./Handoffs.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -69,6 +70,11 @@ const decodeHandoff = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.toCodecJson(Handoff)),
 );
 const decodeProgress = Schema.decodeUnknownOption(Schema.toCodecJson(ProviderSettingsProgress));
+/** Approvals the agent continues itself; once used, their "call again" wake would only fail. */
+const continuedByAgent = (path: string) =>
+  isHubDeviceHandoffPath(path) ||
+  path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH ||
+  path === STORAGE_CLEAN_HANDOFF_PATH;
 
 /** What GOAT did with a provider change it applies itself, once the apply finished. */
 const appliedText = (outcome: ProviderSettingsOutcome | undefined) => {
@@ -284,6 +290,16 @@ const make = Effect.gen(function* () {
         if (current.state !== handoff.state) return;
         // A request whose call is waiting, or already returned this answer, needs no wake.
         return yield* handoffs.deliverComputerUseWake(current, dispatchWake(threadId, wake));
+      }
+      if (
+        handoff.state === "completed" &&
+        continuedByAgent(handoff.target.path) &&
+        (yield* approvalUsed(handoff.handoffId).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        ))
+      ) {
+        retries.delete(wake.messageId);
+        return;
       }
       if (
         handoff.state !== "completed" ||

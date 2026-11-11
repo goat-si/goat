@@ -67,6 +67,58 @@ it.effect("tells the agent to continue an approved hub change through goat_call"
   ),
 );
 
+it.effect("an approval used before its wake is sent produces no call-again wake", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // The agent continued in its turn and the change succeeded before the reactor saw the answer.
+      yield* world.sql`INSERT INTO approval_consumptions (approval_id, action, consumed_at)
+        VALUES (${summary.handoffId}, 'hub.join', '2026-11-11T00:00:00.000Z')`;
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("an approval used while its wake waits behind the running turn withdraws that wake", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      const wakeRun = () =>
+        world.orchestrator
+          .getThreadProjection(threadId)
+          .pipe(
+            Effect.map((projection) =>
+              projection.runs.find(
+                (run) =>
+                  run.userMessageId === `message:handoff-wake:${summary.handoffId}:completed`,
+              ),
+            ),
+          );
+      expect((yield* wakeRun())?.status).toBe("queued");
+      yield* world.approvals.markUsed({
+        threadId,
+        handoffId: summary.handoffId,
+        action: "hub.join",
+      });
+      yield* world.worker.drain();
+      expect((yield* wakeRun())?.status).toBe("cancelled");
+    }),
+  ),
+);
+
 it.effect("tells the agent to finish an approved storage cleanup with an argument it accepts", () =>
   withWorld((world) =>
     Effect.gen(function* () {
