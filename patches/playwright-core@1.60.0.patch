@@ -1,0 +1,16 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index bc601fc..c8025ae 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -23953,7 +23953,10 @@ function setMaxDispatchersForTest(value2) {
+ function maxDispatchersForBucket(gcBucket) {
+   return maxDispatchersOverride ?? {
+     "JSHandle": 1e5,
+-    "ElementHandle": 1e5
++    "ElementHandle": 1e5,
++    // GOAT: Vitest routes every module import; collecting a pending Request or Route hangs that import (#2971).
++    "Request": 1e5,
++    "Route": 1e5
+   }[gcBucket] ?? 1e4;
+ }
+ var import_events5, metadataValidator, maxDispatchersOverride, Dispatcher, RootDispatcher, DispatcherConnection;
