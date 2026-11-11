@@ -314,7 +314,24 @@ export const layerAppServerClientFactory: Layer.Layer<
         if (records.size > 1)
           return yield* openError("Multiple retained Codex processes prevent a safe connection.");
         const recordName = [...records][0];
-        if (recordName !== undefined) {
+        // A kept process that has exited since frees the session to start a fresh app-server.
+        const kept =
+          recordName === undefined
+            ? undefined
+            : yield* detached
+                .settleKept({
+                  instanceId: input.instanceId,
+                  name: recordName,
+                  providerSessionId: input.providerSessionId,
+                  threadId: input.threadId,
+                  survivorThreads: Option.isNone(survivors)
+                    ? []
+                    : (yield* survivors.value.list)
+                        .filter((binding) => binding.recordName === recordName)
+                        .map((binding) => binding.threadId),
+                })
+                .pipe(Effect.mapError(openError));
+        if (recordName !== undefined && kept === "connect") {
           const existing = yield* detached
             .connectExisting(input.instanceId, recordName, input.providerSessionId)
             .pipe(Effect.mapError(openError));

@@ -13,6 +13,8 @@ import * as Scope from "effect/Scope";
 import type { CodexAppServerMessageChannel } from "effect-codex-app-server/client";
 import { blocksSession, recordKey, servesSession } from "./CodexRecordSessions.ts";
 import { goalKey, sameGoal, sameStop, stopKey } from "./CodexFenceKeys.ts";
+import { CodexDetachedAppServerError } from "./CodexDetachedAppServerError.ts";
+import { type KeptRecordOpen, settleKeptRecord } from "./CodexKeptRecord.ts";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
@@ -93,14 +95,7 @@ export type DetachedClassification =
 
 export type DetachedOutcome = "cleaned" | "tombstoned" | "blocked" | "signalled" | "retained";
 
-export class CodexDetachedAppServerError extends Schema.TaggedError<CodexDetachedAppServerError>()(
-  "CodexDetachedAppServerError",
-  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
-) {
-  override get message(): string {
-    return this.detail;
-  }
-}
+export { CodexDetachedAppServerError };
 
 const RECORD_DIRECTORY = "codex-app-servers";
 const TERM_GRACE = "5 seconds";
@@ -884,6 +879,19 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       ),
   );
 
+  /** A kept record whose group exited is retired, or unlisted while its fences guard other threads. */
+  const settleKept = (input: KeptRecordOpen) =>
+    settleKeptRecord({
+      ...input,
+      record: fences.get(input.name),
+      busy: owned.has(input.name) || launching.has(input.name) || stopping.has(input.name),
+      globallyBlocked: Ref.get(globallyBlocked),
+      classify: (record) => classify(record),
+      warn,
+      retire: (record) => finishGone(record, { type: "gone" }),
+      unlist: Effect.sync(() => recoveryRetained.delete(input.name)),
+    });
+
   /**
    * Without a session this is a status probe, whose close never touches the process. A session
    * adopts it: closing outside shutdown stops it like an owned one, unless a goal still runs there.
@@ -965,6 +973,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     connectExisting,
     preserveForRecovery,
     listPreservedForSession,
+    settleKept,
     retainOnClose,
     recordStopObligation,
     clearStopObligation,

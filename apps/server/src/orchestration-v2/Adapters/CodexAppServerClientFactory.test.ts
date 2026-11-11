@@ -228,6 +228,7 @@ it.effect("an identified survivor never falls back to a new Codex process", () =
               } as never),
           }),
           Layer.mock(CodexSurvivors.CodexSurvivors)({
+            list: Effect.succeed([]),
             get: () =>
               Effect.succeed({
                 instanceId,
@@ -239,6 +240,7 @@ it.effect("an identified survivor never falls back to a new Codex process", () =
               }),
           }),
           Layer.mock(CodexDetachedAppServers)({
+            settleKept: () => Effect.succeed("connect" as const),
             socketTransportEnabled: true,
             socketTransportMode: "socket",
             listPreservedForSession: () => Effect.succeed([]),
@@ -298,6 +300,7 @@ it.effect(
             Layer.mock(ServerSettings.ServerSettingsService)({}),
             Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
             Layer.mock(CodexSurvivors.CodexSurvivors)({
+              list: Effect.succeed([]),
               get: () => Effect.void.pipe(Effect.as(undefined)),
               list: Effect.succeed([]),
               listGoalBlocksByInstance: () =>
@@ -312,6 +315,7 @@ it.effect(
                 ]),
             }),
             Layer.mock(CodexDetachedAppServers)({
+              settleKept: () => Effect.succeed("connect" as const),
               socketTransportEnabled: true,
               socketTransportMode: "socket",
               ensureNotBlocked: () => Effect.void,
@@ -368,11 +372,13 @@ it.effect("a preserved process reconnects after its last goal block clears", () 
           Layer.mock(ServerSettings.ServerSettingsService)({}),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
           Layer.mock(CodexSurvivors.CodexSurvivors)({
+            list: Effect.succeed([]),
             get: () => Effect.void.pipe(Effect.as(undefined)),
             list: Effect.succeed([]),
             listGoalBlocksByInstance: () => Effect.succeed([]),
           }),
           Layer.mock(CodexDetachedAppServers)({
+            settleKept: () => Effect.succeed("connect" as const),
             socketTransportEnabled: true,
             socketTransportMode: "socket",
             ensureNotBlocked: () => Effect.void,
