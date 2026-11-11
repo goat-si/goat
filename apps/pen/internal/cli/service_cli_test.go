@@ -400,7 +400,7 @@ func sshG(t *testing.T, cfg, host string) string {
 	if err != nil {
 		t.Fatalf("ssh -G %s: %v", host, err)
 	}
-	return string(out)
+	return strings.ReplaceAll(string(out), "\r\n", "\n")
 }
 
 func block(cfg, host string) string {
@@ -436,8 +436,8 @@ func TestSSHConfigWritesAnExactNodeIDBlockPerMemberWithoutConnectionReuse(t *tes
 	if !strings.Contains(blk, " pipe --node "+am.NodeID+" --noise "+am.NoisePub+" 22\n") || strings.Contains(blk, "%n") {
 		t.Fatalf("pen-<nodeId> block is not the exact form:\n%s", blk)
 	}
-	if strings.Index(cfg, "Host pen-"+am.NodeID+"\n") > strings.Index(cfg, "Host pen-a\n") {
-		t.Fatal("the pen-<nodeId> blocks must come before the name blocks")
+	if i := strings.Index(cfg, "Host pen-"+am.NodeID+"\n"); i < strings.Index(cfg, "Host pen-a\n") || i > strings.Index(cfg, "Host pen-*\n") {
+		t.Fatal("the pen-<nodeId> blocks must come after the name blocks and before pen-*")
 	}
 	if connectionReuse && (!strings.Contains(blk, "ControlMaster no\n") || !strings.Contains(blk, "ControlPath none\n")) {
 		t.Fatalf("pen-<nodeId> block keeps connection reuse:\n%s", blk)
@@ -449,7 +449,7 @@ func TestSSHConfigWritesAnExactNodeIDBlockPerMemberWithoutConnectionReuse(t *tes
 	}
 }
 
-func TestSSHConfigKeepsNameBlocksAndLeavesOutANameThatEqualsANodeID(t *testing.T) {
+func TestSSHConfigKeepsEveryNameBlockAsItWasEvenANameThatEqualsANodeID(t *testing.T) {
 	k := func(b byte) string { return b64.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
 	id1, id2, id3 := strings.Repeat("c", 26), strings.Repeat("d", 26), strings.Repeat("e", 26)
 	hosts := []sshHost{
@@ -460,20 +460,22 @@ func TestSSHConfigKeepsNameBlocksAndLeavesOutANameThatEqualsANodeID(t *testing.T
 	cmd := proxyPrefix("/bin/pen", "")
 	got := sshConfigText(cmd, "/k/known_hosts", "/k", hosts)
 	var named []sshHost
-	for _, h := range hosts[:2] { // the third name is a member's node id: that alias means the node
+	for _, h := range hosts {
 		named = append(named, sshHost{Name: h.Name, User: h.User})
 	}
-	if strings.Count(got, "Host pen-"+id1+"\n") != 1 {
-		t.Fatalf("pen-<id1> has more than one block:\n%s", got)
-	}
 	old := sshConfigText(cmd, "/k/known_hosts", "/k", named)
-	if !strings.HasSuffix(got, strings.TrimPrefix(old, "# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n")) {
-		t.Fatalf("name blocks changed:\n%s\nwant to end with:\n%s", got, old)
+	fallback := old[strings.Index(old, "Host pen-*\n"):]
+	if !strings.HasPrefix(got, strings.TrimSuffix(old, fallback)) || !strings.HasSuffix(got, fallback) {
+		t.Fatalf("name blocks changed:\n%s\nwant the name blocks of:\n%s", got, old)
 	}
 	if g := sshG(t, got, "pen-"+id1); g != "" {
-		if !strings.Contains(g, "\nuser u1\n") || !strings.Contains(g, "--node "+id1+" --noise "+k(1)+" 22") {
-			t.Fatalf("pen-<id1> must reach node id1 as u1:\n%s", g)
+		// The alias keeps the name block it had: the same user and route as before this change.
+		if g != sshG(t, old, "pen-"+id1) {
+			t.Fatalf("pen-<id1> changed for people:\n%s", g)
 		}
+	}
+	if g := sshG(t, got, "pen-"+id2); g != "" && !strings.Contains(g, "--node "+id2+" --noise "+k(2)+" 22") {
+		t.Fatalf("pen-<id2> is not exact:\n%s", g)
 	}
 	if g := sshG(t, got, "pen-dup"); g != "" && !strings.Contains(g, "\nuser u1\n") {
 		t.Fatalf("pen-dup changed:\n%s", g)

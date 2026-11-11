@@ -139,14 +139,16 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 		fmt.Fprintf(&b, "    ControlPath %s\n", strings.TrimSuffix(sshArg(controlPrefix), `"`)+`%C"`)
 		b.WriteString("    ControlPersist 10m\n")
 	}
-	// Exact blocks first: OpenSSH keeps the first value it reads, so pen-<nodeId> never takes the pen-*
-	// block's ProxyCommand or its shared connection, which another route may have opened.
-	ids := map[string]bool{}
+	for _, h := range hosts {
+		block("pen-"+h.Name, h.User)
+	}
+	// Exact blocks come before pen-*: OpenSSH keeps the first value it reads, so pen-<nodeId> never takes the
+	// fallback's ProxyCommand or its shared connection, which another route may have opened. They come after
+	// the name blocks, so a name equal to a node id keeps the block it had (that alias is not exact).
 	for _, h := range hosts {
 		if h.NodeID == "" {
 			continue
 		}
-		ids[h.NodeID] = true
 		fmt.Fprintf(&b, "Host pen-%s\n", h.NodeID)
 		if h.User != "" {
 			fmt.Fprintf(&b, "    User %s\n", h.User)
@@ -156,12 +158,6 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 		b.WriteString("    StrictHostKeyChecking yes\n")
 		if connectionReuse {
 			b.WriteString("    ControlMaster no\n    ControlPath none\n")
-		}
-	}
-	for _, h := range hosts {
-		// A name that is a member's node id already means that node (pen pipe resolves ids first).
-		if !ids[h.Name] {
-			block("pen-"+h.Name, h.User)
 		}
 	}
 	block("pen-*", "")

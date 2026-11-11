@@ -248,12 +248,7 @@ func (d *Daemon) serveService(ctx context.Context, sec *session.Secure) {
 		sec.Close(wire.CodeOffline)
 		return
 	}
-	caller, ok := d.view().MemberByNoise(sec.RemoteStatic)
-	if !ok {
-		sec.Close(wire.CodeNotAdmitted)
-		return
-	}
-	conn, err := d.deliver(ctx, reg, caller)
+	conn, err := d.deliver(ctx, reg, sec.RemoteStatic)
 	if err != nil {
 		cause := causeMalformed
 		var de *deliveryError
@@ -272,13 +267,9 @@ func (d *Daemon) serveService(ctx context.Context, sec *session.Secure) {
 	stream.Splice(ctx, sec, conn, conn, conn.CloseWrite)
 }
 
-// deliver dials reg's port and runs the mutual proof; it returns the connection committed to reg, after
-// line 3, ready for the payload.
-func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, caller mesh.Member) (*net.TCPConn, error) {
-	j, err := identityLine(d.view().MeshID, d.nodeID, caller, reg.name)
-	if err != nil {
-		return nil, failed(causeMalformed, err)
-	}
+// deliver dials reg's port and runs the mutual proof for the member with Noise key remote; it returns the
+// connection committed to reg, after line 3, ready for the payload.
+func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, remote []byte) (*net.TCPConn, error) {
 	dctx, cancel := context.WithTimeout(ctx, deliveryDialTimeout)
 	c, err := (&net.Dialer{}).DialContext(dctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(reg.port)))
 	cancel()
@@ -313,6 +304,18 @@ func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, caller mesh.Membe
 	}
 	if !d.svc.commit(reg, tc) {
 		return nil, failed(causeReplaced, errors.New("the registration ended during the delivery"))
+	}
+	// J carries the caller as the view holds it now, after the commit and before line 3.
+	v := d.view()
+	caller, member := v.MemberByNoise(remote)
+	if !member {
+		d.svc.uncommit(reg, tc)
+		return nil, failed(causeReplaced, errors.New("the caller is no longer a member"))
+	}
+	j, err := identityLine(v.MeshID, d.nodeID, caller, reg.name)
+	if err != nil {
+		d.svc.uncommit(reg, tc)
+		return nil, failed(causeMalformed, err)
 	}
 	b := serviceMAC(reg.key, "pen-svc/1 pen", nd, ng, j)
 	if _, err := io.WriteString(tc, string(j)+" "+strictB64.EncodeToString(b)+"\n"); err != nil {

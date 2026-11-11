@@ -691,3 +691,76 @@ func TestSnapshotWatchSendsCompleteLinesWhoseGenerationRisesByOnePerChange(t *te
 		t.Fatalf("a ninth snapshot watcher was admitted: %v", h.reply)
 	}
 }
+
+func TestTheIdentityLineCarriesTheCallerAsTheViewHoldsItAtTheCommit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	key := newKey(t)
+	p := newProgram(t, "goat", key)
+	p.reached, p.hold = make(chan struct{}, 1), make(chan struct{})
+	p.serve()
+	register(t, a, "goat", p.port(), key)
+	aw, stop := a.watch(t)
+	defer stop()
+	sec, err := openService(t, ctx, []string{rs.URL}, b, memberNamed(t, b, "a"), "goat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-p.reached // the delivery dialed and sent line 1 while the caller was still named b
+	var st Status
+	if err := Call(b.st, Request{Op: "name", Name: "b2"}, &st); err != nil {
+		t.Fatal(err)
+	}
+	untilView(t, aw, func(w WatchLine) bool {
+		for _, m := range w.Members {
+			if m.Name == "b2" {
+				return true
+			}
+		}
+		return false
+	})
+	close(p.hold)
+	if j := <-p.identities; !bytes.Contains(j, []byte(`"name":"b2"`)) {
+		t.Fatalf("identity line %s carries the caller as it was before the commit", j)
+	}
+	sec.Close(wire.CodeNormal)
+}
+
+func TestTheControlSocketClosesConnectionsPastItsCapAndServesTheOthers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	was, wait := controlConnCap, controlRequestTimeout
+	controlConnCap, controlRequestTimeout = 2, time.Hour // only the cap may close a connection here
+	defer func() { controlConnCap, controlRequestTimeout = was, wait }()
+	a := founder(t, ctx, rs, "a", nil)
+	var held []net.Conn
+	for range 2 {
+		c, err := net.Dial("unix", SocketPath(a.st))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		held = append(held, c)
+	}
+	extra, err := net.Dial("unix", SocketPath(a.st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	if n, err := extra.Read(make([]byte, 1)); err == nil {
+		t.Fatalf("the connection past the cap was served (%d bytes)", n)
+	}
+	for _, c := range held {
+		c.Write([]byte(`{"op":"status"}` + "\n"))
+		line, err := bufio.NewReader(c).ReadBytes('\n')
+		if err != nil || !bytes.Contains(line, []byte(`"nodeId"`)) {
+			t.Fatalf("a connection within the cap got %q, %v", line, err)
+		}
+	}
+}

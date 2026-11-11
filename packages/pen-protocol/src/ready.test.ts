@@ -68,6 +68,18 @@ describe("awaitPenReady (CONTRACT Exact dial and the ready line)", () => {
     );
   });
 
+  it("kills and reaps a child whose stdout or stderr is not a pipe", async () => {
+    const proc = NodeChildProcess.spawn(process.execPath, ["-e", HOLD], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    proc.on("error", () => {});
+    const error = await awaitPenReady(proc, { nodeId: NODE, noisePub: NOISE }).catch(
+      (e: unknown) => e,
+    );
+    expect((error as PenReadyError).reason).toBe("spawn");
+    expect(proc.signalCode).toBe("SIGKILL");
+  });
+
   it("kills a child that has not printed its line by the deadline", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {

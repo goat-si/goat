@@ -123,21 +123,41 @@ func (d *Daemon) listenControl() (net.Listener, error) {
 	return ln, nil
 }
 
+// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations)
+// included; controlRequestTimeout bounds the wait for a connection's request line (variables for tests).
+var (
+	controlConnCap        = 512
+	controlRequestTimeout = 10 * time.Second
+)
+
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
+	slots := make(chan struct{}, controlConnCap)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		d.spawn(func() { d.handleControl(ctx, c) })
+		select {
+		case slots <- struct{}{}:
+		default:
+			c.Close()
+			continue
+		}
+		d.spawn(func() {
+			defer func() { <-slots }()
+			d.handleControl(ctx, c)
+		})
 	}
 }
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	defer c.Close()
 	r := bufio.NewReader(io.LimitReader(c, 64<<10))
+	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
+		return
+	}
 	line, err := r.ReadBytes('\n')
-	if err != nil {
+	if err != nil || c.SetReadDeadline(time.Time{}) != nil {
 		return
 	}
 	var req Request

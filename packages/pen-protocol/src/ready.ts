@@ -53,7 +53,13 @@ export function awaitPenReady(
   const { stdout, stderr } = child;
   return new Promise<PenReady>((resolve, reject) => {
     if (stdout === null || stderr === null) {
-      reject(new PenReadyError("spawn", "the child needs piped stdout and stderr"));
+      const done = () =>
+        reject(new PenReadyError("spawn", "the child needs piped stdout and stderr"));
+      if (child.pid === undefined || exited(child)) done();
+      else {
+        child.once("exit", done);
+        child.kill("SIGKILL");
+      }
       return;
     }
     let head = Buffer.alloc(0);

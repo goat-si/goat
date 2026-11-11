@@ -526,8 +526,9 @@ Every line is ASCII and ends in one LF; no line contains CR.
 3. Node: J SP B LF, where B is 43 base64url characters and J is the JSON object, with no whitespace, members in
    exactly this order and every value a JSON string except `v`:
    `{"v":1,"mesh":M,"self":S,"caller":{"nodeId":I,"signPub":G,"noisePub":X,"name":C},"stream":N}`.
-   M is the node's mesh id, S its node id, I, G, X and C the calling member as the node's view holds it when the
-   delivery commits, and `stream` the service name. Every one of these values is drawn from the identifier
+   M is the node's mesh id, S its node id, I, G, X and C the calling member as the node's view holds it after the
+   delivery commits and before line 3 is written (a caller that is no longer a member fails the delivery), and
+   `stream` the service name. Every one of these values is drawn from the identifier
    alphabets in "Identities", so none needs escaping. B = HMAC(K, `pen-svc/1 pen` || Nd || Ng || J), over J's exact
    bytes. A reader splits line 3 at its last SP. The whole line, LF included, is at most 2,200 bytes.
 4. From then on the connection carries the stream's payload both ways, half-closed like `tcp`.
@@ -597,12 +598,12 @@ may authorize from this list. The `watch` op keeps its v1.1 lines.
 
 ### SSH config for exact routes
 
-`pen ssh-config` writes a `Host pen-<nodeId>` block for every member, ahead of the name blocks, with
-`ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's known_hosts,
-and, where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's shared
-connection never carries it. `pen-<name>` blocks and the `pen-*` block are unchanged, except that a name equal to a
-member's node id gets no block of its own: that alias already meant the node, as `pen pipe` resolves node ids first,
-and its block would have lent the node another member's `User`.
+`pen ssh-config` writes a `Host pen-<nodeId>` block for every member, after the name blocks and before the `pen-*`
+block, with `ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's
+known_hosts, and, where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's
+shared connection never carries it. The `pen-<name>` blocks and the `pen-*` block are unchanged. A name equal to a
+member's node id keeps its name block, which OpenSSH reads first, so that one alias is not exact; a program that
+checks an alias's effective route before using it refuses it.
 
 ## Close codes
 
