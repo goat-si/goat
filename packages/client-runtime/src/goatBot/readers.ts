@@ -210,7 +210,7 @@ export const goatBotItemReaders: GoatBotItemReaders = {
 };
 
 /** GOAT Bot answering in its own session; the conversation already shows that as its reply. */
-function isGoatBotTurn(chip: ChannelTaskChip): boolean {
+export function isGoatBotTurn(chip: ChannelTaskChip): boolean {
   // Older chips lack their kind, but a turn's worker is always the bot's session thread.
   return (
     chip.kind === "turn" ||
