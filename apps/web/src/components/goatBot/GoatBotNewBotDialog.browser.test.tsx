@@ -86,7 +86,8 @@ it("creates a bot with its model and keeps one request id when a save is retried
   await expect.element(page.getByRole("alert")).toHaveTextContent("Connection lost");
   await userEvent.click(page.getByRole("button", { name: "Create" }));
   await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(created.bot));
-  expect(pending).toEqual(["Research", null, "Research", null]);
+  // The failed try clears its row; the successful one leaves it for the list to retire.
+  expect(pending).toEqual(["Research", null, "Research"]);
   expect(server.inputs).toHaveLength(2);
   expect(server.inputs[0]).toMatchObject({
     name: "Research",

@@ -85,6 +85,26 @@ it("checks a cleared name when the person leaves the field", async () => {
   await expect.element(missing).toBeVisible();
 });
 
+it("checks a name typed then cleared when the person leaves the field", async () => {
+  await using _screen = await render(
+    <GoatBotProfileDialog
+      mode="create"
+      initial={{ name: "", avatar: null, purpose: "" }}
+      canSubmit
+      onSubmit={vi.fn(async () => null)}
+      onClose={vi.fn()}
+    />,
+    { router: false }, // The dialog uses no links or navigation.
+  );
+  const name = page.getByRole("textbox", { name: "Name" });
+  const missing = page.getByText("The bot needs a name.");
+  await userEvent.type(name, "Docs");
+  await userEvent.clear(name);
+  await expect.element(missing).not.toBeInTheDocument();
+  await userEvent.click(page.getByRole("textbox", { name: "Avatar" }));
+  await expect.element(missing).toBeVisible();
+});
+
 it("shows a refused save in the dialog and keeps the person's text", async () => {
   const onSubmit = vi.fn(async (_changes: GoatBotProfileChanges) => "This request is not allowed.");
   const onClose = vi.fn();
