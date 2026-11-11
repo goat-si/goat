@@ -105,28 +105,24 @@ export class SecureSession {
 
   #onLinkClose(code: number): void {
     this.#closedCode = code;
-    for (const fn of this.#onClose.splice(0)) {
-      try {
-        fn(code);
-      } catch (error) {
-        reportListenerError(error);
-      }
-    }
+    for (const fn of this.#onClose.splice(0)) notify(fn, code);
   }
 
   /** Takes the session's records, held ones first. */
   onRecord(handler: (plaintext: Uint8Array) => void): void {
     this.#onRecord = handler;
-    // A held record that ends the session (a protocol error) ends the drain too: nothing after it is delivered.
+    // Records that arrived before an earlier close are still handed over (the peer sent them first); a held record
+    // that ends the session now (a protocol error, a throwing receiver) ends the drain: nothing after it is delivered.
+    const closedBefore = this.#closedCode !== undefined;
     for (const record of this.#held.splice(0)) {
-      if (this.#closedCode !== undefined) break;
+      if (!closedBefore && this.#closedCode !== undefined) break;
       this.#deliver(handler, record);
     }
     this.#heldBytes = 0;
   }
 
   onClose(handler: (code: number) => void): void {
-    if (this.#closedCode !== undefined) handler(this.#closedCode);
+    if (this.#closedCode !== undefined) notify(handler, this.#closedCode);
     else this.#onClose.push(handler);
   }
 
@@ -145,6 +141,15 @@ export class SecureSession {
 
 const isClose = (error: unknown): number | undefined =>
   error instanceof PenError && error.code === "relay-closed" ? error.closeCode : undefined;
+
+/** Tells a close observer, reporting what it throws instead of passing it to whoever closed the session. */
+function notify(observer: (code: number) => void, code: number): void {
+  try {
+    observer(code);
+  } catch (error) {
+    reportListenerError(error);
+  }
+}
 
 /** A close only the node sends: 4401, or 4400 from the far side. A local bad-message-2 is not one (it may be forged). */
 function nodeRefused(error: unknown): boolean {

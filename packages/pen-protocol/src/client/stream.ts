@@ -103,12 +103,13 @@ class Stream implements PenStream {
   constructor(session: SecureSession) {
     this.session = session;
     this.closed = session.closed;
+    // Records first: those that arrived before an earlier close are still read. A held record that closes the
+    // session now stops the drain in SecureSession.onRecord.
+    session.onRecord((record) => this.#onRecord(record));
     session.onClose((code) => {
       this.#closeCode = code;
       this.#wake();
     });
-    // The close observer comes first, so a held record that closes the session stops the ones after it.
-    session.onRecord((record) => this.#onRecord(record));
   }
 
   stats(): PenStreamStats {

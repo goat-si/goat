@@ -30,7 +30,12 @@ const data = (bytes: Uint8Array) => {
 };
 
 /** A stream over a real Noise session; the test plays the Pen node on the other side. */
-async function connected(options: { readonly beforeStream?: ReadonlyArray<Uint8Array> } = {}) {
+async function connected(
+  options: {
+    readonly beforeStream?: ReadonlyArray<Uint8Array>;
+    readonly closeBefore?: number;
+  } = {},
+) {
   const clock = new ManualClock();
   const fake = fakeFactory();
   const pending = openSession({
@@ -59,6 +64,7 @@ async function connected(options: { readonly beforeStream?: ReadonlyArray<Uint8A
   const { session } = await pending;
   // Records the node sends before the stream takes the session are held by the session.
   for (const plaintext of options.beforeStream ?? []) socket.receive(reply.send.seal(plaintext));
+  if (options.closeBefore !== undefined) socket.remoteClose(options.closeBefore);
   const stream = openStream(session);
   let read = 2; // message 1 and the key confirmation
   reply.recv.open(socket.binarySent()[1] ?? new Uint8Array());
@@ -148,6 +154,15 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     expect(c.stream.stats().uncredited).toBe(64 * KiB);
     await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
     expect(await c.stream.closed).toBe(1006);
+  });
+
+  it("DATA and FIN that arrived before the session closed are still read when the stream opens after the close", async () => {
+    const c = await connected({
+      beforeStream: [data(Uint8Array.of(1, 2, 3)), record(1)],
+      closeBefore: 1000,
+    });
+    expect(await c.stream.read()).toEqual(Uint8Array.of(1, 2, 3));
+    expect(await c.stream.read()).toBeNull();
   });
 
   it("records held before the stream opens stop at a bad one: DATA after it is never read", async () => {

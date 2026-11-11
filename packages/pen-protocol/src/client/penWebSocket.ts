@@ -251,8 +251,12 @@ class PenWebSocket implements PenWebSocketLike {
         this.#closeSent = true;
         this.#outbound = [];
         this.#outboundBytes = 0;
-        this.#outbound.push(encodeFrame(Opcode.Close, closePayload(1008), this.#options.random));
-        void this.#pump();
+        try {
+          this.#outbound.push(encodeFrame(Opcode.Close, closePayload(1008), this.#options.random));
+          void this.#pump();
+        } catch {
+          // Without the CSPRNG no close frame can be masked; the socket ends below all the same.
+        }
       }
       this.#finish(1006, "outbound buffer full");
       return;

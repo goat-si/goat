@@ -384,6 +384,34 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
     await c.whenEvent("close");
     expect(c.events.at(-1)).toMatchObject({ type: "close", code: 1006 });
   });
+
+  it("an overflow whose close frame cannot be masked (CSPRNG failure) still ends the socket", async () => {
+    const run = async (failAt?: number) => {
+      let calls = 0;
+      const c = await connected({
+        random: (n) => {
+          calls += 1;
+          if (calls === failAt) throw new Error("no entropy");
+          return new Uint8Array(n).fill(calls & 255);
+        },
+      });
+      c.accept();
+      await c.opened;
+      for (
+        let i = 0;
+        i <= PEN_WEBSOCKET_LIMITS.outboundFrames + 1 && c.socket.readyState === 1;
+        i++
+      )
+        c.socket.send("x");
+      await c.whenEvent("close");
+      return { calls, socket: c.socket, last: c.events.at(-1) };
+    };
+    // The close frame's mask is the last random draw of a run that can draw it.
+    const dry = await run();
+    const failing = await run(dry.calls);
+    expect(failing.socket.readyState).toBe(3);
+    expect(failing.last).toMatchObject({ type: "close", code: 1006 });
+  });
 });
 
 function fromBase64(text: string): Uint8Array {

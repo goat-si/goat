@@ -306,6 +306,27 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
     }
   });
 
+  it("a close observer added after the close that throws is reported, not thrown to the caller", async () => {
+    const reported: Array<unknown> = [];
+    vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
+    try {
+      const t = setup({ relays: [A] });
+      const a = t.fake.socketFor(A);
+      await flushOpen(a);
+      answer(a);
+      const { session } = await t.result;
+      session.close(1000);
+      expect(() =>
+        session.onClose(() => {
+          throw new Error("late observer");
+        }),
+      ).not.toThrow();
+      expect(reported).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(["held", "live"] as const)(
     "a record receiver that throws on a %s record is reported and ends the session 1011",
     async (when) => {
