@@ -304,13 +304,9 @@ func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, caller mesh.Membe
 	if err != nil {
 		return nil, ioCause(err)
 	}
-	if len(line) != 88 || line[43] != ' ' || line[87] != '\n' {
-		return nil, failed(causeMalformed, errors.New("line 2 is not <Ng> <A>"))
-	}
-	ng, okNg := decodeKey32(string(line[:43]))
-	a, okA := decodeKey32(string(line[44:87]))
-	if !okNg || !okA {
-		return nil, failed(causeMalformed, errors.New("line 2 is not canonical base64url"))
+	ng, a, err := parseAnswer(line)
+	if err != nil {
+		return nil, failed(causeMalformed, err)
 	}
 	if !hmac.Equal(a, serviceMAC(reg.key, "pen-svc/1 "+reg.name, nd, ng)) {
 		return nil, failed(causeProof, errors.New("the program's answer does not prove the registered key"))
@@ -329,6 +325,19 @@ func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, caller mesh.Membe
 	}
 	ok = true
 	return tc, nil
+}
+
+// parseAnswer decodes line 2, "<Ng> <A>" LF, exactly: 88 bytes, canonical base64url, no CR.
+func parseAnswer(line []byte) (ng, a []byte, err error) {
+	if len(line) != 88 || line[43] != ' ' || line[87] != '\n' {
+		return nil, nil, errors.New("line 2 is not <Ng> <A>")
+	}
+	ng, okNg := decodeKey32(string(line[:43]))
+	a, okA := decodeKey32(string(line[44:87]))
+	if !okNg || !okA {
+		return nil, nil, errors.New("line 2 is not canonical base64url")
+	}
+	return ng, a, nil
 }
 
 // serviceMAC is HMAC-SHA256 keyed with key over label || parts.
