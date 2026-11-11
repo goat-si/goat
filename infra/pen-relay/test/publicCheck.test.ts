@@ -15,7 +15,18 @@ const archives = [
   "pen-linux-arm64.gz",
   "pen-darwin-arm64.gz",
   "pen-darwin-amd64.gz",
+  "pen-windows-amd64.exe.gz",
+  "pen-windows-arm64.exe.gz",
 ];
+
+/** install.ps1's default lines, as build.sh fills them in. */
+const ps1 = (relays: string, version: string) =>
+  [
+    "$PenRelay = if ($env:PEN_RELAY) { $env:PEN_RELAY } else { '" + relays.split(" ")[0] + "' }",
+    "$PenRelays = if ($env:PEN_RELAYS) { $env:PEN_RELAYS } else { '" + relays + "' }",
+    "$Version = if ($env:PEN_VERSION) { $env:PEN_VERSION } else { '" + version + "' }",
+    "",
+  ].join("\n");
 
 function publicDir(relays: string, version: string, withBinaries: boolean) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-public-"));
@@ -29,6 +40,7 @@ function publicDir(relays: string, version: string, withBinaries: boolean) {
       "",
     ].join("\n"),
   );
+  NodeFS.writeFileSync(NodePath.join(dir, "install.ps1"), ps1(relays, version));
   if (withBinaries) {
     const dl = NodePath.join(dir, "dl", version);
     NodeFS.mkdirSync(dl, { recursive: true });
@@ -113,5 +125,33 @@ describe("pre-deploy check of public/", () => {
     const r2 = run(binary);
     expect(r2.status).toBe(1);
     expect(r2.stderr).toContain("pen-darwin-arm64.gz");
+  });
+
+  it("refuses a release whose install.ps1 is missing or installs other relays or another version", () => {
+    const missing = publicDir("https://a.example", "1.2.3", true);
+    NodeFS.rmSync(NodePath.join(missing, "install.ps1"));
+    const r1 = run(missing);
+    expect(r1.status).toBe(1);
+    expect(r1.stderr).toContain("install.ps1");
+
+    for (const [relays, version] of [
+      ["http://127.0.0.1:8787", "1.2.3"],
+      ["https://a.example https://b.example", "1.2.3"],
+      ["https://a.example", "0.0.0-check"],
+    ] as const) {
+      const other = publicDir("https://a.example", "1.2.3", true);
+      NodeFS.writeFileSync(NodePath.join(other, "install.ps1"), ps1(relays, version));
+      const r = run(other);
+      expect(r.status, `${relays} ${version}`).toBe(1);
+      expect(r.stderr).toContain("install.ps1");
+    }
+  });
+
+  it("refuses a release without a Windows archive", () => {
+    const dir = publicDir("https://a.example", "1.2.3", true);
+    NodeFS.rmSync(NodePath.join(dir, "dl", "1.2.3", "pen-windows-arm64.exe.gz"));
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("pen-windows-arm64.exe.gz");
   });
 });
