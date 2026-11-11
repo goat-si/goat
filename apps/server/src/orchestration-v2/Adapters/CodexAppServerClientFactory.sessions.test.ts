@@ -239,20 +239,26 @@ it.effect.each([
 
 const freshSocket = (launch: string | undefined) => /unix:\/\/(\S+)/.exec(launch ?? "")?.[1];
 
-it.effect("a kept process that exited is retired and the session starts a fresh app-server", () =>
+it.effect("a kept process that exited is released and the session starts a fresh app-server", () =>
   Effect.gen(function* () {
     // Incident G16: the record still says running, its group has no members, its socket refuses.
     const kept = recordFixture("codex-6d127e4774a6", 18088, sessionA);
-    const { open, connected, launched, gone, recordFiles } = yield* harness([kept]);
+    const { open, dir, detached, connected, launched, gone, recordFiles } = yield* harness([kept]);
     gone.add(kept.pgid);
     yield* Effect.gen(function* () {
       yield* open("thread-a", sessionA);
       assert.equal(launched.length, 1);
       assert.deepEqual(connected, [freshSocket(launched[0])]);
-      assert.notInclude(yield* recordFiles, kept.name + ".json");
     }).pipe(Effect.scoped);
     yield* open("thread-b", sessionA).pipe(Effect.scoped);
     assert.equal(launched.length, 2);
+    // The file stays for fence writes; startup cleanup settles it like any gone record.
+    assert.deepEqual(yield* recordFiles, [kept.name + ".json"]);
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(NodePath.join(dir, kept.name + ".pid"), String(kept.pgid)),
+    );
+    yield* detached.cleanup;
+    assert.deepEqual(yield* recordFiles, []);
   }).pipe(Effect.scoped),
 );
 
@@ -282,12 +288,12 @@ it.effect.each([
   }).pipe(Effect.scoped),
 );
 
-it.effect("a kept process that is still exiting is retired once its group is gone", () =>
+it.effect("a kept process that is still exiting is released once its group is gone", () =>
   Effect.gen(function* () {
     const kept = recordFixture("codex-ffffffffffff", 1007, sessionA);
     const probed = yield* Deferred.make<void>();
     let phase: "alive" | "exiting" | "gone" = "alive";
-    const { open, launched, members, recordFiles } = yield* harness([kept], {
+    const { open, launched, members } = yield* harness([kept], {
       socketAccepts: () =>
         phase === "exiting"
           ? Deferred.succeed(probed, undefined).pipe(Effect.as(true))
@@ -302,7 +308,6 @@ it.effect("a kept process that is still exiting is retired once its group is gon
       yield* TestClock.adjust("250 millis");
       yield* Fiber.join(opening);
       assert.equal(launched.length, 1);
-      assert.notInclude(yield* recordFiles, kept.name + ".json");
     }).pipe(Effect.scoped);
   }).pipe(Effect.scoped),
 );
@@ -403,7 +408,7 @@ it.effect.each([
     }).pipe(Effect.scoped),
 );
 
-it.effect("a fence written after another open removed the record refuses this thread", () =>
+it.effect("a fence written after another open released the record refuses this thread", () =>
   Effect.gen(function* () {
     const kept = recordFixture("codex-444444444444", 1011, sessionA);
     const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
@@ -419,7 +424,6 @@ it.effect("a fence written after another open removed the record refuses this th
       yield* Deferred.await(paused);
       control.gate = Effect.void;
       yield* open("thread-first", sessionA);
-      assert.notInclude(yield* recordFiles, kept.name + ".json");
       yield* detached.recordGoalBlock({ instanceId: codex, recordName: kept.name }, goal);
       assert.include(yield* recordFiles, kept.name + ".json");
       yield* Deferred.succeed(release, undefined);
@@ -429,31 +433,10 @@ it.effect("a fence written after another open removed the record refuses this th
   }).pipe(Effect.scoped),
 );
 
-it.effect("a fence write for another thread that has not landed keeps the record", () =>
-  Effect.gen(function* () {
-    const kept = recordFixture("codex-555555555555", 1012, sessionA);
-    const { open, detached, launched, gone, recordFiles } = yield* harness([kept]);
-    gone.add(kept.pgid);
-    // A write the record refuses stays pending in memory, as a write racing the removal would.
-    const goal = { threadId: ThreadId.make("thread-pending"), nativeThreadId: "native-pending" };
-    yield* detached
-      .recordGoalBlock(
-        { instanceId: ProviderInstanceId.make("other"), recordName: kept.name },
-        goal,
-      )
-      .pipe(Effect.flip);
-    yield* Effect.gen(function* () {
-      yield* open("thread-other", sessionA);
-      assert.equal(launched.length, 1);
-      assert.include(yield* recordFiles, kept.name + ".json");
-    }).pipe(Effect.scoped);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("a fence written after a kept record was retired restores the record with it", () =>
+it.effect("a fence written after a kept record was released lands in its record", () =>
   Effect.gen(function* () {
     const kept = recordFixture("codex-666666666666", 1013, sessionA);
-    const { open, detached, gone, recordFiles } = yield* harness([kept]);
+    const { open, detached, gone } = yield* harness([kept]);
     gone.add(kept.pgid);
     const key = { instanceId: codex, recordName: kept.name };
     const stop = {
@@ -461,62 +444,14 @@ it.effect("a fence written after a kept record was retired restores the record w
       nativeThreadId: "native-lost",
       nativeTurnId: "turn-lost",
     };
-    yield* Effect.gen(function* () {
-      yield* open("thread-first", sessionA);
-      assert.notInclude(yield* recordFiles, kept.name + ".json");
-      yield* detached.recordStopObligation(key, stop);
-      assert.include(yield* recordFiles, kept.name + ".json");
-      assert.deepEqual(yield* detached.getStopObligations(stop.threadId), [
-        { record: { ...key, providerSessionId: sessionA }, block: stop },
-      ]);
-      // Settling the fence removes the restored record again; a clear alone never restores one.
-      yield* detached.clearStopObligation(key, stop);
-      assert.notInclude(yield* recordFiles, kept.name + ".json");
-      yield* detached.clearStopObligation(key, stop).pipe(Effect.flip);
-      assert.notInclude(yield* recordFiles, kept.name + ".json");
-    }).pipe(Effect.scoped);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("a retired record with a fence write pending outlives the retired-record limit", () =>
-  Effect.gen(function* () {
-    const records = Array.from({ length: 34 }, (_, index) =>
-      recordFixture("codex-evict-" + String(index).padStart(2, "0"), 2000 + index, "s" + index),
-    );
-    const { open, detached, gone, recordFiles } = yield* harness(records);
-    for (const record of records) gone.add(record.pgid);
-    const [first, ...rest] = records;
-    if (first === undefined) return;
-    yield* open("thread-0", ProviderSessionId.make(first.providerSessionId)).pipe(Effect.scoped);
-    const goal = { threadId: ThreadId.make("thread-pending"), nativeThreadId: "native-pending" };
-    // Refused by the instance check, this write stays pending for the retired record.
-    const other = { instanceId: ProviderInstanceId.make("other"), recordName: first.name };
-    yield* detached.recordGoalBlock(other, goal).pipe(Effect.flip);
-    for (const record of rest)
-      yield* open("thread-" + record.name, ProviderSessionId.make(record.providerSessionId)).pipe(
-        Effect.scoped,
-      );
-    yield* detached.recordGoalBlock({ instanceId: codex, recordName: first.name }, goal);
-    assert.include(yield* recordFiles, first.name + ".json");
-  }).pipe(Effect.scoped),
-);
-
-it.effect("a retired record that cannot be read is never rewritten from its retired copy", () =>
-  Effect.gen(function* () {
-    const kept = recordFixture("codex-777777777777", 1014, sessionA);
-    const { open, dir, detached, gone } = yield* harness([kept]);
-    gone.add(kept.pgid);
-    const key = { instanceId: codex, recordName: kept.name };
-    const file = NodePath.join(dir, kept.name + ".json");
     yield* open("thread-first", sessionA).pipe(Effect.scoped);
-    yield* detached.recordGoalBlock(key, {
-      threadId: ThreadId.make("thread-a"),
-      nativeThreadId: "native-a",
-    });
-    yield* Effect.promise(() => NodeFSP.writeFile(file, "{"));
-    yield* detached
-      .recordGoalBlock(key, { threadId: ThreadId.make("thread-b"), nativeThreadId: "native-b" })
-      .pipe(Effect.flip);
-    assert.equal(yield* Effect.promise(() => NodeFSP.readFile(file, "utf8")), "{");
+    yield* detached.recordStopObligation(key, stop);
+    assert.deepEqual(yield* detached.getStopObligations(stop.threadId), [
+      { record: { ...key, providerSessionId: sessionA }, block: stop },
+    ]);
+    assert.include(
+      (yield* detached.ensureAdmission(stop.threadId).pipe(Effect.flip)).detail,
+      "running work on this thread",
+    );
   }).pipe(Effect.scoped),
 );

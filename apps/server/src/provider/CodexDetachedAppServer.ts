@@ -226,10 +226,6 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const recordGate = yield* Semaphore.make(1);
   const fences = new Map<string, DetachedAppServerRecord>();
   const failedFences = new Map<string, ThreadId>();
-  // Records settleKept removed; a fence written after removal restores its record.
-  const retiredRecords = new Map<string, DetachedAppServerRecord>();
-  const pendingFor = (name: string) =>
-    [...failedFences.keys()].some((k) => JSON.parse(k)[2] === name);
   const shuttingDown = yield* Ref.make(false);
   const blocked = yield* Ref.make(new Map<string, DetachedAppServerRecord>());
   /** Set when a record cannot be attributed to a provider instance or the records cannot be listed. */
@@ -276,19 +272,19 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       }),
     );
 
-  const removeRecordUnlocked = (record: DetachedAppServerRecord) =>
-    tryIo("Could not remove a Codex process record.", async () => {
-      const files = paths(record.name);
-      // GOAT's alias in its private socket directory; Codex removes its own socket on a clean exit.
-      await NodeFSP.rm(record.socketPath, { force: true });
-      await NodeFSP.rm(files.record, { force: true });
-      await NodeFSP.rm(files.pid, { force: true });
-      await NodeFSP.rm(files.stderr, { force: true });
-      fences.delete(record.name);
-      recoveryRetained.delete(record.name);
-    });
   const removeRecord = (record: DetachedAppServerRecord) =>
-    recordGate.withPermit(removeRecordUnlocked(record));
+    recordGate.withPermit(
+      tryIo("Could not remove a Codex process record.", async () => {
+        const files = paths(record.name);
+        // GOAT's alias in its private socket directory; Codex removes its own socket on a clean exit.
+        await NodeFSP.rm(record.socketPath, { force: true });
+        await NodeFSP.rm(files.record, { force: true });
+        await NodeFSP.rm(files.pid, { force: true });
+        await NodeFSP.rm(files.stderr, { force: true });
+        fences.delete(record.name);
+        recoveryRetained.delete(record.name);
+      }),
+    );
 
   const readPidFile = (name: string) =>
     tryIo("Could not read a Codex pid file.", async () => {
@@ -442,18 +438,12 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   ) =>
     recordGate.withPermit(
       Effect.gen(function* () {
-        const record = yield* readRecord(paths(key.recordName).record).pipe(
-          Effect.catch((error) =>
-            KeptRecord.restoreRetired(retiredRecords.get(key.recordName), change, error),
-          ),
-        );
+        const record = yield* readRecord(paths(key.recordName).record);
         if (record.name !== key.recordName || record.instanceId !== key.instanceId)
           return yield* new CodexDetachedAppServerError({
             detail: "The Codex process record does not match this provider.",
           });
         const next = change(record);
-        if (retiredRecords.has(next.name) && KeptRecord.fenceCount(next) === 0)
-          return yield* removeRecordUnlocked(next);
         yield* writeRecordUnlocked(next);
         fences.set(next.name, next);
       }),
@@ -866,7 +856,10 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       ),
   );
 
-  /** A kept record whose group exited is retired, or unlisted while its fences guard other threads. */
+  /**
+   * A kept record whose group exited stops being offered for recovery, so the session starts
+   * afresh. Its file stays for fence writes and startup cleanup settles it, as it does any gone record.
+   */
   const settleKept = (input: KeptRecord.KeptRecordOpen) =>
     KeptRecord.settleKeptRecord({
       ...input,
@@ -875,23 +868,18 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       globallyBlocked: Ref.get(globallyBlocked),
       classify: (record) => classify(record),
       warn,
-      // Re-read under the gate: a fence written while the group was classified keeps the record.
-      retire: (record, threadId, keep) =>
+      // Under the gate: a fence for this thread written or in flight meanwhile still refuses.
+      release: (threadId) =>
         recordGate.withPermit(
-          Effect.suspend(() => {
-            const current = fences.get(record.name);
+          Effect.sync(() => {
+            const current = fences.get(input.name);
             const fenced = [...(current?.goalBlocks ?? []), ...(current?.stopObligations ?? [])];
             if ([...failedFences.values(), ...fenced.map((f) => f.threadId)].includes(threadId))
-              return Effect.succeed("own" as const);
-            if (current === undefined) return Effect.succeed("removed" as const);
-            // A fence write that names this record and has not landed lives only in memory.
-            if (keep || pendingFor(record.name) || fenced.length > 0)
-              return Effect.succeed("kept" as const);
-            KeptRecord.rememberRetired(retiredRecords, current, pendingFor);
-            return removeRecordUnlocked(current).pipe(Effect.as("removed" as const));
+              return "own" as const;
+            recoveryRetained.delete(input.name);
+            return "released" as const;
           }),
         ),
-      unlist: Effect.sync(() => recoveryRetained.delete(input.name)),
     });
 
   /**

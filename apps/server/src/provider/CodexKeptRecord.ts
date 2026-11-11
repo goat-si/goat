@@ -20,12 +20,7 @@ export interface KeptRecordOpen {
 
 type KeptRecordDecision =
   | { readonly type: "connect" }
-  | {
-      readonly type: "retire";
-      readonly record: DetachedAppServerRecord;
-      /** Fences or survivor bindings guard other threads, so the record stays (unlisted). */
-      readonly keep: boolean;
-    }
+  | { readonly type: "release"; readonly record: DetachedAppServerRecord }
   | { readonly type: "refuse"; readonly detail: string };
 
 const settled = (classification: DetachedClassification) =>
@@ -48,8 +43,8 @@ const AGAIN = " GOAT checks again on every message, so send it again once that i
 
 /**
  * Decides how a session opens on a record kept for recovery. Only a group that is provably gone
- * (no members, socket refusing) is given up; a live, unverifiable or reused group is refused, and
- * a record whose fences still guard other threads stays for them while this session starts anew.
+ * (no members, socket refusing) is released; a live, unverifiable or reused group is refused, and
+ * so is a thread its fences or survivor binding still guard.
  */
 const decideKeptRecord = Effect.fn("CodexDetachedAppServers.decideKeptRecord")(function* (
   input: KeptRecordOpen & {
@@ -119,23 +114,15 @@ const decideKeptRecord = Effect.fn("CodexDetachedAppServers.decideKeptRecord")(f
     ...input.survivorThreads,
   ]);
   if (guarded.has(input.threadId)) return { type: "refuse", detail: ownTurn(record) } as const;
-  return { type: "retire", record, keep: guarded.size > 0 } as const;
+  return { type: "release", record } as const;
 });
 
-/** Applies the decision: "connect" leaves the record for connectExisting; the others free the session to spawn. */
+/** Applies the decision: "connect" leaves the record for connectExisting; "release" frees the session to spawn. */
 export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(function* <E>(
   input: Omit<Parameters<typeof decideKeptRecord>[0], "globallyBlocked"> & {
     readonly globallyBlocked: Effect.Effect<string | undefined>;
-    /**
-     * Re-reads the record's fences under the record gate: "own" when one guards this thread,
-     * "kept" when others are guarded (or keep), otherwise removes it.
-     */
-    readonly retire: (
-      record: DetachedAppServerRecord,
-      threadId: ThreadId,
-      keep: boolean,
-    ) => Effect.Effect<"removed" | "kept" | "own", E>;
-    readonly unlist: Effect.Effect<unknown>;
+    /** Re-reads the record's fences under the record gate: "own" when one guards this thread. */
+    readonly release: (threadId: ThreadId) => Effect.Effect<"released" | "own", E>;
   },
 ) {
   const decision = yield* decideKeptRecord({
@@ -145,42 +132,7 @@ export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(
   if (decision.type === "refuse")
     return yield* new CodexDetachedAppServerError({ detail: decision.detail });
   if (decision.type === "connect") return "connect" as const;
-  const retired = yield* input.retire(decision.record, input.threadId, decision.keep);
-  if (retired === "own")
+  if ((yield* input.release(input.threadId)) === "own")
     return yield* new CodexDetachedAppServerError({ detail: ownTurn(decision.record) });
-  if (retired === "removed") return "retire" as const;
-  yield* input.unlist;
-  return "unlist" as const;
+  return "release" as const;
 });
-
-export const fenceCount = (record: DetachedAppServerRecord) =>
-  (record.goalBlocks?.length ?? 0) + (record.stopObligations?.length ?? 0);
-
-const missing = (error: CodexDetachedAppServerError) =>
-  typeof error.cause === "object" &&
-  error.cause !== null &&
-  (error.cause as { code?: unknown }).code === "ENOENT";
-
-/** A fence written after settleKept removed its record restores it; any other failure stands. */
-export const restoreRetired = (
-  retired: DetachedAppServerRecord | undefined,
-  change: (record: DetachedAppServerRecord) => DetachedAppServerRecord,
-  error: CodexDetachedAppServerError,
-) =>
-  retired !== undefined && missing(error) && fenceCount(change(retired)) > 0
-    ? Effect.succeed(retired)
-    : Effect.fail(error);
-
-const RETIRED_LIMIT = 32;
-
-/** Remembers a retired record, evicting the oldest one that no fence write is pending for. */
-export const rememberRetired = (
-  retired: Map<string, DetachedAppServerRecord>,
-  record: DetachedAppServerRecord,
-  pending: (name: string) => boolean,
-) => {
-  const evict =
-    retired.size >= RETIRED_LIMIT ? [...retired.keys()].find((name) => !pending(name)) : undefined;
-  if (evict !== undefined) retired.delete(evict);
-  retired.set(record.name, record);
-};
