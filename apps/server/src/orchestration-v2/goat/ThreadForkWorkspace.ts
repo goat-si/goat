@@ -75,7 +75,7 @@ function hasForkableRun(
   );
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const projects = yield* ProjectService.ProjectService;
