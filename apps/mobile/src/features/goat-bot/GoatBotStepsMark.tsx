@@ -69,17 +69,21 @@ export const GoatBotStepsMark = memo(function GoatBotStepsMark(props: {
   );
 });
 
-/** A row with the mark that belongs directly above it, if any. */
+/**
+ * A row with the mark that belongs directly above it, if any. The row keeps the same parent
+ * whether or not a mark shows, so a line arriving or a paused read never mounts it again.
+ */
 export function GoatBotStepsAbove(props: {
   readonly mark: GoatBotActivityMark | undefined;
   readonly opened: ReadonlySet<string>;
   readonly onToggle: (key: string) => void;
   readonly children: ReactNode;
 }) {
-  if (props.mark === undefined) return props.children;
   return (
     <View>
-      <GoatBotStepsMark mark={props.mark} opened={props.opened} onToggle={props.onToggle} />
+      {props.mark === undefined ? null : (
+        <GoatBotStepsMark mark={props.mark} opened={props.opened} onToggle={props.onToggle} />
+      )}
       {props.children}
     </View>
   );

@@ -313,6 +313,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
 
 export function GoatBotScreen(props: {
   readonly visible: boolean;
+  /** False while the app is in the background, where GOAT Bot's steps are not read. */
+  readonly foreground?: boolean;
   readonly taskId?: ChannelTaskId;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
@@ -462,13 +464,10 @@ export function GoatBotScreen(props: {
     opened,
     toggle: toggleSteps,
   } = useGoatBotActivityMarks({
-    visibleTurnItems: session.visibleTurnItems,
-    environmentId: session.historyEnvironmentId,
+    chat: session,
     taskId: taskId ?? null,
-    boundedSnapshots: session.boundedSnapshots,
     rows: visibleRows,
-    reading: props.visible && !opener.covered,
-    scope: JSON.stringify([session.historyEnvironmentId, session.threadId, taskId ?? null]),
+    reading: props.visible && props.foreground !== false && !opener.covered,
   });
   const listRef = useRef<LegendListRef>(null);
   const { clear: clearUnread } = unread;

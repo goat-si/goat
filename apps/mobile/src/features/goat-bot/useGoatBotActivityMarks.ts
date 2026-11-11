@@ -9,9 +9,9 @@ import {
   type GoatBotActivityPlacement,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
+import type { EnvironmentId, OrchestrationV2ProjectedTurnItem, ThreadId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { environmentThreadDetails } from "../../state/threads";
 
@@ -23,7 +23,8 @@ const NO_STEPS = Atom.make(EMPTY_GOAT_BOT_SOURCE_STEPS).pipe(
   Atom.withLabel("goat-bot-activity-steps:none"),
 );
 const NO_MARKS: GoatBotActivityPlacement = { beforeRow: new Map(), trailing: null };
-/** Opened lines kept per conversation; older ones close. */
+/** Open lines are kept for this many recent conversations, and this many lines in each. */
+const MAX_CONVERSATIONS = 5;
 const MAX_OPENED = 50;
 const NO_OPENED: ReadonlySet<string> = new Set();
 
@@ -59,17 +60,23 @@ function samePlacement(a: GoatBotActivityPlacement, b: GoatBotActivityPlacement)
  * covered chat lets go of that thread. The placement keeps its identity while no line changes.
  */
 export function useGoatBotActivityMarks(input: {
-  readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
-  readonly environmentId: EnvironmentId | null;
+  /** The conversation shown, as the session reads it. */
+  readonly chat: {
+    readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+    readonly historyEnvironmentId: EnvironmentId | null;
+    readonly threadId: ThreadId | null;
+    readonly boundedSnapshots: boolean;
+  };
   readonly taskId: string | null;
-  readonly boundedSnapshots: boolean;
   /** The rows the list draws, without the unread divider. */
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly reading: boolean;
-  /** The conversation the open lines belong to. */
-  readonly scope: string;
 }) {
-  const { visibleTurnItems, environmentId, taskId, boundedSnapshots, rows, reading } = input;
+  const { taskId, rows, reading } = input;
+  const { visibleTurnItems, boundedSnapshots } = input.chat;
+  const environmentId = input.chat.historyEnvironmentId;
+  // The conversation the open lines belong to.
+  const scope = JSON.stringify([environmentId, input.chat.threadId, taskId]);
   const sources = useMemo(
     () =>
       goatBotActivitySources({
@@ -102,25 +109,26 @@ export function useGoatBotActivityMarks(input: {
   if (changed) setKept(next);
   const placement = changed ? next : kept;
 
-  const [opened, setOpened] = useState<{
-    readonly scope: string;
-    readonly keys: readonly string[];
-  }>({ scope: input.scope, keys: [] });
-  const openKeys = opened.scope === input.scope ? opened.keys : null;
-  const openSet = useMemo(() => (openKeys === null ? NO_OPENED : new Set(openKeys)), [openKeys]);
-  const scope = input.scope;
-  const toggle = useCallback(
-    (key: string) =>
-      setOpened((current) => {
-        const keys = current.scope === scope ? current.keys : [];
-        return {
-          scope,
-          keys: keys.includes(key)
-            ? keys.filter((each) => each !== key)
-            : [...keys, key].slice(-MAX_OPENED),
-        };
-      }),
-    [scope],
-  );
+  // Open lines by conversation, most recently opened last.
+  const [opened, setOpened] = useState<ReadonlyMap<string, readonly string[]>>(new Map());
+  const openKeys = opened.get(scope);
+  const openSet = openKeys === undefined ? NO_OPENED : new Set(openKeys);
+  const toggle = (key: string) =>
+    setOpened((current) => {
+      const keys = current.get(scope) ?? [];
+      const next = new Map(current);
+      next.delete(scope);
+      next.set(
+        scope,
+        keys.includes(key)
+          ? keys.filter((each) => each !== key)
+          : [...keys, key].slice(-MAX_OPENED),
+      );
+      for (const oldest of next.keys()) {
+        if (next.size <= MAX_CONVERSATIONS) break;
+        next.delete(oldest);
+      }
+      return next;
+    });
   return { placement, opened: openSet, toggle };
 }

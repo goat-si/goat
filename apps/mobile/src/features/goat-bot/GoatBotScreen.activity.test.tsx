@@ -144,6 +144,7 @@ function setup() {
     activity: null,
   });
   list.unmounted.clear();
+  chatFiles.cardMounts = 0;
   threadReads.held.length = 0;
   threadReads.released.length = 0;
 }
@@ -273,7 +274,7 @@ it("reads the steps only while the chat shows, and lets go while an image covers
   }
 });
 
-it("keeps a line open when its cell scrolls away and back, closes it in another conversation, and updates it when only the steps change", async () => {
+it("keeps a line open when its cell scrolls away and back, keeps each conversation's open lines, and updates it when only the steps change", async () => {
   setup();
   conversation(answered);
   await steps(SESSION, work);
@@ -291,9 +292,38 @@ it("keeps a line open when its cell scrolls away and back, closes it in another 
     await steps(SESSION, [...work, ran("c3", 7)]);
     expect(line(view.container)?.textContent).toBe("Read 1 file and ran 3 commands");
 
+    // Another conversation starts closed, and opening a line there keeps this one's open.
     screenSession.threadId = "bot-2";
     await view.rerender(<GoatBotScreen visible />);
     expect(line(view.container)?.getAttribute("aria-expanded")).toBe("false");
+    await press(line(view.container));
+    screenSession.threadId = "bot";
+    await view.rerender(<GoatBotScreen visible />);
+    expect(line(view.container)?.getAttribute("aria-expanded")).toBe("true");
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("never mounts a reply's row again when its line arrives, or when the app goes to the background and back", async () => {
+  setup();
+  conversation(answered);
+  const view = await mount(<GoatBotScreen visible foreground />);
+  try {
+    expect(chatFiles.cardMounts).toBe(1);
+    expect(line(view.container)).toBeNull();
+    await steps(SESSION, work);
+    expect(line(view.container)?.textContent).toBe("Read 1 file and ran 2 commands");
+    // In the background the session is let go of, and taken again on return.
+    const held = threadReads.held.length;
+    const released = threadReads.released.length;
+    await view.rerender(<GoatBotScreen visible foreground={false} />);
+    expect(threadReads.released).toHaveLength(released + 1);
+    expect(line(view.container)).toBeNull();
+    await view.rerender(<GoatBotScreen visible foreground />);
+    expect(threadReads.held).toHaveLength(held + 1);
+    expect(line(view.container)).not.toBeNull();
+    expect(chatFiles.cardMounts).toBe(1);
   } finally {
     await view.unmount();
   }
