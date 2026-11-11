@@ -49,14 +49,16 @@ export const REMOTE_FORCED_STOP_SCRIPT = `forced_stop_runtime() {
   # One process table read binds each descendant to its owner and start time, so a PID that is
   # reused afterwards never matches its record. The table's own row for the runtime must still be
   # the approved process, or the children it lists belong to another one. Every row needs numeric
-  # ids (macOS lists nobody as uid -2) and every descendant a whole start time; anything else refuses before a signal.
+  # ids (macOS lists nobody as uid -2) and every descendant a whole start time;
+  # anything else refuses before a signal. Ancestry walks stop after as many steps as the table has
+  # rows, which only a parent loop reaches.
   forced_table="$(LC_ALL=C TZ=UTC ps -A -o pid= -o ppid= -o uid= -o lstart= 2>/dev/null)" || forced_refused "its process table could not be read"
   forced_root="$(printf '%s\\n' "$forced_table" | awk -v root="$FORCE_PID" '$1 == root { start = $4; for (i = 5; i <= NF; i++) start = start " " $i; print $3 " " start }')"
   [ "$forced_root" = "$(id -u) $FORCE_START" ] || forced_refused "the process table shows another process under its PID"
   forced_records="$(printf '%s\\n' "$forced_table" | awk -v root="$FORCE_PID" -v me="$(id -u)" '
     $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || $3 !~ /^-?[0-9]+$/ { bad = 1 }
     { parent[$1] = $2; owner[$1] = $3; fields[$1] = NF; start = $4; for (i = 5; i <= NF; i++) start = start " " $i; started[$1] = start }
-    END { if (bad) exit 1; for (pid in parent) { if (owner[pid] != me) continue; up = parent[pid]; for (depth = 0; depth < 32 && up != ""; depth++) { if (up == root) { if (fields[pid] != 8) exit 1; print pid " " started[pid]; break } up = parent[up] } } }')" || forced_refused "its process table could not be read"
+    END { if (bad) exit 1; for (pid in parent) { if (owner[pid] != me) continue; up = parent[pid]; for (depth = 0; depth < NR && up != ""; depth++) { if (up == root) { if (fields[pid] != 8) exit 1; print pid " " started[pid]; break } up = parent[up] } } }')" || forced_refused "its process table could not be read"
   printf 'Stopping GOAT PID %s (started %s, port %s) for an approved forced update.\\n' "$FORCE_PID" "$FORCE_START" "$FORCE_PORT" >>"$LOG_FILE" 2>/dev/null || :
   if ! forced_signal_same TERM "$FORCE_PID" "$FORCE_START" && server_alive "$FORCE_PID"; then
     forced_refused "it changed before the signal"

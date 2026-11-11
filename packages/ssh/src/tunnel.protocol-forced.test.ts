@@ -483,3 +483,51 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement deep descendants",
+  () => {
+    it.live("a descendant forty levels below the runtime is signalled too", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        const deep = yield* f.realSpawner.spawn(
+          ChildProcess.make(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"]),
+        );
+        const deepPid = Number(deep.pid);
+        const deepStart = yield* startOf(f, deepPid);
+        const chain = Array.from({ length: 40 }, (_, at) => 9_000_001 + at);
+        const rows = [
+          ...chain.map(
+            (pid, at) =>
+              `echo "${pid} ${at === 0 ? f.pid : chain[at - 1]} $(id -u) Thu Jan 1 00:00:00 2099"`,
+          ),
+          `echo "${deepPid} ${chain.at(-1)} $(id -u) ${deepStart}"`,
+        ].join("\n");
+        const bin = `${f.test}/deep-bin`;
+        yield* f.fs.makeDirectory(bin);
+        // The table shows the spawned process at the end of a chain forty processes deep.
+        yield* f.fs.writeFileString(
+          `${bin}/ps`,
+          `#!/bin/sh
+if [ "$*" = "-A -o pid= -o ppid= -o uid= -o lstart=" ]; then
+  /bin/ps "$@"
+${rows}
+  exit 0
+fi
+exec "$HOME/.test/identity-bin/ps" "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/ps`, 0o700);
+        f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+        });
+        assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
+        assert.isFalse(isAlive(f.pid));
+        assert.isFalse(isAlive(deepPid));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
