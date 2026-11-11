@@ -123,7 +123,9 @@ Each action lists its steps and their results. Some changes wait for a person: a
 host key GOAT has not pinned or that changed, re-linking a device, or removing
 one that could not be cleaned up. They appear in **Settings → Decision Inbox**;
 answer there, then select **Continue** on the device. Approving needs permission
-to change this hub's settings.
+to change this hub's settings. An approval covers its change until that change
+succeeds once or the approval expires a day later, so a step that fails without
+changing anything can be tried again without asking you twice.
 
 ## Permission profiles
 

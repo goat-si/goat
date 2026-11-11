@@ -86,8 +86,41 @@ pen="pen"
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) ;;
 *)
-	echo "add $HOME/.local/bin to your PATH to run pen directly"
 	pen="$HOME/.local/bin/pen"
+	# zsh reads .zshenv (in ZDOTDIR when set) in every shell; bash reads the first of its three login
+	# profiles in a login shell and ~/.bashrc in other interactive ones (a desktop terminal); fish reads
+	# none of these. Positional parameters keep paths with spaces whole under set -f.
+	case "${SHELL:-}" in
+	*/zsh) set -- "${ZDOTDIR:-$HOME}/.zshenv" ;;
+	*/fish) set -- ;;
+	*/bash)
+		login="$HOME/.profile"
+		for p in "$HOME/.bash_profile" "$HOME/.bash_login"; do
+			if [ -f "$p" ]; then
+				login="$p"
+				break
+			fi
+		done
+		set -- "$login" "$HOME/.bashrc"
+		;;
+	*) set -- "$HOME/.profile" ;;
+	esac
+	# The line checks PATH first, so a shell that reads two of these files lists the folder once.
+	line='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
+	mark="# added by pen install.sh (PEN_NO_MODIFY_PATH=1 skips this)"
+	if [ "${PEN_NO_MODIFY_PATH:-}" = 1 ]; then
+		echo "add $HOME/.local/bin to your PATH to run pen directly"
+	elif [ $# = 0 ]; then
+		echo "add $HOME/.local/bin to your PATH to run pen directly (fish: fish_add_path $HOME/.local/bin)"
+	else
+		for profile in "$@"; do
+			if grep -qF "$mark" "$profile" 2>/dev/null || printf '\n%s %s\n' "$line" "$mark" >>"$profile" 2>/dev/null; then
+				echo "added $HOME/.local/bin to your PATH in $profile (new terminals see it)"
+			else
+				echo "could not write $profile: add $HOME/.local/bin to your PATH to run pen directly"
+			fi
+		done
+	fi
 	;;
 esac
 "$HOME/.local/bin/pen" relay download "$PEN_RELAY" >/dev/null

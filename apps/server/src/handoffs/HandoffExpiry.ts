@@ -6,6 +6,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
+import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { cancelStaleRuntimeUpdates } from "../sshRemote/staleRuntimeUpdates.ts";
 import * as Handoffs from "./Handoffs.ts";
 import * as HandoffWakeReactor from "./HandoffWakeReactor.ts";
 
@@ -19,12 +21,20 @@ export const layer = Layer.effectDiscard(
     const wakes = yield* HandoffWakeReactor.HandoffWakeReactor;
     yield* wakes.start;
     const hostSync = yield* Effect.serviceOption(ProviderHostSync.ProviderHostSync);
+    const dispatch = yield* Effect.serviceOption(SshRemoteDispatch.SshRemoteDispatch);
     // Registration runs once after startup recovery, then on each shared scheduler tick.
     yield* scheduler.register(
       "handoff-expiry",
       handoffs.sweep.pipe(
         // Expiries this sweep made wake their threads on the same tick.
         Effect.andThen(wakes.reconcile),
+        Effect.andThen(
+          cancelStaleRuntimeUpdates(handoffs, setup, dispatch).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("stale runtime update approvals were not ended", { cause }),
+            ),
+          ),
+        ),
         Effect.andThen(setup.resumeContinuations),
         Effect.andThen(homeRequests.resumeContinuations),
         Effect.andThen(providerSettings.resumeContinuations),

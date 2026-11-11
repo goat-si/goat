@@ -59,6 +59,7 @@ const reactTests = [
   "src/features/goat-bot/MobileBotLibrary.test.tsx",
   "src/features/goat-bot/MobileBotComputer.test.tsx",
   "src/features/goat-bot/useGoatBotVisitSnapshot.test.tsx",
+  "src/features/goat-bot/MobileNeedsYouStrip.test.tsx",
   "src/features/goat-bot/GoatBotRouteScreen.test.tsx",
   "src/features/goat-bot/GoatBotModelPill.test.tsx",
   "src/features/goat-bot/GoatBotScreen.notes.test.tsx",
@@ -73,6 +74,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotBubble.test.tsx",
   "src/features/goat-bot/GoatBotDayStamp.test.tsx",
   "src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.events.test.tsx",
   "src/features/goat-bot/GoatBotScreen.unread.test.tsx",
   "src/features/goat-bot/GoatBotScreen.memory.test.tsx",
   "src/features/goat-bot/GoatBotTimelineRow.test.tsx",
@@ -131,6 +133,7 @@ const devCompiledSources = [
   "/lib/useNotificationPermissionStatus.ts",
   "/features/connection/ConnectionsNewRouteScreen.tsx",
   "/features/goat-bot/GoatBotModelPill.tsx",
+  "/features/goat-bot/GoatBotScreen.tsx",
   "/features/goat-bot/MobileBotWork.tsx",
 ];
 const require = NodeModule.createRequire(import.meta.url);

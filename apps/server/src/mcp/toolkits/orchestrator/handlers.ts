@@ -1,8 +1,10 @@
-import { OrchestratorMcpFailure } from "@goat/contracts";
+import { type HandoffError, OrchestratorMcpFailure, handoffSummary } from "@goat/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import type { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
+import * as Handoffs from "../../../handoffs/Handoffs.ts";
 import { isTerminalRunStatus } from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -12,6 +14,26 @@ import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import { admitLaunch, withPressure } from "../../pressureAdmission.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
+
+/** A withdrawal names what it refused; another thread's card reads as missing. */
+const withdrawFailure = (error: HandoffError) =>
+  error.reason === "not_found"
+    ? new OrchestratorMcpFailure({
+        code: "not_found",
+        message: "This thread has no handoff with that id.",
+      })
+    : error.reason === "conflict" || error.reason === "expired"
+      ? new OrchestratorMcpFailure({
+          code: "conflict",
+          message: "That handoff is no longer open, so there is nothing to withdraw.",
+        })
+      : error.reason === "invalid_request"
+        ? new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message:
+              "Only an approval can be withdrawn here; computer use and browser tab requests end through their own tools.",
+          })
+        : new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message });
 
 /** Whether a thread tool call goes to another machine. */
 const reachesHost = <
@@ -173,6 +195,22 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.requestSecret(scope, input);
+    }),
+  ),
+  goat_handoff_withdraw: McpToolAccess.actsAsCaller(({ handoffId }) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const caller = yield* McpInvocationContext.requireThreadScope(scope, "goat_handoff_withdraw");
+      const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
+      if (Option.isNone(handoffs))
+        return yield* new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message: "This GOAT server cannot withdraw handoffs.",
+        });
+      const handoff = yield* handoffs.value
+        .withdraw({ threadId: caller.thread.threadId, handoffId })
+        .pipe(Effect.mapError(withdrawFailure));
+      return { handoff: handoffSummary(handoff) };
     }),
   ),
   create_threads: McpToolAccess.destructive(

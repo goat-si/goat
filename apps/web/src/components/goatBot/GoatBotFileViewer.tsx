@@ -20,6 +20,7 @@ import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
+import { afterLastChunkRequest } from "./goatBotFileReads";
 import { useGoatBotName } from "./goatBotMemberContext";
 
 type View =
@@ -41,21 +42,6 @@ function download(name: string, bytes: Uint8Array<ArrayBuffer>, mimeType: string
   anchor.download = name;
   anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-// The server reads one file per connection at a time; a closed viewer's last chunk request can
-// still be running there, so the next read on that server waits for it instead of hearing "busy".
-const lastChunkRequest = new Map<EnvironmentId, Promise<unknown>>();
-function afterLastChunkRequest<T>(environmentId: EnvironmentId, request: () => Promise<T>) {
-  const next = (lastChunkRequest.get(environmentId) ?? Promise.resolve())
-    .catch(() => undefined)
-    .then(request);
-  lastChunkRequest.set(environmentId, next);
-  const forget = () => {
-    if (lastChunkRequest.get(environmentId) === next) lastChunkRequest.delete(environmentId);
-  };
-  next.then(forget, forget);
-  return next;
 }
 
 interface FileViewerProps {

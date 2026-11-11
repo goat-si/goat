@@ -63,6 +63,44 @@ const startWaiting = (
     return task;
   });
 
+/** Copies of one waiting task under new ids: each with its own bot, update time and question. */
+const copyTask = (
+  taskId: string,
+  count: number,
+  shape: (index: number) => {
+    readonly botId: string;
+    readonly updatedAt: string;
+    readonly askedAt: string;
+  },
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TEMP TABLE IF NOT EXISTS task_copy AS SELECT * FROM channel_tasks WHERE 0`;
+    for (let index = 0; index < count; index++) {
+      const { botId, updatedAt, askedAt } = shape(index);
+      const copy = taskId + "-copy-" + index;
+      const question = [{ questionId: "q-" + copy, text: "Filler " + index, askedAt }];
+      yield* sql`DELETE FROM task_copy`;
+      yield* sql`INSERT INTO task_copy SELECT * FROM channel_tasks WHERE task_id = ${taskId}`;
+      yield* sql`UPDATE task_copy SET task_id = ${copy}, bot_id = ${botId},
+        updated_at = ${updatedAt}, worker_thread_id = NULL,
+        task_json = json_set(task_json, '$.taskId', ${copy},
+          '$.openQuestions', json(${JSON.stringify(question)}))`;
+      yield* sql`INSERT INTO channel_tasks SELECT * FROM task_copy`;
+    }
+  });
+
+/** Puts one question on a task, asked and updated at the given times. */
+const askOnce = (taskId: string, text: string, askedAt: string, updatedAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const question = [{ questionId: "q-" + taskId, text, askedAt }];
+    yield* sql`UPDATE channel_tasks SET status = 'waiting_input', updated_at = ${updatedAt},
+      task_json = json_set(task_json, '$.status', 'waiting_input',
+        '$.openQuestions', json(${JSON.stringify(question)}))
+      WHERE task_id = ${taskId}`;
+  });
+
 describe("open asks across bots", () => {
   it.effect("lists a task's open question with its words, for its owner only", () => {
     const harness = makeHarness({ projects: 2 });
@@ -202,6 +240,55 @@ describe("open asks across bots", () => {
         result.asks.map((ask) => ask.text),
         "Old question",
       );
+    }).pipe(Effect.provide(harness.layer));
+  });
+  it.effect("keeps the newest ask when 200 tasks updated later hold older ones", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const newest = yield* startWaiting(harness, "do: newest question", "Ev-newest");
+      yield* askOnce(
+        newest.taskId,
+        "Newest question",
+        "2026-10-12T05:00:00.000Z",
+        "2026-10-01T00:00:00.000Z",
+      );
+      yield* copyTask(newest.taskId, 200, () => ({
+        botId: "main",
+        updatedAt: "2026-10-20T00:00:00.000Z",
+        askedAt: "2026-10-12T01:00:00.000Z",
+      }));
+      const result = yield* members.openAsks(owner);
+      assert.strictEqual(result.asks[0]?.text, "Newest question");
+      assert.isTrue(result.truncated);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves a deleted bot's tasks out before counting toward the limit", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const live = yield* startWaiting(harness, "do: live question", "Ev-live");
+      yield* askOnce(
+        live.taskId,
+        "Live question",
+        "2026-10-12T00:30:00.000Z",
+        "2026-10-01T00:00:00.000Z",
+      );
+      yield* copyTask(live.taskId, 200, () => ({
+        botId: "gone-bot",
+        updatedAt: "2026-10-20T00:00:00.000Z",
+        askedAt: "2026-10-12T04:00:00.000Z",
+      }));
+      const result = yield* members.openAsks(owner);
+      assert.deepStrictEqual(
+        result.asks.map((ask) => ask.text),
+        ["Live question"],
+      );
+      assert.strictEqual(result.total, 1);
+      assert.isFalse(result.truncated);
     }).pipe(Effect.provide(harness.layer));
   });
 });

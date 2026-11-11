@@ -39,3 +39,22 @@ func TestLsSaysWhenThisMachineIsNotAMember(t *testing.T) {
 		t.Fatalf("pen ls on a member says it is not one:\n%s", w.String())
 	}
 }
+
+// P1: ssh pen-<name> to a member that published no host keys fails strict checking with no hint, so
+// pen ls names such members everywhere, and on the member itself says which key files it cannot read.
+func TestLsNamesMembersWithoutHostKeysAndTheKeyFilesThisMachineCannotRead(t *testing.T) {
+	self := daemon.LsMember{Member: mesh.Member{Name: "mac", NodeID: "selfnodeidaaaaaaaaaaaaaaaa"}, Self: true}
+	win := daemon.LsMember{Member: mesh.Member{Name: "win", NodeID: "winnodeidaaaaaaaaaaaaaaaaa"}}
+	linux := daemon.LsMember{Member: mesh.Member{Name: "linux", NodeID: "lnxnodeidaaaaaaaaaaaaaaaaa", HostKeys: []string{"ssh-ed25519 AAAA"}}}
+	var w bytes.Buffer
+	printMembers(&w, daemon.LsReply{Self: self.NodeID, Members: []daemon.LsMember{self, win, linux}})
+	if !strings.Contains(w.String(), "no ssh host keys from win:") || strings.Contains(w.String(), "from win, linux") {
+		t.Fatalf("pen ls with a member that published no host keys printed:\n%s", w.String())
+	}
+	w.Reset()
+	win.Self, self.Self = true, false
+	printMembers(&w, daemon.LsReply{Self: win.NodeID, Members: []daemon.LsMember{self, win}, HostKeysError: `cannot read C:\ProgramData\ssh\ssh_host_ed25519_key.pub (Access is denied.)`})
+	if !strings.Contains(w.String(), `ssh      cannot read C:\ProgramData\ssh\ssh_host_ed25519_key.pub`) {
+		t.Fatalf("pen ls on a member that cannot read its host keys printed:\n%s", w.String())
+	}
+}

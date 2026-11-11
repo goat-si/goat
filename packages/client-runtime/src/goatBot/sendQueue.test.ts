@@ -1,4 +1,4 @@
-import { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import { ChannelQuestionId, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createGoatBotSendQueue } from "./sendQueue.ts";
@@ -38,14 +38,15 @@ function setup(canDispatch: () => boolean = () => true) {
 }
 
 describe("createGoatBotSendQueue", () => {
-  it("keeps task attribution in the pending row and every retry", async () => {
+  it("keeps task and question attribution in the pending row and every retry", async () => {
     const attempt = deferred<{ requestKey: string }>();
     const failed = deferred<void>();
-    const sent: Array<string | undefined> = [];
+    const sent: Array<[string | undefined, string | undefined]> = [];
     const taskId = ChannelTaskId.make("task-1");
+    const questionId = ChannelQuestionId.make("question-1");
     const queue = createGoatBotSendQueue({
       send: (message) => {
-        sent.push(message.taskId);
+        sent.push([message.taskId, message.questionId]);
         return sent.length === 1 ? attempt.promise : Promise.resolve({ requestKey: "input" });
       },
       canDispatch: () => true,
@@ -54,12 +55,16 @@ describe("createGoatBotSendQueue", () => {
       },
       makeKey: () => "key",
     });
-    queue.submit("hello", bot, [], taskId);
+    queue.submit("hello", bot, [], taskId, questionId);
     expect(queue.pendingInputs()[0]?.taskId).toBe(taskId);
+    expect(queue.pendingInputs()[0]?.questionId).toBe(questionId);
     attempt.reject(new Error("offline"));
     await failed.promise;
     queue.retry("key");
-    expect(sent).toEqual([taskId, taskId]);
+    expect(sent).toEqual([
+      [taskId, questionId],
+      [taskId, questionId],
+    ]);
   });
   it("does not send queued messages or restore rows after disposal during an in-flight send", async () => {
     const first = deferred<{ requestKey: string }>();

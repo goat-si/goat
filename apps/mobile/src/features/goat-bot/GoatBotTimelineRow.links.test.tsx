@@ -9,6 +9,9 @@ const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFo
 
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
+vi.mock("./useGoatBotEventTargets", () => ({
+  useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
+}));
 vi.mock("./GoatBotFace", async () => {
   const { Text } = await import("react-native");
   return {

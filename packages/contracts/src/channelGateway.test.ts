@@ -156,6 +156,13 @@ describe("channel ingest", () => {
         Schema.encodeSync(json(ChannelOutboundMessage))(outbound),
       ),
     ).toEqual(outbound);
+    // An interim mark survives storage, and a stored message without one still reads.
+    const interim = { ...outbound, interim: true as const };
+    expect(
+      Schema.decodeSync(json(ChannelOutboundMessage))(
+        Schema.encodeSync(json(ChannelOutboundMessage))(interim),
+      ),
+    ).toEqual(interim);
   });
   const input = {
     kind: "slack",
