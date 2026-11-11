@@ -26,7 +26,7 @@ vi.mock("@effect/atom-react", async (original) => {
           ? AsyncResult.initial(true)
           : state.revision === "failed"
             ? AsyncResult.failure(Cause.die("refused"))
-            : AsyncResult.success({ revision: state.revision }),
+            : AsyncResult.success({ subscription: 1, value: { revision: state.revision } }),
   };
 });
 vi.mock("~/state/environments", () => ({

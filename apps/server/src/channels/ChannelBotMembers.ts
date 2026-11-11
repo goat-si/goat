@@ -14,6 +14,7 @@ import {
   type ChannelDeleteBotInput,
   ChannelGatewayError,
   type ChannelListOpenAsksResult,
+  type ChannelListOpenAsksInput,
   type ChannelListBotsInput,
   type ChannelRestoreBotInput,
   type ChannelSetBotHiddenInput,
@@ -83,9 +84,10 @@ export class ChannelBotMembers extends Context.Service<
     /** Every owner's unfinished creates and steps; failures are logged and retried later. */
     readonly reconcileAll: Effect.Effect<void>;
     readonly update: ChannelBotProfiles.ChannelBotProfiles["Service"]["update"];
-    /** What this owner's bots wait on the person for, newest first. */
+    /** What this owner's bots wait on the person for, newest first; `limit` asks at most. */
     readonly openAsks: (
       owner: Owner,
+      limit?: number,
     ) => Effect.Effect<ChannelListOpenAsksResult, ChannelGatewayError>;
     /** Revisions of this owner's tasks and bots; a new one means read the open asks again. */
     readonly taskChanges: (owner: Owner) => Stream.Stream<number, ChannelGatewayError>;
@@ -425,7 +427,7 @@ const make = Effect.gen(function* () {
 
   const openAsks: ChannelBotMembers["Service"]["openAsks"] = Effect.fn(
     "ChannelBotMembers.openAsks",
-  )(function* (owner: Owner) {
+  )(function* (owner: Owner, limit?: number) {
     // Older tasks name their bot only after the repair; asks are filtered by bot.
     yield* ledger.ensureTaskBotsRepaired();
     // The main bot takes channel work before its GOAT thread exists, so it is always asked.
@@ -435,6 +437,7 @@ const make = Effect.gen(function* () {
       threads,
       ownerId: owner.ownerId,
       botIds: new Set<string>([MAIN_BOT_ID, ...members]),
+      ...(limit === undefined ? {} : { limit }),
     });
   }, Effect.mapError(failed));
 
@@ -474,7 +477,8 @@ export const layer = Layer.effect(ChannelBotMembers, make);
 export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => {
   const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
   return {
-    [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () => service.openAsks(owner),
+    [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: (input: ChannelListOpenAsksInput) =>
+      service.openAsks(owner, input.limit),
     [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>
       connectionStreams(
         service.taskChanges(owner).pipe(Stream.map((revision) => ({ revision }))),

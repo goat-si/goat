@@ -344,7 +344,15 @@ export const ChannelOpenAsk = Schema.Struct({
   requestId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ChannelOpenAsk = typeof ChannelOpenAsk.Type;
-export const ChannelListOpenAsksInput = Schema.Struct({});
+/** How many asks a read returns unless it asks for more. */
+export const CHANNEL_OPEN_ASKS_DEFAULT_LIMIT = 50;
+export const CHANNEL_OPEN_ASKS_MAX_LIMIT = 500;
+/** Servers with the goatBotOpenAsksLimit capability honour `limit`; older ones return the default. */
+export const ChannelListOpenAsksInput = Schema.Struct({
+  limit: Schema.optionalKey(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(CHANNEL_OPEN_ASKS_MAX_LIMIT)),
+  ),
+});
 export type ChannelListOpenAsksInput = typeof ChannelListOpenAsksInput.Type;
 /** The newest asks; `total` counts them all, and `truncated` says it is a lower bound. */
 export const ChannelListOpenAsksResult = Schema.Struct({

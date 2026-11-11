@@ -45,7 +45,12 @@ export function GoatBotSidebarTabs() {
         </Tabs>
       </SidebarGroup>
       {environmentId && (
-        <GoatBotNeedsYou environmentId={environmentId} bots={bots ?? []} visible={mode === "bot"} />
+        <GoatBotNeedsYou
+          key={environmentId}
+          environmentId={environmentId}
+          bots={bots ?? []}
+          visible={mode === "bot"}
+        />
       )}
       {mode === "bot" && (
         <div className="max-h-[70dvh] overflow-y-auto">
