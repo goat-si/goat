@@ -135,11 +135,15 @@ const setup = (
     );
     const mainServer = yield* Deferred.make<NodeHttp.Server>();
     yield* Deferred.succeed(mainServer, main!);
+    /** Each registration takes the next hold, if any, after it is recorded. */
+    const holds: Array<Deferred.Deferred<void>> = [];
     const register: PenRegistrar["Service"]["register"] = (input) =>
       Effect.gen(function* () {
         const lost = yield* Deferred.make<void>();
         yield* Effect.addFinalizer(() => Deferred.succeed(lost, undefined));
         yield* Queue.offer(registrations, { port: input.port, key: input.key, lost });
+        const hold = holds.shift();
+        if (hold !== undefined) yield* Deferred.await(hold);
         return { id: "registration", lost };
       });
     const startWith = (settings?: Settings.ServerSettingsService["Service"]) => {
@@ -154,7 +158,7 @@ const setup = (
       ).pipe(Effect.provide(services));
     };
     const start = startWith();
-    return { root, platform, registrations, services, start, startWith, seen };
+    return { root, platform, registrations, holds, services, start, startWith, seen };
   });
 
 const proxyToken = (port: number, key: Uint8Array, nodeId: string) =>
@@ -447,19 +451,85 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("a hand-edited root fences the live generation and starts the new one", () =>
+  it.effect(
+    "a hand-edited root fences the live generation and stays off until a person confirms",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* setup();
+        const changes = yield* Queue.unbounded<ServerSettings>();
+        const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+        const runtime = yield* env.startWith({ ...base, streamChanges: Stream.fromQueue(changes) });
+        yield* runtime.replaceTrustRoot(person, env.root);
+        const first = yield* Queue.take(env.registrations);
+        const current = yield* base.getSettings;
+        const edited = { ...env.root, nodeId: member("q") };
+        yield* Queue.offer(changes, current);
+        yield* Queue.offer(changes, { ...current, pen: edited });
+        yield* Deferred.await(first.lost);
+        expect(yield* runtime.status).toMatchObject({ state: "off" });
+        // A confirmation waits behind the edit's own transition, so only it may register.
+        yield* runtime.replaceTrustRoot(person, edited);
+        expect((yield* Queue.take(env.registrations)).port).toBeGreaterThan(0);
+        expect(yield* Queue.size(env.registrations)).toBe(0);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("confirmations run one at a time and leave only the last confirmed root running", () =>
     Effect.gen(function* () {
       const env = yield* setup();
+      const entered = yield* Deferred.make<void>();
+      const hold = yield* Deferred.make<void>();
+      const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+      // A pauses inside its own settings write, between its fence and its start.
+      const runtime = yield* env.startWith({
+        ...base,
+        updateSettings: (patch, authorize) =>
+          patch.pen?.nodeId === env.root.nodeId
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(hold)),
+                Effect.andThen(base.updateSettings(patch, authorize)),
+              )
+            : base.updateSettings(patch, authorize),
+      });
+      const confirmA = yield* runtime
+        .replaceTrustRoot(person, env.root)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.await(entered);
+      const confirmB = yield* runtime
+        .replaceTrustRoot(person, { ...env.root, nodeId: member("q") })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.succeed(hold, undefined);
+      yield* Fiber.join(confirmA);
+      yield* Fiber.join(confirmB);
+      const first = yield* Queue.take(env.registrations);
+      const last = yield* Queue.take(env.registrations);
+      yield* Deferred.await(first.lost);
+      expect(yield* Deferred.isDone(last.lost)).toBe(false);
+      expect(yield* runtime.status).toMatchObject({ state: "listening", port: last.port });
+      expect(yield* Queue.size(env.registrations)).toBe(0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a hand edit that races a confirmation is fenced after it, not started", () =>
+    Effect.gen(function* () {
+      const env = yield* setup();
+      const hold = yield* Deferred.make<void>();
+      env.holds.push(hold);
       const changes = yield* Queue.unbounded<ServerSettings>();
       const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
       const runtime = yield* env.startWith({ ...base, streamChanges: Stream.fromQueue(changes) });
-      yield* runtime.replaceTrustRoot(person, env.root);
-      const first = yield* Queue.take(env.registrations);
+      const confirm = yield* runtime
+        .replaceTrustRoot(person, env.root)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const a = yield* Queue.take(env.registrations);
       const current = yield* base.getSettings;
-      yield* Queue.offer(changes, current);
       yield* Queue.offer(changes, { ...current, pen: { ...env.root, nodeId: member("q") } });
-      yield* Deferred.await(first.lost);
-      yield* Queue.take(env.registrations);
+      yield* Deferred.succeed(hold, undefined);
+      yield* Fiber.join(confirm);
+      yield* Deferred.await(a.lost);
+      // Clearing waits behind the edit's transition; nothing the edit named may have registered.
+      yield* runtime.replaceTrustRoot(person, null);
+      expect(yield* runtime.status).toMatchObject({ state: "off" });
       expect(yield* Queue.size(env.registrations)).toBe(0);
     }).pipe(Effect.scoped),
   );

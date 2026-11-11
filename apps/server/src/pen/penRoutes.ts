@@ -39,6 +39,13 @@ const ROUTES: ReadonlyArray<PenRoute> = [
     upgrade: false,
   },
   {
+    methods: READ,
+    path: path(String.raw`/\.well-known/t3/environment`), // goat-rename: legacy
+    grants: [{ credential: "none" }],
+    query: "none",
+    upgrade: false,
+  },
+  {
     methods: new Set(["POST"]),
     path: path("/api/pen/session"),
     grants: [{ credential: "none" }],

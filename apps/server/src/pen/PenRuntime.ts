@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -96,21 +97,31 @@ export const make = Effect.fn("PenRuntime.make")(function* (
   });
   const fence = (reason: string): Effect.Effect<void> =>
     penSessions.withIssueLock(teardown(reason));
-  const fenceLater = (reason: string): Effect.Effect<void> =>
-    fence(reason).pipe(Effect.forkIn(outer), Effect.asVoid);
+  /** A fence one generation asks for; it does nothing once that generation has ended. */
+  const fenceLater = (expected: number, reason: string): Effect.Effect<void> =>
+    penSessions
+      .withIssueLock(
+        Effect.gen(function* () {
+          if ((yield* Ref.get(generation)) === expected) yield* teardown(reason);
+        }),
+      )
+      .pipe(Effect.forkIn(outer), Effect.asVoid);
 
   const off = (reason: string) => Ref.set(status, { state: "off", reason });
 
-  const watchMembers = Effect.fn("PenRuntime.watchMembers")(function* (root: PenTrustRoot) {
+  const watchMembers = Effect.fn("PenRuntime.watchMembers")(function* (
+    root: PenTrustRoot,
+    current: number,
+  ) {
     const verdict = yield* gate(root);
     if (!verdict.ok) {
       // The fence closes this generation's scope, which ends this watch.
-      yield* fenceLater(verdict.reason);
+      yield* fenceLater(current, verdict.reason);
       return yield* Effect.never;
     }
     yield* watchSnapshots(root.stateDir, (snapshot) =>
       snapshot.mesh !== root.meshId || snapshot.self !== root.nodeId
-        ? fenceLater("Pen's mesh is no longer the one a person confirmed.")
+        ? fenceLater(current, "Pen's mesh is no longer the one a person confirmed.")
         : penSessions.revokeExcept(snapshot.members).pipe(Effect.ignore),
     ).pipe(Effect.scoped, Effect.ignore);
     yield* Effect.sleep(REWATCH);
@@ -127,7 +138,7 @@ export const make = Effect.fn("PenRuntime.make")(function* (
       generation: current,
       mainServer: yield* Deferred.await(main.server),
       admitAccept: gate(root).pipe(Effect.map((result) => result.ok)),
-      onUnsafe: fenceLater("The Pen paths are no longer safe."),
+      onUnsafe: fenceLater(current, "The Pen paths are no longer safe."),
     });
     const beforeSpawn = yield* gate(root);
     if (!beforeSpawn.ok) return { ok: false as const, reason: beforeSpawn.reason };
@@ -138,10 +149,10 @@ export const make = Effect.fn("PenRuntime.make")(function* (
       key,
     });
     yield* Deferred.await(registration.lost).pipe(
-      Effect.andThen(fenceLater("Pen no longer holds GOAT's registration.")),
+      Effect.andThen(fenceLater(current, "Pen no longer holds GOAT's registration.")),
       Effect.forkScoped,
     );
-    yield* watchMembers(root).pipe(Effect.forever, Effect.forkScoped);
+    yield* watchMembers(root, current).pipe(Effect.forever, Effect.forkScoped);
     return { ok: true as const, port: listener.port };
   });
 
@@ -150,6 +161,11 @@ export const make = Effect.fn("PenRuntime.make")(function* (
       Effect.gen(function* () {
         if (config.devUrl !== undefined)
           return yield* off("A dev server never registers with Pen.");
+        // Only the root a person confirmed last may start, and never beside another generation.
+        if (!sameRoot(yield* Ref.get(desired), root))
+          return yield* off("The Pen trust root changed before it started.");
+        const previous = yield* Ref.getAndSet(live, undefined);
+        if (previous !== undefined) yield* Scope.close(previous, Exit.void);
         const verdict = yield* gate(root);
         if (!verdict.ok) return yield* off(verdict.reason);
         const scope = yield* Scope.make();
@@ -173,23 +189,29 @@ export const make = Effect.fn("PenRuntime.make")(function* (
       }),
     );
 
+  // Confirmation, an observed edit and startup each run alone, start to finish.
+  const transitions = yield* Semaphore.make(1);
+  const transition = transitions.withPermits(1);
+
   // No Pen-bound session survives a restart, before any listener accepts.
   yield* penSessions.revokeAll.pipe(Effect.orDie);
   const initial = (yield* settings.getSettings.pipe(Effect.orDie)).pen;
   yield* Ref.set(desired, initial);
-  if (initial !== null) yield* start(initial);
+  if (initial !== null) yield* transition(start(initial));
   yield* Effect.addFinalizer(() => fence("GOAT is stopping."));
 
-  // A pen value changed outside replaceTrustRoot (a hand edit) is fenced when observed.
+  // A pen value changed outside replaceTrustRoot (a hand edit) is fenced when observed and
+  // stays off until a person confirms a root again (design §7).
   yield* settings.streamChanges.pipe(
     Stream.map((next) => next.pen),
     Stream.runForEach((next) =>
-      Effect.gen(function* () {
-        if (sameRoot(yield* Ref.get(desired), next)) return;
-        yield* Ref.set(desired, next);
-        yield* fence("The Pen trust root changed.");
-        if (next !== null) yield* start(next);
-      }),
+      transition(
+        Effect.gen(function* () {
+          if (sameRoot(yield* Ref.get(desired), next)) return;
+          yield* Ref.set(desired, next);
+          yield* fence("The Pen trust root changed outside its confirmation; confirm it again.");
+        }),
+      ),
     ),
     Effect.forkScoped,
   );
@@ -204,14 +226,18 @@ export const make = Effect.fn("PenRuntime.make")(function* (
         const verdict = yield* gate(root);
         if (!verdict.ok) return yield* new PenTrustRootError({ reason: verdict.reason });
       }
-      yield* penSessions.withIssueLock(
+      yield* transition(
         Effect.gen(function* () {
-          yield* teardown("The Pen trust root changed.");
-          yield* Ref.set(desired, root);
-          yield* settings.updateSettings({ pen: root });
+          yield* penSessions.withIssueLock(
+            Effect.gen(function* () {
+              yield* teardown("The Pen trust root changed.");
+              yield* Ref.set(desired, root);
+              yield* settings.updateSettings({ pen: root });
+            }),
+          );
+          if (root !== null) yield* start(root);
         }).pipe(Effect.mapError((cause) => new PenTrustRootError({ reason: cause.message }))),
       );
-      if (root !== null) yield* start(root);
     }),
     status: Ref.get(status),
   });

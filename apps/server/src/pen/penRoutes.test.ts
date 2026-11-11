@@ -16,6 +16,8 @@ describe("Pen route table, default deny (mesh link design §5)", () => {
   it("admits exactly the listed routes, as the hub proxy calls them", () => {
     expect(kind(admit("GET", "/.well-known/goat/environment"))).toBe("admit");
     expect(kind(admit("HEAD", "/.well-known/goat/environment"))).toBe("admit");
+    expect(kind(admit("GET", "/.well-known/t3/environment"))).toBe("admit"); // goat-rename: legacy
+    expect(kind(admit("HEAD", "/.well-known/t3/environment"))).toBe("admit"); // goat-rename: legacy
     expect(kind(admit("POST", "/api/pen/session"))).toBe("admit");
     expect(kind(admit("POST", "/mcp", bearer))).toBe("admit");
     expect(kind(admit("GET", "/mcp", bearer))).toBe("admit");
