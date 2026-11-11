@@ -113,7 +113,7 @@ export class PenSessions extends Context.Service<
 
 const memberKey = (member: PenMember) => `${member.nodeId} ${member.signPub} ${member.noisePub}`;
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const enablement = yield* PenEnablement;
   const sessions = yield* SessionStore.SessionStore;
   const repository = yield* AuthSessions.AuthSessionRepository;

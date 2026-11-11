@@ -97,7 +97,7 @@ const ROUTES: ReadonlyArray<PenRoute> = [
 ];
 
 /** Query names that carry a credential anywhere in GOAT; never accepted in a Pen request. */
-export const CREDENTIAL_QUERY_NAMES: ReadonlySet<string> = new Set([
+const CREDENTIAL_QUERY_NAMES: ReadonlySet<string> = new Set([
   "token",
   "wsTicket",
   "dpop",
@@ -105,7 +105,7 @@ export const CREDENTIAL_QUERY_NAMES: ReadonlySet<string> = new Set([
   "pairingToken",
 ]);
 /** What the hub proxy forwards on an upstream socket (hubProxy/http.ts FORWARDED_WEBSOCKET_QUERY_PARAMS). */
-export const WEBSOCKET_QUERY_NAMES: ReadonlySet<string> = new Set([
+const WEBSOCKET_QUERY_NAMES: ReadonlySet<string> = new Set([
   "orchestrationProtocol",
   "clientSurface",
   "clientAppVersion",

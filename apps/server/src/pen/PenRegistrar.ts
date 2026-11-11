@@ -14,7 +14,7 @@ import type * as Scope from "effect/Scope";
 import { PEN_SERVICE_NAME } from "./penHandshake.ts";
 
 /** How long the child may take to answer; Pen bounds its own control writes at 5 s. */
-export const PEN_REGISTER_DEADLINE = Duration.seconds(10);
+const PEN_REGISTER_DEADLINE = Duration.seconds(10);
 const READY_CAP = 128;
 const STDERR_TAIL = 2048;
 const REGISTERED = new RegExp(

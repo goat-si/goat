@@ -12,7 +12,7 @@ import type { PenPin } from "./penHandshake.ts";
 export { vector };
 const vectorKey = decodeKey32(vector.key);
 if (vectorKey === null) throw new Error("the shared service vector has no valid key");
-export const KEY = vectorKey;
+const KEY = vectorKey;
 export const PIN: PenPin = { key: KEY, meshId: vector.mesh, nodeId: vector.self };
 /** A valid Pen node id made of one letter. */
 export const member = (letter: string) => letter.repeat(26);
@@ -23,7 +23,7 @@ const key43 = (nodeId: string, use: string) =>
     .digest()
     .toString("base64url");
 
-export const identityLine = (
+const identityLine = (
   nodeId: string,
   overrides: { readonly mesh?: string; readonly self?: string } = {},
 ) =>
@@ -50,7 +50,7 @@ export const peerOf = (nodeId: string) => ({
 });
 
 /** B of CONTRACT "Local delivery" step 3, as the daemon computes it. */
-export const daemonMac = (key: Uint8Array, nd: Buffer, ng: Buffer, json: string) =>
+const daemonMac = (key: Uint8Array, nd: Buffer, ng: Buffer, json: string) =>
   NodeCrypto.createHmac("sha256", key)
     .update("pen-svc/1 pen", "ascii")
     .update(nd)

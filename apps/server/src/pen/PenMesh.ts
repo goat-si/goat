@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import { lineReader } from "./penHandshake.ts";
 
 /** A snapshot line holds every member with its host keys; this bounds one line. */
-export const PEN_SNAPSHOT_LINE_CAP = 1 << 20;
+const PEN_SNAPSHOT_LINE_CAP = 1 << 20;
 
 const SnapshotMember = Schema.Struct({
   nodeId: PenId,
