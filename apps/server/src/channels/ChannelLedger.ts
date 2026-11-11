@@ -488,13 +488,16 @@ export class ChannelLedger extends Context.Service<
       readonly owner: string;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
-    /** Records that an external delivery is being handed to its transport now. */
+    /**
+     * Records that an external delivery is being handed to its transport now. False when the row
+     * is no longer this claim's (its receipt expired, or recovery took it): then it is not sent.
+     */
     readonly markSending: (input: {
       readonly owner: string;
       readonly deliveryId: ChannelDeliveryId;
       readonly attempt: number;
       readonly now: string;
-    }) => Effect.Effect<void, ChannelLedgerError>;
+    }) => Effect.Effect<boolean, ChannelLedgerError>;
     /**
      * After a restart: GOAT bot and MCP deliveries and external ones never handed to their
      * transport retry; external ones handed over become ambiguous.

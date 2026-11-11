@@ -2,9 +2,11 @@ import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput } from "@goat/contracts";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -423,6 +425,25 @@ describe("what still reaches the person after the one message before the answer"
       yield* runtime.drain;
       assert.strictEqual(yield* setAside(), backlog);
       assert.deepStrictEqual(sentSince(before), []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("a real stall warning on Slack", () => {
+  it.effect("goes out after the acknowledgement, written by the stall check itself", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { runtime, task, sentSince } = yield* startSlackTurn(harness, "Ev44");
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      harness.world.activityAt.set(task.worker!.threadId, yield* DateTime.now);
+      const before = harness.slackSent.length;
+      yield* TestClock.adjust(Duration.minutes(20));
+      yield* TestClock.adjust(Duration.millis(1));
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const sent = sentSince(before);
+      assert.strictEqual(sent.length, 1);
+      assert.include(sent[0], "has made no progress for 20 minutes");
     }).pipe(Effect.provide(harness.layer));
   });
 });

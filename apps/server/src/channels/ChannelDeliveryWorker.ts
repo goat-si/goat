@@ -74,19 +74,33 @@ const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const receipts = new Set<Fiber.Fiber<void, unknown>>();
 
-  // A restart before this point sends the row again; after it, the person may have seen it.
+  /**
+   * Records the hand-over just before an external send; a restart before it sends the row again,
+   * after it the person may have seen it. False means do not send: the row is no longer this
+   * claim's, or the record failed and the claim went back to pending for a later pass.
+   */
   const handOver = Effect.fn("ChannelDeliveryWorker.handOver")(function* (
     delivery: ChannelLedger.ChannelStoredDelivery,
     owner: string,
   ) {
     const kind = delivery.message.destination.kind;
-    if (kind === "goat" || kind === "mcp") return;
-    yield* ledger.markSending({
-      owner,
-      deliveryId: delivery.deliveryId,
-      attempt: delivery.attempts,
-      now: DateTime.formatIso(yield* DateTime.now),
-    });
+    if (kind === "goat" || kind === "mcp") return true;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const claim = { owner, deliveryId: delivery.deliveryId, attempt: delivery.attempts, now };
+    return yield* ledger.markSending(claim).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("channel delivery hand-over not recorded", { cause }).pipe(
+          Effect.andThen(
+            ledger.recordDelivery({
+              ...claim,
+              outcome: { type: "retry", at: now, errorCode: "unknown" },
+            }),
+          ),
+          Effect.ignore,
+          Effect.as(false),
+        ),
+      ),
+    );
   });
 
   const sendReceipt = Effect.fn("ChannelDeliveryWorker.sendReceipt")(function* (
@@ -109,7 +123,10 @@ const make = Effect.gen(function* () {
       Effect.ignore,
       Effect.forkIn(scope),
     );
-    yield* handOver(delivery, owner);
+    if (!(yield* handOver(delivery, owner))) {
+      yield* Fiber.interrupt(expiry).pipe(Effect.forkIn(scope));
+      return;
+    }
     const send = yield* gateway.send(delivery.message).pipe(Effect.forkIn(scope));
     const result = yield* Fiber.join(send).pipe(
       Effect.result,
@@ -181,7 +198,10 @@ const make = Effect.gen(function* () {
         if (claimed.setAside > 0) continue;
         break;
       }
-      yield* handOver(delivery, owner);
+      if (!(yield* handOver(delivery, owner))) {
+        handled += 1;
+        continue;
+      }
       const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
       const finishedAt = yield* DateTime.now;
       yield* ledger.recordDelivery({

@@ -188,9 +188,11 @@ export const deliveryLedger = (
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
-            yield* sql`UPDATE channel_outbox SET send_started_at = ${input.now}
+            const marked = yield* sql<{ readonly delivery_id: string }>`UPDATE channel_outbox
+              SET send_started_at = ${input.now}
               WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
-                AND attempts = ${input.attempt}`;
+                AND attempts = ${input.attempt} RETURNING delivery_id`;
+            return marked.length > 0;
           }),
         )
         .pipe(Effect.mapError(mapError("markSending"))),
