@@ -18,7 +18,11 @@ interface AgentState {
   _ptyNative: { kill: NativeKill };
   _conoutSocketWorker: { dispose: () => void };
   _inSocket: { destroy: () => void; readable: boolean };
-  _outSocket: { destroy: () => void; readable: boolean };
+  _outSocket: {
+    destroy: () => void;
+    readable: boolean;
+    on: (event: string, listener: () => void) => void;
+  };
   _onError: { fire: (error: unknown) => void };
 }
 interface Agent extends AgentState {
@@ -42,14 +46,20 @@ utils.loadNativeModule = () => ({
     },
   },
 });
-// One construction caches the fake ConPTY module that connect() reads.
-expect(() => new WindowsPtyAgent("cmd.exe", [], {}, ".", 80, 24, false)).toThrow();
-utils.loadNativeModule = loadNative;
+try {
+  // One construction caches the fake ConPTY module that connect() reads.
+  expect(() => new WindowsPtyAgent("cmd.exe", [], {}, ".", 80, 24, false)).toThrow();
+} finally {
+  utils.loadNativeModule = loadNative;
+}
 
-function agent(): { agent: Agent; nativeKill: ReturnType<typeof vi.fn<NativeKill>> } {
+function agent(useConptyDll = false): {
+  agent: Agent;
+  nativeKill: ReturnType<typeof vi.fn<NativeKill>>;
+} {
   const nativeKill = vi.fn<NativeKill>();
   const state: AgentState = {
-    _useConptyDll: false,
+    _useConptyDll: useConptyDll,
     _innerPid: 0,
     _connected: false,
     _pty: 1,
@@ -57,7 +67,7 @@ function agent(): { agent: Agent; nativeKill: ReturnType<typeof vi.fn<NativeKill
     _ptyNative: { kill: nativeKill },
     _conoutSocketWorker: { dispose: vi.fn() },
     _inSocket: { destroy: vi.fn(), readable: true },
-    _outSocket: { destroy: vi.fn(), readable: true },
+    _outSocket: { destroy: vi.fn(), readable: true, on: vi.fn() },
     _onError: { fire: vi.fn() },
   };
   return { agent: Object.assign(Object.create(WindowsPtyAgent.prototype), state), nativeKill };
@@ -102,5 +112,16 @@ describe("node-pty native kill on a Windows pty", () => {
     expect(running._connected).toBe(true);
     running.kill();
     expect(nativeKill).toHaveBeenCalledWith(1, false);
+  });
+
+  it("the conpty.dll kill path skips the native kill before connect and kills after it", () => {
+    const { agent: pending, nativeKill: pendingKill } = agent(true);
+    pending.kill();
+    expect(pendingKill).not.toHaveBeenCalled();
+    connect = () => ({ pid: 0 });
+    const { agent: running, nativeKill: runningKill } = agent(true);
+    running._completePtyConnection();
+    running.kill();
+    expect(runningKill).toHaveBeenCalledWith(1, true);
   });
 });
