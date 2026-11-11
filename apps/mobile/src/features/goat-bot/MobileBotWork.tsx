@@ -46,7 +46,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
-import { MobileBotRoutines } from "./MobileBotRoutines";
+import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
 /** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
@@ -94,7 +94,10 @@ export function MobileBotWork(props: {
   /** The main bot, named on a member's inherited model. */
   readonly main?: Pick<BotProfile, "name"> | null;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
-  readonly onDraft?: ((text: string) => void) | undefined;
+  /** Fills the chat's message box; false when the box already holds a message. */
+  readonly onDraft?: ((text: string) => boolean) | undefined;
+  /** The sheet has finished going away (iOS). */
+  readonly onDismissed?: (() => void) | undefined;
   /** Task cards in the conversation; the Tasks tab lists the ones the server no longer does. */
   readonly chatTasks?: ReadonlyArray<GoatBotTaskCard>;
   /** The transcript's card for the task this screen shows, for a task the server no longer lists. */
@@ -169,6 +172,20 @@ export function MobileBotWork(props: {
     setPeekTaskId(props.focus.kind === "task" ? ChannelTaskId.make(props.focus.id) : null);
     setRoutineFocus(props.focus.kind === "routine" ? props.focus.id : null);
   }
+  // A note's new wording outlives the sheet, which closes while the person deals with a message
+  // already in the box; it goes on a successful fill or Cancel. Notes belong to the machine.
+  const [noteWordings, setNoteWordings] = useState<{
+    readonly environmentId: EnvironmentId | null;
+    readonly byNote: Readonly<Record<string, string>>;
+  }>({ environmentId, byNote: {} });
+  const wordings = noteWordings.environmentId === environmentId ? noteWordings.byNote : {};
+  const setWording = (note: string, wording: string | null) =>
+    setNoteWordings((current) => {
+      const byNote = { ...(current.environmentId === environmentId ? current.byNote : {}) };
+      if (wording === null) delete byNote[note];
+      else byNote[note] = wording;
+      return { environmentId, byNote };
+    });
   // The check-in being set up, and its save, live here for this bot on this machine: its
   // virtualized cell can unmount while the person scrolls or a save is still running.
   // A save that finishes after the sheet moved to another bot settles that bot's draft only.
@@ -420,6 +437,13 @@ export function MobileBotWork(props: {
               viewOffset: STICKY_TABS_CLEARANCE - y,
             });
           }}
+          onNewRoutine={
+            props.onDraft
+              ? () => {
+                  if (props.onDraft?.(GOAT_BOT_NEW_ROUTINE_DRAFT)) closeSheet();
+                }
+              : undefined
+          }
           checkInDraft={checkInDraft}
           onCheckInDraftChange={updateCheckIn}
         />
@@ -452,12 +476,15 @@ export function MobileBotWork(props: {
             onDraft={
               props.onDraft
                 ? (text) => {
-                    closeSheet();
-                    props.onDraft?.(text);
+                    const taken = props.onDraft?.(text) === true;
+                    if (taken) closeSheet();
+                    return taken;
                   }
                 : undefined
             }
             refreshKey={props.notesRefreshKey}
+            wordings={wordings}
+            onWordingChange={setWording}
           />
         ),
       },
@@ -582,6 +609,7 @@ export function MobileBotWork(props: {
         animationType="slide"
         presentationStyle="pageSheet"
         allowSwipeDismissal
+        onDismiss={props.onDismissed}
         // iOS calls this when the sheet is swiped away; Android when back leaves a peek first.
         onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >
