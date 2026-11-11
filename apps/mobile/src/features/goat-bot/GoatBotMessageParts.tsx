@@ -4,6 +4,7 @@ import {
   goatBotReceiptLabel,
   goatBotRejectionText,
   type GoatBotActivity,
+  type GoatBotAccent,
   type GoatBotFaceState,
   type GoatBotGroupPosition,
   type GoatBotRow,
@@ -83,11 +84,21 @@ export function GoatBotCard(props: { readonly children: ReactNode }) {
 }
 
 /** The person's own words: a tailless, high-contrast neutral pill on the right. */
-export function GoatBotPersonPill(props: { readonly children: ReactNode }) {
+export function GoatBotPersonPill(props: {
+  readonly children: ReactNode;
+  /** A member bot's color; the theme's person color without one. */
+  readonly accent?: GoatBotAccent | null | undefined;
+}) {
   return (
     <View
-      className="bg-goat-person-message"
-      style={{ borderRadius: 20, paddingHorizontal: 14, paddingVertical: 9, maxWidth: "80%" }}
+      className={props.accent ? undefined : "bg-goat-person-message"}
+      style={{
+        borderRadius: 20,
+        paddingHorizontal: 14,
+        paddingVertical: 9,
+        maxWidth: "80%",
+        ...(props.accent ? { backgroundColor: props.accent.background } : {}),
+      }}
     >
       {props.children}
     </View>
