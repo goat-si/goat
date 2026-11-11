@@ -64,6 +64,7 @@ export const owner = {
   sessionId: "person",
   environmentId: EnvironmentId.make("hub"),
   scopes: ["orchestration:operate", "settings:write"],
+  resolver: { kind: "person" },
 } satisfies Inbox.DecisionCaller;
 export const verdict = (failing: ReadonlyArray<HubParityCheckId> = []): HubParityResult => ({
   verdict: failing.length === 0 ? "ok" : failing.some((id) => id <= "P4") ? "broken" : "degraded",

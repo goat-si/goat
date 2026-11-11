@@ -123,6 +123,7 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       const session: AuthClientSession = {
         sessionId: person,
         subject: "browser",
+        principalKind: "person",
         method: "browser-session-cookie",
         scopes: [
           "orchestration:operate",

@@ -13,6 +13,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Config from "../config.ts";
 import * as Runtime from "./ConnectHubRuntime.testkit.ts";
 import { admits } from "./HubConnectAccess.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 
 const decodeSettings = Schema.decodeEffect(Schema.fromJsonString(ServerSettings));
 
@@ -55,7 +56,7 @@ it.effect.each([true, false])(
           scopes: ["hub:proxy"],
           connectAccessGeneration: (yield* runtime.access.current).generation,
         })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       const changes = yield* runtime.settings.subscribeChanges;
       armed = true;
       const writer = yield* runtime.settings
@@ -79,7 +80,9 @@ it.effect.each([true, false])(
       expect((yield* runtime.settings.getSettings).hub.connectDevicesHubProxy).toBe(allowed);
       const state = yield* runtime.access.current;
       expect(state.allowed).toBe(allowed);
-      expect(yield* runtime.sessions.verify(old.token).pipe(Effect.result)).toMatchObject({
+      expect(
+        yield* runtime.sessions.verify(old.token, MAIN_LISTENER).pipe(Effect.result),
+      ).toMatchObject({
         _tag: "Failure",
       });
       const grant = yield* runtime.auth.createCloudConnectPairingLink({
@@ -129,7 +132,7 @@ it.effect(
           scopes: ["hub:proxy"],
           connectAccessGeneration: (yield* runtime.access.current).generation,
         })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       fault = true;
       expect(
         yield* runtime.settings

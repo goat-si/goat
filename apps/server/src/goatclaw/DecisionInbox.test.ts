@@ -42,6 +42,7 @@ const owner: Inbox.DecisionCaller = {
   sessionId: "owner",
   environmentId: EnvironmentId.make("test"),
   scopes: ["orchestration:operate", "settings:write"],
+  resolver: { kind: "person" },
 };
 const agent: Inbox.DecisionCaller = {
   kind: "agent",

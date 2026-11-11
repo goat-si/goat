@@ -12,6 +12,7 @@ import * as Routes from "../provider/CodexRouteService.ts";
 import * as Runtime from "./ConnectHubRuntime.testkit.ts";
 import * as Authorization from "./RpcAuthorization.ts";
 import * as Write from "./SettingsRpc.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 
 const method = WS_METHODS.serverUpdateSettings;
 const tags = [...Authorization.AuthorizedWsRpcGroup.requests.values()].map((rpc) => rpc._tag);
@@ -41,7 +42,7 @@ it.effect.each([false, true])(
       });
       const session = yield* runtime.sessions
         .issue({ scopes: ["settings:write", "providers:manage"] })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       const held = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const queued = yield* Deferred.make<void>();
@@ -112,7 +113,7 @@ it.effect(
       });
       const session = yield* runtime.sessions
         .issue({ scopes: ["providers:manage"] })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       yield* Effect.gen(function* () {
         const write = yield* Write.make(session);
         const client = yield* RpcTest.makeClient(group).pipe(
@@ -164,7 +165,7 @@ it.effect(
         scopes: ["hub:proxy", "settings:write", "providers:manage"],
         connectAccessGeneration: (yield* runtime.access.current).generation,
       });
-      const session = yield* runtime.sessions.verify(issued.token);
+      const session = yield* runtime.sessions.verify(issued.token, MAIN_LISTENER);
       const held = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const queued = yield* Deferred.make<void>();

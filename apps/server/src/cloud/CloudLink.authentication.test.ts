@@ -20,6 +20,7 @@ import * as CliTokenManager from "./CliTokenManager.ts";
 import * as CloudLink from "./CloudLink.ts";
 import * as Runtime from "./ManagedEndpointRuntime.ts";
 import * as Reachability from "./ConnectReachability.ts";
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 
 vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/shared/goatConnect")>()),
@@ -121,6 +122,7 @@ it.effect(
       const pending = yield* mint(true);
       const token = yield* auth.exchangeBootstrapCredentialForAccessToken(
         valid.credential,
+        MAIN_LISTENER,
         ["terminal:read"],
         { deviceType: "mobile", os: "iOS", browser: "GOAT", ipAddress: "127.0.0.1" },
         { proofKeyThumbprint: "client-key" },
@@ -133,6 +135,7 @@ it.effect(
         (yield* auth
           .exchangeBootstrapCredentialForAccessToken(
             pending.credential,
+            MAIN_LISTENER,
             ["terminal:read"],
             { deviceType: "mobile", os: "iOS", browser: "GOAT", ipAddress: "127.0.0.1" },
             { proofKeyThumbprint: "client-key" },

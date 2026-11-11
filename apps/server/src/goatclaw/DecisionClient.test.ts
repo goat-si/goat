@@ -15,7 +15,11 @@ it.effect(
     ];
     let revoked = false;
     return Effect.gen(function* () {
-      const caller = yield* Client.caller(EnvironmentId.make("origin"), { sessionId, scopes });
+      const caller = yield* Client.caller(EnvironmentId.make("origin"), {
+        sessionId,
+        scopes,
+        principalKind: "person",
+      });
       const required = ["orchestration:read", "orchestration:operate"] as const;
       const permit = caller.reauthorize(required);
       yield* permit;
