@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import type { ServerProviderModel } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
@@ -99,19 +100,48 @@ it.effect("only an exact slug counts as known", () =>
   }),
 );
 
-it.effect("a model the process learns later is listed again on a miss, then remembered", () =>
+it.effect(
+  "a refusal always comes from a fresh listing, so a model learned since is not refused",
+  () =>
+    Effect.gen(function* () {
+      const { modelStatus, lists } = yield* arrivals({
+        atOpen: [model(known)],
+        now: [model(known), model(added)],
+        served: [[known], [known, added]],
+      });
+      assert.strictEqual(yield* modelStatus(added), "predated");
+      // Codex refreshed its catalog online and lists the model now, within the quiet minute.
+      assert.strictEqual(yield* modelStatus(added), "ready");
+      assert.strictEqual(yield* modelStatus(known), "ready");
+      assert.strictEqual(yield* lists, 2);
+    }),
+);
+
+it.effect("checks that overlap share one listing of the process", () =>
   Effect.gen(function* () {
-    const { modelStatus, lists } = yield* arrivals({
-      atOpen: [model(known)],
-      now: [model(known), model(added)],
-      served: [[known], [known, added]],
+    const lists = yield* Ref.make(0);
+    const listing = yield* Deferred.make<void>();
+    const answer = yield* Deferred.make<void>();
+    // No GOAT catalog, so an unlisted model is unconfirmed and the answer can be shared.
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [],
+      offered: Effect.succeed([]),
+      listServed: Ref.update(lists, (count) => count + 1).pipe(
+        Effect.andThen(Deferred.succeed(listing, undefined)),
+        Effect.andThen(Deferred.await(answer)),
+        Effect.as([known]),
+      ),
     });
-    assert.strictEqual(yield* modelStatus(added), "predated");
-    // Codex refreshed its catalog online and now lists the model; a minute on, GOAT asks again.
-    yield* TestClock.adjust("1 minute");
-    assert.strictEqual(yield* modelStatus(added), "ready");
-    assert.strictEqual(yield* modelStatus(known), "ready");
-    assert.strictEqual(yield* lists, 2);
+    const first = yield* modelStatus(added).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(listing);
+    // The second check runs until it waits, as an open started meanwhile on another thread would.
+    const second = yield* modelStatus(added).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.succeed(answer, undefined);
+    assert.deepStrictEqual(
+      [yield* Fiber.join(first), yield* Fiber.join(second)],
+      ["unconfirmed", "unconfirmed"],
+    );
+    assert.strictEqual(yield* Ref.get(lists), 1);
   }),
 );
 

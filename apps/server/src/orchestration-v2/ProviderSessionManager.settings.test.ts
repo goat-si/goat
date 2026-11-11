@@ -853,8 +853,6 @@ it.effect("a turn on a process that does not answer its model list waits for one
         Effect.andThen(Deferred.succeed(asked, undefined)),
         Effect.andThen(Effect.never),
       );
-      // The process last answered when thread A's turn opened; it is asked again after a minute.
-      yield* TestClock.adjust("1 minute");
       const opening = yield* open(threadB, addedModel).pipe(Effect.exit, Effect.forkChild);
       yield* Deferred.await(asked);
       yield* TestClock.adjust("10 seconds");

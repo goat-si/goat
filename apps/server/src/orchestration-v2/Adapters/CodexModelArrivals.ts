@@ -8,6 +8,7 @@ import type { ProviderModelStatus } from "@goat/provider-core/server/ProviderAda
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
 
 import type { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import type * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
@@ -15,7 +16,7 @@ import type * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 const offeredFromCatalog = (models: ReadonlyArray<ServerProviderModel>) =>
   new Set(models.flatMap((model) => (model.isCustom ? [] : [model.slug])));
 
-/** A process is not asked again this soon, answered or not, so one turn waits for one listing. */
+/** A process is not asked again this soon for an answer that lets the turn run. */
 const LISTING_QUIET_MS = 60_000;
 
 /** Whether this open reconnects a process kept from an earlier GOAT run, as the client factory does. */
@@ -82,7 +83,8 @@ export const makeCodexModelArrivals = <E>(input: {
   let served: ReadonlySet<string> | undefined;
   let asked: { readonly atMs: number; readonly answered: boolean } | undefined;
   let warned = false;
-  // Codex can still learn models online, so a miss is asked again once the quiet minute passes.
+  // Overlapping checks wait for one listing and then reuse its answer.
+  const listing = Semaphore.makeUnsafe(1);
   const lists = input.listServed.pipe(
     Effect.tap((slugs) => Effect.sync(() => (served = new Set(slugs)))),
     Effect.timeoutOption("10 seconds"),
@@ -100,19 +102,26 @@ export const makeCodexModelArrivals = <E>(input: {
     const offered = yield* input.offered;
     const entry = offered.find((candidate) => candidate.slug === model);
     if (entry?.isCustom === true) return "ready" as ProviderModelStatus;
-    const quiet =
-      asked !== undefined && (yield* Clock.currentTimeMillis) - asked.atMs < LISTING_QUIET_MS;
+    const catalogued = offeredFromCatalog(offered).size > 0;
     // Exact: a provider's own catalog matches slugs exactly, and GOAT cannot see which catalog it uses.
     const listed: Option.Option<boolean> =
       served?.has(model) === true
         ? Option.some(true)
         : options?.cachedOnly === true
           ? Option.fromNullishOr(served?.has(model))
-          : quiet
-            ? asked?.answered === true
-              ? Option.some(false)
-              : Option.none()
-            : Option.map(yield* lists, (slugs) => slugs.includes(model));
+          : yield* listing.withPermits(1)(
+              Effect.gen(function* () {
+                if (served?.has(model) === true) return Option.some(true);
+                const last = asked;
+                const quiet =
+                  last !== undefined &&
+                  (yield* Clock.currentTimeMillis) - last.atMs < LISTING_QUIET_MS;
+                // Codex can learn models online, so a miss that would refuse is always asked again.
+                if (quiet && !(last.answered && catalogued))
+                  return last.answered ? Option.some(false) : Option.none<boolean>();
+                return Option.map(yield* lists, (slugs) => slugs.includes(model));
+              }),
+            );
     if (Option.isNone(listed)) {
       if (!warned && options?.cachedOnly !== true)
         yield* Effect.logWarning("Codex did not list its models; its turns run unchecked", {
@@ -123,8 +132,7 @@ export const makeCodexModelArrivals = <E>(input: {
     }
     if (listed.value) return "ready";
     // A pending or failed probe publishes no catalog, so GOAT cannot tell what a new process knows.
-    if (entry === undefined)
-      return offeredFromCatalog(offered).size > 0 ? "missing" : "unconfirmed";
+    if (entry === undefined) return catalogued ? "missing" : "unconfirmed";
     return atStart.has(model) ? "missing" : "predated";
   });
 };
