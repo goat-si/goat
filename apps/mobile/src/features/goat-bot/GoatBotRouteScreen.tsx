@@ -27,15 +27,22 @@ export function GoatBotRouteScreen({
   // A reply that arrives while the app is in the background has not been seen.
   const seen = focused && foreground;
   const { botRef } = useMobileGoatBotHomeMode();
-  const preview = useMobileBotPreview();
   const botId = route.params?.botId;
   const { member, main, missing } = useMobileGoatBotMember(botId);
+  const taskId = route.params?.taskId;
+  const mainChat = !taskId && botId === undefined;
+  const preview = useMobileBotPreview(botRef);
+  // A member's chat marks its own conversation read, as the main chat does, so its roster row and
+  // waiting count follow what the person has seen.
+  const memberChat =
+    !taskId && member !== null && member.state !== "deleted"
+      ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
+      : null;
+  const memberPreview = useMobileBotPreview(memberChat);
   const manage = useMobileBotManage(member?.environmentId ?? null, goatBotName(main));
   const environmentId = botRef?.environmentId;
   const threadId = botRef?.threadId;
-  const taskId = route.params?.taskId;
   const unreadAt = preview?.unread ? preview.at : null;
-  const mainChat = !taskId && botId === undefined;
   const shell = useThreadShell(
     environmentId && threadId ? scopeThreadRef(environmentId, threadId) : null,
   );
@@ -73,6 +80,17 @@ export function GoatBotRouteScreen({
     conversation,
     newestAt,
   ]);
+  const memberUnreadAt = memberPreview?.unread ? memberPreview.at : null;
+  const memberEnvironmentId = memberChat?.environmentId;
+  const memberThreadId = memberChat?.threadId;
+  // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while a member's conversation is visible.
+  useEffect(() => {
+    if (!seen || !memberEnvironmentId || !memberThreadId || !memberUnreadAt) return;
+    void visit({
+      environmentId: memberEnvironmentId,
+      input: { threadId: memberThreadId, visitedAt: memberUnreadAt },
+    });
+  }, [seen, memberEnvironmentId, memberThreadId, memberUnreadAt, visit]);
   // A named member never falls back to the main bot's conversation.
   if (botId !== undefined && member === null)
     return (

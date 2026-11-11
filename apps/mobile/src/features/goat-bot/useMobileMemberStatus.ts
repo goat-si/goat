@@ -40,7 +40,10 @@ export function useMobileMemberStatus(bot: BotProfile): {
     if (supported && revision !== null) refresh();
   }, [supported, revision, refresh]);
   const latest = status.data?.latest;
+  // A server that records no visits (lastVisitedAt absent) cannot say what was read.
+  const tracksVisits = shell !== null && shell.lastVisitedAt !== undefined;
   const unread =
+    tracksVisits &&
     latest?.author === "bot" &&
     (lastVisitedAt === null || Date.parse(latest.at) > Date.parse(lastVisitedAt));
   return { waitingCount: status.data?.waitingCount ?? 0, latest, unread };
