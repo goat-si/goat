@@ -214,25 +214,47 @@ it("opens a cut-off step to its full text from the keyboard", async () => {
 });
 
 it("shows the waiting face and says so when the work is paused or waits on the person", async () => {
-  for (const [text, attention] of [
-    ["Paused on a usage limit", "paused"],
-    ["Waiting for your approval", "waiting"],
+  for (const [text, attention, wait, heard] of [
+    ["Paused on a usage limit", "paused", "usage_limit", "GOAT Bot is paused on a usage limit"],
+    ["Waiting for your approval", "waiting", "you", "GOAT Bot is waiting for you"],
   ] as const) {
     await using screen = await render(
-      <GoatBotActivityContext value={{ state: "working", text, attention }}>
+      <GoatBotActivityContext value={{ state: "working", text, attention, wait }}>
         <Chat />
       </GoatBotActivityContext>,
       { router: false },
     );
     expect(screen.container.querySelector('[data-face="waiting"]'), text).not.toBeNull();
-    expect(screen.container.querySelector('[role="status"]')?.textContent).toBe(text);
+    expect(screen.container.querySelector('[role="status"]')?.textContent).toBe(heard);
   }
+});
+
+it("says a wait on the person once while its wording changes", async () => {
+  const timeline = (text: string) => (
+    <GoatBotActivityContext value={{ state: "working", text, attention: "waiting", wait: "you" }}>
+      <Chat />
+    </GoatBotActivityContext>
+  );
+  await using screen = await render(timeline("Waiting for you"), { router: false });
+  const region = screen.container.querySelector('[role="status"]');
+  await vi.waitFor(() => expect(region?.textContent).not.toBe(""));
+  const heard = region?.textContent;
+  await screen.rerender(timeline("Waiting for your answer"));
+  await expect
+    .element(screen.getByRole("button", { name: "Waiting for your answer" }))
+    .toBeVisible();
+  expect(region?.textContent).toBe(heard);
 });
 
 it("keeps one status region and says when the work starts, waits, pauses and ends", async () => {
   using _timers = clock();
   const timeline = (
-    activity: { state: "working"; text: string; attention?: "waiting" | "paused" } | null,
+    activity: {
+      state: "working";
+      text: string;
+      attention?: "waiting" | "paused";
+      wait?: "you" | "other_work" | "usage_limit";
+    } | null,
   ) => (
     <GoatBotActivityContext value={activity}>
       <Chat />
@@ -244,19 +266,31 @@ it("keeps one status region and says when the work starts, waits, pauses and end
   expect(region?.textContent).toBe("");
   await screen.rerender(timeline({ state: "working", text: "Running the tests" }));
   expect(region?.textContent).toBe("GOAT Bot is working");
-  await screen.rerender(timeline({ state: "working", text: "Waiting on other work" }));
+  await screen.rerender(
+    timeline({ state: "working", text: "Waiting on other work", wait: "other_work" }),
+  );
   // Waiting on other work needs nothing from the person.
   expect(region?.textContent).toBe("GOAT Bot is working");
   expect(screen.container.querySelector('[data-face="working"]')).not.toBeNull();
   await screen.rerender(
-    timeline({ state: "working", text: "Waiting for your approval", attention: "waiting" }),
+    timeline({
+      state: "working",
+      text: "Waiting for your approval",
+      attention: "waiting",
+      wait: "you",
+    }),
   );
-  expect(region?.textContent).toBe("Waiting for your approval");
+  expect(region?.textContent).toBe("GOAT Bot is waiting for you");
   expect(screen.container.querySelector('[data-face="waiting"]')).not.toBeNull();
   await screen.rerender(
-    timeline({ state: "working", text: "Paused on a usage limit", attention: "paused" }),
+    timeline({
+      state: "working",
+      text: "Paused on a usage limit",
+      attention: "paused",
+      wait: "usage_limit",
+    }),
   );
-  expect(region?.textContent).toBe("Paused on a usage limit");
+  expect(region?.textContent).toBe("GOAT Bot is paused on a usage limit");
   await screen.rerender(timeline(null));
   expect(region?.textContent).toBe("GOAT Bot is done");
   // The same element carried every change, so a screen reader heard each one.

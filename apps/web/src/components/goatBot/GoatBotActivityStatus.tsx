@@ -41,14 +41,19 @@ export function GoatBotActivityStatus({
     setPainted(true);
   }, []);
   const activity = reading ? READING : working;
+  // Words follow what the work waits on, so a wait reworded as more is known is heard once.
   const text =
     activity === null
       ? doneDuring === undefined
         ? ""
         : `${botName} is done`
-      : activity.state === "reading" || activity.attention !== undefined
+      : activity.state === "reading"
         ? activity.text
-        : `${botName} is working`;
+        : activity.wait === "you"
+          ? `${botName} is waiting for you`
+          : activity.wait === "usage_limit"
+            ? `${botName} is paused on a usage limit`
+            : `${botName} is working`;
   return (
     <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
       {painted ? text : ""}
