@@ -2597,7 +2597,7 @@ export const layerWithOptions = (
           }),
         shutdown,
         open: (input) =>
-          Effect.suspend(() => {
+          Effect.flatMap(Clock.currentTimeMillis, (since) => {
             // Consume before waiting for the open lock or doing any preflight I/O.
             // Failure/interrupt discards this call's admission; retries need prepare.
             const admission = pendingMemoryAdmissions.get(input.threadId);
@@ -2609,7 +2609,7 @@ export const layerWithOptions = (
                 cause,
               });
             const model = input.startsTurn === true ? input.modelSelection.model : undefined;
-            const turn = retirement.turnFor(model, input.threadId, input.runId);
+            const turn = retirement.turnFor(model, input.threadId, input.runId, since);
             return sessionOpen
               .withLock(
                 input.providerSessionId,
@@ -2845,7 +2845,7 @@ export const layerWithOptions = (
                   );
                 }),
               )
-              .pipe(Effect.tap((runtime) => Retirement.refuseUnready(runtime, model, openError)));
+              .pipe(Effect.tap((runtime) => Retirement.refuseUnready(runtime, turn, openError)));
           }),
         isLive: (providerSessionId) =>
           Ref.get(sessions).pipe(

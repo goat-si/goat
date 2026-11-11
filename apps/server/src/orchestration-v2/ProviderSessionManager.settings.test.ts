@@ -862,3 +862,40 @@ it.effect("a turn on a process that does not answer its model list waits for one
     }).pipe(Effect.provide(layer(fixture)));
   }),
 );
+
+it.effect("starts queued behind a slow listing on a busy process share its answer", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    const listings = yield* Ref.make(0);
+    const listing = yield* Deferred.make<void>();
+    const answer = yield* Deferred.make<void>();
+    fixture.listServed = Effect.sync(() => fixture.catalog);
+    yield* Effect.gen(function* () {
+      const { open, runTurn } = yield* sharedSession;
+      // Thread A's turn keeps the shared process busy, so a newer model's turn is refused.
+      yield* runTurn(threadA).pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(fixture.turnStarted);
+      fixture.catalog.push(addedModel);
+      fixture.listServed = Ref.update(listings, (count) => count + 1).pipe(
+        Effect.andThen(Deferred.succeed(listing, undefined)),
+        Effect.andThen(Deferred.await(answer)),
+        Effect.as([modelSelection.model]),
+      );
+      const first = yield* open(threadB, addedModel).pipe(
+        Effect.exit,
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(listing);
+      // Thread C's start waits for the session while B's listing is slow to answer.
+      const queued = yield* open(threadC, addedModel).pipe(
+        Effect.exit,
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("8 seconds");
+      yield* Deferred.succeed(answer, undefined);
+      for (const refused of [yield* Fiber.join(first), yield* Fiber.join(queued)])
+        assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
+      assert.strictEqual(yield* Ref.get(listings), 1);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);

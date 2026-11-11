@@ -7550,7 +7550,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     if (turnInput.restartContinuationOfRunId !== undefined && modelStatus)
                       yield* refuseUnready(
                         { modelStatus },
-                        turnInput.modelSelection.model,
+                        { model: turnInput.modelSelection.model },
                         (no) => no,
                       );
                     yield* startNativeTurn(turnInput, yield* toCodexInput(turnInput), true);

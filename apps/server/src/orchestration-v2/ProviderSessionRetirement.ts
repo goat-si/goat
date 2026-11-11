@@ -115,11 +115,12 @@ export const withoutTurnOpen = <K extends string>(
 /** Refuses a turn on a process, however it was opened, that cannot run the turn's model. */
 export const refuseUnready = Effect.fnUntraced(function* <E>(
   runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "modelStatus">,
-  model: string | undefined,
+  turn: { readonly model?: string | undefined; readonly since?: number } | undefined,
   refuse: (cause: ProviderRestartRequiredError) => E,
 ) {
+  const model = turn?.model;
   if (model === undefined || runtime.modelStatus === undefined) return;
-  const status = yield* runtime.modelStatus(model);
+  const status = yield* runtime.modelStatus(model, { since: turn?.since });
   if (status === "predated" || status === "missing")
     return yield* Effect.fail(refuse(restartRequired(status, 0, model)));
 });
@@ -182,6 +183,7 @@ export const make = <
       readonly model?: string | undefined;
       readonly threadId: string;
       readonly id?: string | undefined;
+      readonly since?: number;
     },
   ) {
     const key = String(providerSessionId);
@@ -245,7 +247,7 @@ export const make = <
     }
     if (stale) return yield* releaseIdle("retiring");
     if (model === undefined || marked.runtime.modelStatus === undefined) return "current";
-    const status = yield* marked.runtime.modelStatus(model);
+    const status = yield* marked.runtime.modelStatus(model, { since: turn?.since });
     if (status === "ready" || status === "unconfirmed") return "current";
     return status === "missing" ? status : yield* releaseIdle(status);
   });
@@ -274,8 +276,13 @@ export const make = <
   });
 
   /** A turn-start open: one with a run reserves the process until it settles; one with a model is checked. */
-  const turnFor = <T extends string>(model: string | undefined, threadId: T, runId?: string) =>
-    model === undefined && runId === undefined ? undefined : { model, threadId, id: runId };
+  const turnFor = <T extends string>(
+    model: string | undefined,
+    threadId: T,
+    runId: string | undefined,
+    since: number,
+  ) =>
+    model === undefined && runId === undefined ? undefined : { model, threadId, id: runId, since };
 
   /** Ends a start attempt's reservation on every session once it exits, registered or not. */
   const settleTurnStart = (turn: { readonly threadId: string; readonly id: string }) =>

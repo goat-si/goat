@@ -99,7 +99,7 @@ export const makeCodexModelArrivals = <E>(input: {
   );
   return Effect.fn("CodexModelArrivals.modelStatus")(function* (
     model: string,
-    options?: { readonly cachedOnly?: boolean },
+    options?: { readonly cachedOnly?: boolean; readonly since?: number | undefined },
   ) {
     const offered = yield* input.offered;
     const entry = offered.find((candidate) => candidate.slug === model);
@@ -116,8 +116,11 @@ export const makeCodexModelArrivals = <E>(input: {
               Effect.gen(function* () {
                 if (served?.has(model) === true) return Option.some(true);
                 const last = asked;
-                // A listing that finished while this check waited is as recent as the check itself.
-                const waited = last !== undefined && listings > listingsBefore;
+                // A listing that finished after this check or its open began is as recent as they are.
+                const waited =
+                  last !== undefined &&
+                  (listings > listingsBefore ||
+                    (options?.since !== undefined && last.atMs > options.since));
                 const quiet =
                   last !== undefined &&
                   (yield* Clock.currentTimeMillis) - last.atMs < LISTING_QUIET_MS;
