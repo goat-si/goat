@@ -9,12 +9,14 @@ import (
 	"testing"
 )
 
-// The fixes are commands to paste: a folder with a space stays one argument, the folder fix grants only
-// this uid, and neither replaces the existing mode (chmod 755 or 644 would).
+// A pasted file fix keeps a folder with a space as one argument and only adds read access (chmod 644
+// would replace the mode). The folder fix names what Pen needs and gives no command: chmod would widen
+// it for every account, and setfacl -m recalculates the mask, which can widen other entries.
 func TestHostKeyFixesQuoteThePathAndOnlyAddAccess(t *testing.T) {
 	dir := "/srv/my keys"
 	d := hostKeysDirFix(dir)
-	if !strings.Contains(d, "setfacl -m u:"+strconv.Itoa(os.Getuid())+":rx '/srv/my keys'") {
+	if !strings.Contains(d, "uid "+strconv.Itoa(os.Getuid())) || !strings.Contains(d, "'/srv/my keys'") ||
+		strings.Contains(d, "chmod") || strings.Contains(d, "setfacl") {
 		t.Fatalf("folder fix %q", d)
 	}
 	f := hostKeysFix(dir + "/ssh_host_*_key.pub")
