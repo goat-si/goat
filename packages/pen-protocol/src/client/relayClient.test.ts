@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { parseAck } from "../wire.ts";
 import { dialRelay, RELAY_LIMITS } from "./relayClient.ts";
 import { fakeFactory } from "./testing/fakeRelay.ts";
@@ -52,6 +52,49 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(socket.textSent()).toEqual(["a:" + 70 * KiB, "a:" + 135 * KiB]);
     expect(socket.textSent().map((text) => parseAck(text))).toEqual([70 * KiB, 135 * KiB]);
   });
+
+  it("a link closed before attach still hands over what came first, but a close asked for during that drain stops it", async () => {
+    const { socket, link } = await opened();
+    socket.receive(Uint8Array.of(1));
+    socket.receive(Uint8Array.of(2));
+    socket.remoteClose(1000);
+    const seen: Array<number> = [];
+    link.attach((message) => {
+      seen.push(message[0] ?? -1);
+      link.close(4400);
+    });
+    expect(seen).toEqual([1]);
+  });
+
+  it.each(["held", "live"] as const)(
+    "a receiver that throws on a %s message is reported, closes the link 1011 and gets nothing more",
+    async (when) => {
+      const reported: Array<unknown> = [];
+      vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
+      try {
+        const { socket, link } = await opened();
+        let calls = 0;
+        const receiver = () => {
+          calls += 1;
+          throw new Error("receiver failure");
+        };
+        if (when === "held") {
+          socket.receive(Uint8Array.of(1));
+          socket.receive(Uint8Array.of(2));
+          link.attach(receiver);
+        } else {
+          link.attach(receiver);
+          expect(() => socket.receive(Uint8Array.of(1))).not.toThrow();
+          socket.receive(Uint8Array.of(2));
+        }
+        expect(calls).toBe(1);
+        expect(socket.closedWith).toBe(1011);
+        expect(reported).toHaveLength(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("a receiver that closes the link while held messages drain gets no more and one close notice", async () => {
     const { socket, link } = await opened();

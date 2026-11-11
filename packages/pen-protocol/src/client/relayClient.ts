@@ -111,6 +111,8 @@ class Link implements RelayLink {
   #resolvePong!: () => void;
   #resolveClosed!: (code: number) => void;
   #state: "connecting" | "open" | "closed" = "connecting";
+  /** Set once this side asks for a close: a held-message drain stops even if the link had closed already. */
+  #closing = false;
   #closeCode = 1006;
   #received = 0;
   #acked = 0;
@@ -201,7 +203,7 @@ class Link implements RelayLink {
     }
     const message = bytes.slice();
     if (this.#receiver !== undefined) {
-      this.#receiver(message);
+      this.#deliver(this.#receiver, message);
       return;
     }
     const waiter = this.#receivers.shift();
@@ -236,13 +238,23 @@ class Link implements RelayLink {
     const closedBefore = this.#state === "closed";
     const held = this.#held.splice(0);
     this.#heldBytes = 0;
-    // Messages that arrived before a close are still handed over; once the receiver closes the link, the rest are
-    // not, and that close has already told onClose through #finish.
+    // Messages that arrived before a close are still handed over; once the receiver asks for a close (or throws),
+    // the rest are not, even if the link had closed already. A close during the drain told onClose through #finish.
     for (const message of held) {
-      if (!closedBefore && this.#state === "closed") break;
-      receiver(message);
+      if (this.#closing || (!closedBefore && this.#state === "closed")) break;
+      this.#deliver(receiver, message);
     }
     if (closedBefore) this.#notifyClose();
+  }
+
+  /** A receiver that throws ends the link (1011, WebSocket's internal error) and is reported; nothing escapes. */
+  #deliver(receiver: (message: Uint8Array) => void, message: Uint8Array): void {
+    try {
+      receiver(message);
+    } catch (error) {
+      this.close(1011);
+      reportListenerError(error);
+    }
   }
 
   send(message: Uint8Array): void {
@@ -337,6 +349,7 @@ class Link implements RelayLink {
   }
 
   close(code: number): void {
+    this.#closing = true;
     if (this.#state === "closed") return;
     this.#closeSocket(this.#state === "connecting" ? undefined : code);
     this.#finish(code, true);
@@ -344,6 +357,7 @@ class Link implements RelayLink {
 
   /** Ends the link after the socket refused a send: 1006 locally, and the socket is closed with no code. */
   #abort(): void {
+    this.#closing = true;
     if (this.#state === "closed") return;
     this.#closeSocket(undefined);
     this.#finish(1006, true);
