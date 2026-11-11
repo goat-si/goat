@@ -43,9 +43,9 @@
 - **Introducer.** A key's introducer is the kept `admit` naming it whose signer is introduced at the
   shallowest depth; of several there, the one with the smallest raw hash (the founder introduces itself).
   An admit names its signer as the card's inviter, so a card cannot be replayed by another member. A key
-  without an introducer is not introduced. A record is admissible when its signer is introduced and, for
-  a `revoke`, each subject is too. The view still decides what a record does at its turn; this only
-  replaces the storage check "introduced in its past".
+  without an introducer is not introduced. A record is admissible when its signer is introduced; a
+  `revoke`'s subjects need not be, since it spends only its signer's lineage places. The view still
+  decides what a record does at its turn; this only replaces the storage check "introduced in its past".
 - **Depth.** The founder's depth is 0; a key's depth is its introducer's signer's depth plus 1. A key
   admitting itself, or admitted again deeper, keeps its shallowest introduction.
 - **Lineage.** The founder alone is lineage 0. A key the founder admits is in lineage
@@ -57,7 +57,8 @@
   keys other than the founder, and 56 revoke places. The founder's own admits share 64 places, kept by
   the founder's counter `n` then raw hash, so a later admit never displaces an earlier one. A revoke place
   holds one revoke per (subject, compromised), the smallest of each, and a lineage keeps the 56 smallest of
-  those. Otherwise a share keeps its smallest records by raw hash, admits by (depth, raw hash). A full set
+  those. An `admit` this version cannot read introduces nobody and counts among its signer's records of
+  other types. Otherwise a share keeps its smallest records by raw hash, admits by (depth, raw hash). A full set
   is 16 x 248 + 64 + the found record = 4033 records, so it fits a 4096-hash `have`.
 - **Kept, bare and dropped.** A record outside its share is dropped; one whose signer has no admit yet
   waits in the bounded pool. A record's parents need not be present: a hash a kept record names without
