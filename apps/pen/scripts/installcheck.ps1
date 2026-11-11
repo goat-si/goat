@@ -16,6 +16,32 @@ $savedTemp = @{ TMP = $env:TMP; TEMP = $env:TEMP }
 
 function Fail([string]$msg) { throw "FAIL: $msg" }
 
+# Disable-BackupRestore turns off SeBackupPrivilege and SeRestorePrivilege in this process's token: while
+# either is enabled (an elevated shell may have them on), deleting ignores a deny ACE, so the locked-TEMP
+# check below would prove nothing. install.ps1 runs in this process, so it is bound by the ACE too.
+function Disable-BackupRestore {
+	Add-Type -Namespace PenCheck -Name Token -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct TokenPrivilege { public int Count; public long Luid; public int Attributes; }
+[DllImport("advapi32.dll", SetLastError = true)]
+static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+[DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+static extern bool LookupPrivilegeValue(string system, string name, out long luid);
+[DllImport("advapi32.dll", SetLastError = true)]
+static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivilege state, int length, IntPtr previous, IntPtr returned);
+[DllImport("kernel32.dll")]
+static extern IntPtr GetCurrentProcess();
+public static void Disable(string name) {
+	IntPtr token;
+	if (!OpenProcessToken(GetCurrentProcess(), 0x28, out token)) throw new System.ComponentModel.Win32Exception();
+	var p = new TokenPrivilege { Count = 1, Attributes = 0 };
+	if (!LookupPrivilegeValue(null, name, out p.Luid)) throw new System.ComponentModel.Win32Exception();
+	if (!AdjustTokenPrivileges(token, false, ref p, 0, IntPtr.Zero, IntPtr.Zero)) throw new System.ComponentModel.Win32Exception();
+}
+'@
+	foreach ($p in @('SeBackupPrivilege', 'SeRestorePrivilege')) { [PenCheck.Token]::Disable($p) }
+}
+
 function Free-Port {
 	$l = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
 	$l.Start()
@@ -146,6 +172,7 @@ try {
 
 	# A download install.ps1 cannot remove stops it before it runs pen: here --up must not found a mesh.
 	[IO.File]::WriteAllText($sums, $good)
+	Disable-BackupRestore
 	$stopped = $false
 	try { Inst 'f' @('--name', 'f', '--up') -LockTmp | Out-Null } catch { $stopped = "$_" -match 'could not remove its download' }
 	if (-not $stopped) { Fail 'install.ps1 went on although it could not remove its download' }
