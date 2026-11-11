@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Reads the Windows helper's C# sources for safety checks.
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
@@ -185,3 +187,53 @@ describe("Windows computer use readiness", () => {
     assert.match(capture, /frame\["capturedAt"\] = capturedAt;/);
   });
 });
+
+// oxlint-disable-next-line goat/no-global-process-runtime -- Compiling the helper's C# needs the real host: csc on Windows, dotnet elsewhere.
+const compilesOnWindows = process.platform === "win32";
+
+if (compilesOnWindows || process.env.GOAT_TEST_DOTNET === "1") {
+  it("treats a renewed Artifact Signing certificate as the same publisher, and nothing broader", () => {
+    const temp = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-signing-identity-"));
+    try {
+      const source = NodePath.join(windowsHelperDir, "SigningIdentity.cs");
+      const fixture = NodePath.join(import.meta.dirname, "SigningIdentityTest.cs");
+      let output: string;
+      if (compilesOnWindows) {
+        const executable = NodePath.join(temp, "test.exe");
+        const compiler = NodePath.join(
+          process.env.WINDIR ?? "C:\\Windows",
+          "Microsoft.NET",
+          "Framework64",
+          "v4.0.30319",
+          "csc.exe",
+        );
+        NodeChildProcess.execFileSync(compiler, [
+          "/nologo",
+          "/warnaserror+",
+          `/out:${executable}`,
+          source,
+          fixture,
+        ]);
+        output = NodeChildProcess.execFileSync(executable, { encoding: "utf8" });
+      } else {
+        const version = NodeChildProcess.execFileSync("dotnet", ["--version"], {
+          encoding: "utf8",
+        });
+        const major = Number.parseInt(version, 10);
+        const project = NodePath.join(temp, "test.csproj");
+        NodeFS.copyFileSync(source, NodePath.join(temp, "SigningIdentity.cs"));
+        NodeFS.copyFileSync(fixture, NodePath.join(temp, "SigningIdentityTest.cs"));
+        NodeFS.writeFileSync(
+          project,
+          `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net${major}.0</TargetFramework></PropertyGroup></Project>`,
+        );
+        output = NodeChildProcess.execFileSync("dotnet", ["run", "--project", project], {
+          encoding: "utf8",
+        });
+      }
+      assert.include(output, "Signing identity cases passed");
+    } finally {
+      NodeFS.rmSync(temp, { recursive: true, force: true });
+    }
+  });
+}

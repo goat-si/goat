@@ -32,7 +32,10 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	var res struct{ Results []daemon.PushResult }
 	err = daemon.CallWithin(st, daemon.Request{Op: "leave"}, &res, leaveTimeout)
 	if errors.Is(err, daemon.ErrNotRunning) {
-		if why, ok := leftOrEmpty(st); ok {
+		if _, ok := leftOrEmpty(st); ok {
+			if leaveDecides != nil {
+				leaveDecides()
+			}
 			// A leave that finished in the daemon after its pen leave stopped waiting, or one that could
 			// not delete every file: delete what is left first, and only then the service. With no
 			// identity and no left marker nothing of a node is here: only the task or unit goes.
@@ -43,18 +46,22 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 			} else if err == nil {
 				release()
 			}
-			if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
-				if leaveResumes != nil {
-					leaveResumes()
-				}
-				switch err := daemon.FinishLeave(st); {
-				case errors.Is(err, daemon.ErrNotLeaving):
-					fmt.Fprintf(stderr, "pen: this node is not leaving its mesh, so there is nothing to finish (pen up, pen join or pen login started a node here meanwhile); the %s service is kept\n", mode)
-					return 1
-				case err != nil:
-					fmt.Fprintf(stderr, "pen: %v; the %s service is kept\n", err, mode)
-					return 1
-				}
+			if leaveResumes != nil {
+				leaveResumes()
+			}
+			// Decided once, under the state lock: a node started here since the look above keeps its service.
+			left, err := daemon.FinishLeaveOrEmpty(st)
+			switch {
+			case errors.Is(err, daemon.ErrNotLeaving):
+				fmt.Fprintf(stderr, "pen: this node is not leaving its mesh, so there is nothing to finish (pen up, pen join or pen login started a node here meanwhile); the %s service is kept\n", mode)
+				return 1
+			case err != nil:
+				fmt.Fprintf(stderr, "pen: %v; the %s service is kept\n", err, mode)
+				return 1
+			}
+			why := "no Pen identity in " + st.Dir
+			if left {
+				why = "this node has already left its mesh"
 			}
 			if mode != "none" {
 				if err := removeService(mode, st); err != nil {
@@ -98,6 +105,9 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 
 // leaveResumes runs when a resumed pen leave is about to finish the deletion (a seam for tests).
 var leaveResumes func()
+
+// leaveDecides runs after a resumed pen leave first looked at the state folder (a seam for tests).
+var leaveDecides func()
 
 // leftOrEmpty reports why no running node is left in st: it left (the left marker, though files may
 // remain for FinishLeave), or no Pen identity is in the folder at all (never made, or the folder is not

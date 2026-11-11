@@ -1,4 +1,28 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+
+// For servers that do not track visits: how far the person read each main chat in this app run.
+const localReads = new Map<string, string>();
+const localReadListeners = new Set<() => void>();
+const subscribeLocalReads = (onChange: () => void) => {
+  localReadListeners.add(onChange);
+  return () => {
+    localReadListeners.delete(onChange);
+  };
+};
+
+/** Records how far the person read a conversation whose server keeps no visits. */
+export function recordGoatBotLocalRead(conversation: string, at: string) {
+  if (localReads.get(conversation) === at) return;
+  localReads.set(conversation, at);
+  for (const listener of localReadListeners) listener();
+}
+
+/** How far the person read a conversation in this app run, for servers that keep no visits. */
+export function useGoatBotLocalRead(conversation: string | null): string | null {
+  return useSyncExternalStore(subscribeLocalReads, () =>
+    conversation === null ? null : (localReads.get(conversation) ?? null),
+  );
+}
 
 export interface GoatBotVisitSnapshot {
   /** One focused visit of one conversation. */

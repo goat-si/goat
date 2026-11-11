@@ -239,3 +239,48 @@ it.effect("an unreadable record refuses only turns that would use the socket or 
     }),
   ),
 );
+it.effect(
+  "a goal block whose goal Codex no longer runs does not refuse a start the guard freed",
+  () =>
+    withRecordDirectory((directory) =>
+      Effect.gen(function* () {
+        const service = yield* openService(directory, {});
+        const opened = yield* service.open(openInput);
+        const key = {
+          instanceId: ProviderInstanceId.make("codex"),
+          recordName: opened.record.name,
+        };
+        const threadId = ThreadId.make("thread-goal-ended");
+        const stop = { threadId, nativeThreadId: "native-thread", nativeTurnId: "goal-turn" };
+        const goal = { threadId, nativeThreadId: "native-thread" };
+        yield* service.recordStopObligation(key, stop);
+        yield* service.recordGoalBlock(key, goal);
+        let status: "goal" | "none" = "goal";
+        const reads: Array<string> = [];
+        const admit = (allowGoalControl = false) =>
+          Survivors.admitPastStaleGoalBlocks({
+            detached: service,
+            readGoal: (_record, nativeThreadId) =>
+              Effect.sync(() => {
+                reads.push(nativeThreadId);
+                return status;
+              }),
+            threadId,
+            allowGoalControl,
+            stdio: false,
+          }).pipe(Effect.exit);
+        // While the goal turn runs, its stop fence refuses without asking Codex about the goal.
+        assert.equal((yield* admit())._tag, "Failure");
+        assert.deepEqual(reads, []);
+        // The fenced turn ends: its fence clears, so the start guard frees the waiting start.
+        yield* service.clearStopObligation(key, stop);
+        assert.notInclude(yield* service.stopFencedThreads, threadId);
+        // A goal Codex still runs keeps refusing, as before.
+        assert.equal((yield* admit())._tag, "Failure");
+        // Codex has paused the goal; maintenance has not caught up yet, admission must not refuse.
+        status = "none";
+        assert.equal((yield* admit())._tag, "Success");
+        assert.deepEqual(yield* service.getGoalBlocks(threadId), []);
+      }),
+    ),
+);
