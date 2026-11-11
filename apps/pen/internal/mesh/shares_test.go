@@ -108,7 +108,7 @@ func TestSharedStoresAgreeWhateverTheArrivalOrder(t *testing.T) {
 	}
 	var honest []*Record
 	for i := 0; i < 8; i++ {
-		honest = append(honest, b.sign(o, TypeName, []*Record{filler[i*37]}, Fields{Subject: pub(o), Name: fmt.Sprintf("o%d", i)}))
+		honest = append(honest, b.sign(o, TypeName, []*Record{filler[i*(ShareOrdinary/8)]}, Fields{Subject: pub(o), Name: fmt.Sprintf("o%d", i)}))
 	}
 	recs := slices.Clone(b.recs)
 	rev := slices.Clone(recs)
