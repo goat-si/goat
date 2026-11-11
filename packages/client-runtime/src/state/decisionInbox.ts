@@ -207,6 +207,23 @@ export function createDecisionInboxAtoms(input: {
     return connected;
   }).pipe(Atom.withLabel("decision-inbox-connected"));
 
+  // The last approval list each enabled environment's feed gave. A disconnected environment keeps
+  // its list, so an approval stays listed (and cannot be answered) until a loaded feed drops it.
+  let knownHandoffs: ReadonlyMap<EnvironmentId, ReadonlyArray<DecisionHandoff>> = new Map();
+  const knownHandoffsAtom = Atom.make((get) => {
+    const connected = get(connectedAtom);
+    const next = new Map<EnvironmentId, ReadonlyArray<DecisionHandoff>>();
+    for (const [id, entry] of get(input.catalogValueAtom).entries) {
+      if (!entry.enabled) continue;
+      const feed =
+        input.feedAtom !== undefined && connected.includes(id) ? get(input.feedAtom(id)) : null;
+      const handoffs = feed?.handoffs ?? knownHandoffs.get(id);
+      if (handoffs !== undefined && handoffs.length > 0) next.set(id, handoffs);
+    }
+    knownHandoffs = next;
+    return next;
+  }).pipe(Atom.withLabel("decision-inbox-known-handoffs"));
+
   let previousSummary: Summary = { count: 0, total: 0, refs: [] };
   const summaryAtom = Atom.make((get) => {
     const connected = get(connectedAtom);
@@ -242,9 +259,11 @@ export function createDecisionInboxAtoms(input: {
           unique.set(threadKey(ref), ref);
         }
       }
-      // Approval handoffs always wait on the person; their cards need no thread detail.
-      count += feed.handoffs?.length ?? 0;
-      total += feed.handoffs?.length ?? 0;
+    }
+    // Approval handoffs always wait on the person, including while their environment is away.
+    for (const handoffs of get(knownHandoffsAtom).values()) {
+      count += handoffs.length;
+      total += handoffs.length;
     }
     const refs = [...unique.entries()]
       .sort(([left], [right]) => compareStrings(left, right))
@@ -289,7 +308,9 @@ export function createDecisionInboxAtoms(input: {
           decision: item,
         });
       }
-      for (const entry of feed.handoffs ?? []) {
+    }
+    for (const [environmentId, handoffs] of get(knownHandoffsAtom)) {
+      for (const entry of handoffs) {
         items.push({
           id: handoffKey(environmentId, entry.handoff.handoffId),
           ref: { environmentId, threadId: entry.handoff.requestedBy.threadId },

@@ -936,4 +936,46 @@ describe("decision inbox", () => {
     expect(isDecisionItemWaiting(snapshot, entry)).toBe(true);
     expect(isDecisionItemWaiting({ ...snapshot, feedEnvironments: [a] }, entry)).toBe(false);
   });
+  it("keeps a known approval listed, counted and waiting while its environment disconnects, until its feed drops it", () => {
+    const h = harness();
+    const stopSummary = h.registry.mount(h.inbox.summaryAtom);
+    const stopItems = h.registry.mount(h.inbox.itemsAtom);
+    const phase = (environmentId: EnvironmentId, value: EnvironmentConnectionPhase) =>
+      h.registry.set(h.presentations(environmentId), {
+        ...h.registry.get(h.presentations(environmentId))!,
+        connection: { phase: value, error: null, traceId: null },
+      });
+    try {
+      h.registry.set(h.shells, []);
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
+      });
+      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
+      const id = h.registry.get(h.inbox.itemsAtom).items[0]!.id;
+
+      phase(a, "reconnecting");
+      const away = h.registry.get(h.inbox.itemsAtom);
+      expect(away.items.map((entry) => entry.id)).toEqual([id]);
+      expect(isDecisionItemRemoved(away, id)).toBe(false);
+      expect(isDecisionItemWaiting(away, away.items[0]!)).toBe(true);
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 1 });
+
+      // Back, but its feed has not reloaded yet: still known, still waiting.
+      h.registry.set(h.feeds(a), null);
+      phase(a, "connected");
+      expect(h.registry.get(h.inbox.itemsAtom).items.map((entry) => entry.id)).toEqual([id]);
+
+      // An authoritative feed without it removes it.
+      h.registry.set(h.feeds(a), { items: [], handoffs: [] });
+      const settled = h.registry.get(h.inbox.itemsAtom);
+      expect(settled.items).toEqual([]);
+      expect(isDecisionItemRemoved(settled, id)).toBe(true);
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 0, total: 0 });
+    } finally {
+      stopItems();
+      stopSummary();
+      h.registry.dispose();
+    }
+  });
 });
