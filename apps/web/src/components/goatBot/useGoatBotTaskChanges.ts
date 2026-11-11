@@ -30,6 +30,7 @@ export function useGoatBotTaskChanges(environmentId: EnvironmentId): string {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [supported]);
-  const revision = Option.getOrNull(AsyncResult.value(result))?.revision;
-  return supported ? `stream:${revision ?? "pending"}` : `visit:${visits}`;
+  // The stream opens at revision 0, the state the first read already shows; only later ones change.
+  const revision = Option.getOrNull(AsyncResult.value(result))?.revision ?? 0;
+  return supported ? `stream:${revision}` : `visit:${visits}`;
 }

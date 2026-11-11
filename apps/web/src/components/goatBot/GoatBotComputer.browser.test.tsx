@@ -9,12 +9,16 @@ const state = vi.hoisted(() => ({
   failure: null as unknown,
   refresh: vi.fn(),
   requested: vi.fn(),
-  revision: 0,
+  revision: 0 as number | null,
   supportsChanges: false,
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => ({ _tag: "Success", value: { revision: state.revision }, waiting: false }),
+  // null: the stream has not answered yet.
+  useAtomValue: () =>
+    state.revision === null
+      ? { _tag: "Initial", waiting: true }
+      : { _tag: "Success", value: { revision: state.revision }, waiting: false },
 }));
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
@@ -146,4 +150,18 @@ it("rereads on window focus when task subscriptions are unavailable", async () =
   state.refresh.mockClear();
   window.dispatchEvent(new Event("focus"));
   await vi.waitFor(() => expect(state.refresh).toHaveBeenCalledTimes(1));
+});
+
+it("reads once when the change stream opens, and again only for a later revision", async () => {
+  setup({ tasks: [] });
+  state.supportsChanges = true;
+  state.revision = null;
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  state.revision = 0;
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  state.revision = 1;
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(2);
 });
