@@ -1,5 +1,6 @@
 import type {
   DesktopSshEnvironmentTarget,
+  SshForceReplaceTarget,
   SshHostFailure,
   SshHostStatus,
   SshRuntimePendingReplacement,
@@ -90,6 +91,12 @@ export interface RemoteGoatRunnerOptions {
    * Without it an expired window cancels the replacement and the server keeps running.
    */
   readonly confirmReplacement?: boolean;
+  /**
+   * The runtime process a person approved stopping, as the host reported it. With
+   * `confirmReplacement`, a runtime GOAT cannot verify or drain is stopped only when it is still
+   * this process; any other runtime is refused as before.
+   */
+  readonly forceReplace?: SshForceReplaceTarget;
   /** Drain window for a replacement, in seconds (default 60, at most 300). */
   readonly replacementGraceSeconds?: number;
   /**

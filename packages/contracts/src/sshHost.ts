@@ -69,6 +69,18 @@ export const SshRefreshDeferred = Schema.Struct({
 });
 export type SshRefreshDeferred = typeof SshRefreshDeferred.Type;
 
+/**
+ * The recorded runtime process on a host, alive and owned by the SSH user: its PID, the port it
+ * was recorded on, and its start time as the host's `ps -o lstart=` prints it in UTC. A forced
+ * update names it to the person and stops only this process.
+ */
+export const SshForceReplaceTarget = Schema.Struct({
+  pid: Schema.Int.check(Schema.isGreaterThan(1)),
+  port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
+  startedAt: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9:]+( [A-Za-z0-9:]+){0,7}$/)),
+});
+export type SshForceReplaceTarget = typeof SshForceReplaceTarget.Type;
+
 export const SshHostProviders = Schema.Struct({
   checkedAt: IsoDateTime,
   ready: Schema.Boolean,
