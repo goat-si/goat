@@ -1,6 +1,8 @@
-import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
-export { selectInheritedBackgroundTurnItems } from "./InheritedBackgroundTurnItems.ts";
-import { isTerminalProviderTurnStatus, isSettledTurnItemStatus } from "./providerTurnStatus.ts";
+import {
+  isTerminalProviderTurnStatus,
+  isSettledTurnItemStatus,
+  isSettledRunEligibleForInheritedBackground,
+} from "./providerTurnStatus.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { repairSchedule } from "../retryJitter.ts";
@@ -9,7 +11,6 @@ import { runTurnPrepareInput } from "./RunTurnPrepareInput.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
-import { makeAssistantIdleWake } from "./assistantIdleWake.ts";
 import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
@@ -53,7 +54,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
@@ -120,6 +120,42 @@ const NATIVE_SUBAGENT_TURN_ORIGIN: ProviderEventIngestor.ProviderTurnOrigin = {
   scheduled: false,
   subagent: true,
 };
+
+const backgroundCapableTurnItemTypes: ReadonlySet<OrchestrationV2TurnItem["type"]> = new Set([
+  "command_execution",
+  "dynamic_tool",
+  "subagent",
+]);
+
+/** Use durable provider-thread lineage; sessions can host multiple threads. */
+export function selectInheritedBackgroundTurnItems(input: {
+  readonly threadId: ThreadId;
+  readonly currentProviderThreadId: ProviderThreadId;
+  readonly currentRunOrdinal: number;
+  readonly runs: ReadonlyArray<OrchestrationV2Run>;
+  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+}): ReadonlyArray<InheritedBackgroundTurnItemRoute> {
+  const settledPriorRunIds = new Set(
+    input.runs
+      .filter(
+        (run) =>
+          run.threadId === input.threadId &&
+          run.ordinal < input.currentRunOrdinal &&
+          isSettledRunEligibleForInheritedBackground(run.status),
+      )
+      .map((run) => run.id),
+  );
+  return input.turnItems.flatMap((turnItem) =>
+    turnItem.threadId === input.threadId &&
+    turnItem.providerThreadId === input.currentProviderThreadId &&
+    turnItem.runId !== null &&
+    settledPriorRunIds.has(turnItem.runId) &&
+    backgroundCapableTurnItemTypes.has(turnItem.type) &&
+    !isSettledTurnItemStatus(turnItem.status)
+      ? [{ id: turnItem.id, runId: turnItem.runId }]
+      : [],
+  );
+}
 
 type SubagentTurnItem = Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>;
 
@@ -1425,7 +1461,6 @@ export const layer: Layer.Layer<
         });
         const receipt = { receiptLine: isGoatBotSessionThreadId(input.run.threadId) };
         const filterAssistantEvent = makeAssistantStreamingFilter(responseStreamingMode, receipt);
-        const idleWake = yield* makeAssistantIdleWake();
         const closeEventSubscription = Effect.andThen(
           providerEventIngestor.close(input.run.id, eventSubscription.close),
           cloud
@@ -1526,11 +1561,9 @@ export const layer: Layer.Layer<
         const ingestEvent = Effect.fnUntraced(function* ({
           event,
           accepted,
-          idle = false,
         }: {
           event: ProviderAdapter.ProviderAdapterV2Event;
           accepted: boolean;
-          idle?: boolean;
         }) {
           if (!accepted) return;
           if (
@@ -1554,9 +1587,10 @@ export const layer: Layer.Layer<
                   },
                 }
               : event;
-          const deliveredEvent = idle
-            ? recoveredEvent
-            : filterAssistantEvent(recoveredEvent, DateTime.toEpochMillis(yield* DateTime.now));
+          const deliveredEvent = filterAssistantEvent(
+            recoveredEvent,
+            DateTime.toEpochMillis(yield* DateTime.now),
+          );
           if (deliveredEvent) {
             const rootTerminalAlreadySeen = yield* Ref.get(rootTerminalSeen);
             const isRootProviderThreadUpdate =
@@ -1651,34 +1685,13 @@ export const layer: Layer.Layer<
             }
           }
           yield* trackChildLifecycle(event, deliveredEvent !== null);
-          yield* idleWake.schedule(filterAssistantEvent.nextIdleFlushAt());
         });
         const providerEventFiber = yield* eventSink
           .consumeProviderEvents(
-            eventSubscription.events.pipe(Stream.merge(idleWake.events, { haltStrategy: "left" })),
+            eventSubscription.events,
             (event) =>
               Effect.gen(function* () {
-                if (event.type !== "idle_flush")
-                  return yield* ingestEvent(yield* routeEvent(event));
-                const now = Math.max(DateTime.toEpochMillis(yield* DateTime.now), event.at);
-                idleWake.fired(now);
-                for (const held of filterAssistantEvent.takeIdleFlushes(now)) {
-                  const threadId =
-                    held.type === "message.updated"
-                      ? held.message.threadId
-                      : held.type === "turn_item.updated"
-                        ? held.turnItem.threadId
-                        : null;
-                  if ((yield* Ref.get(rootRunFinalized)) && threadId === input.run.threadId)
-                    continue;
-                  const [accepted] = routeProviderEvent(
-                    held,
-                    routeIdentity,
-                    yield* Ref.get(eventRouting),
-                  );
-                  yield* ingestEvent({ event: held, accepted, idle: true });
-                }
-                yield* idleWake.schedule(filterAssistantEvent.nextIdleFlushAt());
+                yield* ingestEvent(yield* routeEvent(event));
               }),
             Effect.gen(function* () {
               if (yield* agentTurnsSettled) yield* endPreview;
@@ -1687,7 +1700,6 @@ export const layer: Layer.Layer<
             Ref.get(rootTerminalSeen).pipe(Effect.map((seen) => !seen)),
           )
           .pipe(
-            Effect.ensuring(idleWake.close),
             Effect.mapError((cause) => new RunExecutionIngestError({ runId: input.run.id, cause })),
             Effect.flatMap(() =>
               Effect.gen(function* () {

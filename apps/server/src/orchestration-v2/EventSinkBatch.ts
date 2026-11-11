@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type { EventSinkV2Error } from "./EventSink.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
@@ -23,9 +24,9 @@ type Commit = <A, E, R>(
 ) => Effect.Effect<A, E | SqlError.SqlError, R>;
 
 export interface Shape {
-  readonly consumeProviderEvents: <A extends { readonly type: string }, E, R, E2, R2>(
-    source: Stream.Stream<A, E, R>,
-    process: (event: A) => Effect.Effect<void, E2, R2>,
+  readonly consumeProviderEvents: <E, R, E2, R2>(
+    source: Stream.Stream<ProviderAdapter.ProviderAdapterV2Event, E, R>,
+    process: (event: ProviderAdapter.ProviderAdapterV2Event) => Effect.Effect<void, E2, R2>,
     after: Effect.Effect<boolean, E2, R2>,
     canBatch: Effect.Effect<boolean, never, R2>,
   ) => Effect.Effect<

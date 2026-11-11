@@ -1,3 +1,4 @@
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -18,7 +19,8 @@ export const enabled = Config.Boolean("GOAT_PROVIDER_COMMIT_BATCHING").pipe(
   Effect.orDie,
 );
 
-const isSnapshot = (event: { readonly type: string }) =>
+type Event = ProviderAdapter.ProviderAdapterV2Event;
+const isSnapshot = (event: Event) =>
   event.type === "node.updated" ||
   event.type === "message.updated" ||
   event.type === "turn_item.updated" ||
@@ -230,9 +232,9 @@ export const make = Effect.fn("ProviderCommitBatch.make")(function* (
       ),
     );
   });
-  const consume = Effect.fnUntraced(function* <A extends { readonly type: string }, E, R, E2, R2>(
-    source: Stream.Stream<A, E, R>,
-    process: (event: A) => Effect.Effect<void, E2, R2>,
+  const consume = Effect.fnUntraced(function* <E, R, E2, R2>(
+    source: Stream.Stream<Event, E, R>,
+    process: (event: Event) => Effect.Effect<void, E2, R2>,
     after: Effect.Effect<boolean, E2, R2>,
     canBatch: Effect.Effect<boolean, never, R2> = Effect.succeed(true),
   ) {
