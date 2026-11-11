@@ -31,11 +31,30 @@ const state = vi.hoisted(() => ({
   modelEditable: true,
   colorEditable: true,
   pickModel: null as null | ((model: object | null) => void),
+  // The roster's list, environment and reads; each test takes its own environment.
+  roster: {
+    environmentId: "env",
+    listedBots: [] as Array<object> | null,
+    refreshBots: vi.fn(),
+  },
+  requests: 0,
+  newBotRow: null as unknown,
 }));
 vi.mock("react-native", () => ({
-  View: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  View: ({
+    children,
+    accessibilityLabel,
+  }: {
+    children: React.ReactNode;
+    accessibilityLabel?: string;
+  }) => <div aria-label={accessibilityLabel}>{children}</div>,
   Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  Pressable: (props: { children: React.ReactNode; onPress?: () => void }) => (
+    <button onClick={props.onPress}>{props.children}</button>
+  ),
   Alert: { alert: state.alert },
+  AccessibilityInfo: { announceForAccessibility: vi.fn() },
+  Platform: { OS: "ios" },
 }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
@@ -46,15 +65,21 @@ vi.mock("./useMobileBotRoster", () => ({
     bots: [],
     groups: { main: null, members: [], hidden: [], deleted: [] },
     supportsMembers: true,
-    environmentId: "env",
+    environmentId: state.roster.environmentId,
     slackEnabled: false,
     error: null,
+    listedBots: state.roster.listedBots,
+    refreshBots: state.roster.refreshBots,
   }),
 }));
+// The list itself is the view's; this stand-in keeps what the panel gives it and draws its New bot row.
 vi.mock("./MobileBotRosterView", () => ({
-  MobileBotRosterView: (props: { members?: Record<string, unknown> }) => {
+  MobileBotRosterView: (props: {
+    members?: Record<string, unknown>;
+    newBotRow?: React.ReactNode;
+  }) => {
     state.members = props.members ?? null;
-    return null;
+    return <>{props.newBotRow}</>;
   },
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => state.manage }));
@@ -68,7 +93,7 @@ vi.mock("./MobileNewBotModel", () => ({
     return null;
   },
 }));
-vi.mock("../../lib/uuid", () => ({ uuidv4: () => "request-1" }));
+vi.mock("../../lib/uuid", () => ({ uuidv4: () => `request-${(state.requests += 1)}` }));
 vi.mock("./MobileBotProfileSheet", () => ({
   MobileBotProfileSheet: (props: {
     mode: string;
@@ -128,110 +153,6 @@ it("restores a deleted member after the person confirms", async () => {
   await act(async () => root.unmount());
 });
 
-it("creates a bot from New bot with one request id and opens its conversation", async () => {
-  const opened = vi.fn();
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
-  const members = state.members as { onNewBot: () => void };
-  await act(async () => members.onNewBot());
-  expect(state.sheet?.mode).toBe("create");
-  await act(async () => {
-    await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "" });
-  });
-  expect(state.manage.create).toHaveBeenCalledWith(
-    { name: "Research", avatar: null, purpose: "" },
-    null,
-    "request-1",
-  );
-  expect(opened).toHaveBeenCalledWith({
-    kind: "member",
-    profile: {
-      botId: "research",
-      name: "Research",
-      avatar: null,
-      purpose: "",
-      defaultModelSelection: null,
-    },
-  });
-  expect(state.manage.update).not.toHaveBeenCalled();
-  await act(async () => root.unmount());
-});
-
-it("a retry after a create the server kept, though the phone saw it fail, still carries the edits", async () => {
-  state.manage.update.mockClear();
-  const stored = {
-    botId: "research",
-    role: "member",
-    name: "Research",
-    avatar: null,
-    purpose: "",
-    defaultModelSelection: null,
-  };
-  // The first request was stored, but its answer never reached the phone.
-  state.manage.create
-    .mockResolvedValueOnce("Couldn't reach GOAT Bot's computer.")
-    .mockResolvedValueOnce(stored);
-  const opened = vi.fn();
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
-  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
-  let failure: string | null | undefined;
-  await act(async () => {
-    failure = await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "" });
-  });
-  expect(failure).toBe("Couldn't reach GOAT Bot's computer.");
-  const luna = { instanceId: "codex", model: "luna" };
-  await act(async () => state.pickModel?.(luna));
-  await act(async () => {
-    failure = await state.sheet?.onSubmit({ name: "Researcher", avatar: "🔬", purpose: "" });
-  });
-  // The same request id finds the stored bot; the edits made since reach it as a change.
-  expect(state.manage.create).toHaveBeenLastCalledWith(
-    { name: "Researcher", avatar: "🔬", purpose: "" },
-    luna,
-    "request-1",
-  );
-  expect(state.manage.update).toHaveBeenCalledExactlyOnceWith(
-    stored,
-    { name: "Researcher", avatar: "🔬" },
-    luna,
-  );
-  expect(failure).toBeNull();
-  expect(opened).toHaveBeenCalledWith({
-    kind: "member",
-    profile: { ...stored, name: "Researcher", avatar: "🔬", defaultModelSelection: luna },
-  });
-  await act(async () => root.unmount());
-});
-
-it("keeps the New bot sheet open with the reason when the edits cannot reach a bot the server kept", async () => {
-  state.manage.update.mockClear();
-  const stored = {
-    botId: "research",
-    role: "member",
-    name: "Research",
-    avatar: null,
-    purpose: "",
-    defaultModelSelection: null,
-  };
-  state.manage.create.mockResolvedValueOnce(stored);
-  state.manage.update.mockResolvedValueOnce("You can't change this bot.");
-  const opened = vi.fn();
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
-  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
-  let failure: string | null | undefined;
-  await act(async () => {
-    failure = await state.sheet?.onSubmit({ name: "Researcher", avatar: null, purpose: "" });
-  });
-  expect(failure).toBe("You can't change this bot.");
-  expect(opened).not.toHaveBeenCalled();
-  await act(async () => root.unmount());
-});
-
 it("changes a member's model from Edit only where its server takes the change", async () => {
   state.alert.mockClear();
   state.manage.update.mockClear();
@@ -270,49 +191,6 @@ it("changes a member's model from Edit only where its server takes the change", 
   await act(async () => root.unmount());
 });
 
-it("offers a colour where the server stores one, and a create retried after a picked colour still carries it", async () => {
-  state.manage.update.mockClear();
-  const stored = {
-    botId: "research",
-    role: "member",
-    name: "Research",
-    avatar: null,
-    purpose: "",
-    defaultModelSelection: null,
-  };
-  // The first request was stored without a colour, and its answer never reached the phone.
-  state.manage.create
-    .mockResolvedValueOnce("Couldn't reach GOAT Bot's computer.")
-    .mockResolvedValueOnce(stored);
-  const opened = vi.fn();
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
-  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
-  expect(state.sheet?.colorEditable).toBe(true);
-  await act(async () => {
-    await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "" });
-  });
-  await act(async () => {
-    await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "", color: "#0F766E" });
-  });
-  expect(state.manage.create).toHaveBeenLastCalledWith(
-    { name: "Research", avatar: null, purpose: "", color: "#0F766E" },
-    null,
-    "request-1",
-  );
-  expect(state.manage.update).toHaveBeenCalledExactlyOnceWith(
-    stored,
-    { color: "#0F766E" },
-    undefined,
-  );
-  expect(opened).toHaveBeenCalledWith({
-    kind: "member",
-    profile: { ...stored, color: "#0F766E" },
-  });
-  await act(async () => root.unmount());
-});
-
 it("offers a member's colour on Edit only where the server stores one, and never the main bot's", async () => {
   state.alert.mockClear();
   const container = document.createElement("div");
@@ -343,4 +221,144 @@ it("offers a member's colour on Edit only where the server stores one, and never
   expect(state.sheet?.colorEditable).toBe(false);
   state.colorEditable = true;
   await act(async () => root.unmount());
+});
+
+let environments = 0;
+const stored = (botId: string, name: string, extra: object = {}) => ({
+  botId,
+  role: "member",
+  name,
+  avatar: null,
+  purpose: "",
+  defaultModelSelection: null,
+  ...extra,
+});
+/** A roster on its own environment, with a create the test answers when it chooses. */
+async function newBotRoster(options: { visible?: boolean; listed?: Array<object> | null } = {}) {
+  environments += 1;
+  state.roster.environmentId = `env-new-${environments}`;
+  state.roster.listedBots = options.listed === undefined ? [] : options.listed;
+  state.roster.refreshBots = vi.fn();
+  const answers: Array<(value: object | string) => void> = [];
+  state.manage.create.mockReset();
+  state.manage.create.mockImplementation(
+    () => new Promise<object | string>((resolve) => answers.push(resolve)),
+  );
+  const opened = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const draw = (visible = options.visible ?? true) =>
+    act(async () =>
+      root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} visible={visible} />),
+    );
+  await draw();
+  const members = () => state.members as { canCreate: boolean; onNewBot: () => void };
+  return {
+    container,
+    opened,
+    answers,
+    draw,
+    members,
+    tap: () => act(async () => members().onNewBot()),
+    answer: (value: object | string) => act(async () => answers.shift()?.(value)),
+    press: (label: string) =>
+      act(async () =>
+        [...container.querySelectorAll("button")]
+          .find((item) => item.textContent === label)
+          ?.click(),
+      ),
+    unmount: () => act(async () => root.unmount()),
+  };
+}
+
+it("creates a bot with one tap under the first free generated name, shows it creating, and ignores a second tap", async () => {
+  const view = await newBotRoster({
+    listed: [
+      stored("old", "New bot", { state: "deleted" }),
+      stored("hid", "New bot 3", { hidden: true }),
+    ],
+  });
+  await view.tap();
+  await view.tap();
+  expect(state.manage.create).toHaveBeenCalledOnce();
+  expect(state.manage.create).toHaveBeenCalledWith(
+    { name: "New bot 2", avatar: null, purpose: "" },
+    null,
+    expect.stringMatching(/^request-/),
+  );
+  expect(view.container.textContent).toContain("New bot 2 · Creating…");
+  expect(view.members().canCreate).toBe(false);
+  await view.answer(stored("research", "New bot 2"));
+  expect(view.opened).toHaveBeenCalledExactlyOnceWith({
+    kind: "member",
+    profile: stored("research", "New bot 2"),
+  });
+  await view.unmount();
+});
+
+it("opens nothing when the roster is no longer on screen, and the created bot stands in until the list has it", async () => {
+  const view = await newBotRoster();
+  await view.tap();
+  await view.draw(false);
+  await view.answer(stored("research", "New bot"));
+  expect(view.opened).not.toHaveBeenCalled();
+  // One list read for the created bot; until it lands the created bot keeps its row here.
+  expect(state.roster.refreshBots).toHaveBeenCalledOnce();
+  expect(view.container.textContent).toContain("New bot");
+  state.roster.listedBots = [stored("research", "New bot")];
+  await view.draw(true);
+  expect(view.container.textContent).toBe("");
+  expect(view.members().canCreate).toBe(true);
+  await view.unmount();
+});
+
+it("says why a create failed; Retry sends the same request and name, and Dismiss lets a later tap start anew", async () => {
+  const view = await newBotRoster();
+  await view.tap();
+  const first = state.manage.create.mock.calls[0];
+  await view.answer("Couldn't reach GOAT Bot's computer.");
+  expect(view.container.textContent).toContain(
+    "Couldn't create a bot: Couldn't reach GOAT Bot's computer.",
+  );
+  await view.press("Retry");
+  expect(state.manage.create.mock.calls[1]).toEqual(first);
+  await view.answer("Still offline.");
+  await view.press("Dismiss");
+  expect(view.container.textContent).toBe("");
+  await view.tap();
+  expect(state.manage.create.mock.calls[2]?.[2]).not.toBe(first?.[2]);
+  await view.unmount();
+});
+
+it("keeps New bot off until the whole list has answered", async () => {
+  const view = await newBotRoster({ listed: null });
+  expect(view.members().canCreate).toBe(false);
+  await view.tap();
+  expect(state.manage.create).not.toHaveBeenCalled();
+  await view.unmount();
+});
+
+it("keeps Creating… until the answer names the bot, even when the list shows a same-name bot or the new one first", async () => {
+  const view = await newBotRoster();
+  await view.tap();
+  // Another device made a bot with the same name, then the new one arrives in the list early.
+  state.roster.listedBots = [stored("elsewhere", "New bot")];
+  await view.draw();
+  expect(view.container.textContent).toContain("New bot · Creating…");
+  state.roster.listedBots = [stored("elsewhere", "New bot"), stored("research", "New bot")];
+  await view.draw();
+  expect(view.container.textContent).toContain("New bot · Creating…");
+  await view.answer(stored("research", "New bot"));
+  expect(view.container.textContent).toBe("");
+  expect(view.opened).toHaveBeenCalledOnce();
+  await view.unmount();
+});
+
+it("opens nothing for a retried create that returns a bot already deleted", async () => {
+  const view = await newBotRoster();
+  await view.tap();
+  await view.answer(stored("research", "New bot", { state: "deleted" }));
+  expect(view.opened).not.toHaveBeenCalled();
+  expect(view.container.textContent).toBe("");
+  await view.unmount();
 });

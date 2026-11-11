@@ -77,6 +77,7 @@ import {
 import { GoatBotModelPill } from "./GoatBotModelPill";
 import { goatBotModelPillMenu } from "./goatBotModelPillMenu";
 import { GoatBotReplyCards } from "./GoatBotReplyCards";
+import { useMobileBotEditing } from "./MobileNewBotNameRow";
 import { GoatBotFilesProvider, GoatBotReplyFiles } from "./GoatBotReplyFiles";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { useMobileGoatBotModelMenu } from "./useMobileGoatBotModel";
@@ -326,6 +327,7 @@ export function GoatBotScreen(props: {
   const mainName = goatBotName(props.main ?? null);
   const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
   const title = goatBotName(member ?? props.main ?? null);
+  const editing = useMobileBotEditing(member, mainName);
   const copy = availabilityCopy(mainName, title);
   const botEmoji = member ? mobileGoatBotMemberPicture(member) : props.main?.avatar;
   // A member bot's color carries the person's messages and Send; the main bot keeps the theme's.
@@ -524,6 +526,8 @@ export function GoatBotScreen(props: {
   const [intake, setIntake] = useState(0);
   // Where the caret goes once the home sheet has gone, after a request filled the box from it.
   const focusOnDismiss = useRef<number | null>(null);
+  // Edit bot from the home sheet opens once the sheet has gone.
+  const editOnDismiss = useRef(false);
   const focusInput = (caret: number) => {
     inputRef.current?.focus();
     inputRef.current?.setSelection(caret, caret);
@@ -532,6 +536,10 @@ export function GoatBotScreen(props: {
     const caret = focusOnDismiss.current;
     focusOnDismiss.current = null;
     if (caret !== null) focusInput(caret);
+    if (editOnDismiss.current) {
+      editOnDismiss.current = false;
+      editing.openEdit?.();
+    }
   };
   // oxlint-disable-next-line goat/react-effect-budget -- Android has no sheet dismissal event: focus the box once the closed sheet and the drafted text have committed.
   useEffect(() => {
@@ -676,6 +684,14 @@ export function GoatBotScreen(props: {
             botAccent={accent}
             main={props.main ?? null}
             onDraft={session.canSend ? draft : undefined}
+            onEditBot={
+              editing.openEdit === undefined
+                ? undefined
+                : () => {
+                    editOnDismiss.current = true;
+                    setHomeOpen(false);
+                  }
+            }
             notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
             workRevision={session.workRevision}
             chatTasks={chatTasks}
@@ -690,6 +706,7 @@ export function GoatBotScreen(props: {
         {member?.state === "deleted" ? (
           <MobileDeletedBotBanner member={member} onRestore={props.onRestoreMember} />
         ) : null}
+        {editing.editSheet}
         {hasBanner ? (
           <View
             accessibilityRole="alert"
@@ -829,6 +846,7 @@ export function GoatBotScreen(props: {
             attachments={attachments}
             onRemove={removeAttachment}
           />
+          {editing.nameRow}
           {answering.target !== null ? (
             <GoatBotAnsweringChip
               target={answering.target}

@@ -9,6 +9,10 @@ import {
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
 // The screen's list draws every row it is given.
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
 vi.mock("@legendapp/list/react-native", async () => {
   const { Fragment } = await import("react");
   return {

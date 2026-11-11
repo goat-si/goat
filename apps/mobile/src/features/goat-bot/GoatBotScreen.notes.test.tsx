@@ -41,6 +41,10 @@ const box = vi.hoisted(() => ({
   setSelection: vi.fn(),
   pick: null as null | ((value: { attachments: object[]; error?: string }) => void),
 }));
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
 vi.mock("../../lib/composerImages", () => ({
   pickComposerMedia: () =>
     new Promise((resolve) => {

@@ -105,6 +105,8 @@ export function MobileBotWork(props: {
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   /** Fills the chat's message box; false when the box already holds a message. */
   readonly onDraft?: ((text: string) => boolean) | undefined;
+  /** Opens Edit bot for this member; absent for the main bot or when it cannot be edited. */
+  readonly onEditBot?: (() => void) | undefined;
   /** The sheet has finished going away (iOS). */
   readonly onDismissed?: (() => void) | undefined;
   /** Task cards in the conversation; the Tasks tab lists the ones the server no longer does. */
@@ -339,6 +341,15 @@ export function MobileBotWork(props: {
             <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
               {botName}
             </Text>
+            {props.onEditBot ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={props.onEditBot}
+                className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
+              >
+                <Text className="font-goat-medium text-primary-text">Edit bot</Text>
+              </Pressable>
+            ) : null}
           </View>
           <MobileBotStatusCard
             environmentId={environmentId}

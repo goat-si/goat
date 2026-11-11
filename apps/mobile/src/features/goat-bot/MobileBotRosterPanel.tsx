@@ -1,20 +1,24 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
-import { botProfileChanges } from "@goat/client-runtime/state/channels";
 import type { BotProfile, ChannelTaskId } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
-import { MobileBotProfileSheet } from "./MobileBotProfileSheet";
-import { MobileNewBotModel } from "./MobileNewBotModel";
+import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { MobileBotRosterView } from "./MobileBotRosterView";
+import {
+  dismissNewBot,
+  newBotOperation,
+  registerNewBotOpener,
+  retryNewBot,
+  settleListedNewBot,
+  startNewBot,
+  subscribeNewBots,
+  type CreateNewBot,
+} from "./mobileNewBots";
+import { MobileNewBotStatus } from "./MobileNewBotStatus";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
-import {
-  useMobileGoatBotColorEditable,
-  useMobileGoatBotMemberModelEditable,
-} from "./useMobileGoatBotMemberModel";
-import { uuidv4 } from "../../lib/uuid";
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -27,13 +31,39 @@ export function MobileBotRoster(props: {
   const preview = useMobileBotPreview(useMobileGoatBotHomeMode().botRef);
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
-  const [sheet, setSheet] = useState<
-    { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile } | null
-  >(null);
+  const [editing, setEditing] = useState<BotProfile | null>(null);
+  const environmentId = roster.environmentId;
+  const operation = useSyncExternalStore(subscribeNewBots, () => newBotOperation(environmentId));
+  const create: CreateNewBot = (name, clientRequestId) =>
+    manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
+  const { onOpenBot } = props;
+  const visible = props.visible !== false;
+  // oxlint-disable-next-line goat/react-effect-budget -- A create answers after the tap; only a roster still on screen for that environment opens its chat.
+  useEffect(() => {
+    if (!visible || environmentId === null) return;
+    return registerNewBotOpener(environmentId, (bot) =>
+      onOpenBot({ kind: "member", profile: bot }),
+    );
+  }, [visible, environmentId, onOpenBot]);
+  const listed = roster.listedBots;
+  const createdId = operation?.phase === "created" ? operation.bot.botId : null;
+  const refreshBots = roster.refreshBots;
+  const refreshedFor = useRef<string | null>(null);
+  // oxlint-disable-next-line goat/react-effect-budget -- The created bot's own row arrives with the next list read; until then its status row stands in.
+  useEffect(() => {
+    if (environmentId === null || createdId === null || listed === null) return;
+    const ids = new Set(listed.map((bot) => bot.botId));
+    if (ids.has(createdId)) settleListedNewBot(environmentId, ids);
+    else if (refreshBots !== null && refreshedFor.current !== createdId) {
+      // One read per created bot; a list that still lacks it keeps the status row and its error.
+      refreshedFor.current = createdId;
+      refreshBots();
+    }
+  }, [environmentId, createdId, listed, refreshBots]);
   const askAbout = (entry: BotRosterEntry) => {
     const bot = entry.profile;
     if (bot === null) return;
-    const edit = { text: "Edit", onPress: () => setSheet({ mode: "edit", bot }) };
+    const edit = { text: "Edit", onPress: () => setEditing(bot) };
     const cancel = { text: "Cancel", style: "cancel" as const };
     if (entry.kind === "main") {
       if (manage.canEdit) Alert.alert(bot.name, undefined, [edit, cancel]);
@@ -76,8 +106,12 @@ export function MobileBotRoster(props: {
             ? {
                 hidden: roster.groups.hidden,
                 deleted: roster.groups.deleted,
-                canCreate: manage.canCreate,
-                onNewBot: () => setSheet({ mode: "create" }),
+                // The generated name needs the whole list, hidden and deleted included.
+                canCreate: manage.canCreate && listed !== null && operation === null,
+                onNewBot: () => {
+                  if (environmentId !== null && listed !== null)
+                    startNewBot(environmentId, listed, create);
+                },
                 onLongPressBot: askAbout,
                 canRestore: manage.canManage,
                 onRestoreDeleted: (bot) =>
@@ -95,122 +129,30 @@ export function MobileBotRoster(props: {
         onOpenTask={props.onOpenTask}
         onUnknownBot={roster.refreshBots ?? undefined}
         visible={props.visible}
+        newBotRow={
+          operation !== null && environmentId !== null ? (
+            <MobileNewBotStatus
+              operation={operation}
+              onRetry={() => retryNewBot(environmentId, create)}
+              onDismiss={() => dismissNewBot(environmentId)}
+              onOpen={() =>
+                operation.phase === "created" &&
+                onOpenBot({ kind: "member", profile: operation.bot })
+              }
+            />
+          ) : null
+        }
       />
-      {sheet !== null && roster.environmentId !== null ? (
-        <BotSheet
-          // A new sheet starts from its own bot's model.
-          key={sheet.mode === "edit" ? sheet.bot.botId : "create"}
-          sheet={sheet}
-          environmentId={roster.environmentId}
+      {editing !== null && environmentId !== null ? (
+        <MobileBotEditSheet
+          key={editing.botId}
+          bot={editing}
+          environmentId={environmentId}
           manage={manage}
           mainName={mainName}
-          onCreated={(bot) => props.onOpenBot({ kind: "member", profile: bot })}
-          onClose={() => setSheet(null)}
+          onClose={() => setEditing(null)}
         />
       ) : null}
     </View>
   );
-}
-
-function BotSheet(props: {
-  readonly sheet: { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile };
-  readonly environmentId: NonNullable<ReturnType<typeof useMobileBotRoster>["environmentId"]>;
-  readonly manage: ReturnType<typeof useMobileBotManage>;
-  readonly mainName: string;
-  readonly onCreated: (bot: BotProfile) => void;
-  readonly onClose: () => void;
-}) {
-  const { sheet, manage } = props;
-  const initialModel = sheet.mode === "edit" ? sheet.bot.defaultModelSelection : null;
-  const [model, setModel] = useState<BotProfile["defaultModelSelection"]>(initialModel);
-  const [clientRequestId] = useState(uuidv4);
-  // Only a member has a model of its own; the main bot's is the GOAT Bot model setting.
-  const memberModelEditable = useMobileGoatBotMemberModelEditable(props.environmentId).editable;
-  const modelEditable = memberModelEditable && sheet.mode === "edit" && sheet.bot.role === "member";
-  // Only a member has a colour; the main bot keeps the theme's neutral.
-  const colorSupported = useMobileGoatBotColorEditable(props.environmentId);
-  const colorEditable = colorSupported && (sheet.mode === "create" || sheet.bot.role === "member");
-  if (sheet.mode === "edit") {
-    const modelChanged = modelEditable && !sameModel(model, initialModel);
-    return (
-      <MobileBotProfileSheet
-        mode="edit"
-        initial={sheet.bot}
-        canSubmit={manage.canEdit}
-        extraChanged={modelChanged}
-        colorEditable={colorEditable}
-        onClose={props.onClose}
-        onSubmit={(changes) => manage.update(sheet.bot, changes, modelChanged ? model : undefined)}
-      >
-        {modelEditable ? (
-          <MobileNewBotModel
-            environmentId={props.environmentId}
-            model={model}
-            onChange={setModel}
-            mainName={props.mainName}
-          />
-        ) : null}
-      </MobileBotProfileSheet>
-    );
-  }
-  return (
-    <MobileBotProfileSheet
-      mode="create"
-      initial={{ name: "", avatar: null, purpose: "" }}
-      canSubmit={manage.canCreate}
-      colorEditable={colorEditable}
-      onClose={props.onClose}
-      onSubmit={async (changes) => {
-        const created = await manage.create(changes, model, clientRequestId);
-        if (typeof created === "string") return created;
-        // Every try sends the same request id, so after a create the server kept but the phone saw
-        // fail, a retry gets that first bot back; the edits made since still have to reach it.
-        const missed = botProfileChanges("edit", created, {
-          name: changes.name ?? "",
-          avatar: changes.avatar ?? "",
-          purpose: changes.purpose ?? "",
-          // A create sends no key for Neutral; offered swatches mean the choice is known.
-          ...(colorEditable ? { color: changes.color ?? null } : {}),
-        });
-        const modelMissed = memberModelEditable && !sameModel(model, created.defaultModelSelection);
-        if (Object.keys(missed).length === 0 && !modelMissed) {
-          props.onCreated(created);
-          return null;
-        }
-        const failure = await manage.update(created, missed, modelMissed ? model : undefined);
-        if (failure !== null) return failure;
-        const next = {
-          ...created,
-          name: missed.name ?? created.name,
-          avatar: missed.avatar === undefined ? created.avatar : missed.avatar,
-          purpose: missed.purpose ?? created.purpose,
-          ...(modelMissed ? { defaultModelSelection: model } : {}),
-        };
-        const { color: _storedColor, ...neutral } = next;
-        props.onCreated(
-          missed.color === undefined
-            ? next
-            : missed.color === null
-              ? neutral
-              : { ...next, color: missed.color },
-        );
-        return null;
-      }}
-    >
-      <MobileNewBotModel
-        environmentId={props.environmentId}
-        model={model}
-        onChange={setModel}
-        mainName={props.mainName}
-      />
-    </MobileBotProfileSheet>
-  );
-}
-
-function sameModel(
-  left: BotProfile["defaultModelSelection"],
-  right: BotProfile["defaultModelSelection"],
-) {
-  if (left === null || right === null) return left === right;
-  return left.instanceId === right.instanceId && left.model === right.model;
 }
