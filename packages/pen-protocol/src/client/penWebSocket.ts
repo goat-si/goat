@@ -285,8 +285,11 @@ class PenWebSocket implements PenWebSocketLike {
           await stream.write(frame.subarray(at, at + PEN_WEBSOCKET_LIMITS.writePiece));
         }
       }
-    } catch {
-      this.#fail(1006, "the stream failed");
+    } catch (error) {
+      // A write the node's close ended keeps that close's code (4401 not admitted, 4404 delivery failed), as reads do.
+      const code =
+        error instanceof PenError && error.closeCode !== undefined ? error.closeCode : 1006;
+      this.#fail(code, "the stream failed");
     }
   }
 

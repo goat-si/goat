@@ -1,13 +1,20 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import vector from "../../vectors/session.json" with { type: "json" };
 import { fromHex, toHex } from "./bytes.ts";
+import { generateX25519, x25519PublicKey } from "./crypto.ts";
 import { websocketAccept } from "./http1.ts";
+import { Kind } from "./noise.ts";
 import {
   makePenWebSocketConstructor,
   PEN_WEBSOCKET_LIMITS,
   type PenWebSocketLike,
 } from "./penWebSocket.ts";
+import { openSession } from "./race.ts";
+import { openStream, STREAM_LIMITS } from "./stream.ts";
+import { fakeFactory } from "./testing/fakeRelay.ts";
 import { ManualClock } from "./testing/manualClock.ts";
 import { memoryStreamPair } from "./testing/memoryStream.ts";
+import { respond } from "./testing/noiseResponder.ts";
 
 const ORIGIN = "http://goat.pen";
 const latin1 = (bytes: Uint8Array) => String.fromCharCode(...bytes);
@@ -119,6 +126,75 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
       await c.whenEvent("close");
       expect(c.events.filter((event) => event.type === "close")).toMatchObject([{ code }]);
       expect(c.socket.readyState).toBe(3);
+    },
+  );
+
+  it.each([4401, 4404])(
+    "over a real Pen session, a send waiting for stream credit when the node closes %i reports that code",
+    async (code) => {
+      const relay = "wss://relay-a.example";
+      const serverPriv = fromHex(vector.responder.noisePriv);
+      const serverKey = { privateKey: serverPriv, publicKey: x25519PublicKey(serverPriv) };
+      let seed = 1;
+      const random = (n: number) => new Uint8Array(n).fill(seed++ & 255);
+      const clock = new ManualClock();
+      const fake = fakeFactory();
+      const pending = openSession({
+        relays: [relay],
+        nodeId: vector.responder.nodeId,
+        serverNoisePub: serverKey.publicKey,
+        kind: Kind.Session,
+        payload: { v: 1, stream: "service", name: "goat" },
+        localStatic: generateX25519(random),
+        factory: fake.factory,
+        clock,
+        random,
+      });
+      const link = fake.socketFor(relay);
+      link.open();
+      await link.whenSent(1);
+      const node = respond({
+        kind: Kind.Session,
+        nodeId: vector.responder.nodeId,
+        localStatic: serverKey,
+        message1: link.binarySent()[0] ?? new Uint8Array(),
+        psk: () => undefined,
+        random,
+      });
+      link.receive(node.message2);
+      const stream = openStream((await pending).session);
+      const socket = makePenWebSocketConstructor({
+        origin: ORIGIN,
+        openStream: async () => stream,
+        clock,
+        random,
+      })("ws://goat.pen/ws");
+      const closes: Array<number | undefined> = [];
+      socket.addEventListener("close", (event) => closes.push(event.code));
+      const opened = new Promise<void>((resolve) =>
+        socket.addEventListener("open", () => resolve()),
+      );
+      // After message 1 come the key confirmation and the upgrade request as one DATA record.
+      await link.whenSent(3);
+      node.recv.open(link.binarySent()[1] ?? new Uint8Array());
+      const request = latin1(node.recv.open(link.binarySent()[2] ?? new Uint8Array()).subarray(1));
+      const key = /Sec-WebSocket-Key: ([^\r]+)/.exec(request)?.[1] ?? "";
+      const head =
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
+        websocketAccept(key) +
+        "\r\n\r\n";
+      link.receive(node.send.seal(Uint8Array.of(0, ...new TextEncoder().encode(head))));
+      await opened;
+      socket.send(new Uint8Array(STREAM_LIMITS.window + 64 * 1024));
+      // The send now waits for credit: the window holds all but less than one record.
+      while (stream.stats().inflight <= STREAM_LIMITS.window - STREAM_LIMITS.maxData)
+        await link.whenSent(link.sent.length + 1);
+      link.remoteClose(code);
+      await stream.closed;
+      await new Promise<void>((resolve) =>
+        closes.length > 0 ? resolve() : socket.addEventListener("close", () => resolve()),
+      );
+      expect(closes).toEqual([code]);
     },
   );
 

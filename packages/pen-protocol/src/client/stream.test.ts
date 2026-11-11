@@ -293,10 +293,19 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     c.send(fromHex(hello ?? ""));
     c.send(data(new Uint8Array(framing.maxData)));
     c.send(data(new Uint8Array(framing.creditEvery - 5 - framing.maxData)));
+    const chunks: Array<Uint8Array> = [];
     let read = 0;
-    while (read < framing.creditEvery) read += (await c.stream.read())?.length ?? 0;
+    while (read < framing.creditEvery) {
+      const chunk = (await c.stream.read()) ?? new Uint8Array();
+      chunks.push(chunk);
+      read += chunk.length;
+    }
+    expect(new TextDecoder().decode(chunks[0]?.subarray(0, 5))).toBe("hello");
     expect(c.received().map(toHex)).toEqual([credit]);
-    expect(c.socket.closedWith).toBeUndefined();
+    // The node's FIN, alone: end of stream, and with both FINs read the session closes 1000.
+    c.send(fromHex(fin ?? ""));
+    expect(await c.stream.read()).toBeNull();
+    expect(await c.stream.closed).toBe(1000);
   });
 
   it("stream.json CREDIT 65536 from the node returns that much DATA in flight", async () => {
