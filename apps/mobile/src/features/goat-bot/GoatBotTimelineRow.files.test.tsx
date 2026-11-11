@@ -409,6 +409,17 @@ it("shows no card for a file the listing lacks, plain inline code, an older serv
   expect(files.reads).toBe(0);
 });
 
+it("reads no listing for inline code the Library cannot list, and reads one for a bare name like README", async () => {
+  files.listing = listed("README");
+  const odd = bot("b1", "Open `https://example.com/a.md`, `.env` or `../up.md`; run `a:b`.");
+  await show([odd]);
+  expect(files.reads).toBe(0);
+  await view.rerender(chat([odd, later(bot("b2", "See `README`."))]));
+  await settle();
+  expect(files.reads).toBe(1);
+  expect(card("README")).not.toBeNull();
+});
+
 it("matches names with spaces and full artifact paths, and shows the card under a question too", async () => {
   files.listing = {
     ...listed("quarterly report.md", "notes/README"),
