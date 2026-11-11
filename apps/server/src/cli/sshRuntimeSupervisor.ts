@@ -148,7 +148,9 @@ export interface SshRuntimeSupervisorInput {
 
 export type SshRuntimeSupervisorResult =
   | { readonly status: "replaced" | "rolled-back"; readonly pid: number; readonly version: string }
-  | { readonly status: "old-alive" | "failed"; readonly reason: string };
+  | { readonly status: "old-alive" | "failed"; readonly reason: string }
+  /** A server it started failed and did not exit after SIGKILL; it was left running. */
+  | { readonly status: "stuck"; readonly pid: number; readonly reason: string };
 
 /**
  * Starts a program outside the SSH session's job object, which Windows OpenSSH terminates with
@@ -214,7 +216,7 @@ export const superviseSshRuntimeReplacement = async (
       writeAtomically(
         NodePath.join(input.stateDir, SSH_REPLACEMENT_RECORD_FILE),
         encodeSshReplacementRecord({
-          status: result.status,
+          status: result.status === "stuck" ? "failed" : result.status,
           targetVersion: input.targetVersion,
           previousVersion: input.previousVersion,
           at: new Date().toISOString(),
@@ -229,6 +231,12 @@ export const superviseSshRuntimeReplacement = async (
   }
   return result;
 };
+
+const stuck = (pid: number, version: string): SshRuntimeSupervisorResult => ({
+  status: "stuck",
+  pid,
+  reason: `GOAT ${version} (pid ${pid}) did not become ready and did not exit after SIGKILL; it was left running and nothing was restored.`,
+});
 
 const superviseReplacement = async (
   input: SshRuntimeSupervisorInput,
@@ -284,6 +292,8 @@ const superviseReplacement = async (
     ];
     const env = { GOAT_NO_BROWSER: "1", GOAT_RUNTIME_ORIGIN: "ssh", ...extraEnv };
     let pid: number | undefined;
+    // On POSIX the child handle signals only that process: once Node reaps it, kill does nothing.
+    let child: NodeChildProcess.ChildProcess | undefined;
     try {
       if (input.platform === "win32") {
         pid =
@@ -299,7 +309,7 @@ const superviseReplacement = async (
         const log = NodeFS.openSync(input.logFile, "a");
         try {
           const started = Promise.withResolvers<boolean>();
-          const child = guardChild(
+          child = guardChild(
             NodeChildProcess.spawn(runner, args, {
               cwd: serverWorkingDirectory(NodeOS.homedir()),
               detached: true,
@@ -322,8 +332,28 @@ const superviseReplacement = async (
       return undefined;
     }
     if (pid === undefined) return undefined;
+    const own = child;
+    const exited = () =>
+      own === undefined ? !processExists(pid) : own.exitCode !== null || own.signalCode !== null;
+    const exitWithin = (ms: number) =>
+      own === undefined
+        ? waitForExit(pid, ms)
+        : new Promise<boolean>((resolve) => {
+            if (exited()) return resolve(true);
+            const onExit = () => {
+              clearTimeout(timer);
+              resolve(true);
+            };
+            const timer = setTimeout(() => {
+              own.off("exit", onExit);
+              resolve(exited());
+            }, ms);
+            own.once("exit", onExit);
+          });
+    const signal = (name: NodeJS.Signals) =>
+      own === undefined ? process.kill(pid, name) : own.kill(name);
     const deadline = Date.now() + input.readyTimeoutMs;
-    while (Date.now() < deadline && processExists(pid)) {
+    while (Date.now() < deadline && !exited()) {
       try {
         const value = await readSshRuntimeCompatibility(input.port);
         if (
@@ -342,10 +372,10 @@ const superviseReplacement = async (
       await delay(100);
     }
     // Only the child this supervisor started is ever signalled.
-    if (processExists(pid)) {
-      process.kill(pid, "SIGTERM");
-      if (!(await waitForExit(pid, 5000))) process.kill(pid, "SIGKILL");
-      await waitForExit(pid, 5000);
+    if (!exited()) {
+      signal("SIGTERM");
+      if (!(await exitWithin(5000))) signal("SIGKILL");
+      if (!(await exitWithin(5000))) return { stuck: pid };
     }
     return undefined;
   };
@@ -358,6 +388,7 @@ const superviseReplacement = async (
     (verdict) => verdict === "compatible",
     { [SSH_REPLACEMENT_ID_ENV]: replacementId },
   );
+  if (typeof started === "object") return stuck(started.stuck, input.targetVersion);
   if (started !== undefined) {
     NodeFS.rmSync(backup, { recursive: true, force: true });
     if (input.previousRunnerFile) NodeFS.rmSync(input.previousRunnerFile, { force: true });
@@ -393,6 +424,7 @@ const superviseReplacement = async (
     {},
     input.forced !== true,
   );
+  if (typeof restored === "object") return stuck(restored.stuck, input.previousVersion);
   if (restored === undefined)
     return {
       status: "failed",

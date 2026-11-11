@@ -576,6 +576,8 @@ if ! cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_NEXT"; then
   printf 'Candidate runner changed during validation; reconnect.\n' >&2; exit 1
 fi
 publish_selected_runner() {
+  # A forced stop publishes before its first signal; the launch's later publication is that one.
+  [ "\${FORCED_PUBLISHED:-0}" != 1 ] || return 0
   [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || {
     printf 'Replacement lock ownership changed; runner was preserved.\\n' >&2; exit 1;
   }

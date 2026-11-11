@@ -50,7 +50,15 @@ forced_stop_runtime() {
   # A person approved stopping exactly this process. Every check runs again under the lock, and
   # a process that fails one is left running. Nothing is matched by name.
   forced_refused() {
+    forced_restore_runner
     printf 'GOAT did not stop PID %s on the remote host because %s; it was left running. Ask again so the approval names the runtime running now.\\n' "$FORCE_PID" "$1" >&2; exit 1
+  }
+  # Once the new runner is published, a stop that does not happen puts the old one back.
+  FORCED_PUBLISHED=0
+  forced_restore_runner() {
+    [ "$FORCED_PUBLISHED" = 1 ] && [ -f "$FORCED_PREVIOUS_RUNNER" ] || return 0
+    cp -p "$FORCED_PREVIOUS_RUNNER" "$RUNNER_FILE.forced-restore.$" && mv -f "$RUNNER_FILE.forced-restore.$" "$RUNNER_FILE" &&
+      { sync_runner_alias || :; } || rm -f "$RUNNER_FILE.forced-restore.$"
   }
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then forced_refused "GOAT cannot signal processes on a Windows host"; fi
   [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || forced_refused "this client no longer holds the replacement lock"
@@ -113,13 +121,16 @@ GOAT_FORCED_RECORDS
   # identity was verified and its release is still installed; the supervisor then rolls back to it.
   FORCED_PREVIOUS_VERSION=; FORCED_PREVIOUS_IDENTITY=; FORCED_PREVIOUS_RUNNER="$STATE_DIR/forced-runner.previous"
   rm -f "$FORCED_PREVIOUS_RUNNER"
+  if [ -f "$RUNNER_FILE" ]; then cp -p "$RUNNER_FILE" "$FORCED_PREVIOUS_RUNNER" || forced_refused "its runner could not be kept"; fi
   if [ "$forced_identity_verified" = 1 ] && valid_version "\${FORCED_LIVE_VERSION:-}" &&
      [ -x "$HOME/.goat/runtime/goat/versions/$FORCED_LIVE_VERSION/goat" ] &&
      fact_file_is "$HOME/.goat/runtime/goat/versions/$FORCED_LIVE_VERSION/.install-complete" "$FORCED_LIVE_VERSION" &&
-     [ -f "$RUNNER_FILE" ] && cp -p "$RUNNER_FILE" "$FORCED_PREVIOUS_RUNNER"; then
-    fact_slurp "$STATE_DIR/identity" && FORCED_PREVIOUS_IDENTITY="$FACT_TEXT" &&
-      FORCED_PREVIOUS_VERSION="$FORCED_LIVE_VERSION" || rm -f "$FORCED_PREVIOUS_RUNNER"
+     [ -f "$FORCED_PREVIOUS_RUNNER" ] && fact_slurp "$STATE_DIR/identity"; then
+    FORCED_PREVIOUS_IDENTITY="$FACT_TEXT"; FORCED_PREVIOUS_VERSION="$FORCED_LIVE_VERSION"
   fi
+  # The new runner is published before the first signal, so a failed publication stops nothing.
+  publish_selected_runner
+  FORCED_PUBLISHED=1
   # From the first signal on, a dropped SSH session must not end this script before the records
   # of the stopped runtime are gone and the detached supervisor has taken over the start.
   trap '' HUP PIPE
@@ -148,6 +159,7 @@ GOAT_FORCED_RECORDS
     forced_waited=0
     while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1; forced_waited=$((forced_waited + 1)); done
     if forced_parent_holds; then
+      forced_restore_runner
       printf 'GOAT PID %s on the remote host did not exit after SIGKILL; the update stopped. See %s.\\n' "$FORCE_PID" "$LOG_FILE" >&2; exit 1
     fi
   fi
@@ -182,6 +194,7 @@ forced_supervise_start() {
   forced_result="$STATE_DIR/replacement.result.$"
   rm -f "$forced_result"
   set --
+  [ -n "$FORCED_PREVIOUS_VERSION" ] || rm -f "$FORCED_PREVIOUS_RUNNER"
   if [ -n "$FORCED_PREVIOUS_VERSION" ]; then
     set -- --previous-runner "$FORCED_PREVIOUS_RUNNER" --previous-version "$FORCED_PREVIOUS_VERSION" --previous-identity "$FORCED_PREVIOUS_IDENTITY"
   fi
@@ -194,6 +207,8 @@ forced_supervise_start() {
     replaced)
       REMOTE_PID="$forced_new_pid"; REMOTE_PORT="$FORCE_PORT"; REMOTE_MANAGED=managed; REFRESH_DECISION=replaced
       forced_record_start "$REMOTE_PID" ;;
+    stuck)
+      printf 'GOAT %s started as PID %s on the remote host did not become ready and did not exit after SIGKILL; it was left running and the stopped runtime was not started again. Check it on the host. See %s.\\n' "$TARGET_VERSION" "$forced_new_pid" "$LOG_FILE" >&2; exit 1 ;;
     rolled-back)
       printf 'GOAT %s did not start on the remote host after the approved forced stop of PID %s; GOAT %s was started again. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$forced_new_version" "$LOG_FILE" >&2; exit 1 ;;
     *)
