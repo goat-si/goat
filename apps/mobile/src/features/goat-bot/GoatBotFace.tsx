@@ -7,6 +7,7 @@ import {
   goatBotFaceArt,
   goatBotFaceLabel,
   type GoatBotAvatarSignal,
+  type GoatBotAccent,
   type FaceMotion,
   type GoatBotFaceInput,
   type GoatBotFaceState,
@@ -160,18 +161,29 @@ export function GoatBotFaceAvatar(props: {
   readonly motion?: FaceMotion | null;
   /** The bot's profile avatar; an emoji replaces the drawn face. */
   readonly emoji?: string | null | undefined;
+  /** A member's color fills its circle, with text that reads on it. */
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const picture = goatBotAvatarEmoji(props.emoji);
   const signal = goatBotAvatarSignal(props.state, picture !== null);
+  const accent = picture !== null ? (props.accent ?? null) : null;
   return (
     <View
-      style={{ width: props.size, height: props.size }}
+      style={{
+        width: props.size,
+        height: props.size,
+        ...(accent ? { backgroundColor: accent.background } : {}),
+      }}
       className={`items-center justify-center rounded-full border bg-grouped-card ${signal.ring === null ? "border-transparent" : RING[signal.ring]}`}
     >
       {picture !== null ? (
         <Text
           allowFontScaling={false}
-          style={{ fontSize: props.size * 0.5, lineHeight: props.size * 0.62 }}
+          style={{
+            fontSize: props.size * 0.5,
+            lineHeight: props.size * 0.62,
+            ...(accent ? { color: accent.foreground } : {}),
+          }}
           // A member's initial needs a text colour; an emoji ignores it.
           className={signal.dimmed ? "text-foreground opacity-50" : "text-foreground"}
         >
@@ -192,14 +204,16 @@ const PROGRESS_FACE_RANK = FACE_MOTION_RANK.header + 1;
 
 /**
  * The bot beside what it is doing: its drawn face, moving only while the line is in view and motion
- * is allowed, or its emoji, which never moves.
+ * is allowed, or its emoji or initial on its avatar circle, which never moves.
  */
 export function GoatBotProgressFace(props: {
   readonly state: GoatBotFaceState;
   readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
   readonly inView: boolean;
 }) {
   const emoji = goatBotAvatarEmoji(props.emoji);
+  const accent = props.accent ?? null;
   const motion = useMobileGoatBotFaceMotion(
     props.state,
     PROGRESS_FACE_RANK,
@@ -213,9 +227,22 @@ export function GoatBotProgressFace(props: {
       className="h-6 w-6 items-center justify-center"
     >
       {emoji !== null ? (
-        <Text allowFontScaling={false} style={{ fontSize: 15, lineHeight: 19 }}>
-          {emoji}
-        </Text>
+        <View
+          className="h-5 w-5 items-center justify-center rounded-full bg-grouped-card"
+          style={accent ? { backgroundColor: accent.background } : undefined}
+        >
+          <Text
+            allowFontScaling={false}
+            className="text-foreground"
+            style={{
+              fontSize: 11,
+              lineHeight: 14,
+              ...(accent ? { color: accent.foreground } : {}),
+            }}
+          >
+            {emoji}
+          </Text>
+        </View>
       ) : (
         <GoatBotFace state={props.state} size={20} motion={motion} />
       )}
@@ -228,6 +255,7 @@ function GoatBotHeaderTitle(props: {
   readonly motion: FaceMotion | null;
   readonly title: string;
   readonly emoji: string | null;
+  readonly accent: GoatBotAccent | null;
   readonly onPress?: (() => void) | undefined;
 }) {
   const label = goatBotFaceLabel(props.state);
@@ -252,6 +280,7 @@ function GoatBotHeaderTitle(props: {
               size={28}
               motion={props.motion}
               emoji={props.emoji}
+              accent={props.accent}
             />
           </View>
           <Text key={accessibilityLabel} className="text-base font-semibold text-foreground">
@@ -271,6 +300,7 @@ function GoatBotHeaderTitle(props: {
           size={28}
           motion={props.motion}
           emoji={props.emoji}
+          accent={props.accent}
         />
       </View>
       {/* VoiceOver reads the text element here, and iOS keeps a text's first label until its text
@@ -294,9 +324,12 @@ export function GoatBotChipFace(props: {
   readonly conversation?: Parameters<typeof useMobileGoatBotFace>[1];
   /** The bot's profile avatar, or a member's initial. */
   readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const face = useMobileGoatBotFace(props.activity, props.conversation);
-  return <GoatBotFaceAvatar state={face.state} size={24} emoji={props.emoji} />;
+  return (
+    <GoatBotFaceAvatar state={face.state} size={24} emoji={props.emoji} accent={props.accent} />
+  );
 }
 
 /** Puts the main bot's face in the native header title (iOS; Android hides this header). */
@@ -307,6 +340,7 @@ export function GoatBotHeaderFace(props: {
   readonly conversation?: Parameters<typeof useMobileGoatBotFace>[1];
   /** The bot's profile avatar. */
   readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
   /** Opens the bot's home; absent on a task's own screen, whose header is that task. */
   readonly onPress?: (() => void) | undefined;
 }) {
@@ -323,6 +357,7 @@ export function GoatBotHeaderFace(props: {
   const { state } = face;
   const title = props.title;
   const onPress = props.onPress;
+  const accent = props.accent ?? null;
   const renderTitle = useCallback(
     () => (
       <GoatBotHeaderTitle
@@ -330,16 +365,17 @@ export function GoatBotHeaderFace(props: {
         motion={motion}
         title={title}
         emoji={emoji}
+        accent={accent}
         onPress={onPress}
       />
     ),
-    [state, motion, title, emoji, onPress],
+    [state, motion, title, emoji, accent, onPress],
   );
   return (
     <NativeStackScreenOptions
       // The title is also the navigation bar's accessible name; the stack's default says GOAT Bot.
       options={{ title, headerTitle: renderTitle }}
-      optionsVersion={`${title}:${state}:${emoji ?? ""}:${motion === null ? "still" : "moving"}:${onPress ? "chip" : "title"}`}
+      optionsVersion={`${title}:${state}:${emoji ?? ""}:${accent?.background ?? ""}:${motion === null ? "still" : "moving"}:${onPress ? "chip" : "title"}`}
     />
   );
 }

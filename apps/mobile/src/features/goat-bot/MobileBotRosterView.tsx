@@ -5,6 +5,7 @@ import {
   goatBotAvatarEmoji,
   goatBotFaceLabel,
   goatBotPreviewText,
+  goatBotAccent,
 } from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
 import {
@@ -328,6 +329,7 @@ function MemberRow(props: {
         size={40}
         motion={null}
         emoji={mobileGoatBotMemberPicture(bot)}
+        accent={goatBotAccent(bot)}
       />
       <View className="min-w-0 flex-1 gap-0.5">
         <View className="min-w-0 flex-row items-center gap-2">

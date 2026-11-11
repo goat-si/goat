@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
 import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
+import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
 /**
  * ChannelLedger - durable state for channel input, tasks, and deliveries.
  *
@@ -58,6 +59,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { waitingTaskCondition } from "./channelWaitingTasks.ts";
 export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
@@ -982,7 +984,9 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(toLedgerError("acceptInput")));
 
-  const bots = botLedger(sql);
+  const changes = yield* makeChannelTaskChanges(sql);
+  const bots = botLedger(sql, changes);
+  const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
     acceptInput,
 
@@ -1021,7 +1025,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listReceivableInputs")),
       ),
 
-    ...receptionLedger(sql, { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries }),
+    ...receptionLedger(sql, reception),
     ...bots,
 
     readConversationTail: (conversationId, limit) =>
@@ -1287,12 +1291,7 @@ const make = Effect.gen(function* () {
         sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
         FROM channel_tasks
-        WHERE owner_id = ${ownerId} AND bot_id = ${botId}
-          AND (status = 'waiting_input'
-            OR (status = 'running' AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0)
-            OR (status IN ('completed', 'failed') AND EXISTS (
-              SELECT 1 FROM json_each(task_json, '$.observed.needsYou')
-              WHERE json_extract(value, '$.kind') = 'approval')))
+        WHERE owner_id = ${ownerId} AND bot_id = ${botId} AND ${waitingTaskCondition(sql)}
       `,
       ).pipe(
         Effect.map((rows) => {
@@ -1316,34 +1315,40 @@ const make = Effect.gen(function* () {
       ),
 
     applyTaskEvent: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            if (input.completeForwardSequence !== undefined) {
-              const pending = yield* sql<{ readonly sequence: number }>`
+      changes
+        .afterCommit(
+          sql.withTransaction(
+            Effect.gen(function* () {
+              yield* fence(input.owner);
+              if (input.completeForwardSequence !== undefined) {
+                const pending = yield* sql<{ readonly sequence: number }>`
                 UPDATE channel_task_events SET forward_state = 'done'
                 WHERE sequence = ${input.completeForwardSequence} AND task_id = ${input.write.next.taskId}
                   AND forward_state = 'pending' RETURNING sequence
               `;
-              if (pending.length === 0) return 0;
-            }
-            const sequence = yield* writeTaskEvent(input.write);
-            for (const created of input.createdTasks ?? []) {
-              const existing = yield* sql<{ readonly task_id: string }>`
+                if (pending.length === 0) return 0;
+              }
+              const sequence = yield* writeTaskEvent(input.write);
+              for (const created of input.createdTasks ?? []) {
+                const existing = yield* sql<{ readonly task_id: string }>`
                 SELECT task_id FROM channel_tasks WHERE task_id = ${created.task.taskId}`;
-              if (existing.length === 0)
-                yield* insertTask(created.task, created.ownerId, created.event);
-            }
-            yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
-            if (input.cursor !== undefined) {
-              yield* upsertCursor(input.cursor, input.write.event.occurredAt);
-            }
-            if (input.remoteWorker !== undefined) {
-              yield* patchRemoteWorker(input.remoteWorker, input.write.event.occurredAt);
-            }
-            return sequence;
-          }),
+                if (existing.length === 0)
+                  yield* insertTask(created.task, created.ownerId, created.event);
+              }
+              yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
+              if (input.cursor !== undefined) {
+                yield* upsertCursor(input.cursor, input.write.event.occurredAt);
+              }
+              if (input.remoteWorker !== undefined) {
+                yield* patchRemoteWorker(input.remoteWorker, input.write.event.occurredAt);
+              }
+              return sequence;
+            }),
+          ),
+          () => [
+            input.write.next.requester.ownerId,
+            ...(input.createdTasks ?? []).map((created) => created.ownerId),
+          ],
         )
         .pipe(Effect.mapError(toLedgerError("applyTaskEvent"))),
 
