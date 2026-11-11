@@ -221,6 +221,8 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+  const lastCheckStart = new Map<string, number>();
+  let checkSequence = 0;
 
   const real = (target: string) =>
     fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
@@ -827,21 +829,26 @@ const make = Effect.gen(function* () {
     const dryRun = input.dryRun !== false;
     const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
     const facts = yield* scan(input.repo);
+    if (!dryRun)
+      facts.sort((a, b) => {
+        const order =
+          (lastCheckStart.get(a.entry.path) ?? 0) - (lastCheckStart.get(b.entry.path) ?? 0);
+        return order || a.entry.path.localeCompare(b.entry.path);
+      });
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
-    let attempted = false;
     let remaining = 0;
     for (const fact of facts) {
       if (fact.entry.main) continue;
+      if (!dryRun && (yield* Clock.currentTimeMillis) >= deadline) {
+        remaining++;
+        continue;
+      }
+      lastCheckStart.set(fact.entry.path, ++checkSequence);
       const entry = { path: fact.entry.path, branch: fact.entry.branch };
       const blocker = sweepBlocker(fact);
       if (blocker !== null) {
         kept.push({ ...entry, reason: blocker });
-        continue;
-      }
-      // The deadline never skips the first eligible removal, so a repeated sweep can make progress.
-      if (!dryRun && attempted && (yield* Clock.currentTimeMillis) >= deadline) {
-        remaining++;
         continue;
       }
       const work = yield* unsavedWork(fact);
@@ -854,7 +861,6 @@ const make = Effect.gen(function* () {
         removed.push({ ...entry, reason });
         continue;
       }
-      attempted = true;
       yield* removeChecked(fact, {
         force: false,
         deleteBranch: false,

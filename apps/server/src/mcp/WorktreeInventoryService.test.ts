@@ -387,6 +387,36 @@ describe("WorktreeInventoryService", () => {
       }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("slow kept worktrees rotate behind unchecked worktrees within the sweep budget", () =>
+    Effect.gen(function* () {
+      const { service, fs, run, addWorktree, setThreads, setDuringPullRequestLookup } =
+        yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      const removable = yield* addWorktree("d");
+      setThreads([...kept, removable].map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const start = yield* Clock.currentTimeMillis;
+      const first = yield* service.cleanup({ dryRun: false });
+      expect((yield* Clock.currentTimeMillis) - start).toBe(80_000);
+      expect(first.removed).toHaveLength(0);
+      expect(first.remaining).toBeGreaterThan(0);
+      let removed = false;
+      for (let i = 0; i < 3; i++) {
+        const result = yield* service.cleanup({ dryRun: false });
+        removed ||= result.removed.some((entry) => entry.path === removable);
+      }
+      expect(removed).toBe(true);
+      expect(yield* fs.exists(removable)).toBe(false);
+      for (const path of kept) expect(yield* fs.exists(path)).toBe(true);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("never deletes the default branch, even with force", () =>
     Effect.gen(function* () {
       const { service, fs, run, repo } = yield* fixture;
