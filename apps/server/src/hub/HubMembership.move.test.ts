@@ -74,6 +74,7 @@ it.effect(
       const failed = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
       expect(failed.state).toBe("failed");
       expect(failed.fromLinkId).toBe(OLD);
+      expect(failed.message).toContain("already left this Home");
       expect(yield* hub.consumed).toEqual([]);
       const moved = yield* hub.membership.move(scope, {
         ...move,
@@ -130,6 +131,7 @@ it.effect("an old tunnel that remains, or cannot be listed, stops the move befor
       // The revoke lands, but the old tunnel is still running or cannot be listed.
       const first = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
       expect(first.state).toBe("failed");
+      expect(first.message).toContain("already left this Home");
       const again = yield* hub.membership.move(scope, {
         ...move,
         decisionId: asked.decisionId!,
@@ -137,6 +139,7 @@ it.effect("an old tunnel that remains, or cannot be listed, stops the move befor
         fromTunnelPort: 42255,
       });
       expect(again.state).toBe("failed");
+      expect(again.message).toContain("already left this Home");
       expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
       expect(yield* hub.consumed).toEqual([]);
     }
@@ -231,14 +234,20 @@ it.effect(
 
 it.effect("a stop after the old link is gone still says so and how to continue", () =>
   Effect.gen(function* () {
-    const hub = yield* setup({ ...asking, linked: [], direct: false });
+    const hub = yield* setup({ ...asking, addFailures: 1 });
+    const asked = yield* hub.membership.move(scope, move);
+    yield* hub.approve(asked.decisionId!);
+    // The first attempt leaves the old alias, then its link add is refused.
+    yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+    hub.setDirect(false);
     const stopped = yield* hub.membership.move(scope, {
       ...move,
-      decisionId: "decision:earlier",
+      decisionId: asked.decisionId!,
       fromLinkId: OLD,
       fromTunnelPort: 42255,
     });
     expect(stopped.state).toBe("failed");
     expect(stopped.message).toContain("already left this Home");
+    expect(stopped.message).toContain("fromTunnelPort 42255");
   }),
 );

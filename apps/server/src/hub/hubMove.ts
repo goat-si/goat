@@ -128,16 +128,11 @@ export const makeMove = (deps: MoveDeps) =>
     let sourceGone = false;
     let later = "";
     // A stop once the old alias has left must say so: its route through this Home is gone.
-    const stop = (message: string) =>
-      done(
-        "failed",
-        sourceGone ||
-          left ||
-          steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok")
-          ? `${message} ${from} already left this Home, so it no longer routes through it. ${later}`
-          : message,
-        bound,
-      );
+    const said = (message: string) =>
+      sourceGone || left || steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok")
+        ? `${message} ${from} already left this Home, so it no longer routes through it. ${later}`
+        : message;
+    const stop = (message: string) => done("failed", said(message), bound);
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* deps.readHomeLinks();
       if (status === undefined) return deps.homeUnavailable(to, forbidden, steps);
@@ -245,12 +240,10 @@ export const makeMove = (deps: MoveDeps) =>
         left = steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
         if (!clean) {
           yield* deps.audit(caller, to, "failed", input.decisionId);
-          return done(
-            "failed",
+          return stop(
             failure === undefined
-              ? `Move stopped: the old link record or tunnel for ${from} remains on this Home. ${later}`
+              ? `Move stopped: the old link record or tunnel for ${from} remains on this Home.`
               : `Move stopped before touching the Home link: ${failure}`,
-            continuing,
           );
         }
       } else {
@@ -270,11 +263,7 @@ export const makeMove = (deps: MoveDeps) =>
         });
         if (!gone) {
           yield* deps.audit(caller, to, "failed", input.decisionId);
-          return done(
-            "failed",
-            `Move stopped before linking ${to}: the old tunnel is not proven gone. ${later}`,
-            continuing,
-          );
+          return stop(`Move stopped before linking ${to}: the old tunnel is not proven gone.`);
         }
       }
       const linked = yield* deps.link(
@@ -286,7 +275,7 @@ export const makeMove = (deps: MoveDeps) =>
         steps,
       );
       return linked.state === "failed"
-        ? { ...linked, ...continuing, message: `${linked.message} ${later}` }
+        ? { ...linked, ...continuing, message: said(linked.message) }
         : linked;
     }).pipe(
       Effect.catchTags({

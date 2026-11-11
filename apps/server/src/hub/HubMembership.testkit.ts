@@ -141,6 +141,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   let offered = fixture.offered ?? PINNED;
   let failuresLeft = fixture.addFailures ?? 0;
   let revoked = false;
+  let direct = fixture.direct ?? true;
   const json = (value: unknown): OcxOutput => ({ code: 0, stdout: JSON.stringify(value) });
   const home = (args: ReadonlyArray<string>): Effect.Effect<OcxOutput, HubOcxError> => {
     calls.push(`home ${args.join(" ")}`);
@@ -341,7 +342,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
             syncDevice: () => Effect.die("unused"),
             directAlias: () =>
               fixture.directFailure === undefined
-                ? Effect.succeed(fixture.direct ?? true)
+                ? Effect.sync(() => direct)
                 : Effect.fail(
                     new HubOcxError({ reason: "unreachable", message: fixture.directFailure }),
                   ),
@@ -445,6 +446,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     /** Another actor links an alias on the Home. */
     linkAlias: (alias: string) => {
       links.set(alias, "lnk_aaaaaaaaaaaaaaaa");
+    },
+    /** Whether the device's alias now resolves to a direct SSH host. */
+    setDirect: (value: boolean) => {
+      direct = value;
     },
     /** Someone removes a link on the Home by hand. */
     unlink: (alias: string) => {
