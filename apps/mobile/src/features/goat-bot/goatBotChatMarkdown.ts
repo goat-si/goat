@@ -15,23 +15,32 @@ const FENCE = /^\s{0,3}(`{3,}|~{3,})/u;
 export function goatBotWithoutThreadLinks(markdown: string, listed: ReadonlySet<ThreadId>): string {
   if (listed.size === 0) return markdown;
   if (!hasThreadLinks(markdown)) return markdown;
+  // Fenced blocks stay as written; the text between them is read a paragraph at a time, since a
+  // code span can run over several lines of one paragraph but never past a blank line.
   let fence: string | null = null;
-  return markdown
-    .split("\n")
-    .map((line) => {
-      const opener = FENCE.exec(line)?.[1];
-      if (fence !== null) {
-        if (opener !== undefined && opener[0] === fence[0] && opener.length >= fence.length)
-          fence = null;
-        return line;
-      }
-      if (opener !== undefined) {
-        fence = opener;
-        return line;
-      }
-      return stripLine(line, listed);
-    })
-    .join("\n");
+  const out: string[] = [];
+  let paragraph: string[] = [];
+  const flush = () => {
+    if (paragraph.length > 0) out.push(stripLine(paragraph.join("\n"), listed));
+    paragraph = [];
+  };
+  for (const line of markdown.split("\n")) {
+    const opener = FENCE.exec(line)?.[1];
+    if (fence !== null) {
+      if (opener !== undefined && opener[0] === fence[0] && opener.length >= fence.length)
+        fence = null;
+      out.push(line);
+    } else if (opener !== undefined) {
+      flush();
+      fence = opener;
+      out.push(line);
+    } else if (line.trim() === "") {
+      flush();
+      out.push(line);
+    } else paragraph.push(line);
+  }
+  flush();
+  return out.join("\n");
 }
 
 function listedThread(href: string, listed: ReadonlySet<ThreadId>): boolean {

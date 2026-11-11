@@ -46,6 +46,11 @@ describe("goatBotWithoutThreadLinks", () => {
     expect(strip(fenced)).toBe("```md\n[t](goat-thread://v1/x)\n```\nt");
   });
 
+  it("leaves a code span that runs over several lines exactly as written", () => {
+    const span = "Example: `one\n[work](goat-thread://v1/x)\ntwo` and [work](goat-thread://v1/x).";
+    expect(strip(span)).toBe("Example: `one\n[work](goat-thread://v1/x)\ntwo` and work.");
+  });
+
   it("keeps a label with brackets in it whole", () => {
     expect(strip("[Fix [web] tabs](goat-thread://v1/x)")).toBe("Fix [web] tabs");
   });
