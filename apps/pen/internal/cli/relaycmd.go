@@ -47,6 +47,8 @@ func RunRelay(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
+var afterRelayConfigRead func()
+
 func runRelayEdit(verb string, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprintf(stderr, "usage: pen relay %s <url>\n", verb)
@@ -61,35 +63,63 @@ func runRelayEdit(verb string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	list := cfg.RelayList()
-	if verb == "add" {
-		if slices.Contains(list, u) {
-			fmt.Fprintf(stdout, "%s is already a relay\n", u)
-			return 0
-		}
-		list = append(list, u)
-	} else {
-		if !slices.Contains(list, u) {
-			return fail(stderr, fmt.Errorf("%s is not one of this node's relays", u))
-		}
-		if len(list) == 1 {
-			return fail(stderr, errors.New("a node needs at least one relay; add another first"))
-		}
-		list = slices.DeleteFunc(list, func(x string) bool { return x == u })
+	if afterRelayConfigRead != nil {
+		afterRelayConfigRead()
 	}
-	if err := daemon.ValidRelays(list); err != nil {
-		return fail(stderr, err)
+	edit := func(c state.Config) (list []string, already bool, err error) {
+		list = slices.Clone(c.RelayList())
+		if verb == "add" {
+			if slices.Contains(list, u) {
+				return list, true, nil
+			}
+			list = append(list, u)
+		} else {
+			if !slices.Contains(list, u) {
+				return nil, false, fmt.Errorf("%s is not one of this node's relays", u)
+			}
+			if len(list) == 1 {
+				return nil, false, errors.New("a node needs at least one relay; add another first")
+			}
+			list = slices.DeleteFunc(list, func(x string) bool { return x == u })
+		}
+		return list, false, daemon.ValidRelays(list)
 	}
-	var s daemon.Status
-	switch err := daemon.Call(st, daemon.Request{Op: "relays", Relays: list}, &s); {
-	case err == nil:
-		fmt.Fprintln(stdout, "the running node now uses:")
+	var list []string
+	var already bool
+	var editErr error
+	cl, err := daemon.Dial(st)
+	switch {
 	case errors.Is(err, daemon.ErrNotRunning):
-		if err := st.UpdateConfig(func(c *state.Config) { c.SetRelays(list) }); err != nil {
+		if err := st.UpdateConfig(func(c *state.Config) {
+			list, already, editErr = edit(*c)
+			if editErr == nil && !already {
+				c.SetRelays(list)
+			}
+		}); err != nil {
 			return fail(stderr, err)
 		}
-	default:
+	case err != nil:
 		return fail(stderr, err)
+	default:
+		defer cl.Close()
+		list, already, editErr = edit(cfg)
+		if editErr == nil && !already {
+			var s daemon.Status
+			if err := cl.Send(daemon.Request{Op: "relays", Relays: list}); err != nil {
+				return fail(stderr, err)
+			}
+			if err := cl.Next(&s); err != nil {
+				return fail(stderr, err)
+			}
+			fmt.Fprintln(stdout, "the running node now uses:")
+		}
+	}
+	if editErr != nil {
+		return fail(stderr, editErr)
+	}
+	if already {
+		fmt.Fprintf(stdout, "%s is already a relay\n", u)
+		return 0
 	}
 	for _, r := range list {
 		fmt.Fprintln(stdout, r)

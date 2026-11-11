@@ -167,6 +167,86 @@ func TestRelayServeWithCertAndKeyBindsUplinksToItsPublicOrigin(t *testing.T) {
 	}
 }
 
+func TestRelayAddKeepsConcurrentOfflineAdd(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PEN_HOME", dir)
+	st, err := state.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := state.Config{Name: "a"}
+	c.SetRelays([]string{"https://a.example"})
+	if err := st.SaveConfig(c); err != nil {
+		t.Fatal(err)
+	}
+	afterRelayConfigRead = func() {
+		afterRelayConfigRead = nil
+		var out, errOut bytes.Buffer
+		if code := RunRelay([]string{"add", "https://c.example"}, &out, &errOut); code != 0 {
+			t.Fatalf("second add: %d %s", code, errOut.String())
+		}
+	}
+	t.Cleanup(func() { afterRelayConfigRead = nil })
+	var out, errOut bytes.Buffer
+	if code := RunRelay([]string{"add", "https://b.example"}, &out, &errOut); code != 0 {
+		t.Fatalf("first add: %d %s", code, errOut.String())
+	}
+	got, err := st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list := strings.Join(got.RelayList(), ","); list != "https://a.example,https://c.example,https://b.example" {
+		t.Fatalf("relays after both adds: %s", list)
+	}
+}
+
+func TestRelayEditChecksLockedConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name, verb, url, message string
+		initial, updated, want   []string
+		code                     int
+	}{
+		{"already added", "add", "https://b.example", "already a relay", []string{"https://a.example"}, []string{"https://a.example", "https://b.example"}, []string{"https://a.example", "https://b.example"}, 0},
+		{"already removed", "rm", "https://b.example", "not one of this node's relays", []string{"https://a.example", "https://b.example"}, []string{"https://a.example"}, []string{"https://a.example"}, 1},
+		{"last relay", "rm", "https://b.example", "needs at least one relay", []string{"https://a.example", "https://b.example"}, []string{"https://b.example"}, []string{"https://b.example"}, 1},
+		{"invalid duplicate origin", "add", "wss://B.example:443", "", []string{"https://a.example"}, []string{"https://a.example", "https://b.example"}, []string{"https://a.example", "https://b.example"}, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PEN_HOME", dir)
+			st, err := state.OpenDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := state.Config{Name: "a"}
+			c.SetRelays(tt.initial)
+			if err := st.SaveConfig(c); err != nil {
+				t.Fatal(err)
+			}
+			afterRelayConfigRead = func() {
+				if err := st.UpdateConfig(func(c *state.Config) { c.SetRelays(tt.updated) }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() { afterRelayConfigRead = nil })
+			var out, errOut bytes.Buffer
+			if code := RunRelay([]string{tt.verb, tt.url}, &out, &errOut); code != tt.code {
+				t.Fatalf("exit %d, want %d: %s", code, tt.code, errOut.String())
+			}
+			if !strings.Contains(out.String()+errOut.String(), tt.message) {
+				t.Fatalf("output: %s %s", &out, &errOut)
+			}
+			got, err := st.LoadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got.RelayList(), ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("relays: %v, want %v", got.RelayList(), tt.want)
+			}
+		})
+	}
+}
+
 func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PEN_HOME", dir)
