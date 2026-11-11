@@ -94,7 +94,7 @@ function setup(options: { data?: unknown; cause?: unknown } = {}) {
 }
 // The home keeps the wordings being written; this holds them the same way.
 function Memory(props: Props) {
-  const [wordings, setWordings] = useState<Readonly<Record<string, string>>>({});
+  const [wordings, setWordings] = useState<ReadonlyMap<string, string>>(new Map());
   return (
     <MobileBotMemory
       environmentId={environmentId}
@@ -104,9 +104,9 @@ function Memory(props: Props) {
       wordings={wordings}
       onWordingChange={(note, wording) =>
         setWordings((current) => {
-          const next = { ...current };
-          if (wording === null) delete next[note];
-          else next[note] = wording;
+          const next = new Map(current);
+          if (wording === null) next.delete(note);
+          else next.set(note, wording);
           return next;
         })
       }
@@ -303,6 +303,24 @@ it("shows a new wording on its own, to copy or discard, once its note is gone", 
   expect(state.copy).toHaveBeenCalledWith("Keep replies very short", { target: "new wording" });
   await press("Discard");
   expect(container.textContent).not.toContain("Keep replies very short");
+});
+
+it("a note whose text names an object property still lists and can be changed", async () => {
+  setup({
+    data: {
+      revision: "r",
+      notes: [{ index: 0, date: null, text: "constructor" }],
+      truncated: false,
+    },
+  });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  expect(container.textContent).toContain("constructor");
+  expect(button("Ask to change")).toBeDefined();
+  await press("Ask to change");
+  await typeWording("toString");
+  await press("Fill message");
+  expect(onDraft).toHaveBeenCalledWith(goatBotChangeNoteMessage("constructor", "toString"));
 });
 const sourced = (index: number, text: string, extra: Record<string, unknown> = {}) => ({
   index,

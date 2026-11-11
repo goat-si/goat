@@ -51,6 +51,14 @@ import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
 /** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
 const STICKY_TABS_CLEARANCE = 56;
+/** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
+const SCROLL_RETRIES = 3;
+const NO_WORDINGS: ReadonlyMap<string, string> = new Map();
+type HomeScroll = {
+  readonly index: number;
+  readonly viewPosition: number;
+  readonly viewOffset: number;
+};
 import {
   MOBILE_CHECK_IN_DRAFT,
   type MobileCheckInDraft,
@@ -172,6 +180,17 @@ export function MobileBotWork(props: {
   // The focus whose routine row has reported its place and refined the scroll.
   const routineLanded = useRef(0);
   const listRef = useRef<FlatList<MobileBotHomeItem>>(null);
+  // A scroll to an entry the list has not measured lands near it and tries the entry again once
+  // the list has laid out more, a few times at most.
+  const lastScroll = useRef<HomeScroll | null>(null);
+  const scrollRetry = useRef<HomeScroll | null>(null);
+  const scrollAttempts = useRef(0);
+  const scrollHome = (scroll: HomeScroll) => {
+    lastScroll.current = scroll;
+    scrollRetry.current = null;
+    scrollAttempts.current = 0;
+    listRef.current?.scrollToIndex(scroll);
+  };
   if (open && props.focus && props.focus.seq !== focusSeq) {
     setFocusSeq(props.focus.seq);
     setTab("Home");
@@ -183,17 +202,21 @@ export function MobileBotWork(props: {
       props.focus.kind === "routine" ? { id: props.focus.id, seq: props.focus.seq } : null,
     );
   }
-  // Once a fresh list answers, a focused task is either listed (the peek shows it) or has left the
-  // list and opens on its own screen. A failed read keeps the person on Home, showing the failure.
-  const listedTasks = threads.data !== null && threads.error === null ? rows : null;
+  // Once a settled, successful read answers, a focused task is either listed (the peek shows it)
+  // or has left the list and opens on its own screen. Until then, a failed or still-refreshing read
+  // keeps the person on Home with the focus held, so a later answer still decides it.
+  const listedTasks =
+    threads.data !== null && threads.error === null && !threads.isPending ? rows : null;
   const missingTask =
     taskFocus !== null &&
     listedTasks !== null &&
     !listedTasks.some((row) => row.kind === "task" && row.task.taskId === taskFocus)
       ? taskFocus
       : null;
-  if (taskFocus !== null && missingTask === null && (listedTasks !== null || threads.error))
+  if (taskFocus !== null && missingTask === null && listedTasks !== null) {
+    setPeekTaskId(taskFocus);
     setTaskFocus(null);
+  }
   if (missingTask !== null) {
     setTaskFocus(null);
     setPeekTaskId(null);
@@ -203,14 +226,14 @@ export function MobileBotWork(props: {
   // already in the box; it goes on a successful fill or Cancel. Notes belong to the machine.
   const [noteWordings, setNoteWordings] = useState<{
     readonly environmentId: EnvironmentId | null;
-    readonly byNote: Readonly<Record<string, string>>;
-  }>({ environmentId, byNote: {} });
-  const wordings = noteWordings.environmentId === environmentId ? noteWordings.byNote : {};
+    readonly byNote: ReadonlyMap<string, string>;
+  }>({ environmentId, byNote: new Map() });
+  const wordings = noteWordings.environmentId === environmentId ? noteWordings.byNote : NO_WORDINGS;
   const setWording = (note: string, wording: string | null) =>
     setNoteWordings((current) => {
-      const byNote = { ...(current.environmentId === environmentId ? current.byNote : {}) };
-      if (wording === null) delete byNote[note];
-      else byNote[note] = wording;
+      const byNote = new Map(current.environmentId === environmentId ? current.byNote : []);
+      if (wording === null) byNote.delete(note);
+      else byNote.set(note, wording);
       return { environmentId, byNote };
     });
   // The check-in being set up, and its save, live here for this bot on this machine: its
@@ -230,7 +253,7 @@ export function MobileBotWork(props: {
       : ([...work.inProgress, ...work.done].find((entry) => entry.row.task.taskId === peekTaskId) ??
         null);
   // A peeked task that left the list is forgotten, so it does not reopen when it returns.
-  if (peekTaskId !== null && peekEntry === null && threads.data !== null) setPeekTaskId(null);
+  if (peekTaskId !== null && peekEntry === null && listedTasks !== null) setPeekTaskId(null);
   const closeSheet = () => {
     setPeekTaskId(null);
     setTaskFocus(null);
@@ -246,8 +269,10 @@ export function MobileBotWork(props: {
   }, [leaveFor, openTask, setOpen]);
   // The system back (Android's button or gesture) leaves a peek before it leaves the sheet.
   const goBack = () => {
-    if (peekTaskId !== null) setPeekTaskId(null);
-    else closeSheet();
+    if (peekTaskId !== null) {
+      setPeekTaskId(null);
+      setTaskFocus(null);
+    } else closeSheet();
   };
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (!environmentId || !enabled) return;
@@ -468,7 +493,7 @@ export function MobileBotWork(props: {
           onFocusedRowLayout={(y) => {
             if (routineFocus !== null) routineLanded.current = routineFocus.seq;
             setRoutineFocus(null);
-            listRef.current?.scrollToIndex({
+            scrollHome({
               index,
               viewPosition: 0,
               viewOffset: STICKY_TABS_CLEARANCE - y,
@@ -532,12 +557,20 @@ export function MobileBotWork(props: {
   useEffect(() => {
     if (routineFocus === null || routinesIndex < 0) return;
     if (routineLanded.current === routineFocus.seq) return;
-    listRef.current?.scrollToIndex({
-      index: routinesIndex,
-      viewPosition: 0,
-      viewOffset: STICKY_TABS_CLEARANCE,
-    });
-  }, [routineFocus, routinesIndex, listRef, routineLanded]);
+    const scroll = { index: routinesIndex, viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE };
+    lastScroll.current = scroll;
+    scrollRetry.current = null;
+    scrollAttempts.current = 0;
+    listRef.current?.scrollToIndex(scroll);
+  }, [
+    routineFocus,
+    routinesIndex,
+    listRef,
+    routineLanded,
+    lastScroll,
+    scrollRetry,
+    scrollAttempts,
+  ]);
   return (
     <>
       {props.taskId ? (
@@ -680,10 +713,23 @@ export function MobileBotWork(props: {
             data={homeItems}
             keyExtractor={(item) => item.key}
             renderItem={({ item }) => <>{item.render()}</>}
-            // A routine row far down Home may not be measured yet; land near it instead.
-            onScrollToIndexFailed={(info) =>
-              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index })
-            }
+            // A routine row far down Home may not be measured yet: land near it, then try again.
+            onScrollToIndexFailed={(info) => {
+              const scroll = lastScroll.current;
+              const retry =
+                scroll !== null &&
+                scroll.index === info.index &&
+                scrollAttempts.current < SCROLL_RETRIES;
+              if (retry) scrollAttempts.current += 1;
+              scrollRetry.current = retry ? scroll : null;
+              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index });
+            }}
+            onContentSizeChange={() => {
+              const retry = scrollRetry.current;
+              if (retry === null) return;
+              scrollRetry.current = null;
+              listRef.current?.scrollToIndex(retry);
+            }}
             stickyHeaderIndices={[1]}
             contentContainerClassName="gap-2"
             contentContainerStyle={{ paddingBottom: bottomInset }}

@@ -13,10 +13,10 @@ export interface MobileBotHomeFocus {
 }
 
 /**
- * Where an event line's subject opens: the home on that routine or task, the task's own screen for
- * a task that left the list, or nowhere for a routine that is gone. A list still loading, or whose
- * last read failed even with an earlier read held, is not read as absent: the home opens and shows
- * that state. The reads are the home's own, so they share its cache.
+ * Where an event line's subject opens: the home on that routine or task, a task's own screen once
+ * it left the list, or nowhere for a routine that is gone. Absence needs a settled successful read;
+ * the routines read is a live subscription whose every value is current (it always reports
+ * waiting), so only its failure is unknown. The reads share the home's cache.
  */
 export function useGoatBotEventTargets(
   member: { readonly botId: BotId; readonly sessionThreadId: ThreadId } | null,
@@ -56,7 +56,7 @@ export function useGoatBotEventTargets(
         )
       : null;
   const taskIds =
-    threads.data && threads.error === null
+    threads.data && threads.error === null && !threads.isPending
       ? new Set<string>(
           threads.data.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
         )

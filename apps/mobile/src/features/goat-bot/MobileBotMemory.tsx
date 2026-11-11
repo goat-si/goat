@@ -32,7 +32,7 @@ export function MobileBotMemory(props: {
    * New wordings being written, by the note's text; kept by the home so they outlive the sheet
    * closing while the person deals with a message already in the box, and a new read of the file.
    */
-  readonly wordings: Readonly<Record<string, string>>;
+  readonly wordings: ReadonlyMap<string, string>;
   readonly onWordingChange: (note: string, wording: string | null) => void;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly refreshKey?: string | undefined;
@@ -98,7 +98,7 @@ function MobileNoteList(props: {
   readonly notes: ReadonlyArray<ChannelBotNote>;
   readonly truncated: boolean;
   readonly onDraft: ((text: string) => boolean) | undefined;
-  readonly wordings: Readonly<Record<string, string>>;
+  readonly wordings: ReadonlyMap<string, string>;
   readonly onWordingChange: (note: string, wording: string | null) => void;
   readonly botName: string;
 }) {
@@ -107,7 +107,7 @@ function MobileNoteList(props: {
   const now = useNowMinuteMs();
   // A wording follows its note's text across reads; one whose note is gone is shown on its own.
   const editing = new Set<string>();
-  const lost = Object.entries(props.wordings).filter(
+  const lost = [...props.wordings].filter(
     ([text, wording]) =>
       !view.current.some((note) => note.text === text) &&
       wording.trim() !== "" &&
@@ -141,7 +141,7 @@ function MobileNoteList(props: {
               note={note}
               source={goatBotNoteSourceLabel(note.source, { now })}
               onDraft={props.onDraft}
-              wording={first ? (props.wordings[note.text] ?? null) : null}
+              wording={first ? (props.wordings.get(note.text) ?? null) : null}
               onWordingChange={(wording) => props.onWordingChange(note.text, wording)}
             />
           );
