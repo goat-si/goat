@@ -193,6 +193,10 @@ vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
 vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
+// The home sheet's peek reads thread detail, which needs the native runtime.
+vi.mock("./MobileBotPeek", () => ({ MobileBotPeek: () => null }));
+vi.mock("./MobileBotComputer", () => ({ MobileBotComputer: () => null }));
+vi.mock("./MobileBotLibrary", () => ({ MobileBotLibrary: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: string | null) =>
     atom === "notes"
@@ -250,7 +254,7 @@ async function press(container: HTMLElement, label: string) {
 }
 async function openMemory(container: HTMLElement) {
   await press(container, "Open GOAT Bot work");
-  await press(container, "Memory");
+  await press(container, "Library");
 }
 const composer = (container: HTMLElement) =>
   container.querySelector<HTMLTextAreaElement>('[aria-label="Message GOAT Bot"]')!;
@@ -325,7 +329,7 @@ const taskRow = (revision: number): GoatBotRow => {
   };
 };
 
-it("the open Memory tab reads the notes again after the answer and after the task finishes", async () => {
+it("the open notes in Library read again after the answer and after the task finishes", async () => {
   setup();
   const view = await render();
   await openMemory(view.container);

@@ -38,6 +38,9 @@ export function MobileBotTaskList(props: {
   readonly rows: ReadonlyArray<BotThreadRow>;
   /** Task cards in the conversation; ones the list lacks show under "Earlier in chat". */
   readonly chatTasks: ReadonlyArray<GoatBotTaskCard>;
+  /** A listed task opens its peek on the bot's home. */
+  readonly onPeekTask: (id: ChannelTaskId) => void;
+  /** A task only the conversation still shows opens its own conversation. */
   readonly onOpenTask: (id: ChannelTaskId) => void;
   readonly onOpenThread: (thread: ThreadSelection) => void;
   readonly onUpdate: (input: ChannelUpdateTaskViewInput) => void;
@@ -97,7 +100,7 @@ export function MobileBotTaskList(props: {
                   onAccessibilityAction={(event) => act(row, event.nativeEvent.actionName)}
                   onLongPress={() => menu(row)}
                   className="min-h-[44px] justify-center"
-                  onPress={() => props.onOpenTask(row.task.taskId)}
+                  onPress={() => props.onPeekTask(row.task.taskId)}
                 >
                   <Text className="text-foreground">{row.task.title}</Text>
                   <View className="flex-row items-center gap-1">
