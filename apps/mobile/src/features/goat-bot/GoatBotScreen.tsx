@@ -7,7 +7,7 @@ import {
   hasGoatBotMarkdown,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import { type BotProfile, ChannelTaskId, type EnvironmentId, type ThreadId } from "@goat/contracts";
+import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -54,7 +54,6 @@ import {
 } from "./GoatBotMessageParts";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { goatBotChatRows } from "./goatBotChatRows";
-import { goatBotWithoutThreadLinks } from "./goatBotChatMarkdown";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -64,7 +63,6 @@ import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
-const NO_THREADS: ReadonlySet<ThreadId> = new Set();
 const rowKey = (row: GoatBotRow) => row.id;
 function availabilityCopy(mainName: string, openName: string) {
   return {
@@ -97,8 +95,6 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly botName?: string;
   /** The bot's profile avatar, shown beside its name. */
   readonly botEmoji?: string | null | undefined;
-  /** Threads the bot's home lists; links to them leave the conversation, others stay. */
-  readonly listedThreadIds?: ReadonlySet<ThreadId>;
 }) {
   const { row } = props;
   const botName = props.botName ?? "GOAT Bot";
@@ -168,13 +164,11 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </View>
     );
   }
-  // Threads the bot's home lists are reached there, so their links leave the conversation.
-  const text = goatBotWithoutThreadLinks(row.text, props.listedThreadIds ?? NO_THREADS);
   const prose = (
     <>
-      {hasGoatBotMarkdown(text) ? (
+      {hasGoatBotMarkdown(row.text) ? (
         <GoatBotMarkdown
-          text={text}
+          text={row.text}
           failed={row.tone === "failure"}
           environmentId={props.environmentId ?? null}
           onSelectThread={props.onSelectThread}
@@ -184,9 +178,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
           selectable
           className={row.tone === "failure" ? "text-danger-foreground" : "text-foreground"}
           style={bodyText}
-          accessibilityLabel={row.tone === "failure" ? `Failed: ${text}` : undefined}
+          accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
         >
-          <GoatBotLinkedText text={text} />
+          <GoatBotLinkedText text={row.text} />
         </Text>
       )}
       {row.memory ? <MemoryReportLink reference={row.memory} /> : null}
@@ -330,7 +324,6 @@ export function GoatBotScreen(props: {
         environmentId={session.historyEnvironmentId}
         botName={title}
         botEmoji={botEmoji}
-        listedThreadIds={session.listedThreadIds}
       />
     ),
     [
@@ -345,7 +338,6 @@ export function GoatBotScreen(props: {
       session.historyEnvironmentId,
       title,
       botEmoji,
-      session.listedThreadIds,
     ],
   );
   const send = () => {
