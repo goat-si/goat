@@ -9,7 +9,7 @@ import * as NodeCrypto from "node:crypto";
  * goat_thread_launch field except the ones listed here, so a field added to the schema later is
  * covered unless someone excludes it on purpose.
  */
-export const DIGEST_EXCLUDED_FIELDS: ReadonlySet<string> = new Set(["placement"]);
+const DIGEST_EXCLUDED_FIELDS: ReadonlySet<string> = new Set(["placement"]);
 
 export class PlacementAttachmentUnavailable extends Schema.TaggedError<PlacementAttachmentUnavailable>()(
   "PlacementAttachmentUnavailable",

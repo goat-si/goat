@@ -13,7 +13,7 @@ export const FUTURE_MS = 10 * 60 * 1000;
 export const ADMIT_WINDOW_MS = 25 * 24 * 60 * 60 * 1000;
 export const RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
 export const PLACER_BOUND = 4096;
-export const DEFAULT_PENDING_LIMIT = 256;
+const DEFAULT_PENDING_LIMIT = 256;
 
 export class PlacementStoreError extends Schema.TaggedError<PlacementStoreError>()(
   "PlacementStoreError",

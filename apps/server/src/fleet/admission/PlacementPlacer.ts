@@ -36,7 +36,7 @@ export type PlacedOutcome =
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-export const argumentOf = (attempt: Attempt): PlacementArgument => ({
+const argumentOf = (attempt: Attempt): PlacementArgument => ({
   ownerKey: attempt.ownerKey,
   attempt: attempt.attempt,
   issuedAt: DateTime.formatIso(DateTime.makeUnsafe(attempt.issuedAt)),
@@ -82,7 +82,7 @@ export class PlacementPlacer extends Context.Service<PlacementPlacer, PlacementP
   "goat/fleet/admission/PlacementPlacer",
 ) {}
 
-export const LOCAL_TARGET = "local";
+const LOCAL_TARGET = "local";
 
 const make = Effect.gen(function* () {
   const attempts = yield* PlacementAttempts;

@@ -35,13 +35,13 @@ import {
   type Reservation,
 } from "./PlacementReservations.ts";
 
-export const RENEW_EVERY = Duration.minutes(1);
+const RENEW_EVERY = Duration.minutes(1);
 /** How long a retry waits for the owner before it is told "unconfirmed, still pending". */
 export const JoinWait = Context.Reference<Duration.Duration>("goat/fleet/admission/JoinWait", {
   defaultValue: () => Duration.seconds(20),
 });
-export const SWEEP_EVERY = Duration.seconds(30);
-export const PRUNE_EVERY = Duration.hours(24);
+const SWEEP_EVERY = Duration.seconds(30);
+const PRUNE_EVERY = Duration.hours(24);
 
 /** What the target can say about one placement; only its reservation row decides it. */
 export type PlacementAnswer =
@@ -74,7 +74,7 @@ export class PlacementAdmission extends Context.Service<
   PlacementAdmissionShape
 >()("goat/fleet/admission/PlacementAdmission") {}
 
-export const answerFromRow = (row: Reservation): PlacementAnswer =>
+const answerFromRow = (row: Reservation): PlacementAnswer =>
   row.state === "counted" && row.threadId !== null && row.runId !== null
     ? { _tag: "Started", threadId: row.threadId, runId: row.runId }
     : row.state === "fenced"

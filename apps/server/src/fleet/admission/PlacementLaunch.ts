@@ -60,9 +60,7 @@ const refusal = (
   });
 
 /** Every answer except a started one, as the placer reads it. */
-export const refusalForAnswer = (
-  answer: Exclude<PlacementAnswer, { readonly _tag: "Started" }>,
-) => {
+const refusalForAnswer = (answer: Exclude<PlacementAnswer, { readonly _tag: "Started" }>) => {
   switch (answer._tag) {
     case "NotStarted":
       return refusal(
