@@ -313,6 +313,7 @@ export const CodexProviderCapabilitiesV2 = {
     canForkFromTurn: true,
     canForkFromSubagentThread: true,
     exposesNativeThreadId: true,
+    forkHonorsTargetCwd: true,
   },
   turns: {
     exposesNativeTurnId: true,
