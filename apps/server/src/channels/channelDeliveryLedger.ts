@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelDeliveryOutcome, ChannelStoredDelivery } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { ANSWER_DECISION_ATTEMPTS, MAX_ATTEMPTS } from "./channelDeliveryAttempts.ts";
 import {
   copyUndeliveredReplies,
   copyUndeliveredReply,
@@ -320,6 +321,14 @@ export const deliveryLedger = (
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            // A local write cut off on its last attempt may have landed, so it is not called failed.
+            yield* sql`
+              UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
+                updated_at = ${input.now}
+              WHERE state = 'delivering' AND destination_kind IN ('goat', 'mcp')
+                AND attempts >= CASE WHEN json_type(message_json, '$.personAnswer') IS NULL
+                  THEN ${MAX_ATTEMPTS} ELSE ${ANSWER_DECISION_ATTEMPTS} END
+            `;
             // Local destinations record idempotently, and an external row never handed to its
             // transport was not sent, so both simply go again.
             yield* sql`
