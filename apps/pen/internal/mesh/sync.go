@@ -27,8 +27,10 @@ func announce(s *Store, pen string) string {
 	return pen
 }
 
-func refuseEpoch(l Link, s *Store, peer string) error {
-	if s.Shared() && peer != VersionShared {
+// A peer that holds no records yet (a node joining) cannot know the epoch: it gets the records, and
+// takes the epoch from the found record.
+func refuseEpoch(l Link, s *Store, m *Msg) error {
+	if s.Shared() && m.Pen != VersionShared && len(m.Have) > 0 {
 		l.Close(wire.CodeEpoch)
 		return &relay.CloseError{Code: wire.CodeEpoch}
 	}
@@ -115,7 +117,7 @@ func SyncInitiateAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHe
 				l.Close(errLine.Code)
 				return errLine
 			}
-			if err := refuseEpoch(l, s, m.Pen); err != nil {
+			if err := refuseEpoch(l, s, m); err != nil {
 				return err
 			}
 			if onHello != nil {
@@ -169,7 +171,7 @@ func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHel
 				return errLine
 			}
 			gotHello = true
-			if err := refuseEpoch(l, s, m.Pen); err != nil {
+			if err := refuseEpoch(l, s, m); err != nil {
 				return err
 			}
 			if onHello != nil {

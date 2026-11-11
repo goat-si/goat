@@ -82,20 +82,32 @@ func TestUnderSharesARecordWhoseOwnPreviousIsOnlyInItsPastHasNoEffect(t *testing
 	}
 }
 
-// A node of a mesh of the shared epoch closes a sync whose peer does not announce it, with 4509.
+// A node of a mesh of the shared epoch closes a sync whose peer holds records but does not announce the
+// epoch, with 4509; a node that holds nothing yet (joining) gets the records and takes the epoch.
 func TestASharedMeshRefusesASyncFromANodeThatDoesNotAnnounceIt(t *testing.T) {
 	f := detID(1)
 	s, err := FoundV(EpochShared, nil, f, "f", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	peer := NewStore(nil, s.MeshID)
 	srv, cli := pipe()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	go SyncInitiateAs(ctx, cli, peer, nil, nil, Version)
+	old := &Lines{L: cli}
+	if err := old.Write(Msg{T: "hello", Pen: Version, Have: []string{s.Records()[0].Hash}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := SyncRespond(ctx, srv, s, nil, nil); relay.CodeOf(err) != wire.CodeEpoch {
-		t.Fatalf("sync with a 1.1 peer returned %v, want a %d close", err, wire.CodeEpoch)
+		t.Fatalf("sync with a 1.1 peer holding records returned %v, want a %d close", err, wire.CodeEpoch)
+	}
+	joining := NewStore(nil, s.MeshID)
+	srv, cli = pipe()
+	go SyncRespond(ctx, srv, s, nil, nil)
+	if err := SyncInitiate(ctx, cli, joining, nil, nil); err != nil {
+		t.Fatalf("a joining node's first sync: %v", err)
+	}
+	if !joining.Shared() || joining.Len() != s.Len() {
+		t.Fatalf("the joining node holds %d of %d records, shared %v", joining.Len(), s.Len(), joining.Shared())
 	}
 	other, err := FromJoin(nil, s.MeshID, s.Records())
 	if err != nil {

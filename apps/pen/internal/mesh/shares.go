@@ -6,7 +6,7 @@ import "sort"
 // shared epoch to shares.
 func (s *Store) learnVersion(recs []*Record) {
 	for _, r := range recs {
-		if r != nil && r.B.Type == TypeFound && MeshIDOf(r) == s.MeshID && r.Verify() == nil {
+		if r != nil && r.Verify() == nil && r.B.Type == TypeFound && MeshIDOf(r) == s.MeshID {
 			s.version = r.B.V
 			s.shares = s.shares || r.B.V == EpochShared
 			return
