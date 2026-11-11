@@ -91,6 +91,7 @@ describe("layoutFleet", () => {
           Array.from({ length: count }, (_, index) => "m" + index),
         );
         expect(layout.labelChars.name).toBeLessThan(18);
+        expect(layout.labelChars.keepNameEnds).toBe(true);
         const label = nodes.labelWidth / 2;
         const boxes = [
           { owner: "main", ...square(layout.center, 36) },
@@ -149,6 +150,7 @@ describe("layoutFleet", () => {
       name: 18,
       subtitle: 22,
       agent: 18,
+      keepNameEnds: false,
     });
   });
 

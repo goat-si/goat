@@ -91,8 +91,16 @@ export interface FleetLayout {
   readonly inner: { readonly rx: number; readonly ry: number };
   readonly outer: { readonly rx: number; readonly ry: number };
   readonly machines: ReadonlyArray<FleetLayoutMachine>;
-  /** How many characters a machine's name and subtitle, and an agent's name, show before a cut. */
-  readonly labelChars: { readonly name: number; readonly subtitle: number; readonly agent: number };
+  /**
+   * How many characters a machine's name and subtitle, and an agent's name, show before a cut.
+   * keepNameEnds cuts a machine's name in the middle, for dense graphs of similar names.
+   */
+  readonly labelChars: {
+    readonly name: number;
+    readonly subtitle: number;
+    readonly agent: number;
+    readonly keepNameEnds: boolean;
+  };
 }
 
 const isBusy = (work: FleetWork) => work.running + work.attention + work.reported > 0;
@@ -309,8 +317,8 @@ export function layoutFleet(
     outer,
     labelChars:
       bands === null
-        ? { name: 18, subtitle: 22, agent: 18 }
-        : { name: 14, subtitle: 18, agent: 12 },
+        ? { name: 18, subtitle: 22, agent: 18, keepNameEnds: false }
+        : { name: 14, subtitle: 18, agent: 12, keepNameEnds: true },
     machines: nodes.map((machine, index): FleetLayoutMachine => {
       const angle = angles[index] ?? 0;
       const band = index % (bands?.count ?? 1);

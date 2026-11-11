@@ -410,6 +410,14 @@ interface PlacedMachine {
   readonly agents: ReadonlyArray<PlacedAgent>;
 }
 
+/** The graph's size and orbit spots. A hook of its own, so pulling a node does not lay out again. */
+function useFleetLayout(machines: FleetSnapshot["machines"]) {
+  const [wrapperRef, containerWidth] = useElementWidth();
+  const { width, height } = fleetGraphSize(machines.length, containerWidth);
+  const layout = containerWidth > 0 ? layoutFleet(machines, width, height) : null;
+  return { wrapperRef, containerWidth, width, height, layout };
+}
+
 export const FleetGraph = memo(function FleetGraph(props: {
   readonly snapshot: FleetSnapshot;
   readonly connections: ReadonlyMap<string, FleetConnection>;
@@ -424,8 +432,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
   const { snapshot, connections, currentMachineId, selectedMachineId, onSelectMachine, heat } =
     props;
   const slow = props.slowMachineIds;
-  const [wrapperRef, containerWidth] = useElementWidth();
-  const { width, height } = fleetGraphSize(snapshot.machines.length, containerWidth);
+  const { wrapperRef, containerWidth, width, height, layout } = useFleetLayout(snapshot.machines);
   const svgRef = useRef<SVGSVGElement>(null);
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const paint = useHeatPaint();
@@ -434,7 +441,6 @@ export const FleetGraph = memo(function FleetGraph(props: {
   const primaryHalo = haloBase + "-primary";
   usePauseWhileHidden(svgRef);
   const { offsets, press, move, release } = usePullableNodes(svgRef, width, reduced);
-  const layout = containerWidth > 0 ? layoutFleet(snapshot.machines, width, height) : null;
   // A graph wider than its card scrolls, and opens with Main in view.
   // oxlint-disable-next-line goat/react-effect-budget -- the scroll position is DOM state React does not own
   useLayoutEffect(() => {
@@ -910,7 +916,10 @@ function MachineNode(props: {
           quiet ? "fill-muted-foreground" : "fill-foreground",
         )}
       >
-        {truncateName(machine.label, props.labelChars.name)}
+        {(props.labelChars.keepNameEnds ? truncateName : truncate)(
+          machine.label,
+          props.labelChars.name,
+        )}
       </text>
       {sub === null ? null : (
         <text
