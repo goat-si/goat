@@ -207,11 +207,11 @@ export function GoatBotActivityLine(props: {
   const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
-  // Screen readers hear when the bot starts, reads or waits, not each step: the live part says
-  // only that, and the step is plain text beside it.
-  const status = `${props.botName} is ${
-    face === "reading" ? "reading" : face === "waiting" ? "waiting for you" : "working"
-  }`;
+  // Screen readers hear when the bot starts or reads, not each working step, and what it waits on:
+  // the live part says only that, and a working step is plain text beside it.
+  const status = waits
+    ? `${props.botName}: ${activity.text}`
+    : `${props.botName} is ${face === "reading" ? "reading" : "working"}`;
   return (
     <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
       <View accessible accessibilityLiveRegion="polite" accessibilityLabel={status}>

@@ -128,6 +128,14 @@ export function MobileBotWork(props: {
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
   );
+  // What the work list says about each task and thread; the machines follow its changes.
+  const workKey = rows
+    .map((row) =>
+      row.kind === "task"
+        ? `${row.task.taskId}:${row.task.status}:${row.lastActivityAt}`
+        : `${row.threadId}:${row.state}`,
+    )
+    .join("|");
   const [ownOpen, setOwnOpen] = useState(false);
   const open = props.open ?? ownOpen;
   const setOpen = props.onOpenChange ?? setOwnOpen;
@@ -137,9 +145,16 @@ export function MobileBotWork(props: {
       ? null
       : ([...work.inProgress, ...work.done].find((entry) => entry.row.task.taskId === peekTaskId) ??
         null);
+  // A peeked task that left the list is forgotten, so it does not reopen when it returns.
+  if (peekTaskId !== null && peekEntry === null && threads.data !== null) setPeekTaskId(null);
   const closeSheet = () => {
     setPeekTaskId(null);
     setOpen(false);
+  };
+  // The system back (Android's button or gesture) leaves a peek before it leaves the sheet.
+  const goBack = () => {
+    if (peekTaskId !== null) setPeekTaskId(null);
+    else closeSheet();
   };
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (!environmentId || !enabled) return;
@@ -296,7 +311,8 @@ export function MobileBotWork(props: {
         animationType="slide"
         presentationStyle="pageSheet"
         allowSwipeDismissal
-        onRequestClose={closeSheet}
+        // iOS calls this when the sheet is swiped away; Android when back leaves a peek first.
+        onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >
         <View className="flex-1 bg-screen px-4 pt-4">
           <Pressable
@@ -385,6 +401,7 @@ export function MobileBotWork(props: {
                     connected={selected?.connected === true}
                     botId={member?.botId ?? null}
                     botName={botName}
+                    workKey={workKey}
                   />
                   <Text className="mt-4 text-xs font-medium text-foreground-muted">Work</Text>
                   {goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0 ? (
