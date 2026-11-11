@@ -249,6 +249,13 @@ const THREAD_FORK_LABELS: ForkChoiceLabels = {
   worktree: "Fork thread in new worktree",
 };
 
+/** A response's fork button, worded like the desktop app's "Fork chat from here". */
+export const RESPONSE_FORK_LABELS: ForkChoiceLabels = {
+  current: "Fork in this workspace",
+  sameWorktree: "Fork in this worktree",
+  worktree: "Fork in a new worktree",
+};
+
 // The composer's editor keeps focus when a command is picked or submitted.
 function focusedFormAnchor(): { x: number; y: number } {
   const focused = document.activeElement;

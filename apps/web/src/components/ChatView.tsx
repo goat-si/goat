@@ -2926,6 +2926,7 @@ export default function ChatView(props: ChatViewProps) {
     onTimelineRollbackCheckpointStable,
   } = useTimelineRewind({
     isCloudThread,
+    isGitRepo,
     environmentId,
     routeThreadRef,
     routeThreadKey,
