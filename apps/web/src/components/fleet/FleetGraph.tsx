@@ -658,7 +658,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
                         textAnchor="middle"
                         className="fill-muted-foreground text-4xs"
                       >
-                        {truncate(label, 18)}
+                        {truncate(label, 12)}
                       </text>
                     </g>
                   );
@@ -897,7 +897,8 @@ function MachineNode(props: {
         textAnchor="middle"
         className={cn("text-3xs font-medium", quiet ? "fill-muted-foreground" : "fill-foreground")}
       >
-        {truncate(machine.label, 18)}
+        <title>{machine.label}</title>
+        {truncate(machine.label, 12)}
       </text>
       {sub === null ? null : (
         <text
@@ -905,7 +906,8 @@ function MachineNode(props: {
           textAnchor="middle"
           className="fill-muted-foreground text-4xs"
         >
-          {truncate(sub, 22)}
+          <title>{sub}</title>
+          {truncate(sub, 14)}
         </text>
       )}
     </g>
