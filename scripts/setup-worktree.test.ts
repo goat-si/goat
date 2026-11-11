@@ -7,6 +7,7 @@ import * as NodeURL from "node:url";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { onTestFinished } from "vite-plus/test";
 
 import {
   isCorepackLauncherMissing,
@@ -77,8 +78,16 @@ function setupFixture(
   const windows = HostProcess.Platform.defaultValue() === "win32";
   // Stands in for `npx --package=node@<pin> -- node <script>`: the pin becomes this Node.
   const nodeRunner = `if [ "$3" = "--" ] && [ "$4" = "node" ]; then printf '%s' "$SETUP_TEST_PIN" > package.json; exec "$SETUP_TEST_NODE" "$5"; fi\n`;
-  // A runner whose own child outlives it unless the whole group is signalled.
-  const hangingRunner = `( trap 'printf "%s\\n" grandchild-signalled >> "$SETUP_TEST_LOG"; exit 0' TERM; while :; do sleep 1; done ) &\nprintf 'ready %s\\n' "$!"\nwait\n`;
+  // A runner whose own child outlives it unless the whole group is signalled. The child
+  // says it is ready only once its trap is set, so a signal cannot arrive before it.
+  const hangingRunner = `"$(dirname "$0")/npx-child" &\nwait\n`;
+  if (npx === "hangs") {
+    NodeFS.writeFileSync(
+      NodePath.join(bin, "npx-child"),
+      `#!/bin/sh\ntrap 'printf "%s\\n" grandchild-signalled >> "$SETUP_TEST_LOG"; exit 0' TERM\nprintf 'ready %s\\n' "$$"\nwhile :; do sleep 1; done\n`,
+      { mode: 0o755 },
+    );
+  }
   const npxBody = npx === "runs-node" ? nodeRunner : npx === "hangs" ? hangingRunner : "";
   for (const name of ["pnpm", "npx"] as const) {
     const noise = "x".repeat(60);
@@ -136,12 +145,17 @@ describe("worktree setup contract", () => {
         "utf8",
       );
       assert.include(failed, "GOAT development uses Node.js");
-      assert.include(
-        failed,
-        `could not start itself under Node.js ${major + 1}.0.0. Tried:\nnpx node@${major + 1}.0.0: no output`,
-      );
-      // npx was asked for the pinned Node and did not start setup; pnpm, the installer, never ran.
-      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["npx"]);
+      if (HostProcess.Platform.defaultValue() === "win32") {
+        // Windows never reruns setup under another Node, so nothing at all ran.
+        assert.isFalse(NodeFS.existsSync(fixture.log));
+      } else {
+        assert.include(
+          failed,
+          `could not start itself under Node.js ${major + 1}.0.0. Tried:\nnpx node@${major + 1}.0.0: no output`,
+        );
+        // npx was asked for the pinned Node and did not start setup; pnpm, the installer, never ran.
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["npx"]);
+      }
       assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-running")));
     } finally {
       fixture.cleanup();
@@ -181,48 +195,52 @@ describe("worktree setup contract", () => {
     async () => {
       const [major = 0] = process.versions.node.split(".").map(Number);
       const fixture = setupFixture(`${major + 1}.0.0`, "unexpected install", 0, "hangs");
+      const setup = NodeChildProcess.spawn(process.execPath, [fixture.script], {
+        cwd: fixture.root,
+        env: fixture.env,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       let grandchild: number | undefined;
-      try {
-        const setup = NodeChildProcess.spawn(process.execPath, [fixture.script], {
-          cwd: fixture.root,
-          env: fixture.env,
-          stdio: ["ignore", "pipe", "ignore"],
-        });
-        setup.stdout.setEncoding("utf8");
-        const exited = new Promise<number | null>((resolve) => setup.on("exit", resolve));
-        let seen = "";
-        await new Promise<void>((resolve) => {
-          setup.stdout.on("data", (chunk: string) => {
-            seen += chunk;
-            const ready = /ready (\d+)/.exec(seen);
-            if (ready === null || grandchild !== undefined) return;
-            grandchild = Number(ready[1]);
-            resolve();
-          });
-        });
-        setup.kill("SIGTERM");
-        assert.notEqual(await exited, 0);
-        const state = NodePath.join(fixture.root, ".goat");
-        assert.include(
-          NodeFS.readFileSync(NodePath.join(state, "setup-failed"), "utf8"),
-          "Cancelled by SIGTERM.",
-        );
-        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
-        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-running")));
-        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-          "npx",
-          "grandchild-signalled",
-        ]);
-      } finally {
-        if (grandchild !== undefined) {
+      // Runs on a timeout too, where a finally block would not: nothing started here may outlive the test.
+      onTestFinished(() => {
+        for (const pid of [setup.pid, grandchild]) {
+          if (pid === undefined) continue;
           try {
-            process.kill(grandchild, "SIGKILL");
+            process.kill(pid, "SIGKILL");
           } catch {
-            // Already gone, which is what the test expects.
+            // Already gone.
           }
         }
         fixture.cleanup();
-      }
+      });
+      setup.stdout.setEncoding("utf8");
+      const exited = new Promise<number | null>((resolve) => setup.on("exit", resolve));
+      let seen = "";
+      await new Promise<void>((resolve, reject) => {
+        setup.on("exit", (code) =>
+          reject(new Error(`setup exited with ${code} before its runner was ready`)),
+        );
+        setup.stdout.on("data", (chunk: string) => {
+          seen += chunk;
+          const ready = /ready (\d+)/.exec(seen);
+          if (ready === null || grandchild !== undefined) return;
+          grandchild = Number(ready[1]);
+          resolve();
+        });
+      });
+      setup.kill("SIGTERM");
+      assert.notEqual(await exited, 0);
+      const state = NodePath.join(fixture.root, ".goat");
+      assert.include(
+        NodeFS.readFileSync(NodePath.join(state, "setup-failed"), "utf8"),
+        "Cancelled by SIGTERM.",
+      );
+      assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
+      assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-running")));
+      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
+        "npx",
+        "grandchild-signalled",
+      ]);
     },
   );
 

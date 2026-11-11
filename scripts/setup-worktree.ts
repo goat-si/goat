@@ -71,10 +71,9 @@ function toolOnPath(name: string): boolean {
   return result.status === 0;
 }
 
-/** Signals the group a detached child leads; Windows has no groups, so only the child. */
+/** Signals the group a detached child leads, so everything it started gets the signal. */
 function signalProcessGroup(child: NodeChildProcess.ChildProcess, signal: NodeJS.Signals): void {
-  // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before `vp i`, with no Effect runtime.
-  if (process.platform !== "win32" && child.pid !== undefined) {
+  if (child.pid !== undefined) {
     try {
       process.kill(-child.pid, signal);
       return;
@@ -153,7 +152,9 @@ async function main(): Promise<void> {
     // the same script runs once more under the pinned release and owns the markers.
     const pinned = readPinnedNodeVersion();
     const runners =
-      process.env[PINNED_NODE_RERUN] === "1"
+      // Windows has no process group to cancel a rerun through, so it keeps refusing.
+      // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before `vp i`, with no Effect runtime.
+      process.env[PINNED_NODE_RERUN] === "1" || process.platform === "win32"
         ? []
         : pinnedNodeRunners({ pinned, vp: toolOnPath("vp"), npx: toolOnPath("npx") });
     const tried: string[] = [];
