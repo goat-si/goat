@@ -3,7 +3,7 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  approvalHandoffsShownBy,
+  approvalHandoffShownBy,
   createApprovalNotificationGate,
   feedOwnedApprovalThreads,
   createThreadNotificationGate,
@@ -214,17 +214,24 @@ describe("which approvals the decision feed announces", () => {
     );
     expect([...owned]).toEqual([]);
   });
-  it("names every approval handoff a parent's notification stands for, including nested subagents", () => {
+  it("lets the feed announce a second subagent approval the parent's single notification did not", () => {
+    const at = (id: string, ms: number) => ({ ...handoff(id), createdAt: DateTime.makeUnsafe(ms) });
     const threads = [
       shell("root", null),
-      shell("mid", handoff("mid-a"), "root"),
-      shell("leaf", handoff("leaf-a"), "mid"),
-      shell("other", handoff("other-a")),
+      shell("one", at("one-a", 1), "root"),
+      shell("two", at("two-a", 2), "root"),
     ];
-    expect([...approvalHandoffsShownBy(threads, ThreadId.make("root"))].sort()).toEqual([
-      "leaf-a",
-      "mid-a",
-    ]);
-    expect([...approvalHandoffsShownBy(threads, ThreadId.make("other"))]).toEqual(["other-a"]);
+    const notify = vi.fn();
+    const gate = createApprovalNotificationGate<string>(notify);
+    // The shell's one notification for root stands for one approval, the newest.
+    for (const id of approvalHandoffShownBy(threads, ThreadId.make("root"))) gate.remember(id);
+    gate.observe(["one-a", "two-a"], () => true);
+    expect(notify.mock.calls).toEqual([["one-a"]]);
+  });
+
+  it("stands for no handoff when the thread waits on its own provider approval", () => {
+    const threads = [shell("root", provider("p")), shell("child", handoff("child-a"), "root")];
+    expect(approvalHandoffShownBy(threads, ThreadId.make("root"))).toEqual([]);
+    expect(approvalHandoffShownBy(threads, ThreadId.make("child"))).toEqual(["child-a"]);
   });
 });

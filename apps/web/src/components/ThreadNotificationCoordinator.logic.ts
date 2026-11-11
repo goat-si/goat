@@ -3,6 +3,7 @@ import {
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 
 export type ThreadNotificationKind = "input" | "completion";
 
@@ -119,25 +120,36 @@ export function feedOwnedApprovalThreads(
   return owned;
 }
 
-/** The approval handoffs a thread's shell notification stands for: its own and its subagents'. */
-export function approvalHandoffsShownBy(
+/**
+ * The one approval handoff a thread's shell notification stands for: the newest among its own and
+ * its subagents'. None when the thread waits on its own provider approval. Others are left for
+ * the feed to announce.
+ */
+export function approvalHandoffShownBy(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   threadId: ThreadId,
 ): ReadonlyArray<string> {
   const byId = new Map(threads.map((thread) => [thread.id, thread] as const));
-  return threads.flatMap((thread) => {
+  const own = byId.get(threadId)?.pendingRuntimeRequest;
+  if (own != null && own.handoff === undefined && isPendingApprovalRequest(own)) return [];
+  let newest: { readonly id: string; readonly at: number } | null = null;
+  for (const thread of threads) {
     const request = thread.pendingRuntimeRequest;
-    if (request?.handoff?.kind !== "approval") return [];
+    if (request?.handoff?.kind !== "approval") continue;
     const seen = new Set<ThreadId>();
     let current: OrchestrationV2ThreadShell | undefined = thread;
     while (current !== undefined && !seen.has(current.id)) {
-      if (current.id === threadId) return [String(request.id)];
+      if (current.id === threadId) {
+        const at = DateTime.toEpochMillis(request.createdAt);
+        if (newest === null || at > newest.at) newest = { id: String(request.id), at };
+        break;
+      }
       seen.add(current.id);
       current =
         current.lineage.relationshipToParent === "subagent" && current.lineage.parentThreadId
           ? byId.get(current.lineage.parentThreadId)
           : undefined;
     }
-    return [];
-  });
+  }
+  return newest === null ? [] : [newest.id];
 }

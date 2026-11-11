@@ -47,7 +47,7 @@ import {
   type SidebarThreadStatus,
 } from "./Sidebar.logic";
 import {
-  approvalHandoffsShownBy,
+  approvalHandoffShownBy,
   createApprovalNotificationGate,
   feedOwnedApprovalThreads,
   createThreadNotificationGate,
@@ -500,8 +500,8 @@ export function startThreadNotifications(
       gate: createThreadNotificationGate<ThreadId>((threadId, kind) => {
         const state = entry.previous.get(threadId);
         if (!state) return;
-        // Approvals the shell announced, its subagents' included, are not announced again by the feed.
-        for (const id of approvalHandoffsShownBy(entry.threads, threadId))
+        // The approval this notification stands for is not announced again by the feed.
+        for (const id of approvalHandoffShownBy(entry.threads, threadId))
           entry.approvals.remember(id);
         present(environmentId, state, kind);
       }),
