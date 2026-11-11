@@ -14,7 +14,16 @@ import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contra
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
+import {
+  Alert,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  type TextInputInstance,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import {
   KeyboardAvoidingView,
   useReanimatedKeyboardAnimation,
@@ -410,6 +419,39 @@ export function GoatBotScreen(props: {
       accent,
     ],
   );
+  const inputRef = useRef<TextInputInstance>(null);
+  // Photos still being read after the picker closed; they join the message when they arrive.
+  const [intake, setIntake] = useState(0);
+  // Where the caret goes once the home sheet has gone, after a request filled the box from it.
+  const focusOnDismiss = useRef<number | null>(null);
+  const focusInput = (caret: number) => {
+    inputRef.current?.focus();
+    inputRef.current?.setSelection(caret, caret);
+  };
+  const sheetGone = () => {
+    const caret = focusOnDismiss.current;
+    focusOnDismiss.current = null;
+    if (caret !== null) focusInput(caret);
+  };
+  // oxlint-disable-next-line goat/react-effect-budget -- Android has no sheet dismissal event: focus the box once the closed sheet and the drafted text have committed.
+  useEffect(() => {
+    if (Platform.OS === "android" && !homeOpen) sheetGone();
+  });
+  // A drafted request (New routine, Ask to change or forget) fills only an empty message box; the
+  // caller keeps its sheet and wording when the box is taken.
+  const draft = (request: string) => {
+    if (text.trim().length > 0 || attachments.length > 0 || intake > 0) {
+      Alert.alert(
+        "Your message is still in the box",
+        "Send or clear it, then try again to start this request.",
+      );
+      return false;
+    }
+    setText(request);
+    if (homeOpen) focusOnDismiss.current = request.length;
+    else focusInput(request.length);
+    return true;
+  };
   const send = () => {
     if (session.onSend(text, attachments)) {
       unread.clear();
@@ -464,6 +506,8 @@ export function GoatBotScreen(props: {
           taskId={taskId}
           open={homeOpen}
           onOpenChange={setHomeOpen}
+          // iOS reports the sheet's dismissal; Android is handled once the closed sheet commits.
+          onDismissed={sheetGone}
           chipFace={
             Platform.OS === "android" ? (
               <GoatBotChipFace
@@ -500,7 +544,7 @@ export function GoatBotScreen(props: {
           botAvatar={botEmoji}
           botAccent={accent}
           main={props.main ?? null}
-          onDraft={session.canSend ? setText : undefined}
+          onDraft={session.canSend ? draft : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
           workRevision={session.workRevision}
           chatTasks={chatTasks}
@@ -653,6 +697,7 @@ export function GoatBotScreen(props: {
         />
         {/* Two rows on a phone: the field, then attach, model and send under the thumb. */}
         <TextInput
+          ref={inputRef}
           accessibilityLabel={`Message ${title}`}
           placeholder={`Message ${title}`}
           placeholderTextColorClassName="accent-placeholder"
@@ -682,6 +727,7 @@ export function GoatBotScreen(props: {
               existingCount={attachments.length}
               maxUploadBytes={support.maxUploadBytes}
               getLifetime={() => pickerLifetime.current?.signal}
+              onIntake={(change) => setIntake((count) => count + change)}
               onPicked={(picked) => {
                 if (!pickerLifetime.current || pickerLifetime.current.signal.aborted) {
                   releaseGoatBotAttachments(picked);

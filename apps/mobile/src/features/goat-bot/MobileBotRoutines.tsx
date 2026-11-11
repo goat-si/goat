@@ -16,6 +16,9 @@ import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import type { MobileCheckInDraft, MobileCheckInDraftUpdate } from "./mobileCheckInDraft";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
+/** What New routine puts in the message box: the person finishes the sentence. */
+export const GOAT_BOT_NEW_ROUTINE_DRAFT = "Set up a routine: ";
+
 /** The bot's routines on its home: the check-in form, then each bound routine with its switch. */
 export function MobileBotRoutines(props: {
   readonly environmentId: EnvironmentId | null;
@@ -26,11 +29,23 @@ export function MobileBotRoutines(props: {
   readonly error: boolean;
   readonly onRetry: () => void;
   readonly rows: ReadonlyArray<BotRoutineRow>;
+  /** Starts a routine request in the chat's message box; absent while the chat cannot send. */
+  readonly onNewRoutine?: (() => void) | undefined;
   /** The check-in being set up, kept by the Home list across its cell unmounting. */
   readonly checkInDraft: MobileCheckInDraft;
   readonly onCheckInDraftChange: MobileCheckInDraftUpdate;
 }) {
   const { environmentId, botName } = props;
+  // Asking the bot for a routine needs no list, so the entry point never waits on it.
+  const newRoutine = props.onNewRoutine ? (
+    <Pressable
+      accessibilityRole="button"
+      onPress={props.onNewRoutine}
+      className="min-h-[44px] justify-center self-start"
+    >
+      <Text className="text-foreground underline">New routine</Text>
+    </Pressable>
+  ) : null;
   return (
     <>
       {props.connected && props.tasks && environmentId && props.botThreadId ? (
@@ -64,9 +79,14 @@ export function MobileBotRoutines(props: {
       ) : (
         <MobileBotPanelEmpty
           title="No routines yet"
-          next={`Ask ${botName} in chat to set up a routine.`}
+          next={
+            newRoutine
+              ? `Ask ${botName} in chat to set up a routine, or start with New routine.`
+              : `Ask ${botName} in chat to set up a routine.`
+          }
         />
       )}
+      {newRoutine}
     </>
   );
 }
