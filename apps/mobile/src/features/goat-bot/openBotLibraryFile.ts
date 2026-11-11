@@ -36,7 +36,7 @@ export async function openBotLibraryFile(
 ): Promise<BotLibraryOpenResult> {
   const name = botArtifactName(relativePath);
   try {
-    // The open interrupts a chat preview in flight and tries once more if it found the server busy.
+    // The open waits for the one read in flight, then holds the server ahead of waiting previews.
     const result = await openBotFileRead(
       environmentId,
       () =>
@@ -55,11 +55,12 @@ export async function openBotLibraryFile(
           signal,
         ),
       signal,
-      (read) => read.status === "busy",
     );
     if (result === null || signal.aborted) return DONE;
     if (result.status !== "ok") {
-      return { kind: "message", message: botArtifactOpenMessage(name, result, botName) };
+      // Nothing else reads on this connection while the open does, so "busy" means it went wrong.
+      const failed = result.status === "busy" ? { status: "invalid" as const } : result;
+      return { kind: "message", message: botArtifactOpenMessage(name, failed, botName) };
     }
     const attachment = { name, mimeType: result.mimeType };
     // Loaded on open: its file and crypto modules are native and the tab may never open a file.

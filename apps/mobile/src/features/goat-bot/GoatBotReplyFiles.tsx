@@ -74,8 +74,8 @@ interface ListingReads {
   dirty: boolean;
   /** The settled answer a running read started from; another one means it settled. */
   startedFrom: unknown;
-  /** Finished replies already decided, and replies seen while they streamed. */
-  readonly decided: Set<string>;
+  /** Finished replies already decided, by id with the text decided on, and replies seen streaming. */
+  readonly decided: Map<string, string>;
   readonly streamed: Set<string>;
   /** The newest finished reply a read has started after; older history needs no read. */
   coveredUpTo: string | null;
@@ -87,7 +87,7 @@ const freshReads = (chatKey: string): ListingReads => ({
   running: false,
   dirty: false,
   startedFrom: null,
-  decided: new Set(),
+  decided: new Map(),
   streamed: new Set(),
   coveredUpTo: null,
   latestFinished: null,
@@ -146,9 +146,12 @@ export function GoatBotFilesProvider(props: {
         state.streamed.add(reply.id);
         continue;
       }
-      if (state.decided.has(reply.id)) continue;
-      state.decided.add(reply.id);
-      const older = state.coveredUpTo !== null && reply.createdAt < state.coveredUpTo;
+      const before = state.decided.get(reply.id);
+      if (before === reply.text) continue;
+      state.decided.set(reply.id, reply.text);
+      // A finished reply whose words changed is new to any read, like one that streamed.
+      if (before !== undefined) state.streamed.add(reply.id);
+      const older = state.coveredUpTo !== null && reply.createdAt <= state.coveredUpTo;
       if (state.latestFinished === null || reply.createdAt > state.latestFinished)
         state.latestFinished = reply.createdAt;
       if (!namesSomething(reply.text)) continue;

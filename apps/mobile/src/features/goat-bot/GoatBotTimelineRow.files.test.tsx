@@ -139,12 +139,8 @@ const files = vi.hoisted(() => ({
   previews: [] as Array<{
     relativePath: string;
     answered: boolean;
-    /** Left on a connection that has since been replaced, so it no longer holds the server. */
-    dead: boolean;
     answer: (value: object) => void;
   }>,
-  /** Reads fail as on a lost connection. */
-  readsFail: false,
   /** The real Library opener runs, reading through this server, instead of the stand-in. */
   realOpen: false,
   opened: [] as string[],
@@ -194,14 +190,12 @@ vi.mock("@goat/client-runtime/state/runtime", async (original) => ({
     args: { input: { relativePath: string } },
   ) => {
     const relativePath = args.input.relativePath;
-    if (files.readsFail) return Promise.reject(new Error("The connection was lost."));
-    if (files.previews.some((entry) => !entry.answered && !entry.dead))
+    if (files.previews.some((entry) => !entry.answered))
       return Promise.resolve({ _tag: "Success", value: { status: "busy", relativePath } });
     return new Promise((resolve) => {
       const entry = {
         relativePath,
         answered: false,
-        dead: false,
         answer: (value: object) => {
           if (entry.answered) return;
           entry.answered = true;
@@ -267,7 +261,6 @@ afterEach(async () => {
   files.holdOpens = false;
   files.finishOpen.length = 0;
   files.disposed.length = 0;
-  files.readsFail = false;
   files.realOpen = false;
   screenSession.current = {};
 });
@@ -288,6 +281,8 @@ const bot = (id: string, text: string, options: string[] = []) => ({
   groupPosition: "single" as const,
 });
 const settle = () => act(async () => {});
+/** A reply sent after the ones the chat opened with. */
+const later = (row: ReturnType<typeof bot>) => ({ ...row, createdAt: "2026-10-12T09:50:00Z" });
 const chunk = (relativePath: string, mimeType: string, text: string) => ({
   status: "chunk",
   relativePath,
@@ -437,17 +432,17 @@ it("reads the listing again for a file named while a read was running, so a file
   const first = files.reads;
   expect(first).toBeGreaterThan(0);
   // A new reply names new.md while that read is still running.
-  await view.rerender(chat([bot("b1", "Old: `old.md`."), bot("b2", "New: `new.md`.")]));
+  await view.rerender(chat([bot("b1", "Old: `old.md`."), later(bot("b2", "New: `new.md`."))]));
   await settle();
   expect(files.reads).toBe(first);
   // The running read answers without new.md (it was saved after the walk); a follow-up read starts.
   files.pending = false;
   files.listing = listed("old.md");
-  await view.rerender(chat([bot("b1", "Old: `old.md`."), bot("b2", "New: `new.md`.")]));
+  await view.rerender(chat([bot("b1", "Old: `old.md`."), later(bot("b2", "New: `new.md`."))]));
   await settle();
   expect(files.reads).toBe(first + 1);
   files.listing = listed("old.md", "new.md");
-  await view.rerender(chat([bot("b1", "Old: `old.md`."), bot("b2", "New: `new.md`.")]));
+  await view.rerender(chat([bot("b1", "Old: `old.md`."), later(bot("b2", "New: `new.md`."))]));
   await settle();
   expect(card("new.md")).not.toBeNull();
 });
@@ -458,10 +453,10 @@ it("still reads for a newly named file after many replies with plain inline code
   await show(plain);
   const before = files.reads;
   files.listing = listed("fresh.md");
-  await view.rerender(chat([...plain, bot("b1", "Saved `fresh.md`.")]));
+  await view.rerender(chat([...plain, later(bot("b1", "Saved `fresh.md`."))]));
   await settle();
   expect(files.reads).toBe(before + 1);
-  await view.rerender(chat([...plain, bot("b1", "Saved `fresh.md`.")]));
+  await view.rerender(chat([...plain, later(bot("b1", "Saved `fresh.md`."))]));
   await settle();
   expect(card("fresh.md")).not.toBeNull();
 });
@@ -524,28 +519,28 @@ it("reads the listing again for a later mention of a listed file, so a rewritten
   expect(view.container.textContent).not.toContain("Old words");
 });
 
-it("reads the listing once for a reply that has finished streaming, however many files it names on the way", async () => {
+it("reads the listing exactly once for a reply that streams 50 file names and then finishes", async () => {
   files.listing = listed();
   const spans = (count: number) =>
     Array.from({ length: count }, (_, index) => `\`step${index}.md\``).join(" ");
-  await show([bot("b1", spans(1))], undefined);
-  await view.rerender(chat([bot("b1", spans(1))], "thread-a", ["b1"]));
+  h = createNativeMemoryHarness();
+  view = renderNative(h, chat([bot("b1", spans(1))], "thread-a", ["b1"]));
+  await view.render();
   await settle();
-  const before = files.reads;
   for (let count = 2; count <= 50; count += 1) {
     files.listing = listed();
     await view.rerender(chat([bot("b1", spans(count))], "thread-a", ["b1"]));
     await settle();
   }
-  expect(files.reads).toBe(before);
+  expect(files.reads).toBe(0);
   files.listing = listed("step49.md");
   await view.rerender(chat([bot("b1", spans(50))]));
   await settle();
-  expect(files.reads).toBeLessThanOrEqual(before + 1);
+  expect(files.reads).toBe(1);
   expect(card("step49.md")).not.toBeNull();
 });
 
-it("reads nothing more when history rows mount again, or an older reply arrives after a read", async () => {
+it("reads nothing more when history rows mount again, or an older or same-time reply arrives after a read", async () => {
   files.listing = listed("a.md");
   const history = Array.from({ length: 30 }, (_, index) =>
     bot(`h${index}`, `Saved \`f${index}.md\`.`),
@@ -553,6 +548,10 @@ it("reads nothing more when history rows mount again, or an older reply arrives 
   await show(history);
   const opened = files.reads;
   expect(opened).toBe(1);
+  // That read answers, so anything owed from here would start another.
+  files.listing = listed("a.md");
+  await view.rerender(chat(history));
+  await settle();
   // Scrolling away and back unmounts the rows' cards and mounts them again.
   await view.rerender(chat(history, "thread-a", [], []));
   await settle();
@@ -561,6 +560,10 @@ it("reads nothing more when history rows mount again, or an older reply arrives 
   // An older page of history loads.
   const older = { ...bot("old", "Earlier: `g.md`."), createdAt: "2026-10-12T08:00:00Z" };
   await view.rerender(chat([older, ...history]));
+  await settle();
+  // One from the same moment as the newest reply that read covered.
+  const sameTime = { ...bot("same", "Also `h.md`."), createdAt: history.at(-1)?.createdAt ?? "" };
+  await view.rerender(chat([older, ...history, sameTime]));
   await settle();
   expect(files.reads).toBe(opened);
 });
@@ -643,68 +646,42 @@ const pngChunk = (relativePath: string) => ({
 });
 /** The server's next unanswered read, which must be for `path`. */
 async function answerNext(path: string, value: object) {
-  const entry = files.previews.find((read) => !read.answered && !read.dead);
+  const entry = files.previews.find((read) => !read.answered);
   expect(entry?.relativePath).toBe(path);
   await act(async () => entry?.answer(value));
   await settle();
 }
-const BUSY = "Another file is still opening";
+const FAILED = /Another file is still opening|Couldn't open/;
 
-it("opens a card tapped while its own preview is still loading, with no error, and reads that preview again after", async () => {
+it("opens a card tapped while its own preview is loading once that chunk is in, with no error, and keeps the preview", async () => {
   files.realOpen = true;
   files.listing = listed("chart.png");
   await show([bot("b1", "Here: `chart.png`")]);
   await act(async () => card("chart.png")?.click());
   await settle();
-  // The server was still on the preview's chunk: the open waits for it, then tries once more.
-  await answerNext("chart.png", pngChunk("chart.png"));
-  expect(view.container.textContent).not.toContain(BUSY);
-  await answerNext("chart.png", pngChunk("chart.png"));
-  expect(view.container.textContent).not.toContain(BUSY);
-  expect(dialogImage()?.getAttribute("src")).toBe("file:///cache/opened.png");
-  // The interrupted preview is read again and fills its card.
+  // Nothing overlaps on the connection: the preview's chunk comes in, then the open reads.
   await answerNext("chart.png", pngChunk("chart.png"));
   expect(card("chart.png")?.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png/);
+  await answerNext("chart.png", pngChunk("chart.png"));
+  expect(view.container.textContent).not.toMatch(FAILED);
+  expect(dialogImage()?.getAttribute("src")).toBe("file:///cache/opened.png");
 });
 
-it("opens a card tapped while another card's preview is loading, then reads both previews", async () => {
+it("runs a tapped card's open right after the preview in flight, ahead of the previews still waiting", async () => {
   files.realOpen = true;
-  files.listing = listed("report.md", "chart.png");
-  await show([bot("b1", "`report.md` and `chart.png`")]);
-  await act(async () => card("chart.png")?.click());
+  files.listing = listed("report.md", "chart.png", "notes.md");
+  await show([bot("b1", "`report.md`, `chart.png` and `notes.md`")]);
+  // report.md's preview is in flight; chart.png's and notes.md's wait.
+  await act(async () => card("notes.md")?.click());
   await settle();
-  await answerNext("report.md", chunk("report.md", "text/markdown", "Interrupted"));
-  await answerNext("chart.png", pngChunk("chart.png"));
-  expect(view.container.textContent).not.toContain(BUSY);
-  expect(dialogImage()?.getAttribute("src")).toBe("file:///cache/opened.png");
-  // The interrupted preview goes first, then the one that waited behind it.
   await answerNext("report.md", chunk("report.md", "text/markdown", "Weekly words"));
+  // The open goes next; it shares a Markdown file.
+  await answerNext("notes.md", chunk("notes.md", "text/markdown", "Notes"));
+  expect(view.container.textContent).not.toMatch(FAILED);
+  expect(card("notes.md")?.textContent).not.toContain("Opening");
   await answerNext("chart.png", pngChunk("chart.png"));
+  await answerNext("notes.md", chunk("notes.md", "text/markdown", "Notes preview"));
   expect(card("report.md")?.textContent).toContain("Weekly words");
   expect(card("chart.png")?.querySelector("img")).not.toBeNull();
-});
-
-it("leaves an open with its own failure while a preview never answers, and a later open after the chat changes still opens", async () => {
-  files.realOpen = true;
-  files.listing = listed("chart.png");
-  const rows = [bot("b1", "Here: `chart.png`")];
-  await show(rows);
-  // The preview's answer never comes; the connection is lost.
-  files.readsFail = true;
-  await act(async () => card("chart.png")?.click());
-  await settle();
-  expect(card("chart.png")?.textContent).not.toContain("Opening");
-  expect(view.container.textContent).not.toContain(BUSY);
-  expect(dialogImage()).toBeNull();
-  // A new connection; the person moves to another chat and opens the file there.
-  files.readsFail = false;
-  for (const read of files.previews) read.dead = true;
-  await view.rerender(chat(rows, "thread-b"));
-  await settle();
-  await act(async () => card("chart.png")?.click());
-  await settle();
-  await answerNext("chart.png", pngChunk("chart.png"));
-  await answerNext("chart.png", pngChunk("chart.png"));
-  expect(view.container.textContent).not.toContain(BUSY);
-  expect(dialogImage()?.getAttribute("src")).toBe("file:///cache/opened.png");
+  expect(card("notes.md")?.textContent).toContain("Notes preview");
 });

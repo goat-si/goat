@@ -329,12 +329,13 @@ it("leaving with an image preview open deletes the copy", async () => {
   expect(kept()).toEqual([]);
 });
 
-it("says why a file did not open", async () => {
+it("says a file did not open, never that another file is still opening, since opens take turns", async () => {
   setup();
   state.files.delete("deck.pdf");
   await render();
   await press("Open deck.pdf");
-  expect(container.textContent).toContain("Another file is still opening. Try again in a moment.");
+  expect(container.textContent).toContain("Couldn't open deck.pdf. Try again.");
+  expect(container.textContent).not.toContain("still opening");
 });
 
 it("says when this device cannot share files", async () => {

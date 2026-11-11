@@ -1,160 +1,101 @@
 import type { EnvironmentId } from "@goat/contracts";
 
-// The server reads one Library file per connection at a time. Previews take turns: one in flight
-// per server and only the newest few waiting. A file the person opens never waits its turn: it
-// interrupts the preview in flight, which is read again once the open is done.
+// The server reads one Library file per connection at a time, so each server gets one read in
+// flight and the next waits for it instead of hearing "busy". A file the person opens waits only
+// for the one chunk in flight, then holds the server for its whole read, ahead of every waiting
+// preview; opens run in the order they were asked. Only the newest few previews wait at all.
 export const MAX_WAITING_PREVIEW_READS = 4;
 
 interface Waiting {
-  readonly chatKey: string;
-  /** Interrupted by an open: read again first, and never pushed out. */
-  again: boolean;
-  /** Its card has gone: an interrupted read is not read again. */
-  cancelled: boolean;
-  readonly start: () => InFlight;
+  readonly chatKey: string | null;
+  readonly start: () => void;
   readonly drop: () => void;
 }
 
-interface InFlight {
-  readonly entry: Waiting;
-  /** Settles when the server has answered this read, used or not. */
-  readonly done: Promise<void>;
-  /** Its answer, when it comes, is not this preview's. */
-  readonly abort: () => void;
-}
-
 interface Lane {
-  current: InFlight | null;
-  opens: number;
+  busy: boolean;
+  readonly opened: Waiting[];
   readonly previews: Waiting[];
 }
 
 const lanes = new Map<EnvironmentId, Lane>();
-const ignore = () => {};
-
-function laneOf(environmentId: EnvironmentId): Lane {
-  let lane = lanes.get(environmentId);
-  if (lane === undefined) {
-    lane = { current: null, opens: 0, previews: [] };
-    lanes.set(environmentId, lane);
-  }
-  return lane;
-}
 
 function startNext(environmentId: EnvironmentId, lane: Lane) {
-  if (lane.current !== null || lane.opens > 0) return;
-  const next = lane.previews.shift();
+  if (lane.busy) return;
+  const next = lane.opened.shift() ?? lane.previews.shift();
   if (next === undefined) {
     if (lanes.get(environmentId) === lane) lanes.delete(environmentId);
     return;
   }
-  const flight = next.start();
-  lane.current = flight;
-  void flight.done.then(() => {
-    if (lane.current !== flight) return;
-    lane.current = null;
-    startNext(environmentId, lane);
-  });
+  lane.busy = true;
+  next.start();
 }
 
-/** Settles true when `done` does, false if `signal` aborts first. */
-function settledUnlessAborted(done: Promise<void>, signal: AbortSignal | undefined) {
-  if (signal === undefined) return done.then(() => true);
-  if (signal.aborted) return Promise.resolve(false);
-  const aborted = Promise.withResolvers<boolean>();
-  const onAbort = () => aborted.resolve(false);
-  signal.addEventListener("abort", onAbort, { once: true });
-  return Promise.race([done.then(() => true), aborted.promise]).finally(() =>
-    signal.removeEventListener("abort", onAbort),
-  );
+function enqueue<T>(
+  environmentId: EnvironmentId,
+  run: () => Promise<T>,
+  queue: "opened" | "previews",
+  chatKey: string | null,
+) {
+  let lane = lanes.get(environmentId);
+  if (lane === undefined) {
+    lane = { busy: false, opened: [], previews: [] };
+    lanes.set(environmentId, lane);
+  }
+  const owner = lane;
+  const settled = Promise.withResolvers<T | null>();
+  const entry: Waiting = {
+    chatKey,
+    start: () => {
+      run()
+        .then(settled.resolve, settled.reject)
+        .finally(() => {
+          owner.busy = false;
+          startNext(environmentId, owner);
+        });
+    },
+    drop: () => settled.resolve(null),
+  };
+  const waiting = owner[queue];
+  waiting.push(entry);
+  if (queue === "previews" && waiting.length > MAX_WAITING_PREVIEW_READS) waiting.shift()?.drop();
+  startNext(environmentId, owner);
+  const cancel = () => {
+    const at = waiting.indexOf(entry);
+    if (at === -1) return;
+    waiting.splice(at, 1);
+    entry.drop();
+  };
+  return { result: settled.promise, cancel };
 }
 
 /**
- * A file the person opened: `run` reads all of it now. A preview in flight on that server is
- * interrupted and read again afterwards. When `busy` says the server was still on that preview's
- * chunk, the open waits for the chunk's answer and tries once more. Null when aborted first.
+ * A file the person opened, from a chat card or the Library: `run` reads all of it while it holds
+ * the server, after the one read already in flight and before every waiting preview. Null when
+ * aborted before it started; once started, it lets the server go when `run` settles.
  */
-export async function openBotFileRead<T>(
+export function openBotFileRead<T>(
   environmentId: EnvironmentId,
   run: () => Promise<T>,
   signal?: AbortSignal,
-  busy?: (result: T) => boolean,
 ): Promise<T | null> {
-  if (signal?.aborted) return null;
-  const lane = laneOf(environmentId);
-  lane.opens += 1;
-  const interrupted = lane.current;
-  if (interrupted !== null) {
-    lane.current = null;
-    interrupted.abort();
-    if (interrupted.entry.cancelled) interrupted.entry.drop();
-    else {
-      interrupted.entry.again = true;
-      lane.previews.unshift(interrupted.entry);
-    }
-  }
-  try {
-    const first = await run();
-    if (interrupted === null || busy?.(first) !== true) return first;
-    if (!(await settledUnlessAborted(interrupted.done, signal))) return null;
-    return await run();
-  } finally {
-    lane.opens -= 1;
-    startNext(environmentId, lane);
-  }
+  if (signal?.aborted) return Promise.resolve(null);
+  const read = enqueue(environmentId, run, "opened", null);
+  signal?.addEventListener("abort", read.cancel, { once: true });
+  return read.result;
 }
 
 /**
  * A card's preview read in chat `chatKey`, one request. Null when it never ran: cancelled while
- * waiting, pushed out by newer previews past the limit, or its chat left. An interrupted read
- * waits again and resolves with the read that follows.
+ * waiting, pushed out by newer previews past the limit, or its chat left. One already in flight
+ * finishes; its card ignores the answer.
  */
 export function queuePreviewRead<T>(
   environmentId: EnvironmentId,
   chatKey: string,
   request: () => Promise<T>,
 ) {
-  const lane = laneOf(environmentId);
-  const settled = Promise.withResolvers<T | null>();
-  const entry: Waiting = {
-    chatKey,
-    again: false,
-    cancelled: false,
-    start: () => {
-      let aborted = false;
-      const answer = request();
-      answer.then(
-        (value) => {
-          if (!aborted) settled.resolve(value);
-        },
-        (error: unknown) => {
-          if (!aborted) settled.reject(error);
-        },
-      );
-      return {
-        entry,
-        done: answer.then(ignore, ignore),
-        abort: () => {
-          aborted = true;
-        },
-      };
-    },
-    drop: () => settled.resolve(null),
-  };
-  lane.previews.push(entry);
-  if (lane.previews.length > MAX_WAITING_PREVIEW_READS) {
-    const oldest = lane.previews.findIndex((waiting) => !waiting.again);
-    if (oldest !== -1) lane.previews.splice(oldest, 1)[0]?.drop();
-  }
-  startNext(environmentId, lane);
-  const cancel = () => {
-    entry.cancelled = true;
-    const at = lane.previews.indexOf(entry);
-    if (at === -1) return;
-    lane.previews.splice(at, 1);
-    entry.drop();
-  };
-  return { result: settled.promise, cancel };
+  return enqueue(environmentId, request, "previews", chatKey);
 }
 
 /** The person left chat `chatKey`: its waiting previews never start. */
