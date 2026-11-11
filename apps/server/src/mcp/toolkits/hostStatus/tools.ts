@@ -17,6 +17,7 @@ import {
   GoatHubDeviceVerifyInput,
   GoatHubDeviceVerifyResult,
   HubDeviceSetupInput,
+  HubDeviceMoveInput,
   HubDeviceOperationInput,
   hubDeviceToolResult,
   OpenCodexSyncReport,
@@ -77,6 +78,19 @@ const membershipTool = <
       HubMembership.HubMembership,
     ],
   }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry[path]));
+
+const MoveTool = Tool.make(agentSurfaceRegistry["hub.device_move"].name, {
+  description: agentSurfaceRegistry["hub.device_move"].description,
+  parameters: withClientRequestId(HubDeviceMoveInput),
+  success: hubDeviceToolResult(agentSurfaceRegistry["hub.device_move"].name),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    HubMembership.HubMembership,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_move"]));
 
 const OpenCodexSyncTool = Tool.make(agentSurfaceRegistry["hub.opencodex_sync"].name, {
   description: agentSurfaceRegistry["hub.opencodex_sync"].description,
@@ -161,6 +175,7 @@ export const HostStatusToolkit = Toolkit.make(
   membershipTool("hub.device_join"),
   membershipTool("hub.device_leave"),
   membershipTool("hub.device_repair"),
+  MoveTool,
   ChildPrepareTool,
   ChildConnectionTool,
   ChildStatusTool,

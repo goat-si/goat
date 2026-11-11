@@ -2,6 +2,7 @@ import * as ScopedReadMcp from "../../ScopedReadMcp.ts";
 import type {
   GoatHostStatusInput,
   GoatHubOpenCodexSyncInput,
+  HubDeviceMoveInput,
   HubDeviceOperationInput,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -93,6 +94,14 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
   ),
   goat_hub_device_leave: McpToolAccess.destructive(membership("leave")),
   goat_hub_device_repair: membership("repair"),
+  goat_hub_device_move: McpToolAccess.destructive(
+    McpToolAccess.writes((input: HubDeviceMoveInput) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        return yield* (yield* HubMembership.HubMembership).move(scope, input);
+      }),
+    ),
+  ),
   goat_hub_opencodex_sync: openCodexSync,
   goat_hub_device_verify: McpToolAccess.readsOrReachesHost(
     () => true,
