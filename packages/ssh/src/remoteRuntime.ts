@@ -96,7 +96,7 @@ export interface RemoteGoatRunnerOptions {
    * `confirmReplacement`, a runtime GOAT cannot verify or drain is stopped only when it is still
    * this process; any other runtime is refused as before.
    */
-  readonly forceReplace?: SshForceReplaceTarget;
+  readonly forceReplace?: SshForceReplaceTarget | undefined;
   /** Drain window for a replacement, in seconds (default 60, at most 300). */
   readonly replacementGraceSeconds?: number;
   /**

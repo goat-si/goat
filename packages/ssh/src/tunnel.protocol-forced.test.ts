@@ -1,12 +1,16 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
-import { ARCHIVE } from "./tunnel.fixture.ts";
+import * as Stream from "effect/Stream";
+import { ChildProcess } from "effect/process";
+import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
+import { replaceTargetOf } from "./forcedReplacementScripts.ts";
+import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
+import { ARCHIVE, remoteShell } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
 const OLDER = "1.2.3-preview.9";
@@ -20,19 +24,22 @@ const isAlive = (pid: number) => {
   }
 };
 
-/** The start time the host reports for a PID, as a person approved it. */
-const startOf = (pid: number) =>
-  NodeChildProcess.execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
-    encoding: "utf8",
-    env: { LC_ALL: "C", TZ: "UTC" },
-  })
-    .trim()
-    .replace(/\s+/gu, " ");
+type Fixture = Effect.Success<ReturnType<typeof makeProtocolFixture>>;
 
-const events = (f: {
-  fs: { readFileString: (path: string) => Effect.Effect<string, unknown> };
-  test: string;
-}) =>
+/** The start time the host reports for a PID, as a person approved it. */
+const startOf = (f: Pick<Fixture, "realSpawner">, pid: number) =>
+  Effect.gen(function* () {
+    const ps = yield* f.realSpawner.spawn(
+      ChildProcess.make("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+        env: { LC_ALL: "C", TZ: "UTC" },
+        extendEnv: false,
+      }),
+    );
+    const text = yield* ps.stdout.pipe(Stream.decodeText(), Stream.mkString);
+    return text.trim().replace(/\s+/gu, " ");
+  });
+
+const events = (f: Pick<Fixture, "fs" | "test">) =>
   f.fs.readFileString(`${f.test}/events`).pipe(
     Effect.map((text) =>
       text
@@ -63,7 +70,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const result = yield* f.run("launch", false, {
             confirmReplacement: true,
             replacementGraceSeconds: 5,
-            forceReplace: { pid: f.pid, port: f.port, startedAt: startOf(f.pid) },
+            forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
           });
           assert.isTrue(
             Result.isSuccess(result),
@@ -91,7 +98,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture(unverified);
           if (mismatch === "uid") yield* f.fs.writeFileString(`${f.test}/foreign-uid`, "4242\n");
-          const startedAt = startOf(f.pid);
+          const startedAt = yield* startOf(f, f.pid);
           const before = yield* f.snapshot;
           const result = yield* f.run("launch", false, {
             confirmReplacement: true,
@@ -127,7 +134,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const result = yield* f.run("launch", false, {
             confirmReplacement: true,
             replacementGraceSeconds: 1,
-            forceReplace: { pid: f.pid, port: f.port, startedAt: startOf(f.pid) },
+            forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
           });
           assert.isTrue(
             Result.isSuccess(result),
@@ -155,7 +162,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             confirmReplacement: true,
             replacementGraceSeconds: 5,
             ...(forced
-              ? { forceReplace: { pid: f.pid, port: f.port, startedAt: startOf(f.pid) } }
+              ? { forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) } }
               : {}),
           });
           if (Result.isFailure(result)) throw result.failure;
@@ -169,6 +176,52 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.equal(result.success.pending?.refreshCause, "drain_unavailable");
             assert.isTrue(isAlive(f.pid));
           }
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH status names the recorded runtime process",
+  () => {
+    it.live.each([false, true])(
+      "the probe reports the recorded process only while this user owns it; foreign=%s",
+      (foreign) =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture(unverified);
+          if (foreign) yield* f.fs.writeFileString(`${f.test}/foreign-uid`, "4242\n");
+          const probe = yield* f.realSpawner.spawn(
+            ChildProcess.make(remoteShell, ["-s"], {
+              env: {
+                HOME: f.home,
+                PATH: `${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`,
+                LC_ALL: "C",
+              },
+              extendEnv: false,
+              stdin: {
+                stream: Stream.make(
+                  new TextEncoder().encode(
+                    buildRemoteRuntimeProbeScript(ARCHIVE.archiveVersion, REMOTE_RUNTIME_STATE_KEY),
+                  ),
+                ),
+                endOnDone: true,
+              },
+            }),
+          );
+          const output = yield* probe.stdout.pipe(Stream.decodeText(), Stream.mkString);
+          const decoded = yield* decodeRemoteRuntimeProbe(output);
+          assert.deepEqual(
+            replaceTargetOf(decoded),
+            foreign
+              ? {}
+              : {
+                  replaceTarget: {
+                    pid: f.pid,
+                    port: f.port,
+                    startedAt: yield* startOf(f, f.pid),
+                  },
+                },
+          );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   },

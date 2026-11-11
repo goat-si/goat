@@ -261,7 +261,7 @@ repair_owned_identity() {
 check_live_protocol() {
   LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0; LIVE_VERSION=unknown
   LIVE_COMPATIBLE=0; LIVE_OWNED=0; NEEDS_OWNED_UPGRADE=0; REPLACEMENT_REASON=incompatible; comparison=
-  LIVE_DRAIN=0; LIVE_INSTANCE_ID=; DEFER_NO_DRAIN=0
+  LIVE_DRAIN=0; LIVE_INSTANCE_ID=; DEFER_NO_DRAIN=0; FORCE_STOP=0
   if live="$(live_fact "$CHECK_RUNNER" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" 2>/dev/null)"; then
     set -f; set -- $live
     if ! valid_live_tokens "$@"; then printf 'Malformed live protocol output.\n' >&2; exit 1; fi
@@ -305,6 +305,7 @@ check_live_protocol() {
     valid_positive "$recorded_port" || recorded_port=unknown
     stop_pid="$recorded_pid"
     [ "$stop_pid" != unknown ] || stop_pid='<pid>'
+    if forced_target_recorded "$recorded_pid" "$recorded_port"; then select_forced_stop; return 0; fi
     printf 'Cannot verify live GOAT PID=%s port=%s: descriptor unavailable or persisted identity disagrees; it may predate GOAT SSH runtime protocol metadata. It was left running, and the runner and ownership files were preserved. If this is your earlier GOAT server, stop it on the remote host (kill %s) and reconnect.\\n' "$recorded_pid" "$recorded_port" "$stop_pid" >&2; exit 1
   fi
   if [ "$LIVE_OWNED" = 1 ] && [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LEGACY_PENDING" != 1 ]; then
@@ -357,13 +358,15 @@ check_live_protocol() {
   fi
   if [ "$LIVE_STATUS" = live ] && [ "$LIVE_COMPATIBLE" != 1 ]; then
     if [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LIVE_OWNED" = 1 ]; then NEEDS_OWNED_UPGRADE=1
+    elif forced_target_recorded "$LIVE_PID" "$LIVE_PORT"; then select_forced_stop; return 0
     else printf 'Live GOAT PID=%s port=%s is incompatible; it was left running. Upgrade with the owning client or reconnect.\n' "$LIVE_PID" "$LIVE_PORT" >&2; exit 1; fi
   fi
   if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$ALLOW_OWNED_UPGRADE" != 1 ]; then
     printf 'Secondary preparation cannot replace a live runtime.\n' >&2; exit 1
   fi
   if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$LIVE_DRAIN" != 1 ]; then
-    if [ "$REFRESH_IF_IDLE" = 1 ] && [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_OWNED" = 1 ] &&
+    if forced_target_recorded "$LIVE_PID" "$LIVE_PORT"; then select_forced_stop
+    elif [ "$REFRESH_IF_IDLE" = 1 ] && [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_OWNED" = 1 ] &&
        { [ "$REPLACEMENT_REASON" = older ] || [ "$REPLACEMENT_REASON" = capability ]; }; then
       DEFER_NO_DRAIN=1
     elif [ "$REPLACEMENT_REASON" = legacy ]; then
@@ -442,6 +445,22 @@ OWNING_LAUNCH=@@GOAT_OWNING_LAUNCH@@
 DRAIN_FORCE=@@GOAT_DRAIN_FORCE@@
 DRAIN_AUTOMATIC=@@GOAT_DRAIN_AUTOMATIC@@
 DRAIN_GRACE_SECONDS=@@GOAT_DRAIN_GRACE_SECONDS@@
+# The runtime process a person approved stopping: PID, recorded port and start time.
+FORCE_PID=@@GOAT_FORCE_PID@@
+FORCE_PORT=@@GOAT_FORCE_PORT@@
+FORCE_START=@@GOAT_FORCE_START@@
+FORCE_STOP=0
+# Selects only the approved process, and only while the launch records still name it. The
+# launch re-checks liveness, owner, start time and listener under the lock before any signal.
+forced_target_recorded() {
+  [ "$DRAIN_FORCE" = 1 ] && [ "$OWNING_LAUNCH" = 1 ] && valid_positive "$FORCE_PID" &&
+    [ "$1" = "$FORCE_PID" ] && [ "$2" = "$FORCE_PORT" ] &&
+    fact_file_is "$PID_FILE" "$FORCE_PID" && fact_file_is "$PORT_FILE" "$FORCE_PORT"
+}
+select_forced_stop() {
+  FORCE_STOP=1; LIVE_STATUS=forced; LIVE_PID="$FORCE_PID"; LIVE_PORT="$FORCE_PORT"
+  LIVE_COMPATIBLE=0; NEEDS_OWNED_UPGRADE=0; DEFER_NO_DRAIN=0
+}
 RUNNER_PUBLISHED=0; REFRESH_DECISION=; LEGACY_PENDING=0; LEGACY_COMMITTED=0
 LEGACY_TERMINATED=0; LEGACY_IDENTITY_LINK=; LEGACY_PUBLICATION_STARTED=0
 RETAINED_SNAPSHOT_FILE=; LEGACY_PID=; LEGACY_PORT=; LEGACY_IDENTITY=; LEGACY_VERSION=; LEGACY_UID=; LEGACY_START=

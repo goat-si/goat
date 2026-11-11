@@ -138,6 +138,8 @@ const SshHostStatusShape = Schema.Struct({
   detail: Schema.optionalKey(Schema.String),
   failure: Schema.optionalKey(SshHostFailure),
   refreshDeferred: Schema.optionalKey(SshRefreshDeferred),
+  /** The recorded runtime process, when it is alive and owned by the SSH user. */
+  replaceTarget: Schema.optionalKey(SshForceReplaceTarget),
   providers: Schema.optionalKey(SshHostProviders),
   publicKey: Schema.optionalKey(Schema.String),
   keyAuth: Schema.optionalKey(SshKeyAuthInstructions),

@@ -301,6 +301,18 @@ case "$(uname -m)" in
 esac
 ready=false
 if ready_version "$V"; then ready=true; fi
+# The recorded runtime process, alive and this user's: a forced update names it to a person.
+if [ "$platform" != win32 ] && [ -n "$state_key" ]; then
+  replace_pid="$(cat "$state/pid" 2>/dev/null || true)"; replace_port="$(cat "$state/port" 2>/dev/null || true)"
+  if valid_positive "$replace_pid" && valid_port "$replace_port" && kill -0 "$replace_pid" 2>/dev/null &&
+     [ "$(ps -o uid= -p "$replace_pid" 2>/dev/null | tr -d ' ')" = "$(id -u)" ]; then
+    replace_start="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$replace_pid" 2>/dev/null | awk '{ $1 = $1; print }')"
+    case "$replace_start" in
+      ''|*[!A-Za-z0-9:\\ ]*) ;;
+      *) live_fields="$live_fields$(printf ',"replaceTarget":{"pid":%s,"port":%s,"startedAt":"%s"}' "$replace_pid" "$replace_port" "$replace_start")" ;;
+    esac
+  fi
+fi
 ${
   recordReconnect
     ? `# A byte-identical answer alone would miss a rebuilt binary or a changed ownership record.
@@ -368,6 +380,8 @@ const decodeRemoteRuntimeProbeFields = Schema.decodeEffect(
       liveDrain: Schema.optionalKey(Schema.Boolean),
       /** The live server is GOAT's managed runtime whose launch records were lost; see `managed_orphan`. */
       liveAdoptable: Schema.optionalKey(Schema.Boolean),
+      /** The recorded runtime process; decoded leniently by replaceTargetOf. */
+      replaceTarget: Schema.optionalKey(Schema.Unknown),
     }),
   ),
 );

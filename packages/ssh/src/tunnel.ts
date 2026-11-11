@@ -131,6 +131,12 @@ import {
   REPLACE_RUNNER_INSTALL,
   VERIFY_OWNED_BEFORE_PUBLICATION,
 } from "./runtimeOwnershipScripts.ts";
+import {
+  REMOTE_FORCED_STOP_SCRIPT,
+  replaceTargetOf,
+  withForcedReplacement,
+} from "./forcedReplacementScripts.ts";
+import { preparationIntent } from "./preparationIntent.ts";
 import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./launchListenerScripts.ts";
 import { REMOTE_LAUNCH_READY_REPORT_SCRIPT } from "./launchReadyReportScripts.ts";
 import {
@@ -268,6 +274,7 @@ export interface SshEnvironmentEnsureOptions {
   readonly reuseWhileRefreshPending?: boolean;
   readonly refreshRuntime?: boolean;
   readonly confirmReplacement?: boolean;
+  readonly forceReplace?: RemoteGoatRunnerOptions["forceReplace"];
   readonly onPhase?: SshRuntimeProgressCallback;
 }
 
@@ -870,7 +877,7 @@ if ! listener_probe_available; then
   fi
   exit 1
 fi
-if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
+${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   UPGRADE_PID="$LIVE_PID"; UPGRADE_PORT="$LIVE_PORT"; UPGRADE_VERSION="$LIVE_VERSION"
   UPGRADE_INSTANCE="$LIVE_INSTANCE_ID"
   if [ "$GOAT_HOST_WINDOWS" = 1 ] &&
@@ -1240,7 +1247,7 @@ function buildRemoteRunnerSetupScript(
   captureBaseline = false,
 ): string {
   const preserve = selection.source === "retained";
-  return applyScriptPlaceholders(REMOTE_RUNNER_SETUP_SCRIPT, {
+  return applyScriptPlaceholders(withForcedReplacement(REMOTE_RUNNER_SETUP_SCRIPT, input), {
     GOAT_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
     GOAT_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
     GOAT_DRAIN_AUTOMATIC:
@@ -3608,37 +3615,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
   });
 
-  // Only preparation policy participates: tokens, callbacks and request identity are per waiter.
-  const preparationIntent = (
-    runner: RemoteGoatRunnerOptions | undefined,
-    requestOptions: SshEnvironmentEnsureOptions | undefined,
-    background = false,
-  ) =>
-    JSON.stringify({
-      background,
-      keyOnly: requestOptions?.keyOnly === true,
-      refreshRuntime: requestOptions?.refreshRuntime === true,
-      confirmReplacement: requestOptions?.confirmReplacement === true,
-      reuseWhileRefreshPending: requestOptions?.reuseWhileRefreshPending === true,
-      allowFoldedProbe:
-        requestOptions?.refreshRuntime !== true && requestOptions?.confirmReplacement !== true,
-      nodeScriptPath: runner?.nodeScriptPath ?? null,
-      nodeEngineRange: runner?.nodeEngineRange ?? null,
-      archiveVersion: runner?.archiveVersion ?? null,
-      archiveCommitTime: runner?.archiveCommitTime ?? null,
-      archiveSource: runner?.archiveSource ?? null,
-      releaseBaseUrl: runner?.releaseBaseUrl ?? null,
-      archiveDirectory: runner?.archiveDirectory ?? null,
-      bundledArchiveDirectory: runner?.bundledArchiveDirectory ?? null,
-      hostDownload: runner?.hostDownload === true,
-      publishedFallback: runner?.publishedFallback === true,
-      ghCommand: runner?.ghCommand ?? null,
-      cleanupTimeoutMs: runner?.cleanupTimeoutMs ?? null,
-      keepExistingRunner: runner?.keepExistingRunner === true,
-      refreshOwnedRuntimeOnFirstConnection: runner?.refreshOwnedRuntimeOnFirstConnection === true,
-      runnerConfirmReplacement: runner?.confirmReplacement === true,
-      replacementGraceSeconds: runner?.replacementGraceSeconds ?? null,
-    });
   const preparationTerminal = (prepared: PreparedEnsure) => {
     if (
       closed ||
@@ -3911,6 +3887,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       keyOnly: requestOptions?.keyOnly === true || managedPin !== undefined,
       refreshRuntime: requestOptions?.refreshRuntime === true,
       confirmReplacement: requestOptions?.confirmReplacement === true,
+      forceReplace: requestOptions?.forceReplace,
       reuseWhileRefreshPending: requestOptions?.reuseWhileRefreshPending === true,
     };
     const onHostAnswered = yield* SshHostAnswered;
@@ -3982,6 +3959,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                           !pendingReplacements.has(key))) &&
                       runner.refreshOwnedRuntimeOnFirstConnection === true,
                     confirmReplacement: preparationOptions.confirmReplacement === true,
+                    forceReplace: preparationOptions.forceReplace,
                     ...(preparationOptions.refreshRuntime === true ? { manualRefresh: true } : {}),
                   };
             const entry = yield* ensureTunnelEntry(
@@ -4288,12 +4266,20 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             : {}),
         };
       } else if (probe.liveStatus === "unknown") {
-        return {
-          kind: "error",
-          code: "operation_failed",
-          message: `${host}: The running GOAT runtime could not be verified.`,
-          fix: { actor: "agent", instruction: "Try again" },
-        } satisfies SshHostResult;
+        const unverified = replaceTargetOf(probe).replaceTarget;
+        if (unverified === undefined)
+          return {
+            kind: "error",
+            code: "operation_failed",
+            message: `${host}: The running GOAT runtime could not be verified.`,
+            fix: { actor: "agent", instruction: "Try again" },
+          } satisfies SshHostResult;
+        snapshot = {
+          ...base,
+          runtimeVersion: null,
+          state: "update_blocked",
+          detail: `GOAT cannot verify the runtime on ${host} (PID ${unverified.pid}). Ask for an update now to replace it.`,
+        };
       } else {
         snapshot = {
           ...base,
@@ -4391,7 +4377,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           failure: previousFailure,
         };
       }
-      return { kind: "ok", status: { ...snapshot, ...setupFields(key) } } satisfies SshHostResult;
+      const status = { ...snapshot, ...replaceTargetOf(probe), ...setupFields(key) };
+      return { kind: "ok", status } satisfies SshHostResult;
     }).pipe(
       Effect.catch((error) => {
         const failure = runtimeFailureResult(
