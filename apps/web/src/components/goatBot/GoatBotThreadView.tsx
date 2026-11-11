@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -18,6 +18,8 @@ import { threadEnvironment } from "~/state/threads";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
 import { toastManager } from "../ui/toast";
+import { useUiStateStore } from "~/uiStateStore";
+import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ThreadVisitWatermark } from "../chat/ThreadVisitWatermark";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotActivityContext } from "./GoatBotTimeline";
@@ -86,6 +88,17 @@ function GoatBotThreadSession({
   });
   const threadRef = scopeThreadRef(environmentId, threadId);
   const shell = useThreadShell(threadRef);
+  const localLastVisitedAt = useUiStateStore(
+    (state) => state.threadLastVisitedAtById[scopedThreadKey(threadRef)],
+  );
+  const [unreadSince, setUnreadSince] = useState(() =>
+    shell === null
+      ? undefined
+      : (resolveThreadLastVisitedAt(shell.lastVisitedAt, localLastVisitedAt) ?? null),
+  );
+  if (unreadSince === undefined && shell !== null) {
+    setUnreadSince(resolveThreadLastVisitedAt(shell.lastVisitedAt, localLastVisitedAt) ?? null);
+  }
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
@@ -157,6 +170,7 @@ function GoatBotThreadSession({
       <GoatBotChatView
         {...session}
         environmentId={environmentId}
+        unreadSince={unreadSince}
         homeMove={
           moveTarget
             ? {
