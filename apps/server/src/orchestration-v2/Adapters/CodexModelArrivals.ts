@@ -35,10 +35,24 @@ export const reconnectsKeptProcess = Effect.fn("CodexModelArrivals.reconnectsKep
   },
 );
 
+const NAMESPACE = /^[A-Za-z0-9_-]+$/;
+
+/** Codex's own metadata lookup: an exact slug, the longest listed prefix, or that of a namespaced suffix. */
+const resolves = (served: ReadonlySet<string>, model: string) => {
+  if (served.has(model)) return true;
+  const slash = model.indexOf("/");
+  const suffix = slash > 0 ? model.slice(slash + 1) : undefined;
+  const namespaced =
+    suffix !== undefined && !suffix.includes("/") && NAMESPACE.test(model.slice(0, slash));
+  for (const slug of served)
+    if (model.startsWith(slug) || (namespaced && suffix.startsWith(slug))) return true;
+  return false;
+};
+
 /**
- * Codex's app-server reads its catalog only at startup and runs an unknown model with every MCP tool
- * inline, so a catalog model is ready only when the serving process lists it; otherwise it is predated
- * (offered only after the process started), missing (offered then too) or unconfirmed (no answer).
+ * Codex's app-server reads its catalog only at startup and runs a model it cannot resolve with every
+ * MCP tool inline. Otherwise a model is predated (offered only after the process started), missing
+ * (offered then too, or absent from GOAT's catalog) or unconfirmed (no answer, or no catalog yet).
  * Custom models are GOAT's and never checked.
  */
 export const makeCodexModelArrivals = <E>(input: {
@@ -52,19 +66,24 @@ export const makeCodexModelArrivals = <E>(input: {
   const atStart = offeredFromCatalog(input.atStart);
   let served: ReadonlySet<string> | undefined;
   const lists = Effect.fn("CodexModelArrivals.lists")(function* (model: string) {
-    if (served?.has(model)) return true;
+    if (served !== undefined && resolves(served, model)) return true;
     // Codex can still learn models online, so a miss is asked again.
     served = new Set(yield* input.listServed);
-    return served.has(model);
+    return resolves(served, model);
   });
   return Effect.fn("CodexModelArrivals.modelStatus")(function* (model: string) {
-    if (!offeredFromCatalog(yield* input.offered).has(model)) return "ready" as ProviderModelStatus;
+    const offered = yield* input.offered;
+    const entry = offered.find((candidate) => candidate.slug === model);
+    if (entry?.isCustom === true) return "ready" as ProviderModelStatus;
     const listed = yield* lists(model).pipe(
       Effect.timeoutOption("10 seconds"),
       Effect.orElseSucceed(() => Option.none<boolean>()),
     );
     if (Option.isNone(listed)) return "unconfirmed";
     if (listed.value) return "ready";
+    // A pending or failed probe publishes no catalog, so GOAT cannot tell what a new process knows.
+    if (entry === undefined)
+      return offeredFromCatalog(offered).size > 0 ? "missing" : "unconfirmed";
     return atStart.has(model) ? "missing" : "predated";
   });
 };

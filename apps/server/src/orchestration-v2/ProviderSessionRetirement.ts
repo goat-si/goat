@@ -26,9 +26,9 @@ export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRes
   override get message(): string {
     switch (this.model === undefined ? undefined : this.modelStatus) {
       case "missing":
-        return `This provider's process does not list ${this.model}, although GOAT offers it and already did when that process started, so a restart would not help. Pick another model, or check this project's provider configuration for its model catalog.`;
+        return `This provider's process does not know ${this.model}, and a restart would not help: GOAT's model list either lacks it or already had it when that process started. Pick another model, or check this project's provider configuration for its model catalog.`;
       case "unconfirmed":
-        return `GOAT could not confirm that this provider's process can run ${this.model}, because it did not answer for its model list. Once the work still running on it finishes, sending again starts a new process. Try again shortly or pick another model.`;
+        return `GOAT could not confirm that this provider's process can run ${this.model}: it did not answer for its model list, or GOAT has no model list from the provider yet. Once the work still running on it finishes, sending again starts a new process. Try again shortly or pick another model.`;
       case "predated":
         return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes, sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
     }
@@ -68,6 +68,8 @@ export interface RetirableSession {
   readonly sessionConfigKey: string | undefined;
   readonly retiring: boolean;
   readonly busyTurns: ReadonlySet<string>;
+  /** Advances with session activity; a release removes the entry only while it still matches. */
+  readonly idleGeneration: number;
   readonly runtime: Pick<
     ProviderAdapter.ProviderAdapterV2SessionRuntime,
     | "instanceId"
@@ -124,8 +126,11 @@ export const make = <
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<{ readonly sessionConfigKey?: string | undefined }, LookupError>;
   };
-  /** Releases unless a turn is busy on the session. */
-  readonly release: (providerSessionId: ProviderSessionId) => Effect.Effect<void, ReleaseError>;
+  /** Releases unless a turn is busy on the session or its activity moved past `idleGeneration`. */
+  readonly release: (
+    providerSessionId: ProviderSessionId,
+    idleGeneration: number,
+  ) => Effect.Effect<void, ReleaseError>;
   readonly reschedule: (providerSessionId: ProviderSessionId) => Effect.Effect<void, ActivityError>;
   readonly withOpenLock: <A, E, R>(
     providerSessionId: ProviderSessionId,
@@ -169,6 +174,8 @@ export const make = <
       const latest = yield* read;
       if (latest === undefined) return "released" as Retirement;
       if (latest.busyTurns.size > 0) return busy;
+      // Activity seen while the probes below yield keeps the session, as it does for idle release.
+      const generation = latest.idleGeneration;
       const held =
         latest.runtime.holdsLiveWork !== undefined &&
         (yield* latest.runtime
@@ -182,7 +189,7 @@ export const make = <
         latest.runtime.hasPendingBackgroundWork !== undefined &&
         (yield* latest.runtime.hasPendingBackgroundWork.pipe(unlessInterrupted(true)));
       if (working) return busy;
-      yield* input.release(providerSessionId).pipe(logged(providerSessionId));
+      yield* input.release(providerSessionId, generation).pipe(logged(providerSessionId));
       return (yield* read) === undefined ? "released" : busy;
     });
     const opened = yield* read;

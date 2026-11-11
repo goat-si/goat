@@ -72,6 +72,8 @@ interface Fixture {
   keptProcessKnows: ReadonlyArray<string> | undefined;
   /** Commands or tools still running in the process outside any turn. */
   backgroundWork: boolean;
+  /** Runs while the manager reads that state, as a provider event arriving mid-check would. */
+  duringBackgroundProbe: Effect.Effect<void>;
   /** Catalog models a freshly started process still does not list, as with a project's own catalog. */
   readonly freshProcessLacks: Array<string>;
 }
@@ -88,6 +90,7 @@ const makeFixture = Effect.gen(function* () {
     catalog: [modelSelection.model],
     keptProcessKnows: undefined,
     backgroundWork: false,
+    duringBackgroundProbe: Effect.void,
     freshProcessLacks: [],
   };
   fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
@@ -135,7 +138,9 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
         },
         events: Stream.never,
         backgroundTasksEndWithProcess: true,
-        hasPendingBackgroundWork: Effect.sync(() => fixture.backgroundWork),
+        hasPendingBackgroundWork: Effect.suspend(() => fixture.duringBackgroundProbe).pipe(
+          Effect.andThen(Effect.sync(() => fixture.backgroundWork)),
+        ),
         holdsLiveWork: ({ pastPinCeiling }) =>
           pastPinCeiling ? fixture.liveWork.confirm : Effect.succeed(fixture.liveWork.held),
         modelStatus: (model) =>
@@ -610,4 +615,21 @@ it.effect(
         assert.strictEqual(yield* Queue.size(fixture.closed), 0);
       }).pipe(Effect.provide(layer(fixture)));
     }),
+);
+
+it.effect("activity seen while the background check runs keeps a process a newer model needs", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { manager, open, providerSessionId } = yield* sharedSession;
+      yield* open(threadA);
+      fixture.catalog.push(addedModel);
+      // The session's activity moves after the probe found nothing running and before removal.
+      fixture.duringBackgroundProbe = manager.get(providerSessionId).pipe(Effect.ignore);
+      const refused = yield* open(threadB, addedModel).pipe(Effect.exit);
+      assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
+      assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
 );

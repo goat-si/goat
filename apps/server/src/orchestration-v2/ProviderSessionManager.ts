@@ -1585,12 +1585,13 @@ export const layerWithOptions = (
       const retirement = Retirement.make({
         sessions,
         adapters: registry,
-        release: (providerSessionId) =>
+        release: (providerSessionId, idleGeneration) =>
           releaseEntry({
             providerSessionId,
             reason: "idle_timeout",
             detail: Retirement.RETIRED_DETAIL,
             keepIfBusyOtherThan: [],
+            onlyIfIdleGeneration: idleGeneration,
           }),
         reschedule: scheduleIdleReleaseInternal,
         withOpenLock: sessionOpen.withLock,

@@ -58,7 +58,7 @@ it.effect("a model GOAT offered at start but the process does not list is missin
   }),
 );
 
-it.effect("custom models and models GOAT does not offer are not checked", () =>
+it.effect("custom models are GOAT's own and are not checked", () =>
   Effect.gen(function* () {
     const { modelStatus, lists } = yield* arrivals({
       atOpen: [model(known)],
@@ -66,8 +66,31 @@ it.effect("custom models and models GOAT does not offer are not checked", () =>
       served: [[known]],
     });
     assert.strictEqual(yield* modelStatus(added), "ready");
-    assert.strictEqual(yield* modelStatus("not/offered"), "ready");
     assert.strictEqual(yield* lists, 0);
+  }),
+);
+
+it.effect("a model GOAT does not offer is checked too; without a catalog it is unconfirmed", () =>
+  Effect.gen(function* () {
+    const withCatalog = yield* arrivals({
+      atOpen: [model(known)],
+      now: [model(known)],
+      served: [[known]],
+    });
+    assert.strictEqual(yield* withCatalog.modelStatus("other/unlisted"), "missing");
+    // A pending or failed probe publishes no catalog, as for a scheduled run on a kept process.
+    const noCatalog = yield* arrivals({ atOpen: [], now: [], served: [[known]] });
+    assert.strictEqual(yield* noCatalog.modelStatus(added), "unconfirmed");
+    assert.strictEqual(yield* noCatalog.modelStatus(known), "ready");
+  }),
+);
+
+it.effect("a model Codex resolves by prefix or namespaced suffix counts as known", () =>
+  Effect.gen(function* () {
+    const { modelStatus } = yield* arrivals({ atOpen: [], now: [], served: [["gpt-5.5"]] });
+    assert.strictEqual(yield* modelStatus("gpt-5.5-preview"), "ready");
+    assert.strictEqual(yield* modelStatus("custom/gpt-5.5-preview"), "ready");
+    assert.strictEqual(yield* modelStatus("a/b/gpt-5.5"), "unconfirmed");
   }),
 );
 
