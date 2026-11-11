@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -109,9 +110,12 @@ type Daemon struct {
 	sessions map[uint64]*live
 	nextLive uint64
 	watchers map[chan []byte]struct{}
-	// snapWatchers follow watch.snapshot; snapGen is the generation of the last published snapshot.
+	// snapWatchers follow watch.snapshot; snapGen is the generation of the last published snapshot; snapRelays are
+	// the relays it carries (guarded by d.mu, written under relaysMu).
 	snapWatchers map[chan []byte]struct{}
 	snapGen      uint64
+	snapRelays   []SnapshotRelay
+	relaysMu     sync.Mutex
 	seen         map[string]seenInfo
 	// versions is what each peer (by Noise key) announced in its last sync hello, kept in
 	// versions.json so an offline member's last announcement still counts.
@@ -429,8 +433,9 @@ func (sl *uplinkSlot) setRTT(rtt time.Duration, at time.Time) {
 
 // startUplinks (re)connects one uplink per relay.
 func (d *Daemon) startUplinks() {
+	d.relaysMu.Lock()
+	defer d.relaysMu.Unlock()
 	d.upMu.Lock()
-	defer d.upMu.Unlock()
 	for _, sl := range d.slots {
 		sl.cancel()
 	}
@@ -447,10 +452,41 @@ func (d *Daemon) startUplinks() {
 			err := sl.up.Run(ctx)
 			if errors.Is(err, relay.ErrReplaced) {
 				d.opt.Logf("%s: uplink replaced by another pen for this node (4409); not reconnecting until pen up", url)
-				sl.set("replaced")
+				d.setUplinkState(sl, "replaced")
 				d.writeDaemonJSON(d.now())
 			}
 		})
+	}
+	d.upMu.Unlock()
+	d.publishRelaysLocked()
+}
+
+// setUplinkState sets one uplink's state and publishes the relays, in one step (contract "Snapshot watch").
+func (d *Daemon) setUplinkState(sl *uplinkSlot, state string) {
+	d.relaysMu.Lock()
+	defer d.relaysMu.Unlock()
+	sl.set(state)
+	d.publishRelaysLocked()
+}
+
+// publishRelaysLocked publishes a snapshot when the configured relays or their uplink states differ from the last
+// published ones. A slot that is no longer configured is not read, so its late callbacks never show. relaysMu is held;
+// it orders every relay change with its publication (relaysMu, then upMu and uplinkSlot.mu, then d.mu).
+func (d *Daemon) publishRelaysLocked() {
+	d.upMu.Lock()
+	states := make([]SnapshotRelay, 0, len(d.slots))
+	for _, sl := range d.slots {
+		states = append(states, SnapshotRelay{URL: sl.url, Uplink: sl.get()})
+	}
+	d.upMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if slices.Equal(states, d.snapRelays) {
+		return
+	}
+	d.snapRelays = states
+	if d.lastView != nil {
+		d.publishSnapshotLocked()
 	}
 }
 
@@ -466,10 +502,10 @@ func (d *Daemon) stopUplinks(why string) {
 
 func (d *Daemon) onUplink(sl *uplinkSlot, up bool) {
 	if up {
-		sl.set("up")
+		d.setUplinkState(sl, "up")
 		d.spawn(func() { d.pushAll(d.runCtx) })
 	} else if sl.get() == "up" {
-		sl.set("connecting")
+		d.setUplinkState(sl, "connecting")
 	}
 	d.writeDaemonJSON(d.now())
 }
