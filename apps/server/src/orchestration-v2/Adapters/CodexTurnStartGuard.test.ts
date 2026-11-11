@@ -15,10 +15,28 @@ interface Turn {
   readonly providerThread: { readonly nativeThreadRef: { readonly nativeId: string } };
 }
 
-const guardFor = (active: Map<string, Turn>, statuses = makeCodexThreadStatuses()) =>
+/** A Codex client that lists the given running turns and takes any steer into them. */
+const codexListing = (running: ReadonlyArray<string>, steered: Array<unknown> = []) =>
+  ({
+    request: (method: string, params: unknown) => {
+      if (method === "thread/turns/list")
+        return Effect.succeed({ data: running.map((id) => ({ id, status: "inProgress" })) });
+      if (method === "turn/steer") {
+        steered.push(params);
+        return Effect.succeed({ turnId: (params as { expectedTurnId: string }).expectedTurnId });
+      }
+      return Effect.die(`unexpected Codex request ${method}`);
+    },
+  }) as never;
+
+const guardFor = (
+  active: Map<string, Turn>,
+  statuses = makeCodexThreadStatuses(),
+  // Codex names no running turn, so these starts must be refused before sending anything.
+  client: never = codexListing([]),
+) =>
   makeCodexTurnStartGuard<Turn, string>({
-    // Any request to Codex fails the test: these starts must be refused before sending.
-    client: {} as never,
+    client,
     statuses,
     activeTurns: Effect.sync(() => active),
     stopped: () => false,
@@ -75,6 +93,40 @@ describe("CodexTurnStartGuard admission", () => {
       const error = yield* guardFor(new Map(), statuses).prepare("thread", true).pipe(Effect.flip);
       assert.include(error, "GOAT did not start");
     }),
+  );
+
+  it.effect(
+    "an ordinary message steers into the turn Codex lists when a resume reports the thread busy",
+    () =>
+      Effect.gen(function* () {
+        // The turn kept running after the connection that started it ended; this
+        // connection only knows the thread is active.
+        const statuses = makeCodexThreadStatuses();
+        statuses.record("thread", "active");
+        const steered: Array<unknown> = [];
+        const guard = guardFor(new Map(), statuses, codexListing(["survivor-turn"], steered));
+        assert.include(
+          yield* guard.prepare("thread", false).pipe(Effect.flip),
+          "GOAT did not start",
+        );
+        yield* guard.prepare("thread", true);
+        const adopted: Array<string> = [];
+        const result = yield* guard.dispatch({
+          threadId: "thread",
+          codexInput: [],
+          additionalContext: undefined,
+          steer: true,
+          reserve: () => ({ failed: () => {}, answered: () => {} }),
+          adopt: (nativeTurnId) =>
+            Effect.gen(function* () {
+              adopted.push(nativeTurnId);
+              return yield* root(nativeTurnId);
+            }),
+        });
+        assert.equal(result.type, "adopted");
+        assert.deepEqual(adopted, ["survivor-turn"]);
+        assert.equal((steered[0] as { expectedTurnId: string }).expectedTurnId, "survivor-turn");
+      }),
   );
 
   it.effect("refuses while Codex is busy again with a turn it has not reported starting", () =>

@@ -55,16 +55,36 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
   // Goal turns no run owned that GOAT paused and stopped; Codex may keep running them.
   const orphans = new Set<string>();
 
+  // Codex can report a thread busy without naming its turn, as on a connection that only learned
+  // the thread's status from thread/resume while an earlier one still runs the turn
+  const listedRunningTurn = (threadId: string) =>
+    deps.client
+      .request("thread/turns/list", {
+        threadId,
+        itemsView: "summary",
+        sortDirection: "desc",
+        limit: 10,
+      })
+      .pipe(
+        Effect.map((page) => page.data.find((turn) => turn.status === "inProgress")?.id),
+        Effect.timeoutOption("5 seconds"),
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+
   // A turn a tracked root owns, or one a start of ours still waits for, is that run's: the start
   // service stops one a run GOAT ended left behind, and Codex's answer to turn/start is checked
   // against its owner. Any other running turn is judged on its own, tracked roots or not.
   const classify = Effect.fnUntraced(function* (threadId: string) {
     if (!deps.statuses.working(threadId, deps.abandoned)) return undefined;
-    const running = deps.statuses.runningTurn(threadId);
     const roots = Array.from((yield* deps.activeTurns).values()).filter(
       (context) =>
         context.subagent === null && context.providerThread.nativeThreadRef?.nativeId === threadId,
     );
+    const reported = deps.statuses.runningTurn(threadId);
+    if (reported === undefined && roots.length > 0 && deps.statuses.startPending(threadId))
+      return undefined;
+    const running = reported ?? (yield* listedRunningTurn(threadId));
     if (
       roots.length > 0 &&
       (running === undefined
