@@ -1,9 +1,10 @@
-import type {
-  OrchestrationV2ProjectedTurnItem,
-  OrchestrationV2ThreadProjection,
-  OrchestrationV2TurnItem,
-  ThreadId,
-  TurnItemId,
+import {
+  isHandoffPending,
+  type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2TurnItem,
+  type ThreadId,
+  type TurnItemId,
 } from "@goat/contracts";
 
 /**
@@ -506,12 +507,15 @@ function isLocalProjectedRow(
 
 /**
  * Retain interrupt visibility dependencies and pending question/approval bodies
- * outside the visible window for live reducers and request presentation.
+ * outside the visible window for live reducers and request presentation. A waiting approval
+ * handoff counts too, so a thread's dock lists every one; a thread holds at most three.
  */
 function isPendingRuntimeRequestTurnItem(
   item: OrchestrationV2TurnItem,
   pendingRequestIds: ReadonlySet<string>,
 ): boolean {
+  if (item.type === "human_handoff")
+    return item.handoff?.kind === "approval" && isHandoffPending(item.handoff.state);
   return (
     (item.type === "user_input_request" || item.type === "approval_request") &&
     pendingRequestIds.has(String(item.requestId))
