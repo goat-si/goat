@@ -29,11 +29,25 @@ vi.mock("./GoatBotShimmerText", async () => {
     ),
   };
 });
-// The real GoatBotMarkdown runs; only the native renderer under it is replaced by its source text.
+// The real GoatBotMarkdown runs; only the native renderer under it is replaced by its source text,
+// with each link's pill label and the long press it was given.
+const native = vi.hoisted(() => ({ longPress: null as null | ((url: string) => void) }));
 vi.mock("../../native/SelectableMarkdownText", async () => {
   const { Text } = await import("react-native");
   return {
-    SelectableMarkdownText: (props: { markdown: string }) => <Text>{`md[${props.markdown}]`}</Text>,
+    SelectableMarkdownText: (props: {
+      markdown: string;
+      linkCustomization?: (url: string) => { label?: string } | undefined;
+      onLinkLongPress?: (url: string) => void;
+    }) => {
+      native.longPress = props.onLinkLongPress ?? null;
+      const urls = [...new Set(props.markdown.match(/https?:\/\/[^\s<>)\]|]+/g) ?? [])];
+      const pills = urls.flatMap((url) => {
+        const label = props.linkCustomization?.(url)?.label;
+        return label === undefined ? [] : [`pill[${url}=${label}]`];
+      });
+      return <Text>{`md[${props.markdown}]${pills.join("")}`}</Text>;
+    },
   };
 });
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -121,7 +135,81 @@ it("reads pull request links against the whole reply, across its prose and table
   await view.render();
   const shown = view.container.textContent ?? "";
   // Two repositories in one reply: each link keeps its repository, and a bare #8 links nowhere.
-  expect(shown).toContain(`**Fixed** in [a/repo#7](${pr(7, "a/repo")}); #8 is next.`);
-  expect(shown).toContain(`[b/repo#9](${pr(9, "b/repo")})`);
+  // The address stays the link's words, so a screen reader hears it after the short label.
+  expect(shown).toContain(`**Fixed** in <${pr(7, "a/repo")}>; #8 is next.`);
+  expect(shown).toContain(`pill[${pr(7, "a/repo")}=a/repo#7]`);
+  expect(shown).toContain(`| <${pr(9, "b/repo")}> |`);
+  expect(shown).toContain(`pill[${pr(9, "b/repo")}=b/repo#9]`);
   expect(shown).not.toContain("[#8]");
+});
+
+const reply = (text: string) => ({
+  kind: "bot" as const,
+  id: "bot",
+  text,
+  createdAt: "2026-10-12T09:40:00Z",
+  tone: "reply" as const,
+  proactive: false,
+  replyTo: null,
+  options: [],
+  firstInGroup: true,
+  groupPosition: "single" as const,
+});
+async function show(row: Parameters<typeof GoatBotTimelineRow>[0]["row"]) {
+  h = createNativeMemoryHarness();
+  view = renderNative(h, <GoatBotTimelineRow {...props} row={row} />);
+  await view.render();
+  return view.container.textContent ?? "";
+}
+
+it("leaves an address inside inline HTML as written, with no short label", async () => {
+  const shown = await show(reply(`Merged <span>${pr(7, "a/repo")}</span> today.`));
+  expect(shown).toContain(`md[Merged <span>${pr(7, "a/repo")}</span> today.]`);
+  expect(shown).not.toContain("pill[");
+});
+
+it("keeps a whole link destination when it rebuilds a short link beside the bot's own words", async () => {
+  const url = "https://github.com/a/repo/pull/7?q=)";
+  // The same address once bare and once under the bot's words: the bare one is rewritten.
+  const shown = await show(reply(`See <${url}> and [the fix](<${url}>).`));
+  expect(shown).toContain(`md[See [#7](<${url}>) and [the fix](<${url}>).]`);
+});
+
+it("keeps a collapsed task summary's indented code as written", async () => {
+  const summary = [
+    "Reproduce it with:",
+    "",
+    `    curl ${pr(7, "a/repo")}`,
+    "",
+    "Then read the log.",
+    "It should pass now.",
+    "Done.",
+  ].join("\n");
+  const shown = await show({
+    kind: "task",
+    id: "card",
+    createdAt: "2026-10-12T09:41:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    card: {
+      key: "task-1",
+      revision: 1,
+      updatedAt: "2026-10-12T09:41:00Z",
+      title: "Fix the flaky test",
+      statusLabel: "Done",
+      tone: "success",
+      sourceLabel: null,
+      summary,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  });
+  expect(shown).toContain(`curl ${pr(7, "a/repo")}`);
+  expect(shown).not.toContain("a/repo#7");
+});
+
+it("offers a long press on every link of a reply", async () => {
+  await show(reply(`Fixed in ${pr(7, "a/repo")}.`));
+  expect(native.longPress).not.toBeNull();
 });

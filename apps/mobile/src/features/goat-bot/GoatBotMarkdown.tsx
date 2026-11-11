@@ -1,19 +1,25 @@
 import type { GoatBotReplyRepository } from "@goat/client-runtime/goatBot";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { EnvironmentId } from "@goat/contracts";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { markdownLinkIcon } from "../../lib/markdownLinkIcons";
+import { resolveMarkdownLinkPresentation } from "../../lib/markdownLinks";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
+import {
+  type MarkdownLinkCustomization,
+  SelectableMarkdownText,
+} from "../../native/SelectableMarkdownText";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells } from "../../state/threads";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { showGoatBotLinkActions } from "./goatBotLinkActions";
 import { goatBotMarkdownLinkTarget } from "./goatBotMarkdownLinks";
-import { goatBotChangeRequestMarkdown } from "./goatBotChangeRequestText";
+import { goatBotChangeRequestLinks } from "./goatBotChangeRequestText";
 
 /**
  * Bot text that holds Markdown, rendered by the chat's native renderer in the transcript's type and
@@ -33,9 +39,25 @@ export function GoatBotMarkdown(props: {
   const danger = theme["--color-danger-foreground"];
   const color = props.failed ? danger : theme["--color-foreground"];
   // Pull request links read as short references, as on web.
-  const text = useMemo(
-    () => goatBotChangeRequestMarkdown(props.text, props.repository),
+  const { markdown: text, labels } = useMemo(
+    () => goatBotChangeRequestLinks(props.text, props.repository),
     [props.text, props.repository],
+  );
+  const linkColor = styles.nativeTextStyle.linkColor;
+  // A short label drawn over an address the bot left bare, with the icon its host gets elsewhere.
+  const linkCustomization = useCallback(
+    (href: string): MarkdownLinkCustomization | undefined => {
+      const label = labels.get(href);
+      if (label === undefined) return undefined;
+      const link = resolveMarkdownLinkPresentation(href);
+      const icon = link.kind === "external" ? markdownLinkIcon(link.host) : null;
+      return {
+        label,
+        color: linkColor,
+        ...(icon ? { icon: icon.source, ...(icon.tints ? { iconTintColor: linkColor } : {}) } : {}),
+      };
+    },
+    [labels, linkColor],
   );
   const openLink = (href: string) => {
     const target = goatBotMarkdownLinkTarget(
@@ -65,6 +87,8 @@ export function GoatBotMarkdown(props: {
         lineHeight: bodyText.lineHeight,
       }}
       onLinkPress={openLink}
+      linkCustomization={linkCustomization}
+      onLinkLongPress={(href) => showGoatBotLinkActions(href, () => openLink(href))}
     />
   );
   if (!props.failed) return markdown;
