@@ -1,3 +1,4 @@
+import type { ChannelOpenQuestion, ChannelTask, ChannelTaskApprovalRef } from "@goat/contracts";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 /**
@@ -10,3 +11,50 @@ export const waitingTaskCondition = (sql: SqlClient.SqlClient) => sql`(status = 
   OR (status IN ('completed', 'failed') AND EXISTS (
     SELECT 1 FROM json_each(task_json, '$.observed.needsYou')
     WHERE json_extract(value, '$.kind') = 'approval')))`;
+
+/** One thing a task asks of the person that the open asks list can show. */
+export type WaitingAsk =
+  | { readonly kind: "question"; readonly askedAt: string; readonly question: ChannelOpenQuestion }
+  | {
+      readonly kind: "approval" | "native_question";
+      readonly askedAt: string;
+      readonly ref: ChannelTaskApprovalRef;
+    }
+  | { readonly kind: "sign_in" | "usage_limit"; readonly askedAt: string };
+
+/**
+ * Open questions while the task runs, and each worker need that names what to answer. Finished
+ * work can still hold an approval; nothing else it waited on is open.
+ */
+export const waitingAsks = (task: ChannelTask): Array<WaitingAsk> => {
+  const ended = task.status === "completed" || task.status === "failed";
+  const asks: Array<WaitingAsk> = ended
+    ? []
+    : task.openQuestions.map((question) => ({
+        kind: "question",
+        askedAt: question.askedAt,
+        question,
+      }));
+  for (const need of task.observed?.needsYou ?? []) {
+    if (ended && need.kind !== "approval") continue;
+    const askedAt = need.since;
+    if (need.kind === "approval" && need.approval !== undefined) {
+      asks.push({ kind: "approval", askedAt, ref: need.approval });
+    } else if (need.kind === "question" && need.question !== undefined) {
+      asks.push({ kind: "native_question", askedAt, ref: need.question });
+    } else if (need.kind === "sign_in" || need.kind === "usage_limit") {
+      asks.push({ kind: need.kind, askedAt });
+    }
+  }
+  return asks;
+};
+
+/**
+ * When the newest of `waitingAsks` was made, or null without one. Stored with each task as
+ * `channel_tasks.newest_ask_at`, the order the open asks list reads its candidates in.
+ */
+export const newestAskAt = (task: ChannelTask): string | null =>
+  waitingAsks(task).reduce<string | null>(
+    (newest, ask) => (newest === null || ask.askedAt > newest ? ask.askedAt : newest),
+    null,
+  );

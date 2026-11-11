@@ -36,6 +36,7 @@ import { botProfileKey, mainBotKey, memberBotKey } from "./channelBotLedger.ts";
 import { bindingIdFor, contentHashFor, conversationIdFor, inputIdFor } from "./channelIds.ts";
 import { TASK_CHANGES_COALESCE } from "./channelTaskChanges.ts";
 import { makeCreatedTasks } from "./channelTaskWrites.ts";
+import { syncNewestAsks } from "./testkit/newestAsks.ts";
 import { nextTaskChange, watchTaskChanges } from "./testkit/taskChanges.ts";
 import {
   botThreadId,
@@ -437,6 +438,7 @@ describe("channel runtime after a downgrade", () => {
         task_json = json_set(task_json, '$.status', 'waiting_input',
           '$.openQuestions', json(${JSON.stringify(question)}))
         WHERE task_id = ${task.taskId}`;
+      yield* syncNewestAsks();
       const { asks } = yield* members.openAsks(owner);
       assert.deepStrictEqual(
         asks.map((ask) => [ask.taskId, ask.botId]),
