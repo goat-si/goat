@@ -117,6 +117,17 @@ describe("createThreadNotificationGate", () => {
 });
 
 describe("approval notifications", () => {
+  it("announces approvals that opened before the feed first loaded, unless the shell already did", () => {
+    const notify = vi.fn();
+    const gate = createApprovalNotificationGate<string>(notify);
+    gate.remember("announced-by-shell");
+    gate.observe(
+      ["open-before-watching", "announced-by-shell", "opened-while-loading"],
+      (id) => id !== "open-before-watching",
+    );
+    expect(notify.mock.calls).toEqual([["opened-while-loading"]]);
+  });
+
   it("notifies every new approval once, including two at once and a second in the same run", () => {
     const notify = vi.fn();
     const gate = createApprovalNotificationGate<string>(notify);
@@ -194,5 +205,12 @@ describe("which approvals the decision feed announces", () => {
       true,
     );
     expect([...owned]).toEqual(["one"]);
+  });
+  it("keeps the shell notification of a thread with its own handoff while a child waits on a provider approval", () => {
+    const owned = feedOwnedApprovalThreads(
+      [shell("parent", handoff("a")), shell("child", provider("b"), "parent")],
+      true,
+    );
+    expect([...owned]).toEqual([]);
   });
 });

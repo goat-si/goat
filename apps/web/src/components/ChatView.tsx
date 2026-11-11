@@ -23,7 +23,7 @@ import {
 } from "./chat/optimisticUserMessages";
 import { useTimelineRewind } from "./chat/useTimelineRewind";
 import { useThreadLifecycle } from "./chat/useThreadLifecycle";
-import { useNewestApprovalId } from "./chat/ApprovalDockBanners";
+import { useAwaitingApprovalId } from "./chat/ApprovalDockBanners";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
 import { useComposerSend } from "./chat/useComposerSend";
@@ -1813,22 +1813,21 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
-  const approvalHandoffId = useNewestApprovalId(activeThreadRef);
+  const approvalId = useAwaitingApprovalId(activeThreadRef, activePendingApproval?.requestId);
   const timelineActivity = {
     isWorking,
     runlessWorkActive: runlessWorkStartedAt !== null,
     activeTurnInProgress: isWorking || !latestRunSettled,
     isCompacting,
     awaitingUser:
-      activePendingApproval !== null || approvalHandoffId !== null
+      approvalId !== null
         ? ("approval" as const)
         : activePendingUserInput !== null ||
             // A secret request has no runtime request; the shell carries it.
             activeThreadShell?.hasPendingUserInput === true
           ? ("input" as const)
           : null,
-    awaitingRequestId:
-      activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? approvalHandoffId,
+    awaitingRequestId: approvalId ?? activePendingUserInput?.requestId ?? null,
     activeTurnStartedAt: activeWorkStartedAt,
     latestRun: activeActivityRun,
     runningRunId: activeRuntime?.activeRunId ?? null,

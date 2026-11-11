@@ -17,6 +17,7 @@ import type {
 } from "@goat/contracts";
 import { isGoatBotSessionThreadId, isSideChatThread } from "@goat/contracts";
 import type { ClientSettings } from "@goat/contracts/settings";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import type { AtomRegistry } from "effect/reactivity";
 import {
@@ -59,6 +60,7 @@ interface NotificationState extends ThreadNotificationObservation {
   readonly subagentRequest: PendingSubagentRequest | null;
   readonly thread: EnvironmentThreadShell;
   readonly status: SidebarThreadStatus;
+  readonly feedOwned: boolean;
 }
 
 interface WatchedEnvironment {
@@ -67,6 +69,8 @@ interface WatchedEnvironment {
   reconnecting: boolean;
   /** Set once the decision feed has listed approvals; from then on it announces them. */
   feedReady: boolean;
+  /** Server time of the first shell snapshot: approvals older than it were open before watching. */
+  baselineMs: number | null;
   readonly gate: ReturnType<typeof createThreadNotificationGate<ThreadId>>;
   readonly approvals: ReturnType<typeof createApprovalNotificationGate<string>>;
 }
@@ -415,6 +419,10 @@ export function startThreadNotifications(
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     // Approval handoffs notify from the decision feed, one per approval; the shell stays quiet.
     const feedOwned = feedOwnedApprovalThreads(threads, entry.feedReady);
+    entry.baselineMs ??= threads.reduce(
+      (latest, raw) => Math.max(latest, DateTime.toEpochMillis(raw.updatedAt)),
+      0,
+    );
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
       // Subagents report through their parent; a side chat answers in its open panel; a GOAT
@@ -430,7 +438,8 @@ export function startThreadNotifications(
       if (
         !entry.reconnecting &&
         prior?.raw === rawThread &&
-        prior.subagentRequest === subagentRequest
+        prior.subagentRequest === subagentRequest &&
+        prior.feedOwned === feedOwned.has(rawThread.id)
       ) {
         next.set(rawThread.id, prior);
         continue;
@@ -454,6 +463,7 @@ export function startThreadNotifications(
         subagentRequest,
         thread,
         status,
+        feedOwned: feedOwned.has(rawThread.id),
         attention,
         settled,
         completedAt: settled && Number.isFinite(completedAt) ? completedAt : null,
@@ -481,10 +491,15 @@ export function startThreadNotifications(
       previous: new Map(),
       reconnecting: false,
       feedReady: false,
+      baselineMs: null,
       unsubscribe: () => {},
       gate: createThreadNotificationGate<ThreadId>((threadId, kind) => {
         const state = entry.previous.get(threadId);
-        if (state) present(environmentId, state, kind);
+        if (!state) return;
+        // An approval the shell announced is not announced again by the feed.
+        const request = state.raw.pendingRuntimeRequest;
+        if (request?.handoff !== undefined) entry.approvals.remember(request.id);
+        present(environmentId, state, kind);
       }),
       approvals: createApprovalNotificationGate<string>((handoffId) => {
         const handoff = handoffs.get(handoffId);
@@ -498,7 +513,12 @@ export function startThreadNotifications(
         if (feed?.handoffs === undefined) return;
         entry.feedReady = true;
         handoffs = new Map(feed.handoffs.map((item) => [item.handoff.handoffId, item]));
-        entry.approvals.observe([...handoffs.keys()]);
+        // On the first list, only approvals newer than the first shell snapshot opened unseen.
+        const since = entry.baselineMs;
+        entry.approvals.observe([...handoffs.keys()], (id) => {
+          const created = handoffs.get(id)?.handoff.createdAt;
+          return since !== null && created !== undefined && DateTime.toEpochMillis(created) > since;
+        });
       },
       { immediate: true },
     );

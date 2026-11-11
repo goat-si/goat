@@ -98,10 +98,11 @@ export function useApprovalBanners(ref: ScopedThreadRef | null) {
   });
 }
 
-/** The newest open approval of the thread, which the timeline names while it waits. */
-export function useNewestApprovalId(ref: ScopedThreadRef | null) {
-  return (
-    useAtomValue(ref === null ? NO_APPROVALS : decisionInbox.openApprovalsAtom(ref)).at(-1)
-      ?.handoffId ?? null
-  );
+/** The approval the timeline names while the thread waits: the provider's, else the newest handoff. */
+export function useAwaitingApprovalId(
+  ref: ScopedThreadRef | null,
+  runtimeApprovalId: string | undefined,
+) {
+  const handoffs = useAtomValue(ref === null ? NO_APPROVALS : decisionInbox.openApprovalsAtom(ref));
+  return runtimeApprovalId ?? handoffs.at(-1)?.handoffId ?? null;
 }

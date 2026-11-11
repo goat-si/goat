@@ -56,9 +56,9 @@ export function createThreadNotificationGate<Key>(
 const SEEN_APPROVAL_LIMIT = 1000;
 
 /**
- * One notification per approval. The first list seeds what was already open; every later list,
- * including the first after an outage, announces each id never seen before. Seen ids are kept
- * after they leave, so an approval that leaves and returns stays quiet.
+ * One notification per approval. The first list announces only what opened after watching began
+ * (announceOnFirst); every later list, including the first after an outage, announces each id never
+ * seen before. Seen ids, including ones the shell announced, are kept after they leave.
  */
 export function createApprovalNotificationGate<Id>(notify: (id: Id) => void) {
   const seen = new Set<Id>();
@@ -68,15 +68,14 @@ export function createApprovalNotificationGate<Id>(notify: (id: Id) => void) {
     if (seen.size > SEEN_APPROVAL_LIMIT) seen.delete(seen.values().next().value as Id);
   };
   return {
-    observe(ids: ReadonlyArray<Id>): void {
+    observe(ids: ReadonlyArray<Id>, announceOnFirst: (id: Id) => boolean = () => false): void {
       const fresh = ids.filter((id) => !seen.has(id));
       for (const id of fresh) remember(id);
-      if (!seeded) {
-        seeded = true;
-        return;
-      }
-      for (const id of fresh) notify(id);
+      const first = !seeded;
+      seeded = true;
+      for (const id of fresh) if (!first || announceOnFirst(id)) notify(id);
     },
+    remember,
   };
 }
 
@@ -100,7 +99,7 @@ export function feedOwnedApprovalThreads(
     const request = thread.pendingRuntimeRequest;
     if (!isPendingApprovalRequest(request)) continue;
     const handoff = request?.handoff !== undefined;
-    if (handoff) owned.add(thread.id);
+    if (handoff) viaHandoff.add(thread.id);
     // The same walk that raises a subagent's approval on its ancestors.
     const seen = new Set<ThreadId>([thread.id]);
     let current: OrchestrationV2ThreadShell | undefined = thread;
@@ -112,7 +111,10 @@ export function feedOwnedApprovalThreads(
       current = byId.get(parentId);
     }
   }
-  for (const id of viaHandoff)
-    if (!viaProvider.has(id) && byId.get(id)?.pendingRuntimeRequest === null) owned.add(id);
+  for (const id of viaHandoff) {
+    const own = byId.get(id)?.pendingRuntimeRequest;
+    // A provider approval anywhere below keeps the shell notification it raises.
+    if (!viaProvider.has(id) && (own === null || own?.handoff !== undefined)) owned.add(id);
+  }
   return owned;
 }
