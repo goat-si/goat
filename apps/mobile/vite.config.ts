@@ -46,6 +46,7 @@ const reactTests = [
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/decisions/DecisionDurableCard.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",
+  "src/features/decisions/useDecisionInboxAway.test.tsx",
   "src/features/goat-bot/MobileBotProfileSheet.test.tsx",
   "src/features/goat-bot/MobileDeletedBotBanner.test.tsx",
   "src/features/goat-bot/useMobileBotManage.test.tsx",
