@@ -109,6 +109,11 @@ func (s *Store) mergeShared(recs []*Record) []*Record {
 		cands = append(cands, r)
 	}
 	for _, e := range s.pool {
+		// A record pooled before the store learned the mesh's version may be of another one.
+		if !s.belongs(e.r) {
+			s.poolRemove(e.r)
+			continue
+		}
 		cands = append(cands, e.r)
 	}
 	seen := map[string]bool{}

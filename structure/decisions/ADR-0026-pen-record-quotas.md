@@ -51,13 +51,15 @@
 - **Depth.** The founder's depth is 0; a key's depth is its introducer's signer's depth plus 1. A key
   admitting itself, or admitted again deeper, keeps its shallowest introduction.
 - **Lineage.** The founder alone is lineage 0. A key the founder admits is in lineage
-  1 + (SHA-256 of its invite nonce) mod 15: the founder chose the nonce, and no other record changes it.
+  1 + (the first two bytes of SHA-256 of its invite nonce's text, big-endian) mod 15: the founder chose the nonce, and no other record changes it.
   Any other key is in the lineage of its introducer's signer. A record is charged to its signer's lineage.
 - **Own chain.** A record with `n > 1` names its signer's record `n - 1` directly in `prev`, or has no
-  effect. Its effect then depends on nothing another signer's records do. A node's first record names
-  the found or admit records that introduced it (every admit naming a key carries a card that key signed),
-  so replay orders it after its signer's admission even when records between them were dropped. A record
-  names at most 8 heads besides: dropped records leave many, and 64 would pass the 2048-byte body.
+  effect. Its effect then depends on nothing another signer's records do. When a share dropped record
+  `n - 1`, naming its hash, now bare, suffices; a node remembers its last record's hash for this. Every
+  record also names the found or admit records that introduced its signer (every admit naming a key
+  carries a card that key signed), so replay orders it after its signer's admission even when records
+  between them were dropped. A record names at most 8 heads besides: dropped records leave many, and 64
+  would pass the 2048-byte body.
 - **Shares.** Per lineage: 160 records of other types, 16 `lock` records, 16 `admit` records signed by
   keys other than the founder, and 56 revoke places. The founder's own admits share 64 places, kept by
   the founder's counter `n` then raw hash, so a later admit never displaces an earlier one. A revoke place

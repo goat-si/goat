@@ -43,7 +43,9 @@ type Store struct {
 	mu    sync.Mutex
 	recs  map[string]*Record
 	selfN uint64
-	view  *View
+	// selfLast is the hash of this node's record selfN, which a share may have dropped.
+	selfLast string
+	view     *View
 	// self is this node's signPub; its own records never wait in the pool.
 	self string
 	// uncapped is set while reloading the node's own saved set.
@@ -85,11 +87,12 @@ type pooled struct {
 }
 
 type storeFile struct {
-	MeshID  string    `json:"meshId"`
-	Records []*Record `json:"records"`
-	Pool    []*Record `json:"pool"`
-	SelfN   uint64    `json:"selfN"`
-	Shares  bool      `json:"shares,omitempty"`
+	MeshID   string    `json:"meshId"`
+	Records  []*Record `json:"records"`
+	Pool     []*Record `json:"pool"`
+	SelfN    uint64    `json:"selfN"`
+	SelfLast string    `json:"selfLast,omitempty"`
+	Shares   bool      `json:"shares,omitempty"`
 	// version is the store's mesh version at the snapshot, for checking the file's records.
 	version int
 }
@@ -132,7 +135,7 @@ func LoadFile(st *state.Store, name string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.selfN = f.SelfN
+	s.selfN, s.selfLast = f.SelfN, f.SelfLast
 	s.view = nil
 	s.changes, s.saved = 0, 0
 	s.onDisk[name] = true
@@ -163,7 +166,7 @@ func FoundV(v int, st *state.Store, id *ident.Identity, name string, at int64) (
 	if _, err := s.Merge([]*Record{r}); err != nil {
 		return nil, err
 	}
-	s.selfN = 1
+	s.selfN, s.selfLast = 1, r.Hash
 	return s, s.Save()
 }
 
@@ -432,7 +435,7 @@ func (s *Store) SaveFile(st *state.Store, name string) error {
 	gen, adopt, known := s.changes, s.adopt, s.onDisk[name]
 	// The pool is not persisted (contract "Records").
 	recs := s.all()
-	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, Pool: []*Record{}, Shares: s.shares, version: s.version}
+	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, SelfLast: s.selfLast, Pool: []*Record{}, Shares: s.shares, version: s.version}
 	s.mu.Unlock()
 	if s.afterSnapshot != nil {
 		s.afterSnapshot()
@@ -485,7 +488,9 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 				recs = append(recs, r)
 			}
 		}
-		f.SelfN = max(f.SelfN, disk.SelfN)
+		if disk.SelfN > f.SelfN {
+			f.SelfN, f.SelfLast = disk.SelfN, disk.SelfLast
+		}
 	}
 	if f.Shares {
 		// Another process may have written records this store has not seen: keep the shares of both.
@@ -683,13 +688,17 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 	}
 	n = max(n, ownN) + 1
 	prev := s.choosePrev(own, limit)
+	if s.shares && by == s.self && s.selfN > ownN && s.selfLast != "" {
+		// A share dropped this node's latest record; it is still the one this record follows.
+		own = s.selfLast
+	}
 	if s.shares && own != "" && !slices.Contains(prev, own) {
 		// Under shares a record names its own previous one directly (ADR-0026 "Own chain").
 		prev = append([]string{own}, prev[:min(len(prev), limit-1)]...)
 	}
-	if s.shares && own == "" {
-		// A first record names what introduced its signer, so replay puts it after the admission
-		// even when records between them were dropped (ADR-0026 "Own chain").
+	if s.shares {
+		// Every record names what introduced its signer, so replay puts it after the admission even
+		// when records between them, its own included, were dropped (ADR-0026 "Own chain").
 		prev = s.withOwnCards(prev, by)
 	}
 	r, err := SignV(max(s.version, 1), id, s.MeshID, typ, n, prev, at, f)
@@ -708,6 +717,9 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		return nil, err
 	}
 	s.selfN = n
+	if by == s.self {
+		s.selfLast = r.Hash
+	}
 	s.view = nil
 	s.changes++
 	s.mu.Unlock()
