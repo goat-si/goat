@@ -1,4 +1,3 @@
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -10,6 +9,7 @@ import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "e
 import { ASSET_ROUTE_PREFIX } from "./assets/AssetAccess.ts";
 import { ATTACHMENT_UPLOAD_ROUTE_PREFIX } from "./assets/AttachmentUpload.ts";
 import * as ServerHttp from "./http.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 it.effect("keeps signed asset and upload URLs out of HTTP server spans", () =>
   Effect.gen(function* () {
@@ -38,7 +38,7 @@ it.effect("keeps signed asset and upload URLs out of HTTP server spans", () =>
     const services = yield* Layer.build(
       HttpRouter.serve(layerRoutes, { disableListenLog: true, disableLogger: true }).pipe(
         ServerHttp.withUntracedRequests,
-        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provideMerge(layerTestLoopback),
         Layer.provide(layerTracer),
       ),
     );

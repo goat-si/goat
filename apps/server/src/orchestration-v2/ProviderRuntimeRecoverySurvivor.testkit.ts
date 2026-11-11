@@ -93,6 +93,7 @@ export const recoveryScenario = (
         Effect.map((items) => items.map((item) => item.threadId)),
       ),
       setStartWake: () => Effect.void,
+      onFenceChange: () => Effect.void,
       classifyRecord: (key) =>
         Effect.sync(
           () =>

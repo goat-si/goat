@@ -25,7 +25,7 @@ import * as McpToolAccess from "./McpToolAccess.ts";
 import { liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import { serveOverHttp } from "./agentSurface.testkit.ts";
 import { DEPRECATED_META_KEY } from "./ToolDispatch.ts";
-import { NodeHttpServer } from "@effect/platform-node";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const writes = (
   Object.values(agentSurfaceRegistry) as ReadonlyArray<
@@ -511,5 +511,5 @@ it.effect("gates a legacy tool name over /mcp exactly as its listed name", () =>
     expect(yield* outcome(yield* http.callTool("outside", legacy!, {}))).toEqual({
       ran: entry.name,
     });
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );

@@ -72,6 +72,8 @@ const fixture = Effect.gen(function* () {
   let mergedPullRequests: Array<{ branch: string; headSha: string }> = [];
   // Runs while removal waits on the pull request lookup, between its checks and the deletion.
   let duringPullRequestLookup: Effect.Effect<void> = Effect.void;
+  // Runs while a sweep lists the projects, before any worktree is checked.
+  let duringScan: Effect.Effect<void> = Effect.void;
 
   const addWorktree = (branch: string, at = worktreesDir + "/" + branch) =>
     run(repo, ["worktree", "add", "-b", branch, at]).pipe(Effect.as(at));
@@ -98,7 +100,8 @@ const fixture = Effect.gen(function* () {
         }),
     } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
     Effect.provideService(ProjectService.ProjectService, {
-      listShells: () => Effect.succeed([{ id: ProjectId.make("project-1"), workspaceRoot: repo }]),
+      listShells: () =>
+        duringScan.pipe(Effect.as([{ id: ProjectId.make("project-1"), workspaceRoot: repo }])),
     } as unknown as ProjectService.ProjectService["Service"]),
     Effect.provideService(GitManager.GitManager, {
       branchPullRequest: (input: { branch: string }) =>
@@ -136,6 +139,9 @@ const fixture = Effect.gen(function* () {
     },
     setDuringPullRequestLookup: (next: Effect.Effect<void>) => {
       duringPullRequestLookup = next;
+    },
+    setDuringScan: (next: Effect.Effect<void>) => {
+      duringScan = next;
     },
     root,
   };
@@ -385,6 +391,90 @@ describe("WorktreeInventoryService", () => {
         ]);
         for (const { path } of merged) expect(yield* fs.exists(path)).toBe(false);
       }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("slow kept worktrees rotate behind unchecked worktrees within the sweep budget", () =>
+    Effect.gen(function* () {
+      const { service, fs, run, addWorktree, setThreads, setDuringPullRequestLookup } =
+        yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      const removable = yield* addWorktree("d");
+      setThreads([...kept, removable].map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const start = yield* Clock.currentTimeMillis;
+      const first = yield* service.cleanup({ dryRun: false });
+      expect((yield* Clock.currentTimeMillis) - start).toBe(80_000);
+      expect(first.removed).toHaveLength(0);
+      expect(first.remaining).toBeGreaterThan(0);
+      let removed = false;
+      for (let i = 0; i < 3; i++) {
+        const result = yield* service.cleanup({ dryRun: false });
+        removed ||= result.removed.some((entry) => entry.path === removable);
+      }
+      expect(removed).toBe(true);
+      expect(yield* fs.exists(removable)).toBe(false);
+      for (const path of kept) expect(yield* fs.exists(path)).toBe(true);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("repeated sweeps reach remaining 0 when slow kept worktrees outlast one budget", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c", "d"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const remaining = [];
+      for (let i = 0; i < 2; i++)
+        remaining.push((yield* service.cleanup({ dryRun: false })).remaining);
+      expect(remaining).toEqual([2, 0]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("a sweep whose project scan outlasts the budget still checks and removes one", () =>
+    Effect.gen(function* () {
+      const { service, fs, addWorktree, setDuringScan } = yield* fixture;
+      const first = yield* addWorktree("a");
+      const second = yield* addWorktree("b");
+      setDuringScan(TestClock.adjust("70 seconds"));
+
+      const result = yield* service.cleanup({ dryRun: false });
+      expect(result.removed).toHaveLength(1);
+      expect(result.remaining).toBe(1);
+      expect((yield* fs.exists(first)) && (yield* fs.exists(second))).toBe(false);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("a worktree whose check was interrupted still counts in remaining", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c", "d"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(Effect.interrupt);
+      const interrupted = yield* Effect.exit(service.cleanup({ dryRun: false }));
+      expect(interrupted._tag).toBe("Failure");
+
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+      const next = yield* service.cleanup({ dryRun: false });
+      expect(next.kept).toHaveLength(2);
+      expect(next.remaining).toBe(2);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.live("never deletes the default branch, even with force", () =>

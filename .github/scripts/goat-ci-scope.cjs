@@ -74,9 +74,10 @@ const WINDOWS_SUITES = [
 ];
 /** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
 const WINDOWS_TRIGGERS = [
+  "apps/desktop/native/computer-use-helper-windows/",
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
-  "patches/node-pty@1.2.0-beta.15.patch",
+  "patches/node-pty@",
 ];
 const WINDOWS_TASK = "test-windows";
 /** Every workspace package suite no other task owns, listed by packageSuites. */

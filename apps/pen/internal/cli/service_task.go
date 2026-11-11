@@ -177,13 +177,14 @@ var startLockWaits func()
 // startLock is the task turn (taskTurn).
 const startLock = "start.lock"
 
-// taskTurnApplies reports whether pen up, pen down and pen leave take the task turn: on Windows, for the
-// default state folder, the only one that gets a task.
-func taskTurnApplies() bool { return serviceOS == "windows" && os.Getenv("PEN_HOME") == "" }
+// Only the default state folder can install a service.
+func taskTurnApplies() bool {
+	return os.Getenv("PEN_HOME") == "" && (serviceOS == "windows" || serviceOS == "linux" || serviceOS == "darwin")
+}
 
-// taskTurn takes start.lock: pen up holds it from registering the task until its start is decided, and
-// pen down and pen leave from before they look for a task or a daemon until the daemon and supervisor
-// are gone (and the task is deleted). Whichever runs last decides whether Pen runs, and none reports a
+// taskTurn takes start.lock: pen up holds it until the service start is decided, and pen down and pen
+// leave from before they look for a service or daemon until stopping or removing it. Whichever runs
+// last decides whether Pen runs, and none reports a
 // state another undoes: a supervisor reads one start request, and a stop cannot slip between a start's
 // registration and its removal of the down record. It is its own lock: the state lock must stay free
 // for the daemon being started.

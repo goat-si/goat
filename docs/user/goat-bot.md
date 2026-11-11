@@ -24,6 +24,8 @@ under its own name and purpose from its next conversation session.
 - An added bot's model can change in its edit dialog or from the model button in its message
   box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
   bot's model again.
+- On web and desktop, with a server that supports it, an added bot can have a color, picked when
+  you create or edit it. Its chat shows your messages and the send button in that color.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
   history. A bot with open tasks can't be deleted until they finish or you stop them.

@@ -1,4 +1,3 @@
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
@@ -20,6 +19,7 @@ import { describe } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as OtlpEndpointCheck from "./OtlpEndpointCheck.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 interface PostedRequest {
   readonly url: string;
@@ -176,7 +176,7 @@ describe("OtlpEndpointCheck", () => {
         assert.deepStrictEqual(result, { _tag: "Rejected", status: 307 });
         assert.deepStrictEqual(requests, [{ url: "/v1/traces", apiKey: "secret" }]);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(Effect.provide(layerTestLoopback)),
   );
 
   it.effect("keeps OTEL endpoint credentials off other endpoints", () => {
