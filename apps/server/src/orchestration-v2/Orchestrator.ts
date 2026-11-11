@@ -219,6 +219,7 @@ import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from 
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
+import { CommitGuard } from "./goat/CommitGuard.ts";
 import { makeDispatchAdmission } from "./goat/DispatchAdmission.ts";
 import {
   applyToProjection,
@@ -13235,6 +13236,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       } satisfies OrchestratorV2DispatchResult;
     }
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
+    const guard = (yield* CommitGuard)?.({
+      commandId: command.commandId,
+      commandType: command.type,
+      threadId: commandThreadId(command),
+    });
     const committed = yield* eventSink
       .commitCommand({
         commandId: command.commandId,
@@ -13244,6 +13250,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         events: plan.events,
         effects: plan.effects,
         allowEffectOnly: command.type === "thread.stop",
+        ...(guard === undefined ? {} : { guard }),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
