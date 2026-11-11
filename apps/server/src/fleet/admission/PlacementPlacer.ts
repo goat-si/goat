@@ -44,14 +44,29 @@ export const argumentOf = (attempt: Attempt): PlacementArgument => ({
 
 const describe = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
+type RemoteLaunch = Omit<SshRemoteDispatch.SshLaunchInput, "placement" | "host" | "target">;
+
+export type RecoveredOutcome =
+  | PlacedOutcome
+  /** No attempt was ever recorded, so nothing was sent. */
+  | { readonly _tag: "NotSent" }
+  /** A person chose "Run again, it may duplicate"; the next attempt may start. */
+  | { readonly _tag: "RerunChosen"; readonly attempt: Attempt };
+
 export interface PlacementPlacerShape {
+  /** Resends the owner's unknown attempt to its own target, or reads its settled outcome. */
+  readonly recover: <P, E, R, E2>(input: {
+    readonly ownerKey: string;
+    readonly authorize: Effect.Effect<RuntimeMode, E, R>;
+    readonly local: (commandId: CommandId, payload: P) => Effect.Effect<unknown, E2>;
+  }) => Effect.Effect<RecoveredOutcome, PlacementAttemptsError | E, R>;
   /** Whether this owner has ever sent a placed attempt; without one nothing was sent. */
   readonly hasAttempt: (ownerKey: string) => Effect.Effect<boolean, PlacementAttemptsError>;
   /** One attempt on another GOAT over SSH dispatch; a retry resends the frozen payload. */
   readonly placeRemote: <E, R>(input: {
     readonly ownerKey: string;
     readonly host: string;
-    readonly launch: Omit<SshRemoteDispatch.SshLaunchInput, "placement" | "host" | "target">;
+    readonly launch: RemoteLaunch;
     readonly authorize: Effect.Effect<RuntimeMode, E, R>;
   }) => Effect.Effect<PlacedOutcome, PlacementAttemptsError | E, R>;
   /** One attempt on this machine, through its own admission. */
@@ -125,161 +140,187 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const placeRemote: PlacementPlacerShape["placeRemote"] = Effect.fn("PlacementPlacer.placeRemote")(
-    function* (input) {
-      const now = yield* Clock.currentTimeMillis;
-      const resolved = yield* attempts.resolve({
-        ownerKey: input.ownerKey,
-        targetHost: input.host,
-        payloadJson: encodeJson(input.launch),
-        now,
+  const started = (attempt: Attempt): PlacedOutcome => ({
+    _tag: "Started",
+    attempt,
+    threadId: attempt.threadId ?? "",
+    runId: attempt.runId,
+  });
+
+  /** Sends this attempt's key with its frozen payload to its own target. */
+  const sendRemote = Effect.fn("PlacementPlacer.sendRemote")(function* <E, R>(
+    attempt: Attempt,
+    authorize: Effect.Effect<RuntimeMode, E, R>,
+  ) {
+    const host = attempt.targetHost;
+    yield* cleanUp(host, authorize).pipe(Effect.ignore);
+    // The payload as first sent, whatever the caller would build now.
+    const frozen = decodeJson(attempt.payloadJson) as RemoteLaunch;
+    const sent = yield* dispatch
+      .launchThread(
+        { ...frozen, host, placement: argumentOf(attempt) },
+        authorize.pipe(Effect.asVoid),
+      )
+      .pipe(Effect.result);
+    if (sent._tag === "Success") {
+      yield* attempts.recordStarted({
+        ownerKey: attempt.ownerKey,
+        attempt: attempt.attempt,
+        threadId: sent.success.threadId,
+        runId: sent.success.runId,
       });
-      if (resolved._tag === "Started")
-        return {
-          _tag: "Started",
-          attempt: resolved.attempt,
-          threadId: resolved.attempt.threadId ?? "",
-          runId: resolved.attempt.runId,
-        } as const;
-      if (resolved._tag === "PinnedElsewhere")
-        return {
-          _tag: "Unknown",
-          attempt: resolved.attempt,
-          message:
-            "An earlier attempt on " +
-            resolved.attempt.targetHost +
-            " has an unknown outcome; nothing is sent elsewhere.",
-        } as const;
-      const attempt = resolved.attempt;
-      yield* cleanUp(input.host, input.authorize).pipe(Effect.ignore);
-      // The payload as first sent, whatever the caller would build now.
-      const frozen = decodeJson(attempt.payloadJson) as typeof input.launch;
-      const sent = yield* dispatch
-        .launchThread(
-          { ...frozen, host: input.host, placement: argumentOf(attempt) },
-          input.authorize.pipe(Effect.asVoid),
-        )
-        .pipe(Effect.result);
-      if (sent._tag === "Success") {
+      return {
+        _tag: "Started",
+        attempt,
+        threadId: sent.success.threadId,
+        runId: sent.success.runId,
+      } satisfies PlacedOutcome;
+    }
+    const error = sent.failure;
+    if (!(error instanceof SshRemoteDispatch.SshRemoteDispatchError))
+      return yield* Effect.fail(error);
+    yield* attempts.recordAnswer({
+      ownerKey: attempt.ownerKey,
+      attempt: attempt.attempt,
+      answer: error.message,
+    });
+    // Only the target's fenced row frees a new attempt (§11 rule 7).
+    if (error.remoteClassification === "placement_not_started") {
+      yield* attempts.recordNotStarted({
+        ownerKey: attempt.ownerKey,
+        attempt: attempt.attempt,
+        threadId: error.remoteThreadId ?? null,
+      });
+      yield* cleanUp(host, authorize).pipe(Effect.ignore);
+      return { _tag: "NotStarted", attempt, message: error.message } satisfies PlacedOutcome;
+    }
+    return { _tag: "Unknown", attempt, message: error.message } satisfies PlacedOutcome;
+  });
+
+  const localCleanUp = cleanUp(LOCAL_TARGET, Effect.succeed("full-access" as RuntimeMode)).pipe(
+    Effect.ignore,
+  );
+
+  /** Places this attempt through this machine's own admission, rebuilt from its frozen payload. */
+  const sendLocal = Effect.fn("PlacementPlacer.sendLocal")(function* <P, E>(
+    attempt: Attempt,
+    launch: (commandId: CommandId, payload: P) => Effect.Effect<unknown, E>,
+  ) {
+    if (Option.isNone(admission))
+      return {
+        _tag: "Unknown",
+        attempt,
+        message: "This machine does not admit placements.",
+      } satisfies PlacedOutcome;
+    yield* localCleanUp;
+    const frozen = decodeJson(attempt.payloadJson) as P;
+    const answer: PlacementAnswer = yield* admission.value.place({
+      key: {
+        placer: "local",
+        ownerKey: attempt.ownerKey,
+        attempt: attempt.attempt,
+        issuedAt: attempt.issuedAt,
+      },
+      digest: NodeCrypto.createHash("sha256").update(attempt.payloadJson).digest("hex"),
+      launch: (commandId) => launch(commandId, frozen),
+    });
+    switch (answer._tag) {
+      case "Started":
         yield* attempts.recordStarted({
           ownerKey: attempt.ownerKey,
           attempt: attempt.attempt,
-          threadId: sent.success.threadId,
-          runId: sent.success.runId,
+          threadId: answer.threadId,
+          runId: answer.runId,
         });
         return {
           _tag: "Started",
           attempt,
-          threadId: sent.success.threadId,
-          runId: sent.success.runId,
-        } as const;
-      }
-      const error = sent.failure;
-      if (!(error instanceof SshRemoteDispatch.SshRemoteDispatchError))
-        return yield* Effect.fail(error);
-      yield* attempts.recordAnswer({
-        ownerKey: attempt.ownerKey,
-        attempt: attempt.attempt,
-        answer: error.message,
-      });
-      // Only the target's fenced row frees a new attempt (§11 rule 7).
-      if (error.remoteClassification === "placement_not_started") {
+          threadId: answer.threadId,
+          runId: answer.runId,
+        } satisfies PlacedOutcome;
+      case "NotStarted":
         yield* attempts.recordNotStarted({
           ownerKey: attempt.ownerKey,
           attempt: attempt.attempt,
-          threadId: error.remoteThreadId ?? null,
+          threadId: answer.threadId,
         });
-        yield* cleanUp(input.host, input.authorize).pipe(Effect.ignore);
-        return { _tag: "NotStarted", attempt, message: error.message } as const;
-      }
-      return { _tag: "Unknown", attempt, message: error.message } as const;
+        yield* localCleanUp;
+        return { _tag: "NotStarted", attempt, message: answer.reason } satisfies PlacedOutcome;
+      default:
+        yield* attempts.recordAnswer({
+          ownerKey: attempt.ownerKey,
+          attempt: attempt.attempt,
+          answer: answer._tag,
+        });
+        return {
+          _tag: "Unknown",
+          attempt,
+          message: "This machine answered " + answer._tag + ".",
+        } satisfies PlacedOutcome;
+    }
+  });
+
+  const resolveFor = Effect.fn("PlacementPlacer.resolveFor")(function* (
+    ownerKey: string,
+    targetHost: string,
+    payload: unknown,
+  ) {
+    return yield* attempts.resolve({
+      ownerKey,
+      targetHost,
+      payloadJson: encodeJson(payload),
+      now: yield* Clock.currentTimeMillis,
+    });
+  });
+
+  const pinnedElsewhere = (attempt: Attempt): PlacedOutcome => ({
+    _tag: "Unknown",
+    attempt,
+    message:
+      "An earlier attempt on " +
+      attempt.targetHost +
+      " has an unknown outcome; nothing is sent elsewhere.",
+  });
+
+  const placeRemote: PlacementPlacerShape["placeRemote"] = Effect.fn("PlacementPlacer.placeRemote")(
+    function* (input) {
+      const resolved = yield* resolveFor(input.ownerKey, input.host, input.launch);
+      if (resolved._tag === "Started") return started(resolved.attempt);
+      if (resolved._tag === "PinnedElsewhere") return pinnedElsewhere(resolved.attempt);
+      return yield* sendRemote(resolved.attempt, input.authorize);
     },
   );
 
   const placeLocal: PlacementPlacerShape["placeLocal"] = Effect.fn("PlacementPlacer.placeLocal")(
     function* (input) {
-      const now = yield* Clock.currentTimeMillis;
-      const resolved = yield* attempts.resolve({
-        ownerKey: input.ownerKey,
-        targetHost: LOCAL_TARGET,
-        payloadJson: encodeJson(input.payload),
-        now,
-      });
-      if (resolved._tag === "Started")
+      const resolved = yield* resolveFor(input.ownerKey, LOCAL_TARGET, input.payload);
+      if (resolved._tag === "Started") return started(resolved.attempt);
+      if (resolved._tag === "PinnedElsewhere") return pinnedElsewhere(resolved.attempt);
+      return yield* sendLocal(resolved.attempt, input.launch);
+    },
+  );
+
+  /** What a lookup of an earlier launch learns: only the attempt's own key may answer it. */
+  const recover: PlacementPlacerShape["recover"] = Effect.fn("PlacementPlacer.recover")(
+    function* (input) {
+      const latest = yield* attempts.latest(input.ownerKey);
+      if (latest === null) return { _tag: "NotSent" } as const;
+      if (latest.state === "started") return started(latest);
+      if (latest.state === "not_started")
         return {
-          _tag: "Started",
-          attempt: resolved.attempt,
-          threadId: resolved.attempt.threadId ?? "",
-          runId: resolved.attempt.runId,
+          _tag: "NotStarted",
+          attempt: latest,
+          message: latest.lastAnswer ?? "not started",
         } as const;
-      if (resolved._tag === "PinnedElsewhere")
-        return {
-          _tag: "Unknown",
-          attempt: resolved.attempt,
-          message:
-            "An earlier attempt on " + resolved.attempt.targetHost + " has an unknown outcome.",
-        } as const;
-      const attempt = resolved.attempt;
-      if (Option.isNone(admission))
-        return {
-          _tag: "Unknown",
-          attempt,
-          message: "This machine does not admit placements.",
-        } as const;
-      yield* cleanUp(LOCAL_TARGET, Effect.succeed("full-access" as RuntimeMode)).pipe(
-        Effect.ignore,
-      );
-      const frozen = decodeJson(attempt.payloadJson) as typeof input.payload;
-      const answer: PlacementAnswer = yield* admission.value.place({
-        key: {
-          placer: "local",
-          ownerKey: attempt.ownerKey,
-          attempt: attempt.attempt,
-          issuedAt: attempt.issuedAt,
-        },
-        digest: NodeCrypto.createHash("sha256").update(attempt.payloadJson).digest("hex"),
-        launch: (commandId) => input.launch(commandId, frozen),
-      });
-      switch (answer._tag) {
-        case "Started":
-          yield* attempts.recordStarted({
-            ownerKey: attempt.ownerKey,
-            attempt: attempt.attempt,
-            threadId: answer.threadId,
-            runId: answer.runId,
-          });
-          return {
-            _tag: "Started",
-            attempt,
-            threadId: answer.threadId,
-            runId: answer.runId,
-          } as const;
-        case "NotStarted":
-          yield* attempts.recordNotStarted({
-            ownerKey: attempt.ownerKey,
-            attempt: attempt.attempt,
-            threadId: answer.threadId,
-          });
-          yield* cleanUp(LOCAL_TARGET, Effect.succeed("full-access" as RuntimeMode)).pipe(
-            Effect.ignore,
-          );
-          return { _tag: "NotStarted", attempt, message: answer.reason } as const;
-        default:
-          yield* attempts.recordAnswer({
-            ownerKey: attempt.ownerKey,
-            attempt: attempt.attempt,
-            answer: answer._tag,
-          });
-          return {
-            _tag: "Unknown",
-            attempt,
-            message: "This machine answered " + answer._tag + ".",
-          } as const;
-      }
+      if (latest.rerunBy !== null) return { _tag: "RerunChosen", attempt: latest } as const;
+      return latest.targetHost === LOCAL_TARGET
+        ? yield* sendLocal(latest, input.local)
+        : yield* sendRemote(latest, input.authorize);
     },
   );
 
   return PlacementPlacer.of({
+    recover,
     hasAttempt: Effect.fn("PlacementPlacer.hasAttempt")(function* (ownerKey: string) {
       return (yield* attempts.latest(ownerKey)) !== null;
     }),
