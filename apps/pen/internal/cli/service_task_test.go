@@ -12,11 +12,13 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf16"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
@@ -610,5 +612,98 @@ func TestOverlappingTaskStartsEachGetTheirOwnRefusal(t *testing.T) {
 	<-bDone
 	if bErr == nil || !strings.Contains(bErr.Error(), "refused for this start") {
 		t.Fatalf("caller B: %v, want the refusal of its own start", bErr)
+	}
+}
+
+// pen down or pen leave during a pen up that has registered the task but not yet started it: the two
+// take turns, so the stop runs after the start is decided and the node ends down, with the down record
+// in place, instead of a pen up that resumes after a reported stop and brings the node back.
+func TestDownAndLeaveDuringATaskStartEndWithTheNodeDown(t *testing.T) {
+	for _, op := range []string{"down", "leave"} {
+		t.Run(op, func(t *testing.T) {
+			rs := relaytest.New()
+			defer rs.Close()
+			var st *state.Store
+			paused, resume := make(chan struct{}), make(chan struct{})
+			var deleted []bool // whether the start had finished when /Delete ran
+			var startDone atomic.Bool
+			st, _ = windowsHome(t, func(verb string, _ []string) error {
+				switch verb {
+				case "/Create":
+					if !startDone.Load() && paused != nil {
+						close(paused)
+						paused = nil
+						<-resume
+					}
+				case "/Run":
+					return startDetached(st)
+				case "/Delete":
+					deleted = append(deleted, startDone.Load())
+				}
+				return nil
+			})
+			cfg := state.Config{Name: "a"}
+			cfg.SetRelays([]string{rs.URL})
+			if err := st.SaveConfig(cfg); err != nil {
+				t.Fatal(err)
+			}
+			id, _, err := st.EnsureIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mesh.Found(st, id, "a", 1); err != nil {
+				t.Fatal(err)
+			}
+			fakeTaskClock(t)
+			t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+			waiting := make(chan struct{})
+			old := startLockWaits
+			t.Cleanup(func() { startLockWaits = old })
+			startLockWaits = func() { close(waiting) }
+			pausedNow := paused
+			startErr := make(chan error, 1)
+			go func() {
+				err := startTask(st)
+				startDone.Store(true)
+				startErr <- err
+			}()
+			<-pausedNow
+			stopErr := make(chan error, 1)
+			go func() {
+				if op == "down" {
+					stopErr <- stopTask(st)
+				} else {
+					stopErr <- removeTask(st)
+				}
+			}()
+			stoppedFirst := false
+			select {
+			case <-waiting: // the stop waits for the start's turn
+			case err := <-stopErr:
+				stoppedFirst = true
+				if err != nil {
+					t.Fatalf("pen %s: %v", op, err)
+				}
+			}
+			close(resume)
+			if err := <-startErr; err != nil {
+				t.Fatalf("pen up: %v", err)
+			}
+			if !stoppedFirst {
+				if err := <-stopErr; err != nil {
+					t.Fatalf("pen %s: %v", op, err)
+				}
+			}
+			if _, err := os.Stat(st.Path(downMarker)); err != nil {
+				t.Fatalf("pen %s reported success but the down record is gone (stopped first: %v)", op, stoppedFirst)
+			}
+			var s daemon.Status
+			if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
+				t.Fatalf("pen %s reported success but the daemon runs (stopped first: %v)", op, stoppedFirst)
+			}
+			if op == "leave" && (len(deleted) != 1 || !deleted[0]) {
+				t.Fatalf("pen leave deleted the task %v (true: after the start was decided)", deleted)
+			}
+		})
 	}
 }

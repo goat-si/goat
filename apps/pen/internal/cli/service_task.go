@@ -101,16 +101,7 @@ func startTask(st *state.Store) error {
 		return err
 	}
 	name := taskName(account)
-	// One start at a time per state folder: a supervisor reads one start request, so a second pen up
-	// replacing it meanwhile would leave the first waiting for a refusal it can no longer recognise.
-	// This is its own lock: the state lock must stay free for the daemon being started.
-	release, err := state.TryLock(st.Path(startLock))
-	if errors.Is(err, state.ErrLocked) {
-		if startLockWaits != nil {
-			startLockWaits()
-		}
-		release, err = state.LockWait(st.Path(startLock))
-	}
+	release, err := taskTurn(st)
 	if err != nil {
 		return err
 	}
@@ -174,11 +165,29 @@ var taskNow, taskSleep = time.Now, time.Sleep
 // startRequest holds the id of the latest start pen up asked the task for.
 const startRequest = "start-request"
 
-// startLockWaits is called when a task start waits for another one (a seam for tests).
+// startLockWaits is called when pen up, pen down or pen leave waits for another one's task turn (a
+// seam for tests).
 var startLockWaits func()
 
-// startLock is held by pen up from registering the task until its start is decided.
+// startLock is the task turn (taskTurn).
 const startLock = "start.lock"
+
+// taskTurn takes start.lock: pen up holds it from registering the task until its start is decided, and
+// pen down and pen leave from the down record until the daemon and supervisor are gone (and the task is
+// deleted). Whichever runs last decides whether Pen runs, and none reports a state another undoes: a
+// supervisor reads one start request, and a stop cannot slip between a start's registration and its
+// removal of the down record. It is its own lock: the state lock must stay free for the daemon being
+// started. A stop waits at most for the start being decided (readyTimeout and one retry wait).
+func taskTurn(st *state.Store) (func(), error) {
+	release, err := state.TryLock(st.Path(startLock))
+	if errors.Is(err, state.ErrLocked) {
+		if startLockWaits != nil {
+			startLockWaits()
+		}
+		release, err = state.LockWait(st.Path(startLock))
+	}
+	return release, err
+}
 
 // startRequestOf is the start the supervisor was run for: the id pen up wrote last ("" for none).
 func startRequestOf(st *state.Store) string {
@@ -221,6 +230,16 @@ var supervisorWait = downWait
 // supervisor has ended; schtasks /End is the fallback for one that does not. A daemon a supervisor
 // started just before it saw the record is stopped last. The task stays registered.
 func stopTask(st *state.Store) error {
+	release, err := taskTurn(st)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return stopTaskInTurn(st)
+}
+
+// stopTaskInTurn is stopTask for a caller that holds the task turn.
+func stopTaskInTurn(st *state.Store) error {
 	if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
 		return err
 	}
@@ -278,7 +297,12 @@ func lockFree(path string, d time.Duration) bool {
 }
 
 func removeTask(st *state.Store) error {
-	if err := stopTask(st); err != nil {
+	release, err := taskTurn(st)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := stopTaskInTurn(st); err != nil {
 		return err
 	}
 	name, err := accountTaskName()

@@ -174,8 +174,10 @@ the same daemon operation as the CLI.
   refuses its start ends the loop instead of being restarted. `pen up` removes `start-refused`, writes a random
   id to `start-request` and runs the task; the supervisor reads that id before its checks and passes it to its
   daemon, the refusal starts with it, and `pen up` fails at once only with a refusal carrying its own id, so a late
-  refusal of an earlier start is not taken for this one. Starts take turns on `start.lock` (not the state lock,
-  which the starting daemon needs), so two `pen up` at once each see the refusal of their own start.
+  refusal of an earlier start is not taken for this one. `pen up`, `pen down` and `pen leave` take turns on
+  `start.lock` (not the state lock, which the starting daemon needs): two `pen up` at once each see the refusal of
+  their own start, and a `pen down` during a start runs after the start is decided, so whichever finishes last
+  decides whether Pen runs. A stop waits at most for the start's readiness wait (20 s).
 - **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
   while a reader has `mesh.json` or `config.json` open, replacing it fails with `ERROR_ACCESS_DENIED`. Saves retry
   that error (and a sharing violation) for up to 2 s while they hold the state lock, the rule of Go's
