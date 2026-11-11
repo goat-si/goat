@@ -92,6 +92,8 @@ export function makeLocalCommandHarness(input: {
     readonly interruptFailure?: boolean;
     readonly interruptCurrentRun?: boolean;
   };
+  /** The run continues the previous one after a restart, and Codex kept that run's turn alive. */
+  readonly restartContinuation?: { readonly cancelledWork: boolean };
 }) {
   const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
   const threadId = ThreadId.make("thread-native-account-command");
@@ -279,8 +281,8 @@ export function makeLocalCommandHarness(input: {
     };
   }
   const previousTurnId = ProviderTurnId.make("previous-provider-turn");
+  const previousRunId = RunId.make("previous-failed-run");
   if (input.previousTurn !== undefined) {
-    const previousRunId = RunId.make("previous-failed-run");
     const previousAttemptId = RunAttemptId.make("previous-failed-attempt");
     const previousProviderThreadId = input.previousTurn.differentThread
       ? oldProviderThreadId
@@ -328,6 +330,21 @@ export function makeLocalCommandHarness(input: {
       ],
     };
   }
+  const continuation = input.restartContinuation;
+  if (continuation !== undefined)
+    projection = {
+      ...projection,
+      runs: projection.runs.map((candidate) =>
+        candidate.id === runId
+          ? { ...candidate, restartContinuationOfRunId: previousRunId }
+          : candidate.id === previousRunId && continuation.cancelledWork
+            ? {
+                ...candidate,
+                restartCancelledBackgroundWork: [{ kind: "shell", label: "sleep 25" }],
+              }
+            : candidate,
+      ),
+    };
   let providerBusy =
     input.previousTurn !== undefined &&
     input.previousTurn.turnStatus === "running" &&
@@ -524,10 +541,11 @@ export function makeLocalCommandHarness(input: {
           ...AgentScope.defaultValue(),
           oomKilled: () => Effect.succeed(input.oomKilled === true),
         }),
-        input.ensureCodexAdmission === undefined
+        input.ensureCodexAdmission === undefined && input.restartContinuation === undefined
           ? Layer.empty
           : Layer.mock(CodexSurvivors.CodexSurvivors)({
-              ensureAdmission: input.ensureCodexAdmission,
+              ensureAdmission: input.ensureCodexAdmission ?? (() => Effect.void),
+              get: () => Effect.succeed({ sourceRunId: previousRunId } as never),
             }),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: () => Effect.die("history read must fail first"),

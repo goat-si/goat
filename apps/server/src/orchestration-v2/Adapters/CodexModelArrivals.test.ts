@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import type { ServerProviderModel } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
@@ -99,18 +100,68 @@ it.effect("only an exact slug counts as known", () =>
   }),
 );
 
-it.effect("a model the process learns later is listed again on a miss, then remembered", () =>
+it.effect(
+  "a refusal always comes from a fresh listing, so a model learned since is not refused",
+  () =>
+    Effect.gen(function* () {
+      const { modelStatus, lists } = yield* arrivals({
+        atOpen: [model(known)],
+        now: [model(known), model(added)],
+        served: [[known], [known, added]],
+      });
+      assert.strictEqual(yield* modelStatus(added), "predated");
+      // Codex refreshed its catalog online and lists the model now, within the quiet minute.
+      assert.strictEqual(yield* modelStatus(added), "ready");
+      assert.strictEqual(yield* modelStatus(known), "ready");
+      assert.strictEqual(yield* lists, 2);
+    }),
+);
+
+/** Two checks overlap: the second starts while the first waits for the process's answer. */
+const overlappingChecks = (catalog: ReadonlyArray<ServerProviderModel>) =>
   Effect.gen(function* () {
-    const { modelStatus, lists } = yield* arrivals({
-      atOpen: [model(known)],
-      now: [model(known), model(added)],
-      served: [[known], [known, added]],
+    const lists = yield* Ref.make(0);
+    const listing = yield* Deferred.make<void>();
+    const answer = yield* Deferred.make<void>();
+    const modelStatus = makeCodexModelArrivals({
+      atStart: catalog.filter((entry) => entry.slug !== added),
+      offered: Effect.succeed(catalog),
+      listServed: Ref.update(lists, (count) => count + 1).pipe(
+        Effect.andThen(Deferred.succeed(listing, undefined)),
+        Effect.andThen(Deferred.await(answer)),
+        Effect.as([known]),
+      ),
     });
-    assert.strictEqual(yield* modelStatus(added), "predated");
-    // Codex refreshed its catalog online and now lists the model.
-    assert.strictEqual(yield* modelStatus(added), "ready");
-    assert.strictEqual(yield* modelStatus(known), "ready");
-    assert.strictEqual(yield* lists, 2);
+    const first = yield* modelStatus(added).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(listing);
+    // The second check runs until it waits, as an open started meanwhile on another thread would.
+    const second = yield* modelStatus(added).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.succeed(answer, undefined);
+    const answers = [yield* Fiber.join(first), yield* Fiber.join(second)];
+    return { answers, lists: yield* Ref.get(lists) };
+  });
+
+it.effect("checks that overlap share one listing of the process, refusing or not", () =>
+  Effect.gen(function* () {
+    // Without GOAT's catalog an unlisted model is unconfirmed; with it, the model is predated.
+    assert.deepStrictEqual(yield* overlappingChecks([]), {
+      answers: ["unconfirmed", "unconfirmed"],
+      lists: 1,
+    });
+    assert.deepStrictEqual(yield* overlappingChecks([model(known), model(added)]), {
+      answers: ["predated", "predated"],
+      lists: 1,
+    });
+  }),
+);
+
+it.effect("a process that just answered is not asked again for a model it did not list", () =>
+  Effect.gen(function* () {
+    // Without GOAT's catalog a miss is unconfirmed; the open's later checks reuse the answer.
+    const { modelStatus, lists } = yield* arrivals({ atOpen: [], now: [], served: [[known]] });
+    assert.strictEqual(yield* modelStatus(added), "unconfirmed");
+    assert.strictEqual(yield* modelStatus(added), "unconfirmed");
+    assert.strictEqual(yield* lists, 1);
   }),
 );
 
@@ -138,17 +189,28 @@ it.effect("a process that cannot list its models is unconfirmed for every offere
   }),
 );
 
-it.effect("a process that does not answer its model list is unconfirmed", () =>
-  Effect.gen(function* () {
-    const modelStatus = makeCodexModelArrivals({
-      atStart: [model(known)],
-      offered: Effect.succeed([model(known), model(added)]),
-      listServed: Effect.never,
-    });
-    const answer = yield* modelStatus(added).pipe(Effect.forkChild);
-    yield* TestClock.adjust("10 seconds");
-    assert.strictEqual(yield* Fiber.join(answer), "unconfirmed");
-  }),
+it.effect(
+  "a process that does not answer its model list is unconfirmed and asked again later",
+  () =>
+    Effect.gen(function* () {
+      const lists = yield* Ref.make(0);
+      const modelStatus = makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known), model(added)]),
+        listServed: Ref.update(lists, (count) => count + 1).pipe(Effect.andThen(Effect.never)),
+      });
+      const answer = yield* modelStatus(added).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      assert.strictEqual(yield* Fiber.join(answer), "unconfirmed");
+      // The open that asked checks again before its turn; that check must not wait once more.
+      assert.strictEqual(yield* modelStatus(added), "unconfirmed");
+      assert.strictEqual(yield* Ref.get(lists), 1);
+      yield* TestClock.adjust("1 minute");
+      const later = yield* modelStatus(added).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      assert.strictEqual(yield* Fiber.join(later), "unconfirmed");
+      assert.strictEqual(yield* Ref.get(lists), 2);
+    }),
 );
 
 it.effect("a hidden model the serving process still runs is ready", () =>
@@ -166,5 +228,42 @@ it.effect("a hidden model the serving process still runs is ready", () =>
       ),
     });
     assert.strictEqual(yield* modelStatus(hidden), "ready");
+  }),
+);
+
+it.effect("a cached-only answer never asks the process", () =>
+  Effect.gen(function* () {
+    const { modelStatus, lists } = yield* arrivals({
+      atOpen: [model(known)],
+      now: [model(known), model(added)],
+      served: [[known]],
+    });
+    assert.strictEqual(yield* modelStatus(added, { cachedOnly: true }), "unconfirmed");
+    assert.strictEqual(yield* lists, 0);
+    assert.strictEqual(yield* modelStatus(added), "predated");
+    assert.strictEqual(yield* modelStatus(added, { cachedOnly: true }), "predated");
+    assert.strictEqual(yield* lists, 1);
+  }),
+);
+
+it.effect("an answer taken before GOAT's catalog changed is listed again before it refuses", () =>
+  Effect.gen(function* () {
+    const offered: Array<ServerProviderModel> = [];
+    const lists = yield* Ref.make(0);
+    const served = [[known], [known, added]];
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [],
+      offered: Effect.sync(() => [...offered]),
+      listServed: Ref.getAndUpdate(lists, (count) => count + 1).pipe(
+        Effect.map((count) => served[Math.min(count, served.length - 1)] ?? []),
+      ),
+    });
+    // The open began before both checks; without a catalog its first answer is unconfirmed.
+    const since = -1;
+    assert.strictEqual(yield* modelStatus(added, { since }), "unconfirmed");
+    // GOAT's catalog arrives and the process learns the model before the open's second check.
+    offered.push(model(known), model(added));
+    assert.strictEqual(yield* modelStatus(added, { since }), "ready");
+    assert.strictEqual(yield* Ref.get(lists), 2);
   }),
 );
