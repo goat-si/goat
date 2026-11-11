@@ -245,3 +245,25 @@ it.effect("a cached-only answer never asks the process", () =>
     assert.strictEqual(yield* lists, 1);
   }),
 );
+
+it.effect("an answer taken before GOAT's catalog changed is listed again before it refuses", () =>
+  Effect.gen(function* () {
+    const offered: Array<ServerProviderModel> = [];
+    const lists = yield* Ref.make(0);
+    const served = [[known], [known, added]];
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [],
+      offered: Effect.sync(() => [...offered]),
+      listServed: Ref.getAndUpdate(lists, (count) => count + 1).pipe(
+        Effect.map((count) => served[Math.min(count, served.length - 1)] ?? []),
+      ),
+    });
+    // The open began before both checks; without a catalog its first answer is unconfirmed.
+    const since = -1;
+    assert.strictEqual(yield* modelStatus(added, { since }), "unconfirmed");
+    // GOAT's catalog arrives and the process learns the model before the open's second check.
+    offered.push(model(known), model(added));
+    assert.strictEqual(yield* modelStatus(added, { since }), "ready");
+    assert.strictEqual(yield* Ref.get(lists), 2);
+  }),
+);

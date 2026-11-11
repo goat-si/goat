@@ -81,22 +81,26 @@ export const makeCodexModelArrivals = <E>(input: {
 }) => {
   const atStart = offeredFromCatalog(input.atStart);
   let served: ReadonlySet<string> | undefined;
-  let asked: { readonly atMs: number; readonly answered: boolean } | undefined;
+  /** The last listing: when it ended, whether the process answered, and GOAT's catalog then. */
+  let asked:
+    | { readonly atMs: number; readonly answered: boolean; readonly catalog: string }
+    | undefined;
   let listings = 0;
   let warned = false;
   // Overlapping checks take turns; one that waited behind a listing reuses its answer.
   const listing = Semaphore.makeUnsafe(1);
-  const lists = input.listServed.pipe(
-    Effect.tap((slugs) => Effect.sync(() => (served = new Set(slugs)))),
-    Effect.timeoutOption("10 seconds"),
-    Effect.orElseSucceed(() => Option.none()),
-    Effect.tap((answer) =>
-      Effect.map(Clock.currentTimeMillis, (atMs) => {
-        asked = { atMs, answered: Option.isSome(answer) };
-        listings += 1;
-      }),
-    ),
-  );
+  const lists = (catalog: string) =>
+    input.listServed.pipe(
+      Effect.tap((slugs) => Effect.sync(() => (served = new Set(slugs)))),
+      Effect.timeoutOption("10 seconds"),
+      Effect.orElseSucceed(() => Option.none()),
+      Effect.tap((answer) =>
+        Effect.map(Clock.currentTimeMillis, (atMs) => {
+          asked = { atMs, answered: Option.isSome(answer), catalog };
+          listings += 1;
+        }),
+      ),
+    );
   return Effect.fn("CodexModelArrivals.modelStatus")(function* (
     model: string,
     options?: { readonly cachedOnly?: boolean; readonly since?: number | undefined },
@@ -104,7 +108,9 @@ export const makeCodexModelArrivals = <E>(input: {
     const offered = yield* input.offered;
     const entry = offered.find((candidate) => candidate.slug === model);
     if (entry?.isCustom === true) return "ready" as ProviderModelStatus;
-    const catalogued = offeredFromCatalog(offered).size > 0;
+    const catalogSlugs = offeredFromCatalog(offered);
+    const catalogued = catalogSlugs.size > 0;
+    const catalog = [...catalogSlugs].sort().join("\n");
     const listingsBefore = listings;
     // Exact: a provider's own catalog matches slugs exactly, and GOAT cannot see which catalog it uses.
     const listed: Option.Option<boolean> =
@@ -124,10 +130,13 @@ export const makeCodexModelArrivals = <E>(input: {
                 const quiet =
                   last !== undefined &&
                   (yield* Clock.currentTimeMillis) - last.atMs < LISTING_QUIET_MS;
-                // Codex can learn models online, so a miss that would refuse is always asked again.
-                if (waited || (quiet && !(last.answered && catalogued)))
+                // Codex can learn models online: a miss refuses only from a listing as recent as the
+                // check, taken under the catalog GOAT holds now.
+                const refuses = last !== undefined && last.answered && catalogued;
+                const reuse = waited ? !refuses || last.catalog === catalog : quiet && !refuses;
+                if (last !== undefined && reuse)
                   return last.answered ? Option.some(false) : Option.none<boolean>();
-                return Option.map(yield* lists, (slugs) => slugs.includes(model));
+                return Option.map(yield* lists(catalog), (slugs) => slugs.includes(model));
               }),
             );
     if (Option.isNone(listed)) {
