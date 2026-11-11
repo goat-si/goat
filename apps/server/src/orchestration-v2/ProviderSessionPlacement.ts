@@ -47,7 +47,9 @@ export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.
     if (model === undefined || input.sessions === undefined) return false;
     const live = yield* input.sessions.get(shared).pipe(Effect.orElseSucceed(Option.none));
     if (Option.isNone(live) || live.value.predatesModel === undefined) return false;
-    return yield* live.value.predatesModel(model);
+    // Dispatch waits on this; a slow answer leaves the thread to the session's own open check.
+    const predates = yield* live.value.predatesModel(model).pipe(Effect.timeoutOption("2 seconds"));
+    return Option.getOrElse(predates, () => false);
   });
   const providerSessionIdFor = Effect.fn("ProviderSessionPlacement.providerSessionIdFor")(
     function* (placement: {
