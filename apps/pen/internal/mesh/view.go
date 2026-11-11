@@ -38,6 +38,8 @@ type View struct {
 	// Account is the mesh's binding (nil when unbound); Locked is lock mode.
 	Account *Account
 	Locked  bool
+	// admission is, by signPub, the found or admit record that made the key a member.
+	admission map[string]string
 }
 
 // MemberByNoise finds a current member by Noise static key.
@@ -163,7 +165,8 @@ func Compute(meshID string, recs []*Record) *View { return compute(meshID, recs,
 // record's own previous one counts only when named in its prev (ADR-0026).
 func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *View {
 	order := canonicalOrder(recs, bare)
-	v := &View{MeshID: meshID, Members: map[string]Member{}, Revoked: map[string]Member{}, Effective: map[string]bool{}}
+	v := &View{MeshID: meshID, Members: map[string]Member{}, Revoked: map[string]Member{}, Effective: map[string]bool{},
+		admission: map[string]string{}}
 	pos := make(map[string]int, len(order))
 	for i, r := range order {
 		pos[r.Hash] = i
@@ -250,6 +253,7 @@ func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *
 			}
 			c := b.Card.C
 			v.Members[c.SignPub] = Member{NodeID: c.NodeID, SignPub: c.SignPub, NoisePub: c.NoisePub, Name: c.Name, Since: b.At}
+			v.admission[c.SignPub] = r.Hash
 			usedNonces[c.Nonce] = true
 			v.Effective[r.Hash] = true
 			continue
@@ -282,6 +286,7 @@ func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *
 				m.Via, m.Email = *b.Via, *b.Email
 			}
 			v.Members[c.SignPub] = m
+			v.admission[c.SignPub] = r.Hash
 			admitted[b.By] = append(admitted[b.By], c.SignPub)
 		case TypeRevoke:
 			for _, s := range b.Subjects {

@@ -194,23 +194,3 @@ func byHashOf(recs []*Record) map[string]*Record {
 	}
 	return m
 }
-
-// withOwnCards adds to prev the kept found and admit records naming key, the smallest few. Every admit
-// naming a key carries a card that key signed for its inviter, so none of them is another member's decoy.
-func (s *Store) withOwnCards(prev []string, key string) []string {
-	var cards []*Record
-	for _, r := range s.recs {
-		if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && r.B.Card != nil && r.B.Card.C.SignPub == key {
-			cards = append(cards, r)
-		}
-	}
-	sortByHash(cards)
-	out := slices.Clone(prev)
-	for _, r := range cards[:min(len(cards), maxOwnCards)] {
-		if !slices.Contains(out, r.Hash) {
-			out = append(out, r.Hash)
-		}
-	}
-	sort.Strings(out)
-	return out
-}

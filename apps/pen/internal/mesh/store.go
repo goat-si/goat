@@ -697,9 +697,15 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		prev = append([]string{own}, prev[:min(len(prev), limit-1)]...)
 	}
 	if s.shares {
-		// Every record names what introduced its signer, so replay puts it after the admission even
-		// when records between them, its own included, were dropped (ADR-0026 "Own chain").
-		prev = s.withOwnCards(prev, by)
+		// Every record names the found or admit that made its signer a member, so replay puts it after
+		// the admission even when records between them, its own included, were dropped (ADR-0026).
+		if s.view == nil {
+			s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
+		}
+		if h := s.view.admission[by]; h != "" && !slices.Contains(prev, h) {
+			prev = append(prev, h)
+			sort.Strings(prev)
+		}
 	}
 	r, err := SignV(max(s.version, 1), id, s.MeshID, typ, n, prev, at, f)
 	if err != nil {
