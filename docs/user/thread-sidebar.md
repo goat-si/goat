@@ -204,6 +204,12 @@ you; you can still answer it. It counts as yours once that agent hands it to you
 without answering. Approvals always come straight to you, and an unanswered request never counts
 as approval.
 
+Approvals an agent asks GOAT for, such as joining a machine to the hub or updating a runtime, are
+listed here as well, and each one also stays above the composer of its thread until you answer it,
+it expires, or the agent withdraws it. Choose **Review request** to see exactly what you would
+approve before you approve or decline it. Each new approval raises one notification, titled
+**Approval needed** with the change and the thread.
+
 Decisions starts with the oldest request and moves to the next one after each answer. **Skip**
 sends a request to the end of the queue for this visit. The sidebar counts requests waiting on
 you; with servers that cannot report them yet, it counts waiting threads instead.

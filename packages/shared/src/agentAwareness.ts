@@ -5,7 +5,12 @@ import type {
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
-import { isProviderNativeSubagentThread, isSideChatThread } from "@goat/contracts";
+import {
+  isPendingApprovalRequest,
+  isPendingUserInputRequest,
+  isProviderNativeSubagentThread,
+  isSideChatThread,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { backgroundWorkHoldsCompletion } from "./orchestrationV2PendingBackgroundWork.ts";
@@ -42,7 +47,7 @@ export function subagentRequestAwareness(
     return null;
   const status = thread.activityRunStatus ?? thread.status;
   if (
-    request.kind === "user_input" &&
+    isPendingUserInputRequest(request) &&
     request.blocking === false &&
     (status === "preparing" || status === "starting" || status === "running")
   )
@@ -50,7 +55,7 @@ export function subagentRequestAwareness(
   return {
     childId: thread.id,
     requestId: request.id,
-    phase: request.kind === "user_input" ? "waiting_for_input" : "waiting_for_approval",
+    phase: isPendingApprovalRequest(request) ? "waiting_for_approval" : "waiting_for_input",
     createdAt: request.createdAt,
   };
 }
@@ -127,7 +132,9 @@ export function projectThreadAwarenessV2(
       ? "Review the completed task."
       : phase === "failed"
         ? "The agent run failed."
-        : undefined;
+        : phase === "waiting_for_approval"
+          ? thread.pendingRuntimeRequest?.handoff?.title
+          : undefined;
   return {
     environmentId,
     threadId: thread.id,
@@ -147,17 +154,13 @@ function resolveThreadAwarenessPhaseV2(
 ): AgentAwarenessPhase | null {
   const runStatus = thread.activityRunStatus ?? thread.status;
   if (
-    thread.pendingRuntimeRequest?.kind === "user_input" &&
-    (thread.pendingRuntimeRequest.blocking !== false ||
+    isPendingUserInputRequest(thread.pendingRuntimeRequest) &&
+    (thread.pendingRuntimeRequest?.blocking !== false ||
       !(runStatus === "preparing" || runStatus === "starting" || runStatus === "running"))
   ) {
     return "waiting_for_input";
   }
-  if (
-    thread.pendingRuntimeRequest !== null &&
-    thread.pendingRuntimeRequest.kind !== "user_input" &&
-    thread.pendingRuntimeRequest.kind !== "auth_refresh"
-  ) {
+  if (isPendingApprovalRequest(thread.pendingRuntimeRequest)) {
     return "waiting_for_approval";
   }
   switch (runStatus) {

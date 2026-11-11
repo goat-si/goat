@@ -8,9 +8,16 @@ import {
 } from "@goat/client-runtime/state/models";
 import { pendingSubagentRequestsByThread } from "@goat/client-runtime/state/threads";
 import type { AnyRouter } from "@tanstack/react-router";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@goat/contracts";
+import type {
+  DecisionFeed,
+  DecisionHandoff,
+  EnvironmentId,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+} from "@goat/contracts";
 import { isGoatBotSessionThreadId, isSideChatThread } from "@goat/contracts";
 import type { ClientSettings } from "@goat/contracts/settings";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import type { AtomRegistry } from "effect/reactivity";
 import {
@@ -23,6 +30,7 @@ import {
 import { getClientSettings, subscribeClientSettings } from "../hooks/useSettings";
 import { isWindowsPlatform } from "../lib/utils";
 import { environmentSummaries } from "../state/presentation";
+import { serverEnvironment } from "../state/server";
 import { environmentShell } from "../state/shell";
 import { threadFamilies } from "../state/threads";
 import {
@@ -39,6 +47,10 @@ import {
   type SidebarThreadStatus,
 } from "./Sidebar.logic";
 import {
+  approvalHandoffShownBy,
+  createApprovalNotificationGate,
+  feedOwnedApprovalThreads,
+  notificationAttention,
   createThreadNotificationGate,
   type ThreadNotificationKind,
   type ThreadNotificationObservation,
@@ -50,13 +62,20 @@ interface NotificationState extends ThreadNotificationObservation {
   readonly subagentRequest: PendingSubagentRequest | null;
   readonly thread: EnvironmentThreadShell;
   readonly status: SidebarThreadStatus;
+  readonly feedOwned: boolean;
 }
 
 interface WatchedEnvironment {
   unsubscribe: () => void;
   previous: Map<ThreadId, NotificationState>;
   reconnecting: boolean;
+  /** Set once the decision feed has listed approvals; from then on it announces them. */
+  feedReady: boolean;
+  /** Server time of the first shell snapshot: approvals older than it were open before watching. */
+  baselineMs: number | null;
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly gate: ReturnType<typeof createThreadNotificationGate<ThreadId>>;
+  readonly approvals: ReturnType<typeof createApprovalNotificationGate<string>>;
 }
 
 /**
@@ -214,10 +233,86 @@ export function startThreadNotifications(
   };
 
   // Completions fire from a timer, so read settings, focus and route when presenting.
+  const presentApproval = (environmentId: EnvironmentId, entry: DecisionHandoff) => {
+    const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
+    const threadId = entry.handoff.requestedBy.threadId;
+    // A GOAT Bot session asks through its bot, as its other requests do.
+    if (isGoatBotSessionThreadId(threadId)) return;
+    const active = (router.state.matches.at(-1)?.params ?? {}) as {
+      environmentId?: string;
+      threadId?: string;
+    };
+    const title = "Approval needed";
+    const body = entry.threadTitle
+      ? `${entry.handoff.title} · ${entry.threadTitle}`
+      : entry.handoff.title;
+    const open = () =>
+      void router.navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId, threadId },
+      });
+    if (hasNotificationSound(mode)) {
+      void playNotificationSound("input", () =>
+        hasNotificationSound(getClientSettings().notificationMode),
+      );
+    }
+    if (document.visibilityState === "visible" && document.hasFocus()) {
+      // The thread on screen already shows it above the composer.
+      if (
+        !inAppNotificationsEnabled ||
+        (active.environmentId === environmentId && active.threadId === threadId)
+      )
+        return;
+      const toastId = toastManager.add({
+        type: "warning",
+        title,
+        description: body,
+        data: {
+          hideCopyButton: true,
+          leadingIcon: (
+            <ShieldQuestionIcon aria-hidden className="size-4 text-warning-foreground" />
+          ),
+        },
+        actionProps: {
+          children: "Open thread",
+          onClick: () => {
+            toastManager.close(toastId);
+            open();
+          },
+        },
+      });
+      return;
+    }
+    if (
+      !hasDesktopNotifications(mode) ||
+      typeof Notification === "undefined" ||
+      Notification.permission !== "granted"
+    )
+      return;
+    try {
+      // One tag per approval, so two at once do not replace each other.
+      const notification = new Notification(title, {
+        body,
+        tag: `approval:${environmentId}:${entry.handoff.handoffId}`,
+        silent: true,
+      });
+      trackNotification(environmentId, notification);
+      notification.addEventListener("click", () => {
+        notification.close();
+        window.focus();
+        void window.desktopBridge?.revealWindow?.().catch(() => undefined);
+        open();
+      });
+    } catch {
+      // Some browsers expose Notification but reject desktop presentation.
+    }
+  };
+
   const present = (
     environmentId: EnvironmentId,
     state: NotificationState,
     kind: ThreadNotificationKind,
+    approvalTitle?: string,
   ) => {
     let { thread } = state;
     const { status } = state;
@@ -261,7 +356,7 @@ export function startThreadNotifications(
       const toastId = toastManager.add({
         type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
         title,
-        description: thread.title,
+        description: approvalTitle ? `${approvalTitle} · ${thread.title}` : thread.title,
         data: {
           hideCopyButton: true,
           leadingIcon:
@@ -297,7 +392,7 @@ export function startThreadNotifications(
       return;
     try {
       const notification = new Notification(title, {
-        body: thread.title,
+        body: approvalTitle ? `${approvalTitle} · ${thread.title}` : thread.title,
         tag: threadNotificationTag(environmentId, thread.id),
         silent: true,
         // Windows drops clicks after a toast moves into Notification Center.
@@ -326,6 +421,16 @@ export function startThreadNotifications(
     const previous = entry.previous;
     const next = new Map<ThreadId, NotificationState>();
     const subagentRequests = pendingSubagentRequestsByThread(threads);
+    // Approval handoffs notify from the decision feed, one per approval; the shell stays quiet.
+    entry.threads = threads;
+    const feedOwned = feedOwnedApprovalThreads(threads, entry.feedReady);
+    if (entry.baselineMs === null) {
+      entry.baselineMs = threads.reduce(
+        (latest, raw) => Math.max(latest, DateTime.toEpochMillis(raw.updatedAt)),
+        0,
+      );
+      entry.approvals.setBaseline(entry.baselineMs);
+    }
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
       // Subagents report through their parent; a side chat answers in its open panel; a GOAT
@@ -341,7 +446,8 @@ export function startThreadNotifications(
       if (
         !entry.reconnecting &&
         prior?.raw === rawThread &&
-        prior.subagentRequest === subagentRequest
+        prior.subagentRequest === subagentRequest &&
+        prior.feedOwned === feedOwned.has(rawThread.id)
       ) {
         next.set(rawThread.id, prior);
         continue;
@@ -349,14 +455,11 @@ export function startThreadNotifications(
       const thread = presentThreadShell(environmentId, rawThread, subagentRequest);
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
-      const attention =
-        status === "input" ||
-        status === "request" ||
-        status === "approval" ||
-        status === "failed" ||
-        status === "limited"
-          ? `${thread.latestRun?.runId ?? ""}:${status}`
-          : null;
+      const attention = notificationAttention(
+        status,
+        thread.latestRun?.runId ?? "",
+        feedOwned.has(rawThread.id),
+      );
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       const settled = status === "ready" && thread.latestRun?.status === "completed";
       const state = {
@@ -364,6 +467,7 @@ export function startThreadNotifications(
         subagentRequest,
         thread,
         status,
+        feedOwned: feedOwned.has(rawThread.id),
         attention,
         settled,
         completedAt: settled && Number.isFinite(completedAt) ? completedAt : null,
@@ -386,15 +490,45 @@ export function startThreadNotifications(
   };
 
   const watchEnvironment = (environmentId: EnvironmentId): WatchedEnvironment => {
+    let handoffs = new Map<string, DecisionHandoff>();
     const entry: WatchedEnvironment = {
       previous: new Map(),
       reconnecting: false,
+      feedReady: false,
+      baselineMs: null,
+      threads: [],
       unsubscribe: () => {},
       gate: createThreadNotificationGate<ThreadId>((threadId, kind) => {
         const state = entry.previous.get(threadId);
-        if (state) present(environmentId, state, kind);
+        if (!state) return;
+        // The approval this notification stands for is named here and not announced again.
+        const shown =
+          kind === "input" ? approvalHandoffShownBy(entry.threads, threadId, state.status) : null;
+        if (shown) entry.approvals.remember(shown.id);
+        present(environmentId, state, kind, shown?.title);
+      }),
+      approvals: createApprovalNotificationGate<string>((handoffId) => {
+        const handoff = handoffs.get(handoffId);
+        if (handoff) presentApproval(environmentId, handoff);
       }),
     };
+    // Held for as long as notifications watch this environment, whatever is on screen.
+    const unsubscribeFeed = registry.subscribe(
+      serverEnvironment.decisionFeed(environmentId),
+      (feed: DecisionFeed | null) => {
+        if (feed?.handoffs === undefined) return;
+        entry.feedReady = true;
+        handoffs = new Map(feed.handoffs.map((item) => [item.handoff.handoffId, item]));
+        // The gate holds its first list until the first shell snapshot gives it a server time.
+        entry.approvals.observe(
+          feed.handoffs.map((item) => ({
+            id: String(item.handoff.handoffId),
+            createdAt: DateTime.toEpochMillis(item.handoff.createdAt),
+          })),
+        );
+      },
+      { immediate: true },
+    );
     const unsubscribeShell = registry.subscribe(
       environmentShell.stateValueAtom(environmentId),
       (shell) => {
@@ -411,6 +545,7 @@ export function startThreadNotifications(
       { immediate: true },
     );
     entry.unsubscribe = () => {
+      unsubscribeFeed();
       unsubscribeShell();
       entry.gate.clear();
     };

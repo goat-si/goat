@@ -43,6 +43,29 @@ describe("projectThreadAwarenessV2", () => {
     ...overrides,
   });
 
+  it("projects a child's approval handoff as an approval, not a question", () => {
+    const request = subagentRequestAwareness({
+      ...v2Thread({
+        lineage: {
+          rootThreadId: "thread-2" as ThreadId,
+          parentThreadId: "thread-2" as ThreadId,
+          relationshipToParent: "subagent",
+        },
+        activityRunStatus: "running",
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make("child-approval"),
+          kind: "user_input",
+          createdAt: updatedAt,
+          blocking: true,
+          handoff: { kind: "approval", title: "Join pen-lidge to the hub" },
+        },
+      }),
+      id: "child" as ThreadId,
+      creationSource: "mcp",
+    });
+    expect(request?.phase).toBe("waiting_for_approval");
+  });
+
   it("projects a child question ahead of a completed parent's silent state", () => {
     const request = subagentRequestAwareness({
       ...v2Thread({
@@ -271,5 +294,25 @@ describe("projectThreadAwarenessV2", () => {
         }),
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
+  });
+
+  it("reports a waiting approval handoff as an approval named by its title", () => {
+    const state = projectThreadAwarenessV2({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: v2Thread({
+        status: "waiting",
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make("handoff-1"),
+          kind: "user_input",
+          createdAt: updatedAt,
+          blocking: true,
+          handoff: { kind: "approval", title: "Join pen-lidge to the hub" },
+        },
+      }),
+    });
+    expect(state?.phase).toBe("waiting_for_approval");
+    expect(state?.headline).toBe("Approval needed");
+    expect(state?.detail).toBe("Join pen-lidge to the hub");
   });
 });
