@@ -25,13 +25,19 @@ export function useGoatBotPaletteBots(): ReadonlyArray<BotProfile> {
   return (profiles.data?.bots ?? []).filter((bot) => bot.state !== "deleted");
 }
 
-/** One entry per bot, so a person can jump to any bot by its name. */
+/**
+ * One entry per bot, so a person can jump to any bot by its name. The main bot is an action;
+ * added bots appear only for a search, so many of them never push the palette's own actions down.
+ */
 export function goatBotPaletteItems(
   bots: ReadonlyArray<BotProfile>,
   navigate: BotNavigate,
-): CommandPaletteActionItem[] {
+): {
+  readonly actions: CommandPaletteActionItem[];
+  readonly search: CommandPaletteActionItem[];
+} {
   const main = bots.find((bot) => bot.role === "main");
-  const items: CommandPaletteActionItem[] = [
+  const actions: CommandPaletteActionItem[] = [
     {
       kind: "action",
       value: "action:goat-bot",
@@ -41,9 +47,10 @@ export function goatBotPaletteItems(
       run: () => navigate({ to: "/bot" }),
     },
   ];
+  const search: CommandPaletteActionItem[] = [];
   for (const bot of bots) {
     if (bot.role !== "member") continue;
-    items.push({
+    search.push({
       kind: "action",
       value: `action:goat-bot:${bot.botId}`,
       searchTerms: [bot.name, "bot", ...(bot.purpose ? [bot.purpose] : [])],
@@ -59,5 +66,5 @@ export function goatBotPaletteItems(
       run: () => navigate({ to: "/bot", search: { bot: bot.botId } }),
     });
   }
-  return items;
+  return { actions, search };
 }

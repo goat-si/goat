@@ -1690,7 +1690,8 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  actionItems.push(...goatBotPaletteItems(goatBots, navigate));
+  const goatBotItems = goatBotPaletteItems(goatBots, navigate);
+  actionItems.push(...goatBotItems.actions);
 
   actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 
@@ -1861,6 +1862,7 @@ function OpenCommandPaletteDialog(props: {
         }
       : {}),
     projectSearchItems: projectSearchItems,
+    botSearchItems: goatBotItems.search,
     settingsSearchItems,
     threadSearchItems:
       isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
