@@ -252,6 +252,7 @@ export const make = Effect.gen(function* () {
     capabilities: {
       freshContext: true,
       modelCatalogRefresh: true,
+      textGenerators: true,
       // The core and owner memory RPC groups are always installed by ws.ts.
       memory: {
         protocolVersion: 1,

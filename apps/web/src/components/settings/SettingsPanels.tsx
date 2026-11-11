@@ -606,9 +606,9 @@ export function GeneralSettingsPanel() {
       target?.projectId ?? null,
     ),
   );
-  const hasTextGenerationProvider = textGenerationModelInstanceEntries.some(
-    (entry) => entry.enabled && entry.isAvailable,
-  );
+  const hasTextGenerationProvider =
+    settings.textGenerators[textGenInstanceId]?.enabled === true ||
+    textGenerationModelInstanceEntries.some((entry) => entry.enabled && entry.isAvailable);
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(
     (entry) => entry.instanceId === textGenInstanceId,
   );

@@ -12,6 +12,7 @@ import { createModelSelection } from "@goat/shared/model";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as TextGeneration from "./TextGeneration.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as Layer from "effect/Layer";
 
@@ -66,6 +67,7 @@ describe("TextGeneration.generateChannelReception", () => {
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("cursor");
       const generation = yield* TextGeneration.make.pipe(
+        Effect.provide(ServerSettings.layerTest()),
         Effect.provideService(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
           makeStubRegistry([makeStubInstance(instanceId, makeStubTextGeneration({}))]),
@@ -200,6 +202,7 @@ describe("TextGeneration memory routing", () => {
         ),
       );
       const generation = yield* TextGeneration.make.pipe(
+        Effect.provide(ServerSettings.layerTest()),
         Effect.provideService(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
           makeStubRegistry(instances),
@@ -254,6 +257,7 @@ describe("TextGeneration memory routing", () => {
       );
       const missingMethod = ProviderInstanceId.make("missing-method");
       const generation = yield* TextGeneration.make.pipe(
+        Effect.provide(ServerSettings.layerTest()),
         Effect.provideService(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
           makeStubRegistry([

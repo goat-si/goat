@@ -651,6 +651,7 @@ export function requiredScopesForServerSettingsPatch(
       key === "providers" ||
       key === "providerInstances" ||
       key === "usageLimitSources" ||
+      key === "textGenerators" ||
       key === "secretProviders"
     ) {
       changesProviders = true;

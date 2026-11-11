@@ -78,7 +78,13 @@ export function isModelSelectionProviderEnabled(
   settings: ServerSettings,
   selection: ModelSelection,
 ): boolean {
-  const instanceConfig = settings.providerInstances[selection.instanceId];
+  const generator = Object.hasOwn(settings.textGenerators, selection.instanceId)
+    ? settings.textGenerators[selection.instanceId]
+    : undefined;
+  if (generator !== undefined) return generator.enabled;
+  const instanceConfig = Object.hasOwn(settings.providerInstances, selection.instanceId)
+    ? settings.providerInstances[selection.instanceId]
+    : undefined;
   if (instanceConfig !== undefined) {
     return resolveProviderInstanceEnabled(instanceConfig);
   }
@@ -145,6 +151,10 @@ export function resolveSourceControlWriterModelSelection(
   projectId: ProjectId | null,
 ): ModelSelection {
   const selection = settings.sourceControlWriterModelSelection;
+  if (selection && Object.hasOwn(settings.textGenerators, selection.instanceId))
+    return settings.textGenerators[selection.instanceId]?.enabled === true
+      ? selection
+      : settings.textGenerationModelSelection;
   if (
     !selection ||
     !resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
@@ -171,10 +181,39 @@ export function resolveMemoryModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,
 ): ModelSelection {
-  return resolveSourceControlWriterModelSelection(
+  const selection = resolveSourceControlWriterModelSelection(
     { ...settings, sourceControlWriterModelSelection: settings.memoryModelSelection },
     providers,
     null,
+  );
+  return agentOnlySelection(settings, providers, null, selection, false);
+}
+
+function agentOnlySelection(
+  settings: ServerSettings,
+  providers: ReadonlyArray<ServerProvider> | undefined,
+  projectId: ProjectId | null,
+  selection: ModelSelection,
+  investigate: boolean,
+): ModelSelection {
+  if (!Object.hasOwn(settings.textGenerators, selection.instanceId)) return selection;
+  return (
+    fallbackTextGenerationModelSelection(
+      settings.providerInstances,
+      (id, driver) => {
+        if (Object.hasOwn(settings.textGenerators, id)) return false;
+        if (investigate && driver !== "codex" && driver !== "claudeAgent") return false;
+        if (!resolveProjectProviderInstanceEnabled(settings, projectId, id)) return false;
+        if (providers === undefined) return true;
+        const provider = providers.find((candidate) => candidate.instanceId === id);
+        return (
+          provider?.enabled === true &&
+          isProviderAvailable(provider) &&
+          isProviderTextGenerationCapable(provider)
+        );
+      },
+      { includeConfiguredInstances: true },
+    ) ?? selection
   );
 }
 
@@ -186,6 +225,7 @@ export function resolveReviewGuideModelSelection(
   const selection = settings.reviewGuideModelSelection;
   if (
     selection &&
+    !Object.hasOwn(settings.textGenerators, selection.instanceId) &&
     resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
   ) {
     const provider = providers?.find((candidate) => candidate.instanceId === selection.instanceId);
@@ -198,7 +238,13 @@ export function resolveReviewGuideModelSelection(
       return selection;
     }
   }
-  return resolveSourceControlWriterModelSelection(settings, providers, projectId);
+  return agentOnlySelection(
+    settings,
+    providers,
+    projectId,
+    resolveSourceControlWriterModelSelection(settings, providers, projectId),
+    true,
+  );
 }
 
 export interface PersistedServerObservabilitySettings {
@@ -476,6 +522,7 @@ export function applyServerSettingsPatch(
     // Merged per entry below; its `null` removals must not reach deepMerge.
     mcpServers: mcpServersPatch,
     usageLimitSources: usageLimitSourcesPatch,
+    textGenerators: textGeneratorsPatch,
     easDeviceHosts: easDeviceHostsPatch,
     secretProviders: secretProvidersPatch,
     sourceControlHosts: sourceControlHostsPatch,
@@ -695,6 +742,9 @@ export function applyServerSettingsPatch(
             usageLimitSourcesPatch,
           ),
         }
+      : {}),
+    ...(textGeneratorsPatch !== undefined
+      ? { textGenerators: mergeSettingsEntries(current.textGenerators, textGeneratorsPatch) }
       : {}),
     ...(easDeviceHostsPatch === undefined
       ? {}

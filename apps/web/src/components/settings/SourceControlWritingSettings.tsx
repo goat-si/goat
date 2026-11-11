@@ -142,10 +142,12 @@ export function SourceControlWritingSettingsSection() {
     },
     projectEffectiveTextGenerationProviders,
   );
-  const canEnableDedicatedModel = instanceEntries.some(
-    (entry) =>
-      entry.instanceId === defaultModelSelection.instanceId && entry.enabled && entry.isAvailable,
-  );
+  const canEnableDedicatedModel =
+    settings.textGenerators[activeSelection.instanceId]?.enabled === true ||
+    instanceEntries.some(
+      (entry) =>
+        entry.instanceId === defaultModelSelection.instanceId && entry.enabled && entry.isAvailable,
+    );
   const modelOptionsByInstance = getCustomModelOptionsByInstance(
     settings,
     projectEffectiveTextGenerationProviders,
