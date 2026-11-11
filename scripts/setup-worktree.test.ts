@@ -149,7 +149,7 @@ function setupFixture(
   const path = windows
     ? [bin, NodePath.join(systemRoot, "System32"), systemRoot]
     : [bin, "/usr/bin", "/bin"];
-  const env = {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     PATH: path.join(NodePath.delimiter),
     GOAT_PROJECT_ROOT: root,
