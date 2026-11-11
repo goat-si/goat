@@ -5,7 +5,6 @@ import {
 } from "@goat/shared/agentAwareness";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 
 import type { AgentAwarenessThread } from "../orchestration-v2/ProjectionAwareness.ts";
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -13,9 +12,12 @@ import type * as ThreadManagement from "../orchestration-v2/ThreadManagementServ
 const MAX_WAITS = 2048;
 const MAX_ANCESTORS = 64;
 
-class SubagentWaitError extends Schema.TaggedError<SubagentWaitError>()("SubagentWaitError", {
-  reason: Schema.String,
-}) {}
+// Retrying cannot fix any of these, so the wait is skipped (its parent shows no subagent wait)
+// rather than failed into the relay's retry map.
+const skip = (id: ThreadId, reason: string, previous: { parentId: ThreadId } | undefined) =>
+  Effect.logWarning("subagent wait not tracked", { threadId: id, reason }).pipe(
+    Effect.as(previous === undefined ? [] : [previous.parentId]),
+  );
 
 export function makeSubagentWaits(threads: ThreadManagement.ThreadManagementService["Service"]) {
   const waits = new Map<
@@ -38,7 +40,7 @@ export function makeSubagentWaits(threads: ThreadManagement.ThreadManagementServ
       return previous === undefined ? [] : [previous.parentId];
     }
     if (!previous && waits.size >= MAX_WAITS)
-      return yield* new SubagentWaitError({ reason: "Too many waiting subagents" });
+      return yield* skip(id, "too many waiting subagents", undefined);
     const seen = new Set<ThreadId>([id]);
     let current: AgentAwarenessThread | null = thread;
     for (let depth = 0; depth < MAX_ANCESTORS; depth++) {
@@ -54,12 +56,15 @@ export function makeSubagentWaits(threads: ThreadManagement.ThreadManagementServ
           : [parentId];
       }
       const parentId = current.lineage.parentThreadId ?? current.sideChatOf ?? null;
-      if (parentId === null || seen.has(parentId))
-        return yield* new SubagentWaitError({ reason: "Invalid subagent lineage" });
+      if (parentId === null || seen.has(parentId)) {
+        waits.delete(id);
+        return yield* skip(id, "invalid subagent lineage", previous);
+      }
       seen.add(parentId);
       current = yield* read(parentId);
     }
-    return yield* new SubagentWaitError({ reason: "Subagent lineage exceeds limit" });
+    waits.delete(id);
+    return yield* skip(id, "subagent lineage exceeds limit", previous);
   });
   const forParent = Effect.fnUntraced(function* (parentId: ThreadId) {
     let selected: SubagentRequestAwareness | null = null;
