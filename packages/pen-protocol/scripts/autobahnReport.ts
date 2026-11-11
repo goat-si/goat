@@ -1,14 +1,19 @@
 // The Autobahn report check, apart from the socket plumbing so it can be tested: every expected case reported and
 // passing, nothing unexpected, and the six cases design 10.2 refuses ending with the client's 1009.
 
-/** Messages of more than 1,024 fragments are refused by design 10.2 with 1009. */
+/**
+ * Messages of more than 1,024 fragments are refused by design 10.2 with 1009. Autobahn ends each fragmented message
+ * with an empty final frame, so 4 MiB in 4 KiB fragments (9.3.4, 9.4.4) is 1,025 frames, one past the cap.
+ */
 export const REFUSED_BY_DESIGN: ReadonlyMap<string, number> = new Map([
   ["9.3.1", 1009],
   ["9.3.2", 1009],
   ["9.3.3", 1009],
+  ["9.3.4", 1009],
   ["9.4.1", 1009],
   ["9.4.2", 1009],
   ["9.4.3", 1009],
+  ["9.4.4", 1009],
 ]);
 
 const PASSING = new Set(["OK", "NON-STRICT", "INFORMATIONAL"]);

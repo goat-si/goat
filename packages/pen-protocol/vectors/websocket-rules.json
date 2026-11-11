@@ -259,11 +259,11 @@
     },
     {
       "id": "W19",
-      "accepts": false,
-      "text": "bytes after a close frame",
+      "accepts": true,
+      "text": "bytes after a close frame are discarded, never delivered (RFC 6455 section 5.5.1)",
       "where": "decoder",
-      "error": "ws/W19",
-      "closeCode": 1002
+      "error": null,
+      "closeCode": null
     },
     {
       "id": "W20",

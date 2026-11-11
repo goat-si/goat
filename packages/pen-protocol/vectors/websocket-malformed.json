@@ -794,7 +794,7 @@
     },
     {
       "id": "W19",
-      "name": "a frame after the close",
+      "name": "a frame after the close is discarded",
       "context": {},
       "input": [
         {
@@ -805,8 +805,13 @@
         }
       ],
       "expect": {
-        "error": "ws/W19",
-        "closeCode": 1002
+        "ok": [
+          {
+            "type": "close",
+            "code": 1000,
+            "reason": ""
+          }
+        ]
       }
     },
     {
@@ -852,6 +857,25 @@
           {
             "type": "close",
             "code": 1005,
+            "reason": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "W19",
+      "name": "a ping and a second close after the close are discarded",
+      "context": {},
+      "input": [
+        {
+          "hex": "880203e8890100880203e8"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1000,
             "reason": ""
           }
         ]

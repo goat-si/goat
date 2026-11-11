@@ -109,8 +109,25 @@ process.stdout.write(
 const problems = checkAutobahnReport(expectedIds, results, clientClose);
 if (problems.length > 0) {
   process.stderr.write("autobahn: failing:\n" + problems.join("\n") + "\n");
+  // The case reports are not uploaded (no Actions artifacts), so print what each failing case recorded.
+  for (const problem of problems) {
+    const file = results[problem.split(" ")[0] ?? ""]?.reportfile;
+    if (file === undefined) continue;
+    const detail = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(reportsDir, "clients", file), "utf8"),
+    ) as Record<string, unknown>;
+    process.stderr.write(
+      JSON.stringify({
+        id: detail.id,
+        result: detail.result,
+        resultClose: detail.resultClose,
+        localCloseCode: detail.localCloseCode,
+        remoteCloseCode: detail.remoteCloseCode,
+      }) + "\n",
+    );
+  }
   process.exit(1);
 }
 process.stdout.write(
-  "autobahn: every expected case passed; 9.3.1-9.3.3 and 9.4.1-9.4.3 ended with the client's 1009 by design; 12.x and 13.x (permessage-deflate) are excluded because the client offers no extension\n",
+  "autobahn: every expected case passed; 9.3.1-9.3.4 and 9.4.1-9.4.4 ended with the client's 1009 by design; 12.x and 13.x (permessage-deflate) are excluded because the client offers no extension\n",
 );

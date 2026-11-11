@@ -145,7 +145,8 @@ export class FrameDecoder {
     const events: Array<FrameEvent> = [];
     let at = 0;
     while (at < bytes.length) {
-      if (this.#closed) throw fail("W19", 1002, "a frame after the close");
+      // After a close frame the rest is discarded (RFC 6455 section 5.5.1): the close is the last event.
+      if (this.#closed) return events;
       const byte = bytes[at] ?? 0;
       switch (this.#stage) {
         case "b0":
