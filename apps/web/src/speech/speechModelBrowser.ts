@@ -1,11 +1,12 @@
-import type { SpeechModelList } from "@goat/contracts";
+import type { SpeechBenchmarkTier, SpeechModelList } from "@goat/contracts";
 
 type Model = (typeof SpeechModelList.Type.models)[number];
 export function filterSpeechModels(
   models: readonly Model[],
   search: string,
   installedOnly: boolean,
-  sort: "recommended" | "size" | "name",
+  sort: "recommended" | "size" | "name" | "speed",
+  tier?: SpeechBenchmarkTier,
 ) {
   const query = search.trim().toLocaleLowerCase();
   return models
@@ -15,6 +16,12 @@ export function filterSpeechModels(
         (!query || `${model.name} ${model.description}`.toLocaleLowerCase().includes(query)),
     )
     .toSorted((a, b) => {
+      if (sort === "speed" && tier !== undefined) {
+        return (
+          (a.benchmark?.[tier] ?? Infinity) - (b.benchmark?.[tier] ?? Infinity) ||
+          a.name.localeCompare(b.name)
+        );
+      }
       if (sort === "size") return a.size - b.size || a.name.localeCompare(b.name);
       if (sort === "name") return a.name.localeCompare(b.name);
       return (

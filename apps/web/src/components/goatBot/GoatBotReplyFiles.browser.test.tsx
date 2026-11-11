@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   reads: [] as Array<string>,
   // Saved files by path: their type and contents; summary.md unless a test sets others.
   files: new Map<string, { readonly mimeType: string; readonly text: string }>(),
+  // The listing's artifacts folder; undefined is an older server that does not send it.
+  root: undefined as string | undefined,
 }));
 const SUMMARY = { mimeType: "text/markdown", text: "# Weekly summary\nThree merged." };
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -39,6 +41,7 @@ vi.mock("~/state/query", async (original) => ({
       data:
         atom === "artifacts"
           ? {
+              ...(state.root === undefined ? {} : { root: state.root }),
               artifacts: (state.files.size === 0
                 ? ["reports/summary.md"]
                 : [...state.files.keys()]
@@ -125,19 +128,73 @@ it("a reply naming a saved file shows its card with a preview, which opens the f
   expect(state.listed).toBeGreaterThan(0);
 });
 
-it("a reply whose code names no file asks the server for nothing", async () => {
+it("a reply whose code no listed file can match asks the server for nothing", async () => {
   state.listed = 0;
   state.reads = [];
   state.files = new Map();
   await using screen = await render(
     <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
-      <GoatBotTimeline rows={[reply("plain", "Run `vp test` next.")]} onRetry={() => {}} />
+      <GoatBotTimeline
+        rows={[reply("plain", "Set `HOST:PORT` in `.env` next.")]}
+        onRetry={() => {}}
+      />
     </GoatBotOpenFileContext>,
     { router: false }, // This reply has no links.
   );
   await expect.element(screen.getByText(/next\./)).toBeVisible();
   expect(state.listed).toBe(0);
   expect(state.reads).toEqual([]);
+});
+
+const ROOT = "/srv/goat/userdata/goat-bot/artifacts";
+
+it("a full path gets a card only when it is inside this server's artifacts folder", async () => {
+  state.listed = 0;
+  state.reads = [];
+  state.files = new Map();
+  state.root = ROOT;
+  await using screen = await render(
+    <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+      <GoatBotTimeline
+        rows={[
+          reply("other", "The other machine wrote `/other/artifacts/reports/summary.md`."),
+          reply("climb", `Also \`${ROOT}/../../x/artifacts/reports/summary.md\`.`),
+          reply("link", `Through a link: \`${ROOT}/link/../reports/summary.md\`.`),
+          reply("own", `I saved \`${ROOT}/reports/summary.md\`.`),
+        ]}
+        onRetry={() => {}}
+      />
+    </GoatBotOpenFileContext>,
+    { router: false }, // These replies have no links.
+  );
+  await expect.element(screen.getByRole("button", { name: "Open summary.md" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Open summary.md" }).elements()).toHaveLength(1);
+  expect(state.reads).toEqual(["reports/summary.md"]);
+});
+
+it("an older server's listing keeps cards for relative names, extensionless too, and none for full paths", async () => {
+  state.listed = 0;
+  state.reads = [];
+  state.files = new Map([
+    ["README", { mimeType: "application/octet-stream", text: "read me" }],
+    ["reports/summary.md", SUMMARY],
+  ]);
+  state.root = undefined;
+  await using screen = await render(
+    <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+      <GoatBotTimeline
+        rows={[
+          reply("full", `Saved \`${ROOT}/reports/summary.md\`.`),
+          reply("bare", "Saved `README`."),
+        ]}
+        onRetry={() => {}}
+      />
+    </GoatBotOpenFileContext>,
+    { router: false }, // These replies have no links.
+  );
+  await expect.element(screen.getByRole("button", { name: "Open README" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Open summary.md" }).elements()).toHaveLength(0);
+  expect(state.reads).toEqual(["README"]);
 });
 
 const remote = "https://tracker.example.com";

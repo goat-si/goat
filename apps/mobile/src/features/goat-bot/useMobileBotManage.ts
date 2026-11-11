@@ -57,6 +57,8 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
           avatar: changes.avatar ?? null,
           purpose: changes.purpose ?? "",
           defaultModelSelection: model,
+          // Neutral sends no key, which older servers would drop anyway.
+          ...(changes.color == null ? {} : { color: changes.color }),
         },
       });
       return result._tag === "Success"

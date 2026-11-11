@@ -90,8 +90,12 @@ export function MobileBotRosterView(props: {
   onOpenBot: (bot: BotRosterEntry) => void;
   /** Opens one task in its bot's chat, from an ask in the Needs you strip. */
   onOpenTask?: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
+  /** An ask in the Needs you strip names a bot this list doesn't hold yet. */
+  onUnknownBot?: (() => void) | undefined;
   /** The roster is on screen; it stays mounted under other pages on some layouts. */
   visible?: boolean;
+  /** A New bot under way: its Creating…, failure or created row, after the members. */
+  newBotRow?: ReactNode;
   /** Member bots: shown ones are in `bots`; these two lists carry the reverse states. */
   members?: {
     readonly hidden: ReadonlyArray<BotProfile>;
@@ -143,6 +147,7 @@ export function MobileBotRosterView(props: {
         hidden={props.members?.hidden ?? []}
         visible={props.visible ?? true}
         onOpenAsk={props.onOpenTask ?? ((bot) => props.onOpenBot(bot))}
+        onUnknownBot={props.onUnknownBot}
       />
       {props.bots.map((bot) => {
         const key = bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`;
@@ -204,6 +209,7 @@ export function MobileBotRosterView(props: {
           />
         );
       })}
+      {props.newBotRow}
       {props.members && props.members.hidden.length > 0 ? (
         <View>
           <Pressable

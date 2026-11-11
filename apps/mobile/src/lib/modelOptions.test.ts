@@ -12,6 +12,7 @@ import {
 
 import {
   buildModelOptions,
+  providerInstanceNameLabel,
   describeUnavailableModelSelection,
   groupByProvider,
   isModelSelectionUnavailable,
@@ -20,6 +21,29 @@ import {
   resolveSelectableModelSelection,
   type ModelOption,
 } from "./modelOptions";
+
+it("identifies a local ACP instance when its icon cannot distinguish it", () => {
+  expect(
+    providerInstanceNameLabel({ provider: "acpRegistry", displayName: "Local A", showBadge: true }),
+  ).toBe("Local A");
+  expect(
+    providerInstanceNameLabel({ provider: "acpRegistry", displayName: "Local B", showBadge: true }),
+  ).toBe("Local B");
+  expect(
+    providerInstanceNameLabel({ provider: "acpRegistry", displayName: "Hidden", showBadge: false }),
+  ).toBeNull();
+  expect(
+    providerInstanceNameLabel({ provider: "codex", displayName: "Codex", showBadge: true }),
+  ).toBeNull();
+  expect(
+    providerInstanceNameLabel({
+      provider: "acpRegistry",
+      displayName: "Official",
+      showBadge: true,
+      iconUrl: "https://cdn.agentclientprotocol.com/registry/v1/latest/agent.svg",
+    }),
+  ).toBeNull();
+});
 
 describe("mobile model options", () => {
   it.each(["cursor", "cursorCloud"])(

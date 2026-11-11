@@ -19,6 +19,15 @@ import {
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
 // Event lines resolve their routine or task against the home's reads, which this test does not load.
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
+vi.mock("./GoatBotReplyFiles", () => ({
+  GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
+  GoatBotReplyFiles: () => null,
+}));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));

@@ -138,5 +138,7 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
      * know the field ignore it and classify by code, so it can be added without a new reason.
      */
     classification: Schema.optionalKey(Schema.String),
+    /** An idle thread a refused placement left behind; its placer archives it. */
+    threadId: Schema.optionalKey(Schema.String),
   },
 ) {}

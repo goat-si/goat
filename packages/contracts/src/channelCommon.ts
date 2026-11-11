@@ -134,7 +134,8 @@ export const ChannelMessageMeta = Schema.Struct({
   /**
    * On a person's message sent from a task question's card: that question when the server took the
    * answer, null when it refused it (closed, not theirs to answer, or not an answer it accepts).
-   * Absent on other messages and from older servers.
+   * Set at acceptance as the expected outcome, then replaced once by reception's committed
+   * decision. Absent on other messages and from older servers.
    */
   answersQuestionId: Schema.optional(Schema.NullOr(ChannelQuestionId)),
 });

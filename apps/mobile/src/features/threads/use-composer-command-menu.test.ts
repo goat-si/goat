@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ProviderDriverKind } from "@goat/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
+import type { ModelOption } from "../../lib/modelOptions";
+import { buildComposerModelItems } from "./composerModelMentions";
 
 vi.hoisted(() =>
   Object.assign(globalThis, {
@@ -53,6 +55,7 @@ import {
   buildComposerSlashCommandItems,
   resolveComposerCommandSelection,
   resolveComposerMenuSelection,
+  resolveComposerSendIntercept,
 } from "./use-composer-command-menu";
 
 describe("resolveComposerMenuSelection", () => {
@@ -88,6 +91,41 @@ describe("resolveComposerMenuSelection", () => {
       }),
     ).toEqual({ start: 11, end: 11 });
   });
+});
+
+it("lists a catalog model and inserts its reference without switching the thread", () => {
+  const instanceId = ProviderInstanceId.make("codex");
+  const provider = {
+    instanceId,
+    driver: ProviderDriverKind.make("codex"),
+    enabled: true,
+    installed: true,
+    status: "ready",
+    auth: { status: "authenticated" },
+  } as ServerProvider;
+  const option = {
+    key: "codex:gpt-5.5",
+    label: "GPT-5.5",
+    subtitle: "",
+    providerKey: "codex",
+    providerLabel: "Codex",
+    providerDriver: "codex",
+    isDefault: false,
+    isLegacy: false,
+    capabilities: null,
+    selection: { instanceId, model: "gpt-5.5" },
+  } satisfies ModelOption;
+  const [item] = buildComposerModelItems([option], "", [provider]);
+  expect(item).toMatchObject({ type: "model", label: "GPT-5.5" });
+  if (!item) throw new Error("model missing");
+  expect(
+    resolveComposerCommandSelection({
+      draftMessage: "Compare @",
+      trigger: { rangeStart: 8, rangeEnd: 9 },
+      item,
+      allowInteractionMode: true,
+    }),
+  ).toMatchObject({ text: "Compare model:codex/gpt-5.5 ", interactionMode: null });
 });
 
 describe("mobile slash commands", () => {
@@ -153,5 +191,70 @@ describe("mobile slash commands", () => {
         allowInteractionMode: false,
       }),
     ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
+  });
+});
+
+describe("mobile /fork command", () => {
+  const forkItems = (input: { readonly offersFork: boolean; readonly atMessageStart?: boolean }) =>
+    buildComposerSlashCommandItems({
+      query: "fo",
+      atMessageStart: input.atMessageStart ?? true,
+      hasThread: true,
+      offersFork: input.offersFork,
+      allowInteractionMode: true,
+      selectedProviderStatus: null,
+    }).filter((item) => item.id === "cmd:fork");
+
+  it("is offered only for a forkable thread at the start of the message", () => {
+    expect(forkItems({ offersFork: true })).toEqual([
+      expect.objectContaining({ type: "slash-command", command: "fork", label: "/fork" }),
+    ]);
+    expect(forkItems({ offersFork: false })).toEqual([]);
+    expect(forkItems({ offersFork: true, atMessageStart: false })).toEqual([]);
+  });
+
+  it("removes only its own token and asks the composer to fork", () => {
+    const [item] = forkItems({ offersFork: true });
+    if (!item) throw new Error("expected /fork");
+    expect(
+      resolveComposerCommandSelection({
+        draftMessage: "/fo keep this",
+        trigger: { rangeStart: 0, rangeEnd: 3 },
+        item,
+        allowInteractionMode: true,
+      }),
+    ).toEqual({ text: " keep this", cursor: 0, interactionMode: null, fork: true });
+  });
+
+  it("catches a typed standalone /fork in any existing thread, whatever is attached", () => {
+    // Availability is not an input: an unforkable thread explains why instead of sending the text.
+    const intercept = (text: string, attachmentCount = 0, inThread = true) =>
+      resolveComposerSendIntercept({ text, attachmentCount, usageLimitsOffered: true, inThread });
+    expect(intercept(" /fork ")).toBe("fork");
+    expect(intercept("/FORK", 2)).toBe("fork");
+    expect(intercept("/fork", 0, false)).toBeNull();
+    expect(intercept("/fork this please")).toBeNull();
+    expect(intercept("/usage-limits")).toBe("usage-limits");
+    expect(intercept("/usage-limits", 1)).toBeNull();
+    expect(intercept("hello")).toBeNull();
+  });
+  it("hides a provider's own /fork where GOAT's /fork takes the command", () => {
+    const provider = {
+      driver: ProviderDriverKind.make("codex"),
+      showInteractionModeToggle: true,
+      slashCommands: [{ name: "fork", description: "Codex fork" }],
+    };
+    const ids = (reservesFork: boolean) =>
+      buildComposerSlashCommandItems({
+        query: "fork",
+        atMessageStart: true,
+        hasThread: true,
+        offersFork: false,
+        reservesFork,
+        allowInteractionMode: true,
+        selectedProviderStatus: provider,
+      }).map((item) => item.id);
+    expect(ids(true)).toEqual([]);
+    expect(ids(false)).toEqual(["pcmd:fork"]);
   });
 });

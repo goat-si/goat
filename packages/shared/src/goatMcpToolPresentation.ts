@@ -441,6 +441,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Repair", "Repairing", "Repaired", "a hub device"],
     "environment-update",
   ),
+  goat_hub_device_move: tool(
+    ["Move", "Moving", "Moved", "a hub device to another alias"],
+    "environment-update",
+  ),
   goat_hub_opencodex_sync: tool(
     ["Sync", "Syncing", "Synced", "OpenCodex models"],
     "environment-update",

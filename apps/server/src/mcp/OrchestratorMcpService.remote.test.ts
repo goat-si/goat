@@ -468,6 +468,11 @@ it.effect(
         assert.deepEqual(first.parentModelSelection, f.projection.runs[0]!.modelSelection);
         assert.deepEqual(first.modelSelection, f.projection.subagents[0]!.modelSelection);
         assert.equal(first.status, "running");
+        assert.equal(
+          first.link,
+          "[Act as the review sub-agent for this task. Inspect the remote repositor](goat-thread://v1/child-on-host)",
+        );
+        assert.equal(retry.link, first.link);
         assert.equal(retry.taskId, first.taskId);
         assert.equal(f.launches.length, 1);
         yield* Queue.take(f.calls);
@@ -549,6 +554,7 @@ it.effect(
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
         const handle = yield* service.delegateTask(scope, {
           ...input,
+          title: "Review [remote] changes",
           runtimeMode: "auto-accept-edits",
           remote: {
             cwd: "/workspace/repo",
@@ -558,6 +564,7 @@ it.effect(
         assert.equal(handle.status, "running");
         assert.equal(handle.host, "box");
         assert.equal(handle.childThreadId, remoteThreadId);
+        assert.equal(handle.link, "[Review remote changes](goat-thread://v1/child-on-host)");
         assert.equal(handle.childRunId, null);
         assert.equal(handle.hasPendingChildRuns, false);
         assert.equal(handle.resultContextTransferId, null);
@@ -585,6 +592,7 @@ it.effect(
         while (result.type !== "delegated_task.remote.result")
           result = yield* Queue.take(f.commands);
         const status = yield* service.taskStatus(scope, handle.taskId);
+        assert.equal(status.link, handle.link);
         assert.equal(status.status, "completed");
         assert.equal(status.summary, "A finished");
         assert.equal(status.latestTerminalSummary, "A finished");
@@ -661,6 +669,7 @@ it.effect.each(["remote_refused", "host_unavailable"] as const)(
         const handle = yield* service.delegateTask(scope, input);
         assert.equal(handle.status, "failed");
         assert.equal(handle.childThreadId, null);
+        assert.isUndefined(handle.link);
         assert.include(
           handle.summary ?? "",
           reason === "remote_refused" ? "Remote launch refused" : "launch outcome unknown",
@@ -681,7 +690,13 @@ it.effect("unknown launch retains the known remote child handle", () =>
       const handle = yield* service.delegateTask(scope, input);
       assert.equal(handle.status, "failed");
       assert.equal(handle.childThreadId, remoteThreadId);
+      assert.equal(handle.link, "[Inspect the remote repository](goat-thread://v1/child-on-host)");
       assert.equal((yield* service.taskStatus(scope, handle.taskId)).childThreadId, remoteThreadId);
+      f.projection.subagents[0] = { ...f.projection.subagents[0]!, title: null };
+      assert.equal(
+        (yield* service.taskStatus(scope, handle.taskId)).link,
+        "[child-on-host](goat-thread://v1/child-on-host)",
+      );
       assert.equal(yield* Queue.size(f.calls), 0);
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(database)),

@@ -1,6 +1,6 @@
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
-import { deliveryLedger } from "./channelDeliveryLedger.ts";
+import { type ChannelDeliveryLedgerOps, deliveryLedger } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -136,9 +136,11 @@ export interface ChannelTailEntry {
 }
 export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
 
+type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
+
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
-  ChannelBotLedgerOps & {
+  ChannelLedgerOps & {
     /** Stores an input, or returns the stored one for the same idempotency key. */
     readonly acceptInput: (input: {
       readonly ownerId: string;
@@ -456,58 +458,6 @@ export class ChannelLedger extends Context.Service<
       deliveries: ReadonlyArray<ChannelOutboxInsert>,
       now: string,
     ) => Effect.Effect<void, ChannelLedgerError>;
-    /**
-     * Marks the oldest due rows as delivering. A row waits while an earlier row for the same task
-     * and destination kind is still pending or in flight, so a receipt goes out before its result.
-     */
-    readonly claimDueDeliveries: (input: {
-      readonly owner: string;
-      readonly now: string;
-      readonly limit: number;
-      readonly receiptsOnly?: boolean | undefined;
-    }) => Effect.Effect<ReadonlyArray<ChannelStoredDelivery>, ChannelLedgerError>;
-    /**
-     * claimDueDeliveries, also saying how many interim messages it set aside as already heard.
-     * It sets aside a bounded number per call, so a long backlog takes several calls.
-     */
-    readonly claimDue: (input: {
-      readonly owner: string;
-      readonly now: string;
-      readonly limit: number;
-      readonly receiptsOnly?: boolean | undefined;
-    }) => Effect.Effect<
-      { readonly deliveries: ReadonlyArray<ChannelStoredDelivery>; readonly setAside: number },
-      ChannelLedgerError
-    >;
-    readonly recordDelivery: (input: {
-      readonly owner: string;
-      readonly deliveryId: ChannelDeliveryId;
-      readonly outcome: ChannelDeliveryOutcome;
-      readonly now: string;
-      readonly attempt?: number | undefined;
-    }) => Effect.Effect<void, ChannelLedgerError>;
-    readonly expireReceipts: (input: {
-      readonly owner: string;
-      readonly now: string;
-    }) => Effect.Effect<void, ChannelLedgerError>;
-    /**
-     * Records that an external delivery is being handed to its transport now. False when the row
-     * is no longer this claim's (its receipt expired, or recovery took it): then it is not sent.
-     */
-    readonly markSending: (input: {
-      readonly owner: string;
-      readonly deliveryId: ChannelDeliveryId;
-      readonly attempt: number;
-      readonly now: string;
-    }) => Effect.Effect<boolean, ChannelLedgerError>;
-    /**
-     * After a restart: GOAT bot and MCP deliveries and external ones never handed to their
-     * transport retry; external ones handed over become ambiguous.
-     */
-    readonly settleInterruptedDeliveries: (input: {
-      readonly owner: string;
-      readonly now: string;
-    }) => Effect.Effect<void, ChannelLedgerError>;
     readonly getDeliveryState: (
       deliveryId: ChannelDeliveryId,
     ) => Effect.Effect<string | undefined, ChannelLedgerError>;

@@ -1901,7 +1901,6 @@ export const layerWsRpc = (
         threadManagement,
         latestSequence: applicationEvents.latestApplicationSequence,
       });
-
       const subscribeOrchestrationV2ArchivedShell = Effect.fn(
         "ws.orchestrationV2.subscribeArchivedShell",
       )(function* () {
@@ -1937,7 +1936,6 @@ export const layerWsRpc = (
           );
         return Stream.concat(rpcInitialItems([{ kind: "snapshot" as const, snapshot }]), live);
       });
-
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
@@ -2496,6 +2494,8 @@ export const layerWsRpc = (
         [WS_METHODS.serverRefreshProviders]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {
+            if (input.modelCatalogOnly === true)
+              return yield* providerRegistry.refreshModelCatalog.pipe(Effect.as({ providers: [] }));
             if (input.refreshModels) {
               yield* providerRegistry.invalidateModelCaches({
                 instanceId: input.instanceId,

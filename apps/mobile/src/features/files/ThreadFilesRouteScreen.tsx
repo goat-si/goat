@@ -49,7 +49,7 @@ import { ThreadInspectorContentStack } from "../threads/thread-inspector-content
 import { FileTreeBrowser } from "./FileTreeBrowser";
 import { useFileTreeEntries } from "./useFileTreeEntries";
 import { preloadWorkspaceFileContents } from "./preload-workspace-file";
-import { SourceFileSurface } from "./SourceFileSurface";
+import { FileSourceSurface } from "./FileSourceSurface";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { ThreadFileNavigatorPane } from "./thread-file-navigator-pane";
 import { AppBar } from "../../components/ui/AppBar";
@@ -330,7 +330,8 @@ function FileContent(props: {
           onRefresh={props.onRefresh}
         />
       ) : (
-        <SourceFileSurface
+        <FileSourceSurface
+          key={`${props.relativePath}:${props.initialLine ?? ""}`}
           contents={props.fileContents}
           path={props.relativePath}
           initialLine={props.initialLine}

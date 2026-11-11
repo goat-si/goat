@@ -1,8 +1,10 @@
 import type { AssistantCitation } from "@goat/contracts";
+import { collectComposerModelMentions } from "@goat/client-runtime/composer-model-mentions";
 import { collectAssistantCitations } from "@goat/shared/assistantCitations";
 import { collectComposerContextReferences } from "@goat/shared/composerContextReferences";
 import {
   collectComposerInlineTokens,
+  composerMathRanges,
   type ComposerInlineToken,
 } from "@goat/shared/composerInlineTokens";
 
@@ -21,6 +23,7 @@ export type ComposerPromptSegment =
       name: string;
       source: string;
     }
+  | { type: "model"; instanceId: string; model: string; source: string }
   | {
       type: "citation";
       citation: AssistantCitation;
@@ -76,7 +79,16 @@ function forEachMentionMatch(
 }
 
 export function collectComposerPromptInlineTokens(text: string) {
-  const tokens = collectComposerInlineTokens(text);
+  const inlineTokens = collectComposerInlineTokens(text);
+  const taken = [...inlineTokens, ...composerMathRanges(text)];
+  const models = collectComposerModelMentions(text)
+    .filter(
+      (mention) =>
+        /\s/u.test(text[mention.end] ?? "") &&
+        !taken.some((range) => mention.start < range.end && mention.end > range.start),
+    )
+    .map((mention) => ({ ...mention, type: "model" as const }));
+  const tokens = [...inlineTokens, ...models].sort((left, right) => left.start - right.start);
   const citations = collectAssistantCitations(text);
   const references = collectComposerContextReferences(text);
   if (citations.length === 0 && references.length === 0) return tokens;
@@ -125,6 +137,13 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
       segments.push({
         type: "mention",
         path: match.value,
+        source: match.source,
+      });
+    } else if (match.type === "model") {
+      segments.push({
+        type: "model",
+        instanceId: match.instanceId,
+        model: match.model,
         source: match.source,
       });
     } else {

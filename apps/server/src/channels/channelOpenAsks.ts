@@ -1,5 +1,6 @@
 import {
   type BotId,
+  CHANNEL_OPEN_ASKS_DEFAULT_LIMIT,
   ChannelTask,
   type ChannelOpenAsk,
   type ChannelListOpenAsksResult,
@@ -14,8 +15,6 @@ import { approvalCard } from "./channelApprovalCards.ts";
 import { approvalRequestDetail, nativeQuestionText } from "./channelNativeQuestionCards.ts";
 import { type WaitingAsk, waitingAsks, waitingTaskCondition } from "./channelWaitingTasks.ts";
 
-/** How many asks a client gets: the newest, which the strip names first. */
-const OPEN_ASKS_LIMIT = 50;
 /** Waiting tasks read per request; more set `truncated`. */
 const CANDIDATE_LIMIT = 200;
 /** Asks whose words need a read of the worker thread; later ones keep their plain words. */
@@ -118,7 +117,7 @@ export const openAskCandidates = (
     LIMIT ${CANDIDATE_LIMIT + 1}`;
 
 /**
- * What the owner's bots wait on the person for, newest first: at most `OPEN_ASKS_LIMIT`, with
+ * What the owner's bots wait on the person for, newest first: at most `limit`, with
  * the total. Read from the same waiting tasks the bots' badges count, at most `CANDIDATE_LIMIT`
  * of them; only the newest `DETAIL_LIMIT` asks read their worker thread for exact words.
  */
@@ -127,13 +126,14 @@ export const listOpenAsks = Effect.fn("channel.listOpenAsks")(function* (input: 
   readonly threads: ThreadManagement.ThreadManagementService["Service"];
   readonly ownerId: string;
   readonly botIds: ReadonlySet<string>;
+  readonly limit?: number;
 }) {
   const rows = yield* openAskCandidates(input.sql, input);
   const drafts = rows
     .slice(0, CANDIDATE_LIMIT)
     .flatMap((row) => asksOf(row.bot_id as BotId, decodeTask(row.task_json)))
     .toSorted((a, b) => b.ask.askedAt.localeCompare(a.ask.askedAt));
-  const shown = drafts.slice(0, OPEN_ASKS_LIMIT);
+  const shown = drafts.slice(0, input.limit ?? CHANNEL_OPEN_ASKS_DEFAULT_LIMIT);
   const looked = new Set(
     shown.filter((draft) => draft.lookup !== undefined).slice(0, DETAIL_LIMIT),
   );

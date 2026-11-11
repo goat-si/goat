@@ -18,6 +18,15 @@ import {
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
 // Event lines resolve their routine or task against the home's reads, which this test does not load.
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
+vi.mock("./GoatBotReplyFiles", () => ({
+  GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
+  GoatBotReplyFiles: () => null,
+}));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));
@@ -343,7 +352,12 @@ describe("the progress line under the last message", () => {
       h,
       <GoatBotActivityLine
         botName="GOAT Bot"
-        activity={{ state: "working", text: "Waiting for your answer" }}
+        activity={{
+          state: "working",
+          text: "Waiting for your answer",
+          attention: "waiting",
+          wait: "you",
+        }}
         inView
       />,
     );
@@ -734,6 +748,32 @@ describe("a reply with a table", () => {
   it("keeps a reply whole when a list item or quote defines one of its links", async () => {
     for (const definition of ["- [x]: https://example.com", "> [x]: https://example.com"]) {
       await render(bot({ text: ["See [notes][x].", "", ...table, "", definition].join("\n") }));
+      expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
+      await view.unmount();
+      h.dispose();
+    }
+    await render(bot({ text: "x" }));
+  });
+
+  it("cards a table indented under a quote that a blank line ended, and leaves one a list item holds", async () => {
+    const indented = table.map((line) => `  ${line}`);
+    await render(bot({ text: ["> A note first.", "", ...indented].join("\n") }));
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(1);
+    await view.unmount();
+    h.dispose();
+    // Two spaces under "- " still belong to the list item, so the table stays in it.
+    await render(bot({ text: ["- A step first", "", ...indented].join("\n") }));
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
+  });
+
+  it("leaves a table in the bubble when nested lists or quotes above could still hold it", async () => {
+    const indented = table.map((line) => `  ${line}`);
+    for (const above of [
+      ["- An outer step", "  - An inner step"],
+      ["- A step", "  > A quote inside it"],
+      ["- An outer step", "\t- An inner step"],
+    ]) {
+      await render(bot({ text: [...above, "", ...indented].join("\n") }));
       expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
       await view.unmount();
       h.dispose();

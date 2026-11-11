@@ -120,6 +120,7 @@ import {
 import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { mayAnswerTask, openQuestionTask, questionTextForModel } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
+import { personMessageEntry } from "./channelPersonMessage.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import {
@@ -919,19 +920,7 @@ const make = Effect.gen(function* () {
             threadId: origin.threadId,
             record: {
               recordKey: "input:" + inputId,
-              entry: {
-                type: "message",
-                role: "user",
-                text: message.text,
-                meta: {
-                  conversationId,
-                  originKind: "goat",
-                  kind: "inbound",
-                  inputId,
-                  clientMessageId: message.externalMessageId,
-                  readAt: stored.snapshot.readAt ?? readAt,
-                },
-              },
+              entry: personMessageEntry(stored, { readAt: stored.snapshot.readAt ?? readAt }),
             },
             revision: "read",
           })

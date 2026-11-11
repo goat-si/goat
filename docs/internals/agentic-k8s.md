@@ -610,6 +610,18 @@ status plus unsettled goal reservations, so two goals cannot both take the last 
 launching a thread by hand is never refused by a goal cap; that thread simply counts against the
 next goal placement.
 
+**Target-owned admission (built, off).** The caps above are the placer's view, so two machines
+placing on a third can overfill it. `apps/server/src/fleet/admission/` lets the target admit a
+placed `goat_thread_launch` itself: a reservation row per key `(placer, ownerKey, attempt,
+issuedAt)`, admitted under one lock, and made to count by guard writes that run inside the
+transactions committing `thread.create` and the initial message (`CommitGuard`, read in
+`Orchestrator.dispatchWithReceiptEffect`). Fibers a launch forks inherit that reference, so a
+selector matches exact command ids. A placer frees a new attempt only on the target's "not
+started", read from a fenced row, or on a person's choice; every other answer, `full` and
+`cordoned` included, keeps the same key on the same target. `PlacementAdmissionEnabled` is false
+on every machine until the mesh-link units are reviewed together; while it is false the argument is
+not declared, host status does not advertise it, and placers never send it.
+
 Goal budgets are hard for new work and soft for work in flight. Once a budget is spent, every claim
 for a launch, steer, follow-up, fallback hop or reschedule is refused, and the turn already running
 finishes. Goal-owned threads are excluded from `UsageLimitRecoveryWorker` auto-resume (a pure filter

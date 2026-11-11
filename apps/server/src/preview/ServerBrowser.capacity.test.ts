@@ -229,8 +229,16 @@ let desktopPageUrl = "about:blank";
 let desktopSizeAnswer: (() => Promise<Record<string, unknown>>) | null = null;
 const desktopDetaches = new NodeEvents.EventEmitter();
 let desktopDetachReady = Promise.withResolvers<void>();
+let desktopAttachReady = Promise.withResolvers<void>();
+let desktopDetachDrained = Promise.withResolvers<void>();
+let desktopAttachDrained = Promise.withResolvers<void>();
+let desktopAttachListeners = 0;
+let desktopAttachBarriers = 0;
+let heldDetach: PromiseWithResolvers<void> | null = null;
+let enteredDetach = Promise.withResolvers<void>();
 let desktopReleased = Promise.withResolvers<void>();
 const desktopTabs = new Set<string>();
+const desktopEndpoints = new Map<string, object>();
 const desktopRenders = (tabId: string) => {
   if (desktopRendersNext) {
     desktopRendersNext = false;
@@ -275,14 +283,30 @@ const dependencies = Layer.mergeAll(
     detached: Stream.callback<{ threadId: string; tabId: string }>((queue) =>
       Effect.acquireRelease(
         Effect.sync(() => {
-          const onDetach = (key: { threadId: string; tabId: string }) =>
+          const onDetach = (key: { threadId: string; tabId: string }) => {
+            desktopEndpoints.delete(key.tabId);
             Queue.offerUnsafe(queue, key);
+          };
           desktopDetaches.on("detach", onDetach);
           desktopDetachReady.resolve();
           return onDetach;
         }),
         (onDetach) => Effect.sync(() => desktopDetaches.off("detach", onDetach)),
       ),
+    ).pipe(
+      Stream.tap((key) =>
+        key.tabId !== "" && heldDetach !== null
+          ? Effect.sync(() => enteredDetach.resolve()).pipe(
+              Effect.andThen(Effect.promise(() => heldDetach!.promise)),
+            )
+          : Effect.void,
+      ),
+      Stream.tap((key) =>
+        Effect.sync(() => {
+          if (key.tabId === "") desktopDetachDrained.resolve();
+        }),
+      ),
+      Stream.filter((key) => key.tabId !== ""),
     ),
     attached: Stream.callback<{ threadId: string; tabId: string }>((queue) =>
       Effect.acquireRelease(
@@ -290,21 +314,38 @@ const dependencies = Layer.mergeAll(
           const onAttach = (key: { threadId: string; tabId: string }) =>
             Queue.offerUnsafe(queue, key);
           desktopDetaches.on("attach", onAttach);
+          if (++desktopAttachListeners === 2) desktopAttachReady.resolve();
           return onAttach;
         }),
         (onAttach) => Effect.sync(() => desktopDetaches.off("attach", onAttach)),
       ),
+    ).pipe(
+      Stream.tap((key) =>
+        Effect.sync(() => {
+          if (key.tabId === "" && ++desktopAttachBarriers === 2) desktopAttachDrained.resolve();
+        }),
+      ),
+      Stream.filter((key) => key.tabId !== ""),
     ),
     isAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
     isShown: (key) => shownDesktopTabs.has(key.tabId),
-    endpoint: (key) =>
-      Effect.acquireRelease(Effect.succeed(`ws://desktop/${key.tabId}`), () =>
+    endpoint: (key) => {
+      const token = {};
+      return Effect.acquireRelease(
         Effect.sync(() => {
-          releasedDesktopTabs.push(key.tabId);
-          desktopDetaches.emit("release", key.tabId);
-          desktopReleased.resolve();
+          desktopEndpoints.set(key.tabId, token);
+          return `ws://desktop/${key.tabId}`;
         }),
-      ),
+        () =>
+          Effect.sync(() => {
+            if (desktopEndpoints.get(key.tabId) !== token) return;
+            desktopEndpoints.delete(key.tabId);
+            releasedDesktopTabs.push(key.tabId);
+            desktopDetaches.emit("release", key.tabId);
+            desktopReleased.resolve();
+          }),
+      );
+    },
     pointer: () => Effect.void,
     turn: (threadId, active) => Effect.sync(() => desktopTurns.emit("turn", threadId, active)),
   }),
@@ -326,15 +367,80 @@ beforeEach(() => {
   mockCopy.key = "";
   mockCopy.focusedFrame = null;
   desktopTabs.clear();
+  desktopEndpoints.clear();
   shownDesktopTabs.clear();
   desktopRendersNext = false;
   desktopPageUrl = "about:blank";
   desktopSizeAnswer = null;
   desktopDetachReady = Promise.withResolvers<void>();
+  desktopAttachReady = Promise.withResolvers<void>();
+  desktopDetachDrained = Promise.withResolvers<void>();
+  desktopAttachDrained = Promise.withResolvers<void>();
+  desktopAttachListeners = 0;
+  desktopAttachBarriers = 0;
+  heldDetach = null;
+  enteredDetach = Promise.withResolvers<void>();
   desktopReleased = Promise.withResolvers<void>();
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
 });
+it.effect.each([false, true])(
+  "a desktop reload keeps an agent-owned background tab for reattachment (attach first: %s)",
+  (attachFirst) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* Broker.PreviewAutomationBroker;
+        const manager = yield* Manager.PreviewManager;
+        const browser = yield* ServerBrowser.ServerBrowser;
+        yield* Effect.promise(() =>
+          Promise.all([desktopDetachReady.promise, desktopAttachReady.promise]),
+        );
+        const reportProfiles = yield* browser.profileReporter;
+        yield* reportProfiles({
+          profiles: [{ id: "profile-work", name: "Work", kind: "persistent" }],
+          defaultProfileId: "profile-work",
+        });
+        desktopRendersNext = true;
+        const opened = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false, profileId: "profile-work" },
+        });
+        const tabId = opened.tabId!;
+        const before = yield* manager.list({ threadId: scope.thread.threadId });
+        const owner = before.sessions.find((session) => session.tabId === tabId)?.automationOwner;
+        expect(owner).toBeDefined();
+        const key = { threadId: scope.thread.threadId, tabId };
+        if (attachFirst) heldDetach = Promise.withResolvers<void>();
+        desktopTabs.delete(tabId);
+        desktopDetaches.emit("detach", key);
+        desktopDetaches.emit("detach", { ...key, tabId: "" });
+        if (attachFirst) yield* Effect.promise(() => enteredDetach.promise);
+        else yield* Effect.promise(() => desktopDetachDrained.promise);
+        desktopTabs.add(tabId);
+        desktopDetaches.emit("attach", key);
+        desktopDetaches.emit("attach", { ...key, tabId: "" });
+        yield* Effect.promise(() => desktopAttachDrained.promise);
+        if (attachFirst) {
+          heldDetach?.resolve();
+          yield* Effect.promise(() => desktopDetachDrained.promise);
+        }
+        const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
+        expect(sessions.find((session) => session.tabId === tabId)).toMatchObject({
+          automationOwner: owner,
+        });
+        expect(releasedDesktopTabs).not.toContain(tabId);
+        expect(desktopConnections).toHaveLength(2);
+        const status = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          tabId: PreviewTabId.make(tabId),
+          operation: "status",
+          input: {},
+        });
+        expect(status.tabs).toContainEqual(expect.objectContaining({ tabId, ownedByCaller: true }));
+      }),
+    ).pipe(Effect.provide(layer)),
+);
 it.live("a full server takes back the slot of the longest idle agent tab nobody views", () =>
   Effect.scoped(
     Effect.gen(function* () {

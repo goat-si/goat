@@ -1,7 +1,8 @@
 import type { LegendListRenderItemProps } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { formatProviderUpdateRequiredNotice } from "@goat/client-runtime/providerUpdateRequiredModels";
-import { useState, type ReactNode } from "react";
+import { RegistryContext } from "@effect/atom-react";
+import { useContext, useEffect, useEffectEvent, useState, type ReactNode } from "react";
 import { Platform, Pressable, RefreshControl, TextInput, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import Animated, {
@@ -294,6 +295,20 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
   const refreshProvidersCommand = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
+  const registry = useContext(RegistryContext);
+  const refreshModelCatalog = useEffectEvent((environmentId: typeof session.environmentId) => {
+    if (
+      !environmentId ||
+      registry.get(serverEnvironment.configValueAtom(environmentId))?.environment.capabilities
+        .modelCatalogRefresh !== true
+    )
+      return;
+    void refreshProvidersCommand({ environmentId, input: { modelCatalogOnly: true } });
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- refresh the server catalog when this picker opens or changes environment
+  useEffect(() => {
+    refreshModelCatalog(session.environmentId);
+  }, [session.environmentId]);
   const refreshProviderCatalog = createProviderCatalogRefreshRunner(refreshProvidersCommand);
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const refreshProviders = () => {

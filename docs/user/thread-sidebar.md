@@ -204,6 +204,12 @@ you; you can still answer it. It counts as yours once that agent hands it to you
 without answering. Approvals always come straight to you, and an unanswered request never counts
 as approval.
 
+Approvals an agent asks GOAT for, such as joining a machine to the hub or updating a runtime, are
+listed here as well, and each one also stays above the composer of its thread until you answer it,
+it expires, or the agent withdraws it. Choose **Review request** to see exactly what you would
+approve before you approve or decline it. Each new approval raises one notification, titled
+**Approval needed** with the change and the thread.
+
 Decisions starts with the oldest request and moves to the next one after each answer. **Skip**
 sends a request to the end of the queue for this visit. The sidebar counts requests waiting on
 you; with servers that cannot report them yet, it counts waiting threads instead.
@@ -357,9 +363,10 @@ resumed after it closed. Only your own messages count as resuming. A turn that
 finished background work or a pull request watch starts on its own does not.
 
 To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
-choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
-**Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it
-is disabled.
+choose **Auto-settle behavior**, and pick **Never**. The current option is checked. Pick
+**Follow settings** to return to the rules below. While those rules are off, a thread on
+**Follow settings** does not settle automatically either. Manual settle, snooze, and archive
+still work while it is set to **Never**.
 
 Change these rules in **Settings → General** on web and desktop, or **Settings → Thread behavior** on mobile.
 They continue to run when your apps are closed. On web and desktop, choose an environment at the

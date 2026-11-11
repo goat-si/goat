@@ -51,6 +51,16 @@ const CONTEXT_WINDOW = selectDescriptor(
   "1m",
 );
 
+it("identifies Pi's advertised service tier as its speed", () => {
+  const display = buildTraitsTriggerDisplay({
+    provider: ProviderDriverKind.make("pi"),
+    descriptors: [serviceTierDescriptor("priority")],
+    primarySelectDescriptorId: null,
+    ultrathinkPromptControlled: false,
+  });
+  expect(display.speedLabel).toBe("Fast");
+});
+
 it.each([
   { currentValue: undefined, defaultValue: undefined, value: null, label: "Thinking" },
   { currentValue: undefined, defaultValue: "high", value: "high", label: "High" },

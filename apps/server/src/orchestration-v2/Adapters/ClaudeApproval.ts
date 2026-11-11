@@ -107,10 +107,9 @@ function toSessionPermissionUpdates(
   ];
 }
 
-// Web and mobile offer a session grant when options are omitted, and this
-// path only ever answers once.
 export const CLAUDE_MCP_ELICITATION_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
   { decision: "cancel", label: "Cancel" },
   { decision: "decline", label: "Decline" },
+  { decision: "acceptForSession", label: "Always allow this session" },
   { decision: "accept", label: "Approve" },
 ];

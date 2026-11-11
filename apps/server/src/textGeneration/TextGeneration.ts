@@ -9,6 +9,8 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { apiTextGeneration } from "./TextGeneratorApi.ts";
 
 export type {
   BranchNameGenerationInput,
@@ -70,9 +72,58 @@ const resolveInstance = (
 export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const settingsService = yield* ServerSettings.ServerSettingsService;
+  const resolveText = Effect.fn("TextGeneration.resolveText")(
+    (operation: TextGenerationOp, instanceId: ProviderInstanceId) =>
+      settingsService.getSettings.pipe(
+        Effect.mapError(
+          () =>
+            new TextGenerationError({
+              operation,
+              detail: "Could not read text generation settings.",
+            }),
+        ),
+        Effect.flatMap((settings) => {
+          const config = Object.hasOwn(settings.textGenerators, instanceId)
+            ? settings.textGenerators[instanceId]
+            : undefined;
+          if (config === undefined) return resolveInstance(registry, operation, instanceId);
+          if (!config.enabled)
+            return Effect.fail(
+              new TextGenerationError({
+                operation,
+                detail: "The configured model API is disabled.",
+              }),
+            );
+          return Effect.succeed(apiTextGeneration(config, settings.secretProviders));
+        }),
+      ),
+  );
+  const resolveAgent = Effect.fn("TextGeneration.resolveAgent")(
+    (operation: TextGenerationOp, instanceId: ProviderInstanceId) =>
+      settingsService.getSettings.pipe(
+        Effect.mapError(
+          () =>
+            new TextGenerationError({
+              operation,
+              detail: "Could not read text generation settings.",
+            }),
+        ),
+        Effect.flatMap((settings) =>
+          Object.hasOwn(settings.textGenerators, instanceId)
+            ? Effect.fail(
+                new TextGenerationError({
+                  operation,
+                  detail: "This task requires a coding provider.",
+                }),
+              )
+            : resolveInstance(registry, operation, instanceId),
+        ),
+      ),
+  );
   return TextGeneration.of({
     resolveMemoryConflict: (input) =>
-      resolveInstance(registry, "resolveMemoryConflict", input.modelSelection.instanceId).pipe(
+      resolveAgent("resolveMemoryConflict", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.resolveMemoryConflict === undefined
             ? Effect.fail(
@@ -85,7 +136,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
     generateMemorySummary: (input) =>
-      resolveInstance(registry, "generateMemorySummary", input.modelSelection.instanceId).pipe(
+      resolveAgent("generateMemorySummary", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateMemorySummary === undefined
             ? Effect.fail(
@@ -98,24 +149,22 @@ export const make = Effect.gen(function* () {
         ),
       ),
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
-      return resolveInstance(
-        registry,
-        "generateCommitMessage",
-        input.modelSelection.instanceId,
-      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)));
+      return resolveText("generateCommitMessage", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),
+      );
     }),
     generatePrContent: Effect.fn("TextGeneration.generatePrContent")(function (input) {
-      return resolveInstance(registry, "generatePrContent", input.modelSelection.instanceId).pipe(
+      return resolveText("generatePrContent", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generatePrContent(input)),
       );
     }),
     generateBranchName: Effect.fn("TextGeneration.generateBranchName")(function (input) {
-      return resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
+      return resolveText("generateBranchName", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
       );
     }),
     generateChannelReception: (input) =>
-      resolveInstance(registry, "generateChannelReception", input.modelSelection.instanceId).pipe(
+      resolveAgent("generateChannelReception", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateChannelReception === undefined
             ? Effect.fail(
@@ -128,12 +177,12 @@ export const make = Effect.gen(function* () {
         ),
       ),
     generateReviewGuide: Effect.fn("TextGeneration.generateReviewGuide")(function (input) {
-      return resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
+      return resolveAgent("generateReviewGuide", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
       );
     }),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {
-      return resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
+      return resolveText("generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           Effect.gen(function* () {
             const linkedContext =

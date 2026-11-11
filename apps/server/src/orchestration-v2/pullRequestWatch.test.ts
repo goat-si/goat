@@ -2,11 +2,13 @@ import {
   type PullRequestCheck,
   type PullRequestComment,
   PullRequestWatchPolicy,
+  PULL_REQUEST_WATCH_APPROVAL_LIMIT,
   type ThreadPullRequestWatch,
 } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
+import { newPullRequestWatch } from "./goat/PullRequestAutoWatch.ts";
 import {
   PULL_REQUEST_WATCH_WAKE_LIMIT,
   evaluatePullRequestWatch,
@@ -115,6 +117,189 @@ const evaluate = (
 ) => evaluatePullRequestWatch(current, pullRequest, remarks, options);
 
 describe("evaluatePullRequestWatch", () => {
+  it("announces an approval hold once and announces it again after it settles", () => {
+    const gated = detail({ checks: [check("workflow", "action-required")] });
+    const first = evaluate(watch(), gated, noRemarks);
+    assert.deepEqual(
+      first.changes.map((change) => change.kind),
+      ["checks-awaiting-approval"],
+    );
+    assert.deepEqual(evaluate(first.next, gated, noRemarks).changes, []);
+    const settled = evaluate(first.next, detail({ checks: [check("lint", "success")] }), noRemarks);
+    assert.deepEqual(
+      settled.changes.map((change) => change.kind),
+      ["checks-passed"],
+    );
+    assert.deepEqual(
+      evaluate(settled.next, gated, noRemarks).changes.map((change) => change.kind),
+      ["checks-awaiting-approval"],
+    );
+  });
+
+  it("lets visible checks pass after a gated run vanishes, and stays quiet if it returns", () => {
+    const gated = {
+      ...check("CI", "action-required"),
+      url: "https://github.com/o/r/actions/runs/1",
+    };
+    const first = evaluate(watch(), detail({ checks: [gated] }), noRemarks);
+    const missing = evaluate(first.next, detail({ checks: [check("lint", "pending")] }), noRemarks);
+    assert.deepEqual(missing.changes, []);
+    const finished = evaluate(
+      missing.next,
+      detail({ checks: [check("lint", "success")] }),
+      noRemarks,
+    );
+    assert.deepEqual(
+      finished.changes.map((change) => change.kind),
+      ["checks-passed"],
+    );
+    assert.deepEqual(evaluate(finished.next, detail({ checks: [gated] }), noRemarks).changes, []);
+  });
+
+  it("settles a cancelled gated run and permits a later approval announcement", () => {
+    const gated = {
+      ...check("CI", "action-required"),
+      url: "https://github.com/o/r/actions/runs/1",
+    };
+    const first = evaluate(watch(), detail({ checks: [gated] }), noRemarks);
+    const cancelled = evaluate(
+      first.next,
+      detail({ checks: [{ ...gated, status: "cancelled" }] }),
+      noRemarks,
+    );
+    assert.deepEqual(
+      cancelled.changes.map((change) => change.kind),
+      ["checks-failed"],
+    );
+    assert.deepEqual(
+      evaluate(cancelled.next, detail({ checks: [gated] }), noRemarks).changes.map((c) => c.kind),
+      ["checks-awaiting-approval"],
+    );
+  });
+
+  it("reconciles a cancelled run even while an unrelated check remains pending", () => {
+    const gated = {
+      ...check("CI", "action-required"),
+      url: "https://github.com/o/r/actions/runs/1",
+    };
+    const first = evaluate(watch(), detail({ checks: [gated] }), noRemarks);
+    const cancelled = evaluate(
+      first.next,
+      detail({ checks: [{ ...gated, status: "cancelled" }, check("other", "pending")] }),
+      noRemarks,
+    );
+    assert.deepEqual(cancelled.next.awaitingApproval, []);
+    const later = { ...gated, url: "https://github.com/o/r/actions/runs/2" };
+    assert.deepEqual(
+      evaluate(cancelled.next, detail({ checks: [later] }), noRemarks).changes.map((c) => c.kind),
+      ["checks-awaiting-approval"],
+    );
+  });
+
+  it("announces each new gated run on a head while keeping at most the newest 100", () => {
+    let current = watch();
+    for (let id = 0; id < 1100; id++) {
+      const gated = {
+        ...check("CI", "action-required"),
+        url: `https://github.com/o/r/actions/runs/${id}`,
+      };
+      const report = evaluate(current, detail({ checks: [gated] }), noRemarks);
+      assert.equal(report.changes.length, 1);
+      current = report.next;
+    }
+    assert.equal(current.awaitingApproval?.length, PULL_REQUEST_WATCH_APPROVAL_LIMIT);
+    assert.equal(current.awaitingApproval?.at(-1), "https://github.com/o/r/actions/runs/1099");
+    const many = Array.from({ length: PULL_REQUEST_WATCH_APPROVAL_LIMIT + 10 }, (_, id) => ({
+      ...check("CI", "action-required"),
+      url: `https://github.com/o/r/actions/runs/${id}`,
+    }));
+    assert.equal(
+      evaluate(watch(), detail({ checks: many }), noRemarks).next.awaitingApproval?.length,
+      PULL_REQUEST_WATCH_APPROVAL_LIMIT,
+    );
+  });
+
+  it("clears a vanished run when the host confirms an empty approval list", () => {
+    const gated = check("CI", "action-required");
+    const first = evaluate(watch(), detail({ checks: [gated] }), noRemarks);
+    const empty = evaluate(
+      first.next,
+      detail({ checks: [], workflowApprovalsRequired: 0 }),
+      noRemarks,
+    );
+    assert.deepEqual(empty.next.awaitingApproval, []);
+    assert.deepEqual(
+      evaluate(empty.next, detail({ checks: [gated] }), noRemarks).changes.map((c) => c.kind),
+      ["checks-awaiting-approval"],
+    );
+  });
+
+  it("does not repeat an approval announcement when the approval read temporarily omits a run", () => {
+    const gated = {
+      ...check("CI", "action-required"),
+      url: "https://github.com/o/r/actions/runs/1",
+    };
+    const first = evaluate(watch(), detail({ checks: [gated] }), noRemarks);
+    const missing = evaluate(
+      first.next,
+      detail({ checks: [check("lint", "success")], workflowApprovalsRequired: 0 }),
+      noRemarks,
+    );
+    const restored = evaluate(missing.next, detail({ checks: [gated] }), noRemarks);
+    assert.deepEqual(restored.changes, []);
+  });
+
+  it("does not interpret an unavailable approval read as failure or success", () => {
+    const unknown = { ...check("Workflow approval status", "action-required"), placeholder: true };
+    const report = evaluate(
+      watch(),
+      detail({ checks: [check("lint", "success"), unknown] }),
+      noRemarks,
+    );
+    assert.deepEqual(report.changes, []);
+    assert.isFalse(report.next.passed);
+  });
+
+  it("keeps approval context alongside failures and restores watch progress", () => {
+    const policy: PullRequestWatchPolicy = { ...REACT_ALL, checksFailed: "keep_as_context" };
+    const approval = check("CI", "action-required");
+    const report = evaluate(
+      watch(),
+      detail({ checks: [approval, check("lint", "failure")] }),
+      noRemarks,
+      context(policy),
+    );
+    const outcome = pullRequestWatchOutcome({ number: 7, url: "u", baseBranch: "main", report });
+    const kept = keptAfterPass([], outcome.next?.heldContext, { ...report.next, headMoved: false });
+    assert.equal(kept.length, 2);
+    assert.deepEqual(
+      settleHeldContext(kept, { ...report.next, approvalAnnounced: false, headMoved: false }),
+      kept.filter((item) => item.startsWith("checks failed")),
+    );
+    const restarted = newPullRequestWatch(STARTED, false, report.next);
+    assert.deepEqual(restarted.awaitingApproval, report.next.awaitingApproval);
+    assert.isTrue(restarted.approvalAnnounced);
+  });
+
+  it("does not let an old hold block a finished required gate", () => {
+    const first = evaluate(
+      watch(),
+      detail({ checks: [check("CI", "action-required")] }),
+      noRemarks,
+    );
+    const report = evaluate(
+      first.next,
+      detail({
+        checks: [{ ...check("lint", "success"), required: true }, check("optional", "pending")],
+      }),
+      noRemarks,
+    );
+    assert.deepEqual(
+      report.changes.map((change) => change.kind),
+      ["checks-passed"],
+    );
+  });
+
   it("reports each failure at once, even while another check never finishes", () => {
     const bot = check("CodeRabbit", "pending");
     const first = detail({ checks: [check("lint", "failure"), check("test", "pending"), bot] });

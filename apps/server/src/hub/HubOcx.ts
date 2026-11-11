@@ -228,6 +228,8 @@ export class HubOcx extends Context.Service<
     ) => Effect.Effect<number | undefined>;
     /** The device's own `GET /healthz` body over GOAT SSH; undefined when it does not answer. */
     readonly deviceHealth: (alias: string) => Effect.Effect<string | undefined>;
+    /** The environment the alias's GOAT names itself; undefined when it does not answer. */
+    readonly identify: (alias: string) => Effect.Effect<string | undefined>;
     /** Live `ssh -R` link tunnels on this Home for the alias or port; undefined when unreadable. */
     readonly homeTunnels: (
       /** Undefined counts by port alone, so a newer link under the alias is not counted. */
@@ -799,6 +801,12 @@ const make = Effect.gen(function* () {
       },
       Effect.orElseSucceed(() => undefined),
     ),
+    // Only asks: unlike a connection change, a move never provisions a runtime to identify.
+    identify: (alias) =>
+      dispatch.identifyTarget({ alias, hostname: alias, username: null, port: null }).pipe(
+        Effect.map((environment) => environment ?? undefined),
+        Effect.orElseSucceed(() => undefined),
+      ),
     homeTunnels: Effect.fn("HubOcx.homeTunnels")(
       function* (alias, tunnelPort) {
         const output = yield* run("ps", ["-axww", "-o", "command="], 10_000, cwd, PS_MAX_BYTES);

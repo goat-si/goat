@@ -9,6 +9,7 @@ import type { ChannelReadBotArtifactInput, EnvironmentId } from "@goat/contracts
 import type { AttachmentPreviewFile } from "../../lib/attachmentDownload";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { openBotFileRead } from "./goatBotFileReads";
 
 export interface ImagePreview {
   readonly name: string;
@@ -35,23 +36,31 @@ export async function openBotLibraryFile(
 ): Promise<BotLibraryOpenResult> {
   const name = botArtifactName(relativePath);
   try {
-    const result = await readWholeBotArtifact(
-      relativePath,
-      async (input: ChannelReadBotArtifactInput) => {
-        const answer = await runAtomCommand(
-          appAtomRegistry,
-          channelEnvironment.readBotArtifact,
-          { environmentId, input },
-          { label: "GOAT Bot Library file", reportFailure: false },
-        );
-        if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
-        return answer.value;
-      },
+    // The open waits for the one read in flight, then holds the server ahead of waiting previews.
+    const result = await openBotFileRead(
+      environmentId,
+      () =>
+        readWholeBotArtifact(
+          relativePath,
+          async (input: ChannelReadBotArtifactInput) => {
+            const answer = await runAtomCommand(
+              appAtomRegistry,
+              channelEnvironment.readBotArtifact,
+              { environmentId, input },
+              { label: "GOAT Bot Library file", reportFailure: false },
+            );
+            if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
+            return answer.value;
+          },
+          signal,
+        ),
       signal,
     );
-    if (signal.aborted) return DONE;
+    if (result === null || signal.aborted) return DONE;
     if (result.status !== "ok") {
-      return { kind: "message", message: botArtifactOpenMessage(name, result, botName) };
+      // Nothing else reads on this connection while the open does, so "busy" means it went wrong.
+      const failed = result.status === "busy" ? { status: "invalid" as const } : result;
+      return { kind: "message", message: botArtifactOpenMessage(name, failed, botName) };
     }
     const attachment = { name, mimeType: result.mimeType };
     // Loaded on open: its file and crypto modules are native and the tab may never open a file.

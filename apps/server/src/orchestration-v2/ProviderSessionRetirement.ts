@@ -20,15 +20,13 @@ export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRes
   {
     runningTurns: Schema.Number,
     model: Schema.optional(Schema.String),
-    modelStatus: Schema.optional(Schema.Literals(["predated", "missing", "unconfirmed"])),
+    modelStatus: Schema.optional(Schema.Literals(["predated", "missing"])),
   },
 ) {
   override get message(): string {
     switch (this.model === undefined ? undefined : this.modelStatus) {
       case "missing":
         return `This provider's process does not know ${this.model}, and a restart would not help: GOAT's model list either lacks it or already had it when that process started. Pick another model, or check this project's provider configuration for its model catalog.`;
-      case "unconfirmed":
-        return `GOAT could not confirm that this provider's process can run ${this.model}: it did not answer for its model list, or GOAT has no model list from the provider yet. Once the work still running on it finishes, sending again starts a new process. Try again shortly or pick another model.`;
       case "predated":
         return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes, sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
     }
@@ -82,13 +80,14 @@ export interface RetirableSession {
   >;
 }
 
-type ModelRefusal = Exclude<ProviderAdapter.ProviderModelStatus, "ready">;
+/** An unconfirmed model never refuses or restarts: when GOAT cannot ask, the turn runs as before. */
+type ModelRefusal = Exclude<ProviderAdapter.ProviderModelStatus, "ready" | "unconfirmed">;
 
 /** A model state refuses the turn without marking the session; nothing is drained for it. */
 export type Retirement = "current" | "released" | "retiring" | ModelRefusal;
 
 const isModelRefusal = (retired: Retirement): retired is ModelRefusal =>
-  retired === "predated" || retired === "missing" || retired === "unconfirmed";
+  retired === "predated" || retired === "missing";
 
 /** A retiring session still takes turns from threads with a turn running on it; a model state refuses this turn. */
 export const refuses = (retired: Retirement, threadHasRunningTurn: boolean) =>
@@ -116,12 +115,14 @@ export const withoutTurnOpen = <K extends string>(
 /** Refuses a turn on a process, however it was opened, that cannot run the turn's model. */
 export const refuseUnready = Effect.fnUntraced(function* <E>(
   runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "modelStatus">,
-  model: string | undefined,
+  turn: { readonly model?: string | undefined; readonly since?: number } | undefined,
   refuse: (cause: ProviderRestartRequiredError) => E,
 ) {
+  const model = turn?.model;
   if (model === undefined || runtime.modelStatus === undefined) return;
-  const status = yield* runtime.modelStatus(model);
-  if (status !== "ready") return yield* Effect.fail(refuse(restartRequired(status, 0, model)));
+  const status = yield* runtime.modelStatus(model, { since: turn?.since });
+  if (status === "predated" || status === "missing")
+    return yield* Effect.fail(refuse(restartRequired(status, 0, model)));
 });
 
 /**
@@ -178,24 +179,32 @@ export const make = <
    */
   const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
     providerSessionId: ProviderSessionId,
-    turn?: { readonly model: string; readonly threadId: string; readonly id?: string | undefined },
+    turn?: {
+      readonly model?: string | undefined;
+      readonly threadId: string;
+      readonly id?: string | undefined;
+      readonly since?: number;
+    },
   ) {
     const key = String(providerSessionId);
     const model = turn?.model;
     // Turn starts and ends replace the entry, so every decision reads it again after a yield.
     const read = Ref.get(input.sessions).pipe(Effect.map((current) => current.get(key)));
     const runId = turn?.id;
-    // Held until the start attempt registers its turn or exits; its own lifecycle ends it.
+    // Held until the start attempt registers its turn or exits; its own lifecycle ends it. The
+    // same update moves the idle generation, so an idle release already under way keeps the entry.
     if (turn !== undefined && runId !== undefined)
       yield* Ref.update(input.sessions, (current) => {
         const entry = current.get(key);
         if (entry === undefined) return current;
         const turnOpens = new Map(entry.turnOpens).set(turn.threadId, runId);
-        return new Map(current).set(key, { ...entry, turnOpens });
+        const idleGeneration = entry.idleGeneration + 1;
+        return new Map(current).set(key, { ...entry, turnOpens, idleGeneration });
       });
-    const releaseIdle = Effect.fnUntraced(function* (
-      busy: "retiring" | "predated" | "unconfirmed",
-    ) {
+    // The model check below waits on the process; an idle deadline must not fall inside it.
+    if (turn !== undefined)
+      yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
+    const releaseIdle = Effect.fnUntraced(function* (busy: "retiring" | "predated") {
       const latest = yield* read;
       if (latest === undefined) return "released" as Retirement;
       if (latest.busyTurns.size > 0) return busy;
@@ -238,8 +247,8 @@ export const make = <
     }
     if (stale) return yield* releaseIdle("retiring");
     if (model === undefined || marked.runtime.modelStatus === undefined) return "current";
-    const status = yield* marked.runtime.modelStatus(model);
-    if (status === "ready") return "current";
+    const status = yield* marked.runtime.modelStatus(model, { since: turn?.since });
+    if (status === "ready" || status === "unconfirmed") return "current";
     return status === "missing" ? status : yield* releaseIdle(status);
   });
 
@@ -266,9 +275,14 @@ export const make = <
     );
   });
 
-  /** A turn-start open for `model`; only one with a run, which settles it on exit, reserves the process. */
-  const turnFor = <T extends string>(model: string | undefined, threadId: T, runId?: string) =>
-    model === undefined ? undefined : { model, threadId, id: runId };
+  /** A turn-start open: one with a run reserves the process until it settles; one with a model is checked. */
+  const turnFor = <T extends string>(
+    model: string | undefined,
+    threadId: T,
+    runId: string | undefined,
+    since: number,
+  ) =>
+    model === undefined && runId === undefined ? undefined : { model, threadId, id: runId, since };
 
   /** Ends a start attempt's reservation on every session once it exits, registered or not. */
   const settleTurnStart = (turn: { readonly threadId: string; readonly id: string }) =>

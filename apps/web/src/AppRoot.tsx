@@ -2,7 +2,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import { subscribeComposerDraftModelReconciliation } from "./composerDraftStore";
-import { environmentThreadShells } from "./state/threads";
+import { environmentThreadShells, threadEnvironment } from "./state/threads";
 import { environmentShell } from "./state/shell";
 
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
@@ -20,6 +20,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
         threadShellAtom: environmentThreadShells.threadShellAtom,
         threadRefsAtom: environmentThreadShells.threadRefsAtom,
         shellStateAtom: environmentShell.stateAtom,
+        pendingThreadIdsAtom: threadEnvironment.pendingThreadIdsAtom,
       }),
     [],
   );

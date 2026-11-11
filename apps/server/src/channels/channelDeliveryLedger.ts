@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 import type { SqlError } from "effect/sql/SqlError";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
-import type { ChannelLedger } from "./ChannelLedger.ts";
+import type { ChannelDeliveryOutcome, ChannelStoredDelivery } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 import {
   copyUndeliveredReplies,
@@ -15,27 +15,115 @@ import { interimAlreadyHeard, isInterimMessage } from "./channelInterimMessages.
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
+const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const mapError = (detail: string) => (cause: unknown) =>
   isLedgerError(cause) ? cause : new ChannelLedgerError({ reason: "persistence", detail, cause });
 /** How long after its input a reply receipt may still go out. */
 const RECEIPT_DEADLINE_MS = 60_000;
 /** Interim messages one claim may set aside before it commits and lets the worker come back. */
 const SET_ASIDE_PER_CLAIM = 50;
+const RECEIPT_CAUSE = "reply:";
+
+/** Part of the ChannelLedger service, declared here to keep that file within its code budget. */
+export interface UnsentDeliveryRelease {
+  /**
+   * Puts external rows that were never handed to their transport, untouched since `before` and
+   * not in `exclude`, back to pending with their attempt kept, at most `limit` of them, oldest
+   * first. `remaining` says whether other such rows still wait: younger ones, or past the limit.
+   */
+  readonly releaseUnsentDeliveries: (input: {
+    readonly owner: string;
+    readonly now: string;
+    readonly before: string;
+    readonly exclude: ReadonlyArray<ChannelDeliveryId>;
+    readonly limit: number;
+  }) => Effect.Effect<
+    { readonly released: number; readonly remaining: boolean },
+    ChannelLedgerError
+  >;
+}
+
+/**
+ * The rows reconciliation may put back, and whether any such row still waits. Both repeat the
+ * open-row predicate of channel_outbox_due_idx so they read that index instead of the history.
+ */
+export const unsentDeliveryQueries = (
+  sql: SqlClient.SqlClient,
+  input: { readonly before: string; readonly exclude: string; readonly limit: number },
+) => {
+  const unsent = sql`state IN ('pending', 'delivering') AND state = 'delivering'
+    AND send_started_at IS NULL AND destination_kind NOT IN ('goat', 'mcp')
+    AND delivery_id NOT IN (SELECT value FROM json_each(${input.exclude}))`;
+  return {
+    selection: sql`SELECT delivery_id FROM channel_outbox
+      WHERE ${unsent} AND updated_at <= ${input.before}
+      ORDER BY created_at, rowid LIMIT ${input.limit}`,
+    remaining: sql`SELECT EXISTS (SELECT 1 FROM channel_outbox WHERE ${unsent}) AS waiting`,
+  };
+};
+
+/** The outbox operations: claiming due rows, recording how their sends went, and recovery. */
+export interface ChannelDeliveryLedgerOps extends UnsentDeliveryRelease {
+  /**
+   * Marks the oldest due rows as delivering. A row waits while an earlier row for the same task
+   * and destination kind is still pending or in flight, so a receipt goes out before its result.
+   */
+  readonly claimDueDeliveries: (input: {
+    readonly owner: string;
+    readonly now: string;
+    readonly limit: number;
+    readonly receiptsOnly?: boolean | undefined;
+  }) => Effect.Effect<ReadonlyArray<ChannelStoredDelivery>, ChannelLedgerError>;
+  /**
+   * claimDueDeliveries, also saying how many interim messages it set aside as already heard.
+   * It sets aside a bounded number per call, so a long backlog takes several calls.
+   */
+  readonly claimDue: (input: {
+    readonly owner: string;
+    readonly now: string;
+    readonly limit: number;
+    readonly receiptsOnly?: boolean | undefined;
+  }) => Effect.Effect<
+    { readonly deliveries: ReadonlyArray<ChannelStoredDelivery>; readonly setAside: number },
+    ChannelLedgerError
+  >;
+  readonly recordDelivery: (input: {
+    readonly owner: string;
+    readonly deliveryId: ChannelDeliveryId;
+    readonly outcome: ChannelDeliveryOutcome;
+    readonly now: string;
+    readonly attempt?: number | undefined;
+  }) => Effect.Effect<void, ChannelLedgerError>;
+  readonly expireReceipts: (input: {
+    readonly owner: string;
+    readonly now: string;
+  }) => Effect.Effect<void, ChannelLedgerError>;
+  /**
+   * Records that an external delivery is being handed to its transport now. False when the row
+   * is no longer this claim's (its receipt expired, or recovery took it): then it is not sent.
+   */
+  readonly markSending: (input: {
+    readonly owner: string;
+    readonly deliveryId: ChannelDeliveryId;
+    readonly attempt: number;
+    readonly now: string;
+  }) => Effect.Effect<boolean, ChannelLedgerError>;
+  /**
+   * After a restart: GOAT bot and MCP deliveries and external ones never handed to their
+   * transport retry; external ones handed over become ambiguous.
+   */
+  readonly settleInterruptedDeliveries: (input: {
+    readonly owner: string;
+    readonly now: string;
+  }) => Effect.Effect<void, ChannelLedgerError>;
+}
 
 export const deliveryLedger = (
   sql: SqlClient.SqlClient,
   fence: (owner: string | undefined) => Effect.Effect<void, SqlError | ChannelLedgerError>,
   changed: Effect.Effect<void>,
   expired: Effect.Effect<void>,
-): Pick<
-  ChannelLedger["Service"],
-  | "claimDueDeliveries"
-  | "claimDue"
-  | "recordDelivery"
-  | "expireReceipts"
-  | "markSending"
-  | "settleInterruptedDeliveries"
-> => {
+): ChannelDeliveryLedgerOps => {
   const expireRows = Effect.fn("channelDeliveryLedger.expireRows")(function* (now: string) {
     // Only a send that reached a transport may have been seen; one never handed over failed.
     const rows = yield* sql<
@@ -194,20 +282,18 @@ export const deliveryLedger = (
           Effect.gen(function* () {
             yield* fence(input.owner);
             const handOverNow = DateTime.formatIso(yield* DateTime.now);
-            const [row] = yield* sql<{
-              readonly cause_key: string;
-              readonly input_id: string | null;
-            }>`SELECT cause_key, input_id FROM channel_outbox
-              WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
+            const [row] = yield* sql<{ readonly cause_key: string }>`SELECT cause_key
+              FROM channel_outbox WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
                 AND attempts = ${input.attempt}`;
             if (row === undefined) return false;
-            // Only a reply receipt has a deadline; it is looked up by its input id.
-            if (row.input_id !== null && row.cause_key === "reply:" + row.input_id) {
+            // Only a reply receipt has a deadline. Its cause key names the input, as in expireRows;
+            // the nullable input_id column does not.
+            if (row.cause_key.startsWith(RECEIPT_CAUSE)) {
               const deadline = DateTime.formatIso(
                 DateTime.makeUnsafe(Date.parse(handOverNow) - RECEIPT_DEADLINE_MS),
               );
               const expired = yield* sql<{ readonly input_id: string }>`SELECT input_id
-                FROM channel_inbox WHERE input_id = ${row.input_id}
+                FROM channel_inbox WHERE input_id = ${row.cause_key.slice(RECEIPT_CAUSE.length)}
                   AND accepted_at <= ${deadline}`;
               if (expired.length > 0) return false;
             }
@@ -246,6 +332,27 @@ export const deliveryLedger = (
           Effect.tap(() => changed),
           Effect.mapError(mapError("settleInterruptedDeliveries")),
         ),
+    releaseUnsentDeliveries: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* fence(input.owner);
+            const queries = unsentDeliveryQueries(sql, {
+              before: input.before,
+              exclude: encodeIds(input.exclude),
+              limit: input.limit,
+            });
+            // The rule restart recovery uses for a row never handed over. The row keeps its place,
+            // so the claim's earlier-row rule still holds the task's later rows behind it.
+            const released = yield* sql<{ readonly delivery_id: string }>`
+              UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
+              WHERE delivery_id IN (${queries.selection})
+              RETURNING delivery_id`;
+            const [left] = yield* sql<{ readonly waiting: number }>`${queries.remaining}`;
+            return { released: released.length, remaining: left?.waiting === 1 };
+          }),
+        )
+        .pipe(Effect.mapError(mapError("releaseUnsentDeliveries"))),
     recordDelivery: (input) =>
       expiring((expire) =>
         sql
@@ -279,6 +386,10 @@ export const deliveryLedger = (
     markSending: Effect.fn("ChannelLedger.markSending")(operations.markSending),
     settleInterruptedDeliveries: Effect.fn("ChannelLedger.settleInterruptedDeliveries")(
       operations.settleInterruptedDeliveries,
+    ),
+    releaseUnsentDeliveries: Effect.fn("ChannelLedger.releaseUnsentDeliveries")(
+      operations.releaseUnsentDeliveries,
+      Effect.tap((result) => (result.released > 0 ? changed : Effect.void)),
     ),
     expireReceipts: Effect.fn("ChannelLedger.expireReceipts")(
       operations.expireReceipts,

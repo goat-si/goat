@@ -62,6 +62,7 @@ it.effect("lists, downloads, configures and removes catalog models", () =>
       (entry) => entry.id === "handy-computer/parakeet-unified-en-0.6b-gguf",
     );
     expect(recommended?.recommended).toBe(true);
+    expect(recommended).toMatchObject({ benchmark: { cpu: 2.15, accelerated: 1.19 } });
     yield* service.download(modelId);
     yield* service.configure({ modelId, acceleration: "cpu" });
     expect((yield* service.list).find((entry) => entry.id === modelId)).toMatchObject({

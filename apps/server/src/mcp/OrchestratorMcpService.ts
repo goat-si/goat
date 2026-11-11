@@ -72,6 +72,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
+import { latestProviderTurnForAttempt } from "@goat/contracts";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
@@ -139,6 +140,7 @@ import {
   type McpInvocationScope,
   type McpThreadInvocationScope,
   requireThreadScope,
+  remoteTaskLink,
   threadLinkFor,
 } from "./McpInvocationContext.ts";
 
@@ -1542,6 +1544,7 @@ const make = Effect.gen(function* () {
         taskId: task.id,
         host: task.remote.host,
         childThreadId: task.remote.threadId,
+        ...remoteTaskLink(task),
         childRunId: null,
         childNodeId: task.id,
         status,
@@ -1595,6 +1598,7 @@ const make = Effect.gen(function* () {
           "contextTransfers",
           "subagents",
           "providerThreads",
+          "providerTurns",
           "runtimeRequests",
           "nodes",
         ],
@@ -1726,7 +1730,16 @@ const make = Effect.gen(function* () {
       : null;
     const resultContextTransferId = resultTransfer?.id ?? null;
     const latestTerminalResultContextTransferId = resultTransferForRun(terminalRun)?.id ?? null;
-    const modelSelection = childRun?.modelSelection ??
+    const executionRun =
+      task.result === null
+        ? (taskResultRun ?? childRun)
+        : (childControls.runs.find((run) => run.id === resultTransfer?.sourcePoint.runId) ??
+          childRun);
+    const executedModel = latestProviderTurnForAttempt(
+      childControls.providerTurns ?? [],
+      executionRun?.activeAttemptId,
+    )?.model;
+    const modelSelection = executionRun?.modelSelection ??
       childControls.thread.modelSelection ?? {
         instanceId: task.providerInstanceId,
         model: task.model,
@@ -1743,6 +1756,7 @@ const make = Effect.gen(function* () {
       hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),
       providerInstanceId: modelSelection.instanceId,
       model: modelSelection.model,
+      ...(executedModel === undefined ? {} : { executedModel }),
 
       ...(task.role === undefined ? {} : { role: task.role }),
       ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
@@ -2520,7 +2534,7 @@ const make = Effect.gen(function* () {
               parentRunId: parentRun.id,
               parentNodeId,
               task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
-              ...(input.title === undefined ? {} : { title: input.title }),
+              title: input.title ?? taskPrompt(input).slice(0, 72),
               modelSelection: target.modelSelection,
               driver: target.driver,
               runtimeMode,

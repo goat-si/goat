@@ -890,7 +890,6 @@ const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   success: ServerConfig,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
 });
-
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({
     instanceId: Schema.optional(ProviderInstanceId),
@@ -898,6 +897,7 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     fresh: Schema.optional(Schema.Boolean),
     /** Bypass model caches; explicit rediscovery may open sessions, background refreshes must not. */
     refreshModels: Schema.optional(Schema.Boolean),
+    modelCatalogOnly: Schema.optional(Schema.Boolean),
     reloadSecrets: Schema.optional(Schema.Boolean),
     /**
      * Reply without snapshots, or with only the requested instance's cwd snapshot. Snapshots then
