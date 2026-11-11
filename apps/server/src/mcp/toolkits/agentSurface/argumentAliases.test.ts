@@ -1,10 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
 
 import { serveCatalogOverHttp } from "../../agentSurface.testkit.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const thread: McpInvocationScope = {
   environmentId: EnvironmentId.make("environment"),
@@ -42,7 +42,7 @@ it.effect("goat_describe takes name, tool, and resource with verb as its path", 
       expect(yield* described(args), JSON.stringify(args)).toEqual(byPath);
     // A resource alone is a path too, as goat_describe { path: "thread" } is.
     expect(yield* described({ resource: "thread" })).toEqual(yield* described({ path: "thread" }));
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("goat_call takes MCP's {name, arguments}, tool, input, and resource with verb", () =>
@@ -66,7 +66,7 @@ it.effect("goat_call takes MCP's {name, arguments}, tool, input, and resource wi
       ])
         expect(yield* call(aliased), JSON.stringify(aliased)).toEqual(canonical);
     }
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("goat_call through an alias meets the direct call's refusal", () =>
@@ -81,7 +81,7 @@ it.effect("goat_call through an alias meets the direct call's refusal", () =>
       }),
     );
     expect(aliased).toContain("does not take goat_probe");
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("refuses two fields that name different targets, naming both, and unknown fields", () =>
@@ -123,5 +123,5 @@ it.effect("refuses two fields that name different targets, naming both, and unkn
         arguments: { threadId: "a", goat_probe: 1 },
       }),
     ).toContain("does not take goat_probe");
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );

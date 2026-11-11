@@ -2,7 +2,13 @@ import { MemoryReportReference } from "./memory.ts";
 import * as Schema from "effect/Schema";
 
 import { AuthEnvironmentScopes } from "./auth.ts";
-import { EnvironmentId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 
 /**
@@ -115,12 +121,22 @@ export const ChannelMessageMeta = Schema.Struct({
   clientMessageId: Schema.optional(TrimmedNonEmptyString),
   receptionId: Schema.optional(ChannelReceptionId),
   taskId: Schema.optional(ChannelTaskId),
+  /** The attempt of that task the message speaks for; absent from older servers. */
+  taskGeneration: Schema.optional(PositiveInt),
   inReplyToInputId: Schema.optional(ChannelInputId),
   readAt: Schema.optional(IsoDateTime),
   /** Answers a question offers. The GOAT bot shows them as buttons that send the answer. */
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   /** The question this message asks; its buttons stay only while the task still has it open. */
   questionId: Schema.optional(ChannelQuestionId),
+  /** Set when that question is the task's own (not an approval or a coding thread's question). */
+  questionKind: Schema.optional(Schema.Literal("task")),
+  /**
+   * On a person's message sent from a task question's card: that question when the server took the
+   * answer, null when it refused it (closed, not theirs to answer, or not an answer it accepts).
+   * Absent on other messages and from older servers.
+   */
+  answersQuestionId: Schema.optional(Schema.NullOr(ChannelQuestionId)),
 });
 export type ChannelMessageMeta = typeof ChannelMessageMeta.Type;
 

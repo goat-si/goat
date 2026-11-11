@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
-import type { BotProfile } from "@goat/contracts";
+import type { BotProfile, ChannelTaskId } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
 import { MobileBotProfileSheet } from "./MobileBotProfileSheet";
 import { MobileNewBotModel } from "./MobileNewBotModel";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
+import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
 import { useMobileGoatBotMemberModelEditable } from "./useMobileGoatBotMemberModel";
 import { uuidv4 } from "../../lib/uuid";
@@ -15,9 +16,11 @@ export function MobileBotRoster(props: {
   header?: ReactNode;
   selectedKey: string | null;
   onOpenBot: (bot: BotRosterEntry) => void;
+  onOpenTask?: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
+  visible?: boolean;
 }) {
   const roster = useMobileBotRoster();
-  const preview = useMobileBotPreview();
+  const preview = useMobileBotPreview(useMobileGoatBotHomeMode().botRef);
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [sheet, setSheet] = useState<
@@ -85,6 +88,8 @@ export function MobileBotRoster(props: {
         preview={preview?.text}
         unread={preview?.unread}
         onOpenBot={props.onOpenBot}
+        onOpenTask={props.onOpenTask}
+        visible={props.visible}
       />
       {sheet !== null && roster.environmentId !== null ? (
         <BotSheet

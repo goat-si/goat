@@ -779,6 +779,8 @@ export function useMobileGoatBotSession(
   return {
     rows,
     supportsTaskThreads,
+    /** Changes when a task record in the conversation changes; null while the chat is hidden. */
+    workRevision,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */

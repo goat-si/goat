@@ -231,8 +231,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const restart = mutex.withPermits(1)(restartHost);
   const driverPath = () => bundledDriverPath(environment);
   /**
-   * Packaged macOS must keep computer use under the helper's TCC identity (ADR-0023), even when
-   * the helper is missing. Development and Windows can still use the in-process driver.
+   * A packaged build must keep computer use under its helper: macOS for its TCC identity
+   * (ADR-0023), Windows because the helper owns the desktop reads (#1228). Even when the helper
+   * is missing it reports that instead of falling back. Development can use the in-process driver.
    */
   const engine = Effect.fn("desktop.cua.engine")(function* () {
     if (environment.platform === "darwin" || environment.platform === "win32") {
@@ -267,7 +268,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
               : helperBundle(found.path, bundleId),
         } satisfies Engine;
       }
-      if (environment.isPackaged && environment.platform === "darwin")
+      // A packaged build runs computer use only through its helper: macOS for TCC identity
+      // (ADR-0023), Windows because the helper owns the desktop reads (#1228).
+      if (environment.isPackaged)
         return `This build does not include ${COMPUTER_USE_HELPER_NAME}. Computer use is unavailable.`;
     }
     const path = driverPath();

@@ -2,7 +2,6 @@ import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
@@ -32,6 +31,7 @@ import * as Service from "./MemoryService.ts";
 import * as Hub from "./MemoryHubService.ts";
 import * as Compactor from "./MemoryCompactor.ts";
 import { layerMemoryHubServices, layerMemoryHubRoutes, layerMemoryHubStarted } from "../server.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const space = M.MemorySpaceId.make(id(1));
@@ -818,7 +818,7 @@ describe("Memory hub assembled HTTP scenarios", () => {
           disableLogger: true,
           disableListenLog: true,
         }).pipe(
-          Layer.provideMerge(NodeHttpServer.layerTest),
+          Layer.provideMerge(layerTestLoopback),
           Layer.provide(Layer.succeedContext(s.context)),
         ),
         s.memoMap,

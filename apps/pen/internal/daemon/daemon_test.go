@@ -39,10 +39,10 @@ type node struct {
 	done chan error
 }
 
-// shortDir keeps unix socket paths under the 104-byte macOS limit.
+// shortDir keeps unix socket paths under the 104-byte macOS limit (108 on Windows).
 func shortDir(t *testing.T) *state.Store {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "pen")
+	dir, err := os.MkdirTemp(tmpRoot(), "pen")
 	if err != nil {
 		t.Fatal(err)
 	}

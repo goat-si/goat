@@ -2,7 +2,6 @@ import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -49,6 +48,7 @@ import * as Service from "./MemoryService.ts";
 import * as Hub from "./MemoryHubService.ts";
 import * as Client from "./MemoryHubClient.ts";
 import { layerMemoryHubServices, layerMemoryHubRoutes, layerMemorySyncStarted } from "../server.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const id = (n: number) =>
   M.MemoryOperationId.make(`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
@@ -400,7 +400,7 @@ const environment = (label: "H" | "A" | "B", resolve?: Resolve) =>
       );
       const served = yield* Layer.buildWithMemoMap(
         HttpRouter.serve(descriptorRoute, { disableLogger: true, disableListenLog: true }).pipe(
-          Layer.provideMerge(NodeHttpServer.layerTest),
+          Layer.provideMerge(layerTestLoopback),
           Layer.provide(Layer.succeedContext(context)),
         ),
         memoMap,

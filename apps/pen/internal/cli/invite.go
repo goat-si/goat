@@ -34,6 +34,8 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		Relay     string `json:"relay"`
 		ExpiresAt int64  `json:"expiresAt"`
 		Command   string `json:"command"`
+		// WindowsCommand is the same install for PowerShell.
+		WindowsCommand string `json:"windowsCommand"`
 	}
 	if err := cl.Next(&r); err != nil {
 		return fail(stderr, err)
@@ -42,8 +44,8 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, r.Token)
 		return 0
 	}
-	fmt.Fprintf(stdout, "invite (single use, expires %s):\n  %s\n\non the new machine:\n  %s\n\nwaiting for the join (Ctrl-C leaves the invite valid)...\n",
-		time.UnixMilli(r.ExpiresAt).Format(time.Kitchen), r.Token, r.Command)
+	fmt.Fprintf(stdout, "invite (single use, expires %s):\n  %s\n\non the new machine:\n  %s\n\non a new Windows machine, in PowerShell:\n  %s\n\nwaiting for the join (Ctrl-C leaves the invite valid)...\n",
+		time.UnixMilli(r.ExpiresAt).Format(time.Kitchen), r.Token, r.Command, r.WindowsCommand)
 	var ev struct {
 		T      string      `json:"t"`
 		Member mesh.Member `json:"member"`

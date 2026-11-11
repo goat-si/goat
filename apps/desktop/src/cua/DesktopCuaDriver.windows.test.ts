@@ -206,15 +206,18 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
     Effect.scoped(
       Effect.gen(function* () {
         vi.stubEnv("GOAT_CUA_DRIVER_PATH", "C:\\driver\\cua-driver.exe");
-        const test = yield* fixture({ platform: "win32", isPackaged: false });
-        assert.deepEqual((yield* test.verify).steps, [
-          {
-            id: "grants",
-            ok: false,
-            detail:
-              "Readiness checks on Windows run through GOAT Computer Use, which this build does not include.",
-          },
-        ]);
+        for (const isPackaged of [false, true]) {
+          const test = yield* fixture({ platform: "win32", isPackaged });
+          assert.deepEqual((yield* test.verify).steps, [
+            {
+              id: "grants",
+              ok: false,
+              detail: isPackaged
+                ? "This build does not include GOAT Computer Use. Computer use is unavailable."
+                : "Readiness checks on Windows run through GOAT Computer Use, which this build does not include.",
+            },
+          ]);
+        }
       }),
     ),
   );

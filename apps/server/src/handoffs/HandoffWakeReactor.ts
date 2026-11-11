@@ -20,7 +20,8 @@ import {
   isHubDeviceHandoffPath,
   type OrchestrationV2DomainEvent,
   RunId,
-  type ThreadId,
+  ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
 import * as AutomationHold from "../automationHold.ts";
 import * as Context from "effect/Context";
@@ -44,6 +45,8 @@ import {
   type ProviderSettingsOutcome,
 } from "../provider/ProviderSettingsProgress.ts";
 import { forkParked } from "../serverActivation.ts";
+import { approvalUsed } from "./approvalConsumption.ts";
+import { withdrawApprovalWake } from "./approvalWakeWithdraw.ts";
 import * as Handoffs from "./Handoffs.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -69,6 +72,11 @@ const decodeHandoff = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.toCodecJson(Handoff)),
 );
 const decodeProgress = Schema.decodeUnknownOption(Schema.toCodecJson(ProviderSettingsProgress));
+/** Approvals the agent continues itself; once used, their "call again" wake would only fail. */
+const continuedByAgent = (path: string) =>
+  isHubDeviceHandoffPath(path) ||
+  path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH ||
+  path === STORAGE_CLEAN_HANDOFF_PATH;
 
 /** What GOAT did with a provider change it applies itself, once the apply finished. */
 const appliedText = (outcome: ProviderSettingsOutcome | undefined) => {
@@ -102,7 +110,11 @@ const continuation = (handoff: Handoff, applied: Applied | undefined) => {
         ? "A person stopped it. Do not act on that tab or screen again unless they ask; tell them what you could not finish."
         : "The step may not be done, and after a restart the tab or control may be gone. Observe again before acting, and tell the person what you could not finish.";
   if (handoff.state !== "completed")
-    return "Nothing ran. Ask again only if the user still wants it.";
+    return handoff.state === "cancelled" &&
+      handoff.actor.type === "server" &&
+      handoff.resultMessage !== undefined
+      ? `Nothing ran: ${handoff.resultMessage}`
+      : "Nothing ran. Ask again only if the user still wants it.";
   if (applied !== undefined) return applied.text;
   if (isHubDeviceHandoffPath(handoff.target.path))
     return `Call ${goatCallText(handoff.target.path === "hub.device_join" ? "hub.device_join" : handoff.target.path === "hub.device_leave" ? "hub.device_leave" : "hub.device_repair")} again with decisionId "${handoff.handoffId}" to continue.`;
@@ -285,6 +297,18 @@ const make = Effect.gen(function* () {
         // A request whose call is waiting, or already returned this answer, needs no wake.
         return yield* handoffs.deliverComputerUseWake(current, dispatchWake(threadId, wake));
       }
+      const used = approvalUsed(handoff.handoffId).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+      if (handoff.state === "completed" && continuedByAgent(handoff.target.path))
+        // Takes turns with recording a use (ApprovalHandoffs.markUsed): a used approval sends
+        // nothing, and a later use withdraws the wake this queues.
+        return yield* handoffs.serializeApprovalWake(
+          Effect.gen(function* () {
+            if (yield* used) retries.delete(wake.messageId);
+            else yield* dispatchWake(threadId, wake);
+          }),
+        );
       if (
         handoff.state !== "completed" ||
         !Handoffs.isProviderContinuationPath(handoff.target.path)
@@ -344,6 +368,22 @@ const make = Effect.gen(function* () {
       if (wake !== undefined) offered.add(wake.messageId);
       yield* deliver(handoff.value, since.value);
     }
+    // A used approval whose wake is still waiting to start: withdraw it, also after a failed try.
+    const stale = yield* sql<{ readonly thread_id: string; readonly approval_id: string }>`
+      SELECT message.thread_id, consumption.approval_id
+      FROM approval_consumptions AS consumption
+      JOIN orchestration_v2_projection_messages AS message
+        ON message.message_id = 'message:handoff-wake:' || consumption.approval_id || ':completed'
+      WHERE consumption.consumed_at >= ${windowStart}`;
+    for (const row of stale)
+      yield* withdrawApprovalWake(threads, {
+        threadId: ThreadId.make(row.thread_id),
+        handoffId: TurnItemId.make(row.approval_id),
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("approval wake withdrawal failed", { cause }),
+        ),
+      );
     // A wake the tail started after this read began keeps its retry state.
     yield* forgetRetries(offered, DateTime.toEpochMillis(startedAt));
     // Out of the reconcile window, a stopped turn's handoff is never read again.

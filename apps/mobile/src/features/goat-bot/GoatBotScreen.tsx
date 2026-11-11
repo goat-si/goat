@@ -1,18 +1,26 @@
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
-import { LegendList } from "@legendapp/list/react-native";
+import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
+  goatBotAccent,
   goatBotName,
   goatBotNotesRefreshKey,
-  goatBotOpenQuestionPlaceholder,
   hasGoatBotMarkdown,
+  type GoatBotAccent,
+  type GoatBotReplyRepository,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import {
+  type BotProfile,
+  ChannelTaskId,
+  type EnvironmentId,
+  type GoatBotEventSubject,
+} from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Platform,
   Pressable,
   Text,
@@ -46,13 +54,12 @@ import { botThreadDetail, openBotThreadAction } from "./goatBotThreadNavigation"
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
-import { GoatBotHeaderFace } from "./GoatBotFace";
+import { GoatBotChipFace, GoatBotHeaderFace } from "./GoatBotFace";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
   GoatBotActivityLine,
   GoatBotBotCaption,
-  GoatBotCard,
   GoatBotUpdateLabel,
   GoatBotPersonCaption,
   GoatBotPersonPill,
@@ -61,7 +68,20 @@ import {
   goatBotRowGap,
   goatBotTime,
 } from "./GoatBotMessageParts";
+import { GoatBotModelPill } from "./GoatBotModelPill";
+import { goatBotModelPillMenu } from "./goatBotModelPillMenu";
+import { GoatBotReplyCards } from "./GoatBotReplyCards";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
+import { useMobileGoatBotModelMenu } from "./useMobileGoatBotModel";
+import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
+import {
+  type GoatBotChatItem,
+  GoatBotUnreadDividerRow,
+  GoatBotUnreadPill,
+  useGoatBotUnread,
+} from "./GoatBotUnreadMarker";
+import type { GoatBotVisitSnapshot } from "./useGoatBotVisitSnapshot";
+import { type MobileBotHomeFocus, useGoatBotEventTargets } from "./useGoatBotEventTargets";
 import { goatBotChatRows } from "./goatBotChatRows";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
@@ -72,7 +92,7 @@ import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
-const rowKey = (row: GoatBotRow) => row.id;
+const rowKey = (item: GoatBotChatItem) => item.id;
 function availabilityCopy(mainName: string, openName: string) {
   return {
     ready: "Answers here, works in its own threads",
@@ -98,14 +118,16 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
+  /** Where an event line's routine or task opens; undefined leaves the line plain. */
+  readonly onOpenEvent?: ((subject: GoatBotEventSubject) => (() => void) | undefined) | undefined;
   /** The environment whose bot history is shown; thread links in bot text open there. */
   readonly environmentId?: EnvironmentId | null;
   /** Who the conversation belongs to; its name heads each run of bot messages. */
   readonly botName?: string;
   /** The bot's profile avatar, shown beside its name. */
   readonly botEmoji?: string | null | undefined;
-  /** Moves to the composer, where the person types an answer of their own. */
-  readonly onSomethingElse?: () => void;
+  /** A member bot's color for the person's messages; the theme's without one. */
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const { row } = props;
   const botName = props.botName ?? "GOAT Bot";
@@ -115,10 +137,30 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={goatBotTime} />;
   }
   if (row.kind === "event") {
+    const subject = row.subject;
+    const at = subject === undefined ? -1 : row.text.indexOf(subject.name);
+    const open = subject === undefined || at < 0 ? undefined : props.onOpenEvent?.(subject);
+    if (subject === undefined || open === undefined) {
+      return (
+        <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
+          {row.text}
+        </Text>
+      );
+    }
+    // The whole line is the target, so a thumb need not find the name in small type.
     return (
-      <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
-        {row.text}
-      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${row.text}. Open ${subject.kind} ${subject.name}`}
+        onPress={open}
+        className="min-h-[44px] justify-center"
+      >
+        <Text className="text-center text-xs text-foreground-muted">
+          {row.text.slice(0, at)}
+          <Text className="text-foreground underline">{subject.name}</Text>
+          {row.text.slice(at + subject.name.length)}
+        </Text>
+      </Pressable>
     );
   }
   const marginTop = goatBotRowGap(row.groupPosition);
@@ -139,16 +181,17 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   }
   if (row.kind === "user") {
     const time = goatBotTime(row.createdAt);
+    const onAccent = props.accent ? { color: props.accent.foreground } : null;
     return (
       <View className="items-end gap-1" style={{ marginTop }}>
-        <GoatBotPersonPill>
+        <GoatBotPersonPill accent={props.accent}>
           <View className="gap-1">
             {row.text ? (
               <Text
                 selectable
                 accessibilityLabel={time ? `You, ${time}: ${row.text}` : `You: ${row.text}`}
                 className="text-goat-person-message-foreground"
-                style={bodyText}
+                style={{ ...bodyText, ...onAccent }}
               >
                 {row.text}
               </Text>
@@ -158,7 +201,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
                 key={file.id}
                 numberOfLines={1}
                 className="text-goat-person-message-foreground"
-                style={{ opacity: 0.85, ...bodyText }}
+                // The text colour was chosen for the opaque accent; dimming it would lose contrast.
+                style={{ ...(onAccent ? {} : { opacity: 0.85 }), ...bodyText, ...onAccent }}
               >
                 {(file.type === "image" ? "Photo · " : "File · ") + file.name}
               </Text>
@@ -175,32 +219,35 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </View>
     );
   }
-  const prose = (
-    <>
-      {hasGoatBotMarkdown(row.text) ? (
-        <GoatBotMarkdown
-          text={row.text}
-          failed={row.tone === "failure"}
-          environmentId={props.environmentId ?? null}
-          onSelectThread={props.onSelectThread}
-        />
-      ) : (
-        <Text
-          selectable
-          className={row.tone === "failure" ? "text-danger-foreground" : "text-foreground"}
-          style={bodyText}
-          accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
-        >
-          <GoatBotLinkedText text={row.text} />
-        </Text>
-      )}
-      {row.memory ? <MemoryReportLink reference={row.memory} /> : null}
-    </>
-  );
+  const renderText = (text: string, repository?: GoatBotReplyRepository | null) =>
+    hasGoatBotMarkdown(text) ? (
+      <GoatBotMarkdown
+        text={text}
+        repository={repository}
+        failed={row.tone === "failure"}
+        environmentId={props.environmentId ?? null}
+        onSelectThread={props.onSelectThread}
+      />
+    ) : (
+      <Text
+        selectable
+        className={row.tone === "failure" ? "text-danger-foreground" : "text-foreground"}
+        style={bodyText}
+        accessibilityLabel={row.tone === "failure" ? `Failed: ${text}` : undefined}
+      >
+        <GoatBotLinkedText text={text} repository={repository} />
+      </Text>
+    );
+  const memory = row.memory ? <MemoryReportLink reference={row.memory} /> : null;
   return (
     <View className="gap-1.5" style={{ marginTop }}>
       {row.firstInGroup && row.proactive ? (
-        <GoatBotUpdateLabel at={row.createdAt} name={botName} emoji={props.botEmoji} />
+        <GoatBotUpdateLabel
+          at={row.createdAt}
+          name={botName}
+          emoji={props.botEmoji}
+          accent={props.accent}
+        />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
       {row.options.length > 0 || row.answer !== undefined ? (
@@ -213,12 +260,12 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
             )
           }
-          onSomethingElse={props.onSomethingElse}
         >
-          {prose}
+          {renderText(row.text)}
+          {memory}
         </GoatBotQuestionCard>
       ) : (
-        <GoatBotCard>{prose}</GoatBotCard>
+        <GoatBotReplyCards text={row.text} renderText={renderText} footer={memory} />
       )}
       <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
     </View>
@@ -230,6 +277,8 @@ export function GoatBotScreen(props: {
   readonly taskId?: ChannelTaskId;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
+  /** Where the person had read the main chat up to when this visit began. */
+  readonly readSnapshot?: GoatBotVisitSnapshot | null;
   /** The main bot's profile, which names its chat; absent before the server keeps profiles. */
   readonly main?: BotProfile | null;
   /** Restores a deleted member; absent when this person may not manage bots. */
@@ -244,6 +293,15 @@ export function GoatBotScreen(props: {
   const title = goatBotName(member ?? props.main ?? null);
   const copy = availabilityCopy(mainName, title);
   const botEmoji = member ? mobileGoatBotMemberPicture(member) : props.main?.avatar;
+  // A member bot's color carries the person's messages and Send; the main bot keeps the theme's.
+  // Kept while the role and colour stay the same, so the list redraws its rows only when they change.
+  const accentRole = member?.role;
+  const accentColor = member?.color?.toUpperCase();
+  const accent = useMemo(
+    () =>
+      accentRole === undefined ? null : goatBotAccent({ role: accentRole, color: accentColor }),
+    [accentRole, accentColor],
+  );
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -294,8 +352,28 @@ export function GoatBotScreen(props: {
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
   const [text, setText] = useState("");
-  const input = useRef<TextInputInstance>(null);
-  const focusComposer = useCallback(() => input.current?.focus(), []);
+  const [homeOpen, setHomeOpen] = useState(false);
+  const openHome = useCallback(() => setHomeOpen(true), []);
+  // An event line opens the home on its routine or listed task, or a task that left the list on its
+  // own screen; a routine that is gone leaves the line plain.
+  const events = useGoatBotEventTargets(member);
+  const landEvent = events.land;
+  const [homeFocus, setHomeFocus] = useState<(MobileBotHomeFocus & { seq: number }) | null>(null);
+  const onOpenEvent = useCallback(
+    (subject: GoatBotEventSubject) => {
+      if (taskId || (subject.kind === "task" && !session.supportsTaskThreads)) return undefined;
+      const landing = landEvent(subject);
+      if (landing === null) return undefined;
+      if (landing === "task-screen") return () => onSelectTask(ChannelTaskId.make(subject.id));
+      return () => {
+        setHomeFocus((current) => ({ ...landing, seq: (current?.seq ?? 0) + 1 }));
+        setHomeOpen(true);
+      };
+    },
+    [taskId, session.supportsTaskThreads, landEvent, onSelectTask],
+  );
+  const memberModelMenu = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
+  const mainModelMenu = useMobileGoatBotModelMenu();
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const draftFiles = useRef(new Map<string, () => void>());
   const pickerLifetime = useRef<AbortController | null>(null);
@@ -323,41 +401,112 @@ export function GoatBotScreen(props: {
     Object.assign(listMetrics.current, next);
     setFooterInView(goatBotFooterInView(listMetrics.current));
   }, []);
+  // The shared rows decide which work cards the main chat keeps (conversationOnly): only work the
+  // home lists and whose ending the chat told leaves it. A task's own view has its card above.
+  const hidesTaskCards = taskId !== undefined;
+  const visibleRows = useMemo(
+    () =>
+      hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
+    [hidesTaskCards, session.rows],
+  );
+  // The "New" line and its pill belong to the main chat, whose visits the route records.
+  const unread = useGoatBotUnread(
+    visibleRows,
+    taskId !== undefined || member !== null ? null : props.readSnapshot,
+  );
+  const listRef = useRef<LegendListRef>(null);
+  const { clear: clearUnread } = unread;
+  const { onAnswer: answer } = session;
+  const onAnswer = useCallback(
+    (text: string, answerTask?: ChannelTaskId) => {
+      const sent = answer(text, answerTask);
+      if (sent) clearUnread();
+      return sent;
+    },
+    [answer, clearUnread],
+  );
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
+  const eventsKey = events.key;
+  const focusDivider = unread.focusDivider;
+  const listExtraData = useMemo(
+    () => ({ accent, eventsKey, focusDivider }),
+    [accent, eventsKey, focusDivider],
+  );
   const renderItem = useCallback(
-    ({ item }: { item: GoatBotRow }) => (
-      <GoatBotTimelineRow
-        row={item}
-        canSend={session.canSend}
-        onSend={session.onAnswer}
-        onRetry={session.onRetryInput}
-        onDiscard={session.onDiscardInput}
-        onSelectThread={onSelectThread}
-        onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
-        environmentId={session.historyEnvironmentId}
-        botName={title}
-        botEmoji={botEmoji}
-        onSomethingElse={focusComposer}
-      />
-    ),
+    ({ item }: { item: GoatBotChatItem }) =>
+      item.kind === "unread" ? (
+        <GoatBotUnreadDividerRow focus={unread.focusDivider} onFocused={unread.dividerFocused} />
+      ) : (
+        <GoatBotTimelineRow
+          row={item}
+          canSend={session.canSend}
+          onSend={onAnswer}
+          onRetry={session.onRetryInput}
+          onDiscard={session.onDiscardInput}
+          onSelectThread={onSelectThread}
+          onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
+          onOpenEvent={onOpenEvent}
+          environmentId={session.historyEnvironmentId}
+          botName={title}
+          botEmoji={botEmoji}
+          accent={accent}
+        />
+      ),
     [
+      unread.focusDivider,
+      unread.dividerFocused,
       session.canSend,
-      session.onAnswer,
+      onAnswer,
       session.onRetryInput,
       session.onDiscardInput,
       onSelectThread,
       onSelectTask,
       taskId,
+      onOpenEvent,
       session.supportsTaskThreads,
       session.historyEnvironmentId,
       title,
       botEmoji,
-      focusComposer,
+      accent,
     ],
   );
+  const inputRef = useRef<TextInputInstance>(null);
+  // Photos still being read after the picker closed; they join the message when they arrive.
+  const [intake, setIntake] = useState(0);
+  // Where the caret goes once the home sheet has gone, after a request filled the box from it.
+  const focusOnDismiss = useRef<number | null>(null);
+  const focusInput = (caret: number) => {
+    inputRef.current?.focus();
+    inputRef.current?.setSelection(caret, caret);
+  };
+  const sheetGone = () => {
+    const caret = focusOnDismiss.current;
+    focusOnDismiss.current = null;
+    if (caret !== null) focusInput(caret);
+  };
+  // oxlint-disable-next-line goat/react-effect-budget -- Android has no sheet dismissal event: focus the box once the closed sheet and the drafted text have committed.
+  useEffect(() => {
+    if (Platform.OS === "android" && !homeOpen) sheetGone();
+  });
+  // A drafted request (New routine, Ask to change or forget) fills only an empty message box; the
+  // caller keeps its sheet and wording when the box is taken.
+  const draft = (request: string) => {
+    if (text.trim().length > 0 || attachments.length > 0 || intake > 0) {
+      Alert.alert(
+        "Your message is still in the box",
+        "Send or clear it, then try again to start this request.",
+      );
+      return false;
+    }
+    setText(request);
+    if (homeOpen) focusOnDismiss.current = request.length;
+    else focusInput(request.length);
+    return true;
+  };
   const send = () => {
     if (session.onSend(text, attachments)) {
+      unread.clear();
       for (const release of draftFiles.current.values()) release();
       draftFiles.current.clear();
       setText("");
@@ -375,15 +524,9 @@ export function GoatBotScreen(props: {
   const taskCard = taskId
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
-  const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
-  // The shared rows decide which work cards the main chat keeps (conversationOnly): only work the
-  // home lists and whose ending the chat told leaves it. A task's own view has its card above.
-  const hidesTaskCards = taskId !== undefined;
-  const visibleRows = useMemo(
-    () =>
-      hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
-    [hidesTaskCards, session.rows],
-  );
+  const hasDraft = text.trim().length > 0 || attachments.length > 0;
+  const canSubmit = session.canSend && hasDraft;
+  const modelMenu = goatBotModelPillMenu(memberModelMenu, mainModelMenu, member !== null);
   const chatTasks = useMemo(
     () =>
       taskId === undefined && session.supportsTaskThreads
@@ -398,6 +541,8 @@ export function GoatBotScreen(props: {
           activity={session.activity ?? null}
           title={title}
           emoji={botEmoji}
+          accent={accent}
+          onPress={taskId ? undefined : openHome}
           {...(member
             ? {
                 conversation: {
@@ -411,6 +556,28 @@ export function GoatBotScreen(props: {
       <View style={{ paddingTop: topInset }}>
         <MobileBotWork
           taskId={taskId}
+          open={homeOpen}
+          onOpenChange={setHomeOpen}
+          focus={homeFocus}
+          // iOS reports the sheet's dismissal; Android is handled once the closed sheet commits.
+          onDismissed={sheetGone}
+          chipFace={
+            Platform.OS === "android" ? (
+              <GoatBotChipFace
+                activity={session.activity ?? null}
+                emoji={botEmoji}
+                accent={accent}
+                {...(member
+                  ? {
+                      conversation: {
+                        environmentId: member.environmentId,
+                        threadId: member.sessionThreadId,
+                      },
+                    }
+                  : {})}
+              />
+            ) : null
+          }
           visible={props.visible}
           onOpenTask={onSelectTask}
           onOpenThread={onSelectThread}
@@ -428,9 +595,11 @@ export function GoatBotScreen(props: {
           turnsWaiting={session.turnsWaiting}
           botName={title}
           botAvatar={botEmoji}
+          botAccent={accent}
           main={props.main ?? null}
-          onDraft={session.canSend ? setText : undefined}
+          onDraft={session.canSend ? draft : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
+          workRevision={session.workRevision}
           chatTasks={chatTasks}
           taskCardInfo={taskCard?.card ?? null}
           taskCard={
@@ -492,54 +661,85 @@ export function GoatBotScreen(props: {
           {homeError}
         </Text>
       ) : null}
-      <LegendList
-        renderScrollComponent={NativeScrollView}
-        style={{ flex: 1 }}
-        data={visibleRows}
-        keyExtractor={rowKey}
-        renderItem={renderItem}
-        initialScrollAtEnd
-        maintainScrollAtEnd
-        alignItemsAtEnd
-        keyboardShouldPersistTaps="handled"
-        // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
-        contentInsetAdjustmentBehavior="automatic"
-        contentInsetStartAdjustment={listTopInset}
-        contentContainerStyle={{ padding: GOAT_BOT_LIST_PADDING }}
-        scrollEventThrottle={100}
-        onScroll={(event) => {
-          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-          measureList({
-            offsetY: contentOffset.y,
-            viewportHeight: layoutMeasurement.height,
-            contentHeight: contentSize.height,
-          });
-        }}
-        onContentSizeChange={(_width, height) => measureList({ contentHeight: height })}
-        onLayout={(event) => measureList({ viewportHeight: event.nativeEvent.layout.height })}
-        ListEmptyComponent={
-          <Text className="py-6 text-center text-foreground-muted">
-            {taskId
-              ? "Messages for this task will appear here."
-              : `Ask ${title} for anything. It answers here and starts work in its own threads.`}
-          </Text>
-        }
-        ListFooterComponent={
-          !taskId && session.activity ? (
-            <View
-              testID="goat-bot-progress-line"
-              onLayout={(event) => measureList({ footerHeight: event.nativeEvent.layout.height })}
-            >
-              <GoatBotActivityLine
-                activity={session.activity}
-                botName={title}
-                emoji={botEmoji}
-                inView={footerInView}
-              />
-            </View>
-          ) : null
-        }
-      />
+      <View style={{ flex: 1 }}>
+        <LegendList
+          renderScrollComponent={NativeScrollView}
+          style={{ flex: 1 }}
+          ref={listRef}
+          data={unread.items}
+          keyExtractor={rowKey}
+          onViewableItemsChanged={({ viewableItems }) =>
+            unread.onViewable(viewableItems.map((entry) => entry.index))
+          }
+          renderItem={renderItem}
+          // Rows are memoized by key, data and this: a new accent must reach the pills already shown,
+          // the "New" line must learn when to take VoiceOver focus, and an event line where its
+          // routine or task now opens.
+          extraData={listExtraData}
+          initialScrollAtEnd
+          maintainScrollAtEnd
+          alignItemsAtEnd
+          keyboardShouldPersistTaps="handled"
+          // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
+          contentInsetAdjustmentBehavior="automatic"
+          contentInsetStartAdjustment={listTopInset}
+          contentContainerStyle={{ padding: GOAT_BOT_LIST_PADDING }}
+          scrollEventThrottle={100}
+          onScroll={(event) => {
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            measureList({
+              offsetY: contentOffset.y,
+              viewportHeight: layoutMeasurement.height,
+              contentHeight: contentSize.height,
+            });
+          }}
+          onContentSizeChange={(_width, height) => measureList({ contentHeight: height })}
+          onLayout={(event) => measureList({ viewportHeight: event.nativeEvent.layout.height })}
+          ListEmptyComponent={
+            <Text className="py-6 text-center text-foreground-muted">
+              {taskId
+                ? "Messages for this task will appear here."
+                : `Ask ${title} for anything. It answers here and starts work in its own threads.`}
+            </Text>
+          }
+          ListFooterComponent={
+            !taskId && session.activity ? (
+              <View
+                testID="goat-bot-progress-line"
+                onLayout={(event) => measureList({ footerHeight: event.nativeEvent.layout.height })}
+              >
+                <GoatBotActivityLine
+                  activity={session.activity}
+                  botName={title}
+                  emoji={botEmoji}
+                  accent={accent}
+                  inView={footerInView}
+                />
+              </View>
+            ) : null
+          }
+        />
+        {unread.pill !== null ? (
+          <View
+            pointerEvents="box-none"
+            style={{ position: "absolute", left: 0, right: 0, top: topInset }}
+          >
+            <GoatBotUnreadPill
+              count={unread.pill}
+              onPress={() => {
+                unread.jump();
+                void listRef.current?.scrollToIndex({
+                  index: unread.dividerIndex,
+                  viewPosition: 0,
+                  viewOffset: topInset,
+                  animated: true,
+                });
+              }}
+              onDismiss={unread.settle}
+            />
+          </View>
+        ) : null}
+      </View>
       <Animated.View
         className="gap-2 border-t border-border px-4 pt-2"
         style={composerPaddingStyle}
@@ -549,13 +749,39 @@ export function GoatBotScreen(props: {
           attachments={attachments}
           onRemove={removeAttachment}
         />
-        <View className="flex-row items-end gap-2">
+        {/* Two rows on a phone: the field, then attach, model and send under the thumb. */}
+        <TextInput
+          ref={inputRef}
+          accessibilityLabel={`Message ${title}`}
+          placeholder={`Message ${title}`}
+          placeholderTextColorClassName="accent-placeholder"
+          value={text}
+          onChangeText={setText}
+          multiline
+          editable={session.canSend}
+          accessibilityState={{ disabled: !session.canSend }}
+          onContentSizeChange={(event) =>
+            setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
+          }
+          className="px-3 py-2 text-foreground"
+          style={{
+            height: Math.min(inputHeight, inputMaxHeight),
+            minHeight: 44,
+            borderRadius: 22,
+            borderWidth: 0.5,
+            borderColor: themeAppearance === "light" ? "#C6C6C8" : "#545458",
+            backgroundColor: themeAppearance === "light" ? "#F2F2F7" : "#1C1C1E",
+            ...bodyText,
+          }}
+        />
+        <View className="min-h-[44px] flex-row items-center gap-2">
           {support ? (
             <GoatBotAttachButton
               disabled={!session.canSend}
               existingCount={attachments.length}
               maxUploadBytes={support.maxUploadBytes}
               getLifetime={() => pickerLifetime.current?.signal}
+              onIntake={(change) => setIntake((count) => count + change)}
               onPicked={(picked) => {
                 if (!pickerLifetime.current || pickerLifetime.current.signal.aborted) {
                   releaseGoatBotAttachments(picked);
@@ -575,49 +801,44 @@ export function GoatBotScreen(props: {
               }}
             />
           ) : null}
-          <TextInput
-            ref={input}
-            accessibilityLabel={`Message ${title}`}
-            placeholder={goatBotOpenQuestionPlaceholder(visibleRows) ?? `Message ${title}`}
-            placeholderTextColorClassName="accent-placeholder"
-            value={text}
-            onChangeText={setText}
-            multiline
-            editable={session.canSend}
-            accessibilityState={{ disabled: !session.canSend }}
-            onContentSizeChange={(event) =>
-              setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
-            }
-            className="flex-1 px-3 py-2 text-foreground"
-            style={{
-              height: Math.min(inputHeight, inputMaxHeight),
-              minHeight: 44,
-              borderRadius: 22,
-              borderWidth: 0.5,
-              borderColor: themeAppearance === "light" ? "#C6C6C8" : "#545458",
-              backgroundColor: themeAppearance === "light" ? "#F2F2F7" : "#1C1C1E",
-              ...bodyText,
-            }}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-            disabled={!canSubmit}
-            onPress={send}
-            className="items-center justify-center"
-            style={{
-              width: 44,
-              height: 44,
-              opacity: canSubmit ? 1 : 0.45,
-            }}
-          >
-            <View
-              className="items-center justify-center bg-composer-send"
-              style={{ width: 28, height: 28, borderRadius: 14 }}
+          {modelMenu ? <GoatBotModelPill menu={modelMenu} /> : null}
+          <View className="flex-1" />
+          {/* Send shows only once there is something to send. */}
+          {hasDraft ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              disabled={!canSubmit}
+              onPress={send}
+              className="items-center justify-center"
+              style={{
+                width: 44,
+                height: 44,
+                opacity: canSubmit ? 1 : 0.45,
+              }}
             >
-              <Text className="text-xl font-semibold text-white">↑</Text>
-            </View>
-          </Pressable>
+              <View
+                className={
+                  accent
+                    ? "items-center justify-center"
+                    : "items-center justify-center bg-composer-send"
+                }
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  ...(accent ? { backgroundColor: accent.background } : {}),
+                }}
+              >
+                <Text
+                  className="text-xl font-semibold text-primary-foreground"
+                  style={accent ? { color: accent.foreground } : undefined}
+                >
+                  ↑
+                </Text>
+              </View>
+            </Pressable>
+          ) : null}
         </View>
       </Animated.View>
     </KeyboardAvoidingView>

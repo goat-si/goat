@@ -1,4 +1,3 @@
-import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
   BUILTIN_PERMISSION_PROFILES,
@@ -27,6 +26,7 @@ import { ScreenToolkit } from "./toolkits/screen/tools.ts";
 
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { AGENT_DEVICE_ACCESS_OFF, availability } from "./toolAvailability.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
@@ -112,7 +112,7 @@ const refusedByProfile = (result: McpSchema.CallToolResult) =>
 
 const enforcing = (goatclaw: { readonly enabled: boolean; readonly defaultProfile: string }) =>
   Layer.mergeAll(
-    NodeHttpServer.layerTest,
+    layerTestLoopback,
     Sqlite.layerMemory,
     ServerSettings.layerTest({ goatclaw, agentToolListing: "full" }),
   );

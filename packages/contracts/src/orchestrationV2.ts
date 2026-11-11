@@ -2121,6 +2121,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStopRequested: Schema.optional(Schema.Boolean),
+  latestRunStartHeld: Schema.optional(Schema.Boolean),
   latestRunCompletionNotification: Schema.optional(Schema.String),
   activeRunId: Schema.NullOr(RunId),
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),

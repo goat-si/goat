@@ -8,6 +8,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
+import type * as Stream from "effect/Stream";
+import { type ChannelTaskChanges, readOnlyTaskChanges } from "./channelTaskChanges.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 
@@ -84,6 +86,13 @@ export interface ChannelBotLedgerOps {
    * wait for it, so a task an older build filed under main is never shown or counted as main's.
    */
   readonly ensureTaskBotsRepaired: () => Effect.Effect<number, ChannelLedgerError>;
+  /**
+   * Revision 0, then one more after each committed burst of changes to the owner's tasks or bots,
+   * so a mounted list knows to read again. Carries no task data.
+   */
+  readonly taskChangeRevisions: (ownerId: string) => Stream.Stream<number>;
+  /** For a caller whose own transaction wrapped task writes: announce once it committed. */
+  readonly announceTaskChanges: (ownerIds: Iterable<string>) => Effect.Effect<void>;
 }
 
 const isLedgerError = Schema.is(ChannelLedgerError);
@@ -105,7 +114,10 @@ export const isActiveMember = (sql: SqlClient.SqlClient, ownerId: string, botId:
       AND COALESCE(json_extract(value_json, '$.state'), 'active') = 'active'
   `.pipe(Effect.map((rows) => rows.length > 0));
 
-export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
+export const botLedger = (
+  sql: SqlClient.SqlClient,
+  changes: ChannelTaskChanges = readOnlyTaskChanges,
+): ChannelBotLedgerOps => {
   const readMain = (ownerId: string) =>
     sql<{ readonly value_json: string }>`
       SELECT value_json FROM channel_runtime_state WHERE key = ${mainBotKey(ownerId)}
@@ -255,7 +267,9 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
 
   // Walks only member inputs (a partial index) and the tasks each one created.
   const repairTaskBots: ChannelBotLedgerOps["repairTaskBots"] = () =>
-    sql<{ readonly task_id: string }>`
+    changes
+      .afterCommit(
+        sql<{ readonly owner_id: string }>`
       UPDATE channel_tasks SET bot_id = created.bot_id
       FROM (
         SELECT i.input_id, i.owner_id, i.bot_id, j.value AS task_id
@@ -266,11 +280,14 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
         AND channel_tasks.owner_id = created.owner_id
         AND channel_tasks.bot_id = 'main'
         AND json_extract(channel_tasks.task_json, '$.originInputId') = created.input_id
-      RETURNING channel_tasks.task_id
-    `.pipe(
-      Effect.map((rows) => rows.length),
-      Effect.mapError(toLedgerError("repairTaskBots")),
-    );
+      RETURNING channel_tasks.owner_id
+    `,
+        (rows) => rows.map((row) => row.owner_id),
+      )
+      .pipe(
+        Effect.map((rows) => rows.length),
+        Effect.mapError(toLedgerError("repairTaskBots")),
+      );
 
   let tasksRepaired = false;
   const ensureTaskBotsRepaired: ChannelBotLedgerOps["ensureTaskBotsRepaired"] = () =>
@@ -295,5 +312,7 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
     setMemberBotIfAbsent,
     repairTaskBots,
     ensureTaskBotsRepaired,
+    taskChangeRevisions: changes.revisions,
+    announceTaskChanges: changes.announce,
   };
 };

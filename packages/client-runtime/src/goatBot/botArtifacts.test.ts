@@ -20,8 +20,12 @@ import {
   botArtifactSizeLabel,
   botArtifactsFailure,
   botComputers,
+  botArtifactPreview,
+  botArtifactPreviewSlot,
   botArtifactViewKind,
   goatBotArtifactDays,
+  goatBotReplyFiles,
+  goatBotReplyMayNameFile,
   readWholeBotArtifact,
 } from "./botArtifacts.ts";
 
@@ -61,7 +65,11 @@ describe("readWholeBotArtifact", () => {
     const server = fileServer(file);
     const result = await readWholeBotArtifact(path, server.read);
     expect(result.status).toBe("ok");
-    if (result.status === "ok") expect(result.bytes).toEqual(file);
+    // A deep toEqual walks a megabyte element by element; comparing the bytes directly is enough.
+    if (result.status === "ok") {
+      expect(result.bytes.length).toBe(file.length);
+      expect(result.bytes.findIndex((byte, index) => byte !== file[index])).toBe(-1);
+    }
     expect(server.calls).toEqual([
       { relativePath: path },
       { relativePath: path, offset: CHANNEL_BOT_ARTIFACT_CHUNK_BYTES, version: "v1" },
@@ -302,5 +310,62 @@ describe("botArtifactViewKind", () => {
   it("offers text too long to show as a download", () => {
     expect(botArtifactViewKind("text/markdown", "big.md", 2 * 1024 * 1024)).toBe("download");
     expect(botArtifactViewKind("image/png", "big.png", 2 * 1024 * 1024)).toBe("image");
+  });
+});
+
+describe("files a reply names", () => {
+  const files = [
+    { relativePath: "reports/summary.md" },
+    { relativePath: "chart.png" },
+    { relativePath: "notes.txt" },
+  ];
+
+  it("finds Library files named in inline code, in order and once, by path or full path", () => {
+    const text =
+      "Saved `chart.png` and `/Users/me/.goat/userdata/goat-bot/artifacts/reports/summary.md`; see `chart.png` again. `summary.md` alone is ambiguous and `missing.csv` is not there.";
+    expect(goatBotReplyFiles(text, files).map((file) => file.relativePath)).toEqual([
+      "chart.png",
+      "reports/summary.md",
+    ]);
+  });
+
+  it("reads the Library only for inline code that looks like a file name", () => {
+    expect(goatBotReplyMayNameFile("Run `vp test` and check `foo()`.")).toBe(false);
+    expect(goatBotReplyMayNameFile("Saved `reports/summary.md`.")).toBe(true);
+    expect(goatBotReplyMayNameFile("No code here: summary.md")).toBe(false);
+  });
+});
+
+describe("botArtifactPreview", () => {
+  const answer = (mimeType: string, bytes: Uint8Array, done = true, size = bytes.length) =>
+    ({
+      status: "chunk",
+      relativePath: "f",
+      mimeType,
+      size,
+      offset: 0,
+      bytesBase64: Base64.encode(bytes),
+      version: "v",
+      done,
+    }) as const;
+
+  it("previews the start of text, a whole image, and nothing for other files", () => {
+    const long = "# Title\n" + "x".repeat(5000);
+    const text = botArtifactPreview(answer("text/markdown", new TextEncoder().encode(long)));
+    expect(text?.kind).toBe("markdown");
+    expect(text && "text" in text ? text.text.length : 0).toBe(1200);
+    expect(botArtifactPreview(answer("image/png", new Uint8Array([1, 2])))?.kind).toBe("image");
+    expect(botArtifactPreview(answer("image/png", new Uint8Array([1, 2]), false, 9e6))).toBeNull();
+    expect(botArtifactPreview(answer("application/pdf", new Uint8Array([1])))).toBeNull();
+    expect(botArtifactPreview({ status: "busy", relativePath: "f" })).toBeNull();
+  });
+});
+
+describe("botArtifactPreviewSlot", () => {
+  it("keeps room for a text preview or a one-chunk image, and none for other files", () => {
+    expect(botArtifactPreviewSlot("reports/summary.md", 100)).toBe("text");
+    expect(botArtifactPreviewSlot("chart.PNG", 1000)).toBe("image");
+    expect(botArtifactPreviewSlot("huge.png", 5 * 1024 * 1024)).toBeNull();
+    expect(botArtifactPreviewSlot("deck.pdf", 10)).toBeNull();
   });
 });

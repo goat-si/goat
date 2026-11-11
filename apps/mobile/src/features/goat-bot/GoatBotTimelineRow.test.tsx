@@ -1,3 +1,4 @@
+import { act } from "react";
 import {
   buildGoatBotTimeline,
   type GoatBotMessagePresentation,
@@ -16,6 +17,10 @@ import {
 
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
+// Event lines resolve their routine or task against the home's reads, which this test does not load.
+vi.mock("./useGoatBotEventTargets", () => ({
+  useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
+}));
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 vi.mock("./GoatBotFace", async () => {
@@ -64,6 +69,11 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
+vi.mock("./GoatBotModelPill", () => ({ GoatBotModelPill: () => null }));
+const clipboard = vi.hoisted(() => ({ copy: vi.fn(async (_text: string) => true) }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: clipboard.copy }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: appearance.mode,
@@ -651,5 +661,139 @@ describe("a question in the chat folds to the answer the person sent", () => {
     const closed = await typed([]);
     expect(closed.text).toContain("Which one?");
     expect(closed.buttons).toEqual([]);
+  });
+});
+
+describe("a reply with a table", () => {
+  const table = ["| Step | Result |", "| --- | --- |", "| Read | [notes](goat-thread://v1/t-1) |"];
+  const render = async (row: GoatBotRow) => {
+    h = createNativeMemoryHarness();
+    view = renderNative(h, <GoatBotTimelineRow {...props} row={row} />);
+    await view.render();
+    return view.container.textContent ?? "";
+  };
+
+  it("puts the intro, the table and the closing in cards of their own, captioned once", async () => {
+    const text = await render(
+      bot({ text: ["Done.", "", ...table, "", "Ask again any time."].join("\n") }),
+    );
+    const intro = text.indexOf("Done.");
+    const grid = text.indexOf("md[| Step | Result |");
+    const closing = text.indexOf("Ask again any time.");
+    expect(intro).toBeGreaterThanOrEqual(0);
+    expect(grid).toBeGreaterThan(intro);
+    expect(closing).toBeGreaterThan(grid);
+    expect(text.split(goatBotTime("2026-10-12T09:40:00Z")).length - 1).toBe(1);
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(1);
+  });
+
+  it("copies the table as the bot wrote it, says so, and says when it could not", async () => {
+    clipboard.copy.mockClear();
+    await render(bot({ text: ["Done.", "", ...table].join("\n") }));
+    await view.click("Copy table");
+    expect(clipboard.copy).toHaveBeenCalledWith(table.join("\n"), { target: "table" });
+    expect(view.container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+    expect(h.announcements).toEqual(["Table copied"]);
+    await view.unmount();
+    h.dispose();
+
+    clipboard.copy.mockImplementationOnce(async () => false);
+    await render(bot({ text: table.join("\n") }));
+    await view.click("Copy table");
+    expect(view.container.querySelector('[aria-label="Copy table"]')).not.toBeNull();
+    expect(h.announcements).toEqual(["Couldn't copy the table"]);
+  });
+
+  it("says how the newest copy went, ignoring older or unmounted ones", async () => {
+    clipboard.copy.mockClear();
+    await render(bot({ text: table.join("\n") }));
+    await view.click("Copy table");
+    clipboard.copy.mockImplementationOnce(async () => false);
+    await view.click("Copied");
+    expect(view.container.querySelector('[aria-label="Copy table"]')).not.toBeNull();
+    expect(h.announcements).toEqual(["Table copied", "Couldn't copy the table"]);
+
+    const slow = Promise.withResolvers<boolean>();
+    clipboard.copy.mockImplementationOnce(() => slow.promise);
+    clipboard.copy.mockImplementationOnce(async () => false);
+    await view.click("Copy table");
+    await view.click("Copy table");
+    await act(async () => slow.resolve(true));
+    expect(view.container.querySelector('[aria-label="Copied"]')).toBeNull();
+    expect(h.announcements.slice(2)).toEqual(["Couldn't copy the table"]);
+
+    const pending = Promise.withResolvers<boolean>();
+    clipboard.copy.mockImplementationOnce(() => pending.promise);
+    await view.click("Copy table");
+    await view.unmount();
+    await act(async () => pending.resolve(true));
+    expect(h.announcements.slice(3)).toEqual([]);
+  });
+
+  it("keeps a reply whole when a list item or quote defines one of its links", async () => {
+    for (const definition of ["- [x]: https://example.com", "> [x]: https://example.com"]) {
+      await render(bot({ text: ["See [notes][x].", "", ...table, "", definition].join("\n") }));
+      expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
+      await view.unmount();
+      h.dispose();
+    }
+    await render(bot({ text: "x" }));
+  });
+
+  it("keeps a table card in place while the reply streams on", async () => {
+    clipboard.copy.mockClear();
+    const opening = ["Done.", "", ...table].join("\n");
+    await render(bot({ text: opening }));
+    await view.click("Copy table");
+    expect(view.container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+    await view.rerender(
+      <GoatBotTimelineRow
+        {...props}
+        row={bot({ text: `${opening} more\n\nAnd a closing line.` })}
+      />,
+    );
+    // The same card is still there, so its feedback is too.
+    expect(view.container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+  });
+
+  it("gives every table its own card, and keeps a question in one card", async () => {
+    await render(bot({ text: [...table, "", "Then:", "", ...table].join("\n") }));
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(2);
+    await view.unmount();
+    h.dispose();
+
+    await render(
+      bot({ tone: "question", text: ["Which?", "", ...table].join("\n"), options: ["Read"] }),
+    );
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
+  });
+});
+
+describe("event lines", () => {
+  const event = (
+    subject?: { kind: "routine" | "task"; id: string; name: string },
+    text = "Routine Daily check ran",
+  ): GoatBotRow =>
+    ({
+      kind: "event",
+      id: "event",
+      text,
+      createdAt: "2026-10-12T09:40:00Z",
+      ...(subject ? { subject } : {}),
+    }) as GoatBotRow;
+
+  it("stays plain text when it names nothing, or nothing here can open it", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(h, <GoatBotTimelineRow {...props} row={event()} />);
+    await view.render();
+    expect(view.container.querySelector("button")).toBeNull();
+    await view.rerender(
+      <GoatBotTimelineRow
+        {...props}
+        row={event({ kind: "routine", id: "routine-1", name: "Daily check" })}
+      />,
+    );
+    expect(view.container.querySelector("button")).toBeNull();
+    expect(view.container.textContent).toContain("Routine Daily check ran");
   });
 });

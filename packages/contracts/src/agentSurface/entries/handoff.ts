@@ -38,4 +38,25 @@ export const handoffEntries = {
       openWorldHint: true,
     },
   }),
+  "handoff.withdraw": entry({
+    resource: "handoff",
+    verb: "withdraw",
+    name: "goat_handoff_withdraw",
+    toolkit: "orchestrator",
+    summary: "Withdraw an open approval this thread asked for",
+    description:
+      "Withdraw an approval this thread asked for that a person has not answered yet. A thread holds one open approval at a time: while one is open, asking for another is refused with the open one's handoffId. Withdraw it to ask for something else, or end the turn and wait for the answer.",
+    guide:
+      "Only the asking thread can withdraw its approval, and only while it is pending or opened. The card ends as cancelled by the agent, so the thread gets no wake for it and the person can no longer approve it. Computer use and browser tab requests keep their own flows and cannot be withdrawn here. An approval a person already answered stays as it is: an approved one remains usable for its change until that change succeeds once or the approval expires.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "Ends only a request this thread made; it grants nothing.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "Withdrawing ends the card once; a repeat finds it already ended and changes nothing.",
+    annotations: { title: "Withdraw an approval", idempotentHint: true, openWorldHint: false },
+  }),
 } as const;

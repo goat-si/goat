@@ -1,5 +1,5 @@
-import { act, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
+import "./goatBotScreenTestHarness";
+import { act } from "react";
 import {
   goatBotActivity,
   type GoatBotActivity,
@@ -7,233 +7,22 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { expect, it, vi } from "vite-plus/test";
 
-const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
-const screenSession = vi.hoisted(() => ({
-  activity: null as GoatBotActivity | null,
-  rows: [] as GoatBotRow[],
-  supportsTaskThreads: false,
-  requestedTaskId: undefined as string | null | undefined,
-  workTaskId: undefined as string | undefined,
-  chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
-}));
-vi.mock("./MobileBotWork", () => ({
-  MobileBotWork: (props: {
-    taskId?: string;
-    taskCard?: ReactNode;
-    chatTasks?: ReadonlyArray<{ readonly key: string }>;
-  }) => {
-    screenSession.workTaskId = props.taskId;
-    screenSession.chatTasks = props.chatTasks ?? [];
-    return <section aria-label="Task header">{props.taskCard}</section>;
-  },
-}));
-const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
-vi.mock("./GoatBotFace", () => ({
-  GoatBotHeaderFace: () => null,
-  GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
-    <i data-face={`${props.state}:${props.inView}`} />
-  ),
-}));
-vi.mock("./GoatBotShimmerText", () => ({
-  GoatBotShimmerText: (props: { label: string; animate: boolean; style?: unknown }) => (
-    <span data-sweep={String(props.animate)} data-style={JSON.stringify(props.style)}>
-      {props.label}
-    </span>
-  ),
-}));
-const composer = vi.hoisted(() => ({ focus: vi.fn() }));
-const picker = vi.hoisted(() => ({
-  onPicked: null as
-    | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)
-    | null,
-  release: vi.fn(),
-}));
-type LayoutHandler = (event: { nativeEvent: { layout: { height: number } } }) => void;
-const layouts = vi.hoisted(() => new Map<string, LayoutHandler>());
-
-vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
-  useAppearancePreferences: () => ({
-    themeAppearance: appearance.mode,
-    appearance: { baseFontSize: appearance.baseFontSize },
-  }),
-}));
-vi.mock("react-native", () => ({
-  View: ({
-    children,
-    style,
-    className,
-    testID,
-    onLayout,
-  }: {
-    children?: ReactNode;
-    style?: unknown;
-    className?: string;
-    testID?: string;
-    onLayout?: LayoutHandler;
-  }) => {
-    if (testID && onLayout) layouts.set(testID, onLayout);
-    return (
-      <div data-style={JSON.stringify(style)} data-class={className}>
-        {children}
-      </div>
-    );
-  },
-  Text: ({
-    children,
-    style,
-    className,
-    accessibilityLabel,
-  }: {
-    children?: ReactNode;
-    style?: unknown;
-    className?: string;
-    accessibilityLabel?: string;
-  }) => (
-    <span data-style={JSON.stringify(style)} data-class={className} aria-label={accessibilityLabel}>
-      {children}
-    </span>
-  ),
-  Pressable: ({
-    children,
-    style,
-    accessibilityLabel,
-    onPress,
-  }: {
-    children?: ReactNode;
-    style?: unknown;
-    accessibilityLabel?: string;
-    onPress?: () => void;
-  }) => (
-    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel} onClick={onPress}>
-      {children}
-    </button>
-  ),
-  TextInput: ({
-    style,
-    placeholder,
-    ref,
-  }: {
-    style?: unknown;
-    placeholder?: string;
-    ref?: { current: unknown };
-  }) => {
-    if (ref) ref.current = { focus: composer.focus };
-    return (
-      <input
-        aria-label="Message GOAT Bot"
-        placeholder={placeholder}
-        data-style={JSON.stringify(style)}
-      />
-    );
-  },
-  Platform: { OS: "ios" },
-  useWindowDimensions: () => ({ width: 393, height: 852 }),
-}));
-vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
-vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
-// The native Markdown renderer cannot load under Vitest.
-vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
-vi.mock("./GoatBotComposerAttachments", () => ({
-  GoatBotAttachButton: (props: { onPicked: typeof picker.onPicked }) => {
-    picker.onPicked = props.onPicked;
-    return null;
-  },
-  GoatBotAttachmentStrip: () => null,
-  releaseGoatBotAttachments: picker.release,
-}));
-vi.mock("@legendapp/list/react-native", () => ({
-  LegendList: (props: {
-    data?: GoatBotRow[];
-    renderItem?: (item: { item: GoatBotRow }) => ReactNode;
-    ListFooterComponent?: ReactNode;
-  }) => {
-    list.props = props;
-    return (
-      <>
-        {props.data?.map((item) => (
-          <div key={item.id}>{props.renderItem?.({ item })}</div>
-        ))}
-        {props.ListFooterComponent}
-      </>
-    );
-  },
-}));
-vi.mock("@react-navigation/elements", async () => ({
-  HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
-}));
-vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({ dispatch: () => {} }),
-  StackActions: { push: (name: string, params: object) => ({ name, params }) },
-}));
-vi.mock("react-native-reanimated", () => ({
-  default: { View: (props: { children?: unknown }) => props.children },
-  useAnimatedStyle: (style: () => object) => style(),
-}));
-vi.mock("react-native-keyboard-controller", () => ({
-  KeyboardAvoidingView: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }),
-}));
-vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => ({ bottom: 0, top: 0 }),
-}));
-vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
-vi.mock("../settings/SettingsMemoryRouteScreen", () => ({ MemoryReportLink: () => null }));
-vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
-  useSelectWorkspaceDetail: () => () => {},
-}));
-vi.mock("../../state/use-remote-environment-registry", () => ({
-  useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
-}));
-vi.mock("./useMobileGoatBotHomeSettings", () => ({
-  useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
-}));
-vi.mock("./useMobileGoatBotSession", () => ({
-  useMobileGoatBotSession: (_visible: boolean, taskId?: string | null) => {
-    screenSession.requestedTaskId = taskId;
-    return {
-      availability: "ready",
-      rows: screenSession.rows,
-      canSend: true,
-      attachmentSupport: { maxUploadBytes: null },
-      onSend: () => true,
-      onRetryInput: () => {},
-      replyingSince: null,
-      activity: screenSession.activity,
-      supportsTaskThreads: screenSession.supportsTaskThreads,
-    };
-  },
-}));
-
+import {
+  a11y,
+  appearance,
+  bot,
+  layouts,
+  list,
+  models,
+  picker,
+  props,
+  render,
+  screenSession,
+  typeInto,
+  type LayoutHandler,
+} from "./goatBotScreenTestHarness";
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
 import { isComposerAttachmentFileRetained } from "../../lib/composerAttachmentFiles";
-
-const props = { canSend: true, onSend: () => true, onRetry: () => {}, onSelectThread: () => {} };
-const bot: Extract<GoatBotRow, { kind: "bot" }> = {
-  kind: "bot",
-  id: "bot",
-  text: "Could not continue",
-  createdAt: "2026-10-12T09:40:00Z",
-  tone: "failure",
-  proactive: false,
-  replyTo: null,
-  options: ["Try again"],
-  firstInGroup: true,
-  groupPosition: "single",
-};
-
-async function render(element: ReactNode) {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
-  await act(async () => root.render(element));
-  return {
-    container,
-    unmount: async () => {
-      await act(async () => root.unmount());
-      container.remove();
-    },
-  };
-}
 
 it("releases a picker result that arrives after the GOAT Bot screen unmounts", async () => {
   picker.release.mockClear();
@@ -281,6 +70,7 @@ it("keeps answer chips and the send button off the retired blue message palette"
   await rowView.unmount();
 
   const screenView = await render(<GoatBotScreen visible />);
+  await typeInto(screenView.container, "Hello");
   const send = screenView.container.querySelector('[aria-label="Send message"]');
   const composer = screenView.container.querySelector('[aria-label="Message GOAT Bot"]');
   expect(JSON.parse(composer?.getAttribute("data-style") ?? "null")).toMatchObject({
@@ -304,25 +94,105 @@ it("keeps answer chips and the send button off the retired blue message palette"
   await screenView.unmount();
 });
 
-it("hints that the composer answers an open question and moves there from Something else", async () => {
-  composer.focus.mockClear();
-  screenSession.rows = [{ ...bot, tone: "question", text: "Deploy now?", options: ["Yes"] }];
+it("shows Send only once there is something to send", async () => {
   const view = await render(<GoatBotScreen visible />);
-  const input = () => view.container.querySelector('[aria-label="Message GOAT Bot"]');
-  expect(input()?.getAttribute("placeholder")).toBe("Answer, or ask something else");
-  await act(async () => {
-    view.container.querySelector<HTMLButtonElement>('[aria-label="Something else"]')?.click();
-  });
-  expect(composer.focus).toHaveBeenCalledTimes(1);
+  const send = () => view.container.querySelector('[aria-label="Send message"]');
+  expect(send()).toBeNull();
+  await typeInto(view.container, "Hello");
+  expect(send()).not.toBeNull();
+  await typeInto(view.container, "   ");
+  expect(send()).toBeNull();
   await view.unmount();
+});
 
-  screenSession.rows = [{ ...bot, tone: "reply", text: "Done.", options: [] }];
-  const settled = await render(<GoatBotScreen visible />);
-  expect(
-    settled.container.querySelector('[aria-label="Message GOAT Bot"]')?.getAttribute("placeholder"),
-  ).toBe("Message GOAT Bot");
-  await settled.unmount();
-  screenSession.rows = [];
+it("puts the bot's model in the composer, opening a member's menu even when it cannot change", async () => {
+  const select = vi.fn();
+  models.main = {
+    label: "gpt-6-luna",
+    accessibilityLabel: "GOAT Bot model: gpt-6-luna",
+    items: [],
+    disabled: true,
+    select,
+  };
+  const main = await render(<GoatBotScreen visible />);
+  const pill = () => main.container.querySelector('[aria-label="Model"]');
+  expect(pill()?.textContent).toBe("gpt-6-luna");
+  expect(pill()?.getAttribute("data-opens")).toBe("false");
+  await main.unmount();
+
+  models.member = {
+    label: "claude-opus",
+    accessibilityLabel: "Scout model: claude-opus",
+    title: "You can't change Scout's model",
+    canChange: false,
+    items: [],
+    select,
+  };
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+    avatar: null,
+  } as unknown as import("@goat/contracts").BotProfile;
+  const member = await render(<GoatBotScreen visible member={scout} />);
+  const memberPill = member.container.querySelector('[aria-label="Model"]');
+  expect(memberPill?.textContent).toBe("claude-opus");
+  expect(memberPill?.getAttribute("data-opens")).toBe("true");
+  await member.unmount();
+  models.main = null;
+  models.member = null;
+});
+
+it("opens the bot's home from the header chip, which a task's own screen does not have", async () => {
+  const chat = await render(<GoatBotScreen visible />);
+  const chip = chat.container.querySelector<HTMLButtonElement>('[aria-label="Chip GOAT Bot"]');
+  expect(screenSession.homeOpen).toBe(false);
+  await act(async () => chip?.click());
+  expect(screenSession.homeOpen).toBe(true);
+  await chat.unmount();
+
+  screenSession.supportsTaskThreads = true;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const taskView = await render(<GoatBotScreen visible taskId={task} />);
+  expect(taskView.container.querySelector('[aria-label="Chip GOAT Bot"]')).toBeNull();
+  await taskView.unmount();
+  screenSession.supportsTaskThreads = false;
+});
+
+it("tells VoiceOver on iOS when the bot starts waiting on something new, once per wait", async () => {
+  a11y.announce.mockClear();
+  screenSession.activity = { state: "working", text: "Copying files" };
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    screenSession.activity = { state: "working", text: "Waiting for your answer" };
+    await view.rerender(<GoatBotScreen visible />);
+    await view.rerender(<GoatBotScreen visible />);
+    screenSession.activity = { state: "working", text: "Waiting on other work" };
+    await view.rerender(<GoatBotScreen visible />);
+    expect(a11y.announce.mock.calls.map((call) => call[0])).toEqual([
+      "GOAT Bot: Waiting for your answer",
+      "GOAT Bot: Waiting on other work",
+    ]);
+    // A task's own update that streams in and happens to start with "Waiting" is not a wait.
+    a11y.announce.mockClear();
+    for (const text of [
+      "Waiting… the build",
+      "Waiting… the build is",
+      "Waiting… the build is green",
+    ]) {
+      screenSession.activity = { state: "working", text };
+      await view.rerender(<GoatBotScreen visible />);
+    }
+    expect(a11y.announce).not.toHaveBeenCalled();
+    expect(view.container.querySelector("[data-live]")?.getAttribute("aria-label")).toBe(
+      "GOAT Bot is working",
+    );
+  } finally {
+    screenSession.activity = null;
+    await view.unmount();
+  }
 });
 
 it("uses the light filled composer", async () => {
@@ -423,6 +293,40 @@ it("moves the progress line only while at least half of it shows, whatever moved
   } finally {
     screenSession.activity = null;
     await view.unmount();
+  }
+});
+
+it("announces only whether the bot works, reads or waits, not every step it takes", async () => {
+  const live = async (activity: GoatBotActivity) => {
+    screenSession.activity = activity;
+    const view = await render(<GoatBotScreen visible />);
+    const region = view.container.querySelector("[data-live]");
+    const result = {
+      label: region?.getAttribute("aria-label"),
+      holdsStep: region?.textContent?.includes(activity.text) ?? false,
+      showsStep: view.container.textContent?.includes(activity.text) ?? false,
+    };
+    await view.unmount();
+    return result;
+  };
+  try {
+    const first = await live({ state: "working", text: "Copying files" });
+    const second = await live({ state: "working", text: "Run df -h" });
+    expect(first).toEqual({ label: "GOAT Bot is working", holdsStep: false, showsStep: true });
+    expect(second.label).toBe(first.label);
+    expect((await live({ state: "reading", text: "Reading" })).label).toBe("GOAT Bot is reading");
+    // A wait is said as it is, so moving from one wait to another is heard.
+    expect((await live({ state: "working", text: "Waiting for your answer" })).label).toBe(
+      "GOAT Bot: Waiting for your answer",
+    );
+    expect((await live({ state: "working", text: "Waiting on other work" })).label).toBe(
+      "GOAT Bot: Waiting on other work",
+    );
+    expect((await live({ state: "working", text: "Paused on a usage limit" })).label).toBe(
+      "GOAT Bot: Paused on a usage limit",
+    );
+  } finally {
+    screenSession.activity = null;
   }
 });
 
@@ -589,4 +493,139 @@ it("shows a task chip in the task header only when one exists", async () => {
   );
   await empty.unmount();
   screenSession.supportsTaskThreads = false;
+});
+
+it("keeps Send in the composer row after a long model name, at its full size", async () => {
+  models.main = {
+    label: "a-very-long-provider/model-name-that-does-not-fit-a-narrow-phone",
+    accessibilityLabel: "GOAT Bot model",
+    items: [],
+    disabled: false,
+    select: vi.fn(),
+  };
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    await typeInto(view.container, "Check the disks");
+    const send = view.container.querySelector('[aria-label="Send message"]');
+    const row = send?.parentElement;
+    const pill = row?.querySelector('[aria-label="Model"]');
+    expect(pill?.textContent).toContain("a-very-long-provider");
+    // The pill comes before Send in the same row, and Send keeps its 44-point target.
+    expect(row?.lastElementChild).toBe(send);
+    expect(JSON.parse(send?.getAttribute("data-style") ?? "null")).toMatchObject({
+      width: 44,
+      height: 44,
+    });
+    expect(JSON.parse(send?.getAttribute("data-style") ?? "null").flexShrink ?? 0).toBe(0);
+  } finally {
+    await view.unmount();
+    models.main = null;
+  }
+});
+
+it("draws the person's messages and Send in a member bot's color, with text that reads on it", async () => {
+  const you: GoatBotRow = {
+    kind: "user",
+    id: "you",
+    text: "Check the disks",
+    createdAt: "2026-11-11T10:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    sendKey: null,
+    requestKey: null,
+    delivery: { state: "sent" },
+    showReceipt: false,
+  } as GoatBotRow;
+  const member = (color: string | undefined) =>
+    ({
+      botId: "scout",
+      name: "Scout",
+      role: "member",
+      environmentId: "env",
+      sessionThreadId: "scout-thread",
+      state: "active",
+      avatar: null,
+      ...(color === undefined ? {} : { color }),
+    }) as unknown as import("@goat/contracts").BotProfile;
+  const colors = async (bot: import("@goat/contracts").BotProfile | undefined) => {
+    screenSession.rows = [you];
+    const view = await render(<GoatBotScreen visible member={bot} />);
+    await typeInto(view.container, "More");
+    const text = [...view.container.querySelectorAll("span")].find(
+      (node) => node.textContent === "Check the disks",
+    );
+    const pill = [...view.container.querySelectorAll("div[data-style]")].find(
+      (node) =>
+        JSON.parse(node.getAttribute("data-style") ?? "null")?.borderRadius === 20 &&
+        node.contains(text ?? null),
+    );
+    const send = view.container.querySelector('[aria-label="Send message"]');
+    const result = {
+      pill: JSON.parse(pill?.getAttribute("data-style") ?? "null")?.backgroundColor,
+      text: JSON.parse(text?.getAttribute("data-style") ?? "null")?.color,
+      send: JSON.parse(send?.querySelector("div")?.getAttribute("data-style") ?? "null")
+        ?.backgroundColor,
+    };
+    await view.unmount();
+    screenSession.rows = [];
+    return result;
+  };
+  expect(await colors(member("#1d3a8a"))).toEqual({
+    pill: "#1D3A8A",
+    text: "#FFFFFF",
+    send: "#1D3A8A",
+  });
+  expect((await colors(member("#D9A21B"))).text).toBe("#000000");
+  // The main bot and a member without a color keep the theme's neutral.
+  expect(await colors(undefined)).toEqual({ pill: undefined, text: undefined, send: undefined });
+  expect(await colors(member(undefined))).toEqual({
+    pill: undefined,
+    text: undefined,
+    send: undefined,
+  });
+});
+
+it("redraws messages already shown when the member's color changes, and keeps attachment labels fully opaque on it", async () => {
+  const you = {
+    kind: "user",
+    id: "you",
+    text: "Here",
+    attachments: [{ id: "a1", type: "file", name: "notes.txt" }],
+    createdAt: "2026-11-11T10:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    sendKey: null,
+    requestKey: null,
+    delivery: { state: "sent" },
+    showReceipt: false,
+  } as unknown as GoatBotRow;
+  const member = (color: string) =>
+    ({
+      botId: "scout",
+      name: "Scout",
+      role: "member",
+      environmentId: "env",
+      sessionThreadId: "scout-thread",
+      state: "active",
+      avatar: null,
+      color,
+    }) as unknown as import("@goat/contracts").BotProfile;
+  screenSession.rows = [you];
+  const view = await render(<GoatBotScreen visible member={member("#1D3A8A")} />);
+  try {
+    const first = list.props?.extraData;
+    expect(first).toBeDefined();
+    // A fresh profile object with the same color keeps the rows as they are.
+    await view.rerender(<GoatBotScreen visible member={member("#1d3a8a")} />);
+    expect(list.props?.extraData).toBe(first);
+    await view.rerender(<GoatBotScreen visible member={member("#D9A21B")} />);
+    expect(list.props?.extraData).not.toBe(first);
+    const label = [...view.container.querySelectorAll("span")].find((node) =>
+      node.textContent?.includes("notes.txt"),
+    );
+    expect(JSON.parse(label?.getAttribute("data-style") ?? "{}").opacity ?? 1).toBe(1);
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
 });

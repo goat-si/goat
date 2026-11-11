@@ -1,4 +1,5 @@
 import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
+import { useState } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -7,8 +8,12 @@ import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 
+const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
+}));
 vi.mock("react-native", () => ({
-  Platform: { OS: "ios" },
+  Platform: nativePlatform,
   Switch: ({
     value,
     disabled,
@@ -31,6 +36,18 @@ vi.mock("react-native", () => ({
   ),
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  FlatList: (
+    props: {
+      data: ReadonlyArray<{ key: string }>;
+      renderItem: (info: { item: { key: string }; index: number }) => ReactNode;
+    } & Record<string, unknown>,
+  ) => (
+    <div>
+      {props.data.map((item, index) => (
+        <div key={item.key}>{props.renderItem({ item, index })}</div>
+      ))}
+    </div>
+  ),
   Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
     visible ? <div>{children}</div> : null,
   Alert: { alert: vi.fn() },
@@ -85,10 +102,10 @@ const state = vi.hoisted(() => ({
   runNow: vi.fn(),
   retry: vi.fn(),
   openThread: vi.fn(),
-  memberModel: null as null | Record<string, unknown>,
 }));
 
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
 vi.mock("../../native/StackHeader", () => ({
@@ -164,11 +181,6 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
-// The Android menu needs native modules; iOS builds the model into the header items below.
-vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
-vi.mock("./useMobileGoatBotMemberModel", () => ({
-  useMobileGoatBotMemberModelMenu: () => state.memberModel,
-}));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) =>
     key === "task"
@@ -201,6 +213,17 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { MobileBotWork } from "./MobileBotWork";
+
+// The chat's header chip opens the home; this stands in for it.
+function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      {props.taskId === undefined ? <button onClick={() => setOpen(true)}>Work</button> : null}
+      <MobileBotWork {...props} open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(async () => {
@@ -211,7 +234,6 @@ afterEach(async () => {
 
 function reset() {
   state.connected = true;
-  state.memberModel = null;
   for (const query of [state.task, state.routines])
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
   state.task.refresh.mockClear();
@@ -225,16 +247,18 @@ async function render(
   taskCard?: ReactNode,
   turnsWaiting: readonly string[] = [],
   chatTasks: ReadonlyArray<GoatBotTaskCard> = [],
+  chipFace?: ReactNode,
 ) {
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork
+      <WorkWithChip
         visible
         taskId={taskId}
         taskCard={taskCard}
         turnsWaiting={turnsWaiting}
         chatTasks={chatTasks}
+        chipFace={chipFace}
         onOpenTask={() => {}}
         onOpenThread={state.openThread}
       />,
@@ -421,7 +445,7 @@ it("names a task the server no longer lists from its conversation card, not as m
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork
+      <WorkWithChip
         visible
         taskId={ChannelTaskId.make("task-old")}
         taskCardInfo={{ title: "Summarize the README", statusLabel: "Needs your input" }}
@@ -614,18 +638,17 @@ it("offers the Work sheet, and with it Open the chat, only on the chat screen", 
   expect(container.textContent).not.toContain("waiting for your answer in the chat");
 });
 
-it("puts a member's model beside Work in its chat header", async () => {
+it("shows the bot's face in the chip Android draws above the chat", async () => {
   reset();
-  state.memberModel = {
-    label: "GPT-6-Luna",
-    accessibilityLabel: "Research model: GPT-6-Luna",
-    title: "Research's model",
-    canChange: true,
-    items: [],
-    select: () => {},
-  };
-  await render();
-  const header = [...container.querySelectorAll("[data-header-item]")];
-  expect(header.map((item) => item.textContent)).toEqual(["Work", "GPT-6-Luna"]);
-  expect(header[1]?.getAttribute("aria-label")).toBe("Research model: GPT-6-Luna");
+  nativePlatform.OS = "android";
+  try {
+    await render(undefined, undefined, [], [], <i data-chip-face="S" />);
+    const chip = [...container.querySelectorAll("button")].find(
+      (item) => item.getAttribute("aria-label") === "GOAT Bot",
+    );
+    expect(chip).toBeDefined();
+    expect(chip?.querySelector("[data-chip-face]")).toBeTruthy();
+  } finally {
+    nativePlatform.OS = "ios";
+  }
 });

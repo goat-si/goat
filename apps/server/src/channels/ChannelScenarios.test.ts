@@ -345,10 +345,9 @@ describe("GOAT bot boundary (scenario 6)", () => {
 
       // Both channels contribute to the owner's waiting count.
       assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 2);
-      assert.deepStrictEqual(yield* bots.status(owner), {
-        bot: { environmentId, projectId: scratchProjectId, threadId: botThreadId },
-        waitingCount: 2,
-      });
+      const { latest, ...status } = yield* bots.status(owner);
+      const bot = { environmentId, projectId: scratchProjectId, threadId: botThreadId };
+      assert.deepStrictEqual([status, latest?.text], [{ bot, waitingCount: 2 }, "On it."]);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -1150,16 +1149,17 @@ describe("duplicates and restarts (scenario 2)", () => {
           );
           yield* reception.receive(slack.inputId, first.ownerToken);
           yield* reception.receive(goat.inputId, first.ownerToken);
-          const claimed = yield* ledger.claimDueDeliveries({
+          yield* ledger.claimDueDeliveries({
             owner: first.ownerToken,
             now,
             limit: 50,
           });
-          assert.strictEqual(claimed.length, 2);
           const slackDelivery = deliveryIdFor("reply:" + slack.inputId);
           const goatDelivery = deliveryIdFor("reply:" + goat.inputId);
           assert.strictEqual(yield* ledger.getDeliveryState(slackDelivery), "delivering");
           assert.strictEqual(yield* ledger.getDeliveryState(goatDelivery), "delivering");
+          const handedOver = { owner: first.ownerToken, attempt: 1, now };
+          yield* ledger.markSending({ ...handedOver, deliveryId: slackDelivery });
           const second = yield* makeRuntime;
           assert.notStrictEqual(second.ownerToken, first.ownerToken);
           yield* TestClock.adjust(Duration.seconds(31));

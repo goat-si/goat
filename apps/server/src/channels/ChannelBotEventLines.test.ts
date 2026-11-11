@@ -26,6 +26,31 @@ const eventLines = Effect.gen(function* () {
 });
 
 describe("GOAT Bot event lines", () => {
+  it.effect("keeps the routine a line is about, so the line can open it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const events = yield* ChannelBotEvents.ChannelBotEvents;
+      const subject = { kind: "routine" as const, id: "routine-1", name: "Standup" };
+      yield* events.emit({
+        ownerId: owner.ownerId,
+        botId: main,
+        kind: "routine-paused",
+        id: "routine-1",
+        text: "Routine Standup paused",
+        subject,
+      });
+      yield* events.flush;
+      const lines = (yield* botMessages).turnItems.flatMap((item) =>
+        item.type === "notification" && item.source.kind === "goat_bot_event" ? [item] : [],
+      );
+      assert.deepStrictEqual(
+        lines.map((item) => [item.summary, item.source]),
+        [["Routine Standup paused", { kind: "goat_bot_event", subject }]],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("records a bot event line once per record key, without a run", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

@@ -10,6 +10,10 @@ import {
   type NativeMemoryHarness,
 } from "../../testing/memoryNativeHarness";
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
+// Event lines resolve their routine or task against the home's reads, which this test does not load.
+vi.mock("./useGoatBotEventTargets", () => ({
+  useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
+}));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 vi.mock("./GoatBotFace", () => ({
   GoatBotHeaderFace: () => null,
@@ -43,6 +47,10 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
+vi.mock("./GoatBotModelPill", () => ({ GoatBotModelPill: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: appearance.mode,

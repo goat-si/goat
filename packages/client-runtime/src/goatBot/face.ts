@@ -22,6 +22,7 @@ export type GoatBotFaceState =
 export type GoatBotFaceShell = Pick<
   OrchestrationV2ThreadShell,
   | "activityRunStatus"
+  | "latestRunStartHeld"
   | "pendingRuntimeRequest"
   | "latestRunCompletedAt"
   | "status"
@@ -98,6 +99,7 @@ export function goatBotFace(input: GoatBotFaceInput, now: number): GoatBotFace {
   const { shell, tasks } = input;
   if (
     input.waitingCount > 0 ||
+    (shell?.activityRunStatus === "starting" && shell.latestRunStartHeld === true) ||
     (tasks !== null && tasks.waiting > 0) ||
     (shell !== null && requestWaits(shell.pendingRuntimeRequest))
   ) {

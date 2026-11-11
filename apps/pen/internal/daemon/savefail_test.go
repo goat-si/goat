@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +24,10 @@ func TestAMemberThatCannotSaveDoesNotAcknowledgeARevoke(t *testing.T) {
 	a := founder(t, ctx, rs, "a", nil)
 	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
 	c := joiner(t, ctx, rs, a.invite(t, time.Minute), "c")
-	if err := os.Chmod(b.st.Dir, 0o500); err != nil {
+	if err := denyCreate(b.st.Dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(b.st.Dir, 0o700) })
+	t.Cleanup(func() { allowCreate(b.st.Dir) })
 	var res struct{ Results []PushResult }
 	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(c.id.SignPub)}, &res); err != nil {
 		t.Fatal(err)
@@ -51,7 +50,7 @@ func TestAMemberThatCannotSaveDoesNotAcknowledgeARevoke(t *testing.T) {
 	if again == "taken" || !strings.Contains(again, "4507") {
 		t.Fatalf("a second sync with nothing new: b answered %q while its state is unsaved", again)
 	}
-	if err := os.Chmod(b.st.Dir, 0o700); err != nil {
+	if err := allowCreate(b.st.Dir); err != nil {
 		t.Fatal(err)
 	}
 	if got := pushResult(t, a, "b"); got != "taken" {

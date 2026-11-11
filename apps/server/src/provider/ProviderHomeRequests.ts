@@ -183,33 +183,41 @@ const make = Effect.gen(function* () {
         driver === "pi"
           ? " Pi uses an isolated GOAT configuration while routed; existing Pi credentials, settings and extensions are not copied."
           : "";
-      const handoff = yield* handoffs.create({
-        kind: "approval",
-        title:
-          input.action === "connect"
-            ? `Use OpenCodex Home for this ${label} instance?`
-            : "Stop using OpenCodex Home?",
-        reason:
-          input.action === "connect"
-            ? `An agent asked to route this ${label} instance through OpenCodex Home.`
-            : `An agent asked to stop routing this ${label} instance through OpenCodex Home.`,
-        requestedBy: {
-          threadId: scope.thread.threadId,
-          providerInstanceId: scope.thread.providerInstanceId,
-          path: "provider.home_request",
-        },
-        target: { environmentId: scope.environmentId, path: "provider.home_request" },
-        runId: run.id,
-        nodeId: run.rootNodeId,
-        human: {
-          location:
+      const asked = yield* handoffs
+        .create({
+          kind: "approval",
+          title:
             input.action === "connect"
-              ? `${name} on ${host} will send model requests through OpenCodex Home and use its accounts and shared quota. If Home is unavailable, it stops instead of switching accounts.${isolation}`
-              : `${name} on ${host} goes back to ${label}'s own settings. OpenCodex stays connected to Home; run ocx disconnect on ${host} to disconnect it.`,
-        },
-        args: intent,
-        expiresAt: DateTime.add(yield* DateTime.now, { minutes: 15 }),
-      });
+              ? `Use OpenCodex Home for this ${label} instance?`
+              : "Stop using OpenCodex Home?",
+          reason:
+            input.action === "connect"
+              ? `An agent asked to route this ${label} instance through OpenCodex Home.`
+              : `An agent asked to stop routing this ${label} instance through OpenCodex Home.`,
+          requestedBy: {
+            threadId: scope.thread.threadId,
+            providerInstanceId: scope.thread.providerInstanceId,
+            path: "provider.home_request",
+          },
+          target: { environmentId: scope.environmentId, path: "provider.home_request" },
+          runId: run.id,
+          nodeId: run.rootNodeId,
+          human: {
+            location:
+              input.action === "connect"
+                ? `${name} on ${host} will send model requests through OpenCodex Home and use its accounts and shared quota. If Home is unavailable, it stops instead of switching accounts.${isolation}`
+                : `${name} on ${host} goes back to ${label}'s own settings. OpenCodex stays connected to Home; run ocx disconnect on ${host} to disconnect it.`,
+          },
+          args: intent,
+          expiresAt: DateTime.add(yield* DateTime.now, { minutes: 15 }),
+        })
+        .pipe(Effect.result);
+      // An open approval holds the thread; its refusal names that card.
+      if (asked._tag === "Failure")
+        return asked.failure.reason === "limit_reached"
+          ? { kind: "error" as const, code: "request_failed", message: asked.failure.message }
+          : yield* asked.failure;
+      const handoff = asked.success;
       return {
         kind: "needs_human" as const,
         handoff,

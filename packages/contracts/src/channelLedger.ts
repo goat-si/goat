@@ -164,6 +164,15 @@ export const ChannelOpenQuestion = Schema.Struct({
 });
 export type ChannelOpenQuestion = typeof ChannelOpenQuestion.Type;
 
+/** A question the task recorded an answer to, and the person's input that answered it. */
+export const ChannelAnsweredQuestion = Schema.Struct({
+  questionId: ChannelQuestionId,
+  inputId: Schema.optional(ChannelInputId),
+});
+export type ChannelAnsweredQuestion = typeof ChannelAnsweredQuestion.Type;
+/** The newest answers a task keeps; an older one's pick shows as a plain message. */
+export const CHANNEL_ANSWERED_QUESTIONS_KEPT = 100;
+
 /** A worker said it finished before its run did; held until the run settles. */
 export const ChannelProposedCompletion = Schema.Struct({
   eventId: ChannelTaskEventId,
@@ -260,6 +269,8 @@ export const ChannelTask = Schema.Struct({
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
   skillProposal: Schema.optional(ChannelTaskSkillProposal),
   openQuestions: Schema.Array(ChannelOpenQuestion),
+  /** Answers recorded for the task's questions, oldest first; absent on older servers. */
+  answeredQuestions: Schema.optional(Schema.Array(ChannelAnsweredQuestion)),
   /** The worker thread's pull requests, pending native requests and usage-limit wait. */
   observed: Schema.optional(ChannelWorkerObservation),
   /** Set when the task continued here from a machine that stopped answering. */
@@ -363,6 +374,8 @@ export const ChannelTaskEvent = Schema.Union([
   taskEvent("task.question.answered", {
     questionId: ChannelQuestionId,
     answer: Schema.String,
+    /** The person's input that answered; absent for agents and on older servers. */
+    inputId: Schema.optional(ChannelInputId),
     projectChoice: Schema.optional(ChannelAnswerProjectChoice),
     sender: Schema.optional(ChannelTaskSender),
   }),
@@ -457,6 +470,8 @@ export const ChannelTaskChip = Schema.Struct({
   askInChat: Schema.optional(Schema.Literal(true)),
   /** Ids of the task's open questions; a question's buttons retire once its id is gone. */
   openQuestionIds: Schema.optional(Schema.Array(ChannelQuestionId)),
+  /** Which input answered which question; present (possibly empty) on servers that record it. */
+  answeredQuestions: Schema.optional(Schema.Array(ChannelAnsweredQuestion)),
 });
 export type ChannelTaskChip = typeof ChannelTaskChip.Type;
 
@@ -467,6 +482,14 @@ export const ChannelBotRef = Schema.Struct({
   threadId: ThreadId,
 });
 export type ChannelBotRef = typeof ChannelBotRef.Type;
+
+/** The routine or task an event line is about, so a client can open it from the line. */
+export const GoatBotEventSubject = Schema.Struct({
+  kind: Schema.Literals(["routine", "task"]),
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+});
+export type GoatBotEventSubject = typeof GoatBotEventSubject.Type;
 
 /**
  * One entry the gateway writes to the GOAT bot timeline without a provider run. `recordKey`
@@ -491,6 +514,7 @@ export const ChannelTimelineRecord = Schema.Struct({
     Schema.Struct({
       type: Schema.Literal("event"),
       text: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+      subject: Schema.optionalKey(GoatBotEventSubject),
     }),
   ]),
 });

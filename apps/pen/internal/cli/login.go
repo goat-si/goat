@@ -92,10 +92,8 @@ func RunLogin(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if err := clearLeft(st); err != nil {
-		return fail(stderr, err)
-	}
-	id, _, err := st.EnsureIdentity()
+	// As pen join: the left marker goes in the same state-lock hold that makes the identity.
+	id, _, err := st.EnsureIdentityClearing(daemon.LeftMarker)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -227,7 +225,7 @@ func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 		return errors.New("nothing changed")
 	}
 	if cur == nil {
-		if _, err := mesh.Found(l.st, l.id, l.name, time.Now().UnixMilli()); err != nil {
+		if _, err := mesh.FoundV(mesh.EpochShared, l.st, l.id, l.name, time.Now().UnixMilli()); err != nil {
 			return err
 		}
 	}

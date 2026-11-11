@@ -11,7 +11,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ChannelTaskChip } from "./channelLedger.ts";
+import { ChannelTaskChip, GoatBotEventSubject } from "./channelLedger.ts";
 
 function encodedKind(member: Schema.Top): string {
   const encoded = SchemaAST.toEncoded(member.ast);
@@ -94,7 +94,10 @@ export const OrchestrationV2NotificationSource = kindUnionWithFallback(
     }),
     Schema.Struct({ kind: Schema.Literal("background_task") }),
     Schema.Struct({ kind: Schema.Literal("system") }),
-    Schema.Struct({ kind: Schema.Literal("goat_bot_event") }),
+    Schema.Struct({
+      kind: Schema.Literal("goat_bot_event"),
+      subject: Schema.optionalKey(GoatBotEventSubject),
+    }),
   ],
   (kind) => Schema.Struct({ kind }),
   () => ({ kind: "background_task" }),

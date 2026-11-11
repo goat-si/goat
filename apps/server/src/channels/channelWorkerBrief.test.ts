@@ -210,6 +210,13 @@ describe("channel worker brief", () => {
     assert.include(turnInstruction(task, files, false), sentence);
   });
 
+  it("tells a bot turn to name a file it saved for the person by its path inside the artifacts folder", () => {
+    assert.include(
+      turnInstruction(task, files, false),
+      "When your answer is a file you saved for the person, name it in your answer by its path inside the artifacts folder in inline code, such as `reports/summary.md`, so GOAT can show it.",
+    );
+  });
+
   it("tells a bot turn not to read a host that may no longer be the GOAT that ran the work", () => {
     assert.include(
       turnInstruction(task, files, false),

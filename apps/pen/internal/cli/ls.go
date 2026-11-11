@@ -60,6 +60,15 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 	}
 	tw.Flush()
 	printNotAMember(w, ls)
+	var bare []string
+	for _, m := range ls.Members {
+		if !m.Self && len(m.HostKeys) == 0 {
+			bare = append(bare, safe(m.Name))
+		}
+	}
+	if len(bare) > 0 {
+		fmt.Fprintf(w, "no ssh host keys from %s: ssh pen-<name> refuses them until they publish some (pen ls there says why, unless no SSH server runs there)\n", strings.Join(bare, ", "))
+	}
 	for _, m := range ls.Members {
 		if m.Via == mesh.ViaGoogle && time.Since(time.UnixMilli(m.Since)) < announceFor {
 			fmt.Fprintf(w, "%s joined via Google %s, fingerprint %s (%s)\n", m.Name, safe(m.Email), m.Fingerprint, ago(m.Since))
@@ -114,6 +123,9 @@ func printAccount(w io.Writer, ls daemon.LsReply) {
 	}
 	if ls.SaveError != "" {
 		fmt.Fprintf(w, "state    cannot be written (%s): records other members send are not kept and their syncs fail; free disk space or fix the folder's permissions\n", safe(ls.SaveError))
+	}
+	if ls.HostKeysError != "" {
+		fmt.Fprintf(w, "ssh      %s\n", safe(ls.HostKeysError))
 	}
 	if ls.Records >= mesh.MaxOrdinary {
 		fmt.Fprintf(w, "mesh     full: %d records (new members, names, locks and bindings stop at %d, revokes at %d); move to a new mesh\n", ls.Records, mesh.MaxOrdinary, mesh.MaxRecords)

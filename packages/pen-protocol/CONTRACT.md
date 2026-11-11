@@ -149,7 +149,7 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   from a known one only by case, or with a duplicate name, is malformed.
 - A record is `{"body":"<base64url of body bytes>","sig":"<base64url Ed25519 sig>"}`; `sig` signs
   `"pen-mesh/1" || SHA-256(body)` with the key `body.by`. Its hash is base64url (no padding) of SHA-256(body).
-- Body: I-JSON object, at most 2048 bytes: `v` (1), `mesh` (mesh id; `"-"` only in `found`), `type`, `by` (signer
+- Body: I-JSON object, at most 2048 bytes: `v` (1, or 2 in a mesh of the shared epoch below), `mesh` (mesh id; `"-"` only in `found`), `type`, `by` (signer
   signPub, base64url), `n` (signer counter, 1 for its first record), `prev` (hashes of the signer's current heads,
   1 to 64; empty only in `found`), `at` (ms since epoch, display only), plus:
   - `found`: `card` (the founder's own card).
@@ -174,9 +174,10 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   stored, so a set full of other records can still revoke and every set fits a 4096-hash `have`. A node reloading its
   own saved set applies no cap. A node that refuses a received record for a cap closes that sync 4508 without its
   `done`, and one that cannot save what it received closes it 4507, so the sender learns the records were not taken.
-  Limit: no signer has a share of the record space, so one member can fill it with valid records (ordinary ones to
-  3840, then revokes to 4096), after which every node refuses every new record, the revoke of that member included;
-  the remedy is a new mesh.
+  Limit (version 1 meshes): no signer has a share of the record space, so one member can fill it with valid records
+  (ordinary ones to 3840, then revokes to 4096), after which every node refuses every new record, the revoke of that
+  member included; the remedy is a mesh of the shared epoch, which `pen` now founds (ADR-0026: in it, the caps and
+  "in its past" checks above are replaced by per-lineage shares and admission read from the kept admits).
 
 ### View
 
@@ -462,7 +463,8 @@ mesh is unbound, or bound to an older login key, offers to bind it again (same q
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
 no live invite, refused card); 4402 relay protocol error; 4403 relay auth failed; 4404 node offline or port refused;
 4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps; 4507 a mesh sync whose records the node could not save, or while it holds records it could not save;
-4508 a mesh sync that brought a record the node refused for its record cap (relays never send 45xx). 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
+4508 a mesh sync that brought a record the node refused for its record cap (relays never send 45xx); 4509 a mesh sync
+whose peer did not announce the shared epoch, from a node of a mesh of that epoch. 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
 or card that did not arrive within 10 s.
 
 ## Vectors
@@ -495,6 +497,11 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
   fill it. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): a mesh whose found record has `v` 2 is of the shared epoch (ADR-0026): all its records have `v` 2, a node of it announces `"pen":"2.0"` in the sync hello and closes 4509 when
+  the peer does not, a record names its signer's previous record directly in `prev` or has no effect, and each
+  admission lineage keeps fixed shares of records (structure/decisions/ADR-0026). Older nodes drop `v` 2 records.
+  A node holding no records yet (joining) may announce anything and is sent the records. `pen up` and `pen login`
+  found meshes of this epoch.
 - v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
   (else 4429), and past 8 pending sessions per node the address holding the most loses its oldest (4429). Go relay
   only; the Worker keeps the node-wide rule. No wire change.

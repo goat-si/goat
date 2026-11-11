@@ -18,8 +18,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -32,7 +34,9 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { botProfileKey, mainBotKey, memberBotKey } from "./channelBotLedger.ts";
 import { bindingIdFor, contentHashFor, conversationIdFor, inputIdFor } from "./channelIds.ts";
+import { TASK_CHANGES_COALESCE } from "./channelTaskChanges.ts";
 import { makeCreatedTasks } from "./channelTaskWrites.ts";
+import { nextTaskChange, watchTaskChanges } from "./testkit/taskChanges.ts";
 import {
   botThreadId,
   defaultScript,
@@ -222,8 +226,17 @@ describe("channel tasks keep their bot", () => {
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MAIN);
       const inboxBefore = yield* sql`SELECT * FROM channel_inbox ORDER BY input_id`;
       const outboxBefore = yield* sql`SELECT * FROM channel_outbox ORDER BY delivery_id`;
+      // A mounted list hears that the owner's tasks moved to another bot.
+      const seen = yield* Queue.unbounded<number>();
+      yield* ledger.taskChangeRevisions("owner").pipe(
+        Stream.runForEach((revision) => Queue.offer(seen, revision)),
+        Effect.forkChild,
+      );
+      assert.strictEqual(yield* Queue.take(seen), 0);
 
       assert.strictEqual(yield* ledger.repairTaskBots(), 1);
+      yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+      assert.strictEqual(yield* Queue.take(seen), 1);
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MEMBER);
       assert.strictEqual(yield* ledger.repairTaskBots(), 0);
       assert.deepStrictEqual(
@@ -374,6 +387,61 @@ describe("channel runtime after a downgrade", () => {
       assert.deepStrictEqual(yield* tasksOf(bot.botId), [task.taskId]);
       const busy = yield* Effect.flip(members.remove({ botId: bot.botId }, owner));
       assert.strictEqual(busy.reason, "bot_busy");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("archiving a bot tells every owner whose tasks its repair moved", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const bot = yield* members.create(
+        {
+          clientRequestId: "archive-repairs-others",
+          name: "Helper",
+          avatar: null,
+          purpose: "Checks builds.",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const elsewhere = "environment:elsewhere";
+      const theirs = yield* downgradedMemberTask(elsewhere);
+      const seen = yield* watchTaskChanges({ ownerId: elsewhere });
+      yield* members.remove({ botId: bot.botId }, owner);
+      assert.strictEqual((yield* ledger.getTask(theirs.taskId))?.botId, MEMBER);
+      assert.strictEqual(yield* nextTaskChange(seen), 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("open asks are read after the repair, under the bot that asked", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const bot = yield* members.create(
+        {
+          clientRequestId: "asks-after-repair",
+          name: "Helper",
+          avatar: null,
+          purpose: "Checks builds.",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const task = yield* downgradedMemberTask(harnessOwner, bot.botId, "running");
+      const question = [{ questionId: "q-repair", text: "Which repo?", askedAt: NOW }];
+      yield* sql`UPDATE channel_tasks SET status = 'waiting_input',
+        task_json = json_set(task_json, '$.status', 'waiting_input',
+          '$.openQuestions', json(${JSON.stringify(question)}))
+        WHERE task_id = ${task.taskId}`;
+      const { asks } = yield* members.openAsks(owner);
+      assert.deepStrictEqual(
+        asks.map((ask) => [ask.taskId, ask.botId]),
+        [[task.taskId, bot.botId]],
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 

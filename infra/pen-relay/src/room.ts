@@ -41,6 +41,7 @@ interface UplinkState extends SocketState {
 interface ClientState extends SocketState {
   readonly role: "client";
   readonly sid: number;
+  readonly order?: number;
   pending: boolean;
   /** Uplink byte offset after this session's last DATA frame. */
   upEnd: number;
@@ -135,6 +136,7 @@ export class Room extends DurableObject<Env> {
       uid: randomId(),
       role: "client",
       sid,
+      order: this.nextOrder(),
       sent: 0,
       acked: 0,
       at: now,
@@ -147,7 +149,12 @@ export class Room extends DurableObject<Env> {
     save(server, state);
     const pending = this.clients()
       .filter(([, other]) => other.pending && other.sid !== sid)
-      .sort(([, a], [, b]) => a.sid - b.sid);
+      .sort(([, a], [, b]) => {
+        if (a.order === undefined && b.order === undefined) return a.at - b.at || a.sid - b.sid;
+        if (a.order === undefined) return -1;
+        if (b.order === undefined) return 1;
+        return a.order - b.order;
+      });
     for (const [ws, other] of pending.slice(
       0,
       Math.max(0, pending.length - Limits.PENDING_MAX + 1),
@@ -215,6 +222,12 @@ export class Room extends DurableObject<Env> {
   private async armAlarm(at: number): Promise<void> {
     const current = await this.ctx.storage.getAlarm();
     if (current === null || at < current) await this.ctx.storage.setAlarm(at);
+  }
+
+  private nextOrder(): number {
+    const order = (this.ctx.storage.kv.get<number>("admissionOrder") ?? 0) + 1;
+    this.ctx.storage.kv.put("admissionOrder", order);
+    return order;
   }
 
   /**

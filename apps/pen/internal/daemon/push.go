@@ -89,6 +89,8 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member, limit time.Duration) s
 			return "not taken: the relay is busy (4429); it syncs again within 10 minutes"
 		case wire.CodeMeshFull:
 			return "not taken: its mesh is full (4508)"
+		case wire.CodeEpoch:
+			return "not taken: it runs an older Pen than this mesh needs (4509)"
 		case wire.CodeNotKept:
 			return "not taken: it cannot write its state folder (4507)"
 		}

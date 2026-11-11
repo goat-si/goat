@@ -1,4 +1,3 @@
-import { NodeHttpServer } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
@@ -16,6 +15,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { runAgentSurfaceInvocation } from "./agentSurfaceCli.ts";
 import { agentSurfaceInvocation, exitCodeOf, type InputReader } from "./agentSurfaceCommand.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const entries = Object.values(agentSurfaceRegistry) as ReadonlyArray<AgentSurfaceRegistryEntry>;
 const CALLER_THREAD = ThreadId.make("thread:cli-caller");
@@ -143,7 +143,7 @@ describe("goat call through the origin's /mcp", () => {
       ];
       for (const caller of Object.keys(callers) as ReadonlyArray<Caller>)
         for (const [argv, path, args] of cases) yield* expectParity(http, caller, argv, path, args);
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
   );
 
   it.effect("searches paths by query, within a resource when one is named", () =>
@@ -172,7 +172,7 @@ describe("goat call through the origin's /mcp", () => {
         status: "error",
         error: { code: "invalid_request" },
       });
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
   );
 
   it.effect(
@@ -252,7 +252,7 @@ describe("goat call through the origin's /mcp", () => {
         Effect.scoped,
         Effect.provide(
           Layer.mergeAll(
-            NodeHttpServer.layerTest,
+            layerTestLoopback,
             Sqlite.layerMemory,
             ServerSettings.layerTest({ goatclaw: { enabled: true, defaultProfile: "manager" } }),
           ),

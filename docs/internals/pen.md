@@ -15,7 +15,7 @@ wins over the code; user workflows are in [Pen](../user/pen.md) and procedures i
 - **Relays are untrusted for content, trusted for availability.** They forward Noise records between
   pinned static keys and cannot read, forge, replay or splice them. They see node ids, client addresses,
   record sizes and timing. Close codes are not authenticated, so a hostile relay can end a dial (4401, 4400) or drop it; several relays are the answer to that, not code.
-- **The installer trusts the relay that serves it.** `install.sh` checks the binaries against
+- **The installer trusts the relay that serves it.** `install.sh` (and `install.ps1`) checks the binaries against
   `SHA256SUMS` from the same relay (`apps/pen/install/install.sh`), which proves an intact transfer only.
   Whoever controls the download relay can ship any binary. Publishing checksums somewhere the relay
   operator cannot write (signed release assets) would remove that; it is not done.
@@ -101,9 +101,12 @@ and every minute, and `pen ls` shows the error until then. Meanwhile the daemon 
 a revoke it holds but could not write still closes that peer's sessions, which errs toward the revoke; a
 restart before a successful save forgets it until a member sends it again.
 
-The record space is shared: no signer has a quota, so one member can fill it with valid records (3840
-ordinary ones, then revokes to 4096), after which no member can record anything, its own revoke included.
-The remedy is a new mesh; issue #2864 tracks a bound that admitted keys cannot multiply.
+A version 1 mesh's record space has no shares: one member can fill it with valid records (3840 ordinary
+ones, then revokes to 4096), after which no member can record anything, its own revoke included. `pen up` and
+`pen login` now found meshes of the shared epoch ([ADR-0026](../../structure/decisions/ADR-0026-pen-record-quotas.md)):
+records have `v` 2, each admission lineage keeps fixed shares chosen from the candidates alone
+(`selectShares`), admission is read from the kept admits rather than a record's past, and a hash a kept
+record names without its record is kept bare. A version 1 mesh keeps the old rules until it is moved.
 
 ## Lock order
 
@@ -142,8 +145,78 @@ the list because it also serves the installer and binaries.
 
 `pen dashboard` runs on `127.0.0.1` with a random port, and anything on that machine can reach the port.
 Cookies are not isolated by port, so the page never uses one: a single-use token arrives in the URL
-fragment (from a 0600 file, never a process argument), is exchanged for a bearer kept in
+fragment (from an owner-only file, never a process argument), is exchanged for a bearer kept in
 `sessionStorage`, and every response carries an HMAC of that bearer under a per-start key. A tab that
 sees a missing or wrong server id, a network error or a timeout stops for good, because a process that takes
 the port after the dashboard stops would otherwise be trusted by the open tab. Every action goes through
 the same daemon operation as the CLI.
+
+## Windows
+
+- **Go's monotonic clock counts sleep on Windows.** It reads the interrupt time, so wall minus monotonic never
+  shows a sleep there; the wake check uses `QueryUnbiasedInterruptTime` instead (`awake_windows.go` in
+  `apps/pen/internal/daemon`).
+- **Mode bits protect nothing on Windows.** The state directory gets a protected DACL with one ACE for the user,
+  which its files and the AF_UNIX control socket inherit (`private_windows.go` in `apps/pen/internal/state`).
+  Windows checks that DACL when a process connects to the socket; an elevated administrator's backup privilege
+  passes it, as root passes 0600 on unix, so no peer check is added.
+- **Task Scheduler's restart on failure ignores exit codes.** It restarts only a task that failed to launch, so the
+  task runs `pen up --supervise`, which restarts a daemon that exited non-zero. `pen down` writes a `down` record
+  that every supervisor checks before it starts the daemon, then waits for the supervisor's lock to come free;
+  the supervisor sits in a kill-on-close job, so `schtasks /End` also ends a daemon it was still starting.
+  `pen up` removes the record and repeats `schtasks /Run` until the daemon answers, because
+  Task Scheduler can still count the old run as running and drop the new one (IgnoreNew). The record outlives a
+  sign-in on purpose: a sign-in cannot be told apart from a supervisor that was starting during `pen down`. The task uses the user's
+  interactive token, which needs no admin rights and means Pen runs only while that user is signed in; S4U or a
+  stored password would need "Log on as a batch job", which standard users lack. schtasks accepts its XML only in
+  UTF-16, and expands `%VAR%` in the task's command with no escape, so `pen up` refuses a `pen.exe` path holding
+  `%`, as the systemd unit refuses `$`.
+- **A refused start ends the supervisor.** `pen up --supervise` follows the `--service` rule: when the stored
+  configuration cannot start (a relay list pen no longer accepts, or the node left), it exits 0 and writes the reason
+  to `daemon.log` and `start-refused`; it runs the daemon as `pen up --foreground --service`, so a daemon that
+  refuses its start ends the loop instead of being restarted. `pen up` removes `start-refused`, writes a random
+  id to `start-request` and runs the task; the supervisor reads that id before its checks and passes it to its
+  daemon, the refusal starts with it, and `pen up` fails at once only with a refusal carrying its own id, so a late
+  refusal of an earlier start is not taken for this one. `pen up`, `pen down` and `pen leave` take turns on
+  `start.lock` (not the state lock, which the starting daemon needs); `pen down` and `pen leave` take it before
+  they look for a task or a daemon, and `pen down` writes the `down` record even when nothing runs. Two `pen up`
+  at once each see the refusal of their own start, and a `pen down` during a start runs after the start is
+  decided, so whichever finishes last decides whether Pen runs. Everything done while holding the turn is
+  bounded: a status or stop request on the control socket 2 s, each `schtasks` run 15 s (then that process is
+  ended), the readiness wait 20 s, the leave request 1 min. A start holds the turn at most about 1 min, a
+  `pen down` 1.5 min, a `pen leave` 3 min; a command that waits longer than 3 min 10 s for the turn fails and
+  names the command holding it (`start.holder`). The same control-socket and command bounds apply to `pen up`,
+  `pen down` and `pen leave` on macOS and Linux (`systemctl` and `launchctl` runs).
+  - What a bound cut short means: a status answer slower than 2 s from a busy but healthy daemon makes `pen up`
+    try a start (on Windows it registers the task again and runs it, which the running supervisor ignores, and
+    reports that the daemon did not start) or makes `pen down` report that the daemon did not stop; repeating
+    the command is safe. A `schtasks`, `systemctl` or `launchctl` run cut off at 15 s may or may not have taken
+    effect; the next command does not trust it: `pen up` registers the task (or rewrites the unit) and starts it
+    again and waits for the daemon to answer, `pen down` decides by whether the supervisor and daemon locks are
+    free, and `pen leave` looks for the task with `schtasks /Query` (or the unit file) before it removes it.
+  - `pen leave` waits 1 min for the daemon's leave. The daemon finishes a leave it has begun even when its client
+    stopped waiting (the revoke may already be signed and pushed), and refuses a second leave meanwhile; so a
+    `pen leave` that runs out says the leave is still in progress and keeps the service. A request that never
+    reached the daemon (its write timed out) is reported as such: nothing changed. The daemon writes the `left`
+    marker before it deletes `identity.json`, `mesh.json` and `offers.json`; a delete that fails (a reader
+    holding the file on Windows) is reported by name and the service is kept. A later `pen leave` that finds the
+    marker and no daemon deletes what is left (`FinishLeave`, under the state lock, the code the daemon uses)
+    and removes the task or unit only once those files are gone. `FinishLeave` looks at the marker again under
+    the lock and deletes nothing without it; `pen up`, `pen join` and `pen login` clear the marker and make the
+    new identity in one hold of that lock (`EnsureIdentityClearing`), so a resumed leave cannot delete a node
+    started meanwhile (it says the node is not leaving). It refuses while a daemon holds `daemon.lock`. A `pen leave` that finds no Pen identity and no
+    marker removes only the task or unit, no state files, and says "no Pen identity in <folder>", so a folder
+    that is missing or not mounted is not taken for a node that left. This holds on macOS and Linux too.
+  - A command that has to wait for the turn says so at once, naming the holder from `start.holder`.
+  - With `PEN_HOME` set there is no task and no turn (Pen runs detached), so a `pen down` that overlaps a
+    `pen up` can find nothing to stop while the start completes; run `pen down` again.
+- **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
+  while a reader has `mesh.json` or `config.json` open, replacing it fails with `ERROR_ACCESS_DENIED`. Saves retry
+  that error (and a sharing violation) for up to 2 s while they hold the state lock, the rule of Go's
+  `cmd/internal/robustio`; past that the save fails and the file keeps its old content whole. A stale writer cannot
+  win meanwhile: every write of those files reads the current file under the state lock (`LockFileEx`, which a
+  second handle in the same process also waits for) and decides from it.
+- **Win32-OpenSSH starts ProxyCommand without a shell.** The command is quoted for CreateProcess, the state
+  directory travels as `pen pipe --home`, and the config has no ControlMaster, which that ssh lacks.
+- **An sshd session's job ends its processes.** A `--no-service` daemon started over SSH tries to leave the job
+  (CREATE_BREAKAWAY_FROM_JOB) and stays in it when the job forbids that; the task is the background path.

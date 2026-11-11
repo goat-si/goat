@@ -835,6 +835,8 @@
             ". 새 기기에서 실행 · Run on the new machine:",
         ),
         cmdBox(r.command),
+        h("p", { class: "sub" }, "Windows PowerShell:"),
+        cmdBox(r.windowsCommand),
       );
     } catch (e2) {
       if (e2.kind === "session") return gate("none");
@@ -884,6 +886,8 @@
               ".",
       ),
       cmdBox(s.loginCommand),
+      h("p", { class: "sub" }, "Windows PowerShell:"),
+      cmdBox(s.loginCommandWindows),
     );
   }
 

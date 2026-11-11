@@ -279,7 +279,10 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
         const turnItem: OrchestrationV2TurnItem = {
           ...base,
           type: "notification",
-          source: { kind: "goat_bot_event" },
+          source: {
+            kind: "goat_bot_event",
+            ...(entry.subject === undefined ? {} : { subject: entry.subject }),
+          },
           outcome: "updated",
           summary: entry.text,
         };
@@ -306,10 +309,22 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
       // A later record of the same message, such as its read time, keeps the files it came with.
       const attachments =
         entry.attachments ?? (existing?.type === "user_message" ? existing.attachments : []);
+      // It also keeps the task and answer verdict its accepted record decided.
+      const earlier = existing?.type === "user_message" ? existing.channel : undefined;
+      const meta =
+        earlier === undefined
+          ? entry.meta
+          : {
+              ...(earlier.taskId === undefined ? {} : { taskId: earlier.taskId }),
+              ...(earlier.answersQuestionId === undefined
+                ? {}
+                : { answersQuestionId: earlier.answersQuestionId }),
+              ...entry.meta,
+            };
       const message: OrchestrationV2ConversationMessage = {
         createdBy,
         creationSource: "server",
-        channel: entry.meta,
+        channel: meta,
         id: messageId,
         threadId: command.threadId,
         runId: null,
@@ -329,7 +344,7 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
               creationSource: "server",
               type: "user_message",
               messageId,
-              channel: entry.meta,
+              channel: meta,
               // A channel input starts no provider turn; runId null marks it as runless.
               inputIntent: "turn_start",
               text: entry.text,
@@ -339,7 +354,7 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
               ...base,
               type: "assistant_message",
               messageId,
-              channel: entry.meta,
+              channel: meta,
               text: entry.text,
               streaming: false,
             };

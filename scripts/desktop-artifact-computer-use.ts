@@ -10,13 +10,21 @@ import {
   cuaDriverRelease,
 } from "@goat/shared/cuaDriverRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { signWithJsign } from "./lib/windows-jsign.ts";
+
 import { buildComputerUseHelper } from "./build-computer-use-helper.ts";
+import {
+  buildWindowsComputerUseHelper,
+  PINNED_DRIVER_FILES,
+  type HelperChannel,
+} from "./build-computer-use-helper-windows.ts";
 import { runReleaseCommand } from "./lib/release-verify.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import { COMPUTER_USE_HELPER_ENV } from "./restore-computer-use-helper.ts";
@@ -49,13 +57,11 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
   readonly platform: DesktopPlatform;
   readonly arch: DesktopArch;
 }) {
-  if (input.platform === "mac") return;
+  // Windows packages run the helper, which carries its own pinned driver.
+  if (input.platform === "mac" || input.platform === "win") return;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const release = cuaDriverRelease(
-    input.platform === "win" ? "win32" : "linux",
-    input.arch === "universal" ? "arm64" : input.arch,
-  );
+  const release = cuaDriverRelease("linux", input.arch === "universal" ? "arm64" : input.arch);
   if (!release) {
     return yield* new CuaDriverArtifactError({ message: "Unsupported Cua Driver build target." });
   }
@@ -155,6 +161,125 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
     }),
   );
 });
+
+/** The helper folder a Windows package carries, relative to resources. */
+export const WINDOWS_HELPER_DIR = "computer-use-helper";
+
+/**
+ * What a packaged Windows app needs from its helper folder: the executable, the driver folder
+ * and the driver files the helper pins by hash (DriverService.PinDriverFiles). The paths of the
+ * files that are missing, relative to resources; empty when the payload is whole.
+ */
+export const windowsHelperPayloadMissing = Effect.fn("windowsHelperPayloadMissing")(function* (
+  resourcesDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const isFile = (file: string) =>
+    fs.stat(file).pipe(
+      Effect.map((stat) => stat.type === "File"),
+      Effect.orElseSucceed(() => false),
+    );
+  const helperDir = path.join(resourcesDir, WINDOWS_HELPER_DIR);
+  const driverDir = path.join(helperDir, "cua-driver");
+  const missing: string[] = [];
+  if (!(yield* isFile(path.join(helperDir, COMPUTER_USE_HELPER_NAME + ".exe"))))
+    missing.push(WINDOWS_HELPER_DIR + "/" + COMPUTER_USE_HELPER_NAME + ".exe");
+  const driver = yield* fs.stat(driverDir).pipe(
+    Effect.map((stat) => stat.type === "Directory"),
+    Effect.orElseSucceed(() => false),
+  );
+  if (!driver) missing.push(WINDOWS_HELPER_DIR + "/cua-driver");
+  for (const file of PINNED_DRIVER_FILES)
+    if (!(yield* isFile(path.join(driverDir, file))))
+      missing.push(WINDOWS_HELPER_DIR + "/cua-driver/" + file);
+  return missing;
+});
+
+const WindowsSigningConfig = Config.all({
+  endpoint: Config.String("AZURE_TRUSTED_SIGNING_ENDPOINT"),
+  accountName: Config.String("AZURE_TRUSTED_SIGNING_ACCOUNT_NAME"),
+  certificateProfileName: Config.String("AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME"),
+});
+
+/** Signs the helper with the same Azure Trusted Signing identity as GOAT.exe. */
+const signWindowsComputerUseHelper = Effect.fn("signWindowsComputerUseHelper")(function* (
+  executable: string,
+) {
+  if ((yield* HostProcess.Platform) !== "win32") {
+    yield* signWithJsign(executable);
+    return;
+  }
+  const { endpoint, accountName, certificateProfileName } = yield* WindowsSigningConfig;
+  const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  yield* run("Invoke-TrustedSigning " + COMPUTER_USE_HELPER_NAME, "pwsh", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    [
+      "$ErrorActionPreference = 'Stop';",
+      "Invoke-TrustedSigning",
+      `-Endpoint ${quote(endpoint)}`,
+      `-CodeSigningAccountName ${quote(accountName)}`,
+      `-CertificateProfileName ${quote(certificateProfileName)}`,
+      "-FileDigest 'SHA256'",
+      "-TimestampRfc3161 'http://timestamp.acs.microsoft.com'",
+      "-TimestampDigest 'SHA256'",
+      `-Files ${quote(executable)}`,
+    ].join(" "),
+  ]);
+});
+
+/**
+ * Puts the Windows helper in resources\computer-use-helper. A release packages on Linux, so it
+ * carries a helper built on a Windows runner through --computer-use-helper-dir; a Windows host
+ * builds it here, which is what nightly does.
+ */
+export const stageWindowsComputerUseHelper = Effect.fn("stageWindowsComputerUseHelper")(
+  function* (input: {
+    readonly repoRoot: string;
+    readonly stageResourcesDir: string;
+    readonly channel: HelperChannel;
+    readonly arch: "x64" | "arm64";
+    readonly helperDir: string | undefined;
+    readonly signed: boolean;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const destination = path.join(input.stageResourcesDir, WINDOWS_HELPER_DIR);
+    const executable = path.join(destination, COMPUTER_USE_HELPER_NAME + ".exe");
+    if (input.helperDir !== undefined) {
+      if (!(yield* fs.exists(path.join(input.helperDir, COMPUTER_USE_HELPER_NAME + ".exe"))))
+        return yield* new CuaDriverArtifactError({
+          message: `${COMPUTER_USE_HELPER_NAME}.exe is missing from ${input.helperDir}.`,
+        });
+      yield* fs.remove(destination, { recursive: true, force: true });
+      yield* fs.copy(input.helperDir, destination);
+    } else {
+      if ((yield* HostProcess.Platform) !== "win32")
+        return yield* new CuaDriverArtifactError({
+          message: `A Windows package built on another host needs --computer-use-helper-dir with a helper built on Windows.`,
+        });
+      yield* buildWindowsComputerUseHelper({
+        repoRoot: input.repoRoot,
+        output: input.stageResourcesDir,
+        channel: input.channel,
+        arch: input.arch,
+        thumbprint: undefined,
+        timestampUrl: undefined,
+        deferredSigning: input.signed,
+        allowAnyParent: !input.signed,
+      });
+    }
+    const missing = yield* windowsHelperPayloadMissing(input.stageResourcesDir);
+    if (missing.length > 0)
+      return yield* new CuaDriverArtifactError({
+        message: `The ${COMPUTER_USE_HELPER_NAME} payload is incomplete: ${missing.join(", ")}.`,
+      });
+    if (input.signed) yield* signWindowsComputerUseHelper(executable);
+    return destination;
+  },
+);
 
 /** Where GOAT.app carries the helper, relative to Contents; DesktopCuaDriver looks there. */
 const COMPUTER_USE_HELPER_IN_APP = `Helpers/${COMPUTER_USE_HELPER_NAME}.app`;

@@ -647,7 +647,7 @@ const make = Effect.gen(function* () {
         args: { version: 1, request },
         expiresAt: DateTime.add(yield* DateTime.now, { minutes: 30 }),
       })
-      .pipe(Effect.mapError(() => failure("orchestration_error", "Could not ask for approval.")));
+      .pipe(Effect.mapError(Handoffs.approvalAskFailure));
     yield* audit(
       { actor: `thread:${scope.thread.threadId}`, profile: "approval" },
       request,

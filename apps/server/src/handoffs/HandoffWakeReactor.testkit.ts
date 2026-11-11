@@ -35,6 +35,7 @@ import { makeFakeCloudAdapter } from "../orchestration-v2/testkit/FakeCloudAdapt
 import * as Harness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ApprovalHandoffs from "./ApprovalHandoffs.ts";
 import * as HandoffWakeReactor from "./HandoffWakeReactor.ts";
 import * as Handoffs from "./Handoffs.ts";
 
@@ -47,6 +48,7 @@ export interface World {
   readonly orchestrator: Orchestrator.OrchestratorV2["Service"];
   readonly worker: Worker.OrchestrationEffectWorkerV2["Service"];
   readonly handoffs: Handoffs.Handoffs["Service"];
+  readonly approvals: ApprovalHandoffs.ApprovalHandoffs["Service"];
   readonly reactor: HandoffWakeReactor.HandoffWakeReactor["Service"];
   readonly sql: SqlClient.SqlClient;
   /**
@@ -63,6 +65,8 @@ export interface World {
     removeFailing: number;
     arrived: Deferred.Deferred<void>;
     readonly sent: Array<string>;
+    /** Runs just before a wake reaches the orchestrator, as a concurrent change would. */
+    beforeWake: Effect.Effect<void> | undefined;
   };
 }
 
@@ -119,6 +123,7 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         removeFailing: 0,
         arrived: yield* Deferred.make<void>(),
         sent: [],
+        beforeWake: undefined,
       };
       const session: AuthClientSession = {
         sessionId: person,
@@ -143,7 +148,10 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
             return orchestrator.dispatch(command);
           outage.sent.push(command.commandId);
           Deferred.doneUnsafe(outage.arrived, Effect.void);
-          if (outage.failing === 0) return orchestrator.dispatch(command);
+          if (outage.failing === 0)
+            return (outage.beforeWake ?? Effect.void).pipe(
+              Effect.andThen(orchestrator.dispatch(command)),
+            );
           outage.failing -= 1;
           // A planning failure: the orchestrator keeps a rejected receipt under this command id.
           return Effect.sleep(outage.slowMs).pipe(
@@ -168,16 +176,20 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         getThreadRecords: orchestrator.getThreadRecords,
         getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
       });
+      const environment = Layer.mock(ServerEnvironment.ServerEnvironment)({
+        getEnvironmentId: Effect.succeed(environmentId),
+      });
       const services = HandoffWakeReactor.layer.pipe(
         Layer.provide(threads),
+        Layer.provideMerge(
+          ApprovalHandoffs.layer.pipe(Layer.provide(threads), Layer.provide(environment)),
+        ),
         Layer.provideMerge(
           Handoffs.layer.pipe(
             Layer.provide(
               Layer.mergeAll(
                 threads,
-                Layer.mock(ServerEnvironment.ServerEnvironment)({
-                  getEnvironmentId: Effect.succeed(environmentId),
-                }),
+                environment,
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 Layer.mock(SessionStore.SessionStore)({
                   cookieName: "test",
@@ -226,6 +238,7 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
           sql,
           outage,
           handoffs: yield* Handoffs.Handoffs,
+          approvals: yield* ApprovalHandoffs.ApprovalHandoffs,
           reactor: yield* HandoffWakeReactor.HandoffWakeReactor,
         });
       }).pipe(Effect.provide(services));

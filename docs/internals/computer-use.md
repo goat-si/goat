@@ -82,8 +82,9 @@ provider (Codex, Claude, ...)
   window's diff cannot rule out an effect on another window, a sheet or the clipboard.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
-  requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
-  without it keeps computer use off. Unpackaged development can use `GOAT_CUA_DRIVER_PATH`.
+  requires the helper on a packaged build, macOS for its TCC identity and Windows because the
+  helper owns the desktop reads (#1228); a build without it keeps computer use off. Unpackaged
+  development can use `GOAT_CUA_DRIVER_PATH`.
   A standalone server on a Mac reports computer use unavailable, because its launch chain ends at a
   terminal or a launchd job (#1174). Windows and Linux servers launch their platform helper
   directly.
@@ -612,7 +613,8 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   executable is a small Swift program (the disclaim, the channel, held-input release, the Escape
   tap, permission probes) and whose resources hold `cua-driver` and `cua-cursor-theme`. The
   release manifest already requires the cursor theme tool, which the desktop artifact does not
-  copy today (#1176).
+  copy today (#1176). Windows carries `resources/computer-use-helper`, built on a Windows runner
+  because `csc.exe` ships with Windows only and signed with the app (#1228).
 - Signing goes inside out: `cua-driver` and `cua-cursor-theme`, then the helper bundle with its
   own entitlements (hardened runtime, Apple Events; no JIT, no disabled library validation, no
   `get-task-allow`), then GOAT.app. Notarization covers the outer artifact and its nested code.
