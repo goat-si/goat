@@ -82,6 +82,8 @@ function setup(
   const replies = { request: deferred<PairResponse>(), polls: [] as Array<Deferred<PairResponse>> };
   const probes: Array<{ key: string; answer: Deferred<ProbeResult> }> = [];
   let opened = 0;
+  let loads = 0;
+  const heldLoads = new Map<number, Deferred<void>>();
   const channel: PairingChannel = {
     handshakeHash: HASH,
     request: (body) => {
@@ -103,7 +105,15 @@ function setup(
     random: (n) => new Uint8Array(n).fill(seed++),
     device: { name: "Jun's phone", platform: "ios", appVersion: "1.0.0" },
     store: {
-      load: async () => stored,
+      // A held load reads the record when it is called and answers only when released, like a slow keychain.
+      load: async () => {
+        loads += 1;
+        const snapshot = stored;
+        const gate = heldLoads.get(loads);
+        emit("load");
+        if (gate !== undefined) await gate.promise;
+        return snapshot;
+      },
       save: async (_nodeId, record) => {
         if (options.failSave?.(record)) throw new Error("keychain unavailable");
         emit("save:" + (record.pending?.stage ?? (record.current ? "current" : "empty")));
@@ -143,6 +153,12 @@ function setup(
     stored: () => stored,
     opened: () => opened,
     when,
+    /** Holds the nth store load (1-based) until the returned gate is resolved. */
+    holdLoad: (n: number) => {
+      const gate = deferred<void>();
+      heldLoads.set(n, gate);
+      return gate;
+    },
   };
 }
 
@@ -358,6 +374,53 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     t.probes[0]?.answer.resolve({ issued: true, deviceId: "old-attempt" });
     expect(await done).toEqual({ tag: "superseded" });
     expect(t.stored()).toEqual({ pending: newer });
+  });
+
+  it("Checking starts in turn with other changes: a retry during a discard probes nothing and shows no Checking", async () => {
+    const pendingKey = generateX25519(() => new Uint8Array(32).fill(7));
+    const t = setup({
+      record: {
+        pending: {
+          key: {
+            privateKey: toBase64Url(pendingKey.privateKey),
+            publicKey: toBase64Url(pendingKey.publicKey),
+          },
+          stage: "post-202",
+          server: { nodeId: NODE, noisePub: "x", relays: [] },
+          startedAt: 0,
+        },
+      },
+    });
+    const gate = t.holdLoad(1);
+    const discarded = discardPairing(t.deps, NODE);
+    await t.when("load", 1);
+    const retried = retryChecking(t.deps, NODE);
+    gate.resolve();
+    await discarded;
+    const first = await Promise.race([
+      retried,
+      t.when("probe").then(() => ({ tag: "probed" }) as const),
+    ]);
+    expect(first).toEqual({ tag: "not-paired", reason: "no pairing in progress" });
+    expect(t.views.some((view) => view.tag === "checking")).toBe(false);
+  });
+
+  it("a discard while a poll is outstanding: a 204 ends that attempt and it polls no more", async () => {
+    const t = setup();
+    const done = runPairing(t.deps, qr);
+    await t.when("dial");
+    t.race.resolve(t.channel);
+    await t.when("request");
+    t.replies.request.resolve({ status: 202 });
+    await t.when("poll");
+    await discardPairing(t.deps, NODE);
+    t.replies.polls[0]?.resolve({ status: 204 });
+    const outcome = await Promise.race([
+      done,
+      t.when("poll", 2).then(() => ({ tag: "polled again" }) as const),
+    ]);
+    expect(outcome).toEqual({ tag: "superseded" });
+    expect(t.events).toContain("close");
   });
 
   it("a late 409 for an attempt that was replaced does not remove the newer attempt's key", async () => {

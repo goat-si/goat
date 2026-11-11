@@ -47,6 +47,21 @@ async function relayStandIn() {
 }
 
 describe("the Node relay socket factory meets the factory contract (network fixture)", () => {
+  it("a refused connection fails the dial 1006 and its error event does not escape", async () => {
+    const server = NodeHttp.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const dial = dialRelay({
+      relay: "ws://127.0.0.1:" + port,
+      nodeId: NODE,
+      factory: wsRelaySocketFactory,
+      clock: new ManualClock(),
+    });
+    await expect(dial.opened).rejects.toMatchObject({ code: "relay-closed", closeCode: 1006 });
+  });
+
   it("offers no WebSocket extension even to a server that would accept permessage-deflate", async () => {
     await using relay = await relayStandIn();
     const dial = dialRelay({

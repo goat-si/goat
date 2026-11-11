@@ -146,6 +146,9 @@ class Link implements RelayLink {
     socket.addEventListener("close", (event) =>
       this.#finish(typeof event.code === "number" ? event.code : 1006, false),
     );
+    // A refused or broken connection reports an error (Node's ws throws an error event nobody listens to): the link
+    // ends 1006 at once, and the close event that may follow changes nothing.
+    socket.addEventListener("error", () => this.#finish(1006, false));
   }
 
   #onOpen(): void {
@@ -236,7 +239,12 @@ class Link implements RelayLink {
     if (message.length > RELAY_LIMITS.message) {
       throw new PenError("message-too-large", "a relay message is at most 1 MiB");
     }
-    this.socket.send(message);
+    try {
+      this.socket.send(message);
+    } catch (error) {
+      this.#abort();
+      throw error;
+    }
     this.#checkBuffered();
   }
 

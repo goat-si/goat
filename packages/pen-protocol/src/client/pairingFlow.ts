@@ -377,7 +377,12 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
       channel.close();
       return checking(deps, qr.nodeId, attempt);
     }
-    if (result.status === 204) continue;
+    if (result.status === 204) {
+      // A discard or a newer attempt while the poll was held ends this attempt's polling.
+      if (await ownsChecking(deps, qr.nodeId, attempt)) continue;
+      channel.close();
+      return SUPERSEDED;
+    }
     channel.close();
     if (result.status === 200) {
       if (!(await promoteAttempt(deps, qr.nodeId, attempt, result.deviceId))) return SUPERSEDED;
@@ -401,23 +406,28 @@ async function checking(
   nodeId: string,
   expected?: string,
 ): Promise<PairingView> {
-  const record = await deps.store.load(nodeId);
-  const pending = record?.pending;
-  // Checking runs only for its own attempt, and only after that attempt's 202 was recorded.
-  const own =
-    pending !== undefined &&
-    pending.stage === "post-202" &&
-    (expected === undefined || pending.key.publicKey === expected);
-  if (!own) {
+  const start = deps.clock.now();
+  const until = start + CHECKING_WINDOW_MS;
+  // Checking runs only for its own attempt, only after that attempt's 202 was recorded, and it starts (screen
+  // included) in turn with every other change to the record: a discard or a newer attempt is either seen here or
+  // comes after the Checking screen and is seen at the next step.
+  const pending = await update(deps, nodeId, (record) => {
+    const candidate = record.pending;
+    const own =
+      candidate !== undefined &&
+      candidate.stage === "post-202" &&
+      (expected === undefined || candidate.key.publicKey === expected);
+    if (!own) return { result: undefined };
+    deps.show({ tag: "checking", until });
+    return { result: candidate };
+  });
+  if (pending === undefined) {
     return expected === undefined
       ? finish(deps, { tag: "not-paired", reason: "no pairing in progress" })
       : SUPERSEDED;
   }
   const attempt = pending.key.publicKey;
   const key = loadKey(pending.key);
-  const start = deps.clock.now();
-  const until = start + CHECKING_WINDOW_MS;
-  deps.show({ tag: "checking", until });
   for (let at = start; ; at += PROBE_INTERVAL_MS) {
     const result = await deps
       .probe({ server: pending.server, key })
@@ -462,17 +472,20 @@ export async function resumePairing(
   deps: PairingDeps,
   nodeId: string,
 ): Promise<PairingView | undefined> {
-  const stage = await update(deps, nodeId, (record) => {
+  type Stage = "dropped" | "paired" | "none" | { readonly checking: string };
+  const stage = await update<Stage>(deps, nodeId, (record) => {
     if (record.pending?.stage === "pre-202")
-      return { next: withoutPending(record), result: "dropped" as const };
-    if (record.pending?.stage === "post-202") return { result: "checking" as const };
-    if (record.current !== undefined) return { result: "paired" as const };
-    return { result: "none" as const };
+      return { next: withoutPending(record), result: "dropped" };
+    if (record.pending?.stage === "post-202")
+      return { result: { checking: record.pending.key.publicKey } };
+    if (record.current !== undefined) return { result: "paired" };
+    return { result: "none" };
   });
   if (stage === "dropped") {
     return finish(deps, { tag: "not-paired", reason: "interrupted before the server answered" });
   }
-  if (stage === "checking") return checking(deps, nodeId);
+  // Recovery checks the attempt it found; one that was discarded or replaced meanwhile is not adopted.
+  if (typeof stage === "object") return checking(deps, nodeId, stage.checking);
   if (stage === "paired") {
     const record = await deps.store.load(nodeId);
     return finish(deps, { tag: "paired", deviceId: record?.current?.deviceId ?? null });

@@ -59,6 +59,11 @@ export class FakeSocket implements RelaySocketLike {
     this.#emit("close", { code });
   }
 
+  /** The socket reports an error, as a refused or broken connection does. */
+  fail(): void {
+    this.#emit("error", {});
+  }
+
   binarySent(): Array<Uint8Array> {
     return this.sent.filter((item): item is Uint8Array => typeof item !== "string");
   }

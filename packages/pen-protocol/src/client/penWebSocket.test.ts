@@ -200,6 +200,17 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
     expect(toHex(c.framesSent()[0]?.payload ?? new Uint8Array())).toBe("0fa0");
   });
 
+  it("after close() no message is dispatched; the server's close still completes the closing", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.socket.close(1000);
+    c.server.write("\x81\x01A\x88\x02\x03\xe8");
+    await c.whenEvent("close");
+    expect(c.events.map((e) => e.type)).toEqual(["open", "close"]);
+    expect(c.events.at(-1)).toMatchObject({ code: 1000 });
+  });
+
   it("the stream ending between frames closes the socket once with 1006", async () => {
     const c = await connected();
     c.accept();
@@ -257,6 +268,7 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
 
   it.each([
     ["an invalid code", () => [1005, ""] as const],
+    ["a code that is not an integer", () => [Number.NaN, ""] as const],
     ["a reason over 123 bytes", () => [1000, "x".repeat(124)] as const],
   ])("close() with %s throws and leaves the socket open", async (_name, args) => {
     const c = await connected();

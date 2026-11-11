@@ -181,7 +181,6 @@ class PenWebSocket implements PenWebSocketLike {
     }
   }
 
-  /** Reads one chunk at a time and hands each message out before the next read: the stream's credit is the backpressure. */
   /**
    * Decodes and handles one event at a time, reading the next chunk only when the fed bytes hold no further event:
    * at most one decoded message is held, and the stream's credit is the backpressure.
@@ -207,7 +206,10 @@ class PenWebSocket implements PenWebSocketLike {
   /** Handles one decoded event; true once the socket has finished. */
   #handle(event: FrameEvent): boolean {
     if (event.type === "message") {
-      this.#dispatch("message", { type: "message", data: event.data });
+      // As in the WebSocket standard, messages are delivered only while OPEN; after close() the socket waits for the
+      // server's close and nothing else.
+      if (this.readyState === OPEN)
+        this.#dispatch("message", { type: "message", data: event.data });
       return this.#finished;
     }
     if (event.type === "ping") {
@@ -290,7 +292,7 @@ class PenWebSocket implements PenWebSocketLike {
     }
     // Everything that can fail runs before the state changes: the WebSocket API allows 1000 and 3000-4999, a
     // reason of at most 123 bytes, and the mask needs the CSPRNG. A refused close leaves the socket open.
-    if (code !== 1000 && (code < 3000 || code > 4999)) {
+    if (!Number.isInteger(code) || (code !== 1000 && (code < 3000 || code > 4999))) {
       throw new PenError("ws/close-code", "close codes are 1000 or 3000 to 4999");
     }
     const frame = encodeFrame(Opcode.Close, closePayload(code, reason), this.#options.random);

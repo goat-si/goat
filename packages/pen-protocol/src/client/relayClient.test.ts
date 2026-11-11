@@ -86,6 +86,40 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(delivered).toEqual([]);
   });
 
+  it("an error event ends the link 1006: a dial still connecting fails, an open link wakes its waiters", async () => {
+    const fake = fakeFactory();
+    const dial = dialRelay({
+      relay: RELAY,
+      nodeId: NODE,
+      factory: fake.factory,
+      clock: new ManualClock(),
+    });
+    fake.socketFor(RELAY).fail();
+    await expect(dial.opened).rejects.toMatchObject({ code: "relay-closed", closeCode: 1006 });
+
+    const open = await opened();
+    const waiting = open.link.receive();
+    open.socket.fail();
+    await expect(waiting).rejects.toMatchObject({ code: "relay-closed", closeCode: 1006 });
+    expect(await open.link.closed).toBe(1006);
+  });
+
+  it("a binary send the socket refuses ends the link 1006; close() finishes even when the socket's close throws", async () => {
+    const refused = await opened();
+    refused.socket.send = () => {
+      throw new Error("socket gone");
+    };
+    expect(() => refused.link.send(Uint8Array.of(1))).toThrow("socket gone");
+    expect(await refused.link.closed).toBe(1006);
+
+    const stuck = await opened();
+    stuck.socket.close = () => {
+      throw new Error("cannot close");
+    };
+    stuck.link.close(1000);
+    expect(await stuck.link.closed).toBe(1000);
+  });
+
   it("closes 1003 on any text other than pong and 1009 on a binary message over 1 MiB (CONTRACT Relay text, 1 MiB cap)", async () => {
     const first = await opened();
     first.socket.receive("pong");

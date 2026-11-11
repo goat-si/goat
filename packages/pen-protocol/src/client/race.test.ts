@@ -238,7 +238,8 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
     };
     answer(a);
     await expect(t.result).rejects.toThrow("socket gone");
-    expect(a.closedWith).toBe(1000);
+    // The refused send ended the link: the socket is closed with no code.
+    expect(a.closedWith).toBeNull();
   });
 
   it("a CSPRNG failure refuses the race and closes every socket", async () => {
@@ -359,6 +360,7 @@ describe("ping race (CONTRACT Several relays, kinds 0x03 and 0x04)", () => {
     };
     answerJoin(a);
     await expect(t.result).rejects.toThrow("socket gone");
-    expect(a.closedWith).toBe(1000);
+    // The refused send ended the link: the socket is closed with no code.
+    expect(a.closedWith).toBeNull();
   });
 });

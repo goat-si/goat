@@ -264,6 +264,8 @@ class PenFetcher {
     try {
       const stream = await Promise.race([opening, aborted]);
       this.#current = new IdleStream(stream);
+      // A new stream is watched from the start: a byte before the first request is sent is unsolicited (H42).
+      this.#current.idle();
       return this.#current;
     } catch (error) {
       // A stream that opens after the abort is closed without a byte.

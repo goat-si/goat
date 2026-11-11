@@ -7,15 +7,17 @@ import { memoryStreamPair } from "./testing/memoryStream.ts";
 const ORIGIN = "http://goat.pen";
 const latin1 = (bytes: Uint8Array) => String.fromCharCode(...bytes);
 
-function setup() {
+function setup(options: { readonly preload?: string } = {}) {
   const clock = new ManualClock();
   const pairs: Array<ReturnType<typeof memoryStreamPair>> = [];
   const waiters: Array<() => void> = [];
-  const options = {
+  const fetchOptions = {
     origin: ORIGIN,
     clock,
     openStream: async () => {
       const pair = memoryStreamPair();
+      // Bytes the server sent before the client wrote anything.
+      if (options.preload !== undefined) pair.server.write(options.preload);
       pairs.push(pair);
       for (const wake of waiters.splice(0)) wake();
       return pair.client;
@@ -24,8 +26,8 @@ function setup() {
   return {
     clock,
     pairs,
-    fetch: makePenFetch(options),
-    toSink: makePenFetchToSink(options),
+    fetch: makePenFetch(fetchOptions),
+    toSink: makePenFetchToSink(fetchOptions),
     /** The nth stream (1-based) once it is opened. */
     stream: (n: number) =>
       new Promise<ReturnType<typeof memoryStreamPair>["server"]>((resolve) => {
@@ -459,5 +461,11 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     expect((await second).status).toBe(200);
     expect(two.closeCode()).toBeUndefined();
     expect(writes).toEqual([2]);
+  });
+
+  it("H42: bytes already waiting on a new stream before its first request close it and fail the request", async () => {
+    const t = setup({ preload: "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nx" });
+    await expect(t.fetch(ORIGIN + "/a")).rejects.toBeInstanceOf(PenError);
+    expect(t.pairs[0]?.server.closeCode()).toBe(1000);
   });
 });

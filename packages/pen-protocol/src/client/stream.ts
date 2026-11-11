@@ -157,13 +157,16 @@ class Stream implements PenStream {
 
   #sendCredit(): void {
     const amount = this.#consumed;
-    this.#consumed = 0;
-    this.#uncredited -= amount;
     try {
       this.session.send(Uint8Array.of(TYPE_CREDIT, ...u32le(amount)));
     } catch {
-      // The peer may already have closed after both FINs; this credit is best effort (Go stream.go writer).
+      // Not sent, so not counted. A refused send has ended the link; a session that cannot seal or send at all is
+      // closed 4400, since a sealed record that never left breaks the peer's nonce sequence.
+      if (this.#closeCode === undefined) this.close(4400);
+      return;
     }
+    this.#consumed = 0;
+    this.#uncredited -= amount;
   }
 
   async read(): Promise<Uint8Array | null> {

@@ -283,6 +283,11 @@ export class ResponseParser {
       reason: this.#reason,
       headers: this.#headers,
     });
+    // No content encoding on any response, the upgrade included (design 10.2).
+    for (const value of this.#values("content-encoding")) {
+      if (value.toLowerCase() !== "identity")
+        throw fail("H29", "content encodings are not accepted");
+    }
     if (this.#status === 101) {
       this.#checkUpgrade(lengths, encodings);
       this.#end(events, "upgrade");
@@ -301,10 +306,6 @@ export class ResponseParser {
     const encoding = encodings[0];
     if (encoding !== undefined && encoding.toLowerCase() !== "chunked") {
       throw fail("H21", "Transfer-Encoding is not chunked");
-    }
-    for (const value of this.#values("content-encoding")) {
-      if (value.toLowerCase() !== "identity")
-        throw fail("H29", "content encodings are not accepted");
     }
     // Design 10.2 caps Content-Length itself, before any allocation, whether or not a body follows.
     if (length !== undefined && Number(length) > this.#context.bodyCap) {

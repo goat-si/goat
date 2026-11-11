@@ -135,6 +135,19 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     expect(c.received()).toEqual([record(2, u32le(10))]);
   });
 
+  it("a CREDIT the socket refuses is not counted as sent, and the stream ends with the link", async () => {
+    const c = await connected();
+    c.send(data(new Uint8Array(48 * KiB)));
+    c.send(data(new Uint8Array(16 * KiB)));
+    c.socket.send = () => {
+      throw new Error("socket gone");
+    };
+    expect((await c.stream.read())?.length).toBe(64 * KiB);
+    expect(c.stream.stats().uncredited).toBe(64 * KiB);
+    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
+    expect(await c.stream.closed).toBe(1006);
+  });
+
   it("a writer waits at the 512 KiB window and resumes when CREDIT arrives", async () => {
     const c = await connected();
     await c.stream.write(new Uint8Array(512 * KiB));
