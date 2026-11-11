@@ -106,6 +106,7 @@ export const HUB_DEVICE_HANDOFF_PATHS = {
   join: "hub.device_join",
   leave: "hub.device_leave",
   repair: "hub.device_repair",
+  move: "hub.device_move",
 } as const;
 const HUB_PATHS: ReadonlySet<string> = new Set(Object.values(HUB_DEVICE_HANDOFF_PATHS));
 export const isHubDeviceHandoffPath = (path: string) => HUB_PATHS.has(path);

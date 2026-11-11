@@ -83,6 +83,12 @@ export interface Fixture {
   readonly linked?: ReadonlyArray<string>;
   readonly verdicts?: ReadonlyArray<HubParityResult>;
   readonly addFails?: boolean;
+  /** The first N link adds fail with an OpenCodex refusal; later ones succeed. */
+  readonly addFailures?: number;
+  /** The environment each alias's GOAT names; absent aliases name "env-child", undefined none. */
+  readonly identities?: Record<string, string | undefined>;
+  /** This Home's ssh tunnels cannot be listed. */
+  readonly tunnelsUnreadable?: boolean;
   readonly deviceDown?: ReadonlyArray<string>;
   readonly deviceExit?: Readonly<Record<string, number>>;
   readonly health?: { readonly service: string; readonly role?: string };
@@ -119,6 +125,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   const links = new Map((fixture.linked ?? []).map((alias) => [alias, "lnk_0123456789abcdef"]));
   const verdicts = [...(fixture.verdicts ?? [])];
   let offered = fixture.offered ?? PINNED;
+  let failuresLeft = fixture.addFailures ?? 0;
   const json = (value: unknown): OcxOutput => ({ code: 0, stdout: JSON.stringify(value) });
   const home = (args: ReadonlyArray<string>): Effect.Effect<OcxOutput, HubOcxError> => {
     calls.push(`home ${args.join(" ")}`);
@@ -143,6 +150,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       if (fixture.addExit) return Effect.succeed({ stdout: "", ...fixture.addExit });
       if (fixture.addFails)
         return Effect.succeed({ code: 1, stdout: "", phase: "child_relay_failed" });
+      if (failuresLeft > 0) {
+        failuresLeft -= 1;
+        return Effect.succeed({ code: 1, stdout: "", phase: "child_relay_failed" });
+      }
       links.set(alias ?? "", "lnk_fedcba9876543210");
       return Effect.succeed(json({ linkId: "lnk_fedcba9876543210" }));
     }
@@ -317,7 +328,16 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
             homeTunnels: (alias, port) =>
               Effect.sync(() => {
                 calls.push(`tunnels ${alias} ${port}`);
+                if (fixture.tunnelsUnreadable === true) return undefined;
                 return (alias !== undefined && links.has(alias)) || fixture.strayTunnel ? 1 : 0;
+              }),
+            identify: (alias) =>
+              Effect.sync(() => {
+                calls.push(`identify ${alias}`);
+                const identities = fixture.identities;
+                return identities !== undefined && Object.hasOwn(identities, alias)
+                  ? identities[alias]
+                  : "env-child";
               }),
           }),
         ),

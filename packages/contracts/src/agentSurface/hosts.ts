@@ -13,6 +13,7 @@ const HOST_ARGUMENTS = {
   "host.uncordon": ["host"],
   "hub.device_join": ["deviceAlias"],
   "hub.device_leave": ["deviceAlias"],
+  "hub.device_move": ["fromAlias", "toAlias"],
   "hub.device_repair": ["deviceAlias"],
   "hub.device_setup": ["deviceAlias"],
   "ssh.host_forget": ["host"],

@@ -23,6 +23,7 @@ export const hubDeviceResult = (
     readonly decisionId?: string;
     readonly handoff?: HandoffSummary;
     readonly transport?: HubDeviceTransport;
+    readonly fromLinkId?: string;
   } = {},
 ): HubDeviceMcpResult => {
   const { handoff, ...rest } = extra;
@@ -47,14 +48,23 @@ export const hubDeviceResult = (
             handoff,
             next: { after: "approval", call: "goat_hub_device_leave" },
           }
-        : {
-            ...base,
-            state: "needs_human",
-            decisionId: rest.decisionId,
-            kind: "needs_human",
-            handoff,
-            next: { after: "approval", call: "goat_hub_device_repair" },
-          };
+        : action === "move"
+          ? {
+              ...base,
+              state: "needs_human",
+              decisionId: rest.decisionId,
+              kind: "needs_human",
+              handoff,
+              next: { after: "approval", call: "goat_hub_device_move" },
+            }
+          : {
+              ...base,
+              state: "needs_human",
+              decisionId: rest.decisionId,
+              kind: "needs_human",
+              handoff,
+              next: { after: "approval", call: "goat_hub_device_repair" },
+            };
 };
 /** Why OpenCodex refused: its own known sentence first, then its failure code. */
 export const phaseMessage = (output?: {

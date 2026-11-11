@@ -1,7 +1,8 @@
 import type { HubTransport } from "@goat/client-runtime/state/hub-fleet";
 import type { HubDeviceOperationResult, HubDeviceStep } from "@goat/contracts";
 
-export type HubAction = HubDeviceOperationResult["action"];
+// Settings offers join, leave and repair; a move is agent-only (goat_hub_device_move).
+export type HubAction = Exclude<HubDeviceOperationResult["action"], "move">;
 
 export const HUB_ACTION_LABEL: Record<HubAction, string> = {
   join: "Join",
