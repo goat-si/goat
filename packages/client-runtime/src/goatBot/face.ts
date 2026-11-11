@@ -7,6 +7,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 
 import { goatBotTaskWaitsOnPerson } from "./activity.ts";
+import { GOAT_BOT_READING_LIMIT_MS } from "./rows.ts";
 
 /** What a bot's face shows. Each is a still drawing; a change fades once at most. */
 export type GoatBotFaceState =
@@ -68,6 +69,57 @@ const FACE_LABEL: Record<GoatBotFaceState, string | null> = {
 /** What the face says to assistive technology; null when it only decorates. */
 export function goatBotFaceLabel(state: GoatBotFaceState): string | null {
   return FACE_LABEL[state];
+}
+
+/**
+ * The face's label where a row also counts what waits on the person, so waiting is said once and
+ * with its count. A count means the face waits, since waiting beats every other face.
+ */
+export function goatBotFaceSpoken(state: GoatBotFaceState, waitingCount: number): string | null {
+  return waitingCount > 0 ? `${waitingCount} waiting for you` : goatBotFaceLabel(state);
+}
+
+/** The parts of a bot's status (channel.getBotStatus) a roster row reads. */
+export interface GoatBotRowStatus {
+  readonly waitingCount: number;
+  readonly latest?: { readonly at: string; readonly author: "bot" | "person" } | undefined;
+  /** Whether one of the bot's tasks is going; absent where the server does not say. */
+  readonly working?: boolean | undefined;
+}
+
+export interface GoatBotRowFaceSignals extends Omit<GoatBotFaceInput, "shell"> {
+  /** When reading ends with no newer status; null when the bot's message is the newest. */
+  readonly readingUntil: number | null;
+}
+
+const READING = { state: "reading" } as const;
+
+/** When a row's reading ends: the person's newest message plus the reading limit; null otherwise. */
+export function goatBotRowReadingUntil(status: GoatBotRowStatus): number | null {
+  if (status.latest?.author !== "person") return null;
+  const until = Date.parse(status.latest.at) + GOAT_BOT_READING_LIMIT_MS;
+  return Number.isFinite(until) ? until : null;
+}
+
+/**
+ * A roster row's face inputs from its bot status alone, with no conversation loaded. The bot is
+ * reading while the person's message is the newest one, until the reading limit; without the
+ * status's working flag its tasks are unknown, as the conversation shell alone shows them.
+ */
+export function goatBotRowFaceSignals(
+  status: GoatBotRowStatus,
+  now: number,
+): GoatBotRowFaceSignals {
+  const readingUntil = goatBotRowReadingUntil(status);
+  return {
+    activity: readingUntil !== null && now < readingUntil ? READING : null,
+    waitingCount: status.waitingCount,
+    tasks:
+      status.working === undefined
+        ? null
+        : { waiting: 0, active: status.working ? 1 : 0, ended: null, activeSince: null },
+    readingUntil,
+  };
 }
 
 function epochMs(value: DateTime.Utc | null | undefined): number | null {
