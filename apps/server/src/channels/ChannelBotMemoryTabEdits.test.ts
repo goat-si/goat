@@ -20,7 +20,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
-import { CHANNEL_COPY, noteKeptNotice } from "./channelCopy.ts";
+import { CHANNEL_COPY, noteKeptNotice, notesAlikeAnswer } from "./channelCopy.ts";
 import { inputIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
@@ -208,6 +208,69 @@ describe("Memory tab requests to change or forget a note", () => {
       assert.strictEqual(yield* taskCount, 0);
     }).pipe(Effect.provide(layer));
   });
+
+  // Two current notes whose words differ only in spacing count as the same words.
+  const alike = () =>
+    NOTES_HEADER +
+    line("Use pnpm", "a") +
+    "\n" +
+    line("Reply in Korean.", "k") +
+    "\n" +
+    "- 2026-11-02: Use  pnpm\n";
+
+  it.effect("Ask to forget words two current notes share changes nothing and says so", () => {
+    const { asked, layer } = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const text = alike();
+      yield* writeNotes(text);
+      const message = goatBotForgetNoteMessage("Use pnpm");
+      yield* send(message, "tab-forget");
+      assert.strictEqual(yield* readNotes, text);
+      assert.notInclude(asked, message);
+      assert.include(yield* replies, notesAlikeAnswer("Use pnpm", 2));
+      assert.strictEqual(yield* taskCount, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("Ask to change words two current notes share changes nothing and says so", () => {
+    const { asked, layer } = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const text = alike();
+      yield* writeNotes(text);
+      const message = goatBotChangeNoteMessage("Use  pnpm", "Use vp");
+      yield* send(message, "tab-change");
+      assert.strictEqual(yield* readNotes, text);
+      assert.notInclude(asked, message);
+      assert.include(yield* replies, notesAlikeAnswer("Use pnpm", 2));
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "a note whose same words were replaced earlier is the one current note to change",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* writeNotes(
+          NOTES_HEADER +
+            line("Use pnpm", "a") +
+            "\n" +
+            line("Use npm", "b", "Use pnpm") +
+            "\n" +
+            line("Use pnpm", "c") +
+            "\n",
+        );
+        yield* send(goatBotChangeNoteMessage("Use  pnpm", "Use vp"), "tab-change");
+        assert.include(yield* replies, CHANNEL_COPY.noteChanged);
+        const current = parseChannelBotNoteLines(yield* readNotes)
+          .filter((note) => note.replacedBy === undefined)
+          .map((note) => note.text);
+        assert.deepStrictEqual(current, ["Use npm", "Use vp"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("a Slack person whose link was removed cannot forget a note", () => {
     const { layer } = harnessFor();

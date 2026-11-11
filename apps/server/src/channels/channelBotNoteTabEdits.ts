@@ -35,7 +35,7 @@ import {
   type ChannelBotFiles,
 } from "./channelBotNotes.ts";
 import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { CHANNEL_COPY, notesAlikeAnswer } from "./channelCopy.ts";
 
 /** The largest notes file a Memory tab edit reads and rewrites. */
 const NOTES_EDIT_MAX_BYTES = 1024 * 1024;
@@ -96,6 +96,28 @@ const tabRequest = (text: string): TabRequest | undefined => {
 /** Whether a message is one of the Memory tab's sentences, which reception answers itself. */
 export const isMemoryTabEdit = (message: { readonly intent: string; readonly text?: string }) =>
   message.intent === "message" && tabRequest(message.text ?? "") !== undefined;
+
+/**
+ * The one current note a request's words name, compared with spacing collapsed as corrections
+ * bind. Words that several current notes read name none of them, so each is left alone.
+ */
+const addressedNote = (
+  lines: ReadonlyArray<ChannelBotNoteLine>,
+  note: string,
+):
+  | { readonly line: ChannelBotNoteLine }
+  | { readonly line?: undefined; readonly answer: string } => {
+  const words = collapseNoteText(note);
+  const current = lines.filter(
+    (line) => line.replacedBy === undefined && collapseNoteText(line.text) === words,
+  );
+  const [line, ...others] = current;
+  if (line !== undefined && others.length === 0) return { line };
+  return {
+    answer:
+      line === undefined ? CHANNEL_COPY.noteNotFound : notesAlikeAnswer(words, current.length),
+  };
+};
 
 /** What a tab edit answers; shaped like an approval answer so reception completes it the same way. */
 interface TabEditAnswer {
@@ -298,9 +320,8 @@ export const makeChannelBotNoteWriter = (
         .map((stored) => stored.task.taskId as string);
       const read = yield* readNotes;
       if (holders.length === 0 || read === null || read.truncated) return;
-      const line = parseChannelBotNoteLines(decode(read.bytes)).findLast(
-        (candidate) => candidate.replacedBy === undefined && candidate.text === note,
-      );
+      // A forget the words could not have carried out is not one to put back later.
+      const { line } = addressedNote(parseChannelBotNoteLines(decode(read.bytes)), note);
       if (line === undefined) return;
       const key = collapseNoteText(line.text);
       const prior = refused.get(key);
@@ -386,12 +407,9 @@ export const makeChannelBotNoteWriter = (
     ) {
       // A pass re-run after a restart finds its own line and answers as the first pass did.
       if (text.includes(noteSource(inputId))) return CHANNEL_COPY.noteChanged;
-      const inForce = parseChannelBotNoteLines(text).some(
-        (line) => line.replacedBy === undefined && line.text === note,
-      );
-      const line = inForce
-        ? channelBotNoteLine(next, yield* noteDay(readAt), inputId, note)
-        : undefined;
+      const addressed = addressedNote(parseChannelBotNoteLines(text), note);
+      if (addressed.line === undefined) return addressed.answer;
+      const line = channelBotNoteLine(next, yield* noteDay(readAt), inputId, addressed.line.text);
       if (line === undefined) return CHANNEL_COPY.noteNotFound;
       yield* fs.writeFileString(files.notes, appendPrefix(exists, text) + line + "\n", {
         flag: "a",
@@ -415,9 +433,9 @@ export const makeChannelBotNoteWriter = (
       const bom = decoded.value.startsWith(BOM) ? BOM : "";
       const text = decoded.value.slice(bom.length);
       const lines = parseChannelBotNoteLines(text);
-      const target = lines.find((line) => line.replacedBy === undefined && line.text === note);
-      if (target === undefined) return CHANNEL_COPY.noteNotFound;
-      const next = withoutNote(text, lines, target.text);
+      const addressed = addressedNote(lines, note);
+      if (addressed.line === undefined) return addressed.answer;
+      const next = withoutNote(text, lines, addressed.line.text);
       if (next === undefined) return CHANNEL_COPY.noteEditFailed;
       const mode = (yield* fs.stat(files.notes)).mode;
       // Created exclusively under a fresh name, so no existing file or link is ever written.

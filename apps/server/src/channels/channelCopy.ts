@@ -72,6 +72,13 @@ export const noteKeptNotice = (note: string) =>
   JSON.stringify(note) +
   ". You asked me to forget it while another change to my notes was running, so that request changed nothing. Ask again if you still want it gone.";
 
+/** The answer to a Memory tab change or forget whose words more than one current note reads. */
+export const notesAlikeAnswer = (note: string, count: number) =>
+  (count === 2 ? "Two notes read “" : count + " notes read “") +
+  note +
+  (count === 2 ? "”, so I left them both." : "”, so I left them all.") +
+  " Tell me in your own words which one you mean.";
+
 /** What a model reads for a person's message: its text, then the names of the files sent with it. */
 export const inboundTextWithFiles = (message: {
   readonly text: string;
