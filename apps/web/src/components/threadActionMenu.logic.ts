@@ -119,8 +119,10 @@ export interface ThreadForkMenuState {
   readonly needsServerUpdate: boolean;
 }
 
-function forkMenuItems(
+/** The fork entry alone, for menus that do not use buildThreadActionMenuItems. */
+export function buildForkMenuItems(
   fork: ThreadForkMenuState | null | undefined,
+  canOperate = true,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   if (!fork) return [];
   const currentLabel = fork.inWorktree ? "Fork thread in same worktree" : "Fork thread";
@@ -130,7 +132,7 @@ function forkMenuItems(
         id: "fork",
         label: "Fork thread",
         icon: "git-fork",
-        disabled: !fork.canFork,
+        disabled: !fork.canFork || !canOperate,
         children: [
           { id: "fork:current", label: currentLabel },
           { id: "fork:worktree", label: "Fork thread in new worktree" },
@@ -143,7 +145,7 @@ function forkMenuItems(
       id: "fork:current",
       label: fork.needsServerUpdate ? `${currentLabel} (update this server)` : currentLabel,
       icon: "git-fork",
-      disabled: !fork.canFork,
+      disabled: !fork.canFork || !canOperate,
     },
   ];
 }
@@ -201,7 +203,7 @@ export function buildThreadActionMenuItems(
           },
         ]
       : []),
-    ...forkMenuItems(state.fork),
+    ...buildForkMenuItems(state.fork),
     ...(state.canOpenSshHandoff
       ? [{ id: "continue-on-ssh" as const, label: "Continue on SSH host…", icon: "terminal" }]
       : []),

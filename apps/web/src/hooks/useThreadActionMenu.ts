@@ -1,7 +1,6 @@
 import { requestSshThreadHandoff } from "../components/chat/sshThreadHandoffActionBus";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "../lib/copyThreadReference";
-import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import { openGuestShareDialog } from "../components/chat/guestShareDialogState";
 import {
@@ -50,8 +49,10 @@ import {
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { threadRuntimeCanArchive } from "@goat/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
+import { forkMenuWorkspace, readThreadForkMenuState, useForkThread } from "./useForkThread";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
+import { startThreadOnBranch } from "./threadMenuActions";
 import { canTurnThreadIntoProject, useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -107,6 +108,7 @@ export function useThreadActionMenu(input: {
     reportFailure: false,
   });
   const handleNewThread = useNewThreadHandler();
+  const forkThread = useForkThread();
   const promoteThread = usePromoteThread();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -169,6 +171,7 @@ export function useThreadActionMenu(input: {
         globalAgent,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+        fork: globalAgent ? null : readThreadForkMenuState(threadRef),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -234,20 +237,13 @@ export function useThreadActionMenu(input: {
           });
           return;
         }
-        case "new-thread-on-branch": {
-          const result = await settlePromise(() =>
-            handleNewThread(scopeProjectRef(threadRef.environmentId, thread.projectId), {
-              branch: thread.branch,
-              worktreePath: thread.worktreePath,
-              envMode: thread.worktreePath ? "worktree" : "local",
-              startFromOrigin: false,
-            }),
-          );
-          if (result._tag === "Failure") {
-            failureToast("Could not create thread", squashAtomCommandFailure(result));
-          }
+        case "new-thread-on-branch":
+          await startThreadOnBranch(handleNewThread, thread);
           return;
-        }
+        case "fork:current":
+        case "fork:worktree":
+          await forkThread(threadRef, forkMenuWorkspace(action));
+          return;
         case "settle":
           await reportFailure("Failed to settle thread", () => settleThread(threadRef));
           return;
