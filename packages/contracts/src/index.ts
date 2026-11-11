@@ -162,6 +162,7 @@ export * from "./memoryMcpTools.ts";
 export * from "./memoryGeneration.ts";
 
 export * from "./handoff.ts";
+export * from "./pendingRequestKind.ts";
 export * from "./humanStepResult.ts";
 
 export * from "./permissionProfiles.ts";

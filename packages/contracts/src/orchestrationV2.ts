@@ -16,7 +16,7 @@ import {
 export * from "./orchestrationV2Notification.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
-import { Handoff, HandoffJson, HandoffActor } from "./handoff.ts";
+import { Handoff, HandoffJson, HandoffActor, HandoffKind } from "./handoff.ts";
 import { HandoffTransitionCommand } from "./handoffTransitionCommand.ts";
 import {
   MemoryCurrentAccess,
@@ -1013,6 +1013,8 @@ export type OrchestrationV2ProviderSessionDetached =
   typeof OrchestrationV2ProviderSessionDetached.Type;
 
 const PendingBackgroundTaskFields = {
+  command: Schema.optional(Schema.String),
+  startedAt: Schema.optional(IsoDateTime),
   taskId: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
   /** The subagent task that started this work and waits on it. */
@@ -1198,6 +1200,8 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   ...Restart.SurvivingRestartFields,
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
+  /** Model reported by the provider for this turn, when available. */
+  model: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
 
@@ -2069,6 +2073,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   /** False for async questions the run keeps working past. Absent from older servers. */
   blocking: Schema.optional(Schema.Boolean),
+  /** Set when the request is a waiting human handoff; older servers omit it. */
+  handoff: Schema.optionalKey(Schema.Struct({ kind: HandoffKind, title: Schema.String })),
 });
 export type OrchestrationV2PendingRuntimeRequestSummary =
   typeof OrchestrationV2PendingRuntimeRequestSummary.Type;

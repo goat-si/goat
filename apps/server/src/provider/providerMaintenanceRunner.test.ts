@@ -152,7 +152,6 @@ function layerMockSpawner(
     }),
   );
 }
-
 function makeRegistry(
   initialProviders: ServerProvider | ReadonlyArray<ServerProvider> = baseProvider,
   options?: {
@@ -164,7 +163,6 @@ function makeRegistry(
       Array.isArray(initialProviders) ? initialProviders : [initialProviders],
     );
     const updateStatesRef = yield* Ref.make<ReadonlyArray<ServerProviderUpdateState>>([]);
-
     const setProviderMaintenanceActionState = Effect.fn(
       "providerMaintenanceRunner.test.setProviderMaintenanceActionState",
     )(function* (input: {
@@ -192,7 +190,6 @@ function makeRegistry(
         }),
       );
     });
-
     const registry: ProviderRegistry.ProviderRegistry["Service"] = {
       getProviders: Ref.get(providersRef),
       refresh: () => Ref.get(providersRef),
@@ -211,6 +208,7 @@ function makeRegistry(
       },
       refreshWorkspaceSnapshot: () => Ref.get(providersRef),
       invalidateModelCaches: () => Effect.void,
+      refreshModelCatalog: Effect.void,
       getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
         Effect.succeed(lifecycleFor(provider)),
       setProviderMaintenanceActionState,
@@ -248,6 +246,7 @@ const makeTestRunner = (
               current: Effect.succeed(manifest),
               refresh: Effect.succeed(manifest),
               forceRefresh: Effect.succeed(manifest),
+              refreshOnDemand: Effect.succeed(manifest),
               refreshInBackground: Effect.void,
             }),
             latestVersions,
@@ -269,6 +268,7 @@ function layerFailingLatestLookupAfterFirst() {
         return yield* lookup;
       }),
     invalidate: () => Effect.void,
+    invalidateAll: Effect.void,
   });
 }
 

@@ -1,3 +1,4 @@
+import { parseServerUrlFromOutput } from "./openCodeServerUrl.ts";
 import { resolveOpenCodeConfigContent } from "./openCodeConfigContent.ts";
 import * as NodeURL from "node:url";
 
@@ -34,10 +35,15 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
-import { isWindowsCommandNotFound, safeProcessCwd } from "@goat/provider-core/server/snapshotProbe";
+import { safeProcessCwd } from "@goat/provider-core/server/snapshotProbe";
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
-import { classifyStartupExit, OpenCodeSpawnFailure, spawnFailureFor } from "./spawnFailure.ts";
+import {
+  classifyStartupExit,
+  isOpenCodeMissingCommand,
+  OpenCodeSpawnFailure,
+  spawnFailureFor,
+} from "./spawnFailure.ts";
 import * as NetService from "@goat/shared/Net";
 import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -284,14 +290,6 @@ export class OpenCodeRuntime extends Context.Service<
     }) => Effect.Effect<ReadonlyArray<OpenCodeSkill>, OpenCodeRuntimeError>;
   }
 >()("@goat/provider-opencode/server/OpenCodeRuntime") {}
-
-function parseServerUrlFromOutput(output: string): string | null {
-  for (const line of output.split("\n")) {
-    const match = line.match(/server listening on\s+(https?:\/\/[^\s]+)/i);
-    if (match?.[1]) return match[1];
-  }
-  return null;
-}
 
 const SLUG_LINE_RE = /^(\S+\/\S+)\s*$/;
 const AGENT_HEADER_RE = /^(.+)\s+\((\S+)\)\s*$/;
@@ -607,7 +605,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         { concurrency: "unbounded" },
       );
       const exitCode = Number(code);
-      if (yield* isWindowsCommandNotFound(exitCode, stderr)) {
+      if (yield* isOpenCodeMissingCommand(exitCode, stdout, stderr, input.environment)) {
         return yield* new OpenCodeRuntimeError({
           operation: "runOpenCodeCommand",
           ...OpenCodeSpawnFailure.notFound(input.binaryPath, exitCode, stdout, stderr),

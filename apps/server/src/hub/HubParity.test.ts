@@ -328,7 +328,7 @@ it.effect("a built-in Codex instance without a settings entry counts as wiring e
     const { parity } = yield* setup({ providerInstances, providers: [provider] });
     expect((yield* parity.readLocal).parityEvidence?.wiring?.map(({ status }) => status)).toEqual([
       "ok",
-      "failed",
+      "unproven",
     ]);
   }),
 );

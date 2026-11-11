@@ -7,6 +7,23 @@ import * as Fiber from "effect/Fiber";
 import * as ProviderLatestVersions from "./ProviderLatestVersions.ts";
 
 describe("ProviderLatestVersions", () => {
+  it.effect(
+    "invalidating all entries prevents an older in-flight lookup from repopulating them",
+    () =>
+      Effect.gen(function* () {
+        const versions = yield* ProviderLatestVersions.make();
+        const release = yield* Deferred.make<void>();
+        const old = yield* Effect.forkChild(
+          versions.cached("cli", Deferred.await(release).pipe(Effect.as("1.0.0"))),
+          { startImmediately: true },
+        );
+        yield* versions.invalidateAll;
+        expect(yield* versions.cached("cli", Effect.succeed("2.0.0"))).toBe("2.0.0");
+        yield* Deferred.succeed(release, undefined);
+        expect(yield* Fiber.join(old)).toBe("1.0.0");
+        expect(yield* versions.cached("cli", Effect.succeed("3.0.0"))).toBe("2.0.0");
+      }),
+  );
   it.effect("concurrent misses for one key share a single lookup", () =>
     Effect.gen(function* () {
       const latestVersions = yield* ProviderLatestVersions.make();

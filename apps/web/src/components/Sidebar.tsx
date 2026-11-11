@@ -84,6 +84,8 @@ import {
 } from "../keybindings";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { isPreviewFocused } from "../lib/previewFocus";
+import { useRoutePreviewShown } from "../lib/previewShown";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
@@ -108,6 +110,8 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { forkMenuWorkspace, readThreadForkMenuState, useForkThread } from "../hooks/useForkThread";
+import { startThreadOnBranch } from "../hooks/threadMenuActions";
 import { useStartChatNew } from "../hooks/useStartChatNew";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
@@ -218,6 +222,7 @@ import {
 } from "./Sidebar.drag";
 import { SIDEBAR_DRAG_DISTANCE, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
+import { sameHolds, sameKeys } from "./Sidebar.equality";
 import {
   pickSnoozePreset,
   resolveSnoozePresets,
@@ -289,20 +294,6 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "goat:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "goat:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "goat:sidebar:working-expanded";
-function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
-  if (left.size !== right.size) return false;
-  for (const key of left) if (!right.has(key)) return false;
-  return true;
-}
-
-function sameHolds(left: SidebarPriorityHolds, right: SidebarPriorityHolds): boolean {
-  if (left.size !== right.size) return false;
-  for (const [key, settledOverride] of left) {
-    if (!right.has(key) || right.get(key) !== settledOverride) return false;
-  }
-  return true;
-}
-
 function scrollSidebarToTop(content: HTMLElement | null) {
   content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
 }
@@ -839,6 +830,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const startChatNew = useStartChatNew();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
+  const forkThread = useForkThread();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -2506,6 +2498,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+              fork: readThreadForkMenuState(threadRef),
               supports: {
                 settlement: supportsSettlement,
                 autoSettleOptOut: supportsAutoSettleOptOut,
@@ -2550,27 +2543,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 projectId: thread.projectId,
               });
             return;
-          case "new-thread-on-branch": {
-            const result = await settlePromise(() =>
-              handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
-                branch: thread.branch,
-                worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
-                startFromOrigin: false,
-              }),
-            );
-            if (result._tag === "Failure") {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Could not create thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            }
+          case "new-thread-on-branch":
+            await startThreadOnBranch(handleNewThread, thread);
             return;
-          }
+          case "fork:current":
+          case "fork:worktree":
+            await forkThread(threadRef, forkMenuWorkspace(clicked.value));
+            return;
           case "settle":
             attemptSettle(threadRef);
             return;
@@ -2718,6 +2697,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
+  const routePreviewOpen = useRoutePreviewShown(routeThreadRef);
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
@@ -2728,6 +2708,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         context: {
           terminalFocus: isTerminalFocused(),
           terminalOpen: routeTerminalOpen,
+          previewFocus: isPreviewFocused(),
+          previewOpen: routePreviewOpen,
           modelPickerOpen: isModelPickerOpen(),
           isWeb: !isElectron,
           isDesktop: isElectron,
@@ -2764,6 +2746,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     navigateToThread,
     orderedThreadKeys,
     routeRowThreadKey,
+    routePreviewOpen,
     routeTerminalOpen,
     threadByKey,
   ]);
@@ -2776,6 +2759,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       context: {
         terminalFocus: terminalFocused,
         terminalOpen: routeTerminalOpen,
+        previewFocus: isPreviewFocused(),
+        previewOpen: routePreviewOpen,
         modelPickerOpen: isModelPickerOpen(),
         isWeb: !isElectron,
         isDesktop: isElectron,

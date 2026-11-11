@@ -39,11 +39,12 @@ const VIEW_COMMANDS: readonly FileViewCommand[] = [
   "files.goToLine",
 ];
 
-function editorFindOpen(content: HTMLElement): boolean {
+export function editorFindOpen(content: HTMLElement): boolean {
   const root = content.getRootNode();
   return (
     root instanceof ShadowRoot &&
-    root.querySelector("[data-search-panel] input[data-search]") !== null
+    root.querySelector("[data-search-panel]")?.shadowRoot?.querySelector("input[data-search]") !=
+      null
   );
 }
 

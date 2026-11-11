@@ -6,12 +6,14 @@ import { useLayoutEffect, useRef, useState } from "react";
 import {
   FlatList,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   Text as NativeText,
   useWindowDimensions,
   View,
 } from "react-native";
+import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "../../components/ui/AppText";
 import { LoadingStrip } from "../../components/ui/LoadingStrip";
@@ -35,7 +37,11 @@ import {
 } from "./nativeSourceFileAdapter";
 import { SourceText } from "@goat/mobile-source-text";
 
-import { boundedSelectableSourceTokens, prepareSourceFileDocument } from "./source-file-document";
+import {
+  boundedSelectableSourceTokens,
+  prepareSourceFileDocument,
+  selectableSourceHtml,
+} from "./source-file-document";
 import { sourceHighlightAtom } from "./sourceHighlightingState";
 import { createSourceLineScroll } from "./source-file-scroll";
 
@@ -46,6 +52,7 @@ interface SourceFileSurfaceProps {
   readonly initialLine?: number | null;
   readonly headerInsetTop?: number;
   readonly selectable?: boolean;
+  readonly onLongPressLine?: (line: number) => void;
   readonly onRefresh?: () => Promise<void> | void;
 }
 
@@ -58,8 +65,10 @@ const HighlightedSourceLine = function HighlightedSourceLine(props: {
   readonly tokens: ReadonlyArray<HighlightedToken> | null;
   readonly highlighted: boolean;
   readonly wordBreak: boolean;
+  readonly onLongPress?: () => void;
 }) {
-  return (
+  const selectable = props.onLongPress === undefined;
+  const row = (
     <View
       className={cn("flex-row", props.highlighted && "bg-primary/10")}
       style={{ minHeight: props.codeSurface.rowHeight }}
@@ -76,7 +85,7 @@ const HighlightedSourceLine = function HighlightedSourceLine(props: {
         {props.index + 1}
       </NativeText>
       <NativeText
-        selectable
+        selectable={selectable}
         selectionColorClassName={Platform.OS === "android" ? "accent-focus/32" : undefined}
         numberOfLines={props.wordBreak ? undefined : 1}
         className="flex-1 font-normal text-foreground"
@@ -106,7 +115,7 @@ const HighlightedSourceLine = function HighlightedSourceLine(props: {
                 return (
                   <NativeText
                     key={`${start}:${token.content.length}:${token.color ?? ""}`}
-                    selectable
+                    selectable={selectable}
                     selectionColorClassName={
                       Platform.OS === "android" ? "accent-focus/32" : undefined
                     }
@@ -125,6 +134,19 @@ const HighlightedSourceLine = function HighlightedSourceLine(props: {
           : renderVisibleWhitespace(props.line || " ")}
       </NativeText>
     </View>
+  );
+  return props.onLongPress ? (
+    <Pressable
+      onLongPress={props.onLongPress}
+      accessibilityActions={[{ name: "longpress", label: "Select text" }]}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === "longpress") props.onLongPress?.();
+      }}
+    >
+      {row}
+    </Pressable>
+  ) : (
+    row
   );
 };
 
@@ -187,7 +209,7 @@ function NativeSourceFileSurface(
     readonly NativeView: ComponentType<NativeReviewDiffViewProps>;
   },
 ) {
-  const { NativeView, onRefresh } = props;
+  const { NativeView, onLongPressLine, onRefresh } = props;
   const insets = useSafeAreaInsets();
   const columnMetrics = useNativeColumnLayoutMetrics();
   const safeArea = columnMetrics?.safeArea ?? insets;
@@ -226,6 +248,10 @@ function NativeSourceFileSurface(
         styleJson={styleJson}
         themeJson={themeJson}
         tokensJson={tokensJson}
+        onPressLine={({ nativeEvent }) => {
+          if (nativeEvent.gesture === "longPress" && nativeEvent.newLineNumber !== undefined)
+            onLongPressLine?.(nativeEvent.newLineNumber);
+        }}
         {...(onRefresh
           ? {
               refreshing: isPullRefreshing,
@@ -239,7 +265,8 @@ function NativeSourceFileSurface(
 
 function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   const usesAutomaticInsets = Platform.OS === "ios" && !props.embedded;
-  const foreground = useUniwindTheme()["--color-foreground"];
+  const appTheme = useUniwindTheme();
+  const foreground = appTheme["--color-foreground"];
   const { codeSurface, codeWordBreak } = useAppearanceCodeSurface();
   const { normalizedContents, lines, status, targetIndex, tokens } = useSourceFileModel(props);
   const selectableTokens = props.selectable ? boundedSelectableSourceTokens(tokens) : null;
@@ -249,16 +276,18 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   const refreshControl = props.onRefresh ? (
     <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullToRefresh()} />
   ) : undefined;
+  const usesLineList = !props.selectable;
+  const usesWebSelection = props.selectable === true && Platform.OS === "android";
 
   // Layout effect so a pending jump is cancelled in the commit that swaps the file.
   useLayoutEffect(() => {
-    if (targetIndex === null) {
+    if (targetIndex === null || !usesLineList) {
       return;
     }
     lineScroll.scrollToLine(listRef.current, targetIndex);
     return lineScroll.cancel;
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Opening another file at the same line index scrolls the new file to it.
-  }, [lineScroll, props.path, targetIndex]);
+  }, [lineScroll, props.path, targetIndex, usesLineList]);
 
   const renderLine = ({ item, index }: { item: string; index: number }) => (
     <HighlightedSourceLine
@@ -268,60 +297,62 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
       tokens={tokens?.[index] ?? null}
       highlighted={index === targetIndex}
       wordBreak={codeWordBreak}
+      onLongPress={props.onLongPressLine ? () => props.onLongPressLine?.(index + 1) : undefined}
     />
   );
 
   // One native text view permits document-wide selection; virtualized rows cannot.
-  const selectableBlock = props.selectable ? (
-    <SourceText
-      selectable
-      selectionColorClassName={Platform.OS === "android" ? "accent-focus/32" : undefined}
-      style={{
-        color: foreground,
-        fontFamily: REVIEW_MONO_FONT_FAMILY,
-        fontSize: codeSurface.fontSize,
-        lineHeight: codeSurface.rowHeight,
-      }}
-    >
-      {selectableTokens
-        ? lines.map(
-            (
-              line,
-              index,
-            ) => /* oxlint-disable react/no-array-index-key -- Source lines and highlight tokens are stateless positions within the loaded file. */ {
-                const lineTokens = selectableTokens[index] ?? null;
-                const body =
-                  lineTokens && lineTokens.length > 0
-                    ? lineTokens.map((token, tokenIndex) => (
-                        <SourceText
-                          key={`${index}:${tokenIndex}`}
-                          style={{
-                            color: token.color ?? foreground,
-                            fontWeight:
-                              token.fontStyle !== null && (token.fontStyle & 2) === 2
-                                ? "700"
-                                : "400",
-                            fontStyle:
-                              token.fontStyle !== null && (token.fontStyle & 1) === 1
-                                ? "italic"
-                                : "normal",
-                          }}
-                        >
-                          {token.content}
-                        </SourceText>
-                      ))
-                    : line;
-                return (
-                  <SourceText key={index}>
-                    {body}
-                    {index < lines.length - 1 ? "\n" : ""}
-                  </SourceText>
-                );
-              } /* oxlint-enable react/no-array-index-key */,
-          )
-        : normalizedContents}
-    </SourceText>
-  ) : null;
+  const selectableBlock =
+    props.selectable && !usesWebSelection ? (
+      <SourceText
+        selectable
+        selectionColorClassName={Platform.OS === "android" ? "accent-focus/32" : undefined}
+        style={{
+          color: foreground,
+          fontFamily: REVIEW_MONO_FONT_FAMILY,
+          fontSize: codeSurface.fontSize,
+          lineHeight: codeSurface.rowHeight,
+        }}
+      >
+        {selectableTokens
+          ? lines.map(
+              (
+                line,
+                index,
+              ) => /* oxlint-disable react/no-array-index-key -- Source lines and highlight tokens are stateless positions within the loaded file. */ {
+                  const lineTokens = selectableTokens[index] ?? null;
+                  const body =
+                    lineTokens && lineTokens.length > 0
+                      ? lineTokens.map((token, tokenIndex) => (
+                          <SourceText
+                            key={`${index}:${tokenIndex}`}
+                            style={{
+                              color: token.color ?? foreground,
+                              fontWeight:
+                                token.fontStyle !== null && (token.fontStyle & 2) === 2
+                                  ? "700"
+                                  : "400",
+                              fontStyle:
+                                token.fontStyle !== null && (token.fontStyle & 1) === 1
+                                  ? "italic"
+                                  : "normal",
+                            }}
+                          >
+                            {token.content}
+                          </SourceText>
+                        ))
+                      : line;
+                  return (
+                    <SourceText key={index}>
+                      {body}
+                      {index < lines.length - 1 ? "\n" : ""}
+                    </SourceText>
+                  );
+                } /* oxlint-enable react/no-array-index-key */,
+            )
+          : normalizedContents}
+      </SourceText>
+    ) : null;
 
   const list = (
     <FlatList
@@ -354,7 +385,26 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
     />
   );
 
-  const usesLineList = !props.selectable;
+  const webSelection = usesWebSelection ? (
+    <WebView
+      source={{
+        html: selectableSourceHtml(normalizedContents, {
+          foreground,
+          selection: appTheme["--color-focus"],
+          fontSize: codeSurface.fontSize,
+          rowHeight: codeSurface.rowHeight,
+          wordBreak: codeWordBreak,
+        }),
+      }}
+      originWhitelist={["*"]}
+      injectedJavaScript={`addEventListener("copy",(event)=>{event.clipboardData.setData("text/plain",getSelection().toString());event.preventDefault();});${targetIndex === null ? "" : `const line=document.getElementById("L${targetIndex + 1}");const reveal=()=>line?.scrollIntoView({block:"center"});reveal();addEventListener("resize",reveal,{once:true});`}true;`}
+      domStorageEnabled={false}
+      cacheEnabled={false}
+      setSupportMultipleWindows={false}
+      onShouldStartLoadWithRequest={(request) => request.url === "about:blank"}
+      style={{ flex: 1, backgroundColor: "transparent" }}
+    />
+  ) : null;
   const padded = (
     <ScrollView
       refreshControl={refreshControl}
@@ -373,7 +423,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
 
   return (
     <View className="relative flex-1 bg-sheet">
-      <SourceHighlightStatusView status={status} />
+      {usesWebSelection ? null : <SourceHighlightStatusView status={status} />}
       {usesLineList ? (
         codeWordBreak ? (
           list
@@ -382,6 +432,8 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
             {list}
           </ScrollView>
         )
+      ) : usesWebSelection ? (
+        webSelection
       ) : codeWordBreak ? (
         padded
       ) : (

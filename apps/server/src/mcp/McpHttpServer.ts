@@ -196,6 +196,10 @@ import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { saveScreenshot } from "./previewScreenshotFile.ts";
+import {
+  hidePlacementArgument,
+  PlacementAdmissionEnabled,
+} from "../fleet/admission/PlacementKey.ts";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   HttpServerRequest.toURL(request).pipe(
@@ -615,6 +619,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
     const server = yield* McpServer.McpServer;
     const effects = yield* McpToolAccess.ToolEffects;
     const admit = yield* ToolAdmission.make();
+    const placementDeclared = yield* PlacementAdmissionEnabled;
     return yield* register.pipe(
       Effect.provideService(
         McpServer.McpServer,
@@ -646,7 +651,11 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
             const handle = keepingRefusalCode(registration.handle);
             const gated = (payload: unknown) =>
               admit(registration.tool.name, effect, payload, handle);
-            const inputSchema = registration.tool.inputSchema;
+            const inputSchema = hidePlacementArgument(
+              registration.tool.name,
+              registration.tool.inputSchema,
+              placementDeclared,
+            );
             // A parameter schema with an index signature declares its own extra keys.
             if (typeof inputSchema.additionalProperties === "object")
               return server.addTool({ ...registration, handle: gated });

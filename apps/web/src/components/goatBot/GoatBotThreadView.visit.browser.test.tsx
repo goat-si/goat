@@ -21,6 +21,7 @@ vi.mock("~/state/entities", () => ({
   useEnvironmentShellsBootstrapped: () => true,
   resolveThreadDetailRef: (ref: unknown) => ref,
   useThreadVisibleTurnItems: () => [],
+  useServerConfigs: () => new Map(),
 }));
 vi.mock("~/uiStateStore", () => ({
   useUiStateStore: (selector: (store: object) => unknown) =>

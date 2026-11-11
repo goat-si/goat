@@ -218,7 +218,11 @@ afterEach(async () => {
   container.remove();
   app.active = true;
 });
-async function showRoster(visible: boolean, onOpenTask = vi.fn()) {
+async function showRoster(
+  visible: boolean,
+  onOpenTask = vi.fn(),
+  more: { readonly members?: ReadonlyArray<BotProfile>; readonly onUnknownBot?: () => void } = {},
+) {
   root ??= createRoot(container);
   await act(async () =>
     root?.render(
@@ -227,10 +231,12 @@ async function showRoster(visible: boolean, onOpenTask = vi.fn()) {
           bots={[
             { kind: "main", profile: null },
             { kind: "member", profile: scout },
+            ...(more.members ?? []).map((profile) => ({ kind: "member" as const, profile })),
           ]}
           slackEnabled={false}
           onOpenBot={vi.fn()}
           onOpenTask={onOpenTask}
+          onUnknownBot={more.onUnknownBot}
           visible={visible}
           members={{
             hidden: [quiet],
@@ -283,6 +289,47 @@ it("reads every bot's asks, labels each by its bot, and opens the task in that b
   // A bot the roster does not know yet is named plainly and opens nothing.
   expect(row("A bot, 09:30: Sign in again")?.disabled).toBe(true);
   expect(onOpenTask).toHaveBeenCalledTimes(2);
+});
+
+it("asks for the bot list again once when an ask names a bot it does not know, then opens that ask in it", async () => {
+  registry = AtomRegistry.make();
+  const onUnknownBot = vi.fn();
+  const onOpenTask = await showRoster(true, vi.fn(), { onUnknownBot });
+  serve(read([ask("nova", "task-n", "Which branch?", "2026-11-11T10:20:00.000Z")]));
+  await act(async () => {});
+  expect(onUnknownBot).toHaveBeenCalledTimes(1);
+  // Another read naming the same unknown bot does not ask again while the roster stays in view.
+  serve(read([ask("nova", "task-n", "Which branch?", "2026-11-11T10:20:00.000Z")]));
+  await act(async () => {});
+  await showRoster(true, onOpenTask, { onUnknownBot });
+  expect(onUnknownBot).toHaveBeenCalledTimes(1);
+  // The bot list comes back with the new member: the ask names it and opens its task there.
+  const nova = profile("nova", "Nova");
+  await showRoster(true, onOpenTask, { onUnknownBot, members: [nova] });
+  await act(async () => stripButton()?.click());
+  const row = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Nova, 10:20: Which branch?"]',
+  );
+  expect(row?.disabled).toBe(false);
+  await act(async () => row?.click());
+  expect(onOpenTask).toHaveBeenLastCalledWith({ kind: "member", profile: nova }, "task-n");
+  expect(onUnknownBot).toHaveBeenCalledTimes(1);
+});
+
+it("asks again for an unknown bot each time the roster comes back into view, not while it is covered", async () => {
+  registry = AtomRegistry.make();
+  const onUnknownBot = vi.fn();
+  await showRoster(true, vi.fn(), { onUnknownBot });
+  serve(read([ask("nova", "task-n", "Which branch?", "2026-11-11T10:20:00.000Z")]));
+  await act(async () => {});
+  expect(onUnknownBot).toHaveBeenCalledTimes(1);
+  await showRoster(false, vi.fn(), { onUnknownBot });
+  await act(async () => {});
+  expect(onUnknownBot).toHaveBeenCalledTimes(1);
+  await showRoster(true, vi.fn(), { onUnknownBot });
+  serve(read([ask("nova", "task-n", "Which branch?", "2026-11-11T10:20:00.000Z")]));
+  await act(async () => {});
+  expect(onUnknownBot).toHaveBeenCalledTimes(2);
 });
 
 it("shows a failed refresh as failed even after an empty read, and reads again on Try again", async () => {

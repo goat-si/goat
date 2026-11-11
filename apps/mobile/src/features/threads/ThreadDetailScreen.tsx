@@ -178,6 +178,7 @@ import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
+import { SideChatParentRow } from "./SideChatParentRow";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
@@ -209,7 +210,7 @@ import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
-import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
+import { ComposerThreadBars } from "./ComposerThreadBars";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
@@ -227,7 +228,7 @@ export interface ThreadDetailScreenProps {
       bottomInset: number,
       availableHeight: number,
     ) => React.ReactNode;
-    readonly controls: React.ReactNode;
+    readonly controls: (viewportHeight: number) => React.ReactNode;
     readonly editorRef: React.RefObject<ComposerEditorHandle | null>;
     readonly sendBlockedReason: string | null;
     readonly interactionLocked: boolean;
@@ -840,8 +841,7 @@ function ThreadDetailBody(
     jumpMessageId !== null &&
     selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === jumpMessageId);
   const historyForJump = props.historyControls;
-  // History down to the message in one request; another page if it is not
-  // there yet.
+  // History down to the message in one request; another page if it is not there yet.
   const loadEarlierForJump = useEffectEvent(() => {
     if (jumpMessageId !== null) historyForJump?.onLoadThrough(jumpMessageId);
   });
@@ -959,6 +959,7 @@ function ThreadDetailBody(
     setScreenHeight(event.nativeEvent.layout.height);
   }, []);
   const screenAreaHeight = screenHeight ?? windowHeight;
+  const draftViewportHeight = screenAreaHeight - navigationHeaderHeight - liveKeyboardHeight;
   // The question card reads the keyboard frame on the UI thread, in the same frame the sticky
   // view translates, so it gets the full height while the keyboard is closed and never crosses
   // the header while the keyboard moves.
@@ -1364,11 +1365,9 @@ function ThreadDetailBody(
     }
     feedTouchStartRef.current = null;
   };
-
   const handleFeedTouchCancel = () => {
     feedTouchStartRef.current = null;
   };
-
   return (
     <View className="flex-1" onLayout={handleScreenLayout}>
       {!usesNativeWorkspaceColumns ? <NativeLayoutObserver onChange={setScreenMetrics} /> : null}
@@ -1376,11 +1375,7 @@ function ThreadDetailBody(
         props.draftMode.content(
           navigationHeaderHeight,
           liveKeyboardHeight + estimatedOverlayHeight + 24,
-          screenAreaHeight -
-            navigationHeaderHeight -
-            liveKeyboardHeight -
-            estimatedOverlayHeight -
-            24,
+          draftViewportHeight,
         )
       ) : showContent ? (
         <View
@@ -1412,6 +1407,7 @@ function ThreadDetailBody(
             <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
               <ThreadFeed
                 environmentId={props.environmentId}
+                offline={props.connectionStateLabel !== "connected"}
                 threadId={props.selectedThread.id}
                 detailRef={props.selectedThreadDetailRef}
                 workspaceRoot={props.threadCwd}
@@ -1571,6 +1567,7 @@ function ThreadDetailBody(
                   </Text>
                 ) : null}
                 <ComposerCards maxWidth={contentMaxWidth} onHeight={handleCardsHeight}>
+                  <SideChatParentRow thread={props.selectedThread} />
                   {!props.draftMode &&
                   props.serverConfig?.environment.capabilities.worktreeRestore === true ? (
                     <ThreadWorkspaceBanner
@@ -1602,7 +1599,7 @@ function ThreadDetailBody(
                     thread={props.selectedThread}
                     environmentId={props.environmentId}
                   />
-                  <ThreadGuestShareBar
+                  <ComposerThreadBars
                     threadRef={props.selectedThreadDetailRef}
                     canOperateThread={props.canOperateThread}
                   />
@@ -1780,7 +1777,7 @@ function ThreadDetailBody(
                             : "Ask anything"
                         }
                         contentMaxWidth={contentMaxWidth}
-                        draftControls={props.draftMode?.controls}
+                        draftControls={props.draftMode?.controls(draftViewportHeight)}
                         connectionState={props.connectionStateLabel}
                         environmentLabel={props.environmentLabel}
                         selectedThread={props.selectedThread}

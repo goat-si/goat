@@ -2,6 +2,7 @@ import {
   type AuthEnvironmentScope,
   OrchestratorMcpFailure,
   type HubDeviceMcpResult,
+  type HubDeviceMoveInput,
   type HubDeviceOperationInput,
   type HubDeviceOperationResult,
   type HubDeviceStep,
@@ -34,6 +35,7 @@ import {
   type OcxOutput,
 } from "./HubOcx.ts";
 import { makeLeaveSteps } from "./hubLeave.ts";
+import { makeMove } from "./hubMove.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
   deviceExit,
@@ -75,7 +77,7 @@ export interface HubPerson {
   readonly sessionId: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
 }
-interface Caller {
+export interface Caller {
   readonly actor: string;
   readonly profile: string;
   readonly owner: boolean;
@@ -115,6 +117,12 @@ export class HubMembership extends Context.Service<
     readonly repair: (
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
+      person?: HubPerson,
+    ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
+    /** Moves a Remote Link Child to another alias of the same machine under one approval. */
+    readonly move: (
+      scope: McpInvocationScope,
+      input: HubDeviceMoveInput,
       person?: HubPerson,
     ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
     /**
@@ -357,6 +365,25 @@ const make = Effect.gen(function* () {
     steps: ReadonlyArray<HubDeviceStep>,
     forbidden: boolean,
   ) => result(action, alias, "failed", linkStatusUnreadable(forbidden), steps);
+
+  const move = makeMove({
+    ocx,
+    pinned: windowsRemoteLinkRelease(releases) !== undefined,
+    authorize,
+    readHomeLinks,
+    homeUnavailable: (alias, forbidden, steps) => homeUnavailable("move", alias, steps, forbidden),
+    probe,
+    phaseMessage,
+    request: (caller, input) => consent.request(caller, "move", input),
+    approved: (caller, decisionId, binding) =>
+      consent.approved(caller, "move", decisionId, binding),
+    audit: (caller, target, outcome, decisionId) =>
+      audit(caller, "hub.move", target, outcome, decisionId),
+    leaveDevice,
+    revokeOnHome,
+    link: (scope, caller, alias, fingerprint, decisionId, steps) =>
+      link(scope, caller, "move", alias, fingerprint, decisionId, steps),
+  });
 
   /** False when the caller's standing permission no longer holds; an unreadable one does not. */
   const permitted = (caller: Pick<Caller, "gate">) =>
@@ -872,6 +899,7 @@ const make = Effect.gen(function* () {
     join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
+    move: (scope, input, person) => permit.withPermits(1)(move(scope, input, person)),
     joinProvisioned: (scope, alias, gate) =>
       SAFE_ALIAS.test(alias) && hasCloudMachineAliasPrefix(alias)
         ? permit.withPermits(1)(

@@ -1057,6 +1057,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     outline-offset: -2px;
   }
   [data-workspace-area]:focus-visible {
+    outline: none;
+  }
+  [data-workspace-keyboard-focus]:focus {
     outline: 2px solid var(--ring);
     outline-offset: -2px;
   }
@@ -2621,12 +2624,13 @@ code {
   color: var(--code-foreground);
 }
 
-/* Pierre's find panel and match highlights read these. */
-.diff-render-surface {
+/* Pierre's find panel sits beside the diff containers. */
+.diff-render-surface > [data-search-panel] {
   --diffs-search-panel-bg: var(--popover);
   --diffs-search-panel-fg: var(--popover-foreground);
-  --diffs-search-panel-accent: var(--primary);
-  --diffs-search-panel-font: var(--font-sans);
+  --diffs-search-panel-modified: var(--primary);
+  --diffs-header-font-fallback: var(--font-sans);
+  --diffs-search-panel-inset-top: 40px;
 }
 
 /* Pierre's file renderer owns its own surface tokens. Keep the root of a file

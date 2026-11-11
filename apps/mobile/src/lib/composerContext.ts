@@ -1,4 +1,7 @@
 import { isProviderSkillUserInvocable } from "@goat/client-runtime/providerSkills";
+import { collectComposerModelTokens } from "./composerModelTokens";
+import type { ComposerModelMentionOccurrence } from "@goat/client-runtime/composer-model-mentions";
+export { collectComposerModelTokens } from "./composerModelTokens";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { serializeLegacyContextMessage } from "@goat/shared/composerContextLegacySend";
 import { filePreviewKind } from "@goat/shared/filePreview";
@@ -28,6 +31,7 @@ import {
 import { capabilityRecordApp } from "@goat/shared/turnCapabilities";
 import {
   collectComposerInlineTokens,
+  composerMathRanges,
   type ComposerInlineToken,
 } from "@goat/shared/composerInlineTokens";
 
@@ -170,8 +174,13 @@ export function composerContextEditorTokens(
   text: string,
   tokens: readonly ComposerInlineToken[],
   knownSkills: { has(name: string): boolean },
+  modelTokens: ReadonlyArray<ComposerModelMentionOccurrence> = collectComposerModelTokens(text),
 ) {
   const references = collectComposerContextReferences(text);
+  const taken = [...tokens, ...references, ...composerMathRanges(text)];
+  const models = modelTokens.filter(
+    (mention) => !taken.some((range) => mention.start < range.end && mention.end > range.start),
+  );
   return [
     ...tokens.filter(
       (token) =>
@@ -184,6 +193,7 @@ export function composerContextEditorTokens(
       value: ref.label,
       ...ref,
     })),
+    ...models.map((mention) => ({ ...mention, type: "model" as const, value: mention.model })),
   ].sort((a, b) => a.start - b.start);
 }
 

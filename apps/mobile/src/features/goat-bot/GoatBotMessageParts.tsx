@@ -207,16 +207,12 @@ export function GoatBotPersonCaption(props: {
   );
 }
 
-// The waits goatBotActivity reports; a task's own streamed update can also begin "Waiting…", and
-// is a working step, so a wait is one of these exact lines and each is heard once.
-const PERSON_WAITS: ReadonlySet<string> = new Set([
-  "Waiting for your approval",
-  "Waiting for your answer",
-  "Waiting for you to sign in",
-  "Waiting for you",
-  "Waiting on other work",
-  "Paused on a usage limit",
-]);
+// What a screen reader hears for a wait, one phrase per kind, so a wait reworded as more is known
+// is heard once. Waiting on other work reads as working, as on web: nothing for the person to do.
+const SPOKEN_WAIT = {
+  you: "is waiting for you",
+  usage_limit: "is paused on a usage limit",
+} as const;
 
 /**
  * What the bot is doing now, under the last message: its face and one muted line. The words get the
@@ -234,14 +230,18 @@ export function GoatBotActivityLine(props: {
 }) {
   const label = useScaledTextRole("label");
   const { activity } = props;
-  const waits = activity.state === "working" && PERSON_WAITS.has(activity.text);
+  const wait =
+    activity.state === "working" && (activity.wait === "you" || activity.wait === "usage_limit")
+      ? activity.wait
+      : null;
+  const waits = wait !== null;
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
-  // Screen readers hear when the bot starts or reads, not each working step, and what it waits on:
-  // the live part says only that, and a working step is plain text beside it.
-  const status = waits
-    ? `${props.botName}: ${activity.text}`
-    : `${props.botName} is ${face === "reading" ? "reading" : "working"}`;
+  // Screen readers hear when the bot starts or reads, not each working step, and what kind of wait
+  // it is in: the live part says only that, and the step's own words are plain text beside it.
+  const status = `${props.botName} ${
+    wait !== null ? SPOKEN_WAIT[wait] : face === "reading" ? "is reading" : "is working"
+  }`;
   const waitStatus = waits ? status : null;
   // oxlint-disable-next-line goat/react-effect-budget -- iOS has no live regions; VoiceOver hears each new wait from here.
   useEffect(() => {

@@ -299,7 +299,8 @@ export const ChannelReceptionResult = Schema.Struct({
   rememberQuote: Schema.optional(TrimmedNonEmptyString),
   /**
    * The text of the standing note this `remember` corrects. The server marks that note replaced
-   * when one current note has this text; otherwise it keeps both and says so in the reply.
+   * when exactly one current note has this text. When several do it saves nothing, and when none
+   * does it keeps the note plainly; the reply says so in both cases.
    */
   replacesNote: Schema.optional(TrimmedNonEmptyString),
 });

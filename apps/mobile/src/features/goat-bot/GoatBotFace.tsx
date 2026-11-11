@@ -29,10 +29,11 @@ import {
 } from "react-native";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import Svg, { Path } from "react-native-svg";
-import { withUniwind } from "uniwind";
+import { useResolveClassNames, withUniwind } from "uniwind";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { goatBotSleepingAccent } from "./goatBotSleepingAccent";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
 
 const ThemedPath = withUniwind(Path);
@@ -166,7 +167,14 @@ export function GoatBotFaceAvatar(props: {
 }) {
   const picture = goatBotAvatarEmoji(props.emoji);
   const signal = goatBotAvatarSignal(props.state, picture !== null);
-  const accent = picture !== null ? (props.accent ?? null) : null;
+  const surface = useResolveClassNames("bg-grouped-card").backgroundColor;
+  const awake = picture !== null ? (props.accent ?? null) : null;
+  // Asleep, a coloured circle moves toward the surface instead of dimming its initial, whose colour
+  // is chosen again for the mix; an uncoloured one dims as before.
+  const accent =
+    awake && signal.dimmed && typeof surface === "string"
+      ? goatBotSleepingAccent(awake, surface)
+      : awake;
   return (
     <View
       style={{
@@ -185,7 +193,7 @@ export function GoatBotFaceAvatar(props: {
             ...(accent ? { color: accent.foreground } : {}),
           }}
           // A member's initial needs a text colour; an emoji ignores it.
-          className={signal.dimmed ? "text-foreground opacity-50" : "text-foreground"}
+          className={signal.dimmed && !accent ? "text-foreground opacity-50" : "text-foreground"}
         >
           {picture}
         </Text>

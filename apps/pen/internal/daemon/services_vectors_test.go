@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
+	"github.com/goat-si/goat/apps/pen/internal/session"
 )
 
 var updateServiceVectors = flag.Bool("update-service", false, "rewrite packages/pen-protocol/vectors/service.json")
@@ -37,6 +38,30 @@ type serviceVector struct {
 	RejectLine1 []serviceReject `json:"rejectLine1"`
 	RejectLine2 []serviceReject `json:"rejectLine2"`
 	RejectLine3 []serviceReject `json:"rejectLine3"`
+	// The v1.3 forms of line 3 for callers that are not members, under the same K, Nd and Ng.
+	Client             vectorClient    `json:"client"`
+	ClientIdentity     string          `json:"clientIdentity"`
+	ClientProof        string          `json:"clientProof"`
+	ClientLine3        string          `json:"clientLine3"`
+	Pairing            vectorPairing   `json:"pairing"`
+	PairingIdentity    string          `json:"pairingIdentity"`
+	PairingProof       string          `json:"pairingProof"`
+	PairingLine3       string          `json:"pairingLine3"`
+	RejectClientLine3  []serviceReject `json:"rejectClientLine3"`
+	RejectPairingLine3 []serviceReject `json:"rejectPairingLine3"`
+}
+
+// vectorClient is a listed client as J carries it.
+type vectorClient struct {
+	ID       string `json:"id"`
+	NoisePub string `json:"noisePub"`
+}
+
+// vectorPairing is a pairing handshake as J carries it.
+type vectorPairing struct {
+	Invite   string `json:"invite"`
+	NoisePub string `json:"noisePub"`
+	SAS      string `json:"sas"`
 }
 
 // vectorCaller is the caller as J carries it.
@@ -68,6 +93,21 @@ func buildServiceVector(t *testing.T) serviceVector {
 		return j + " " + strictB64.EncodeToString(serviceMAC(key, "pen-svc/1 pen", nd, ng, []byte(j))) + "\n"
 	}
 	js := string(j)
+	client := vectorClient{ID: "dddddddddddddddddddddddddd", NoisePub: strictB64.EncodeToString(fill(0x66))}
+	cj, err := clientIdentityLine(meshID, self, client.ID, client.NoisePub, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing := vectorPairing{Invite: "0Fh_z1uKAGoODu_-", NoisePub: strictB64.EncodeToString(fill(0x88)),
+		SAS: strictB64.EncodeToString(session.PairSAS(fill(0x77)))}
+	pj, err := pairingIdentityLine(meshID, self, pairing.Invite, pairing.NoisePub, pairing.SAS, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cjs, pjs := string(cj), string(pj)
+	cb := strictB64.EncodeToString(serviceMAC(key, "pen-svc/1 pen", nd, ng, cj))
+	pb := strictB64.EncodeToString(serviceMAC(key, "pen-svc/1 pen", nd, ng, pj))
+	callerObj := `"caller":{"nodeId":"` + caller.NodeID + `","signPub":"` + caller.SignPub + `","noisePub":"` + caller.NoisePub + `","name":"caller-1"},`
 	flip := func(s string) string { // the same 32 bytes with a non-zero trailing bit
 		last := s[42]
 		alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -109,6 +149,32 @@ func buildServiceVector(t *testing.T) serviceVector {
 			{line3(strings.Replace(js, `"self":"`+self, `"self":"tttttttttttttttttttttttttt`, 1)), "self is not the pinned node"},
 			{line3(strings.Replace(js, `"stream":"goat"`, `"stream":"other"`, 1)), "stream is not this service"},
 			{line3(strings.Replace(js, `"name":"caller-1"`, `"name":"`+strings.Repeat("c", 2200)+`"`, 1)), "over 2,200 bytes"},
+			{cjs + " " + cb + "\n", "a client line, which a member-only (v1.2) reader refuses"},
+			{pjs + " " + pb + "\n", "a pairing line, which a member-only (v1.2) reader refuses"},
+		},
+		Client: client, ClientIdentity: cjs, ClientProof: cb, ClientLine3: cjs + " " + cb + "\n",
+		Pairing: pairing, PairingIdentity: pjs, PairingProof: pb, PairingLine3: pjs + " " + pb + "\n",
+		RejectClientLine3: []serviceReject{
+			{cjs + " " + cb[:42] + "A\n", "wrong MAC"},
+			{line3(strings.Replace(cjs, `"client":`, callerObj+`"client":`, 1)), "both caller and client"},
+			{line3(strings.Replace(cjs, `,"stream":"goat"}`, `,"pairing":{"invite":"`+pairing.Invite+`","noisePub":"`+pairing.NoisePub+`","sas":"`+pairing.SAS+`"},"stream":"goat"}`, 1)), "both client and pairing"},
+			{line3(strings.Replace(cjs, `"id":"`+client.ID+`",`, "", 1)), "client without id"},
+			{line3(strings.Replace(cjs, `"},"stream"`, `","x":"y"},"stream"`, 1)), "unknown client member"},
+			{line3(strings.Replace(cjs, client.ID, strings.ToUpper(client.ID), 1)), "id is not lowercase base32"},
+			{line3(strings.Replace(cjs, client.NoisePub, flip(client.NoisePub), 1)), "non-canonical client key"},
+			{line3(strings.Replace(cjs, `"id":"`+client.ID+`","noisePub":"`+client.NoisePub+`"`, `"noisePub":"`+client.NoisePub+`","id":"`+client.ID+`"`, 1)), "client members out of order"},
+			{line3(strings.Replace(cjs, `"stream":"goat"`, `"stream":"other"`, 1)), "stream is not this service"},
+			{line3(strings.Replace(cjs, meshID, "nnnnnnnnnnnnnnnnnnnnnnnnnn", 1)), "mesh is not the pinned mesh"},
+		},
+		RejectPairingLine3: []serviceReject{
+			{pjs + " " + pb[:42] + "A\n", "wrong MAC"},
+			{line3(strings.Replace(pjs, `"pairing":`, callerObj+`"pairing":`, 1)), "both caller and pairing"},
+			{line3(strings.Replace(pjs, pairing.SAS, pairing.SAS[:42], 1)), "sas is 42 characters"},
+			{line3(strings.Replace(pjs, pairing.Invite, pairing.Invite[:15], 1)), "invite is 15 characters"},
+			{line3(strings.Replace(pjs, `","sas"`, `","x":"y","sas"`, 1)), "unknown pairing member"},
+			{line3(strings.Replace(pjs, `,"sas":"`+pairing.SAS+`"`, "", 1)), "pairing without sas"},
+			{line3(strings.Replace(pjs, pairing.NoisePub, flip(pairing.NoisePub), 1)), "non-canonical pairing key"},
+			{line3(strings.Replace(pjs, `"self":"`+self, `"self":"tttttttttttttttttttttttttt`, 1)), "self is not the pinned node"},
 		},
 	}
 }
@@ -134,6 +200,22 @@ func TestServiceVectors(t *testing.T) {
 	w, _ := json.Marshal(want)
 	if !bytes.Equal(g, w) {
 		t.Fatal("service.json differs from what the daemon computes; run with -update-service after a deliberate change")
+	}
+	for _, bad := range [][5]string{
+		{"mesh", "ssssssssssssssssssssssssss", "dddddddddddddddddddddddddd", want.Client.NoisePub, "goat"},
+		{want.Mesh, want.Self, "DDDDDDDDDDDDDDDDDDDDDDDDDD", want.Client.NoisePub, "goat"},
+		{want.Mesh, want.Self, want.Client.ID, want.Client.NoisePub + "=", "goat"},
+		{want.Mesh, want.Self, want.Client.ID, want.Client.NoisePub, "pen"},
+	} {
+		if _, err := clientIdentityLine(bad[0], bad[1], bad[2], bad[3], bad[4]); err == nil {
+			t.Fatalf("client line rendered for %q", bad)
+		}
+	}
+	if _, err := pairingIdentityLine(want.Mesh, want.Self, want.Pairing.Invite[:15]+"=", want.Pairing.NoisePub, want.Pairing.SAS, "goat"); err == nil {
+		t.Fatal("pairing line rendered for a bad invite id")
+	}
+	if _, err := pairingIdentityLine(want.Mesh, want.Self, want.Pairing.Invite, want.Pairing.NoisePub, want.Pairing.SAS[:42], "goat"); err == nil {
+		t.Fatal("pairing line rendered for a short sas")
 	}
 	if _, _, err := parseAnswer([]byte(want.Line2)); err != nil {
 		t.Fatalf("line 2 refused: %v", err)

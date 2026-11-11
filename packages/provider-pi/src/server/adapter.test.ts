@@ -1606,6 +1606,46 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("sends a selected Pi service tier before the turn prompt", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const turn = (value: string | undefined, expected: string | null, ordinal: number) =>
+        Effect.gen(function* () {
+          yield* startTurn(
+            runtime,
+            providerThread,
+            "default",
+            [],
+            "Hello pi",
+            {
+              instanceId: PI_INSTANCE_ID,
+              model: "openai/test-model",
+              ...(value === undefined ? {} : { options: [{ id: "serviceTier", value }] }),
+            },
+            ordinal,
+          );
+          if (expected !== null)
+            assert.equal((yield* fake.takeRequest("prompt")).message, expected);
+          assert.equal((yield* fake.takeRequest("prompt")).message, "Hello pi");
+          yield* fake.emit({ type: "agent_start" });
+          yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+          yield* fake.emit({ type: "agent_settled" });
+          yield* takeEvent((event) => event.type === "turn.terminal");
+        });
+      yield* turn("priority", "/goat-service-tier priority", 1);
+      yield* turn("priority", "/goat-service-tier priority", 2);
+      yield* turn("ultrafast", "/goat-service-tier ultrafast", 3);
+      yield* turn("default", "/goat-service-tier", 4);
+      yield* turn(undefined, null, 5);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect.each(["anthropic/model-b", "default"])(
     "preserves explicit thinking when switching models to %s in the same runtime",
     (targetModel) =>

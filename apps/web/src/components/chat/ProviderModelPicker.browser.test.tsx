@@ -2,11 +2,14 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
   type ServerProvider,
 } from "@goat/contracts";
 import { useEffect, useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { useComposerDraftStore } from "../../composerDraftStore";
 
 import "~/index.css";
 
@@ -236,4 +239,90 @@ it("announces the full current model when opening the model picker from traits",
   await userEvent.click(modelButton);
   expect(openModelPicker).toHaveBeenCalledOnce();
   await expect.element(modelButton).not.toBeInTheDocument();
+});
+
+it("persists a composer trait pick after recording its draft options", async () => {
+  const threadRef = scopeThreadRef(EnvironmentId.make("trait-test"), ThreadId.make("trait-thread"));
+  const persist = vi.fn();
+  await using screen = await render(
+    <TraitsPicker
+      provider={ProviderDriverKind.make("codex")}
+      instanceId={ProviderInstanceId.make("codex")}
+      threadRef={threadRef}
+      onDraftModelOptionsChange={persist}
+      model="gpt-6.1-sol"
+      models={[
+        {
+          slug: "gpt-6.1-sol",
+          name: "GPT-6.1-Sol",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning effort",
+                type: "select",
+                options: [
+                  { id: "low", label: "Low" },
+                  { id: "high", label: "High" },
+                ],
+                currentValue: "low",
+              },
+            ],
+          },
+        },
+      ]}
+      planModeEnabled={false}
+      isComposerOwned
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Reasoning:/ }));
+  const slider = screen.getByRole("slider", { name: "Reasoning effort" });
+  slider.element().focus();
+  await userEvent.keyboard("{End}");
+  expect(persist).toHaveBeenCalled();
+  expect(
+    useComposerDraftStore.getState().getComposerDraft(threadRef)?.modelSelectionByProvider[
+      ProviderInstanceId.make("codex")
+    ]?.options,
+  ).toContainEqual({ id: "reasoningEffort", value: "high" });
+});
+
+it("lets a Pi model select an advertised service tier", async () => {
+  const change = vi.fn();
+  await using screen = await render(
+    <TraitsPicker
+      provider={ProviderDriverKind.make("pi")}
+      instanceId={ProviderInstanceId.make("pi")}
+      model="openai/test-model"
+      models={[
+        {
+          slug: "openai/test-model",
+          name: "Test model",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "serviceTier",
+                label: "Service Tier",
+                type: "select",
+                currentValue: "default",
+                options: [
+                  { id: "default", label: "Standard", isDefault: true },
+                  { id: "priority", label: "Fast" },
+                  { id: "ultrafast", label: "Ultrafast" },
+                ],
+              },
+            ],
+          },
+        },
+      ]}
+      planModeEnabled={false}
+      isComposerOwned
+      onModelOptionsChange={change}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Reasoning:/ }));
+  await userEvent.click(page.getByRole("button", { name: "Fast", exact: true }));
+  expect(change).toHaveBeenCalledWith([{ id: "serviceTier", value: "priority" }]);
 });

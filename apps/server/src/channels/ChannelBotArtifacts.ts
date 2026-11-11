@@ -220,7 +220,7 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
     );
     if (Option.isNone(rootStat) || !rootStat.value.isDirectory()) {
       if (Option.isSome(rootStat)) yield* Effect.logWarning("GOAT Bot artifacts folder is a link");
-      return { artifacts: [], truncated: false };
+      return { root, artifacts: [], truncated: false };
     }
     const found: Array<{ readonly artifact: ChannelBotArtifact; readonly mtime: bigint }> = [];
     const queue: Array<{ readonly dir: string; readonly prefix: string; readonly depth: number }> =
@@ -293,6 +293,7 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
           : 1,
     );
     return {
+      root,
       artifacts: found.slice(0, maxFiles).map((entry) => entry.artifact),
       truncated: truncated || found.length > maxFiles,
     };

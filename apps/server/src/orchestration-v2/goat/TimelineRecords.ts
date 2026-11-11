@@ -309,17 +309,21 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
       // A later record of the same message, such as its read time, keeps the files it came with.
       const attachments =
         entry.attachments ?? (existing?.type === "user_message" ? existing.attachments : []);
-      // It also keeps the task and answer verdict its accepted record decided.
+      // It also keeps the task its accepted record decided and the read time a read record set.
+      // Once set, the answer only changes through reception's decision (answerDecided).
       const earlier = existing?.type === "user_message" ? existing.channel : undefined;
+      const answersQuestionId =
+        entry.answerDecided === true || earlier?.answersQuestionId === undefined
+          ? entry.meta.answersQuestionId
+          : earlier.answersQuestionId;
       const meta =
         earlier === undefined
           ? entry.meta
           : {
               ...(earlier.taskId === undefined ? {} : { taskId: earlier.taskId }),
-              ...(earlier.answersQuestionId === undefined
-                ? {}
-                : { answersQuestionId: earlier.answersQuestionId }),
+              ...(earlier.readAt === undefined ? {} : { readAt: earlier.readAt }),
               ...entry.meta,
+              ...(answersQuestionId === undefined ? {} : { answersQuestionId }),
             };
       const message: OrchestrationV2ConversationMessage = {
         createdBy,

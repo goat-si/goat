@@ -266,6 +266,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   latestTerminalResultContextTransferId: Schema.NullOr(ContextTransferId),
   providerInstanceId: ProviderInstanceId,
   model: Schema.NullOr(Schema.String),
+  executedModel: Schema.optional(Schema.NullOr(Schema.String)),
   role: Schema.optional(OrchestratorMcpTaskRole),
   modelSelection: Schema.optional(ModelSelection),
   parentModelSelection: Schema.optional(ModelSelection),

@@ -113,11 +113,14 @@ function AssistantForkButton({
             size="xs"
             variant="ghost"
             disabled={busy}
-            onClick={() => {
+            onClick={(event) => {
+              const box = event.currentTarget.getBoundingClientRect();
               setBusy(true);
-              void onForkFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId }).finally(
-                () => setBusy(false),
-              );
+              void onForkFromRun({
+                sourceThreadId: projectedItem.sourceThreadId,
+                runId,
+                anchor: { x: box.left, y: box.bottom },
+              }).finally(() => setBusy(false));
             }}
             aria-label="Fork from this response"
           />

@@ -24,7 +24,12 @@ import { newThreadId } from "~/lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { threadEnvironment } from "../../state/threads";
-import { waitForThreadShell } from "../../state/entities";
+import { readEnvironmentSupportsForkWorkspace, waitForThreadShell } from "../../state/entities";
+import {
+  RESPONSE_FORK_LABELS,
+  readThreadForkAvailability,
+  useForkWithChoice,
+} from "../../hooks/useForkThread";
 import { openRevertConfirm } from "./ChatOverlayHosts";
 import { assetEnvironment } from "../../state/assets";
 import { readEnvironmentScope } from "../../state/session";
@@ -35,6 +40,7 @@ import { rewindToMessage } from "./chatViewSend";
 import { makeThreadErrorSetter } from "../ChatView.logic";
 interface TimelineRewindInput {
   readonly isCloudThread: boolean;
+  readonly isGitRepo: boolean;
   readonly environmentId: EnvironmentId;
   readonly routeThreadRef: ScopedThreadRef;
   readonly routeThreadKey: string;
@@ -63,6 +69,7 @@ interface TimelineRewindInput {
 export function useTimelineRewind(input: TimelineRewindInput) {
   const {
     isCloudThread,
+    isGitRepo,
     environmentId,
     routeThreadRef,
     routeThreadKey,
@@ -84,6 +91,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
     setThreadError,
   } = input;
   const navigate = useNavigate();
+  const forkWithChoice = useForkWithChoice();
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -231,8 +239,27 @@ export function useTimelineRewind(input: TimelineRewindInput) {
   const onForkFromRun = async (input: {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
+    readonly anchor?: { readonly x: number; readonly y: number };
   }) => {
     if (!activeThread || activeEnvironmentUnavailable) return;
+    const sourceRef = scopeThreadRef(environmentId, input.sourceThreadId);
+    // An inherited row forks its own thread, whose checkout this view knows nothing about.
+    const availability = readThreadForkAvailability(
+      sourceRef,
+      input.sourceThreadId === activeThread.id
+        ? { isGitRepository: isGitRepo, cloud: isCloudThread }
+        : {},
+    );
+    // Through the server's fork RPC both destinations work, the hub included.
+    if (readEnvironmentSupportsForkWorkspace(environmentId) && availability?.canFork) {
+      await forkWithChoice(sourceRef, availability, {
+        runId: input.runId,
+        title: activeThread.title,
+        labels: RESPONSE_FORK_LABELS,
+        ...(input.anchor ? { anchor: input.anchor } : {}),
+      });
+      return;
+    }
     const targetThreadId = newThreadId();
     const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
     const result = await forkThreadFromRun({

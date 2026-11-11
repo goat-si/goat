@@ -158,7 +158,11 @@ export function parityVerdict(input: {
         : wiring.length === 0
           ? "No configured client reports wiring to local OpenCodex."
           : wiring.some(({ status }) => status === "unproven")
-            ? "Some configured client wiring is unproven."
+            ? wiring
+                .filter(({ status }) => status === "unproven")
+                .slice(0, 3)
+                .map(({ reason }) => reason)
+                .join("; ")
             : "Configured clients use local OpenCodex.",
   );
 

@@ -60,7 +60,7 @@ const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
   environment: NodeJS.ProcessEnv | undefined,
 ) {
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
-  const { stdout } = yield* runtime
+  const { stdout, code } = yield* runtime
     .runOpenCodeCommand({
       binaryPath,
       args: ["--version"],
@@ -78,7 +78,7 @@ const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
           ),
       }),
     );
-  const result = classifyOpenCodeCliVersion(stdout);
+  const result = code === 0 ? classifyOpenCodeCliVersion(stdout) : undefined;
   if (result) return result;
   return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
     operation: "probeOpenCodeBinary",
@@ -185,5 +185,6 @@ export const makeOpenCodeRuntimeProbe = <E>(probe: Effect.Effect<ProbedOpenCode,
       get: Cache.get(cache, undefined),
       refresh: Cache.refresh(cache, undefined),
       lastSuccess: Cache.getSuccess(cache, undefined),
+      record: (probed: ProbedOpenCode) => Cache.set(cache, undefined, probed),
     }),
   );

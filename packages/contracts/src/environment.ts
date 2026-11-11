@@ -86,6 +86,8 @@ export const ServerSelfUpdateCapability = Schema.Literals([
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  modelCatalogRefresh: Schema.optionalKey(Schema.Boolean),
+  textGenerators: Schema.optionalKey(Schema.Boolean),
   freshContext: Schema.optionalKey(Schema.Boolean),
   memoryHubProtocolVersion: Schema.optionalKey(Schema.Int),
   memory: Schema.optionalKey(
@@ -243,6 +245,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listOpenAsks`: each open question and approval across bots. */
   goatBotOpenAsks: Schema.optionalKey(Schema.Boolean),
+  /** Server honours `limit` on `channel.listOpenAsks`; older ones return the newest 50. */
+  goatBotOpenAsksLimit: Schema.optionalKey(Schema.Boolean),
   /** Server streams `channel.subscribeTaskChanges`; with older ones clients read on open and focus. */
   goatBotTaskChanges: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */

@@ -563,6 +563,7 @@ export function useGoatBotSession(
     confirmedBot: availability.kind === "ready" ? availability.bot : null,
     availability,
     canOperate,
+    visibleTurnItems,
     rows,
     replyingSince: goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     activity,

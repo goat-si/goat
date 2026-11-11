@@ -6,10 +6,14 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+import { queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 
-export function isBufferedProviderNotification(
-  message: OrchestrationV2ConversationMessage,
-): boolean {
+type NotificationIdentity = Pick<
+  OrchestrationV2ConversationMessage,
+  "createdBy" | "creationSource" | "notification" | "delegatedCompletion"
+>;
+
+export function isBufferedProviderNotification(message: NotificationIdentity): boolean {
   return (
     message.createdBy === "agent" &&
     message.creationSource === "provider" &&
@@ -35,12 +39,23 @@ export function isUndeliveredMailboxSteer(
   );
 }
 
-export function followsCurrentConversation(
-  message: OrchestrationV2ConversationMessage | undefined,
-): boolean {
+export function followsCurrentConversation(message: NotificationIdentity | undefined): boolean {
   return (
     message?.delegatedCompletion !== undefined ||
     (message?.notification?.source.kind === "monitor" && !isBufferedProviderNotification(message))
+  );
+}
+
+export function queueTailModelSelection(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "messages">,
+): ModelSelection {
+  return (
+    queuedRunsInDeliveryOrder(projection).findLast(
+      (run) =>
+        !followsCurrentConversation(
+          projection.messages.find((message) => message.id === run.userMessageId),
+        ),
+    )?.modelSelection ?? projection.thread.modelSelection
   );
 }
 

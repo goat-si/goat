@@ -95,6 +95,7 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
       current: input.manifestCurrent ?? Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
       refresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
       forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      refreshOnDemand: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
       refreshInBackground: Effect.void,
     }),
     Effect.provideService(HostProcess.Platform, input.platform ?? "darwin"),
@@ -146,6 +147,27 @@ const startupInfo = JSON.stringify({
   configRequirements: { requirements: null },
 });
 const startupFailure = JSON.stringify({ error: { code: -32600, message: "fixture config error" } });
+
+it.live(
+  "does not install through a lazy shim during status and lets a later session resolve it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness({ local: { version: "0.164.0" } });
+        const marker = `${h.baseDir}/shim-installed`;
+        yield* h.fs.writeFileString(
+          h.localBinaryPath,
+          `#!/bin/sh\nif [ "$MISE_OFFLINE" = 1 ]; then echo 'mise ERROR not installed' >&2; exit 1; fi\n: > '${marker}'\necho 'codex-cli 0.164.0'\n`,
+          { mode: 0o755 },
+        );
+        yield* h.installation.resolve().pipe(Effect.flip);
+        expect(yield* h.fs.exists(marker)).toBe(false);
+        const executable = yield* h.installation.acquire();
+        expect(executable.source).toBe("local");
+        expect(yield* h.fs.exists(marker)).toBe(true);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+);
 
 function startupProbeFixture(
   input: {
@@ -899,6 +921,7 @@ it.effect(
   "installs and runs the pinned managed release for a managed-only start when Codex is on PATH",
   () =>
     Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
       const h = yield* makeHarness({ local: { version: "0.164.0" } });
       // The default start keeps reusing a supported PATH Codex.
       expect((yield* h.installation.start).source).toBe("local");

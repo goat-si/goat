@@ -5,7 +5,12 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+} from "@goat/contracts";
 import type { OpenCodeSettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
@@ -147,7 +152,68 @@ it.live("discovers models through a home-relative OpenCode wrapper", () =>
   ),
 );
 
+const lazyMiseShim = {
+  ...openCode2Runtime,
+  runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
+    environment?.MISE_OFFLINE === "1"
+      ? Effect.fail(
+          new OpenCodeRuntime.OpenCodeRuntimeError({
+            operation: "runOpenCodeCommand",
+            detail: "mise ERROR Failed to install opencode@latest",
+          }),
+        )
+      : Effect.succeed({ stdout: "opencode v2.0.18\n", stderr: "", code: 0 }),
+} as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"];
+
 it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
+  it.effect("starts workspace discovery servers with mise offline", () =>
+    Effect.gen(function* () {
+      const environments: NodeJS.ProcessEnv[] = [];
+      const runtime = {
+        ...openCode2Runtime,
+        startOpenCodeServerProcess: (input: { readonly environment?: NodeJS.ProcessEnv }) =>
+          Effect.sync(() => {
+            environments.push(input.environment ?? {});
+          }).pipe(Effect.andThen(reachedServer("probe-start"))),
+      };
+      const instance = yield* create({}, noHttp).pipe(
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+      );
+      yield* Effect.flip(instance.snapshotForCwd!(process.cwd()));
+      assert.isAtLeast(environments.length, 1);
+      assert.isTrue(environments.every((env) => env.MISE_OFFLINE === "1"));
+    }).pipe(Effect.scoped),
+  );
+  it.effect("does not scan with a lazy shim after an offline probe fails", () =>
+    Effect.gen(function* () {
+      serverStarts.length = 0;
+      const instance = yield* create({}, noHttp).pipe(
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, lazyMiseShim),
+      );
+      yield* Effect.flip(instance.snapshotForCwd!(process.cwd()));
+      assert.deepStrictEqual(serverStarts, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("permits user-started sessions to resolve the online runtime", () =>
+    Effect.gen(function* () {
+      serverStarts.length = 0;
+      const instance = yield* create({}, noHttp).pipe(
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, lazyMiseShim),
+        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+      );
+      yield* instance.orchestrationAdapter
+        .openSession({
+          threadId: ThreadId.make("thread-lazy-mise"),
+          providerSessionId: ProviderSessionId.make("session-lazy-mise"),
+          modelSelection: { instanceId: instance.instanceId, model: "opencode/big-pickle" },
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+        })
+        .pipe(Effect.scoped, Effect.flip);
+      assert.deepStrictEqual(serverStarts, ["start"]);
+    }).pipe(Effect.scoped),
+  );
   it.effect("never starts a 1.x server for an OpenCode 2 instance", () =>
     Effect.gen(function* () {
       serverStarts.length = 0;

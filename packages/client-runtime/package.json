@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./composer-model-mentions": {
+      "types": "./src/composerModelMentions.ts",
+      "default": "./src/composerModelMentions.ts"
+    },
     "./blocked-browser-hosts": {
       "types": "./src/blockedBrowserHosts.ts",
       "default": "./src/blockedBrowserHosts.ts"
@@ -602,6 +606,10 @@
     "./work-log/tool-presentation": {
       "types": "./src/work-log/toolPresentation.ts",
       "default": "./src/work-log/toolPresentation.ts"
+    },
+    "./work-log/turn-item-entry": {
+      "types": "./src/work-log/turnItemEntry.ts",
+      "default": "./src/work-log/turnItemEntry.ts"
     },
     "./work-log/command-label": {
       "types": "./src/work-log/commandLabel.ts",

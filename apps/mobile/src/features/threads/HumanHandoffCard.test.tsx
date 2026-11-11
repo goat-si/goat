@@ -201,11 +201,16 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
-const render = async (record: Handoff = handoff) => {
+const render = async (record: Handoff = handoff, offline = false) => {
   await act(async () =>
     root.render(
       <RegistryContext value={registry}>
-        <HumanHandoffCard environmentId={environmentId} handoff={record} inherited={false} />
+        <HumanHandoffCard
+          environmentId={environmentId}
+          handoff={record}
+          inherited={false}
+          offline={offline}
+        />
       </RegistryContext>,
     ),
   );
@@ -479,6 +484,15 @@ it.each([
   expect(container.textContent).toContain(message);
   expect(container.textContent).not.toContain("GOAT is setting up");
   expect(container.textContent).not.toContain("GOAT is updating");
+});
+it("asks to reconnect instead of answering while its environment is away", async () => {
+  await render({ ...handoff, state: "pending" }, true);
+  expect(container.textContent).toContain("Reconnect to answer.");
+  const review = [...container.querySelectorAll("button")].find(
+    (node) => node.textContent === "Review request",
+  );
+  expect(review?.disabled).toBe(true);
+  expect(harness.open).not.toHaveBeenCalled();
 });
 it("preserves the generic terminal completion and cancellation actions", async () => {
   await render({

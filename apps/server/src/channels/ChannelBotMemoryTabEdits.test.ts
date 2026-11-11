@@ -20,7 +20,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
-import { CHANNEL_COPY, noteKeptNotice } from "./channelCopy.ts";
+import { CHANNEL_COPY, noteKeptNotice, notesAlikeAnswer } from "./channelCopy.ts";
 import { inputIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
@@ -162,7 +162,7 @@ describe("Memory tab requests to change or forget a note", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("Ask to forget removes the note, the notes it replaced and quotes of them", () => {
+  it.effect("Ask to forget removes the note and the notes it replaced, and nothing else", () => {
     const { asked, layer } = harnessFor();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -187,7 +187,8 @@ describe("Memory tab requests to change or forget a note", () => {
       assert.notInclude(asked, message);
       assert.strictEqual(
         yield* readNotes,
-        NOTES_HEADER + korean + line("Weekly sync is on Monday.", "g") + "\n",
+        // The last note's marker bound nothing (Mina was already replaced), so it stays as it was.
+        NOTES_HEADER + korean + line("Weekly sync is on Monday.", "g", mina) + "\n",
       );
       assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
       assert.strictEqual(yield* taskCount, 0);
@@ -208,6 +209,157 @@ describe("Memory tab requests to change or forget a note", () => {
       assert.strictEqual(yield* taskCount, 0);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "Ask to forget a correction keeps a newer note that reads like the one it replaced",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* writeNotes(
+          NOTES_HEADER +
+            line("Use pnpm", "a") +
+            "\n" +
+            line("Use npm", "b", "Use pnpm") +
+            "\n" +
+            line("Use pnpm", "c") +
+            "\n",
+        );
+        yield* send(goatBotForgetNoteMessage("Use npm"), "tab-forget");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + line("Use pnpm", "c") + "\n");
+        assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "Ask to forget the end of a correction chain removes the chain and nothing else",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const korean = line("Reply in Korean.", "k") + "\n";
+        // Saved after the chain with the words of its middle note, so it is a note of its own.
+        const tuesday = line("Release on Tuesday.", "d") + "\n";
+        yield* writeNotes(
+          NOTES_HEADER +
+            line("Release on Monday.", "a") +
+            "\n" +
+            korean +
+            line("Release on Tuesday.", "b", "Release on Monday.") +
+            "\n" +
+            line("Release on Wednesday.", "c", "Release on Tuesday.") +
+            "\n" +
+            tuesday,
+        );
+        yield* send(goatBotForgetNoteMessage("Release on Wednesday."), "tab-forget");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + korean + tuesday);
+        assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "Ask to forget refuses when removing the note would change what another replaces",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        // A hand edit put a note above the header. Without that note the header starts the file
+        // again, so its wording stops being a note and the correction below would replace nothing.
+        const headerWords = NOTES_HEADER.split("\n")[2] ?? "";
+        const text =
+          line(fridays, "a") +
+          "\n" +
+          NOTES_HEADER +
+          line("Keep notes short.", "c", headerWords) +
+          "\n";
+        yield* writeNotes(text);
+        yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
+        assert.strictEqual(yield* readNotes, text);
+        assert.include(yield* replies, CHANNEL_COPY.noteForgetWouldRebind);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "Ask to forget leaves every other line as it was, an unmatched correction naming it too",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        // The correction came first, so it replaces nothing; the later note is its own.
+        const unmatched = line("Use vp", "z", "Use pnpm") + "\n";
+        yield* writeNotes(NOTES_HEADER + unmatched + line("Use pnpm", "x") + "\n");
+        yield* send(goatBotForgetNoteMessage("Use pnpm"), "tab-forget");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + unmatched);
+        assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  // Two current notes whose words differ only in spacing count as the same words.
+  const alike = () =>
+    NOTES_HEADER +
+    line("Use pnpm", "a") +
+    "\n" +
+    line("Reply in Korean.", "k") +
+    "\n" +
+    "- 2026-11-02: Use  pnpm\n";
+
+  it.effect("Ask to forget words two current notes share changes nothing and says so", () => {
+    const { asked, layer } = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const text = alike();
+      yield* writeNotes(text);
+      const message = goatBotForgetNoteMessage("Use pnpm");
+      yield* send(message, "tab-forget");
+      assert.strictEqual(yield* readNotes, text);
+      assert.notInclude(asked, message);
+      assert.include(yield* replies, notesAlikeAnswer("Use pnpm", 2));
+      assert.strictEqual(yield* taskCount, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("Ask to change words two current notes share changes nothing and says so", () => {
+    const { asked, layer } = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const text = alike();
+      yield* writeNotes(text);
+      const message = goatBotChangeNoteMessage("Use  pnpm", "Use vp");
+      yield* send(message, "tab-change");
+      assert.strictEqual(yield* readNotes, text);
+      assert.notInclude(asked, message);
+      assert.include(yield* replies, notesAlikeAnswer("Use pnpm", 2));
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "a note whose same words were replaced earlier is the one current note to change",
+    () => {
+      const { layer } = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* writeNotes(
+          NOTES_HEADER +
+            line("Use pnpm", "a") +
+            "\n" +
+            line("Use npm", "b", "Use pnpm") +
+            "\n" +
+            line("Use pnpm", "c") +
+            "\n",
+        );
+        yield* send(goatBotChangeNoteMessage("Use  pnpm", "Use vp"), "tab-change");
+        assert.include(yield* replies, CHANNEL_COPY.noteChanged);
+        const current = parseChannelBotNoteLines(yield* readNotes)
+          .filter((note) => note.replacedBy === undefined)
+          .map((note) => note.text);
+        assert.deepStrictEqual(current, ["Use npm", "Use vp"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("a Slack person whose link was removed cannot forget a note", () => {
     const { layer } = harnessFor();

@@ -251,6 +251,8 @@ export const make = Effect.gen(function* () {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       freshContext: true,
+      modelCatalogRefresh: true,
+      textGenerators: true,
       // The core and owner memory RPC groups are always installed by ws.ts.
       memory: {
         protocolVersion: 1,
@@ -341,6 +343,7 @@ export const make = Effect.gen(function* () {
       goatBotHome: true,
       goatBotStatus: true,
       goatBotOpenAsks: true,
+      goatBotOpenAsksLimit: true,
       goatBotTaskChanges: true,
       goatBotChildWork: true,
       goatBotProfiles: true,

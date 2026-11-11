@@ -87,6 +87,7 @@ describe("resolveProviderCatalog", () => {
               current: Effect.succeed(manifest),
               refresh: Effect.die("Catalog reads must not refresh the manifest"),
               forceRefresh: Effect.die("Catalog reads must not refresh the manifest"),
+              refreshOnDemand: Effect.die("Catalog reads must not refresh the manifest"),
               refreshInBackground: Effect.die("Catalog reads must not refresh the manifest"),
             }),
           ),
@@ -341,6 +342,31 @@ describe("ModelManifest service", () => {
         ),
       ),
   );
+
+  it.effect("model picker refresh waits five minutes between manifest fetches", () => {
+    let fetches = 0;
+    return Effect.gen(function* () {
+      const service = yield* ModelManifest.make;
+      yield* service.refresh;
+      yield* TestClock.adjust("4 minutes");
+      yield* service.refreshOnDemand;
+      assert.strictEqual(fetches, 1);
+      yield* TestClock.adjust("1 minute");
+      yield* service.refreshOnDemand;
+      assert.strictEqual(fetches, 2);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerService({
+          prefix: "model-manifest-picker-test",
+          response: () => {
+            fetches++;
+            return Response.json(REMOTE_MANIFEST);
+          },
+        }),
+      ),
+    );
+  });
 
   it.live("prefers a fetched manifest over the bundle and caches it to disk", () =>
     Effect.gen(function* () {

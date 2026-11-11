@@ -35,6 +35,13 @@ const citation: AssistantCitation = {
 };
 
 describe("splitPromptIntoComposerSegments", () => {
+  it("recognizes a model mention without changing its serialized prompt text", () => {
+    expect(splitPromptIntoComposerSegments("Compare model:codex/gpt-5.5 with this.")).toEqual([
+      { type: "text", text: "Compare " },
+      { type: "model", instanceId: "codex", model: "gpt-5.5", source: "model:codex/gpt-5.5" },
+      { type: "text", text: " with this." },
+    ]);
+  });
   it("splits mention tokens followed by whitespace into mention segments", () => {
     expect(splitPromptIntoComposerSegments("Inspect @AGENTS.md please")).toEqual([
       { type: "text", text: "Inspect " },

@@ -120,6 +120,7 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
             penAliasRevision: () => Effect.succeed(undefined),
             runningTurns: () => Effect.succeed(0),
             deviceHealth: () => Effect.die("unused"),
+            identify: () => Effect.die("unused"),
             homeTunnels: (alias, port) =>
               Effect.sync(() => {
                 calls.push(`tunnels ${alias} ${port}`);

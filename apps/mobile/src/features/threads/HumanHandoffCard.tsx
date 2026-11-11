@@ -43,6 +43,8 @@ type HumanHandoffCardProps = {
   environmentId: EnvironmentId;
   handoff: Handoff;
   inherited: boolean;
+  /** The environment that receives the answer is not connected; answering waits for it. */
+  offline?: boolean;
 };
 
 export function HumanHandoffCard(props: HumanHandoffCardProps) {
@@ -178,12 +180,14 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
     [],
   );
   const pending = isHandoffPending(handoff.state);
+  const offline = props.offline === true;
   const act = async (
     action: "opened" | "completed" | "declined" | "cancelled",
     computerUseScope?: "session" | "always",
   ) => {
     if (
       inFlight.current ||
+      offline ||
       (isBrowserClaim && action === "completed" && !canWriteSettings) ||
       (isProvider && (!canTarget || !(action === "opened" ? canOpen : allowed)))
     )
@@ -258,7 +262,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
               <Button
                 tone="secondary"
                 label="End computer use"
-                disabled={busy || !allowed || !canTarget}
+                disabled={busy || offline || !allowed || !canTarget}
                 onPress={() => void act("cancelled")}
               />
             ) : null}
@@ -275,11 +279,14 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
         </Text>
       ) : (
         <>
+          {offline ? (
+            <Text className="font-sans text-sm text-foreground-muted">Reconnect to answer.</Text>
+          ) : null}
           {human === null ? (
             <Button
               tone="primary"
               label="Review request"
-              disabled={busy || !canOpen || ((isSsh || isProvider) && !canTarget)}
+              disabled={busy || offline || !canOpen || ((isSsh || isProvider) && !canTarget)}
               onPress={() => void act("opened")}
             />
           ) : (
@@ -288,7 +295,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
                 <Button
                   tone="primary"
                   label="Open setup"
-                  disabled={busy || !allowed || !canTarget}
+                  disabled={busy || offline || !allowed || !canTarget}
                   onPress={openProviderSetup}
                 />
               ) : null}
@@ -348,6 +355,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
                 }
                 disabled={
                   busy ||
+                  offline ||
                   !allowed ||
                   ((isSsh || isProvider) && !canTarget) ||
                   (isBrowserClaim && !canWriteSettings)
@@ -358,7 +366,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
                 <Button
                   tone="primary"
                   label={`Always allow ${handoff.apps?.join(", ")}`}
-                  disabled={busy || !allowed || !canTarget}
+                  disabled={busy || offline || !allowed || !canTarget}
                   onPress={() => void act("completed", "always")}
                 />
               ) : null}
@@ -368,7 +376,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
             <Button
               tone="primary"
               label="Decline"
-              disabled={busy || !allowed || ((isSsh || isProvider) && !canTarget)}
+              disabled={busy || offline || !allowed || ((isSsh || isProvider) && !canTarget)}
               onPress={() => void act("declined")}
             />
           ) : null}
@@ -376,7 +384,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
             <Button
               tone="primary"
               label={isRuntimeUpdate ? "Cancel" : "Cancel request"}
-              disabled={busy || !allowed || ((isSsh || isProvider) && !canTarget)}
+              disabled={busy || offline || !allowed || ((isSsh || isProvider) && !canTarget)}
               onPress={() => void act("cancelled")}
             />
           ) : null}
@@ -392,7 +400,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
           <Button
             tone="primary"
             label="Check provider status"
-            disabled={busy || !canRefresh}
+            disabled={busy || offline || !canRefresh}
             onPress={() => void checkProviderRoute()}
           />
         </View>

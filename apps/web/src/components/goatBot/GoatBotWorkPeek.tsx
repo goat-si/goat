@@ -7,6 +7,7 @@ import { ChevronLeftIcon } from "~/components/solar";
 import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
+import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 
 const NO_RETRY = () => {};
@@ -61,22 +62,24 @@ export function GoatBotWorkPeek({
         </Button>
         <p className="px-3 text-xs text-muted-foreground">{statusLabel}</p>
       </div>
-      {/* The chat's activity line is the bot's, not this task's; the one way on is below. */}
+      {/* The chat's activity lines are the bot's, not this task's; the one way on is below. */}
       <GoatBotActivityContext value={null}>
-        <GoatBotTaskTargetHidden value>
-          {rows.length > 0 ? (
-            <GoatBotTimeline
-              taskDetails
-              rows={rows}
-              environmentId={environmentId}
-              onRetry={onRetry ?? NO_RETRY}
-            />
-          ) : (
-            <p className="flex-1 px-4 text-muted-foreground">
-              Nothing has been said in this task yet.
-            </p>
-          )}
-        </GoatBotTaskTargetHidden>
+        <GoatBotStepsContext value={null}>
+          <GoatBotTaskTargetHidden value>
+            {rows.length > 0 ? (
+              <GoatBotTimeline
+                taskDetails
+                rows={rows}
+                environmentId={environmentId}
+                onRetry={onRetry ?? NO_RETRY}
+              />
+            ) : (
+              <p className="flex-1 px-4 text-muted-foreground">
+                Nothing has been said in this task yet.
+              </p>
+            )}
+          </GoatBotTaskTargetHidden>
+        </GoatBotStepsContext>
       </GoatBotActivityContext>
       <div className="p-3">
         <Button

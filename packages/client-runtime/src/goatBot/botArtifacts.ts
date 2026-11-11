@@ -8,7 +8,7 @@ import {
 import * as Base64 from "effect/encoding/Base64";
 import * as Result from "effect/Result";
 
-import { goatBotDayLabel } from "./labels.ts";
+import { goatBotDayLabel, goatBotLocalDate } from "./labels.ts";
 
 export type BotArtifactRead =
   | {
@@ -96,30 +96,76 @@ export const botArtifactName = (relativePath: string) =>
 
 const INLINE_CODE = /`([^`\n]+)`/g;
 
+const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/;
+// The names the server lists (plainName in ChannelBotArtifacts): no leading dot, colon, backslash or edge spaces.
+const listableName = (name: string) =>
+  name !== "" && !name.startsWith(".") && !/[:\\]/.test(name) && name === name.trim();
+
 /**
- * Library files a reply names in inline code, in order, each once: by its path inside the
- * artifacts folder, or by a full path ending in that folder and path.
+ * `path` with `.` and repeated separators removed, or null when it is not absolute or has a `..`
+ * segment: a link inside the folder can make `..` lead elsewhere, so it is never resolved here.
+ */
+function normalizedAbsolute(path: string, windows: boolean): string | null {
+  if (windows ? !WINDOWS_ABSOLUTE.test(path) : !path.startsWith("/")) return null;
+  const parts = path.split(windows ? /[\\/]/ : "/");
+  // A drive ("C:") stays first; a UNC path keeps a "//" start so it never equals a drive path.
+  const head = !windows
+    ? []
+    : /^[A-Za-z]:$/.test(parts[0] ?? "")
+      ? [parts.shift() ?? ""]
+      : ["", ""];
+  const kept: Array<string> = [];
+  for (const part of parts) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") return null;
+    kept.push(part);
+  }
+  const joined = [...head, ...kept].join("/");
+  // Windows compares paths without regard to case; elsewhere a different case is a different file.
+  return windows ? joined.toLowerCase() : joined;
+}
+
+/**
+ * Library files a reply names in inline code, in order, each once.
+ * Rule: a relative path names a file only when it is exactly the listed path; an absolute path
+ * only when, normalized, it is `root` + "/" + the listed path; without `root` (an older server),
+ * absolute paths name nothing, and a caller that passes none gets that rule too.
  */
 export function goatBotReplyFiles<File extends { readonly relativePath: string }>(
   text: string,
   files: ReadonlyArray<File>,
+  root?: string,
 ): ReadonlyArray<File> {
+  const windows = root !== undefined && (root.includes("\\") || /^[A-Za-z]:/.test(root));
+  const folder = root === undefined ? null : normalizedAbsolute(root, windows);
   const named: Array<File> = [];
   for (const match of text.matchAll(INLINE_CODE)) {
     const code = (match[1] ?? "").trim();
-    const file = files.find(
-      (candidate) =>
-        code === candidate.relativePath || code.endsWith(`/artifacts/${candidate.relativePath}`),
+    const absolute = folder === null ? null : normalizedAbsolute(code, windows);
+    const file = files.find((candidate) =>
+      absolute === null
+        ? code === candidate.relativePath
+        : absolute ===
+          (windows
+            ? `${folder}/${candidate.relativePath.toLowerCase()}`
+            : `${folder}/${candidate.relativePath}`),
     );
     if (file !== undefined && !named.includes(file)) named.push(file);
   }
   return named;
 }
 
-/** True when a reply has inline code that could name a saved file, so the Library is worth reading. */
+/**
+ * True when a reply has inline code that could name a file the Library can list, so it is worth
+ * reading: a relative path of listable names, or an absolute path ending in one.
+ */
 export function goatBotReplyMayNameFile(text: string): boolean {
-  for (const match of text.matchAll(INLINE_CODE))
-    if (/[^/\s]\.[A-Za-z0-9]{1,8}$/.test((match[1] ?? "").trim())) return true;
+  for (const match of text.matchAll(INLINE_CODE)) {
+    const code = (match[1] ?? "").trim();
+    if (code.startsWith("/") || WINDOWS_ABSOLUTE.test(code)) {
+      if (listableName(code.split(/[\\/]/).at(-1) ?? "")) return true;
+    } else if (code.length <= 512 && code.split("/").every(listableName)) return true;
+  }
   return false;
 }
 
@@ -141,19 +187,31 @@ export function botArtifactViewKind(
   return "download";
 }
 
-/** Newest-first Library files under one heading per local calendar day, order kept. */
+/**
+ * Newest-first Library files under one heading per local calendar day, order kept. `key` is that
+ * day as YYYY-MM-DD and unique; a date from another year shows its year in the label.
+ */
 export function goatBotArtifactDays<File extends { readonly modifiedAt: string }>(
   files: ReadonlyArray<File>,
   nowMs: number,
-): ReadonlyArray<{ readonly label: string; readonly files: ReadonlyArray<File> }> {
-  const days: Array<{ label: string; files: File[] }> = [];
+): ReadonlyArray<{
+  readonly key: string;
+  readonly label: string;
+  readonly files: ReadonlyArray<File>;
+}> {
+  const days = new Map<string, { key: string; label: string; files: File[] }>();
   for (const file of files) {
-    const label = goatBotDayLabel(file.modifiedAt, nowMs);
-    const last = days.at(-1);
-    if (last?.label === label) last.files.push(file);
-    else days.push({ label, files: [file] });
+    const key = goatBotLocalDate(file.modifiedAt);
+    const day = days.get(key);
+    if (day !== undefined) day.files.push(file);
+    else
+      days.set(key, {
+        key,
+        label: goatBotDayLabel(file.modifiedAt, nowMs, { yearWhenOther: true }),
+        files: [file],
+      });
   }
-  return days;
+  return [...days.values()];
 }
 
 export function botArtifactSizeLabel(bytes: number): string {

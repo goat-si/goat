@@ -1,4 +1,5 @@
 import { AuthPreviewOperateScope, type EnvironmentId } from "@goat/contracts";
+import { readPreviewShown } from "../lib/previewShown";
 import type { AnyRouter } from "@tanstack/react-router";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
@@ -134,7 +135,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
                 threadRef,
               ).terminalOpen
             : false,
-          previewOpen: readPreviewOpen(),
+          previewOpen: threadRef ? readPreviewShown(threadRef) : false,
         };
       },
       onKeyDown: (event) => {

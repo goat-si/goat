@@ -41,6 +41,7 @@ import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { PlacementAdmissionEnabled } from "../fleet/admission/PlacementKey.ts";
 import {
   countHostThreads,
   runningSubagents,
@@ -255,6 +256,7 @@ const make = Effect.gen(function* () {
       host: null,
       reachability: "ok" as const,
       serverVersion: packageJson.version,
+      ...((yield* PlacementAdmissionEnabled) ? { placementAdmission: 1 as const } : {}),
       protocol: servedRuntimeProtocolRanges(),
       ...(includeRepositories ? { repositories: yield* repositories.read } : {}),
       metrics: {

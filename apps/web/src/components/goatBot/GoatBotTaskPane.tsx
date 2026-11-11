@@ -6,7 +6,7 @@ import {
   presentTaskStatus,
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
-import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { ChannelQuestionId, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { useEffect, type CSSProperties } from "react";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { cn } from "~/lib/utils";
@@ -19,6 +19,7 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
+import { GoatBotStepsProvider, GoatBotStepsReader } from "./GoatBotStepsProvider";
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
 import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
@@ -170,14 +171,35 @@ export function GoatBotTaskPane({
           remoteWork={remoteWork}
         />
       </div>
-      <GoatBotTimeline
-        taskDetails
-        rows={timelineRows}
+      <GoatBotStepsProvider
+        visibleTurnItems={session.visibleTurnItems}
         environmentId={environmentId}
-        onRetry={session.onRetryInput}
-        onDiscard={session.onDiscardInput}
-        onPick={canSend ? (text) => session.onSendToTask(taskId, text) : undefined}
-      />
+        taskId={taskId}
+      >
+        <GoatBotStepsReader rows={timelineRows}>
+          <GoatBotTimeline
+            taskDetails
+            rows={timelineRows}
+            environmentId={environmentId}
+            onRetry={session.onRetryInput}
+            onDiscard={session.onDiscardInput}
+            onPick={
+              canSend
+                ? (text, answerTask, questionId) =>
+                    // A question id goes only with the task that asked it.
+                    session.onSendToTask(
+                      taskId,
+                      text,
+                      [],
+                      answerTask === taskId && questionId !== undefined
+                        ? ChannelQuestionId.make(questionId)
+                        : undefined,
+                    )
+                : undefined
+            }
+          />
+        </GoatBotStepsReader>
+      </GoatBotStepsProvider>
       <GoatBotComposer
         disabled={!canSend}
         botName={botName}

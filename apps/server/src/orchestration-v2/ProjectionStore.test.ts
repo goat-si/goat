@@ -1971,6 +1971,7 @@ it.effect("lists only active subagent IDs without loading shell data", () =>
     for (const [id, relationship, archivedAt, deletedAt] of [
       ["parent", null, null, null],
       ["active-subagent", "subagent", null, null],
+      ["active-subagent-2", "subagent", null, null],
       ["archived-subagent", "subagent", createdAt, null],
       ["deleted-subagent", "subagent", null, createdAt],
     ] as const) {
@@ -1988,7 +1989,17 @@ it.effect("lists only active subagent IDs without loading shell data", () =>
 
     assert.sameMembers(
       [...(yield* store.listActiveSubagentThreadIds())],
-      [ThreadId.make("active-subagent")],
+      [ThreadId.make("active-subagent"), ThreadId.make("active-subagent-2")],
+    );
+    assert.deepEqual(yield* store.listActiveSubagentThreadIds({ limit: 1 }), [
+      ThreadId.make("active-subagent"),
+    ]);
+    assert.deepEqual(
+      yield* store.listActiveSubagentThreadIds({
+        limit: 1,
+        after: ThreadId.make("active-subagent"),
+      }),
+      [ThreadId.make("active-subagent-2")],
     );
   }).pipe(Effect.provide(layerTest)),
 );

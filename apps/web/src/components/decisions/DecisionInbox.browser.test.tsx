@@ -99,6 +99,12 @@ vi.mock("../../state/environments", () => ({
   useEnvironment: (id: EnvironmentId) => ({ label: `Environment ${id}` }),
 }));
 vi.mock("../../state/server", () => ({ serverEnvironment: { answerDecision: "decisionAnswer" } }));
+// The handoff card answers through its own RPCs and has its own tests.
+vi.mock("../chat/HandoffCard", () => ({
+  HandoffCard: (props: { readonly handoff: { readonly title: string } }) => (
+    <section aria-label={props.handoff.title} />
+  ),
+}));
 
 import { DecisionInbox } from "./DecisionInbox";
 import { TooltipProvider } from "../ui/tooltip";

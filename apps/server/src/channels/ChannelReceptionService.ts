@@ -120,6 +120,7 @@ import {
 import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { mayAnswerTask, openQuestionTask, questionTextForModel } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
+import { personMessageEntry } from "./channelPersonMessage.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import {
@@ -919,19 +920,7 @@ const make = Effect.gen(function* () {
             threadId: origin.threadId,
             record: {
               recordKey: "input:" + inputId,
-              entry: {
-                type: "message",
-                role: "user",
-                text: message.text,
-                meta: {
-                  conversationId,
-                  originKind: "goat",
-                  kind: "inbound",
-                  inputId,
-                  clientMessageId: message.externalMessageId,
-                  readAt: stored.snapshot.readAt ?? readAt,
-                },
-              },
+              entry: personMessageEntry(stored, { readAt: stored.snapshot.readAt ?? readAt }),
             },
             revision: "read",
           })
@@ -1244,13 +1233,17 @@ const make = Effect.gen(function* () {
             : quotedFromInput(asked.notesChangeRequested, message.text)
               ? undefined
               : "quote_not_in_input";
-      const noteNotice =
-        (decision.remember !== undefined && rememberRefusal === undefined
+      const saved =
+        decision.remember !== undefined && rememberRefusal === undefined
           ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
-          : droppedNoteNotice(rememberRefusal)) ?? droppedNoteNotice(editRefusal);
+          : undefined;
+      const noteNotice =
+        (saved === undefined ? droppedNoteNotice(rememberRefusal) : saved.notice) ??
+        droppedNoteNotice(editRefusal);
       let replyText = decision.replyText;
       let finalDecision = decision;
-      if (noteNotice === CHANNEL_COPY.noteEditBusy) {
+      // Nothing was saved, so the model's reply, which says it was, gives way to the notice.
+      if (saved?.held === true && noteNotice !== undefined) {
         replyText = noteNotice;
         finalDecision = { replyText, action: { type: "report_only" } };
       }

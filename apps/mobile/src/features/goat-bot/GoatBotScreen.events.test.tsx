@@ -32,6 +32,10 @@ type Read =
   | ReadonlyArray<object>
   | { readonly failedAfter: ReadonlyArray<object> }
   | { readonly refreshing: ReadonlyArray<object> };
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
 vi.mock("react-native", () => ({
   // Views report where they sit, as native layout does once they mount.
   View: function View({
@@ -229,6 +233,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
     replyingSince: null,
     activity: null,
     supportsTaskThreads: true,
+    streamingReplyIds: new Set<string>(),
   }),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));

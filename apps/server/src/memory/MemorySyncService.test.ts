@@ -3866,7 +3866,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "claim response before ticket failure recovers alongside an existing uncertain submission",
   () =>
@@ -3983,7 +3982,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "settings model change rearms availability pull hold while authorization push hold stays parked",
   () =>
@@ -4039,7 +4037,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "automatic pull retry wakes at its durable due time instead of waiting for the periodic cycle",
   () =>
@@ -4087,7 +4084,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "lost resolve response followed by canonical pull reconciles changed heads without regeneration",
   () =>
@@ -4215,7 +4211,6 @@ it.effect(
       );
     }),
 );
-
 it.effect("failed renewal SQL write and release retain the authoritative retry floor", () =>
   Effect.gen(function* () {
     const released = yield* Deferred.make<void>();
@@ -4269,7 +4264,6 @@ it.effect("failed renewal SQL write and release retain the authoritative retry f
     );
   }),
 );
-
 it.effect.each(["pull", "ack"] as const)(
   "commits %s while the real settings provider-history reload is pending",
   (lane) =>
@@ -4379,7 +4373,9 @@ it.effect.each(["pull", "ack"] as const)(
           realHub,
           runtimeBase.pipe(Layer.provide(realCore)),
           identity,
-          realGeneration({ resolveMemoryConflict: () => Effect.never }),
+          realGeneration({ resolveMemoryConflict: () => Effect.never }).pipe(
+            Layer.provide(realCore),
+          ),
           peer(),
         );
         const app = Sync.layer.pipe(
@@ -5098,7 +5094,9 @@ it.effect.each(["bootstrap", "exchange"] as const)(
             Layer.mergeAll(
               selfHub,
               runtimeBase.pipe(Layer.provide(selfCore)),
-              realGeneration({ resolveMemoryConflict: () => Effect.never }),
+              realGeneration({ resolveMemoryConflict: () => Effect.never }).pipe(
+                Layer.provide(settingsLayer),
+              ),
               peer({
                 join: () => Effect.die("self HTTP join forbidden"),
                 pull: () => Effect.die("self HTTP pull forbidden"),
@@ -5267,7 +5265,9 @@ it.effect.each(["bootstrap", "exchange"] as const)(
                 aCore,
                 aHub,
                 runtimeBase.pipe(Layer.provide(aCore)),
-                realGeneration({ resolveMemoryConflict: () => Effect.never }),
+                realGeneration({ resolveMemoryConflict: () => Effect.never }).pipe(
+                  Layer.provide(aCore),
+                ),
                 aClient,
               ),
             ),

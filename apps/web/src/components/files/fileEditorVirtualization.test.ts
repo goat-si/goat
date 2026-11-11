@@ -15,7 +15,7 @@ const { clearRenderQueue } = (await import(/* @vite-ignore */ renderingManagerUr
   clearRenderQueue(): void;
 };
 
-class MeasuredElement {
+class MeasuredElement extends EventTarget {
   static geometryReads = 0;
   children: MeasuredElement[] = [];
   dataset: Record<string, string> = {};
@@ -23,7 +23,9 @@ class MeasuredElement {
   shadowRoot: MeasuredElement | null = null;
   width = 283;
 
-  constructor(readonly height = 0) {}
+  constructor(readonly height = 0) {
+    super();
+  }
 
   attachShadow() {
     this.shadowRoot ??= new MeasuredElement();
@@ -117,7 +119,7 @@ class MeasuredFile extends VirtualizedFile {
     (this as unknown as { installEditSession(file: FileContents): void }).installEditSession(file);
     await this.fileRenderer.initializeHighlighter();
     expect(
-      this.fileRenderer.renderFile(file, {
+      this.fileRenderer.renderFile(this.getWorkingFile(file) ?? file, {
         startingLine: 5950,
         totalLines: 51,
         bufferBefore: 0,
@@ -223,6 +225,7 @@ async function makeFixture(
     lang: "text",
   };
   const document = new TextDocument<"file", undefined>(file.name, contents, "text");
+  const virtualizer = new LayoutVirtualizer();
   const instance = new MeasuredFile(
     {
       overflow,
@@ -232,7 +235,7 @@ async function makeFixture(
       useTokenTransformer: true,
       controlledSelection: true,
     },
-    new LayoutVirtualizer(),
+    virtualizer,
   );
   instances.push(instance);
   await instance.initialize(file);
@@ -247,31 +250,43 @@ async function makeFixture(
     ],
     contentWidth,
   );
-  const apply = (change: { startLine: number } | undefined, passStartLine = true) => {
+  const apply = (
+    change: Parameters<MeasuredFile["applyChange"]>[1] | undefined,
+    passStartLine = true,
+  ) => {
     if (change === undefined) throw new Error("Expected a document change");
     file.contents = document.getText();
-    instance.applyDocumentChange(
+    instance.applyChange(
       document,
-      undefined,
-      false,
-      passStartLine ? change.startLine : undefined,
+      passStartLine ? change : ({ ...change, startLine: undefined } as unknown as typeof change),
     );
   };
   const append = () => {
     const position = document.positionAt(document.getText().length);
     apply(document.applyEdits([{ range: { start: position, end: position }, newText: "\n" }]));
   };
-  return { instance, document, file, apply, append };
+  return { instance, document, file, apply, append, virtualizer };
 }
 
 describe("wrapped editor document changes", () => {
+  it("remeasures wrapped rows when the code column resizes", async () => {
+    const { instance, virtualizer } = await makeFixture();
+    const onResize = instance.observeLayout();
+    const reconcile = vi.spyOn(virtualizer, "requestHeightReconcile");
+    instance.resizeContent(200);
+    onResize();
+    expect(reconcile).toHaveBeenCalledWith(instance);
+    instance.measure([[0, 60]], 200);
+    expect(instance.getLineHeight(120)).toBe(20);
+    expect(instance.getLineHeight(0)).toBe(60);
+  });
   it("preserves the position above an EOF insertion across layout checkpoints", async () => {
     const { instance, document, append } = await makeFixture();
     const previousLastLine = document.lineCount;
     const before = instance.getLinePosition(previousLastLine);
     expect(before).toEqual({ top: 120328, height: 60 });
     const viewport = { top: before!.top - 100, bottom: before!.top + 80 };
-    expect(instance.getAdvancedStickySpecs(viewport)).toEqual({ topOffset: 118240, height: 2096 });
+    const sticky = instance.getAdvancedStickySpecs(viewport);
 
     append();
 
@@ -279,7 +294,10 @@ describe("wrapped editor document changes", () => {
     expect(instance.getLinePosition(previousLastLine)).toEqual({ top: before!.top, height: 20 });
     expect(instance.getLinePosition(document.lineCount)).toEqual({ top: 120348, height: 20 });
     expect(instance.getVirtualizedHeight()).toBe(120376);
-    expect(instance.getAdvancedStickySpecs(viewport)).toEqual({ topOffset: 118240, height: 2096 });
+    const after = instance.getAdvancedStickySpecs(viewport);
+    if (!after || !sticky) throw new Error("Expected sticky layout");
+    expect(after.topOffset).toBe(sticky.topOffset);
+    expect(after.topOffset + after.height).toBeGreaterThanOrEqual(instance.getVirtualizedHeight());
   });
 
   it("invalidates changed and shifted rows after an insertion in the middle", async () => {
@@ -293,6 +311,34 @@ describe("wrapped editor document changes", () => {
     expect(instance.getLineHeight(5000)).toBe(20);
     expect(instance.getLineHeight(5999)).toBe(20);
     expect(instance.getLinePosition(document.lineCount)).toEqual({ top: 120208, height: 20 });
+  });
+
+  it("captures the viewport anchor before invalidating edited row measurements", async () => {
+    const { instance, document, apply } = await makeFixture();
+    let capturedHeight = 0;
+    const anchor = {
+      capturePendingLayoutAnchor: () => {
+        capturedHeight = instance.getLineHeight(5000);
+      },
+    };
+    using _advanced = vi
+      .spyOn(
+        instance as unknown as { getAdvancedVirtualizer: () => typeof anchor | undefined },
+        "getAdvancedVirtualizer",
+      )
+      .mockReturnValue(anchor);
+    const position = { line: 5000, character: 2 };
+    apply(document.applyEdits([{ range: { start: position, end: position }, newText: "\n" }]));
+    expect(capturedHeight).toBe(80);
+    expect(instance.getLineHeight(5000)).toBe(20);
+  });
+
+  it("invalidates preceding wrapped rows when the line-number gutter gains a digit", async () => {
+    const { instance, document, append } = await makeFixture("wrap", 9);
+    expect(instance.getLineHeight(0)).toBe(80);
+    append();
+    expect(document.lineCount).toBe(10);
+    expect(instance.getLineHeight(0)).toBe(20);
   });
 
   it("keeps preceding measurements when a deletion crosses a checkpoint", async () => {

@@ -90,6 +90,13 @@ func InviteID(secret []byte) string {
 	return ident.B64.EncodeToString(sum[:12])
 }
 
+// PairSAS is SHA-256("goat-pair/1 sas" || h), the value a pairing's six-digit code is read from (contract
+// "Service invites").
+func PairSAS(h []byte) []byte {
+	sum := sha256.Sum256(append([]byte("goat-pair/1 sas"), h...))
+	return sum[:]
+}
+
 // JoinPSK is HKDF-SHA256(secret, salt empty, info "pen/1 join psk" || nodeId || noisePub, 32).
 func JoinPSK(secret []byte, nodeID string, noisePub []byte) ([]byte, error) {
 	info := append([]byte("pen/1 join psk"+nodeID), noisePub...)
@@ -124,6 +131,8 @@ type Secure struct {
 	RemoteStatic []byte
 	Kind         byte
 	Payload      Payload
+	// HandshakeHash is the Noise handshake hash h after message 2, the same at both ends.
+	HandshakeHash []byte
 }
 
 // Send encrypts one record (at most MaxPlaintext bytes).
@@ -237,7 +246,8 @@ func initiateHandshake(ctx context.Context, conn relay.Conn, kind byte, nodeID s
 		conn.Close(wire.CodeCrypto)
 		return nil, fmt.Errorf("%w: %w", ErrBadMessage2, &relay.CloseError{Code: wire.CodeCrypto})
 	}
-	return &Pending{s: &Secure{conn: conn, send: cs1, recv: cs2, RemoteStatic: remoteNoisePub, Kind: kind}}, nil
+	return &Pending{s: &Secure{conn: conn, send: cs1, recv: cs2, RemoteStatic: remoteNoisePub, Kind: kind,
+		HandshakeHash: append([]byte(nil), hs.ChannelBinding()...)}}, nil
 }
 
 // AdmitFunc decides on a session after message 1. It returns the psk for KindJoin. A *relay.CloseError
@@ -303,7 +313,8 @@ func respond(ctx context.Context, conn relay.Conn, local *ident.Identity, nodeID
 	if err := conn.Send(m2); err != nil {
 		return nil, err
 	}
-	s := &Secure{conn: conn, send: cs2, recv: cs1, RemoteStatic: remote, Kind: kind, Payload: p}
+	s := &Secure{conn: conn, send: cs2, recv: cs1, RemoteStatic: remote, Kind: kind, Payload: p,
+		HandshakeHash: append([]byte(nil), hs.ChannelBinding()...)}
 	confirm, err := s.Recv(ctx)
 	if err != nil {
 		if relay.CodeOf(err) == wire.CodeCrypto {

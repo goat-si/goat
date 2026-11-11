@@ -238,8 +238,11 @@ it.effect("a new thread on a model the shared Codex process predates opens its o
               Effect.succeed(
                 id === sharedId
                   ? Option.some({
-                      modelStatus: (model) =>
-                        Effect.succeed(model === addedModel ? "predated" : "ready"),
+                      // Placement runs on the serial dispatch path, so it may only read memory.
+                      modelStatus: (model, options) =>
+                        options?.cachedOnly === true
+                          ? Effect.succeed(model === addedModel ? "predated" : "ready")
+                          : Effect.die("placement asked the process"),
                     })
                   : Option.none(),
               ),

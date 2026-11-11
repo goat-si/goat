@@ -27,6 +27,7 @@ const reactTests = [
   "src/components/ui/SplitButton.android.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
+  "src/features/files/FileSourceSurface.test.tsx",
   "src/features/files/ZipArchiveView.test.tsx",
   "src/lib/clock.test.ts",
   "src/lib/useNotificationPermissionStatus.test.tsx",
@@ -74,6 +75,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotBubble.test.tsx",
   "src/features/goat-bot/GoatBotDayStamp.test.tsx",
   "src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.naming.test.tsx",
   "src/features/goat-bot/GoatBotScreen.events.test.tsx",
   "src/features/goat-bot/GoatBotScreen.unread.test.tsx",
   "src/features/goat-bot/GoatBotScreen.memory.test.tsx",
@@ -81,6 +83,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotQuestionAnswer.test.tsx",
   "src/features/goat-bot/GoatBotScreen.answering.test.tsx",
   "src/features/goat-bot/GoatBotTimelineRow.links.test.tsx",
+  "src/features/goat-bot/GoatBotTimelineRow.files.test.tsx",
   "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
   "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
@@ -132,6 +135,7 @@ const reactTests = [
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;
 // Their tests vary Platform.OS or __DEV__, which production inlining would erase.
 const devCompiledSources = [
+  "/features/files/FileSourceSurface.tsx",
   "/lib/useNotificationPermissionStatus.ts",
   "/features/connection/ConnectionsNewRouteScreen.tsx",
   "/features/goat-bot/GoatBotModelPill.tsx",

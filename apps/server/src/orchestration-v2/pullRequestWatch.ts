@@ -8,6 +8,7 @@ import type {
   ThreadPullRequestWatch,
 } from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import { PULL_REQUEST_WATCH_APPROVAL_LIMIT } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 /** Bounds consecutive comment-only wakes to stop bot reply loops; check, conflict, or push news resets it. */
@@ -23,6 +24,7 @@ const DAY_MS = 24 * 60 * 60_000;
 export type PullRequestWatchChange =
   | { readonly kind: "checks-failed"; readonly failed: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "checks-passed"; readonly count: number; readonly required: boolean }
+  | { readonly kind: "checks-awaiting-approval"; readonly checks: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "remarks"; readonly remarks: ReadonlyArray<PullRequestComment> }
   | { readonly kind: "no-checks"; readonly minutes: number }
   | { readonly kind: "conflicting" };
@@ -44,9 +46,13 @@ export interface PullRequestWatchContext {
   readonly now: number;
 }
 
-// "action-required" is a finished check that needs someone, so the agent hears about it.
 const isFailedCheck = (check: PullRequestCheck) =>
-  check.status === "failure" || check.status === "cancelled" || check.status === "action-required";
+  check.status === "failure" || check.status === "cancelled";
+
+const approvalKey = (check: PullRequestCheck) =>
+  check.url?.match(/^.*\/actions\/runs\/\d+(?=\/|$)/)?.[0] ?? check.name;
+
+const isRunKey = (key: string) => /\/actions\/runs\/\d+$/.test(key);
 
 const botLogin = (login: string) => login.toLowerCase().replace(/\[bot\]$/, "");
 
@@ -72,7 +78,13 @@ export function evaluatePullRequestWatch(
   watch: ThreadPullRequestWatch,
   detail: Pick<
     PullRequestDetail,
-    "capabilities" | "headSha" | "checks" | "mergeability" | "viewer" | "author"
+    | "capabilities"
+    | "headSha"
+    | "checks"
+    | "mergeability"
+    | "viewer"
+    | "author"
+    | "workflowApprovalsRequired"
   >,
   remarks: ReadonlyArray<PullRequestComment> | null,
   context: PullRequestWatchContext,
@@ -92,17 +104,50 @@ export function evaluatePullRequestWatch(
   let passed = headMoved ? false : watch.passed;
   let passedChecks = headMoved ? [] : watch.passedChecks;
   let owedChecks = headMoved ? [] : (watch.owedChecks ?? []);
-  if (detail.checks.length > 0) {
-    const failed = detail.checks.filter(isFailedCheck);
+  const unread = detail.checks.some((check) => check.placeholder === true);
+  const checks = detail.checks.filter((check) => check.placeholder !== true);
+  const awaiting = checks.filter((check) => check.status === "action-required");
+  // Run URLs name one run, so a run a read briefly omits is not news again; a new run is.
+  // A name-only key cannot tell runs apart and is forgotten once it stops showing.
+  let awaitingApproval = headMoved ? [] : (watch.awaitingApproval ?? []);
+  if (!unread) {
+    const active = new Set(
+      checks
+        .filter((check) => check.status === "pending" || check.status === "action-required")
+        .map(approvalKey),
+    );
+    const finished = new Set(
+      checks.filter((check) => !active.has(approvalKey(check))).map(approvalKey),
+    );
+    awaitingApproval = awaitingApproval.filter(
+      (key) => !finished.has(key) && (isRunKey(key) || active.has(key)),
+    );
+  }
+  const announced = new Set(awaitingApproval);
+  const newlyAwaiting = awaiting.filter((check) => !announced.has(approvalKey(check)));
+  if (newlyAwaiting.length > 0) {
+    sort({ kind: "checks-awaiting-approval", checks: newlyAwaiting }, policy.checksFailed);
+  }
+  awaitingApproval = [...new Set([...awaitingApproval, ...newlyAwaiting.map(approvalKey)])].slice(
+    -PULL_REQUEST_WATCH_APPROVAL_LIMIT,
+  );
+  const approvalAnnounced = unread
+    ? !headMoved && (watch.approvalAnnounced ?? false)
+    : awaiting.length > 0;
+  if (checks.length > 0) {
+    const failed = checks.filter(isFailedCheck);
     const newlyFailed = failed.filter((check) => !failedChecks.includes(check.name));
     if (newlyFailed.length > 0) {
       sort({ kind: "checks-failed", failed: newlyFailed }, policy.checksFailed);
     }
     failedChecks = failed.map((check) => check.name);
 
-    const required = detail.checks.filter((check) => check.required === true);
-    const gate = required.length > 0 ? required : detail.checks;
-    const passedNow = gate.every((check) => check.status !== "pending" && !isFailedCheck(check));
+    const required = checks.filter((check) => check.required === true);
+    const gate = required.length > 0 ? required : checks;
+    const passedNow =
+      !unread &&
+      awaiting.length === 0 &&
+      gate.every((check) => check.status !== "pending" && !isFailedCheck(check));
     const gateNames = gate.map((check) => check.name);
     const told = passed && passedChecks.length === 0 ? gateNames : passedChecks;
     // Required checks can finish between sweeps; detect new names. With no required checks, ignore advisory gate growth.
@@ -111,12 +156,15 @@ export function evaluatePullRequestWatch(
     // Only those are owed, so later advisory churn never wakes. One turned required is gate news.
     const owed =
       passedNow && passed
-        ? detail.checks
+        ? checks
             .filter((check) => check.required !== true && owedChecks.includes(check.name))
             .map((check) => check.name)
         : [];
     const settled =
-      failed.length === 0 && detail.checks.every((check) => check.status !== "pending");
+      !unread &&
+      awaiting.length === 0 &&
+      failed.length === 0 &&
+      checks.every((check) => check.status !== "pending");
     owedChecks = owed;
     if (passedNow && (!passed || gateGrew)) {
       sort(
@@ -125,15 +173,12 @@ export function evaluatePullRequestWatch(
       );
       owedChecks =
         required.length > 0
-          ? detail.checks
+          ? checks
               .filter((check) => check.required !== true && check.status === "pending")
               .map((check) => check.name)
           : [];
     } else if (settled && owed.length > 0) {
-      sort(
-        { kind: "checks-passed", count: detail.checks.length, required: false },
-        policy.checksPassed,
-      );
+      sort({ kind: "checks-passed", count: checks.length, required: false }, policy.checksPassed);
       owedChecks = [];
     }
     passed = passedNow;
@@ -149,10 +194,10 @@ export function evaluatePullRequestWatch(
     const awaitedBefore = headMoved
       ? DateTime.formatIso(DateTime.makeUnsafe(context.now))
       : (watch.checksAwaitedSince ?? null);
-    checksAwaitedSince = detail.checks.length > 0 ? null : awaitedBefore;
+    checksAwaitedSince = checks.length > 0 ? null : awaitedBefore;
     const awaitedMs =
       checksAwaitedSince === null ? 0 : context.now - Date.parse(checksAwaitedSince);
-    if (awaitedMs >= PULL_REQUEST_WATCH_NO_CHECKS_MS) {
+    if (!unread && awaitedMs >= PULL_REQUEST_WATCH_NO_CHECKS_MS) {
       // Check news, so the failed-check mode decides whether it wakes.
       sort({ kind: "no-checks", minutes: Math.round(awaitedMs / 60_000) }, policy.checksFailed);
       checksAwaitedSince = null;
@@ -210,6 +255,8 @@ export function evaluatePullRequestWatch(
       passed,
       passedChecks,
       owedChecks,
+      awaitingApproval,
+      approvalAnnounced,
       remarksThrough,
       remarkIds,
       conflicting,
@@ -252,6 +299,11 @@ function changeLines(
             `  - ${check.name}${check.status === "failure" ? "" : ` (${check.status})`}${check.url ? ` ${check.url}` : ""}`,
         ),
       ];
+    case "checks-awaiting-approval":
+      return [
+        `- Checks are waiting for approval or action from a maintainer${context.commit}:`,
+        ...listed(change.checks, (check) => `  - ${check.name}${check.url ? ` ${check.url}` : ""}`),
+      ];
     case "checks-passed":
       return [
         `- All ${change.count} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} passed${context.commit}.`,
@@ -278,6 +330,7 @@ function changeLines(
 const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   "checks-failed": "checks failed",
   "checks-passed": "checks passed",
+  "checks-awaiting-approval": "checks await approval",
   remarks: "new comments",
   "no-checks": "no checks reported",
   conflicting: "merge conflict",
@@ -296,6 +349,8 @@ function heldFragment(
     case "checks-failed": {
       return `checks failed${context.commit}: ${checkNames(change.failed.map((check) => check.name))}`;
     }
+    case "checks-awaiting-approval":
+      return `checks await approval${context.commit}: ${checkNames(change.checks.map((check) => check.name))}`;
     case "checks-passed":
       return `all ${change.count} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} passed${context.commit}`;
     case "remarks": {
@@ -321,6 +376,7 @@ const checkNames = (names: ReadonlyArray<string>) => {
 
 const HELD_KINDS = [
   ["checks", /^(checks failed|all \d+ (required )?checks? passed|no checks reported)/],
+  ["approval", /^checks await approval/],
   ["conflict", /^conflicts with /],
   ["comments", /^\d+ new comments?[,:]/],
 ] as const;
@@ -372,7 +428,10 @@ export function mergeHeldContext(
  */
 export function settleHeldContext(
   heldContext: ReadonlyArray<string> | undefined,
-  state: Pick<ThreadPullRequestWatch, "conflicting" | "failedChecks" | "passed"> & {
+  state: Pick<
+    ThreadPullRequestWatch,
+    "conflicting" | "failedChecks" | "passed" | "approvalAnnounced"
+  > & {
     readonly headMoved: boolean;
   },
 ): ReadonlyArray<string> {
@@ -380,6 +439,8 @@ export function settleHeldContext(
     switch (heldKind(fragment)) {
       case "conflict":
         return state.conflicting ? [fragment] : [];
+      case "approval":
+        return !state.headMoved && state.approvalAnnounced ? [fragment] : [];
       case "checks": {
         // A pass a rerun or a new failure undid no longer holds, nor do failures that cleared.
         if (state.headMoved) return [];
@@ -407,7 +468,10 @@ export function settleHeldContext(
 export function keptAfterPass(
   stored: ReadonlyArray<string> | undefined,
   kept: ReadonlyArray<string> | undefined,
-  state: Pick<ThreadPullRequestWatch, "conflicting" | "failedChecks" | "passed"> & {
+  state: Pick<
+    ThreadPullRequestWatch,
+    "conflicting" | "failedChecks" | "passed" | "approvalAnnounced"
+  > & {
     readonly headMoved: boolean;
   },
 ): ReadonlyArray<string> {
@@ -462,6 +526,7 @@ function pullRequestWatchMessage(input: {
     (change) =>
       change.kind === "checks-failed" ||
       change.kind === "checks-passed" ||
+      change.kind === "checks-awaiting-approval" ||
       change.kind === "no-checks",
   );
   return {
