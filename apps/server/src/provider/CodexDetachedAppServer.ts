@@ -870,10 +870,10 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         recordGate.withPermit(
           Effect.suspend(() => {
             const current = fences.get(record.name);
-            if (current === undefined) return Effect.succeed("removed" as const);
-            const fenced = [...(current.goalBlocks ?? []), ...(current.stopObligations ?? [])];
+            const fenced = [...(current?.goalBlocks ?? []), ...(current?.stopObligations ?? [])];
             if ([...failedFences.values(), ...fenced.map((f) => f.threadId)].includes(threadId))
               return Effect.succeed("own" as const);
+            if (current === undefined) return Effect.succeed("removed" as const);
             if (keep || fenced.length > 0) return Effect.succeed("kept" as const);
             return removeRecordUnlocked(current).pipe(Effect.as("removed" as const));
           }),

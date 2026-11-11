@@ -401,3 +401,32 @@ it.effect.each([
       }).pipe(Effect.scoped);
     }).pipe(Effect.scoped),
 );
+
+it.effect(
+  "a fence write that fails after another open removed the record refuses this thread",
+  () =>
+    Effect.gen(function* () {
+      const kept = recordFixture("codex-444444444444", 1011, sessionA);
+      const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
+      gone.add(kept.pgid);
+      const paused = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      control.gate = Deferred.succeed(paused, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const goal = { threadId: ThreadId.make("thread-late"), nativeThreadId: "native-late" };
+      yield* Effect.gen(function* () {
+        const late = yield* open(goal.threadId, sessionA).pipe(Effect.exit, Effect.forkScoped);
+        yield* Deferred.await(paused);
+        control.gate = Effect.void;
+        yield* open("thread-first", sessionA);
+        assert.notInclude(yield* recordFiles, kept.name + ".json");
+        yield* detached
+          .recordGoalBlock({ instanceId: codex, recordName: kept.name }, goal)
+          .pipe(Effect.flip);
+        yield* Deferred.succeed(release, undefined);
+        assert.equal((yield* Fiber.join(late))._tag, "Failure");
+        assert.equal(launched.length, 1);
+      }).pipe(Effect.scoped);
+    }).pipe(Effect.scoped),
+);
