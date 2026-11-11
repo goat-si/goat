@@ -17,12 +17,15 @@ export function GoatBotNewBotDialog({
   canSubmit,
   onCreated,
   onClose,
+  onPending,
   mainName = "GOAT Bot",
 }: {
   readonly environmentId: EnvironmentId;
   readonly canSubmit: boolean;
   readonly onCreated: (bot: BotProfile) => void;
   readonly onClose: () => void;
+  /** The name being created while the request runs, then null. */
+  readonly onPending?: ((name: string | null) => void) | undefined;
   readonly mainName?: string;
 }) {
   const [clientRequestId] = useState(randomUUID);
@@ -34,6 +37,7 @@ export function GoatBotNewBotDialog({
       initial={EMPTY}
       canSubmit={canSubmit}
       onClose={onClose}
+      onPending={onPending}
       onSubmit={async (changes) => {
         const result = await create({
           environmentId,
