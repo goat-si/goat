@@ -37,6 +37,7 @@ import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -346,6 +347,11 @@ export function GoatBotChatView({
           ) : null}
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
+            {/* Mounted before the first message, so the chat's first status is heard. */}
+            <GoatBotActivityStatus
+              key={botIdentity}
+              replyingSince={removed ? null : replyingSince}
+            />
             <GoatBotOpenFileContext value={fileOpening}>
               {rows.length > 0 ? (
                 // History stays readable while the bot is unavailable; only sending stops.

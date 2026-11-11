@@ -97,14 +97,14 @@ function GoatBotSentFile({ name }: { readonly name: string }) {
 /**
  * One line for what GOAT Bot is doing: its still face and the step it is on, then the work it
  * follows. Nothing here moves; a new step replaces the text. The line opens to its full text;
- * `onToggle` runs just before, so the conversation can keep its place.
+ * `onToggle` applies the change itself, so the conversation can keep its place around it.
  */
 export function GoatBotActivityLine({
   activity,
   onToggle,
 }: {
   readonly activity: GoatBotTimelineActivity;
-  readonly onToggle?: () => void;
+  readonly onToggle?: (toggle: () => void) => void;
 }) {
   const [open, setOpen] = useState(false);
   const waiting = activity.attention !== undefined;
@@ -120,8 +120,9 @@ export function GoatBotActivityLine({
         type="button"
         aria-expanded={open}
         onClick={() => {
-          onToggle?.();
-          setOpen((value) => !value);
+          const toggle = () => setOpen((value) => !value);
+          if (onToggle === undefined) toggle();
+          else onToggle(toggle);
         }}
         className={cn(
           "min-w-0 rounded-sm text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",

@@ -10,6 +10,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
+import { flushSync } from "react-dom";
 import { ArrowUpLeftIcon, CopyIcon, CircleAlertIcon, XIcon } from "~/components/solar";
 import {
   createContext,
@@ -144,22 +145,9 @@ export function GoatBotTimeline({
     ? goatBotActivity({ reading: true, task: null, worker: null })
     : working;
   const activityText = activity?.text ?? null;
-  // One status region stays mounted for the chat, so its changes are read: working, waiting or
-  // paused, and done once the work ends.
-  // A reply after reading speaks for itself; "done" closes work the bot was doing.
-  const [hadWork, setHadWork] = useState(false);
-  if (activity?.state === "working" && !hadWork) setHadWork(true);
-  if (activity?.state === "reading" && hadWork) setHadWork(false);
-  const announcement =
-    activity === null
-      ? hadWork
-        ? `${botName} is done`
-        : ""
-      : activity.state === "reading" || activity.attention !== undefined
-        ? activity.text
-        : `${botName} is working`;
-  // Opening the activity line keeps the conversation where it is instead of following its growth.
-  const heldScrollTop = useRef<number | null>(null);
+  // The transcript's height right after the activity line opened or closed in place; the one
+  // resize that reaches it is that toggle's own and does not follow the newest message.
+  const toggledHeight = useRef<number | null>(null);
   const updateEdges = useStableCallback(() => {
     const scroll = scrollRef.current;
     const wrapper = wrapperRef.current;
@@ -186,10 +174,9 @@ export function GoatBotTimeline({
   // column can get its height after mounting; a reader following the newest message stays there.
   const followResize = useStableCallback(() => {
     const scroll = scrollRef.current;
-    const held = heldScrollTop.current;
-    heldScrollTop.current = null;
-    if (scroll !== null && held !== null) {
-      scroll.scrollTop = held;
+    const toggled = toggledHeight.current;
+    toggledHeight.current = null;
+    if (scroll !== null && toggled !== null && scroll.scrollHeight === toggled) {
       lastScrollTopRef.current = scroll.scrollTop;
     } else if (scroll !== null && followingRef.current) {
       scroll.scrollTop = scroll.scrollHeight;
@@ -604,16 +591,20 @@ export function GoatBotTimeline({
             <li className={cn("flex", rows.length > 0 && "mt-6")}>
               <GoatBotActivityLine
                 activity={activity}
-                onToggle={() => {
-                  heldScrollTop.current = scrollRef.current?.scrollTop ?? null;
+                onToggle={(toggle) => {
+                  // Opening the line keeps the conversation where it is instead of following it.
+                  const scroll = scrollRef.current;
+                  const top = scroll?.scrollTop;
+                  flushSync(toggle);
+                  if (scroll === null || top === undefined) return;
+                  scroll.scrollTop = top;
+                  lastScrollTopRef.current = scroll.scrollTop;
+                  toggledHeight.current = scroll.scrollHeight;
                 }}
               />
             </li>
           ) : null}
         </ol>
-        <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-          {announcement}
-        </span>
       </div>
       {unread && dividerAbove && !pillDismissed ? (
         <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm ring-2 ring-background">
