@@ -30,12 +30,14 @@ describe("readOpenCodeUsage", () => {
         "CREATE TABLE message (id TEXT, session_id TEXT, data TEXT, time_created INTEGER)",
       );
       const sinceMs = 1780000000000;
+      // Any one raw row exceeds the 64 KiB statement bound asserted below, so bigger rows only cost time.
+      const rawRowBytes = 64 * 1024;
       const message = {
         role: "assistant",
         modelID: "claude-sonnet-4-5",
         time: { created: sinceMs },
         tokens: { input: 100, output: 20 },
-        body: "x".repeat(256 * 1024),
+        body: "x".repeat(rawRowBytes),
       };
       const data = JSON.stringify(message);
       const insert = (rowId: number, id: string, payload: string, created = sinceMs) =>
@@ -43,23 +45,27 @@ describe("readOpenCodeUsage", () => {
           "INSERT INTO message (rowid, id, session_id, data, time_created) VALUES (?, ?, ?, ?, ?)",
           [rowId, id, "session-1", payload, created],
         );
-      for (let index = 0; index < 130; index++) {
-        yield* insert(index * 2 - 10, `msg-${index}`, data);
-      }
-      yield* insert(300, "old", data, sinceMs - 1);
-      yield* insert(301, "user", JSON.stringify({ ...message, role: "user" }));
-      for (let index = 0; index < 32; index++) {
-        yield* insert(
-          400 + index,
-          `user-${index}`,
-          JSON.stringify({
-            role: "user",
-            summary: { diffs: [{ patch: "x".repeat(1024 * 1024) }] },
-          }),
-        );
-      }
-      yield* insert(302, "invalid", "{invalid");
-      yield* insert(303, "msg-0", data);
+      yield* db.withTransaction(
+        Effect.gen(function* () {
+          for (let index = 0; index < 130; index++) {
+            yield* insert(index * 2 - 10, `msg-${index}`, data);
+          }
+          yield* insert(300, "old", data, sinceMs - 1);
+          yield* insert(301, "user", JSON.stringify({ ...message, role: "user" }));
+          for (let index = 0; index < 32; index++) {
+            yield* insert(
+              400 + index,
+              `user-${index}`,
+              JSON.stringify({
+                role: "user",
+                summary: { diffs: [{ patch: "x".repeat(rawRowBytes) }] },
+              }),
+            );
+          }
+          yield* insert(302, "invalid", "{invalid");
+          yield* insert(303, "msg-0", data);
+        }),
+      );
 
       const writer = yield* Effect.acquireRelease(
         Effect.sync(() => new NodeSqlite.DatabaseSync(path.join(dir, "opencode.db"))),
