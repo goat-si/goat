@@ -5,6 +5,7 @@ import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   supported: true,
+  permitted: true,
   revision: 0,
   data: null as unknown,
   error: null as string | null,
@@ -12,10 +13,14 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   requested: vi.fn(),
 }));
-vi.mock("@effect/atom-react", async (original) => ({
-  ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => ({ _tag: "Success", value: { revision: state.revision }, waiting: false }),
-}));
+vi.mock("@effect/atom-react", async (original) => {
+  const { AsyncResult } = await import("effect/reactivity");
+  return {
+    ...(await original<typeof import("@effect/atom-react")>()),
+    useAtomValue: (atom: unknown) =>
+      atom === "permission" ? state.permitted : AsyncResult.success({ revision: state.revision }),
+  };
+});
 vi.mock("@tanstack/react-router", async (original) => ({
   ...(await original<typeof import("@tanstack/react-router")>()),
   useNavigate: () => state.navigate,
@@ -35,6 +40,8 @@ vi.mock("~/state/environments", () => ({
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     taskChanges: () => "changes",
+    taskChangesPermission: () => "permission",
+    listOpenAsksPermission: () => "permission",
     listOpenAsks: (target: unknown) => {
       state.requested(target);
       return "asks";
@@ -75,6 +82,7 @@ const bots = [
 ] as unknown as React.ComponentProps<typeof GoatBotNeedsYou>["bots"];
 function setup(data: unknown, error: string | null = null) {
   state.supported = true;
+  state.permitted = true;
   state.revision = 0;
   state.data = data;
   state.error = error;
@@ -152,4 +160,38 @@ it("cycles through asks with the registered command", async () => {
     { task: "task-1" },
     { bot: "hidden", task: "task-2" },
   ]);
+});
+
+it("shows nothing, and reads nothing, for a client without the read grant", async () => {
+  setup({ asks, total: 2, truncated: false });
+  state.permitted = false;
+  await using screen = await render(view());
+  expect(state.requested).not.toHaveBeenCalled();
+  expect(screen.container.textContent).toBe("");
+  dispatchMenuAction("goatBot.nextAsk");
+  expect(state.navigate).not.toHaveBeenCalled();
+});
+
+it("steps through two asks waiting on the same task", async () => {
+  const both = [
+    { ...asks[0]!, questionId: "q-1", text: "Which branch?" },
+    { ...asks[0]!, questionId: "q-2", text: "Which remote?" },
+    asks[1]!,
+  ];
+  setup({ asks: both, total: 3, truncated: false });
+  await using _screen = await render(view());
+  for (let step = 0; step < 4; step++) dispatchMenuAction("goatBot.nextAsk");
+  expect(state.navigate.mock.calls.map(([options]) => options.search)).toEqual([
+    { bot: "hidden", task: "task-2" },
+    { bot: "hidden", task: "task-2" },
+    { task: "task-1" },
+    { bot: "hidden", task: "task-2" },
+  ]);
+});
+
+it("says when the list shows fewer asks than wait", async () => {
+  setup({ asks, total: 60, truncated: false });
+  await using screen = await render(view());
+  await userEvent.click(screen.getByRole("button", { name: /Needs you · 60/ }));
+  await expect.element(screen.getByText("Showing the newest 2 of 60.")).toBeVisible();
 });

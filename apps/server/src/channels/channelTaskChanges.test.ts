@@ -1,9 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { CHANNEL_GATEWAY_WS_METHODS } from "@goat/contracts";
-import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -110,7 +108,7 @@ describe("channel task change revisions", () => {
 
 describe("how many change streams stay open", () => {
   /** Opens one stream and waits for its revision 0; its fiber is returned to close it later. */
-  const open = (stream: Stream.Stream<unknown>) =>
+  const open = <E>(stream: Stream.Stream<unknown, E>) =>
     Effect.gen(function* () {
       const first = yield* Queue.unbounded<unknown>();
       const fiber = yield* stream.pipe(
@@ -129,8 +127,8 @@ describe("how many change streams stay open", () => {
         const changes = yield* makeChannelTaskChanges(sql, 2);
         const one = yield* open(changes.revisions("owner-a"));
         yield* open(changes.revisions("owner-b"));
-        const refused = yield* Effect.exit(Stream.runHead(changes.revisions("owner-c")));
-        assert.isTrue(Exit.isFailure(refused) && Cause.hasDies(refused.cause));
+        const refused = yield* Effect.flip(Stream.runHead(changes.revisions("owner-c")));
+        assert.strictEqual(refused.reason, "stream_unavailable");
         yield* Fiber.interrupt(one);
         yield* open(changes.revisions("owner-c"));
       }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
@@ -149,9 +147,26 @@ describe("how many change streams stay open", () => {
         const connection = handlersFor();
         for (let index = 0; index < MAX_TASK_CHANGE_STREAMS_PER_CONNECTION; index++)
           yield* open(connection());
-        const refused = yield* Effect.exit(Stream.runHead(connection()));
-        assert.isTrue(Exit.isFailure(refused) && Cause.hasDies(refused.cause));
+        const refused = yield* Effect.flip(Stream.runHead(connection()));
+        assert.strictEqual(refused.reason, "stream_unavailable");
         yield* open(handlersFor()());
       }),
+  );
+
+  it.effect("tells the client the stream is unavailable if it ever ends", () =>
+    Effect.gen(function* () {
+      const handler = ChannelBotMembers.rpcHandlers(
+        {
+          taskChanges: () => Stream.make(0),
+        } as unknown as ChannelBotMembers.ChannelBotMembers["Service"],
+        { ownerId: "owner-a" } as Parameters<typeof ChannelBotMembers.rpcHandlers>[1],
+      )[CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges];
+      const seen: number[] = [];
+      const ended = yield* Effect.flip(
+        Stream.runForEach(handler(), (event) => Effect.sync(() => seen.push(event.revision))),
+      );
+      assert.deepStrictEqual(seen, [0]);
+      assert.strictEqual(ended.reason, "stream_unavailable");
+    }),
   );
 });

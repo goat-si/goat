@@ -14,7 +14,9 @@ const NO_CHANGES = Atom.make(AsyncResult.initial<{ readonly revision: number }, 
  */
 export function useGoatBotTaskChanges(environmentId: EnvironmentId): string {
   const environment = useEnvironment(environmentId);
-  const supported = environment?.serverConfig?.environment.capabilities.goatBotTaskChanges === true;
+  const permitted = useAtomValue(channelEnvironment.taskChangesPermission(environmentId));
+  const supported =
+    permitted && environment?.serverConfig?.environment.capabilities.goatBotTaskChanges === true;
   const result = useAtomValue(
     supported ? channelEnvironment.taskChanges({ environmentId, input: {} }) : NO_CHANGES,
   );
@@ -34,7 +36,8 @@ export function useGoatBotTaskChanges(environmentId: EnvironmentId): string {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [streaming]);
-  // The stream opens at revision 0, the state the first read already shows; only later ones change.
-  const revision = Option.getOrNull(AsyncResult.value(result))?.revision ?? 0;
+  // Revision 0 arriving says the server now tracks changes: one more read then catches anything
+  // that landed between the first read and the subscription.
+  const revision = Option.getOrNull(AsyncResult.value(result))?.revision ?? "pending";
   return streaming ? `stream:${revision}` : `visit:${visits}`;
 }

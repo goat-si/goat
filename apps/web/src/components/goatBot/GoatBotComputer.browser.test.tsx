@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   requested: vi.fn(),
   revision: 0 as number | null | "failed",
   supportsChanges: false,
+  permitted: true,
 }));
 vi.mock("@effect/atom-react", async (original) => {
   const { AsyncResult } = await import("effect/reactivity");
@@ -18,12 +19,14 @@ vi.mock("@effect/atom-react", async (original) => {
   return {
     ...(await original<typeof import("@effect/atom-react")>()),
     // null: the stream has not answered yet; "failed": the server refused or ended it.
-    useAtomValue: () =>
-      state.revision === null
-        ? AsyncResult.initial(true)
-        : state.revision === "failed"
-          ? AsyncResult.failure(Cause.die("refused"))
-          : AsyncResult.success({ revision: state.revision }),
+    useAtomValue: (atom: unknown) =>
+      atom === "permission"
+        ? state.permitted
+        : state.revision === null
+          ? AsyncResult.initial(true)
+          : state.revision === "failed"
+            ? AsyncResult.failure(Cause.die("refused"))
+            : AsyncResult.success({ revision: state.revision }),
   };
 });
 vi.mock("~/state/environments", () => ({
@@ -34,6 +37,7 @@ vi.mock("~/state/environments", () => ({
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     taskChanges: () => "changes",
+    taskChangesPermission: () => "permission",
     listTasks: (target: unknown) => {
       state.requested(target);
       return "tasks";
@@ -158,18 +162,21 @@ it("rereads on window focus when task subscriptions are unavailable", async () =
   await vi.waitFor(() => expect(state.refresh).toHaveBeenCalledTimes(1));
 });
 
-it("reads once when the change stream opens, and again only for a later revision", async () => {
+it("reads again once when the change stream starts tracking, then once per later revision", async () => {
   setup({ tasks: [] });
   state.supportsChanges = true;
   state.revision = null;
   await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
   expect(state.refresh).toHaveBeenCalledTimes(1);
+  // Revision 0 is the server's acknowledgement: a change between the first read and it shows now.
   state.revision = 0;
   await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
-  expect(state.refresh).toHaveBeenCalledTimes(1);
-  state.revision = 1;
+  expect(state.refresh).toHaveBeenCalledTimes(2);
   await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
   expect(state.refresh).toHaveBeenCalledTimes(2);
+  state.revision = 1;
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(3);
 });
 
 it("reads again on window focus once the server refuses or ends the change stream", async () => {

@@ -1,4 +1,4 @@
-import * as Data from "effect/Data";
+import { ChannelGatewayError } from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -13,8 +13,11 @@ import * as Stream from "effect/Stream";
 export interface ChannelTaskChanges {
   /** Owners whose tasks a committed write changed. */
   readonly announce: (ownerIds: Iterable<string>) => Effect.Effect<void>;
-  /** Revision 0 at once, then one more for each window of changes to this owner's tasks. */
-  readonly revisions: (ownerId: string) => Stream.Stream<number>;
+  /**
+   * Revision 0 at once, then one more for each window of changes to this owner's tasks. Fails with
+   * stream_unavailable when the server holds as many streams as it allows.
+   */
+  readonly revisions: (ownerId: string) => Stream.Stream<number, ChannelGatewayError>;
   /**
    * Runs a write and announces its owners once it committed. Inside a caller's transaction it
    * announces nothing: that caller announces after its own commit, the outermost one.
@@ -35,28 +38,18 @@ const MAX_TASK_CHANGE_STREAMS = 512;
 /** Change streams one connection holds open; a client shares one per server. */
 export const MAX_TASK_CHANGE_STREAMS_PER_CONNECTION = 4;
 
-class TaskChangeStreamLimitError extends Data.TaggedError("TaskChangeStreamLimitError")<{
-  readonly message: string;
-  readonly limit: number;
-}> {}
+/** Why a client gets no task change stream; it reads on open and focus instead, never retrying. */
+export const streamUnavailable = () => new ChannelGatewayError({ reason: "stream_unavailable" });
 
-/**
- * Admits at most `limit` open streams. One over it ends as a defect, as RpcInFlightLimit does for
- * requests, so the RPC's error contract stays as it is; the client then reads on open and focus.
- */
-export const makeStreamLimit = (limit: number, holder: string) => {
+/** Admits at most limit open streams; one over it fails with stream_unavailable. */
+export const makeStreamLimit = (limit: number) => {
   let open = 0;
-  return <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+  return <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E | ChannelGatewayError, R> =>
     Stream.unwrap(
       Effect.acquireRelease(
         Effect.suspend(() =>
           open >= limit
-            ? Effect.die(
-                new TaskChangeStreamLimitError({
-                  message: holder + " already has " + limit + " task change streams open.",
-                  limit,
-                }),
-              )
+            ? Effect.fail(streamUnavailable())
             : Effect.sync(() => {
                 open += 1;
               }),
@@ -73,7 +66,7 @@ export const makeChannelTaskChanges = Effect.fn("makeChannelTaskChanges")(functi
   sql: SqlClient.SqlClient,
   maxStreams: number = MAX_TASK_CHANGE_STREAMS,
 ) {
-  const limited = makeStreamLimit(maxStreams, "This server");
+  const limited = makeStreamLimit(maxStreams);
   // One mark per subscriber, held only for its owner: a change sets it, and changes while it is
   // set add nothing, so a slow subscriber holds one pending "read again" and never misses it.
   const marks = new Map<string, Set<Queue.Queue<void>>>();

@@ -4,6 +4,7 @@ import {
   type ChannelOpenAsk,
   type EnvironmentId,
 } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -13,6 +14,10 @@ import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useGoatBotTaskChanges } from "./useGoatBotTaskChanges";
+
+/** One ask: a task can wait on several, each its own question or request. */
+const askKey = (ask: ChannelOpenAsk) =>
+  `${ask.botId}:${ask.taskId}:${ask.questionId ?? ask.requestId ?? ask.kind}`;
 
 export function GoatBotNeedsYou({
   environmentId,
@@ -24,7 +29,10 @@ export function GoatBotNeedsYou({
   visible: boolean;
 }) {
   const environment = useEnvironment(environmentId);
-  const supported = environment?.serverConfig?.environment.capabilities.goatBotOpenAsks === true;
+  // A client without the read grant sees nothing here, not a failure.
+  const permitted = useAtomValue(channelEnvironment.listOpenAsksPermission(environmentId));
+  const supported =
+    permitted && environment?.serverConfig?.environment.capabilities.goatBotOpenAsks === true;
   const changes = useGoatBotTaskChanges(environmentId);
   const query = useEnvironmentQuery(
     supported ? channelEnvironment.listOpenAsks({ environmentId, input: {} }) : null,
@@ -39,7 +47,7 @@ export function GoatBotNeedsYou({
   }, [supported, changes, refresh]);
   const asks = query.data?.asks;
   const openAsk = (ask: ChannelOpenAsk) => {
-    lastAsk.current = `${ask.botId}:${ask.taskId}`;
+    lastAsk.current = askKey(ask);
     void navigate({
       to: "/bot",
       search: {
@@ -50,7 +58,7 @@ export function GoatBotNeedsYou({
   };
   const openNext = useStableCallback(() => {
     if (!asks?.length) return false;
-    const previous = asks.findIndex((ask) => `${ask.botId}:${ask.taskId}` === lastAsk.current);
+    const previous = asks.findIndex((ask) => askKey(ask) === lastAsk.current);
     const ask = asks[(previous + 1) % asks.length];
     if (!ask) return false;
     openAsk(ask);
@@ -114,7 +122,7 @@ export function GoatBotNeedsYou({
         <div>
           {query.data.asks.map((ask) => (
             <button
-              key={`${ask.botId}:${ask.taskId}:${ask.questionId ?? ask.requestId ?? ask.kind}`}
+              key={askKey(ask)}
               type="button"
               className="block w-full rounded-md px-2 py-2 text-left hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
               onClick={() => openAsk(ask)}
@@ -125,6 +133,11 @@ export function GoatBotNeedsYou({
               </span>
             </button>
           ))}
+          {query.data.asks.length < query.data.total && (
+            <p className="px-2 py-1 text-xs text-sidebar-muted-foreground">
+              Showing the newest {query.data.asks.length} of {query.data.total}.
+            </p>
+          )}
         </div>
       )}
       {query.error !== null && (
