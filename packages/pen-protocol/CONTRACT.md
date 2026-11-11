@@ -495,8 +495,12 @@ way: the local management page (dashboard) cannot register, and neither can a me
   exactly as long as this connection. When the connection closes, the node removes registration R and nothing
   else, so an old holder's exit never removes a newer registration.
 - A new registration for N replaces the current one: the node sends `{"t":"replaced","id":R}` (R the old id) on the
-  old connection and closes it, so the old holder learns it lost the name. A node holds at most 8 names; a request
-  for a ninth is refused.
+  old connection, giving that write 1 s, and closes it, so the old holder learns it lost the name. A node holds at
+  most 8 names; a request for a ninth is refused. The node ignores anything a holder sends after its request.
+- K is exactly 43 base64url characters without padding that decode to 32 bytes and encode back to the same text; N
+  and P follow the rules above; anything else is refused.
+- When a registration ends (its connection closed, or replaced), the node closes every connection it delivered to
+  that registration, and a delivery to it that has not yet passed step 3 below fails.
 - A refusal is `{"error":"..."}` and closes the connection with nothing registered. The node never writes K to disk
   or to a log, and keeps it only in memory.
 
@@ -513,16 +517,29 @@ the program prove to each other that they hold K before any caller byte moves. N
 fresh for every connection, written as 43 base64url characters without padding. A MAC is HMAC-SHA256 keyed with K,
 written the same way. `||` concatenates bytes; Nd and Ng enter a MAC as their 32 raw bytes, text as ASCII.
 
-1. Node: `PENSVC/1 <Nd>` LF.
-2. Program: `<Ng> <A>` LF, with A = HMAC(K, `pen-svc/1 ` || N || Nd || Ng). The node reads at most 128 bytes up
-   to the LF, within 5 s of writing line 1, and compares A in constant time.
-3. Node: `<J> <B>` LF. J is `{"v":1,"mesh":M,"self":S,"caller":{"nodeId","signPub","noisePub","name"},"stream":N}`
-   with exactly these members in this order: M the node's mesh id, S its node id, `caller` the calling member as the
-   node's view holds it at delivery, `stream` the service name. B = HMAC(K, `pen-svc/1 pen` || Nd || Ng || J).
+Every line is ASCII and ends in one LF; no line contains CR.
+
+1. Node: `PENSVC/1 ` Nd LF (53 bytes).
+2. Program: Ng SP A LF (88 bytes), with A = HMAC(K, `pen-svc/1 ` || N || Nd || Ng). The node reads at most 128
+   bytes up to the LF, within 5 s of writing line 1, requires exactly this shape with canonical base64url (43
+   characters that decode to 32 bytes and encode back to the same text), and compares A in constant time.
+3. Node: J SP B LF, where B is 43 base64url characters and J is the JSON object, with no whitespace, members in
+   exactly this order and every value a JSON string except `v`:
+   `{"v":1,"mesh":M,"self":S,"caller":{"nodeId":I,"signPub":G,"noisePub":X,"name":C},"stream":N}`.
+   M is the node's mesh id, S its node id, I, G, X and C the calling member as the node's view holds it when the
+   delivery commits, and `stream` the service name. Every one of these values is drawn from the identifier
+   alphabets in "Identities", so none needs escaping. B = HMAC(K, `pen-svc/1 pen` || Nd || Ng || J), over J's exact
+   bytes. A reader splits line 3 at its last SP. The whole line, LF included, is at most 2,200 bytes.
 4. From then on the connection carries the stream's payload both ways, half-closed like `tcp`.
 
-If any step fails (the dial, a deadline, the cap, a malformed line, a wrong A, or N registered again meanwhile), the
-node closes the socket, sends CLOSE 4404 to the caller and logs the cause at most once a minute per cause. A
+A delivery commits to the registration it dialed at one point: after step 2 verifies and before the node writes
+line 3, under the lock that replacement and removal take, and only if that registration is still the current one
+for N. A delivery that cannot commit fails. A committed delivery belongs to its registration and is closed when that
+registration ends.
+
+If any step fails (the dial, a deadline, the cap, a malformed line, a wrong A, or a delivery that cannot commit),
+the node closes the socket and sends CLOSE 4404 to the caller. It logs each failure under one of a fixed set of
+causes (dial, deadline, malformed, proof, replaced), at most once a minute per cause. A
 refused delivery passes no caller byte to the program, but the caller still classifies its own data by what it
 wrote (above). At most 32 deliveries are in progress at once, from key confirmation to the end of step 3.
 
@@ -531,15 +548,16 @@ Rules for the program; GOAT implements them:
 - Before the proof: at most 16 connections in the handshake at once, the 17th closed at accept; 3 s from accept to a
   verified line 3; line 1 read with a 128-byte cap up to the LF, line 3 with a 2,200-byte cap. Decoding is exact: the
   fixed prefix, base64url fields of exactly 43 characters that decode to 32 bytes and encode back to the same text, no
-  CR, J strict JSON with no unknown, missing or duplicate members. The program checks B, then that M and S equal the
-  mesh id and node id it pinned for this machine. Any violation, EOF or timeout closes the socket with no reply.
+  CR, line 2 split at its last SP, J strict JSON with no unknown, missing or duplicate members and the value types
+  above. The program compares B in constant time over J's exact bytes, then checks that M and S equal the mesh id and
+  node id it pinned for this machine. Any violation, EOF or timeout closes the socket with no reply.
 - After the proof: at most 32 live connections per calling node id and 128 in total, extras closed at once. A
   connection is closed as idle only after 120 s with no request open on it and no WebSocket upgraded on it.
 
 K never crosses the wire and both nonces are fresh, so a recorded handshake cannot be replayed or moved to another
 connection. Another OS user can connect to P but cannot produce B, and cannot listen on P while the program holds it.
-A program that exits loses its registration with its connection, so the node never dials a port the program gave
-up. Processes of the same OS user can register a name or read K; they are the owner, outside this boundary.
+A program that exits loses its registration as soon as the node sees its connection close; until then a dial to
+its old port fails the proof, because whoever holds the port has no K. Processes of the same OS user can register a name or read K; they are the owner, outside this boundary.
 
 ### Exact dial and the ready line
 
@@ -554,10 +572,15 @@ Programs dial members with `pen pipe --node <nodeId> --noise <noisePub> [--home 
   responder holds that Noise key; it says nothing about delivery to the program.
 - `<port>` opens a `tcp` stream as `pen pipe <node> <port>` does, without a ready line; ssh checks the host key.
 
-A program that spawns the pipe for a service reads stderr up to the first LF with a 128-byte cap and accepts only
-exactly `pen-ready v1 <requested nodeId> <pinned noisePub>`. On any stdout byte before it, a longer or different
-line, or an exit before it, the program kills the child, waits until it has exited and sends nothing. After the line
-it keeps reading stderr to its end, holding at most a bounded tail. `@goat/pen-protocol/ready` implements this.
+A program that spawns the pipe for a service gives it 25 s from spawn to a verified ready line (Pen's 15 s dial and
+10 s handshake). It writes nothing to the child's stdin before then. It reads stderr up to the first LF with a
+128-byte cap and accepts only exactly `pen-ready v1 <requested nodeId> <pinned noisePub>`. On a longer or different
+line, an exit, the deadline, or any stdout byte it has received before it accepted the line, it kills the child,
+waits until it has exited and sends nothing. Stdout and stderr are separate pipes with no common order, so the
+last rule is fail-closed: a service must not send before the caller's first byte (HTTP never does), or a caller may
+drop the connection. After the line the program keeps reading stderr to its end, holding at most a bounded tail.
+`@goat/pen-protocol/ready` implements this reader. Its tests prove the reader alone; the caller and target together are
+proved in the integrated review before any Pen route is enabled.
 
 ### Snapshot watch
 
@@ -565,18 +588,20 @@ Control op `watch.snapshot` (control socket only) answers one line now and one o
 member's online state:
 `{"t":"snapshot","gen":G,"mesh":M,"self":S,"members":[{"nodeId","signPub","noisePub","name","user","hostKeys","online"}],"revoked":[{"nodeId","name"}]}`.
 Every line is complete, and `user` and `hostKeys` are always present (empty when the member published none). G
-counts the snapshots this daemon run produced and rises by exactly 1 from one line to the next on a watch. A watcher
-that falls 16 lines behind is closed. A gap in G or a closed watch means the list is stale: drop it and watch again.
-Nothing may authorize from this list. The `watch` op keeps its v1.1 lines.
+rises by exactly 1 for each change the daemon publishes; a new watcher's first line carries the current G without
+raising it, and the state and the subscription are taken together, so each watcher sees consecutive values. A watcher
+that falls 16 lines behind, or whose socket does not take a line within 5 s, is closed; at most 8 watchers run at
+once, and a ninth is refused. A gap in G or a closed watch means the list is stale: drop it and watch again. Nothing
+may authorize from this list. The `watch` op keeps its v1.1 lines.
 
 ### SSH config for exact routes
 
 `pen ssh-config` writes a `Host pen-<nodeId>` block for every member, ahead of the name blocks, with
 `ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's known_hosts,
 and, where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's shared
-connection never carries it. `pen-<name>` blocks are unchanged, and written only for a name exactly one member has
-that is not also a member's node id; any other name falls to the `pen-*` block, where `pen pipe` resolves it as
-before.
+connection never carries it. `pen-<name>` blocks and the `pen-*` block are unchanged. Where a member's name equals
+another member's node id, the earlier `pen-<nodeId>` block wins for that alias, as `pen pipe` already resolved such an
+alias to the node id.
 
 ## Close codes
 
