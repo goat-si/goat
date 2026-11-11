@@ -90,13 +90,21 @@ func runRelayEdit(verb string, args []string, stdout, stderr io.Writer) int {
 	cl, err := daemon.Dial(st)
 	switch {
 	case errors.Is(err, daemon.ErrNotRunning):
-		if err := st.UpdateConfig(func(c *state.Config) {
-			list, already, editErr = edit(*c)
-			if editErr == nil && !already {
-				c.SetRelays(list)
-			}
-		}); err != nil {
+		// Under the state lock, as UpdateConfig, but an edit that changes nothing writes nothing.
+		unlock, err := st.Lock()
+		if err != nil {
 			return fail(stderr, err)
+		}
+		defer unlock()
+		c, err := st.LoadConfig()
+		if err != nil {
+			return fail(stderr, err)
+		}
+		if list, already, editErr = edit(c); editErr == nil && !already {
+			c.SetRelays(list)
+			if err := st.SaveConfig(c); err != nil {
+				return fail(stderr, err)
+			}
 		}
 	case err != nil:
 		return fail(stderr, err)

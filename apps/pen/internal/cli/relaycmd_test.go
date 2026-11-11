@@ -247,6 +247,39 @@ func TestRelayEditChecksLockedConfig(t *testing.T) {
 	}
 }
 
+// An offline edit that changes nothing (already a relay, not a relay, the last one, invalid) leaves
+// config.json exactly as it was, including fields this binary does not know.
+func TestARefusedOfflineRelayEditLeavesTheConfigUntouched(t *testing.T) {
+	for _, args := range [][]string{
+		{"add", "https://a.example"},
+		{"rm", "https://x.example"},
+		{"rm", "https://a.example"},
+		{"add", "wss://A.example:443"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PEN_HOME", dir)
+			st, err := state.OpenDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte(`{"name":"a","relays":["https://a.example"],"relay":"https://a.example","future":1}`)
+			if err := os.WriteFile(st.Path("config.json"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			RunRelay(args, &out, &errOut)
+			got, err := os.ReadFile(st.Path("config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, raw) {
+				t.Fatalf("config.json rewritten: %s", got)
+			}
+		})
+	}
+}
+
 func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PEN_HOME", dir)
