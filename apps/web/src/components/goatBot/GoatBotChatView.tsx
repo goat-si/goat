@@ -146,11 +146,21 @@ export function GoatBotChatView({
     readonly file: ChannelBotArtifact;
   } | null>(null);
   const fileOpener = useRef<HTMLElement | null>(null);
+  // A file opened from the narrow sheet takes focus itself; the closing sheet leaves it there.
+  const fileOpenedFromSheet = useRef(false);
+  const sheetFinalFocus = () => {
+    const opened = fileOpenedFromSheet.current;
+    fileOpenedFromSheet.current = false;
+    return opened ? false : (homeRef.current ?? true);
+  };
   const openFile = bot
     ? (file: ChannelBotArtifact) => {
         fileOpener.current =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        if (narrow) setPanelOpen(false);
+        if (narrow) {
+          fileOpenedFromSheet.current = true;
+          setPanelOpen(false);
+        }
         setViewing({ environmentId: bot.environmentId, threadId: bot.threadId, file });
       }
     : () => {};
@@ -392,7 +402,7 @@ export function GoatBotChatView({
       )}
       {bot && narrow && (
         <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
-          <SheetPopup finalFocus={homeRef}>
+          <SheetPopup finalFocus={sheetFinalFocus}>
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
               environmentId={bot.environmentId}
