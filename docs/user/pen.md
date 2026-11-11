@@ -153,8 +153,8 @@ on that member says why:
 - "its mesh is full (4508)": the mesh holds 3840 records, the most Pen keeps for new members, names, locks and
   sign-in changes (removals still fit up to 4096). This happens only in meshes founded before the current Pen;
   start over in a new mesh, below. A mesh founded by the current Pen gives each group of machines (the founder,
-  and each of the founder's first 15 machines with the machines they admit) its own room, so one machine cannot
-  fill it for the others, and any machine outside that group can still remove it.
+  and each machine the founder invites with the machines it admits; up to 15 groups) its own room, so one
+  machine cannot fill it for the others, and any machine outside that group can still remove it.
 - "it runs an older Pen than this mesh needs (4509)": the member holds records of this mesh but runs a Pen from
   before meshes shared their room out. Update Pen on that machine; machines of a mesh founded by the current Pen
   all need the current Pen, and an older one cannot join it.
