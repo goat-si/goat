@@ -44,6 +44,8 @@ export interface FleetWork {
 
 export interface LayoutMachineInput extends FleetWork {
   readonly id: string;
+  readonly answering?: boolean;
+  readonly environmentId?: string | null;
   readonly agents: ReadonlyArray<FleetWork & { readonly key: string }>;
 }
 
@@ -168,7 +170,23 @@ export function layoutFleet(
         rx: width * (narrow ? 0.17 : 0.25),
         ry: Math.min(height * 0.22, outer.ry - ORBIT_GAP),
       };
-  const { shown, folded } = fold(machines, limits.machines);
+  const ranked =
+    machines.length <= limits.machines
+      ? machines
+      : [...machines].sort((a, b) => {
+          const priority = (machine: LayoutMachineInput) =>
+            machine.answering === false
+              ? machine.environmentId === null
+                ? 3
+                : 2
+              : machine.running + machine.attention > 0
+                ? 0
+                : 1;
+          return priority(a) - priority(b);
+        });
+  const shown = ranked.length > limits.machines ? ranked.slice(0, limits.machines - 1) : ranked;
+  const folded =
+    ranked.length > limits.machines ? aggregate(ranked.slice(limits.machines - 1)) : null;
   const nodes: ReadonlyArray<LayoutMachineInput | null> = folded ? [...shown, null] : shown;
   const angles = machineAngles(nodes.length, narrow);
 

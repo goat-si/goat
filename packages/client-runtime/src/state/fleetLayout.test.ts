@@ -25,6 +25,17 @@ function machine(id: string, work = idle, agents = 0): LayoutMachineInput {
 }
 
 describe("layoutFleet", () => {
+  it("prioritizes answering live work, then answering idle, then away, then reported hosts", () => {
+    const machines = [
+      { ...machine("reported", { ...idle, reported: 4 }), answering: false, environmentId: null },
+      { ...machine("away", { ...idle, reported: 3 }), answering: false, environmentId: "away" },
+      { ...machine("idle"), answering: true, environmentId: "idle" },
+      { ...machine("live", { ...idle, attention: 1 }), answering: true, environmentId: "live" },
+    ];
+    expect(
+      layoutFleet(machines, 800, 400, { machines: 3, agents: 3 }).machines.map((node) => node.id),
+    ).toEqual(["live", "idle", null]);
+  });
   it("places one machine to the right of Main and two on opposite sides", () => {
     const one = layoutFleet([machine("a")], 800, 500);
     expect(one.machines[0]).toMatchObject({ x: 600, y: 250 });
@@ -61,7 +72,7 @@ describe("layoutFleet", () => {
     expect(layout.machines.map((node) => node.id)).toContain("m19");
     const folded = layout.machines.at(-1)!;
     expect(folded.id).toBeNull();
-    expect(folded.aggregate).toEqual({ count: 9, running: 0, attention: 0, reported: 0 });
+    expect(folded.aggregate).toEqual({ count: 9, running: 0, attention: 0, reported: 3 });
 
     const allBusy = Array.from({ length: 14 }, (_, index) =>
       machine("m" + index, { running: 1, attention: index % 2, reported: 0 }),
