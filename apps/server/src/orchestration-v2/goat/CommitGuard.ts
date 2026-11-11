@@ -1,4 +1,4 @@
-import type { CommandId, ThreadId } from "@goat/contracts";
+import type { CommandId, OrchestrationV2StoredEvent, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -21,7 +21,11 @@ export interface CommitGuardInput {
  */
 export type CommitGuardSelector = (
   input: CommitGuardInput,
-) => Effect.Effect<void, CommitGuardRefused> | undefined;
+) =>
+  | ((
+      storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>,
+    ) => Effect.Effect<void, CommitGuardRefused>)
+  | undefined;
 
 export const CommitGuard = Context.Reference<CommitGuardSelector | undefined>(
   "goat/orchestration-v2/CommitGuard",

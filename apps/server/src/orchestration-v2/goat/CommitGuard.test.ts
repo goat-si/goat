@@ -57,10 +57,11 @@ it.effect(
       const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
       const guard: CommitGuardSelector = ({ commandType, commandId }) =>
         commandType === "thread.create"
-          ? Effect.gen(function* () {
-              yield* sql`INSERT INTO guard_marks VALUES (${commandId}, 0)`.pipe(Effect.orDie);
-              return yield* new CommitGuardRefused({ reason: "fenced" });
-            })
+          ? () =>
+              Effect.gen(function* () {
+                yield* sql`INSERT INTO guard_marks VALUES (${commandId}, 0)`.pipe(Effect.orDie);
+                return yield* new CommitGuardRefused({ reason: "fenced" });
+              })
           : undefined;
       const failed = yield* launches
         .launch(launchInput({ command: "cmd:refused", thread: "thread:refused", message: "go" }))
@@ -83,12 +84,15 @@ it.effect.each(["memory", "file"] as const)(
       const guard: CommitGuardSelector = ({ commandType, commandId }) =>
         commandId !== "cmd:counted" && commandId !== "cmd:counted:initial-message"
           ? undefined
-          : Effect.gen(function* () {
-              yield* Ref.update(calls, (all) => [...all, commandType]);
-              if (commandType !== "message.dispatch") return;
-              const seen = yield* running.pipe(Effect.orDie);
-              yield* sql`INSERT INTO guard_marks VALUES (${commandId}, ${seen})`.pipe(Effect.orDie);
-            });
+          : () =>
+              Effect.gen(function* () {
+                yield* Ref.update(calls, (all) => [...all, commandType]);
+                if (commandType !== "message.dispatch") return;
+                const seen = yield* running.pipe(Effect.orDie);
+                yield* sql`INSERT INTO guard_marks VALUES (${commandId}, ${seen})`.pipe(
+                  Effect.orDie,
+                );
+              });
       assert.equal(yield* running.pipe(Effect.orDie), 0);
       const input = launchInput({
         command: "cmd:counted",
@@ -114,10 +118,11 @@ it.effect(
       const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
       const guard: CommitGuardSelector = ({ commandType, commandId }) =>
         commandType === "message.dispatch"
-          ? Effect.gen(function* () {
-              yield* sql`INSERT INTO guard_marks VALUES (${commandId}, 1)`.pipe(Effect.orDie);
-              return yield* new CommitGuardRefused({ reason: "fenced" });
-            })
+          ? () =>
+              Effect.gen(function* () {
+                yield* sql`INSERT INTO guard_marks VALUES (${commandId}, 1)`.pipe(Effect.orDie);
+                return yield* new CommitGuardRefused({ reason: "fenced" });
+              })
           : undefined;
       const failed = yield* launches
         .launch(launchInput({ command: "cmd:late", thread: "thread:late", message: "go" }))
