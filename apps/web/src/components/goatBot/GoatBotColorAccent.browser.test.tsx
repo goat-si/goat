@@ -121,7 +121,7 @@ it("moves the swatch choice with the arrow keys and saves that color", async () 
   await expect.element(neutral).not.toBeChecked();
   await userEvent.click(page.getByRole("button", { name: "Save" }));
   await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
-  expect(state.updates).toEqual([{ botId: "docs", color: "#2F6FED" }]);
+  expect(state.updates).toEqual([{ botId: "docs", color: "#2563EB" }]);
 });
 
 const personRow: GoatBotRow = {
