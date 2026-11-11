@@ -65,6 +65,8 @@ export type GoatBotActivitySource =
        * Null in a task's view, where every step is that task's.
        */
       readonly runs: ReadonlyMap<string, GoatBotRunTurn> | null;
+      /** In a task's view, the attempt its worker runs; null in the main chat. */
+      readonly generation: number | null;
     }
   /** Work on another machine or server; null `at` trails a task's own view. */
   | {
@@ -175,6 +177,7 @@ export function goatBotActivitySources(input: {
         refs: [scopeThreadRef(worker.environmentId, worker.threadId)],
         running: goatBotChipOutstanding(chip),
         runs: null,
+        generation: chip.generation ?? 1,
       },
     ];
   }
@@ -225,19 +228,28 @@ export function goatBotActivitySources(input: {
       refs: kept.map((session) => session.ref),
       running: kept.some((session) => session.running),
       runs: new Map(kept.flatMap((session) => [...session.runs])),
+      generation: null,
     },
     ...elsewhere,
   ];
 }
 
-/** The turn each of GOAT Bot's replies and questions answers for, by row id. */
+/** The task a message speaks for, and the attempt when the server says. */
+export interface GoatBotRowTurn {
+  readonly taskId: string;
+  readonly generation: number | null;
+}
+
+/** The task and attempt each message names, by row id. */
 export function goatBotActivityRowTurns(
   visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
-): ReadonlyMap<string, string> {
-  const turns = new Map<string, string>();
+): ReadonlyMap<string, GoatBotRowTurn> {
+  const turns = new Map<string, GoatBotRowTurn>();
   for (const { item } of visibleTurnItems) {
-    if (item.type === "assistant_message" && item.channel?.taskId !== undefined)
-      turns.set(item.id, item.channel.taskId);
+    if (item.type !== "assistant_message" && item.type !== "user_message") continue;
+    const meta = item.channel;
+    if (meta?.taskId === undefined) continue;
+    turns.set(item.id, { taskId: meta.taskId, generation: meta.taskGeneration ?? null });
   }
   return turns;
 }
@@ -451,26 +463,33 @@ function firstAtOrAfter(rows: TimedRows, time: number): number {
 /**
  * Where each line goes. A main-chat step sits above the first reply or question at or after it of
  * the turn its run serves, trails only while that turn runs, and gets no line for a run no turn
- * names. In a task's view every step is the task's and sits above the first row after it. No
- * stretch opens before the source's held history, so no count is partial.
+ * names. In a task's view a step sits above the first row after it that does not name another
+ * attempt. No stretch opens before the source's held history, so no count is partial.
  */
 export function goatBotActivityPlacement(input: {
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly sources: ReadonlyArray<GoatBotActivitySource>;
   readonly steps: ReadonlyArray<GoatBotSourceSteps>;
   /** From `goatBotActivityRowTurns`. */
-  readonly rowTurns: ReadonlyMap<string, string>;
+  readonly rowTurns: ReadonlyMap<string, GoatBotRowTurn>;
 }): GoatBotActivityPlacement {
   // A message still being sent carries this client's clock, so it never splits a stretch.
   const anchors = input.rows.filter(
     (row) => row.kind !== "day" && !(row.kind === "user" && row.sendKey !== null),
   );
+  const local = input.sources.find((source) => source.kind === "local");
+  const runs = local?.kind === "local" ? local.runs : null;
+  // A retry's worker never speaks for an earlier attempt's late outcome.
+  const generation = local?.kind === "local" ? local.generation : null;
   const all: TimedRows = { indexes: [], times: [], reach: [] };
   const turnRows = new Map<string, TimedRows>();
   anchors.forEach((row, index) => {
     const time = Date.parse(row.kind === "day" ? row.at : row.createdAt);
-    addRow(all, index, time);
-    const taskId = row.kind === "bot" ? input.rowTurns.get(row.id) : undefined;
+    const turn = input.rowTurns.get(row.id);
+    const otherAttempt =
+      generation !== null && turn?.generation != null && turn.generation !== generation;
+    if (!otherAttempt) addRow(all, index, time);
+    const taskId = row.kind === "bot" ? turn?.taskId : undefined;
     if (taskId === undefined) return;
     let rows = turnRows.get(taskId);
     if (rows === undefined) {
@@ -484,7 +503,7 @@ export function goatBotActivityPlacement(input: {
   const byTime = (heldFrom: string | null, at: string): number | null => {
     const gap = firstAtOrAfter(all, Date.parse(at));
     if (gap === 0 || opensBefore(heldFrom, all.times[gap - 1] ?? 0)) return null;
-    return gap;
+    return all.indexes[gap] ?? anchors.length;
   };
   const byTurn = (turn: GoatBotRunTurn, heldFrom: string | null, at: string): number | null => {
     const rows = turnRows.get(turn.taskId) ?? { indexes: [], times: [], reach: [] };
@@ -495,8 +514,6 @@ export function goatBotActivityPlacement(input: {
     if (index !== undefined) return index;
     return turn.running ? anchors.length : null;
   };
-  const local = input.sources.find((source) => source.kind === "local");
-  const runs = local?.kind === "local" ? local.runs : null;
   const gapOf = (source: GoatBotSourceSteps, runId: string | null, at: string) => {
     if (runs === null) return byTime(source.heldFrom, at);
     const turn = runId === null ? undefined : runs.get(runId);

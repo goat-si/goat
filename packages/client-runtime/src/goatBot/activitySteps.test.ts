@@ -73,14 +73,19 @@ const said = (id: string, second: number) =>
     channel: { ...meta, kind: "inbound", inputId: "in-" + id, readAt: at(second) },
   });
 // A reply or question names the turn it answers for, as the server's receipts do.
-const replied = (id: string, second: number, taskId?: string) =>
+const replied = (id: string, second: number, taskId?: string, taskGeneration?: number) =>
   projected({
     ...base("bot", id, second),
     type: "assistant_message",
     messageId: "m-" + id,
     text: "Reply " + id,
     streaming: false,
-    channel: { ...meta, kind: "result", ...(taskId === undefined ? {} : { taskId }) },
+    channel: {
+      ...meta,
+      kind: "result",
+      ...(taskId === undefined ? {} : { taskId }),
+      ...(taskGeneration === undefined ? {} : { taskGeneration }),
+    },
   });
 function chip(
   id: string,
@@ -92,6 +97,7 @@ function chip(
     kind?: string;
     taskId?: string;
     createdAt?: number;
+    generation?: number;
   } = {},
 ) {
   return projected({
@@ -113,6 +119,7 @@ function chip(
       updatedAt: at(second),
       worker,
       openQuestionCount: 0,
+      ...(fields.generation === undefined ? {} : { generation: fields.generation }),
     },
   });
 }
@@ -157,11 +164,13 @@ const thought = (id: string, second: number, extra: object = {}) =>
 function timeline(
   items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
   pending: GoatBotPendingInput[] = [],
+  taskId: string | null = null,
 ) {
   return buildGoatBotTimeline({
     visibleTurnItems: items,
     pendingInputs: pending,
     readers: goatBotItemReaders,
+    taskId,
   });
 }
 
@@ -329,6 +338,7 @@ describe("goatBotActivityPlacement", () => {
         refs: [{ environmentId: env, threadId: ThreadId.make(sessionB) }],
         running: false,
         runs: new Map([["run-1", turn("task-c2", 21)]]),
+        generation: null,
       },
     ]);
     const placement = place(botItems, [
@@ -471,6 +481,7 @@ describe("goatBotActivityPlacement", () => {
         refs: [{ environmentId: env, threadId: ThreadId.make("worker-1") }],
         running: true,
         runs: null,
+        generation: 1,
       },
     ]);
     const moved = [
@@ -493,6 +504,26 @@ describe("goatBotActivityPlacement", () => {
     expect(place(moved, [], { taskId: "task-1", rows: [] }).trailing).toEqual({
       kind: "elsewhere",
       host: "mac-studio",
+    });
+  });
+
+  it("keeps a retry's steps off the earlier attempt's late outcome in the task's view", () => {
+    const worker = { environmentId: "env", threadId: "worker-1" };
+    const items = [
+      chip("t1", 1, worker, { kind: "work", taskId: "task-1", status: "running", generation: 2 }),
+      replied("retrying", 2, "task-1", 2),
+      // Attempt 1's failure lands after attempt 2 already ran a command.
+      replied("late", 10, "task-1", 1),
+    ];
+    const steps = [goatBotSourceSteps([ran("cmd", 5, [], {}, "worker-1")], false)];
+    const placement = place(items, steps, {
+      taskId: "task-1",
+      rows: timeline(items, [], "task-1"),
+    });
+    expect(placement.beforeRow.has("late")).toBe(false);
+    expect(placement.trailing).toMatchObject({
+      kind: "steps",
+      line: { live: true, summary: "Ran 1 command" },
     });
   });
 

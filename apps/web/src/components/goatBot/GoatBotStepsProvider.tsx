@@ -7,6 +7,7 @@ import {
   goatBotActivitySources,
   type GoatBotActivitySource,
   type GoatBotRow,
+  type GoatBotRowTurn,
 } from "@goat/client-runtime/goatBot";
 import type {
   EnvironmentId,
@@ -31,7 +32,7 @@ function useSourceSteps(ref: ScopedThreadRef | undefined) {
 
 interface GoatBotStepsSources {
   readonly sources: ReadonlyArray<GoatBotActivitySource>;
-  readonly rowTurns: ReadonlyMap<string, string>;
+  readonly rowTurns: ReadonlyMap<string, GoatBotRowTurn>;
 }
 
 const GoatBotStepsSourcesContext = createContext<GoatBotStepsSources | null>(null);
