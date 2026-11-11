@@ -322,3 +322,52 @@ func TestASharedSaveOfTwoProcessesKeepsOnlyTheShareOfTheirUnion(t *testing.T) {
 		}
 	}
 }
+
+// A revoke of a key nobody has introduced yet does not stop that key's later admission: under shared
+// rules a revoke takes effect only on subjects introduced in its own past, as the old storage rule had it.
+func TestARevokeOfAKeyNotYetAdmittedDoesNotBlockItsAdmission(t *testing.T) {
+	f, o, x := detID(1), detID(2), detID(3)
+	b, found := newMesh(t, f)
+	ao := b.admit(f, o, found)
+	b.sign(o, TypeRevoke, []*Record{ao}, Fields{Subjects: []string{pub(x)}})
+	b.admit(f, x, ao)
+	s := sharedStore(b)
+	mergeEach(t, s, b.recs)
+	if !isMember(s.View(), x) {
+		t.Fatal("a member's revoke signed before the key was admitted kept the founder from admitting it")
+	}
+}
+
+// An honest revoke a node signs takes effect even when the records between it and its subject's admit
+// were dropped from a full share: the revoke names the subject's admit in its prev.
+func TestARevokeSignedOverDroppedRecordsStillReachesItsSubject(t *testing.T) {
+	f, h, o := detID(1), detID(2), detID(3)
+	b, found := newMesh(t, f)
+	ah := b.admit(f, h, found)
+	ao := b.admit(f, o, ah)
+	if nonceLineage(ah.B.Card.C.Nonce) == nonceLineage(ao.B.Card.C.Nonce) {
+		t.Fatal("setup: h and o share a lineage")
+	}
+	last := ah
+	for i := 0; i < 3*ShareOrdinary; i++ {
+		last = b.sign(h, TypeName, []*Record{last}, Fields{Subject: pub(h), Name: fmt.Sprintf("n%d", i)})
+	}
+	s := sharedStore(b)
+	s.self = pub(o)
+	if _, err := s.Merge(b.recs); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Bare()) == 0 {
+		t.Fatal("setup: no filler record was dropped")
+	}
+	rev, err := s.Append(o, TypeRevoke, 9999, Fields{Subjects: []string{pub(h)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(rev.B.Prev, ah.Hash) {
+		t.Errorf("the revoke does not name its subject's admit in prev")
+	}
+	if _, ok := s.View().Revoked[pub(h)]; !ok {
+		t.Fatal("an honest revoke signed over dropped filler records had no effect")
+	}
+}

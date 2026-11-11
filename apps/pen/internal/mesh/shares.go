@@ -188,3 +188,23 @@ func byHashOf(recs []*Record) map[string]*Record {
 	}
 	return m
 }
+
+// withSubjectCards adds to prev, for each revoke subject, the smallest kept found or admit naming it,
+// so the subject is introduced in the revoke's past even when records between them were dropped.
+func (s *Store) withSubjectCards(prev, subjects []string) []string {
+	out := slices.Clone(prev)
+	for _, k := range subjects {
+		var best *Record
+		for _, r := range s.recs {
+			if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && r.B.Card != nil && r.B.Card.C.SignPub == k &&
+				(best == nil || bytes.Compare(r.Sum[:], best.Sum[:]) < 0) {
+				best = r
+			}
+		}
+		if best != nil && !slices.Contains(out, best.Hash) {
+			out = append(out, best.Hash)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

@@ -666,6 +666,10 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		// An admit for an account names at most 8 heads, so its body stays within 2048 bytes.
 		limit = maxAccountAdmitPrev
 	}
+	if s.shares {
+		// Dropped records leave many heads; naming 64 would pass the 2048-byte body limit.
+		limit = min(limit, maxSharedPrev)
+	}
 	by := ident.B64.EncodeToString(id.SignPub)
 	n, own := s.selfN, ""
 	var ownN uint64
@@ -682,6 +686,9 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 	if s.shares && own != "" && !slices.Contains(prev, own) {
 		// Under shares a record names its own previous one directly (ADR-0026 "Own chain").
 		prev = append([]string{own}, prev[:min(len(prev), limit-1)]...)
+	}
+	if s.shares && typ == TypeRevoke {
+		prev = s.withSubjectCards(prev, f.Subjects)
 	}
 	r, err := SignV(max(s.version, 1), id, s.MeshID, typ, n, prev, at, f)
 	if err != nil {
