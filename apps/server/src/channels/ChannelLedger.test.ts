@@ -487,7 +487,7 @@ describe("ChannelLedger outbox", () => {
               ...delivery("reply:" + accepted.inputId, slackDestination, created.task.taskId),
               inputId: accepted.inputId,
             },
-            delivery("result", slackDestination, created.task.taskId),
+            delivery("result", slackDestination, created.task.taskId, "result"),
             delivery("bot-copy", goatDestination, created.task.taskId),
           ],
           NOW,

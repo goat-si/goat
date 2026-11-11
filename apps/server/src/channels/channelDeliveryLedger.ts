@@ -7,6 +7,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelLedger } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 import { copyUndeliveredReply, type UndeliveredSourceRow } from "./channelUndeliveredReplies.ts";
+import { interimAlreadyHeard, isInterimMessage } from "./channelInterimMessages.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
@@ -73,14 +74,20 @@ export const deliveryLedger = (
             Effect.gen(function* () {
               yield* fence(input.owner);
               yield* expire(input.now);
-              const rows = yield* sql<{
-                readonly row_order: number;
-                readonly delivery_id: ChannelDeliveryId;
-                readonly message_json: string;
-                readonly attempts: number;
-                readonly cause_key: string;
-                readonly input_id: string | null;
-              }>`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
+              const claimRound = Effect.fn("channelDeliveryLedger.claimRound")(function* (
+                limit: number,
+              ) {
+                const rows = yield* sql<{
+                  readonly row_order: number;
+                  readonly delivery_id: ChannelDeliveryId;
+                  readonly message_json: string;
+                  readonly attempts: number;
+                  readonly cause_key: string;
+                  readonly input_id: string | null;
+                  readonly task_id: string | null;
+                  readonly kind: string;
+                  readonly destination_kind: string;
+                }>`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
         updated_at = ${input.now}
         WHERE delivery_id IN (
           SELECT due.delivery_id FROM channel_outbox due
@@ -101,32 +108,52 @@ export const deliveryLedger = (
                 WHERE earlier.task_id = due.task_id AND earlier.destination_kind = due.destination_kind
                   AND earlier.state IN ('pending', 'delivering') AND earlier.rowid < due.rowid)))
           ORDER BY CASE WHEN due.cause_key = 'reply:' || due.input_id THEN 0 ELSE 1 END,
-            due.created_at, due.rowid LIMIT ${input.limit})
-        RETURNING rowid AS row_order, delivery_id, message_json, attempts, cause_key, input_id`;
-              return yield* Effect.forEach(
-                rows.toSorted((a, b) => {
-                  const aReceipt = a.cause_key === "reply:" + a.input_id;
-                  const bReceipt = b.cause_key === "reply:" + b.input_id;
-                  return Number(bReceipt) - Number(aReceipt) || a.row_order - b.row_order;
-                }),
-                (row) =>
-                  Effect.gen(function* () {
-                    const receipt =
-                      row.input_id !== null && row.cause_key === "reply:" + row.input_id;
-                    const inbox = receipt
-                      ? yield* sql<{ readonly accepted_at: string }>`
-          SELECT accepted_at FROM channel_inbox WHERE input_id = ${row.input_id}`
-                      : [];
-                    return {
-                      deliveryId: row.delivery_id,
-                      message: decodeOutbound(row.message_json),
-                      attempts: row.attempts,
-                      ...(inbox[0] === undefined
-                        ? {}
-                        : { receiptDeadline: Date.parse(inbox[0].accepted_at) + 60_000 }),
-                    };
+            due.created_at, due.rowid LIMIT ${limit})
+        RETURNING rowid AS row_order, delivery_id, message_json, attempts, cause_key, input_id,
+          task_id, kind, destination_kind`;
+                const claimed = yield* Effect.forEach(
+                  rows.toSorted((a, b) => {
+                    const aReceipt = a.cause_key === "reply:" + a.input_id;
+                    const bReceipt = b.cause_key === "reply:" + b.input_id;
+                    return Number(bReceipt) - Number(aReceipt) || a.row_order - b.row_order;
                   }),
-              );
+                  (row) =>
+                    Effect.gen(function* () {
+                      if (isInterimMessage(row) && (yield* interimAlreadyHeard(sql, row))) {
+                        yield* sql`UPDATE channel_outbox SET state = 'superseded',
+                        updated_at = ${input.now} WHERE delivery_id = ${row.delivery_id}`;
+                        return null;
+                      }
+                      const receipt =
+                        row.input_id !== null && row.cause_key === "reply:" + row.input_id;
+                      const inbox = receipt
+                        ? yield* sql<{ readonly accepted_at: string }>`
+          SELECT accepted_at FROM channel_inbox WHERE input_id = ${row.input_id}`
+                        : [];
+                      return {
+                        deliveryId: row.delivery_id,
+                        message: decodeOutbound(row.message_json),
+                        attempts: row.attempts,
+                        ...(inbox[0] === undefined
+                          ? {}
+                          : { receiptDeadline: Date.parse(inbox[0].accepted_at) + 60_000 }),
+                      };
+                    }),
+                );
+                return claimed;
+              });
+              // A superseded interim message frees the task's next row, so claim again until a
+              // round supersedes nothing; each round moves rows out of pending, so this ends.
+              const deliveries: Array<
+                NonNullable<Effect.Success<ReturnType<typeof claimRound>>[number]>
+              > = [];
+              while (deliveries.length < input.limit) {
+                const round = yield* claimRound(input.limit - deliveries.length);
+                const sent = round.filter((delivery) => delivery !== null);
+                deliveries.push(...sent);
+                if (sent.length === round.length) break;
+              }
+              return deliveries;
             }),
           )
           .pipe(Effect.mapError(mapError("claimDueDeliveries"))),

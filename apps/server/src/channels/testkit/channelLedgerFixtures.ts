@@ -20,14 +20,19 @@ export const deliverAllDue = Effect.fn("ChannelFixtures.deliverAllDue")(function
   yield* delivery.deliverDue(owner);
 });
 
-export const ledgerOutboxDelivery = (causeKey: string, destination: unknown, taskId?: string) => ({
+export const ledgerOutboxDelivery = (
+  causeKey: string,
+  destination: unknown,
+  taskId?: string,
+  kind: "receipt" | "result" = "receipt",
+) => ({
   deliveryId: deliveryIdFor(causeKey),
   causeKey,
   ...(taskId === undefined ? {} : { taskId: ChannelTaskId.make(taskId) }),
   message: decodeOutbound({
     deliveryId: deliveryIdFor(causeKey),
     destination,
-    kind: "receipt",
+    kind,
     text: "On it.",
   }),
 });

@@ -47,7 +47,6 @@ import {
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/sql/SqlClient";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -112,7 +111,6 @@ import {
   whichApproval,
 } from "./channelApprovalCards.ts";
 import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
-import { progressAlreadyTold } from "./channelProgressMessages.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import {
   answerNativeQuestion,
@@ -210,7 +208,6 @@ const boundTail = (
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
-  const sql = yield* SqlClient.SqlClient;
   const routineInputs = yield* makeRoutineInputs;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const identityNow = (input: {
@@ -1692,9 +1689,7 @@ const make = Effect.gen(function* () {
       const deliveries =
         goatOutcome && bot !== undefined
           ? [chipDelivery(task, bot, "narration:" + pending.event.eventId + ":card"), told]
-          : pending.event.type === "task.progress" && (yield* progressAlreadyTold(sql, task))
-            ? []
-            : [told];
+          : [told];
       // Work started elsewhere shows up in the bot as its card; its result is on the card, and
       // only receipts and a turn's answer also arrive as messages.
       if (
