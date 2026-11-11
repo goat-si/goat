@@ -534,7 +534,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     thread: props.selectedThread,
     serverConfig: props.serverConfig,
     project,
-    enabled: !props.isDraft && props.canOperateThread && queuedEdit === null,
+    enabled: !props.isDraft && queuedEdit === null,
+    canOperate: props.canOperateThread,
   });
   const composerMenu = useComposerCommandMenu({
     draftMessage: draftMessage,
@@ -666,14 +667,14 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       text: draftMessage,
       attachmentCount: draftAttachments.length,
       usageLimitsOffered,
-      offersFork: composerFork.offersFork,
+      inThread: composerFork.interceptsFork,
     });
     if (intercept === "usage-limits") {
       if (openUsageLimits()) onChangeDraftMessage("");
       return;
     }
     if (intercept === "fork") {
-      onChangeDraftMessage("");
+      if (composerFork.offersFork) onChangeDraftMessage("");
       composerFork.startFork();
       return;
     }

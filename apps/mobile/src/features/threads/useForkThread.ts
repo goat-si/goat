@@ -169,7 +169,9 @@ export function useComposerFork(input: {
     readonly environment: { readonly capabilities: { readonly threadForkWorkspace?: boolean } };
   } | null;
   readonly project: Pick<EnvironmentProject, "isScratch"> | null;
+  /** An existing thread outside queued-message editing. */
   readonly enabled: boolean;
+  readonly canOperate: boolean;
 }) {
   const { start } = useForkThread();
   const { thread, serverConfig } = input;
@@ -180,6 +182,9 @@ export function useComposerFork(input: {
     project: input.project,
     cloud: threadRunsInCloud(thread, serverConfig?.providers),
   });
+  const choice: ForkEntryChoice = input.canOperate
+    ? forkEntryChoice(availability)
+    : { kind: "blocked", reason: "Connect with permission to operate threads to fork this one." };
   const startFork = () =>
     void start(
       {
@@ -188,14 +193,18 @@ export function useComposerFork(input: {
         sourceTitle: thread.title,
         serverForks,
       },
-      forkEntryChoice(availability),
+      choice,
       {
         title: FORK_THREAD_PICKER.title,
         message: FORK_THREAD_PICKER.message(availability.inWorktree),
         choices: forkChoices(availability.inWorktree, "thread"),
       },
     );
-  return { offersFork: input.enabled && availability.canFork, startFork };
+  return {
+    offersFork: input.enabled && choice.kind !== "blocked",
+    interceptsFork: input.enabled,
+    startFork,
+  };
 }
 
 /** "Fork thread" in a thread-list row's long-press menu. */

@@ -241,13 +241,14 @@ export function resolveComposerSendIntercept(input: {
   readonly text: string;
   readonly attachmentCount: number;
   readonly usageLimitsOffered: boolean;
-  readonly offersFork: boolean;
+  /** The composer belongs to an existing thread, where /fork is always GOAT's. */
+  readonly inThread: boolean;
 }): "usage-limits" | "fork" | null {
   if (input.usageLimitsOffered && isUsageLimitsCommand(input.text) && input.attachmentCount === 0) {
     return "usage-limits";
   }
   // Attachments stay in the draft for the next message.
-  if (input.offersFork && input.text.trim().toLowerCase() === "/fork") return "fork";
+  if (input.inThread && input.text.trim().toLowerCase() === "/fork") return "fork";
   return null;
 }
 

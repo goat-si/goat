@@ -189,9 +189,10 @@ describe("mobile /fork command", () => {
     ).toEqual({ text: " keep this", cursor: 0, interactionMode: null, fork: true });
   });
 
-  it("catches a typed standalone /fork on send whatever is attached", () => {
-    const intercept = (text: string, attachmentCount = 0, offersFork = true) =>
-      resolveComposerSendIntercept({ text, attachmentCount, usageLimitsOffered: true, offersFork });
+  it("catches a typed standalone /fork in any existing thread, whatever is attached", () => {
+    // Availability is not an input: an unforkable thread explains why instead of sending the text.
+    const intercept = (text: string, attachmentCount = 0, inThread = true) =>
+      resolveComposerSendIntercept({ text, attachmentCount, usageLimitsOffered: true, inThread });
     expect(intercept(" /fork ")).toBe("fork");
     expect(intercept("/FORK", 2)).toBe("fork");
     expect(intercept("/fork", 0, false)).toBeNull();
