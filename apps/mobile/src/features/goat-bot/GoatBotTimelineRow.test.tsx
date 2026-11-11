@@ -720,3 +720,60 @@ describe("a reply with a table", () => {
     expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
   });
 });
+
+describe("event lines", () => {
+  const event = (
+    subject?: { kind: "routine" | "task"; id: string; name: string },
+    text = "Routine Daily check ran",
+  ): GoatBotRow =>
+    ({
+      kind: "event",
+      id: "event",
+      text,
+      createdAt: "2026-10-12T09:40:00Z",
+      ...(subject ? { subject } : {}),
+    }) as GoatBotRow;
+
+  it("opens the routine an event line names in the bot's home, and a task in its own view", async () => {
+    const onOpenHome = vi.fn();
+    const onSelectTask = vi.fn();
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotTimelineRow
+        {...props}
+        onOpenHome={onOpenHome}
+        onSelectTask={onSelectTask}
+        row={event({ kind: "routine", id: "routine-1", name: "Daily check" })}
+      />,
+    );
+    await view.render();
+    await view.click("Routine Daily check ran. Open routine Daily check");
+    expect(onOpenHome).toHaveBeenCalledTimes(1);
+    await view.rerender(
+      <GoatBotTimelineRow
+        {...props}
+        onOpenHome={onOpenHome}
+        onSelectTask={onSelectTask}
+        row={event({ kind: "task", id: "task-9", name: "Check disks" }, "Check disks finished")}
+      />,
+    );
+    await view.click("Check disks finished. Open task Check disks");
+    expect(onSelectTask).toHaveBeenCalledWith("task-9");
+  });
+
+  it("stays plain text when it names nothing, or nothing here can open it", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(h, <GoatBotTimelineRow {...props} row={event()} />);
+    await view.render();
+    expect(view.container.querySelector("button")).toBeNull();
+    await view.rerender(
+      <GoatBotTimelineRow
+        {...props}
+        row={event({ kind: "routine", id: "routine-1", name: "Daily check" })}
+      />,
+    );
+    expect(view.container.querySelector("button")).toBeNull();
+    expect(view.container.textContent).toContain("Routine Daily check ran");
+  });
+});

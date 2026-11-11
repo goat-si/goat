@@ -100,6 +100,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
+  /** Opens the bot's home, where a routine an event line names lives. */
+  readonly onOpenHome?: (() => void) | undefined;
   /** The environment whose bot history is shown; thread links in bot text open there. */
   readonly environmentId?: EnvironmentId | null;
   /** Who the conversation belongs to; its name heads each run of bot messages. */
@@ -115,10 +117,38 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={goatBotTime} />;
   }
   if (row.kind === "event") {
+    const subject = row.subject;
+    const at = subject === undefined ? -1 : row.text.indexOf(subject.name);
+    const onSelectTask = props.onSelectTask;
+    const open =
+      subject === undefined || at < 0
+        ? undefined
+        : subject.kind === "routine"
+          ? props.onOpenHome
+          : onSelectTask
+            ? () => onSelectTask(ChannelTaskId.make(subject.id))
+            : undefined;
+    if (subject === undefined || open === undefined) {
+      return (
+        <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
+          {row.text}
+        </Text>
+      );
+    }
+    // The whole line is the target, so a thumb need not find the name in small type.
     return (
-      <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
-        {row.text}
-      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${row.text}. Open ${subject.kind} ${subject.name}`}
+        onPress={open}
+        className="min-h-[44px] justify-center"
+      >
+        <Text className="text-center text-xs text-foreground-muted">
+          {row.text.slice(0, at)}
+          <Text className="text-foreground underline">{subject.name}</Text>
+          {row.text.slice(at + subject.name.length)}
+        </Text>
+      </Pressable>
     );
   }
   const marginTop = goatBotRowGap(row.groupPosition);
@@ -363,6 +393,7 @@ export function GoatBotScreen(props: {
           onDiscard={session.onDiscardInput}
           onSelectThread={onSelectThread}
           onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
+          onOpenHome={taskId ? undefined : openHome}
           environmentId={session.historyEnvironmentId}
           botName={title}
           botEmoji={botEmoji}
@@ -376,6 +407,7 @@ export function GoatBotScreen(props: {
       onSelectThread,
       onSelectTask,
       taskId,
+      openHome,
       session.supportsTaskThreads,
       session.historyEnvironmentId,
       title,
