@@ -9,8 +9,14 @@ const state = vi.hoisted(() => ({
     canCreate: true,
     canManage: true,
     canEdit: true,
-    create: vi.fn(async () => ({ botId: "research", name: "Research" })),
-    update: vi.fn(async () => null),
+    create: vi.fn(async (..._args: unknown[]): Promise<object | string> => ({
+      botId: "research",
+      name: "Research",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    })),
+    update: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
     hide: vi.fn(async () => true),
     remove: vi.fn(async () => true),
     restore: vi.fn(async () => true),
@@ -136,8 +142,89 @@ it("creates a bot from New bot with one request id and opens its conversation", 
   );
   expect(opened).toHaveBeenCalledWith({
     kind: "member",
-    profile: { botId: "research", name: "Research" },
+    profile: {
+      botId: "research",
+      name: "Research",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    },
   });
+  expect(state.manage.update).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+});
+
+it("a retry after a create the server kept, though the phone saw it fail, still carries the edits", async () => {
+  state.manage.update.mockClear();
+  const stored = {
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+  };
+  // The first request was stored, but its answer never reached the phone.
+  state.manage.create
+    .mockResolvedValueOnce("Couldn't reach GOAT Bot's computer.")
+    .mockResolvedValueOnce(stored);
+  const opened = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  let failure: string | null | undefined;
+  await act(async () => {
+    failure = await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "" });
+  });
+  expect(failure).toBe("Couldn't reach GOAT Bot's computer.");
+  const luna = { instanceId: "codex", model: "luna" };
+  await act(async () => state.pickModel?.(luna));
+  await act(async () => {
+    failure = await state.sheet?.onSubmit({ name: "Researcher", avatar: "🔬", purpose: "" });
+  });
+  // The same request id finds the stored bot; the edits made since reach it as a change.
+  expect(state.manage.create).toHaveBeenLastCalledWith(
+    { name: "Researcher", avatar: "🔬", purpose: "" },
+    luna,
+    "request-1",
+  );
+  expect(state.manage.update).toHaveBeenCalledExactlyOnceWith(
+    stored,
+    { name: "Researcher", avatar: "🔬" },
+    luna,
+  );
+  expect(failure).toBeNull();
+  expect(opened).toHaveBeenCalledWith({
+    kind: "member",
+    profile: { ...stored, name: "Researcher", avatar: "🔬", defaultModelSelection: luna },
+  });
+  await act(async () => root.unmount());
+});
+
+it("keeps the New bot sheet open with the reason when the edits cannot reach a bot the server kept", async () => {
+  state.manage.update.mockClear();
+  const stored = {
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+  };
+  state.manage.create.mockResolvedValueOnce(stored);
+  state.manage.update.mockResolvedValueOnce("You can't change this bot.");
+  const opened = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  let failure: string | null | undefined;
+  await act(async () => {
+    failure = await state.sheet?.onSubmit({ name: "Researcher", avatar: null, purpose: "" });
+  });
+  expect(failure).toBe("You can't change this bot.");
+  expect(opened).not.toHaveBeenCalled();
   await act(async () => root.unmount());
 });
 

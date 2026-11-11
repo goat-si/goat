@@ -5,7 +5,7 @@ import {
   type ChannelTaskId,
   MAIN_BOT_ID,
 } from "@goat/contracts";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -25,10 +25,45 @@ export function MobileNeedsYouStrip(props: {
   /** The roster is on screen; coming back into view reads the asks again. */
   readonly visible: boolean;
   readonly onOpenAsk: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
+  /**
+   * An ask names a bot the profiles don't hold yet, such as one made on another device: read the
+   * bot list again. Called once per set of unknown bots each time the roster is in view; left out
+   * while the list is still loading.
+   */
+  readonly onUnknownBot?: (() => void) | undefined;
 }) {
   const { botRef } = useMobileGoatBotHomeMode();
   const open = useMobileOpenAsks(botRef?.environmentId ?? null, props.visible);
   const [expanded, setExpanded] = useState(false);
+  const members = [
+    ...props.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile] : [])),
+    ...props.hidden,
+  ];
+  const known = new Set(members.map((member) => member.botId));
+  const unknown =
+    open.state === "ready"
+      ? [
+          ...new Set(
+            open.asks
+              .map((ask) => ask.botId)
+              .filter((botId) => botId !== MAIN_BOT_ID && !known.has(botId)),
+          ),
+        ]
+          .sort()
+          .join(" ")
+      : "";
+  const askedFor = useRef<string | null>(null);
+  const onUnknownBot = props.onUnknownBot;
+  // oxlint-disable-next-line goat/react-effect-budget -- The bot list is server data; read it again when an ask names a bot it lacks.
+  useEffect(() => {
+    if (!props.visible) {
+      askedFor.current = null;
+      return;
+    }
+    if (unknown === "" || onUnknownBot === undefined || askedFor.current === unknown) return;
+    askedFor.current = unknown;
+    onUnknownBot();
+  }, [props.visible, unknown, onUnknownBot]);
   if (open.state === "failed") {
     return (
       <View className="mx-4 my-2 rounded-2xl bg-goat-bot-message">
@@ -47,10 +82,6 @@ export function MobileNeedsYouStrip(props: {
   }
   if (open.state !== "ready" || (open.total === 0 && !open.truncated)) return null;
   const main = props.bots.find((entry) => entry.kind === "main") ?? null;
-  const members = [
-    ...props.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile] : [])),
-    ...props.hidden,
-  ];
   // Each ask names its bot; one not among the profiles yet has no destination until they load.
   const botOf = (ask: ChannelOpenAsk): { entry: BotRosterEntry | null; name: string } => {
     if (ask.botId === MAIN_BOT_ID) return { entry: main, name: main?.profile?.name ?? "GOAT Bot" };

@@ -136,6 +136,19 @@ it("opens a new bot without an error and points out the missing name only when C
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: null, purpose: "" });
 });
 
+it("points out a new bot's name the person typed and then cleared, once they leave the field", async () => {
+  await mount(
+    vi.fn(async (_changes: object) => null),
+    true,
+    "create",
+  );
+  await type("Name", "Sc");
+  await type("Name", "");
+  expect(container.textContent).not.toContain("The bot needs a name.");
+  await act(async () => field("Name").dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(container.textContent).toContain("The bot needs a name.");
+});
+
 it("asks a new bot only for a name and a look; its purpose and model wait under More", async () => {
   await mount(async () => null, true, "create", <p>model picker</p>);
   expect(field("Name")).not.toBeNull();
