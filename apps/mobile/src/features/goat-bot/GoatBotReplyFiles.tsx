@@ -25,9 +25,10 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
-import { queuePreviewRead } from "./goatBotFileReads";
+import { dropChatPreviewReads, queuePreviewRead } from "./goatBotFileReads";
 import {
   cachedGoatBotFilePreview,
+  forgetChatFilePreviews,
   goatBotFilePreviewOf,
   listingGeneration,
   storeGoatBotFilePreview,
@@ -42,25 +43,69 @@ interface GoatBotFiles {
   readonly chatKey: string;
   readonly artifacts: ReadonlyArray<ChannelBotArtifact> | null;
   readonly generation: number;
-  readonly ask: (occurrences: ReadonlyArray<string>) => void;
   readonly open: (file: ChannelBotArtifact) => void;
   readonly opening: string | null;
   readonly messages: Readonly<Record<string, string>>;
 }
 
+/** A bot reply as the chat's file cards need it. */
+export interface GoatBotFilesReply {
+  readonly id: string;
+  readonly text: string;
+  readonly createdAt: string;
+  /** Still arriving: it asks for no listing until it has finished. */
+  readonly streaming: boolean;
+}
+
 const GoatBotFilesContext = createContext<GoatBotFiles | null>(null);
 
+const INLINE_CODE = /`([^`\n]+)`/g;
+
+/** A reply's inline-code spans, each a possible file name; the listing decides which are. */
+function namesSomething(text: string): boolean {
+  for (const match of text.matchAll(INLINE_CODE)) if ((match[1] ?? "").trim() !== "") return true;
+  return false;
+}
+
+interface ListingReads {
+  readonly chatKey: string;
+  running: boolean;
+  /** A finished reply asked while a read ran: one follow-up read when it settles. */
+  dirty: boolean;
+  /** The settled answer a running read started from; another one means it settled. */
+  startedFrom: unknown;
+  /** Finished replies already decided, and replies seen while they streamed. */
+  readonly decided: Set<string>;
+  readonly streamed: Set<string>;
+  /** The newest finished reply a read has started after; older history needs no read. */
+  coveredUpTo: string | null;
+  latestFinished: string | null;
+}
+
+const freshReads = (chatKey: string): ListingReads => ({
+  chatKey,
+  running: false,
+  dirty: false,
+  startedFrom: null,
+  decided: new Set(),
+  streamed: new Set(),
+  coveredUpTo: null,
+  latestFinished: null,
+});
+
 /**
- * The chat's Library: its listing, read when the chat opens and again for each newly named file,
- * and the one viewer its file cards open. No cards on a server without the Library or offline.
+ * The chat's Library: its listing, read once a finished reply names something (one read for every
+ * reply that finishes while none runs, one follow-up for those that finish during a read), and the
+ * one viewer its file cards open. No cards on a server without the Library or offline.
  */
 export function GoatBotFilesProvider(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: ThreadId | null;
   readonly botName: string;
+  readonly replies: ReadonlyArray<GoatBotFilesReply>;
   readonly children: ReactNode;
 }) {
-  const { environmentId } = props;
+  const { environmentId, replies } = props;
   const { presentationById } = useEnvironments();
   const presentation = environmentId === null ? undefined : presentationById.get(environmentId);
   const readable =
@@ -70,55 +115,68 @@ export function GoatBotFilesProvider(props: {
   const listing = useEnvironmentQuery(
     readable ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null,
   );
-  const opener = useBotFileOpener(environmentId, props.botName);
-  const refresh = listing.refresh;
   const chatKey = JSON.stringify([environmentId, props.threadId]);
-  // Every newly seen occurrence is owed a listing read that starts after it was seen: one read at
-  // a time, and one follow-up for those that arrived while a read was running. A new chat starts
-  // with nothing seen.
-  const reads = useRef({ chatKey, running: false, dirty: false, seen: new Set<string>() });
+  const opener = useBotFileOpener(environmentId, props.botName, chatKey);
+  const refresh = listing.refresh;
+  const pending = listing.isPending;
+  // What a read settles to: an answer or a failure, never the answer it started from.
+  const settled = pending ? null : (listing.successResult ?? listing.cause);
+  const reads = useRef<ListingReads | null>(null);
   const stateFor = useCallback(() => {
-    if (reads.current.chatKey !== chatKey)
-      reads.current = { chatKey, running: false, dirty: false, seen: new Set<string>() };
+    if (reads.current?.chatKey !== chatKey) reads.current = freshReads(chatKey);
     return reads.current;
   }, [chatKey]);
-  const ask = useCallback(
-    (occurrences: ReadonlyArray<string>) => {
-      if (!readable) return;
-      const state = stateFor();
-      const fresh = occurrences.filter((occurrence) => !state.seen.has(occurrence));
-      if (fresh.length === 0) return;
-      for (const occurrence of fresh) state.seen.add(occurrence);
-      if (state.running) {
-        state.dirty = true;
-        return;
-      }
+  const start = useCallback(
+    (state: ListingReads, from: unknown) => {
       state.running = true;
+      state.dirty = false;
+      state.startedFrom = from;
+      state.coveredUpTo = state.latestFinished;
       refresh();
     },
-    [readable, refresh, stateFor],
+    [refresh],
   );
-  // oxlint-disable-next-line goat/react-effect-budget -- Files are saved on the server at any time; read the listing again when the chat opens.
+  // oxlint-disable-next-line goat/react-effect-budget -- A finished reply may name a file saved after the listing was read; read it again, once per finished reply.
   useEffect(() => {
+    if (!readable) return;
     const state = stateFor();
-    if (!readable || state.running) return;
-    state.running = true;
-    refresh();
-  }, [readable, refresh, stateFor]);
-  const pending = listing.isPending;
-  const answer = listing.data;
-  const failure = listing.error;
+    let owed = false;
+    for (const reply of replies) {
+      if (reply.streaming) {
+        state.streamed.add(reply.id);
+        continue;
+      }
+      if (state.decided.has(reply.id)) continue;
+      state.decided.add(reply.id);
+      const older = state.coveredUpTo !== null && reply.createdAt < state.coveredUpTo;
+      if (state.latestFinished === null || reply.createdAt > state.latestFinished)
+        state.latestFinished = reply.createdAt;
+      if (!namesSomething(reply.text)) continue;
+      // History older than a reply a read already started after: that read saw its files.
+      if (older && !state.streamed.has(reply.id)) continue;
+      owed = true;
+    }
+    if (!owed) return;
+    if (state.running) state.dirty = true;
+    else start(state, settled);
+  }, [readable, replies, settled, stateFor, start]);
   // oxlint-disable-next-line goat/react-effect-budget -- A listing read settles on the server's time; then the follow-up read, if one is owed, starts.
   useEffect(() => {
     const state = stateFor();
-    // Settled: no longer waiting, with an answer or a failure to show for it.
-    if (pending || !state.running || (answer === null && failure === null)) return;
+    if (!state.running || settled === null || settled === state.startedFrom) return;
     state.running = false;
-    if (!state.dirty) return;
-    state.dirty = false;
-    state.running = true;
-    refresh();
-  }, [pending, answer, failure, refresh, stateFor]);
+    if (state.dirty) start(state, settled);
+  }, [settled, stateFor, start]);
+  // oxlint-disable-next-line goat/react-effect-budget -- Previews outlive a render; leaving the chat drops its waiting reads and its cached previews.
+  useEffect(
+    () => () => {
+      dropChatPreviewReads(chatKey);
+      forgetChatFilePreviews(chatKey);
+    },
+    [chatKey],
+  );
+  const answer = listing.data;
+  const failure = listing.error;
   const artifacts = readable && failure === null ? (answer?.artifacts ?? null) : null;
   const generation = answer === null ? 0 : listingGeneration(answer);
   const { open, opening, messages, viewer } = opener;
@@ -131,12 +189,11 @@ export function GoatBotFilesProvider(props: {
             chatKey,
             artifacts,
             generation,
-            ask,
             open: (file: ChannelBotArtifact) => void open(file),
             opening,
             messages,
           },
-    [environmentId, chatKey, artifacts, generation, ask, open, opening, messages],
+    [environmentId, chatKey, artifacts, generation, open, opening, messages],
   );
   return (
     <GoatBotFilesContext value={value}>
@@ -146,32 +203,9 @@ export function GoatBotFilesProvider(props: {
   );
 }
 
-const INLINE_CODE = /`([^`\n]+)`/g;
-
-/** A reply's inline-code spans, each a possible file name; the listing decides which are. */
-function inlineCodeSpans(text: string): ReadonlyArray<string> {
-  return [...text.matchAll(INLINE_CODE)].flatMap((match) => {
-    const span = (match[1] ?? "").trim();
-    return span === "" ? [] : [span];
-  });
-}
-
 /** Cards under a bot message for each Library file it names, in the order named. */
-export const GoatBotReplyFiles = memo(function GoatBotReplyFiles(props: {
-  readonly rowId: string;
-  readonly text: string;
-}) {
+export const GoatBotReplyFiles = memo(function GoatBotReplyFiles(props: { readonly text: string }) {
   const files = use(GoatBotFilesContext);
-  const occurrences = useMemo(
-    () =>
-      inlineCodeSpans(props.text).map((span, index) => JSON.stringify([props.rowId, index, span])),
-    [props.rowId, props.text],
-  );
-  const ask = files?.ask;
-  // oxlint-disable-next-line goat/react-effect-budget -- A newly named file may have been saved after the listing was read; ask the chat to read it again.
-  useEffect(() => {
-    if (ask !== undefined && occurrences.length > 0) ask(occurrences);
-  }, [ask, occurrences]);
   const artifacts = files?.artifacts ?? null;
   const named = useMemo(
     () => (artifacts === null ? [] : goatBotReplyFiles(props.text, artifacts)),
@@ -192,6 +226,12 @@ export const GoatBotReplyFiles = memo(function GoatBotReplyFiles(props: {
 });
 
 const KIND_LABEL = { markdown: "Document", text: "Text", image: "Image", download: "File" };
+const KIND_SPOKEN = {
+  markdown: "Markdown file",
+  text: "Text file",
+  image: "Image",
+  download: "File",
+};
 const KIND_SYMBOL = {
   markdown: "doc.text",
   text: "doc.text",
@@ -210,7 +250,7 @@ function GoatBotFileCard(props: {
   const name = botArtifactName(path);
   const label = useScaledTextRole("label");
   const key = JSON.stringify([chatKey, path, generation]);
-  const cached = cachedGoatBotFilePreview(environmentId, path, generation);
+  const cached = cachedGoatBotFilePreview(chatKey, path, generation);
   const [read, setRead] = useState<{
     readonly key: string;
     readonly preview: GoatBotFilePreview | null;
@@ -219,7 +259,7 @@ function GoatBotFileCard(props: {
   useEffect(() => {
     if (cached !== undefined) return;
     let stale = false;
-    const pending = queuePreviewRead(environmentId, () =>
+    const pending = queuePreviewRead(environmentId, chatKey, () =>
       runAtomCommand(
         appAtomRegistry,
         channelEnvironment.readBotArtifact,
@@ -231,7 +271,7 @@ function GoatBotFileCard(props: {
       (answer) => {
         if (stale || answer === null || answer._tag !== "Success") return;
         const next = goatBotFilePreviewOf(answer.value);
-        if (next !== null) storeGoatBotFilePreview(environmentId, path, generation, next);
+        if (next !== null) storeGoatBotFilePreview(chatKey, path, generation, next);
         setRead({ key, preview: next });
       },
       () => {},
@@ -240,7 +280,7 @@ function GoatBotFileCard(props: {
       stale = true;
       pending.cancel();
     };
-  }, [cached, environmentId, path, generation, key]);
+  }, [cached, environmentId, chatKey, path, generation, key]);
   const preview = cached ?? (read?.key === key ? read.preview : null);
   const slot = botArtifactPreviewSlot(path, file.size);
   // Before or without a preview, an image name still reads as an image.
@@ -252,7 +292,7 @@ function GoatBotFileCard(props: {
     <View className="gap-1">
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Open ${name}`}
+        accessibilityLabel={`Open ${name}, ${KIND_SPOKEN[kind]}`}
         accessibilityState={{ disabled: files.opening !== null, busy: opening }}
         disabled={files.opening !== null}
         onPress={() => files.open(file)}

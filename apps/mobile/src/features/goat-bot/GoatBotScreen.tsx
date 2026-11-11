@@ -301,7 +301,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       ) : (
         <GoatBotReplyCards text={row.text} renderText={renderText} footer={memory} />
       )}
-      <GoatBotReplyFiles rowId={row.id} text={row.text} />
+      <GoatBotReplyFiles text={row.text} />
       <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
     </View>
   );
@@ -598,11 +598,20 @@ export function GoatBotScreen(props: {
         : [],
     [taskId, session.supportsTaskThreads, session.rows],
   );
+  // A reply still arriving asks for no listing until it has finished.
+  const fileReplies = useMemo(
+    () =>
+      session.rows.flatMap((row) =>
+        row.kind === "bot" ? [{ ...row, streaming: session.streamingReplyIds.has(row.id) }] : [],
+      ),
+    [session.rows, session.streamingReplyIds],
+  );
   return (
     <GoatBotFilesProvider
       environmentId={session.historyEnvironmentId}
       threadId={session.threadId}
       botName={title}
+      replies={fileReplies}
     >
       <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
         {Platform.OS === "ios" ? (

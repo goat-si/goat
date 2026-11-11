@@ -8,7 +8,19 @@ import {
 
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
-vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
+// The screen's list draws every row it is given.
+vi.mock("@legendapp/list/react-native", async () => {
+  const { Fragment } = await import("react");
+  return {
+    LegendList: (props: {
+      data?: Array<{ id: string }>;
+      renderItem?: (item: { item: unknown; index: number }) => unknown;
+    }) =>
+      props.data?.map((item, index) => (
+        <Fragment key={item.id}>{props.renderItem?.({ item, index }) as never}</Fragment>
+      )) ?? null,
+  };
+});
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
@@ -68,7 +80,7 @@ vi.mock("react-native-reanimated", () => ({
   useAnimatedStyle: (style: () => object) => style(),
 }));
 vi.mock("react-native-keyboard-controller", () => ({
-  KeyboardAvoidingView: () => null,
+  KeyboardAvoidingView: (props: { children?: unknown }) => props.children,
   useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }),
 }));
 vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
@@ -76,7 +88,23 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ b
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
-vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
+// The screen's session: whose chat it shows, and its rows.
+const screenSession = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+vi.mock("./useMobileGoatBotSession", () => ({
+  useMobileGoatBotSession: () => screenSession.current,
+}));
+vi.mock("@react-navigation/native", () => ({
+  useNavigation: () => ({ dispatch: () => {} }),
+  StackActions: { push: (name: string, params: object) => ({ name, params }) },
+}));
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => () => {},
+  startOpeningDetail: () => {},
+}));
+vi.mock("../settings/SettingsMemoryRouteScreen", () => ({ MemoryReportLink: () => null }));
+vi.mock("../../state/use-remote-environment-registry", () => ({
+  useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
+}));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
@@ -111,6 +139,10 @@ const files = vi.hoisted(() => ({
     answer: (value: object) => void;
   }>,
   opened: [] as string[],
+  // An open waits here until the test lets it finish; disposed copies are named here.
+  holdOpens: false,
+  finishOpen: [] as Array<() => void>,
+  disposed: [] as string[],
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
@@ -128,6 +160,9 @@ vi.mock("../../state/environments", () => ({
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: unknown) => ({
     data: atom === null ? null : files.listing,
+    // Each listing answer is its own object, as the query's settled result is.
+    successResult: atom === null || files.pending ? null : files.listing,
+    cause: null,
     error: null,
     isPending: atom !== null && files.pending,
     refresh: () => {
@@ -159,17 +194,22 @@ vi.mock("@goat/client-runtime/state/runtime", async (original) => ({
 vi.mock("./openBotLibraryFile", () => ({
   openBotLibraryFile: async (_environmentId: string, relativePath: string) => {
     files.opened.push(relativePath);
+    if (files.holdOpens) await new Promise<void>((resolve) => files.finishOpen.push(resolve));
     return {
       kind: "image",
       preview: {
         name: relativePath,
-        file: { uri: "file:///cache/chart.png", dispose: () => {}, share: async () => {} },
+        file: {
+          uri: "file:///cache/chart.png",
+          dispose: () => files.disposed.push(relativePath),
+          share: async () => {},
+        },
       },
     };
   },
 }));
 import { EnvironmentId, ThreadId } from "@goat/contracts";
-import { GoatBotTimelineRow } from "./GoatBotScreen";
+import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
 import { GoatBotFilesProvider } from "./GoatBotReplyFiles";
 
 let h: NativeMemoryHarness;
@@ -188,6 +228,10 @@ afterEach(async () => {
   files.reads = 0;
   files.previews.length = 0;
   files.opened.length = 0;
+  files.holdOpens = false;
+  files.finishOpen.length = 0;
+  files.disposed.length = 0;
+  screenSession.current = {};
 });
 
 const props = { canSend: true, onSend: () => true, onRetry: vi.fn(), onSelectThread: () => {} };
@@ -217,14 +261,29 @@ const chunk = (relativePath: string, mimeType: string, text: string) => ({
   done: true,
 });
 
-function chat(rows: ReturnType<typeof bot>[], threadId = "thread-a") {
+/** The chat's bot replies as the screen passes them: those in `streaming` are still arriving. */
+const repliesOf = (rows: ReturnType<typeof bot>[], streaming: ReadonlyArray<string> = []) =>
+  rows.map((row) => ({
+    id: row.id,
+    text: row.text,
+    createdAt: row.createdAt,
+    streaming: streaming.includes(row.id),
+  }));
+
+function chat(
+  rows: ReturnType<typeof bot>[],
+  threadId = "thread-a",
+  streaming: ReadonlyArray<string> = [],
+  shown: ReturnType<typeof bot>[] = rows,
+) {
   return (
     <GoatBotFilesProvider
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make(threadId)}
       botName="GOAT Bot"
+      replies={repliesOf(rows, streaming)}
     >
-      {rows.map((row) => (
+      {shown.map((row) => (
         <GoatBotTimelineRow key={row.id} {...props} row={row} />
       ))}
     </GoatBotFilesProvider>
@@ -237,7 +296,7 @@ async function show(rows: ReturnType<typeof bot>[], threadId?: string) {
   await settle();
 }
 const card = (name: string) =>
-  view.container.querySelector<HTMLButtonElement>(`button[aria-label="Open ${name}"]`);
+  view.container.querySelector<HTMLButtonElement>(`button[aria-label^="Open ${name},"]`);
 const listed = (...paths: string[]) => ({
   artifacts: paths.map((path) => file(path)),
   truncated: false,
@@ -371,9 +430,9 @@ it("still reads for a newly named file after many replies with plain inline code
 
 it("drops a late preview answer once the chat changes", async () => {
   files.listing = listed("a.md");
-  await show([bot("b1", "See \`a.md\`")]);
+  await show([bot("b1", "See `a.md`")]);
   expect(files.previews.map((entry) => entry.relativePath)).toEqual(["a.md"]);
-  await view.rerender(chat([bot("b1", "See \`a.md\`")], "thread-b"));
+  await view.rerender(chat([bot("b1", "See `a.md`")], "thread-b"));
   await settle();
   // The old chat's answer arrives late and lands nowhere.
   await act(async () => files.previews[0]?.answer(chunk("a.md", "text/markdown", "OLD CHAT")));
@@ -383,7 +442,7 @@ it("drops a late preview answer once the chat changes", async () => {
 
 it("never starts a waiting preview read once its card has left", async () => {
   files.listing = listed("a.md", "b.md");
-  await show([bot("b1", "\`a.md\` and \`b.md\`")]);
+  await show([bot("b1", "`a.md` and `b.md`")]);
   // One read runs at a time: a.md is in flight, b.md waits.
   expect(files.previews.map((entry) => entry.relativePath)).toEqual(["a.md"]);
   await view.unmount();
@@ -393,39 +452,139 @@ it("never starts a waiting preview read once its card has left", async () => {
 });
 
 it("reads the listing again for a later mention of a listed file, so a rewritten file previews again", async () => {
+  const first = bot("b1", "See `report.md`.");
+  const later = { ...bot("b2", "Updated `report.md`."), createdAt: "2026-10-12T09:50:00Z" };
+  // Answers every read so far, then the one that was waiting behind them.
+  const answerPreviews = async (words: string) => {
+    for (let round = 0; round < 2; round += 1)
+      await act(async () => {
+        for (const entry of files.previews)
+          entry.answer(chunk("report.md", "text/markdown", words));
+      });
+  };
   files.listing = listed("report.md");
-  await show([bot("b1", "See `report.md`.")]);
-  await act(async () =>
-    files.previews[0]?.answer(chunk("report.md", "text/markdown", "Old words")),
-  );
+  await show([first]);
+  // The chat's first read answers.
+  files.listing = listed("report.md");
+  await view.rerender(chat([first]));
+  await settle();
+  await answerPreviews("Old words");
   expect(card("report.md")?.textContent).toContain("Old words");
   const before = files.reads;
   const previewsBefore = files.previews.length;
   // The bot rewrote the file and names it again; a new listing answer moves the generation.
-  await view.rerender(chat([bot("b1", "See `report.md`."), bot("b2", "Updated `report.md`.")]));
+  await view.rerender(chat([first, later]));
   await settle();
   expect(files.reads).toBe(before + 1);
   files.listing = listed("report.md");
-  await view.rerender(chat([bot("b1", "See `report.md`."), bot("b2", "Updated `report.md`.")]));
+  await view.rerender(chat([first, later]));
   await settle();
   expect(files.previews.length).toBeGreaterThan(previewsBefore);
-  await act(async () => {
-    for (const entry of files.previews.slice(previewsBefore))
-      entry.answer(chunk("report.md", "text/markdown", "New words"));
-  });
+  await answerPreviews("New words");
   await settle();
   expect(view.container.textContent).toContain("New words");
   expect(view.container.textContent).not.toContain("Old words");
 });
 
-it("counts the same file named again later in a streamed reply as a new mention", async () => {
+it("reads the listing once for a reply that has finished streaming, however many files it names on the way", async () => {
   files.listing = listed();
-  await show([bot("b1", "Saving `report.md` now.")]);
-  const before = files.reads;
-  files.pending = false;
-  files.listing = listed("report.md");
-  await view.rerender(chat([bot("b1", "Saving `report.md` now. Saved `report.md`.")]));
+  const spans = (count: number) =>
+    Array.from({ length: count }, (_, index) => `\`step${index}.md\``).join(" ");
+  await show([bot("b1", spans(1))], undefined);
+  await view.rerender(chat([bot("b1", spans(1))], "thread-a", ["b1"]));
   await settle();
-  expect(files.reads).toBe(before + 1);
-  expect(card("report.md")).not.toBeNull();
+  const before = files.reads;
+  for (let count = 2; count <= 50; count += 1) {
+    files.listing = listed();
+    await view.rerender(chat([bot("b1", spans(count))], "thread-a", ["b1"]));
+    await settle();
+  }
+  expect(files.reads).toBe(before);
+  files.listing = listed("step49.md");
+  await view.rerender(chat([bot("b1", spans(50))]));
+  await settle();
+  expect(files.reads).toBeLessThanOrEqual(before + 1);
+  expect(card("step49.md")).not.toBeNull();
+});
+
+it("reads nothing more when history rows mount again, or an older reply arrives after a read", async () => {
+  files.listing = listed("a.md");
+  const history = Array.from({ length: 30 }, (_, index) =>
+    bot(`h${index}`, `Saved \`f${index}.md\`.`),
+  ).map((row, index) => ({ ...row, createdAt: `2026-10-12T09:${String(10 + index)}:00Z` }));
+  await show(history);
+  const opened = files.reads;
+  expect(opened).toBe(1);
+  // Scrolling away and back unmounts the rows' cards and mounts them again.
+  await view.rerender(chat(history, "thread-a", [], []));
+  await settle();
+  await view.rerender(chat(history, "thread-a", [], history));
+  await settle();
+  // An older page of history loads.
+  const older = { ...bot("old", "Earlier: `g.md`."), createdAt: "2026-10-12T08:00:00Z" };
+  await view.rerender(chat([older, ...history]));
+  await settle();
+  expect(files.reads).toBe(opened);
+});
+
+it("names the file's kind to a screen reader", async () => {
+  files.listing = listed("report.md", "chart.png", "data.csv");
+  await show([bot("b1", "`report.md`, `chart.png` and `data.csv`")]);
+  const labels = [...view.container.querySelectorAll('button[aria-label^="Open "]')].map((button) =>
+    button.getAttribute("aria-label"),
+  );
+  expect(labels).toEqual([
+    "Open report.md, Markdown file",
+    "Open chart.png, Image",
+    "Open data.csv, File",
+  ]);
+});
+
+// The real screen around the rows, for what happens when its chat changes in place.
+function screenFor(threadId: string, rows: ReturnType<typeof bot>[]) {
+  screenSession.current = {
+    availability: "ready",
+    rows,
+    canSend: true,
+    attachmentSupport: { maxUploadBytes: null },
+    onSend: () => true,
+    onAnswer: () => true,
+    onRetryInput: () => {},
+    replyingSince: null,
+    activity: null,
+    supportsTaskThreads: false,
+    historyEnvironmentId: EnvironmentId.make("env"),
+    threadId: ThreadId.make(threadId),
+    streamingReplyIds: new Set<string>(),
+  };
+  return <GoatBotScreen visible />;
+}
+const dialogImage = () => view.container.querySelector('[role="dialog"] img');
+
+it("drops an open still reading when the chat changes, and closes a shown image", async () => {
+  files.listing = listed("chart.png");
+  const rows = [bot("b1", "Here: `chart.png`")];
+  h = createNativeMemoryHarness();
+  view = renderNative(h, screenFor("thread-a", rows));
+  await view.render();
+  await settle();
+  files.holdOpens = true;
+  await act(async () => card("chart.png")?.click());
+  expect(files.opened).toEqual(["chart.png"]);
+  // The person switches to another bot's chat on the same screen before the file arrives.
+  await view.rerender(screenFor("thread-b", rows));
+  await settle();
+  await act(async () => files.finishOpen.shift()?.());
+  await settle();
+  expect(dialogImage()).toBeNull();
+  expect(files.disposed).toEqual(["chart.png"]);
+  // An image already shown closes when the chat changes.
+  files.holdOpens = false;
+  await act(async () => card("chart.png")?.click());
+  await settle();
+  expect(dialogImage()).not.toBeNull();
+  await view.rerender(screenFor("thread-c", rows));
+  await settle();
+  expect(dialogImage()).toBeNull();
+  expect(files.disposed).toEqual(["chart.png", "chart.png"]);
 });

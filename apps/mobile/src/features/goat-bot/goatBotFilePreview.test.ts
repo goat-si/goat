@@ -2,6 +2,7 @@ import { expect, it } from "vite-plus/test";
 
 import {
   cachedGoatBotFilePreview,
+  forgetChatFilePreviews,
   goatBotFilePreviewOf,
   goatBotPreviewBlocks,
   goatBotStillImage,
@@ -99,6 +100,18 @@ it("draws only still images up to 2048 pixels a side", () => {
   expect(goatBotStillImage(png(10, 10), "image/svg+xml")).toBe(false);
 });
 
+it("decides an image's format from its bytes, and previews it only when the name says the same format", () => {
+  // GIF bytes saved as chart.png, and a PNG saved as photo.jpg, show the icon.
+  expect(goatBotStillImage(gif, "image/png")).toBe(false);
+  expect(goatBotStillImage(png(10, 10), "image/jpeg")).toBe(false);
+  expect(goatBotStillImage(webp(false), "image/png")).toBe(false);
+  const jpeg = new Uint8Array([
+    0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 0, 10, 0, 10, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1,
+  ]);
+  expect(goatBotStillImage(jpeg, "image/jpeg")).toBe(true);
+  expect(goatBotStillImage(jpeg, "image/png")).toBe(false);
+});
+
 const base64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const answer = (bytes: Uint8Array, mimeType: string, relativePath: string) => ({
   status: "chunk" as const,
@@ -146,4 +159,14 @@ it("keeps previews per listing generation, and forgets the oldest past 12 or 4 M
   storeGoatBotFilePreview("env", "big2.png", first, big);
   expect(cachedGoatBotFilePreview("env", "big1.png", first)).toBeUndefined();
   expect(cachedGoatBotFilePreview("env", "big2.png", first)).toEqual(big);
+});
+
+it("forgets a chat's previews when the person leaves it, and keeps another chat's", () => {
+  const generation = listingGeneration({});
+  const text = { kind: "text" as const, text: "hello" };
+  storeGoatBotFilePreview("chat-left", "a.txt", generation, text);
+  storeGoatBotFilePreview("chat-stays", "a.txt", generation, text);
+  forgetChatFilePreviews("chat-left");
+  expect(cachedGoatBotFilePreview("chat-left", "a.txt", generation)).toBeUndefined();
+  expect(cachedGoatBotFilePreview("chat-stays", "a.txt", generation)).toEqual(text);
 });

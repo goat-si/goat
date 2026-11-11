@@ -1,90 +1,105 @@
 import type { EnvironmentId } from "@goat/contracts";
 
-// The server reads one Library file per connection at a time, so each server gets one read in
-// flight; the next waits for it instead of hearing "busy". An opened file holds the server for its
-// whole read, ahead of every waiting preview, and only the newest few previews wait at all.
+// The server reads one Library file per connection at a time. Previews take turns, one in flight per
+// server and only the newest few waiting; none starts while a file the person opened is being read.
+// An open never waits for a preview: it starts at once, beside one already in flight.
 export const MAX_WAITING_PREVIEW_READS = 4;
 
 interface Waiting {
+  readonly chatKey: string;
   readonly start: () => void;
   readonly drop: () => void;
 }
 
 interface Lane {
-  busy: boolean;
-  readonly opened: Waiting[];
+  previewRunning: boolean;
+  opens: number;
   readonly previews: Waiting[];
 }
 
 const lanes = new Map<EnvironmentId, Lane>();
 
+function laneOf(environmentId: EnvironmentId): Lane {
+  let lane = lanes.get(environmentId);
+  if (lane === undefined) {
+    lane = { previewRunning: false, opens: 0, previews: [] };
+    lanes.set(environmentId, lane);
+  }
+  return lane;
+}
+
 function startNext(environmentId: EnvironmentId, lane: Lane) {
-  if (lane.busy) return;
-  const next = lane.opened.shift() ?? lane.previews.shift();
+  if (lane.previewRunning || lane.opens > 0) return;
+  const next = lane.previews.shift();
   if (next === undefined) {
     if (lanes.get(environmentId) === lane) lanes.delete(environmentId);
     return;
   }
-  lane.busy = true;
+  lane.previewRunning = true;
   next.start();
 }
 
-function enqueue<T>(
+/**
+ * A file the person opened: `run` reads all of it now, whatever preview is in flight. Null when
+ * aborted before it started. Waiting previews start only after it settles.
+ */
+export async function openBotFileRead<T>(
   environmentId: EnvironmentId,
   run: () => Promise<T>,
-  queue: "opened" | "previews",
-) {
-  let lane = lanes.get(environmentId);
-  if (lane === undefined) {
-    lane = { busy: false, opened: [], previews: [] };
-    lanes.set(environmentId, lane);
+  signal?: AbortSignal,
+): Promise<T | null> {
+  if (signal?.aborted) return null;
+  const lane = laneOf(environmentId);
+  lane.opens += 1;
+  try {
+    return await run();
+  } finally {
+    lane.opens -= 1;
+    startNext(environmentId, lane);
   }
-  const owner = lane;
+}
+
+/**
+ * A card's preview read in chat `chatKey`, one request. Null when it never ran: cancelled while
+ * waiting, pushed out by newer previews past the limit, or its chat left.
+ */
+export function queuePreviewRead<T>(
+  environmentId: EnvironmentId,
+  chatKey: string,
+  request: () => Promise<T>,
+) {
+  const lane = laneOf(environmentId);
   const settled = Promise.withResolvers<T | null>();
   const entry: Waiting = {
+    chatKey,
     start: () => {
-      run()
+      request()
         .then(settled.resolve, settled.reject)
         .finally(() => {
-          owner.busy = false;
-          startNext(environmentId, owner);
+          lane.previewRunning = false;
+          startNext(environmentId, lane);
         });
     },
     drop: () => settled.resolve(null),
   };
-  const waiting = owner[queue];
-  waiting.push(entry);
-  if (queue === "previews" && waiting.length > MAX_WAITING_PREVIEW_READS) waiting.shift()?.drop();
-  startNext(environmentId, owner);
+  lane.previews.push(entry);
+  if (lane.previews.length > MAX_WAITING_PREVIEW_READS) lane.previews.shift()?.drop();
+  startNext(environmentId, lane);
   const cancel = () => {
-    const at = waiting.indexOf(entry);
+    const at = lane.previews.indexOf(entry);
     if (at === -1) return;
-    waiting.splice(at, 1);
+    lane.previews.splice(at, 1);
     entry.drop();
   };
   return { result: settled.promise, cancel };
 }
 
-/**
- * A file the person opened: `run` reads all of it while it holds the server, after the one read
- * already in flight and before every waiting preview. Null when aborted before it started; once
- * started, it lets the server go when `run` settles.
- */
-export function openBotFileRead<T>(
-  environmentId: EnvironmentId,
-  run: () => Promise<T>,
-  signal?: AbortSignal,
-): Promise<T | null> {
-  if (signal?.aborted) return Promise.resolve(null);
-  const read = enqueue(environmentId, run, "opened");
-  signal?.addEventListener("abort", read.cancel, { once: true });
-  return read.result;
-}
-
-/**
- * A card's preview read, one request. Null when it never ran: cancelled while waiting, or pushed
- * out by newer previews past the limit.
- */
-export function queuePreviewRead<T>(environmentId: EnvironmentId, request: () => Promise<T>) {
-  return enqueue(environmentId, request, "previews");
+/** The person left chat `chatKey`: its waiting previews never start. */
+export function dropChatPreviewReads(chatKey: string): void {
+  for (const lane of lanes.values()) {
+    for (const entry of lane.previews.filter((waiting) => waiting.chatKey === chatKey)) {
+      lane.previews.splice(lane.previews.indexOf(entry), 1);
+      entry.drop();
+    }
+  }
 }

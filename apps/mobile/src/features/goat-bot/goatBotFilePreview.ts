@@ -115,18 +115,36 @@ function pngIsAnimated(bytes: Uint8Array): boolean {
   return true;
 }
 
+const startsWith = (bytes: Uint8Array, at: number, expected: ReadonlyArray<number>) =>
+  expected.every((byte, index) => bytes[at + index] === byte);
+
+/** The still-image format the bytes themselves are, whatever the file is called. */
+function stillFormatOf(bytes: Uint8Array): "image/png" | "image/jpeg" | "image/webp" | null {
+  if (startsWith(bytes, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (startsWith(bytes, 0, [0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (
+    startsWith(bytes, 0, [0x52, 0x49, 0x46, 0x46]) &&
+    startsWith(bytes, 8, [0x57, 0x45, 0x42, 0x50])
+  )
+    return "image/webp";
+  return null;
+}
+
 /**
  * Whether an image's first chunk is one still picture small enough to decode in a card: PNG,
- * JPEG or WebP up to 2048 pixels a side. GIF, animated PNG and animated WebP never preview.
+ * JPEG or WebP up to 2048 pixels a side, by its bytes, and the format its name says. GIF,
+ * animated PNG and animated WebP never preview.
  */
 export function goatBotStillImage(bytes: Uint8Array, mimeType: string): boolean {
-  const type = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (!["image/png", "image/jpeg", "image/webp"].includes(type)) return false;
+  const named = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const format = stillFormatOf(bytes);
+  if (format === null || format !== named) return false;
   const size = readImageDimensions(bytes);
   if (size === null || size.width > MAX_SIDE || size.height > MAX_SIDE) return false;
-  if (bytes[0] === 0x89) return !pngIsAnimated(bytes);
+  if (format === "image/png") return !pngIsAnimated(bytes);
   // WebP VP8X: the animation flag is bit 1 of the flags byte.
-  if (bytes[12] === 0x56 && bytes[15] === 0x58) return ((bytes[20] ?? 0) & 0x02) === 0;
+  if (format === "image/webp" && startsWith(bytes, 12, [0x56, 0x50, 0x38, 0x58]))
+    return ((bytes[20] ?? 0) & 0x02) === 0;
   return true;
 }
 
@@ -163,10 +181,13 @@ export function listingGeneration(listing: object): number {
 
 const MAX_ENTRIES = 12;
 const MAX_BYTES = 4 * 1024 * 1024;
-const cache = new Map<string, { readonly preview: GoatBotFilePreview; readonly bytes: number }>();
+const cache = new Map<
+  string,
+  { readonly chatKey: string; readonly preview: GoatBotFilePreview; readonly bytes: number }
+>();
 let cachedBytes = 0;
-const keyOf = (environmentId: string, path: string, generation: number) =>
-  JSON.stringify([environmentId, path, generation]);
+const keyOf = (chatKey: string, path: string, generation: number) =>
+  JSON.stringify([chatKey, path, generation]);
 const weight = (preview: GoatBotFilePreview) =>
   preview.kind === "image"
     ? preview.uri.length
@@ -178,13 +199,13 @@ const weight = (preview: GoatBotFilePreview) =>
           0,
         );
 
-/** A preview read under this listing, so scrolling a card back does not read it again. */
+/** A preview read in this chat under this listing, so scrolling a card back does not read it again. */
 export function cachedGoatBotFilePreview(
-  environmentId: string,
+  chatKey: string,
   path: string,
   generation: number,
 ): GoatBotFilePreview | undefined {
-  const key = keyOf(environmentId, path, generation);
+  const key = keyOf(chatKey, path, generation);
   const entry = cache.get(key);
   if (entry === undefined) return undefined;
   cache.delete(key);
@@ -193,24 +214,33 @@ export function cachedGoatBotFilePreview(
 }
 
 export function storeGoatBotFilePreview(
-  environmentId: string,
+  chatKey: string,
   path: string,
   generation: number,
   preview: GoatBotFilePreview,
 ): void {
-  const key = keyOf(environmentId, path, generation);
+  const key = keyOf(chatKey, path, generation);
   const old = cache.get(key);
   if (old !== undefined) {
     cachedBytes -= old.bytes;
     cache.delete(key);
   }
   const bytes = weight(preview);
-  cache.set(key, { preview, bytes });
+  cache.set(key, { chatKey, preview, bytes });
   cachedBytes += bytes;
   for (const [oldest, entry] of cache) {
     if (cache.size <= MAX_ENTRIES && cachedBytes <= MAX_BYTES) break;
     if (oldest === key) continue;
     cache.delete(oldest);
+    cachedBytes -= entry.bytes;
+  }
+}
+
+/** The person left chat `chatKey`: its previews go. */
+export function forgetChatFilePreviews(chatKey: string): void {
+  for (const [key, entry] of cache) {
+    if (entry.chatKey !== chatKey) continue;
+    cache.delete(key);
     cachedBytes -= entry.bytes;
   }
 }

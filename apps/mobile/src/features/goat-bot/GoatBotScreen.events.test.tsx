@@ -229,6 +229,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
     replyingSince: null,
     activity: null,
     supportsTaskThreads: true,
+    streamingReplyIds: new Set<string>(),
   }),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));

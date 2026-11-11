@@ -6,51 +6,70 @@ import { type ImagePreview, openBotLibraryFile } from "./openBotLibraryFile";
 
 const withoutKey = (record: Readonly<Record<string, string>>, key: string) =>
   Object.fromEntries(Object.entries(record).filter(([entry]) => entry !== key));
+const NO_MESSAGES: Readonly<Record<string, string>> = {};
+
+interface Scoped<T> {
+  readonly scope: string;
+  readonly value: T;
+}
 
 /**
  * Opens GOAT Bot's Library files the one way the app does: an image in the viewer this hook
  * draws, any other file in the share sheet, and a failure as a message by its path. The Library
- * and the chat's file cards share it. Reads stop and an unshared copy goes when the owner unmounts.
+ * and the chat's file cards share it. Everything belongs to `scope` (the chat, or the Library's
+ * server): when it changes or the owner unmounts, reads stop, the viewer closes and its copy goes.
  */
 export function useBotFileOpener(
   environmentId: EnvironmentId | null,
   botName: string,
+  scope: string = JSON.stringify([environmentId]),
 ): {
   readonly open: (file: ChannelBotArtifact) => Promise<void>;
   readonly opening: string | null;
   readonly messages: Readonly<Record<string, string>>;
   readonly viewer: ReactNode;
 } {
-  const [opening, setOpening] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Readonly<Record<string, string>>>({});
-  const [preview, setPreview] = useState<ImagePreview | null>(null);
+  // Each is kept with the scope it belongs to and shows only while that scope is current.
+  const [openingIn, setOpening] = useState<Scoped<string> | null>(null);
+  const [messagesIn, setMessages] = useState<Scoped<Readonly<Record<string, string>>> | null>(null);
+  const [previewIn, setPreview] = useState<Scoped<ImagePreview> | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const lifetime = useRef<AbortController | null>(null);
+  const opening = openingIn?.scope === scope ? openingIn.value : null;
+  const messages = messagesIn?.scope === scope ? messagesIn.value : NO_MESSAGES;
+  const preview = previewIn?.scope === scope ? previewIn.value : null;
+  const lifetime = useRef<{ readonly scope: string; readonly controller: AbortController } | null>(
+    null,
+  );
   const previewRef = useRef<ImagePreview | null>(null);
-  // oxlint-disable-next-line goat/react-effect-budget -- Reads and cache copies outlive a render; stop the read and drop an unshared copy when the owner goes away.
+  // oxlint-disable-next-line goat/react-effect-budget -- Reads and cache copies outlive a render; stop the read and drop an unshared copy when the scope changes or the owner goes away.
   useEffect(() => {
     const controller = new AbortController();
-    lifetime.current = controller;
+    lifetime.current = { scope, controller };
     return () => {
       controller.abort();
       previewRef.current?.file.dispose();
       previewRef.current = null;
     };
-  }, []);
+  }, [scope]);
   const show = (next: ImagePreview | null) => {
     previewRef.current = next;
     setPreviewError(null);
-    setPreview(next);
+    setPreview(next === null ? null : { scope, value: next });
   };
   const closePreview = () => {
     previewRef.current?.file.dispose();
     show(null);
   };
   const open = async (file: ChannelBotArtifact) => {
-    const signal = lifetime.current?.signal;
+    // A tap rendered for another scope than the one still current opens nothing.
+    const life = lifetime.current;
+    const signal = life?.scope === scope ? life.controller.signal : undefined;
     if (environmentId === null || signal === undefined || signal.aborted) return;
-    setOpening(file.relativePath);
-    setMessages((current) => withoutKey(current, file.relativePath));
+    setOpening({ scope, value: file.relativePath });
+    setMessages((current) => ({
+      scope,
+      value: withoutKey(current?.scope === scope ? current.value : NO_MESSAGES, file.relativePath),
+    }));
     const result = await openBotLibraryFile(environmentId, file.relativePath, signal, botName);
     if (signal.aborted) {
       if (result.kind === "image") result.preview.file.dispose();
@@ -59,7 +78,13 @@ export function useBotFileOpener(
     setOpening(null);
     if (result.kind === "image") show(result.preview);
     else if (result.kind === "message")
-      setMessages((current) => ({ ...current, [file.relativePath]: result.message }));
+      setMessages((current) => ({
+        scope,
+        value: {
+          ...(current?.scope === scope ? current.value : NO_MESSAGES),
+          [file.relativePath]: result.message,
+        },
+      }));
   };
   const viewer = (
     <Modal
@@ -80,7 +105,7 @@ export function useBotFileOpener(
           <Pressable
             accessibilityRole="button"
             onPress={() => {
-              const signal = lifetime.current?.signal;
+              const signal = lifetime.current?.controller.signal;
               if (!preview || !signal) return;
               setPreviewError(null);
               void preview.file.share(signal).catch((error: unknown) => {

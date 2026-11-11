@@ -281,6 +281,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
       replyingSince: null,
       activity: screenSession.activity,
       supportsTaskThreads: screenSession.supportsTaskThreads,
+      streamingReplyIds: new Set<string>(),
     };
   },
 }));

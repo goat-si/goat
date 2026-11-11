@@ -692,6 +692,15 @@ export function useMobileGoatBotSession(
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     [visibleTurnItems],
   );
+  const streamingReplyIds = useMemo(
+    () =>
+      new Set<string>(
+        visibleTurnItems.flatMap(({ item }) =>
+          item.type === "assistant_message" && item.streaming ? [item.id] : [],
+        ),
+      ),
+    [visibleTurnItems],
+  );
   const reading = useReplying(replyingSince, visible);
   const turnsWaiting = useMemo(() => goatBotTurnsWaiting(visibleTurnItems), [visibleTurnItems]);
   const activityTask = useMemo(
@@ -792,6 +801,8 @@ export function useMobileGoatBotSession(
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */
     threadId: target?.threadId ?? null,
+    /** Bot replies still arriving, by row id. */
+    streamingReplyIds,
     replyingSince,
     activity,
     /** The bot's own turns asking a question in this chat, which the task list never shows. */
