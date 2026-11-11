@@ -22,7 +22,7 @@ it.effect(
       // The result survives the MCP schema with its continuation value.
       expect(decodeResult(asked).fromLinkId).toBe(OLD);
       const [item] = (yield* hub.inboxItems).items;
-      for (const named of ["mini", "pen-mini", "env-child", OLD, PINNED])
+      for (const named of ["mini", "pen-mini", "env-child", OLD, "port 42255", PINNED])
         expect(item?.context).toContain(named);
       expect(hub.calls.some((call) => call.includes("revoke") || call.includes("link add"))).toBe(
         false,
@@ -74,7 +74,7 @@ it.effect(
       const failed = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
       expect(failed.state).toBe("failed");
       expect(failed.fromLinkId).toBe(OLD);
-      expect(failed.message).toContain("already left this Home");
+      expect(failed.message).toContain("no longer routes through it");
       expect(yield* hub.consumed).toEqual([]);
       const moved = yield* hub.membership.move(scope, {
         ...move,
@@ -122,28 +122,32 @@ it.effect("aliases that now name another machine fail the approval", () =>
   }),
 );
 
-it.effect("an old tunnel that remains, or cannot be listed, stops the move before linking", () =>
-  Effect.gen(function* () {
-    for (const leftover of [{ strayTunnel: true }, { tunnelsUnreadable: true }]) {
-      const hub = yield* setup({ ...asking, ...leftover });
-      const asked = yield* hub.membership.move(scope, move);
-      yield* hub.approve(asked.decisionId!);
-      // The revoke lands, but the old tunnel is still running or cannot be listed.
-      const first = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
-      expect(first.state).toBe("failed");
-      expect(first.message).toContain("already left this Home");
-      const again = yield* hub.membership.move(scope, {
-        ...move,
-        decisionId: asked.decisionId!,
-        fromLinkId: OLD,
-        fromTunnelPort: 42255,
-      });
-      expect(again.state).toBe("failed");
-      expect(again.message).toContain("already left this Home");
-      expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
-      expect(yield* hub.consumed).toEqual([]);
-    }
-  }),
+it.effect(
+  "an old tunnel that remains, or cannot be listed, stops the move and leaves routing unproven",
+  () =>
+    Effect.gen(function* () {
+      for (const leftover of [{ strayTunnel: true }, { tunnelsUnreadable: true }]) {
+        const hub = yield* setup({ ...asking, ...leftover });
+        const asked = yield* hub.membership.move(scope, move);
+        yield* hub.approve(asked.decisionId!);
+        // The revoke lands, but the old tunnel is still running or cannot be listed.
+        const first = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+        expect(first.state).toBe("failed");
+        expect(first.message).toContain("unproven");
+        expect(first.message).not.toContain("no longer routes");
+        const again = yield* hub.membership.move(scope, {
+          ...move,
+          decisionId: asked.decisionId!,
+          fromLinkId: OLD,
+          fromTunnelPort: 42255,
+        });
+        expect(again.state).toBe("failed");
+        expect(again.message).toContain("unproven");
+        expect(again.message).not.toContain("no longer routes");
+        expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
+        expect(yield* hub.consumed).toEqual([]);
+      }
+    }),
 );
 
 it.effect("an owner moves a Child with GOAT's pinned key without asking", () =>
@@ -186,7 +190,7 @@ it.effect("an error after the old alias left says the old route is gone and how 
     const failed = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
     expect(failed.state).toBe("failed");
     expect(failed.fromLinkId).toBe(OLD);
-    expect(failed.message).toContain("already left this Home");
+    expect(failed.message).toContain("no longer routes through it");
     expect(failed.message).toContain("fromLinkId " + OLD);
   }),
 );
@@ -196,6 +200,8 @@ it.effect("a thread's move continues through its handoff", () =>
     const hub = yield* setup(asking);
     const asked = yield* hub.membership.move(threadScope, move);
     expect(asked).toMatchObject({ kind: "needs_human", next: { call: "goat_hub_device_move" } });
+    // The person sees the old tunnel port the approval binds, as on the inbox path.
+    expect(hub.handoffReason(asked.decisionId!)).toContain("port 42255");
     yield* hub.answer(asked.decisionId!);
     const moved = yield* hub.membership.move(threadScope, {
       ...move,
@@ -219,7 +225,7 @@ it.effect("a link record without a tunnel port is refused before the old alias i
 );
 
 it.effect(
-  "an error right after the revoke says the old alias already left and how to continue",
+  "an error right after the revoke says the old link was revoked, routing is unproven, and how to continue",
   () =>
     Effect.gen(function* () {
       const hub = yield* setup({ ...asking, statusFailsAfterRevoke: true });
@@ -227,7 +233,8 @@ it.effect(
       yield* hub.approve(asked.decisionId!);
       const failed = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
       expect(failed.state).toBe("failed");
-      expect(failed.message).toContain("already left this Home");
+      expect(failed.message).toContain("revoked");
+      expect(failed.message).toContain("unproven");
       expect(failed.message).toContain("fromTunnelPort 42255");
     }),
 );
@@ -247,7 +254,45 @@ it.effect("a stop after the old link is gone still says so and how to continue",
       fromTunnelPort: 42255,
     });
     expect(stopped.state).toBe("failed");
-    expect(stopped.message).toContain("already left this Home");
+    // This call stopped before rechecking the old tunnel, so it does not claim routing stopped.
+    expect(stopped.message).toContain("unproven");
     expect(stopped.message).toContain("fromTunnelPort 42255");
   }),
+);
+
+it.effect("a failed audit write after an unclean revoke still returns the partial move", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ ...asking, strayTunnel: true });
+    const asked = yield* hub.membership.move(scope, move);
+    yield* hub.approve(asked.decisionId!);
+    yield* hub.sql`CREATE TRIGGER audit_full BEFORE INSERT ON audit_events WHEN NEW.outcome = 'failed'
+      BEGIN SELECT RAISE(ABORT, 'audit disk full'); END`;
+    const failed = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+    expect(failed.state).toBe("failed");
+    expect(failed.fromLinkId).toBe(OLD);
+    expect(failed.message).toContain("unproven");
+    expect(failed.message).toContain("fromLinkId " + OLD);
+  }),
+);
+
+it.effect(
+  "a link added before its approval could be recorded is reported as linked, not retried",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup(asking);
+      const asked = yield* hub.membership.move(scope, move);
+      yield* hub.approve(asked.decisionId!);
+      yield* hub.sql`CREATE TRIGGER used_full BEFORE INSERT ON approval_consumptions
+        BEGIN SELECT RAISE(ABORT, 'approval store full'); END`;
+      const added = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+      expect(added.state).toBe("degraded");
+      expect(added.message).toContain("pen-mini was linked to this Home");
+      expect(added.message).toContain("goat_hub_device_verify");
+      expect(added.message).not.toContain("Call goat_hub_device_move again");
+      expect(added.fromLinkId).toBeUndefined();
+      // The target-first check refuses a second add with the same, still unspent, approval.
+      const again = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+      expect(again.message).toContain("already linked");
+      expect(hub.calls.filter((call) => call.startsWith("home link add"))).toHaveLength(1);
+    }),
 );

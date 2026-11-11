@@ -124,15 +124,31 @@ export const makeMove = (deps: MoveDeps) =>
     ) => result("move", to, state, message, steps, { transport: "remote-link", ...extra });
     // What a failure after this point must tell the caller: the bound link, and whether it left.
     let bound: { readonly fromLinkId?: string; readonly fromTunnelPort?: number } = {};
-    let left = false;
     let sourceGone = false;
+    // The old link record and its tunnel were seen gone in this call; only that ends its route.
+    let proven = false;
+    // Once the old alias's device may have changed, an error must not hide the partial move.
+    let mutating = false;
     let later = "";
-    // A stop once the old alias has left must say so: its route through this Home is gone.
+    const revoked = () =>
+      sourceGone || steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
     const said = (message: string) =>
-      sourceGone || left || steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok")
-        ? `${message} ${from} already left this Home, so it no longer routes through it. ${later}`
-        : message;
+      !revoked()
+        ? message
+        : proven
+          ? `${message} ${from} already left this Home: its link and tunnel are gone, so it no longer routes through it. ${later}`
+          : `${message} The link of ${from} on this Home was revoked, but GOAT has not proven that its link record and tunnel are gone, so whether ${from} still routes through this Home is unproven. ${later}`;
     const stop = (message: string) => done("failed", said(message), bound);
+    const failedAfter = (error: { readonly message: string }) => {
+      const added = steps.find(({ step, outcome }) => step === "link_add" && outcome === "ok");
+      // The new link exists: retrying would only be refused, so say what to check instead.
+      if (added !== undefined)
+        return done(
+          "degraded",
+          `${to} was linked to this Home (${added.detail}), but the move did not finish: ${error.message} Check ${to} with goat_hub_device_verify; do not move it again.`,
+        );
+      return stop(error.message);
+    };
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* deps.readHomeLinks();
       if (status === undefined) return deps.homeUnavailable(to, forbidden, steps);
@@ -220,7 +236,7 @@ export const makeMove = (deps: MoveDeps) =>
               : "Moving a device needs an owner's approval.";
           const requested = yield* deps.request(caller, {
             title: `Move ${from} to ${to}`,
-            context: `${from} and ${to} are one machine (${fromEnvironment}). Moving disconnects ${from}, revokes its link ${fromLinkId} on this Home, then links ${to} with ${offered.keyType} ${offered.fingerprint}. ${reason} Routing is briefly gone.`,
+            context: `${from} and ${to} are one machine (${fromEnvironment}). Moving disconnects ${from}, revokes its link ${fromLinkId}${fromTunnelPort === undefined ? "" : ` (tunnel port ${fromTunnelPort})`} on this Home, then links ${to} with ${offered.keyType} ${offered.fingerprint}. ${reason} Routing is briefly gone.`,
             binding,
             approve: "Move it",
             consequence: `${to} routes through this Home instead of ${from}.`,
@@ -234,10 +250,11 @@ export const makeMove = (deps: MoveDeps) =>
         }
       }
       yield* deps.audit(caller, to, "started", input.decisionId);
+      mutating = true;
       if (record !== undefined) {
         const failure = yield* deps.leaveDevice(from, record.id, fromCaller.connection, steps);
         const clean = failure === undefined && (yield* deps.revokeOnHome(from, record, steps));
-        left = steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
+        proven = clean;
         if (!clean) {
           yield* deps.audit(caller, to, "failed", input.decisionId);
           return stop(
@@ -248,10 +265,10 @@ export const makeMove = (deps: MoveDeps) =>
         }
       } else {
         // The old link went earlier; its Home tunnel must be gone before the new link is added.
-        left = true;
         // By alias and by the bound port: a tunnel can outlive the alias its process names.
         const tunnels = yield* deps.ocx.homeTunnels(from, fromTunnelPort);
         const gone = tunnels === 0;
+        proven = gone;
         steps.push({
           step: "link_removed",
           outcome: gone ? "ok" : "failed",
@@ -278,8 +295,10 @@ export const makeMove = (deps: MoveDeps) =>
         ? { ...linked, ...continuing, message: said(linked.message) }
         : linked;
     }).pipe(
-      Effect.catchTags({
-        HubOcxError: (error) => Effect.succeed(stop(error.message)),
-      }),
+      Effect.catchTags({ HubOcxError: (error) => Effect.succeed(failedAfter(error)) }),
+      Effect.catchIf(
+        () => mutating,
+        (error) => Effect.succeed(failedAfter(error)),
+      ),
     );
   });

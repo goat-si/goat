@@ -417,6 +417,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     membership,
     inbox,
     audit,
+    sql,
     calls,
     approve: (id: string, optionId = "approve") =>
       inbox.answer(owner, { id, optionId, reason: "Reviewed the host key." }),
@@ -434,6 +435,8 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
         };
       }),
     inboxItems: inbox.list(owner, {}),
+    /** What the person reads in a handoff's request. */
+    handoffReason: (id: string) => handoffs.get(id)?.record.reason,
     consumed: sql<{ readonly approval_id: string }>`SELECT approval_id FROM approval_consumptions`,
     provisioned: sql<{
       readonly alias: string;
