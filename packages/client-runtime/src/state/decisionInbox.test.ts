@@ -23,6 +23,7 @@ import { PrimaryConnectionTarget } from "../connection/model.ts";
 import {
   createDecisionInboxAtoms,
   isDecisionItemRemoved,
+  isDecisionItemWaiting,
   orderDecisionQueue,
   skipDecisionItem,
   type DecisionItem,
@@ -921,5 +922,18 @@ describe("decision inbox", () => {
       stopDock();
       h.registry.dispose();
     }
+  });
+  it("keeps a feed approval waiting, not resolved, while its environment's feed is away", () => {
+    const entry: DecisionItem = {
+      id: JSON.stringify(["handoff", a, "one"]),
+      ref: ref(a),
+      createdAt: "2026-11-11T00:00:00.000Z",
+      routing: { routedTo: "person" },
+      kind: "handoff",
+      handoff: approval("one"),
+    };
+    const snapshot = { feedEnvironments: [], loadingRefs: [], errors: [] };
+    expect(isDecisionItemWaiting(snapshot, entry)).toBe(true);
+    expect(isDecisionItemWaiting({ ...snapshot, feedEnvironments: [a] }, entry)).toBe(false);
   });
 });

@@ -118,6 +118,27 @@ export function isDecisionItemRemoved(
   );
 }
 
+/**
+ * Whether an item cannot be answered yet but has not gone: a feed-owned item (durable decision or
+ * approval handoff) while its environment's feed is away, a thread request while its thread loads
+ * or fails to.
+ */
+export function isDecisionItemWaiting(
+  snapshot: {
+    readonly feedEnvironments: ReadonlyArray<EnvironmentId>;
+    readonly loadingRefs: ReadonlyArray<ScopedThreadRef>;
+    readonly errors: ReadonlyArray<{ readonly ref: ScopedThreadRef }>;
+  },
+  item: DecisionItem,
+): boolean {
+  if (item.kind === "decision" || item.kind === "handoff")
+    return !snapshot.feedEnvironments.includes(item.ref.environmentId);
+  return (
+    snapshot.loadingRefs.some((ref) => threadRefsEqual([ref], [item.ref])) ||
+    snapshot.errors.some(({ ref }) => threadRefsEqual([ref], [item.ref]))
+  );
+}
+
 export function orderDecisionQueue(
   items: ReadonlyArray<DecisionItem>,
   skipOrder: ReadonlyArray<string>,

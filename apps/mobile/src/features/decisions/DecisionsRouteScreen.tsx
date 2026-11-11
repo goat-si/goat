@@ -155,6 +155,7 @@ function FocusedDecisionsContent(props: {
                   environmentId={current.ref.environmentId}
                   handoff={current.handoff}
                   inherited={false}
+                  offline={paused}
                 />
               ) : current.kind === "decision" ? (
                 <DecisionDurableCard

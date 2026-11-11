@@ -3,6 +3,7 @@ import {
   type DecisionItem,
   durableDecisionAnswer,
   isDecisionItemRemoved,
+  isDecisionItemWaiting,
   orderDecisionQueue,
 } from "@goat/client-runtime/state/decision-inbox";
 import {
@@ -102,13 +103,8 @@ export function useDecisionInbox(
     [state.items, skippedIds],
   );
   const unresolved = useCallback(
-    (item: DecisionItem) =>
-      // Durable decisions come from the environment's feed, not the thread's detail.
-      item.kind === "decision"
-        ? !state.feedEnvironments.includes(item.ref.environmentId)
-        : state.loadingRefs.some((ref) => sameRef(ref, item.ref)) ||
-          state.errors.some(({ ref }) => sameRef(ref, item.ref)),
-    [state.loadingRefs, state.errors, state.feedEnvironments],
+    (item: DecisionItem) => isDecisionItemWaiting(state, item),
+    [state],
   );
   const liveSelected =
     selected === null ? undefined : queue.find((item) => item.id === selected.id);
