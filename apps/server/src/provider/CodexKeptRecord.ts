@@ -66,17 +66,17 @@ const decideKeptRecord = Effect.fn("CodexDetachedAppServers.decideKeptRecord")(f
       type: "refuse",
       detail: "The existing Codex process cannot be verified for recovery.",
     } as const;
-  let last: DetachedClassification = { type: "unverifiable" };
+  const last: { value: DetachedClassification } = { value: { type: "unverifiable" } };
   yield* input.classify(record).pipe(
     Effect.tap((classification) =>
       Effect.sync(() => {
-        last = classification;
+        last.value = classification;
       }),
     ),
     Effect.repeat({ schedule: SETTLE_POLL, until: settled }),
     Effect.timeoutOption(SETTLE_WINDOW),
   );
-  const current = last;
+  const current = last.value;
   if (current.type === "verified") return { type: "connect" } as const;
   if (current.type === "unverifiable")
     return {

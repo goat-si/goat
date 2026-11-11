@@ -203,6 +203,11 @@ The next turn GOAT starts in that thread reloads the conversation so GOAT tools
 work again, which also stops background terminals from before the restart, such
 as a dev server.
 
+If a Codex process kept from before the restart exits later, the next message starts
+a new one. When GOAT cannot confirm that the old process is gone, the thread names
+its process group so you can stop it; GOAT checks again on the next message, so no
+restart is needed.
+
 A message you send while such a turn still runs waits for it, and so does one sent
 while Codex runs a turn no message started, such as a goal continuation. The thread
 says which Codex turn the message waits for. For a turn no message started,

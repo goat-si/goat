@@ -300,7 +300,6 @@ it.effect(
             Layer.mock(ServerSettings.ServerSettingsService)({}),
             Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
             Layer.mock(CodexSurvivors.CodexSurvivors)({
-              list: Effect.succeed([]),
               get: () => Effect.void.pipe(Effect.as(undefined)),
               list: Effect.succeed([]),
               listGoalBlocksByInstance: () =>
@@ -372,7 +371,6 @@ it.effect("a preserved process reconnects after its last goal block clears", () 
           Layer.mock(ServerSettings.ServerSettingsService)({}),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
           Layer.mock(CodexSurvivors.CodexSurvivors)({
-            list: Effect.succeed([]),
             get: () => Effect.void.pipe(Effect.as(undefined)),
             list: Effect.succeed([]),
             listGoalBlocksByInstance: () => Effect.succeed([]),
