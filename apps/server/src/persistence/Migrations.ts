@@ -141,6 +141,7 @@ import Migration0135 from "./Migrations/135_ChannelBotIds.ts";
 import Migration0136 from "./Migrations/136_ScheduledBotRoutines.ts";
 import Migration0137 from "./Migrations/137_RemoteDispatchDeleteIntent.ts";
 import Migration0138 from "./Migrations/138_ChannelInterimMessages.ts";
+import Migration0139 from "./Migrations/139_PlacementAdmission.ts";
 import Migration0121 from "./Migrations/121_NotificationCursorRepair.ts";
 import Migration0123 from "./Migrations/123_McpEvalJournal.ts";
 import Migration0124 from "./Migrations/124_DecisionRoutes.ts";
@@ -289,6 +290,7 @@ export const migrationEntries = [
   [136, "ScheduledBotRoutines", Migration0136],
   [137, "RemoteDispatchDeleteIntent", Migration0137],
   [138, "ChannelInterimMessages", Migration0138],
+  [139, "PlacementAdmission", Migration0139],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
