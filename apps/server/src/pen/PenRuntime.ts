@@ -134,8 +134,9 @@ export const make = Effect.fn("PenRuntime.make")(function* (
     yield* watchSnapshots(root.stateDir, (snapshot) =>
       snapshot.mesh !== root.meshId || snapshot.self !== root.nodeId
         ? fenceLater(current, "Pen's mesh is no longer the one a person confirmed.")
-        : penSessions
-            .revokeExcept(snapshot.members)
+        : // Under the issue lock, so a session issued for a member who just left is withdrawn too.
+          penSessions
+            .withIssueLock(penSessions.revokeExcept(snapshot.members))
             .pipe(
               Effect.catch(() =>
                 fenceLater(current, "A departed member's Pen sessions could not be withdrawn."),

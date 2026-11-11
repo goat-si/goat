@@ -441,6 +441,68 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("a session issued while its member leaves the mesh is withdrawn by that cleanup", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const reached = yield* Queue.unbounded<string>();
+      const cleaned = yield* Deferred.make<void>();
+      let hold = false;
+      const env = yield* setup({
+        repository: (real) => ({
+          deleteInactivePenBound: (input) =>
+            hold
+              ? Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(real.deleteInactivePenBound(input)),
+                )
+              : real.deleteInactivePenBound(input),
+        }),
+      });
+      const { watching, send } = yield* controlSocket(env.root.stateDir);
+      const pen = yield* PenSessionsModule.PenSessions.pipe(Effect.provide(env.services));
+      // Signals when the watcher reaches the cleanup, at the issue lock or at the cleanup itself.
+      const runtime = yield* env.startWith({
+        penSessions: {
+          ...pen,
+          withIssueLock: (effect) =>
+            Queue.offer(reached, "issue lock").pipe(Effect.andThen(pen.withIssueLock(effect))),
+          revokeExcept: (members) =>
+            Queue.offer(reached, "cleanup").pipe(
+              Effect.andThen(pen.revokeExcept(members)),
+              Effect.ensuring(Deferred.succeed(cleaned, undefined)),
+            ),
+        },
+      });
+      yield* runtime.replaceTrustRoot(person, env.root);
+      yield* Queue.take(env.registrations);
+      yield* Deferred.await(watching);
+      const status = yield* runtime.status;
+      const connection = penConnection(peerOf(member("b")), {
+        generation: status.state === "listening" ? status.generation : -1,
+      });
+      hold = true;
+      const held = yield* pen
+        .issue(
+          connection.context,
+          JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),
+        )
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.await(entered);
+      hold = false;
+      yield* Queue.clear(reached);
+      yield* send(snapshot(1, PIN.meshId, [PIN.nodeId]));
+      yield* Queue.take(reached);
+      yield* Deferred.succeed(release, undefined);
+      const issued = yield* Fiber.join(held);
+      yield* Deferred.await(cleaned);
+      const sessions = yield* SessionStore.SessionStore.pipe(Effect.provide(env.services));
+      expect(
+        Exit.isFailure(yield* Effect.exit(sessions.verify(issued.token, connection.context))),
+      ).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "an issue held inside the lock when the root changes is revoked by the fence; later issues are refused",
     () =>
