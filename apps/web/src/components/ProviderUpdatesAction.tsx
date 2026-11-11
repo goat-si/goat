@@ -20,8 +20,7 @@ import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-// `refreshModels` always drops the server's hour-long latest-version cache. `modelCatalogOnly`
-// drops it only when the model manifest changed.
+// `refreshModels` drops the server's hour-long latest-version cache.
 export function useCheckProviderUpdates() {
   const { environments } = useEnvironments();
   const manageableIds = useEnvironmentsWithScope(environments, AuthProvidersManageScope);
