@@ -34,8 +34,9 @@ const toNotes = (
   lines: ReadonlyArray<ChannelBotNoteLine>,
   sourceOf: (inputId: string) => NonNullable<ChannelBotNote["source"]>,
 ): ReadonlyArray<ChannelBotNote> =>
-  lines.map(({ index, date, text, replaces, replacedBy, sourceInputId }) => ({
+  lines.map(({ index, id, date, text, replaces, replacedBy, sourceInputId }) => ({
     index,
+    id,
     date,
     text,
     ...(replaces === undefined ? {} : { replaces }),

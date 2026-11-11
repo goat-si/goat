@@ -86,16 +86,44 @@ const viewer = {
   grantedScopes: ["memory:read" as const],
   runtimeModeCeiling: "approval-required" as const,
 };
-const list = Effect.flatMap(ChannelBotNotesReader.ChannelBotNotesReader, (reader) =>
+const listWithIds = Effect.flatMap(ChannelBotNotesReader.ChannelBotNotesReader, (reader) =>
   reader.list(viewer),
-).pipe(
+);
+// Line ids are covered by their own case below.
+const list = listWithIds.pipe(
   Effect.map((result) => ({
     ...result,
-    notes: result.notes.map(({ source: _source, ...note }) => note),
+    notes: result.notes.map(({ source: _source, id: _id, ...note }) => note),
   })),
 );
 
 describe("ChannelBotNotesReader", () => {
+  it.effect("names each note's line with an id that alike notes do not share", () =>
+    Effect.gen(function* () {
+      yield* writeNotes(
+        NOTES_HEADER +
+          "- 2026-11-01: Use pnpm. (asked in input-1)\n- 2026-11-02: Use pnpm. (asked in input-2)\n",
+      );
+      const first = (yield* listWithIds).notes;
+      const ids = first.map((note) => note.id);
+      assert.strictEqual(new Set(ids).size, 2);
+      for (const id of ids) assert.match(id ?? "", /^[0-9a-f]{12}$/u);
+      // A later line leaves the ids of the lines already there unchanged.
+      yield* appendChannelBotNote(
+        yield* FileSystem.FileSystem,
+        yield* notesFile,
+        "Use vp.",
+        "2026-11-03T10:00:00Z",
+        "input-3",
+      );
+      const second = (yield* listWithIds).notes;
+      assert.deepStrictEqual(
+        second.slice(1).map((note) => note.id),
+        ids,
+      );
+    }).pipe(Effect.provide(readerLayer())),
+  );
+
   it.effect("lists dated notes newest first without the header or their source", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -17,7 +17,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import type * as ChannelLedger from "./ChannelLedger.ts";
-import { NOTES_HEADER } from "./channelBotNoteLines.ts";
+import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeChannelBotNoteWriter, type NoteWriterHooks } from "./channelBotNoteTabEdits.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
@@ -98,6 +98,90 @@ const setup = (text: string, hooks: NoteWriterHooks = {}) =>
   });
 
 describe("Memory tab note edits", () => {
+  /** The id the notes list gives the line at `index`, as a client would send it back. */
+  const idOf = (text: string, index: number) => parseChannelBotNoteLines(text)[index]?.id;
+  const thursdays = "I deploy on Thursdays.";
+
+  it.effect("a forget naming one of two alike notes removes only it and its earlier versions", () =>
+    Effect.gen(function* () {
+      const text =
+        NOTES_HEADER +
+        line(thursdays, "a") +
+        "\n" +
+        line(fridays, "b", thursdays) +
+        "\n" +
+        line(fridays, "c") +
+        "\n";
+      const { edit, read } = yield* setup(text);
+      assert.strictEqual(
+        yield* edit(goatBotForgetNoteMessage(fridays, idOf(text, 1))),
+        CHANNEL_COPY.noteForgotten,
+      );
+      assert.strictEqual(yield* read, NOTES_HEADER + line(fridays, "c") + "\n");
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
+  it.effect("a change naming the older of two alike notes replaces that one", () =>
+    Effect.gen(function* () {
+      const text = NOTES_HEADER + line(fridays, "a") + "\n" + line(fridays, "b") + "\n";
+      const { edit, read } = yield* setup(text);
+      assert.strictEqual(
+        yield* edit(goatBotChangeNoteMessage(fridays, "I deploy on Mondays.", idOf(text, 0))),
+        CHANNEL_COPY.noteChanged,
+      );
+      const saved = yield* read;
+      // The named line moves to just before its replacement, which replaces the nearest alike note.
+      assert.strictEqual(
+        saved,
+        NOTES_HEADER +
+          line(fridays, "b") +
+          "\n" +
+          line(fridays, "a") +
+          "\n- 2026-11-07: I deploy on Mondays. (asked in input-1)" +
+          ' (replaces: "I deploy on Fridays.")\n',
+      );
+      const inForce = parseChannelBotNoteLines(saved)
+        .filter((entry) => entry.replacedBy === undefined)
+        .map((entry) => entry.sourceInputId);
+      assert.deepStrictEqual(inForce, ["b", "input-1"]);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
+  it.effect("a change naming the newest of two alike notes appends after it", () =>
+    Effect.gen(function* () {
+      const text = NOTES_HEADER + line(fridays, "a") + "\n" + line(fridays, "b") + "\n";
+      const { edit, read } = yield* setup(text);
+      yield* edit(goatBotChangeNoteMessage(fridays, "I deploy on Mondays.", idOf(text, 1)));
+      assert.strictEqual(
+        yield* read,
+        text +
+          '- 2026-11-07: I deploy on Mondays. (asked in input-1) (replaces: "I deploy on Fridays.")\n',
+      );
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
+  it.effect("a request naming a line that changed, or with other words, finds nothing", () =>
+    Effect.gen(function* () {
+      const before = NOTES_HEADER + line(fridays, "a") + "\n";
+      const now = NOTES_HEADER + "- 2026-11-02: " + fridays + "\n";
+      const { edit, read } = yield* setup(now);
+      const id = idOf(before, 0);
+      assert.strictEqual(
+        yield* edit(goatBotForgetNoteMessage(fridays, id)),
+        CHANNEL_COPY.noteNotFound,
+      );
+      assert.strictEqual(
+        yield* edit(goatBotForgetNoteMessage("I deploy on Sundays.", idOf(now, 0))),
+        CHANNEL_COPY.noteNotFound,
+      );
+      assert.strictEqual(
+        yield* edit(goatBotChangeNoteMessage(fridays, "I deploy on Mondays.", id)),
+        CHANNEL_COPY.noteNotFound,
+      );
+      assert.strictEqual(yield* read, now);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
   it.effect("leave every other message to reception", () =>
     Effect.gen(function* () {
       const { edit } = yield* setup(NOTES_HEADER + line(fridays, "a") + "\n");

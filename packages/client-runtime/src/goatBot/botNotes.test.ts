@@ -11,6 +11,7 @@ import {
   changeNoteDraft,
   forgetNoteDraft,
   GOAT_BOT_NOTES_TRUNCATED_COPY,
+  goatBotNotesNamedByTextOnly,
   goatBotNoteSourceLabel,
   goatBotNotesRefreshKey,
   goatBotNotesView,
@@ -33,6 +34,29 @@ describe("note drafts", () => {
   it("change has nothing to send for blank or unchanged wording", () => {
     expect(changeNoteDraft(note, "   ")).toBeNull();
     expect(changeNoteDraft(note, note.text.trim())).toBeNull();
+  });
+
+  it("names the one note when the server gave it an id", () => {
+    const named = { index: 0, date: null, text: "Use pnpm", id: "0123456789ab" };
+    expect(forgetNoteDraft(named)).toBe('Please forget this note: "Use pnpm" (note 0123456789ab)');
+    expect(changeNoteDraft(named, "Use vp")).toBe(
+      'Please change this note: "Use pnpm" (note 0123456789ab) to: "Use vp"',
+    );
+  });
+
+  it("finds current notes a request can name only by words another current note shares", () => {
+    const alike = (index: number, id?: string) => ({
+      index,
+      date: null,
+      text: "Use pnpm",
+      ...(id === undefined ? {} : { id }),
+    });
+    const replaced = { ...alike(0), replacedBy: 3 };
+    const other = { index: 4, date: null, text: "Use vp" };
+    expect([...goatBotNotesNamedByTextOnly([replaced, alike(1), other])]).toEqual([]);
+    expect([...goatBotNotesNamedByTextOnly([alike(1), alike(2), other])]).toEqual([1, 2]);
+    // A server that names each line lets a request pick one of them.
+    expect([...goatBotNotesNamedByTextOnly([alike(1, "a"), alike(2, "b")])]).toEqual([]);
   });
 
   it("an undated note says so", () => {

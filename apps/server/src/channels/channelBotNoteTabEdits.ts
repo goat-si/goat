@@ -53,10 +53,12 @@ const FORGET_PREFIX = goatBotForgetNoteMessage("").slice(0, -2);
 const CHANGE_SAMPLE = goatBotChangeNoteMessage("", "");
 const CHANGE_PREFIX = CHANGE_SAMPLE.slice(0, CHANGE_SAMPLE.indexOf('"'));
 const CHANGE_TO = CHANGE_SAMPLE.slice(CHANGE_PREFIX.length + 2, -2);
+// A note named by its line's id, right after its quoted words (goatBotForgetNoteMessage).
+const NAMED = /^ \(note ([0-9a-f]{12})\)/u;
 
 type TabRequest =
-  | { readonly kind: "forget"; readonly note: string }
-  | { readonly kind: "change"; readonly note: string; readonly next: string };
+  | { readonly kind: "forget"; readonly note: string; readonly id?: string }
+  | { readonly kind: "change"; readonly note: string; readonly next: string; readonly id?: string };
 
 /** The JSON string literal starting at `from`, and the index just after it. */
 const jsonStringAt = (text: string, from: number) => {
@@ -75,23 +77,54 @@ const jsonStringAt = (text: string, from: number) => {
   return undefined;
 };
 
+/** The quoted note starting at `from`, with the line id that may follow it. */
+const namedNoteAt = (text: string, from: number) => {
+  const note = jsonStringAt(text, from);
+  if (note === undefined) return undefined;
+  const named = NAMED.exec(text.slice(note.end, note.end + 20));
+  const id = named?.[1];
+  return id === undefined
+    ? note
+    : { value: note.value, end: note.end + (named?.[0].length ?? 0), id };
+};
+
 /** The Memory tab's sentences, recognised only when they are the whole message. */
 const tabRequest = (text: string): TabRequest | undefined => {
   const message = text.trim();
   if (message.startsWith(FORGET_PREFIX)) {
-    const note = jsonStringAt(message, FORGET_PREFIX.length);
+    const note = namedNoteAt(message, FORGET_PREFIX.length);
     return note?.end === message.length && note.value !== ""
-      ? { kind: "forget", note: note.value }
+      ? { kind: "forget", note: note.value, ...("id" in note ? { id: note.id } : {}) }
       : undefined;
   }
   if (!message.startsWith(CHANGE_PREFIX)) return undefined;
-  const note = jsonStringAt(message, CHANGE_PREFIX.length);
+  const note = namedNoteAt(message, CHANGE_PREFIX.length);
   if (note === undefined || !message.startsWith(CHANGE_TO, note.end)) return undefined;
   const next = jsonStringAt(message, note.end + CHANGE_TO.length);
   return next?.end === message.length && next.value.trim() !== ""
-    ? { kind: "change", note: note.value, next: next.value }
+    ? {
+        kind: "change",
+        note: note.value,
+        next: next.value,
+        ...("id" in note ? { id: note.id } : {}),
+      }
     : undefined;
 };
+
+/**
+ * The note a request names: by its line's id when it carries one, which must still read the
+ * quoted words; otherwise the oldest note in force with those words.
+ */
+const targetOf = (lines: ReadonlyArray<ChannelBotNoteLine>, note: string, id?: string) =>
+  id === undefined
+    ? lines.find((line) => line.replacedBy === undefined && line.text === note)
+    : lines.findLast(
+        (line) => line.replacedBy === undefined && line.id === id && line.text === note,
+      );
+
+// Refused forgets are kept by the line they named, or by their words for a request without one.
+const refusedKey = (note: string, id: string | undefined) =>
+  id === undefined ? "text:" + collapseNoteText(note) : "line:" + id;
 
 /** Whether a message is one of the Memory tab's sentences, which reception answers itself. */
 export const isMemoryTabEdit = (message: { readonly intent: string; readonly text?: string }) =>
@@ -121,6 +154,7 @@ export interface KeptNote {
 }
 
 interface RefusedForget {
+  readonly key: string;
   readonly note: string;
   readonly raw: string;
   readonly holders: ReadonlySet<string>;
@@ -134,6 +168,40 @@ const BOM = "\uFEFF";
 const sameBytes = (left: Uint8Array, right: Uint8Array) =>
   left.length === right.length && left.every((byte, index) => byte === right[index]);
 
+/** The parsed notes mapped back onto the file's physical lines; undefined when they disagree. */
+const rewriteLines = (
+  fileText: string,
+  lines: ReadonlyArray<ChannelBotNoteLine>,
+  replace: (line: ChannelBotNoteLine, physical: string) => string,
+) => {
+  // Physical lines keep their own endings; parsed notes map onto them with the parser's skips.
+  const physical = fileText.split(/(?<=\n)/u);
+  const headerLines = fileText.replaceAll("\r\n", "\n").startsWith(NOTES_HEADER)
+    ? NOTES_HEADER.split("\n").length - 1
+    : 0;
+  let index = 0;
+  for (let at = headerLines; at < physical.length; at++) {
+    const content = (physical[at] ?? "").replace(/\r?\n$/u, "").trim();
+    if (content === "" || content.startsWith("#")) continue;
+    const line = lines[index++];
+    if (line === undefined || line.raw !== content) return undefined;
+    physical[at] = replace(line, physical[at] ?? "");
+  }
+  return index === lines.length ? physical.join("") : undefined;
+};
+
+/** The lines a note replaced, and the ones those replaced, by the index of each line. */
+const earlierVersions = (lines: ReadonlyArray<ChannelBotNoteLine>) => {
+  const replacedLines = new Map<number, Array<number>>();
+  for (const line of lines) {
+    if (line.replacedBy === undefined) continue;
+    const list = replacedLines.get(line.replacedBy);
+    if (list === undefined) replacedLines.set(line.replacedBy, [line.index]);
+    else list.push(line.index);
+  }
+  return replacedLines;
+};
+
 /**
  * The file without the note `text`: its lines, every earlier line they replaced, every other line
  * with a removed text, and replaces markers that quote a removed text. Every other byte is kept.
@@ -141,15 +209,12 @@ const sameBytes = (left: Uint8Array, right: Uint8Array) =>
 const withoutNote = (fileText: string, lines: ReadonlyArray<ChannelBotNoteLine>, text: string) => {
   // Indexed both ways, so a long correction chain is walked once instead of once per link.
   const byText = new Map<string, Array<number>>();
-  const replacedLines = new Map<number, Array<number>>();
-  const add = <K>(map: Map<K, Array<number>>, key: K, index: number) => {
-    const list = map.get(key);
-    if (list === undefined) map.set(key, [index]);
-    else list.push(index);
-  };
+  const replacedLines = earlierVersions(lines);
   for (const line of lines) {
-    add(byText, collapseNoteText(line.text), line.index);
-    if (line.replacedBy !== undefined) add(replacedLines, line.replacedBy, line.index);
+    const key = collapseNoteText(line.text);
+    const list = byText.get(key);
+    if (list === undefined) byText.set(key, [line.index]);
+    else list.push(line.index);
   }
   const removedTexts = new Set<string>();
   const removed = new Set<number>();
@@ -163,22 +228,45 @@ const withoutNote = (fileText: string, lines: ReadonlyArray<ChannelBotNoteLine>,
     removedTexts.add(key);
     for (const same of byText.get(key) ?? []) queue.push(same);
   }
-  // Physical lines keep their own endings; parsed notes map onto them with the parser's skips.
-  const physical = fileText.split(/(?<=\n)/u);
-  const headerLines = fileText.replaceAll("\r\n", "\n").startsWith(NOTES_HEADER)
-    ? NOTES_HEADER.split("\n").length - 1
-    : 0;
-  let index = 0;
-  for (let at = headerLines; at < physical.length; at++) {
-    const content = (physical[at] ?? "").replace(/\r?\n$/u, "").trim();
-    if (content === "" || content.startsWith("#")) continue;
-    const line = lines[index++];
-    if (line === undefined || line.raw !== content) return undefined;
-    if (removed.has(line.index)) physical[at] = "";
-    else if (line.replaces !== undefined && removedTexts.has(collapseNoteText(line.replaces)))
-      physical[at] = (physical[at] ?? "").replace(line.raw, withoutReplacesMarker(line.raw));
+  const next = rewriteLines(fileText, lines, (line, physical) =>
+    removed.has(line.index)
+      ? ""
+      : line.replaces !== undefined && removedTexts.has(collapseNoteText(line.replaces))
+        ? physical.replace(line.raw, withoutReplacesMarker(line.raw))
+        : physical,
+  );
+  return next === undefined
+    ? undefined
+    : { text: next, cameBack: (after: string) => stillThere(after, removedTexts) };
+};
+
+/**
+ * The file without one named note and the earlier versions it replaced. Other notes with the same
+ * words stay, and every remaining correction replaces what it did: the named note is in force, and
+ * each earlier version was replaced by a line removed with it.
+ */
+const withoutLine = (
+  fileText: string,
+  lines: ReadonlyArray<ChannelBotNoteLine>,
+  target: ChannelBotNoteLine,
+) => {
+  const replacedLines = earlierVersions(lines);
+  const removed = new Set<number>();
+  const queue = [target.index];
+  for (let index = queue.pop(); index !== undefined; index = queue.pop()) {
+    if (removed.has(index)) continue;
+    removed.add(index);
+    queue.push(...(replacedLines.get(index) ?? []));
   }
-  return index === lines.length ? { text: physical.join(""), removedTexts } : undefined;
+  const next = rewriteLines(fileText, lines, (line, physical) =>
+    removed.has(line.index) ? "" : physical,
+  );
+  const copies = (text: string) =>
+    parseChannelBotNoteLines(text).filter((line) => line.raw === target.raw).length;
+  const before = copies(fileText);
+  return next === undefined
+    ? undefined
+    : { text: next, cameBack: (after: string) => copies(after) >= before };
 };
 
 const stillThere = (fileText: string, removedTexts: ReadonlySet<string>) =>
@@ -292,19 +380,25 @@ export const makeChannelBotNoteWriter = (
     const recordRefused = Effect.fn("channelBotNoteTabEdits.recordRefused")(function* (
       note: string,
       open: ReadonlyArray<ChannelLedger.ChannelStoredTask>,
+      id: string | undefined,
     ) {
       const holders = open
         .filter((stored) => stored.task.notesChangeRequested !== undefined)
         .map((stored) => stored.task.taskId as string);
       const read = yield* readNotes;
       if (holders.length === 0 || read === null || read.truncated) return;
-      const line = parseChannelBotNoteLines(decode(read.bytes)).findLast(
-        (candidate) => candidate.replacedBy === undefined && candidate.text === note,
-      );
+      const lines = parseChannelBotNoteLines(decode(read.bytes));
+      const line =
+        id === undefined
+          ? lines.findLast(
+              (candidate) => candidate.replacedBy === undefined && candidate.text === note,
+            )
+          : targetOf(lines, note, id);
       if (line === undefined) return;
-      const key = collapseNoteText(line.text);
+      const key = refusedKey(line.text, id);
       const prior = refused.get(key);
       refused.set(key, {
+        key,
         note: line.text,
         raw: prior?.raw ?? line.raw,
         holders: new Set([...(prior?.holders ?? []), ...holders]),
@@ -313,8 +407,9 @@ export const makeChannelBotNoteWriter = (
     const recordRefusedQuietly = (
       note: string,
       open: ReadonlyArray<ChannelLedger.ChannelStoredTask>,
+      id: string | undefined,
     ) =>
-      recordRefused(note, open).pipe(
+      recordRefused(note, open, id).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("GOAT Bot refused forget not recorded", { cause }),
         ),
@@ -326,7 +421,7 @@ export const makeChannelBotNoteWriter = (
         const request = tabRequest(message);
         if (request?.kind !== "forget") return;
         const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
-        yield* recordRefusedQuietly(request.note, open);
+        yield* recordRefusedQuietly(request.note, open, request.id);
       },
       Effect.catch((cause) => Effect.logWarning("GOAT Bot refused forget not recorded", { cause })),
     );
@@ -355,15 +450,18 @@ export const makeChannelBotNoteWriter = (
           const inForce = new Set(
             parseChannelBotNoteLines(text)
               .filter((line) => line.replacedBy === undefined)
-              .map((line) => collapseNoteText(line.text)),
+              .flatMap((line) => [
+                refusedKey(line.text, undefined),
+                refusedKey(line.text, line.id),
+              ]),
           );
           const granted = yield* grantOpen;
-          const kept: Array<KeptNote & { readonly raw: string }> = [];
+          const kept: Array<KeptNote & { readonly raw: string; readonly key: string }> = [];
           for (const [key, record] of quiet) {
             // Still there: nothing to put back, and a later change to it must stand.
             if (inForce.has(key)) refused.delete(key);
             else if (!granted)
-              kept.push({ note: record.note, holders: [...record.holders], raw: record.raw });
+              kept.push({ note: record.note, holders: [...record.holders], raw: record.raw, key });
           }
           if (kept.length === 0) return [];
           yield* fs.writeFileString(
@@ -371,60 +469,24 @@ export const makeChannelBotNoteWriter = (
             appendPrefix(read !== null, text) + kept.map((note) => note.raw).join("\n") + "\n",
             { flag: "a" },
           );
-          for (const note of kept) refused.delete(collapseNoteText(note.note));
+          for (const note of kept) refused.delete(note.key);
           return kept.map(({ note, holders }): KeptNote => ({ note, holders }));
         }),
       );
 
-    const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
-      note: string,
-      next: string,
-      text: string,
-      exists: boolean,
-      inputId: string,
-      readAt: string,
-    ) {
-      // A pass re-run after a restart finds its own line and answers as the first pass did.
-      if (text.includes(noteSource(inputId))) return CHANNEL_COPY.noteChanged;
-      const inForce = parseChannelBotNoteLines(text).some(
-        (line) => line.replacedBy === undefined && line.text === note,
-      );
-      const line = inForce
-        ? channelBotNoteLine(next, yield* noteDay(readAt), inputId, note)
-        : undefined;
-      if (line === undefined) return CHANNEL_COPY.noteNotFound;
-      yield* fs.writeFileString(files.notes, appendPrefix(exists, text) + line + "\n", {
-        flag: "a",
-      });
-      yield* reportWrote(inputId);
-      return CHANNEL_COPY.noteChanged;
-    });
-
-    // Residuals, accepted: a write that lands between the compare and the rename is lost, and a
-    // writer holding a copy read before the rename can write the removed words back afterwards.
-    const forget = Effect.fn("channelBotNoteTabEdits.forget")(function* (
-      note: string,
+    /**
+     * Replaces memory.md with `next` only if it still holds `original`; false when it changed.
+     * Staged under a fresh name created exclusively, so no existing file or link is ever written.
+     */
+    const replaceFile = Effect.fn("channelBotNoteTabEdits.replaceFile")(function* (
       original: Uint8Array,
-      inputId: string,
+      next: string,
     ) {
-      const decoded = yield* Effect.try({
-        try: () => strictDecoder.decode(original),
-        catch: () => "not UTF-8",
-      }).pipe(Effect.option);
-      if (decoded._tag === "None") return CHANNEL_COPY.noteEditFailed;
-      const bom = decoded.value.startsWith(BOM) ? BOM : "";
-      const text = decoded.value.slice(bom.length);
-      const lines = parseChannelBotNoteLines(text);
-      const target = lines.find((line) => line.replacedBy === undefined && line.text === note);
-      if (target === undefined) return CHANNEL_COPY.noteNotFound;
-      const next = withoutNote(text, lines, target.text);
-      if (next === undefined) return CHANNEL_COPY.noteEditFailed;
       const mode = (yield* fs.stat(files.notes)).mode;
-      // Created exclusively under a fresh name, so no existing file or link is ever written.
       const staged = files.notes + ".edit-" + NodeCrypto.randomUUID();
       let created = false;
-      const replaced = yield* Effect.gen(function* () {
-        yield* fs.writeFileString(staged, bom + next.text, { flag: "wx" });
+      return yield* Effect.gen(function* () {
+        yield* fs.writeFileString(staged, next, { flag: "wx" });
         created = true;
         yield* fs.chmod(staged, mode & 0o777);
         yield* hooks.beforeCompare ?? Effect.void;
@@ -433,14 +495,93 @@ export const makeChannelBotNoteWriter = (
         yield* fs.rename(staged, files.notes);
         return true;
       }).pipe(Effect.onExit(() => (created ? fs.remove(staged).pipe(Effect.ignore) : Effect.void)));
-      if (!replaced) return undefined;
+    });
+
+    /** The file's text and byte order mark, or undefined for bytes that are not UTF-8. */
+    const strictText = (original: Uint8Array) =>
+      Effect.try({ try: () => strictDecoder.decode(original), catch: () => "not UTF-8" }).pipe(
+        Effect.option,
+        Effect.map((decoded) => {
+          if (decoded._tag === "None") return undefined;
+          const bom = decoded.value.startsWith(BOM) ? BOM : "";
+          return { bom, text: decoded.value.slice(bom.length) };
+        }),
+      );
+
+    /**
+     * A change appends the new note with a marker that replaces the newest note in force with the
+     * quoted words. When the request names an older one, that line first moves to the end, so the
+     * marker replaces it and every other note keeps its place and meaning. Undefined when the file
+     * changed during that rewrite.
+     */
+    const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
+      request: Extract<TabRequest, { kind: "change" }>,
+      original: Uint8Array,
+      exists: boolean,
+      inputId: string,
+      readAt: string,
+    ) {
+      const { note, next, id } = request;
+      const text = decode(original);
+      // A pass re-run after a restart finds its own line and answers as the first pass did.
+      if (text.includes(noteSource(inputId))) return CHANNEL_COPY.noteChanged;
+      const lines = parseChannelBotNoteLines(text);
+      const target = targetOf(lines, note, id);
+      const line =
+        target === undefined
+          ? undefined
+          : channelBotNoteLine(next, yield* noteDay(readAt), inputId, note);
+      if (target === undefined || line === undefined) return CHANNEL_COPY.noteNotFound;
+      const words = collapseNoteText(target.text);
+      const newest = lines.findLast(
+        (other) => other.replacedBy === undefined && collapseNoteText(other.text) === words,
+      );
+      if (newest === target || id === undefined) {
+        yield* fs.writeFileString(files.notes, appendPrefix(exists, text) + line + "\n", {
+          flag: "a",
+        });
+      } else {
+        const decoded = yield* strictText(original);
+        if (decoded === undefined) return CHANNEL_COPY.noteEditFailed;
+        const rest = rewriteLines(
+          decoded.text,
+          parseChannelBotNoteLines(decoded.text),
+          (other, physical) => (other.index === target.index ? "" : physical),
+        );
+        if (rest === undefined) return CHANNEL_COPY.noteEditFailed;
+        const moved = rest + appendPrefix(true, rest) + target.raw + "\n" + line + "\n";
+        if (!(yield* replaceFile(original, decoded.bom + moved))) return undefined;
+      }
+      yield* reportWrote(inputId);
+      return CHANNEL_COPY.noteChanged;
+    });
+
+    // Residuals, accepted: a write that lands between the compare and the rename is lost, and a
+    // writer holding a copy read before the rename can write the removed words back afterwards.
+    const forget = Effect.fn("channelBotNoteTabEdits.forget")(function* (
+      request: Extract<TabRequest, { kind: "forget" }>,
+      original: Uint8Array,
+      inputId: string,
+    ) {
+      const decoded = yield* strictText(original);
+      if (decoded === undefined) return CHANNEL_COPY.noteEditFailed;
+      const { bom, text } = decoded;
+      const lines = parseChannelBotNoteLines(text);
+      const target = targetOf(lines, request.note, request.id);
+      if (target === undefined) return CHANNEL_COPY.noteNotFound;
+      const next =
+        request.id === undefined
+          ? withoutNote(text, lines, target.text)
+          : withoutLine(text, lines, target);
+      if (next === undefined) return CHANNEL_COPY.noteEditFailed;
+      if (!(yield* replaceFile(original, bom + next.text))) return undefined;
       yield* hooks.afterRename ?? Effect.void;
       const check = yield* readNotes.pipe(Effect.option);
       if (check._tag === "None" || check.value === null || check.value.truncated) {
         yield* reportWrote(inputId);
         return CHANNEL_COPY.noteUnverified;
       }
-      const answer = stillThere(decode(check.value.bytes), next.removedTexts)
+      const answer = next.cameBack(decode(check.value.bytes))
         ? CHANNEL_COPY.noteCameBack
         : CHANNEL_COPY.noteForgotten;
       if (!sameBytes(check.value.bytes, original)) yield* reportWrote(inputId);
@@ -454,25 +595,19 @@ export const makeChannelBotNoteWriter = (
     ) {
       const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
       if (open.some((stored) => stored.task.notesChangeRequested !== undefined)) {
-        if (request.kind === "forget") yield* recordRefusedQuietly(request.note, open);
+        if (request.kind === "forget") yield* recordRefusedQuietly(request.note, open, request.id);
         return CHANNEL_COPY.noteEditBusy;
       }
       // A request for this note that goes through now is the person's latest word on it.
-      refused.delete(collapseNoteText(request.note));
+      refused.delete(refusedKey(request.note, request.id));
       for (let attempt = 0; attempt < EDIT_ATTEMPTS; attempt++) {
         const read = yield* readNotes;
         if (read?.truncated === true) return CHANNEL_COPY.noteFileTooLarge;
         const original = read?.bytes ?? new Uint8Array();
-        if (request.kind === "change")
-          return yield* change(
-            request.note,
-            request.next,
-            decode(original),
-            read !== null,
-            inputId,
-            readAt,
-          );
-        const answer = yield* forget(request.note, original, inputId);
+        const answer =
+          request.kind === "change"
+            ? yield* change(request, original, read !== null, inputId, readAt)
+            : yield* forget(request, original, inputId);
         if (answer !== undefined) return answer;
       }
       return CHANNEL_COPY.noteEditFailed;

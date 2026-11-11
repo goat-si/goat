@@ -5,12 +5,14 @@ import {
   GOAT_BOT_NOTES_COPY,
   GOAT_BOT_NOTES_SHARED_COPY,
   GOAT_BOT_NOTES_TRUNCATED_COPY,
+  goatBotNotesNamedByTextOnly,
   goatBotNoteSourceLabel,
   goatBotNotesView,
   noteDateLabel,
 } from "@goat/client-runtime/goatBot";
 import type { ChannelBotNote, EnvironmentId } from "@goat/contracts";
 import { useEffect, useId, useState } from "react";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { channelEnvironment } from "~/state/channels";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useServerConfigs } from "~/state/entities";
@@ -91,6 +93,7 @@ function NoteList({
 }) {
   const botName = useGoatBotName();
   const view = goatBotNotesView({ notes, truncated });
+  const textOnly = goatBotNotesNamedByTextOnly(notes);
   const [showReplaced, setShowReplaced] = useState(false);
   const replacedId = useId();
   // The minute tick is UTC without an offset, and Date.parse reads that form as local time.
@@ -116,6 +119,7 @@ function NoteList({
             <NoteRow
               key={`${revision}:${note.index}`}
               note={note}
+              sharedText={textOnly.has(note.index)}
               source={goatBotNoteSourceLabel(note.source, { now })}
               onDraft={onDraft}
             />
@@ -164,14 +168,18 @@ function NoteList({
 
 function NoteRow({
   note,
+  sharedText,
   source,
   onDraft,
 }: {
   note: ChannelBotNote;
+  /** Another current note reads the same and the server cannot tell them apart in a request. */
+  sharedText: boolean;
   source: string | null;
   onDraft: ((text: string) => void) | undefined;
 }) {
   const [wording, setWording] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState(false);
   const textId = useId();
   const draft = wording === null ? null : changeNoteDraft(note, wording);
   return (
@@ -184,7 +192,14 @@ function NoteRow({
       {note.replaces !== undefined && (
         <p className="text-xs text-muted-foreground">Replaces: “{note.replaces}”</p>
       )}
-      {wording === null ? (
+      {wording === null && forgetting ? (
+        <SharedNoteNotice
+          text={note.text}
+          copy={note.text}
+          copyTarget="note"
+          onDiscard={() => setForgetting(false)}
+        />
+      ) : wording === null ? (
         <div className="flex gap-1">
           <Button
             size="xs"
@@ -198,7 +213,7 @@ function NoteRow({
             size="xs"
             variant="ghost"
             disabled={onDraft === undefined}
-            onClick={() => onDraft?.(forgetNoteDraft(note))}
+            onClick={() => (sharedText ? setForgetting(true) : onDraft?.(forgetNoteDraft(note)))}
           >
             Ask to forget
           </Button>
@@ -211,24 +226,64 @@ function NoteRow({
             value={wording}
             onChange={(event) => setWording(event.currentTarget.value)}
           />
-          <div className="flex gap-1">
-            <Button
-              size="xs"
-              disabled={draft === null || onDraft === undefined}
-              onClick={() => {
-                if (draft === null) return;
-                onDraft?.(draft);
-                setWording(null);
-              }}
-            >
-              Fill message
-            </Button>
-            <Button size="xs" variant="ghost" onClick={() => setWording(null)}>
-              Cancel
-            </Button>
-          </div>
+          {sharedText ? (
+            <SharedNoteNotice
+              text={note.text}
+              copy={wording}
+              copyTarget="new wording"
+              onDiscard={() => setWording(null)}
+            />
+          ) : (
+            <div className="flex gap-1">
+              <Button
+                size="xs"
+                disabled={draft === null || onDraft === undefined}
+                onClick={() => {
+                  if (draft === null) return;
+                  onDraft?.(draft);
+                  setWording(null);
+                }}
+              >
+                Fill message
+              </Button>
+              <Button size="xs" variant="ghost" onClick={() => setWording(null)}>
+                Cancel
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </li>
+  );
+}
+
+/** Two notes read the same, so a request naming one by its words cannot pick it; keep it by hand. */
+function SharedNoteNotice({
+  text,
+  copy,
+  copyTarget,
+  onDiscard,
+}: {
+  text: string;
+  copy: string;
+  copyTarget: string;
+  onDiscard: () => void;
+}) {
+  const botName = useGoatBotName();
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: copyTarget });
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">
+        Two notes read “{text}”, so {botName} can't tell which one you mean.
+      </p>
+      <div className="flex gap-1">
+        <Button size="xs" variant="ghost" onClick={() => copyToClipboard(copy)}>
+          {isCopied ? "Copied" : `Copy ${copyTarget}`}
+        </Button>
+        <Button size="xs" variant="ghost" onClick={onDiscard}>
+          Discard
+        </Button>
+      </div>
+    </div>
   );
 }

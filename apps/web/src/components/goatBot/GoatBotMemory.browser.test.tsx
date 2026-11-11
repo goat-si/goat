@@ -144,6 +144,48 @@ it("Ask to change asks for the new wording first, then drafts the quoted change"
   expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
 });
 
+it("an older server's alike notes are held back, since a request names a note by its words", async () => {
+  const first = { index: 0, date: "2026-11-01", text: "Use pnpm" };
+  const second = { index: 1, date: "2026-11-02", text: "Use pnpm" };
+  setup({ data: { revision: "r1", notes: [second, first], truncated: false } });
+  const onDraft = vi.fn();
+  await using screen = await render(
+    <GoatBotMemory environmentId={environmentId} onDraft={onDraft} />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Ask to forget" }).first());
+  await expect
+    .element(
+      screen.getByText("Two notes read “Use pnpm”, so GOAT Bot can't tell which one you mean."),
+    )
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).first());
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Use vp");
+  expect(screen.getByRole("button", { name: "Fill message" }).query()).toBeNull();
+  await expect.element(screen.getByRole("button", { name: "Copy new wording" })).toBeVisible();
+  expect(onDraft).not.toHaveBeenCalled();
+});
+
+it("names the one note in the request when the server gave each line an id", async () => {
+  const first = { index: 0, date: "2026-11-01", text: "Use pnpm", id: "aaaaaaaaaaaa" };
+  const second = { index: 1, date: "2026-11-02", text: "Use pnpm", id: "bbbbbbbbbbbb" };
+  setup({ data: { revision: "r1", notes: [second, first], truncated: false } });
+  const onDraft = vi.fn();
+  await using screen = await render(
+    <GoatBotMemory environmentId={environmentId} onDraft={onDraft} />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Ask to forget" }).nth(1));
+  expect(onDraft).toHaveBeenLastCalledWith(
+    'Please forget this note: "Use pnpm" (note aaaaaaaaaaaa)',
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).first());
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Use vp");
+  await userEvent.click(screen.getByRole("button", { name: "Fill message" }));
+  expect(onDraft).toHaveBeenLastCalledWith(
+    'Please change this note: "Use pnpm" (note bbbbbbbbbbbb) to: "Use vp"',
+  );
+});
+
 it("cannot ask while the chat cannot send", async () => {
   setup();
   await using screen = await render(<GoatBotMemory environmentId={environmentId} />);

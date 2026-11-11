@@ -5,6 +5,8 @@
  *
  * @module channelBotNoteLines
  */
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a line's id is a short sha-256 of the line.
+import * as NodeCrypto from "node:crypto";
 
 export const NOTES_HEADER =
   "# GOAT Bot notes\n\nStanding notes people asked GOAT Bot to keep, newest last. Edit or delete lines freely.\n\n";
@@ -12,6 +14,8 @@ export const NOTES_HEADER =
 export interface ChannelBotNoteLine {
   /** Position among the lines parsed, oldest first. */
   readonly index: number;
+  /** Names the line in a Memory tab request; lines with the same bytes share it. */
+  readonly id: string;
   readonly date: string | null;
   readonly text: string;
   readonly raw: string;
@@ -27,6 +31,10 @@ const DATED = /^- (\d{4}-\d{2}-\d{2}): (.+)$/u;
 const MARKER = " (replaces: ";
 
 export const collapseNoteText = (text: string) => text.replace(/\s+/gu, " ").trim();
+
+/** A line's id: the first 12 hex digits of its sha-256, enough to tell one file's lines apart. */
+const noteLineId = (raw: string) =>
+  NodeCrypto.createHash("sha256").update(raw).digest("hex").slice(0, 12);
 
 /** The marker a correction line ends with; JSON keeps quotes and parentheses in the text exact. */
 export const replacesMarker = (text: string) => MARKER + JSON.stringify(text) + ")";
@@ -45,7 +53,12 @@ const jsonString = (text: string): string | undefined => {
  * only when the rest of the line is one JSON string. A marker typed into a note is followed by
  * the real source, so it never reaches the end of the line.
  */
-const parseLine = (raw: string, index: number): ChannelBotNoteLine => {
+const parseLine = (raw: string, index: number): ChannelBotNoteLine => ({
+  ...parseLineText(raw, index),
+  id: noteLineId(raw),
+});
+
+const parseLineText = (raw: string, index: number): Omit<ChannelBotNoteLine, "id"> => {
   if (raw.endsWith(")")) {
     for (let at = raw.indexOf(MARKER); at !== -1; at = raw.indexOf(MARKER, at + 1)) {
       const replaces = jsonString(raw.slice(at + MARKER.length, -1));
