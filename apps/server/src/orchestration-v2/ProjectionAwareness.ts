@@ -6,6 +6,7 @@ export type AgentAwarenessThread = ProjectThreadAwarenessV2Input["thread"] &
   Pick<
     OrchestrationV2ThreadShell,
     | "projectId"
+    | "creationSource"
     | "archivedAt"
     | "activeRunId"
     | "latestRunId"
@@ -26,6 +27,7 @@ export function awarenessThread(thread: OrchestrationV2ThreadShell): AgentAwaren
   const {
     id,
     projectId,
+    creationSource,
     archivedAt,
     activeRunId,
     latestRunId,
@@ -47,6 +49,7 @@ export function awarenessThread(thread: OrchestrationV2ThreadShell): AgentAwaren
   return {
     id,
     projectId,
+    creationSource,
     archivedAt,
     activeRunId,
     latestRunId,

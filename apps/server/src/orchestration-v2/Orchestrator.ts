@@ -486,10 +486,9 @@ export interface OrchestratorV2Shape
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<ShellSnapshotRead, OrchestratorV2Error>;
-  readonly listActiveSubagentThreadIds: () => Effect.Effect<
-    ReadonlyArray<ThreadId>,
-    OrchestratorV2Error
-  >;
+  readonly listActiveSubagentThreadIds: (
+    page?: Parameters<ProjectionStoreV2["Service"]["listActiveSubagentThreadIds"]>[0],
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, OrchestratorV2Error>;
   readonly countThreads: () => Effect.Effect<number, OrchestratorV2Error>;
   /** Each active thread's parent and launcher, for walking launched threads cheaply. */
   readonly listLaunchEdges: () => Effect.Effect<
@@ -13770,9 +13769,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError));
     }),
     listActiveSubagentThreadIds: Effect.fn("OrchestratorV2.listActiveSubagentThreadIds")(
-      function () {
+      function (page) {
         return projectionStore
-          .listActiveSubagentThreadIds()
+          .listActiveSubagentThreadIds(page)
           .pipe(Effect.mapError(shellProjectionError));
       },
     ),
