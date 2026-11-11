@@ -545,7 +545,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
         ),
       );
       assert.deepStrictEqual(yield* runMigrations(), migrationManifest);
-      assert.deepStrictEqual(migrationManifest.at(-1), [139, "ChannelNewestAsk"]);
+      assert.deepStrictEqual(migrationManifest.at(-1), [140, "PlacementAdmission"]);
       const sql = yield* SqlClient.SqlClient;
       assert.lengthOf(
         yield* sql`SELECT name FROM sqlite_master WHERE type='index' AND name IN (

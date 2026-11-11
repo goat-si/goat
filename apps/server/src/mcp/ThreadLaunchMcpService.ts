@@ -77,6 +77,8 @@ export interface CloudRunLaunch {
   readonly approved?: true;
   /** Asked right before the thread is created and before its first message; see ThreadLaunchInput. */
   readonly confirm?: ThreadLaunch.ThreadLaunchInput["confirm"];
+  /** A placement's command id, derived from its key, so every retry of the key is one launch. */
+  readonly commandId?: CommandId;
 }
 
 export class ThreadLaunchMcpService extends Context.Service<
@@ -289,9 +291,10 @@ const make = Effect.gen(function* () {
 
         return yield* Effect.gen(function* () {
           const commandId =
-            admission === undefined
+            cloudRun?.commandId ??
+            (admission === undefined
               ? yield* newCommandId()
-              : CommandId.make(admission.record.childWorkId);
+              : CommandId.make(admission.record.childWorkId));
           const threadId = cloudRun?.threadId ?? ThreadId.make(commandId);
           const messageId = MessageId.make(commandId);
           const attachments = input.attachments ?? [];

@@ -1063,6 +1063,9 @@ importers:
       '@goat/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@goat/pen-protocol':
+        specifier: workspace:*
+        version: link:../../packages/pen-protocol
       '@goat/provider-testing':
         specifier: workspace:*
         version: link:../../packages/provider-testing

@@ -38,6 +38,7 @@ import * as SourceControlRepositoryService from "../../../sourceControl/SourceCo
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
+import { PlacementArgument } from "../../../fleet/admission/PlacementKey.ts";
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
@@ -193,6 +194,12 @@ export const ThreadLaunchParameters = Schema.Struct({
         "Set only by another machine's GOAT when it launches this thread over SSH, so the thread can report back to its origin. Agents omit it.",
     }),
   ),
+  placement: Schema.optional(
+    PlacementArgument.annotate({
+      description:
+        "Set only by another GOAT that places fleet work here, so this machine admits it against its own limits and a retry never starts it twice. Agents omit it.",
+    }),
+  ),
 });
 
 export const ThreadLaunchSuccess = Schema.Struct({
@@ -212,6 +219,8 @@ export const ThreadLaunchSuccess = Schema.Struct({
   ),
   /** Set when this machine is under resource pressure; see goat_host_status placement. */
   pressure: Schema.optional(HostPressureAdvice),
+  /** Present only on a placed launch this machine admitted and counted. */
+  placement: Schema.optional(Schema.Struct({ outcome: Schema.Literal("started") })),
 });
 
 const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {
