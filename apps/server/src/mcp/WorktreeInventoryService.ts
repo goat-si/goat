@@ -223,8 +223,9 @@ const make = Effect.gen(function* () {
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const lastCheckStart = new Map<string, number>();
   let checkSequence = 0;
-  // Worktrees checked since remaining last reached 0: a repeat skips counting them, so it ends.
-  const checkedThisRound = new Set<string>();
+  // Per repo scope, worktrees checked since remaining last reached 0: a repeat skips counting
+  // them, so repeating ends.
+  const rounds = new Map<string, Set<string>>();
 
   const real = (target: string) =>
     fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
@@ -840,15 +841,21 @@ const make = Effect.gen(function* () {
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
     let remaining = 0;
+    let checked = false;
+    const roundKey = input.repo ?? "";
+    const round = rounds.get(roundKey) ?? new Set<string>();
+    rounds.set(roundKey, round);
     for (const fact of facts) {
       if (fact.entry.main) continue;
-      if (!dryRun && (yield* Clock.currentTimeMillis) >= deadline) {
-        if (!checkedThisRound.has(fact.entry.path)) remaining++;
+      // Every removing call checks at least one worktree, so a slow scan cannot stall repeats.
+      if (!dryRun && checked && (yield* Clock.currentTimeMillis) >= deadline) {
+        if (!round.has(fact.entry.path)) remaining++;
         continue;
       }
+      checked = true;
       if (!dryRun) {
         lastCheckStart.set(fact.entry.path, ++checkSequence);
-        checkedThisRound.add(fact.entry.path);
+        round.add(fact.entry.path);
       }
       const entry = { path: fact.entry.path, branch: fact.entry.branch };
       const blocker = sweepBlocker(fact);
@@ -877,7 +884,7 @@ const make = Effect.gen(function* () {
         }),
       );
     }
-    if (!dryRun && remaining === 0) checkedThisRound.clear();
+    if (!dryRun && remaining === 0) round.clear();
     return { dryRun, removed, kept, remaining };
   });
 

@@ -72,6 +72,8 @@ const fixture = Effect.gen(function* () {
   let mergedPullRequests: Array<{ branch: string; headSha: string }> = [];
   // Runs while removal waits on the pull request lookup, between its checks and the deletion.
   let duringPullRequestLookup: Effect.Effect<void> = Effect.void;
+  // Runs while a sweep lists the projects, before any worktree is checked.
+  let duringScan: Effect.Effect<void> = Effect.void;
 
   const addWorktree = (branch: string, at = worktreesDir + "/" + branch) =>
     run(repo, ["worktree", "add", "-b", branch, at]).pipe(Effect.as(at));
@@ -98,7 +100,8 @@ const fixture = Effect.gen(function* () {
         }),
     } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
     Effect.provideService(ProjectService.ProjectService, {
-      listShells: () => Effect.succeed([{ id: ProjectId.make("project-1"), workspaceRoot: repo }]),
+      listShells: () =>
+        duringScan.pipe(Effect.as([{ id: ProjectId.make("project-1"), workspaceRoot: repo }])),
     } as unknown as ProjectService.ProjectService["Service"]),
     Effect.provideService(GitManager.GitManager, {
       branchPullRequest: (input: { branch: string }) =>
@@ -136,6 +139,9 @@ const fixture = Effect.gen(function* () {
     },
     setDuringPullRequestLookup: (next: Effect.Effect<void>) => {
       duringPullRequestLookup = next;
+    },
+    setDuringScan: (next: Effect.Effect<void>) => {
+      duringScan = next;
     },
     root,
   };
@@ -433,6 +439,20 @@ describe("WorktreeInventoryService", () => {
       for (let i = 0; i < 2; i++)
         remaining.push((yield* service.cleanup({ dryRun: false })).remaining);
       expect(remaining).toEqual([2, 0]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("a sweep whose project scan outlasts the budget still checks and removes one", () =>
+    Effect.gen(function* () {
+      const { service, fs, addWorktree, setDuringScan } = yield* fixture;
+      const first = yield* addWorktree("a");
+      const second = yield* addWorktree("b");
+      setDuringScan(TestClock.adjust("70 seconds"));
+
+      const result = yield* service.cleanup({ dryRun: false });
+      expect(result.removed).toHaveLength(1);
+      expect(result.remaining).toBe(1);
+      expect((yield* fs.exists(first)) && (yield* fs.exists(second))).toBe(false);
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
