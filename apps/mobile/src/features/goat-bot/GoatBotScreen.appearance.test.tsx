@@ -465,7 +465,9 @@ it("marks what the bot said since the last read, and points up to it until the p
       expect.objectContaining({ index: 1, viewPosition: 0 }),
     );
     expect(pill(view.container)).toBeNull();
-    // VoiceOver follows the jump to the "New" line, once.
+    // VoiceOver follows the jump to the "New" line once the list shows it, and only once.
+    expect(a11y.focus).not.toHaveBeenCalled();
+    await act(async () => viewable({ viewableItems: [{ index: 1 }, { index: 2 }] }));
     expect(a11y.focus).toHaveBeenCalledTimes(1);
     expect(a11y.focus.mock.calls[0]?.[0]?.getAttribute("aria-label")).toBe("New messages");
     await view.rerender(<GoatBotScreen visible readSnapshot={snapshot} />);
@@ -544,6 +546,20 @@ it("tells VoiceOver on iOS when the bot starts waiting on something new, once pe
       "GOAT Bot: Waiting for your answer",
       "GOAT Bot: Waiting on other work",
     ]);
+    // A task's own update that streams in and happens to start with "Waiting" is not a wait.
+    a11y.announce.mockClear();
+    for (const text of [
+      "Waiting… the build",
+      "Waiting… the build is",
+      "Waiting… the build is green",
+    ]) {
+      screenSession.activity = { state: "working", text };
+      await view.rerender(<GoatBotScreen visible />);
+    }
+    expect(a11y.announce).not.toHaveBeenCalled();
+    expect(view.container.querySelector("[data-live]")?.getAttribute("aria-label")).toBe(
+      "GOAT Bot is working",
+    );
   } finally {
     screenSession.activity = null;
     await view.unmount();
@@ -848,4 +864,32 @@ it("shows a task chip in the task header only when one exists", async () => {
   );
   await empty.unmount();
   screenSession.supportsTaskThreads = false;
+});
+
+it("keeps Send in the composer row after a long model name, at its full size", async () => {
+  models.main = {
+    label: "a-very-long-provider/model-name-that-does-not-fit-a-narrow-phone",
+    accessibilityLabel: "GOAT Bot model",
+    items: [],
+    disabled: false,
+    select: vi.fn(),
+  };
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    await typeInto(view.container, "Check the disks");
+    const send = view.container.querySelector('[aria-label="Send message"]');
+    const row = send?.parentElement;
+    const pill = row?.querySelector('[aria-label="Model"]');
+    expect(pill?.textContent).toContain("a-very-long-provider");
+    // The pill comes before Send in the same row, and Send keeps its 44-point target.
+    expect(row?.lastElementChild).toBe(send);
+    expect(JSON.parse(send?.getAttribute("data-style") ?? "null")).toMatchObject({
+      width: 44,
+      height: 44,
+    });
+    expect(JSON.parse(send?.getAttribute("data-style") ?? "null").flexShrink ?? 0).toBe(0);
+  } finally {
+    await view.unmount();
+    models.main = null;
+  }
 });

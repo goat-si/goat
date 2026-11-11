@@ -18,7 +18,7 @@ vi.mock("react-native", () => ({
   View: (props: { children?: ReactNode }) => <div>{props.children}</div>,
 }));
 vi.mock("@react-navigation/native", () => ({ useIsFocused: () => route.focused }));
-vi.mock("../../lib/appState", () => ({ useAppForeground: () => route.foreground }));
+vi.mock("../../lib/appState", () => ({ useAppActive: () => route.foreground }));
 vi.mock("@goat/client-runtime/environment", () => ({
   scopeThreadRef: (environmentId: string, threadId: string) => ({ environmentId, threadId }),
 }));
@@ -57,7 +57,7 @@ async function mount() {
   return { show, unmount: () => act(async () => root.unmount()) };
 }
 
-it("does not count a reply that arrived in the background as read, and marks it on return", async () => {
+it("does not count a reply that arrived while the app was inactive or in the background as read, and marks it on return", async () => {
   Object.assign(route, { focused: true, foreground: true, threadId: "bg-thread" });
   route.visit.mockClear();
   route.shell = { lastVisitedAt: at(1) };
@@ -69,7 +69,7 @@ it("does not count a reply that arrived in the background as read, and marks it 
   route.shell = { lastVisitedAt: at(2) };
   await view.show();
   route.visit.mockClear();
-  // The app goes to the background; the bot replies there.
+  // The app goes inactive (the app switcher) or to the background; the bot replies there.
   route.foreground = false;
   await view.show();
   route.preview = { unread: true, at: at(9) };

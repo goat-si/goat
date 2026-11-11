@@ -4,7 +4,7 @@ import { goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
-import { useAppForeground } from "../../lib/appState";
+import { useAppActive } from "../../lib/appState";
 import { useThreadShell } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -23,9 +23,10 @@ export function GoatBotRouteScreen({
   route,
 }: StaticScreenProps<{ taskId?: string; botId?: string }>) {
   const focused = useIsFocused();
-  const foreground = useAppForeground();
-  // A reply that arrives while the app is in the background has not been seen.
-  const seen = focused && foreground;
+  const active = useAppActive();
+  // A reply that arrives while the app is inactive (the app switcher, Control Center) or in the
+  // background has not been seen.
+  const seen = focused && active;
   const { botRef } = useMobileGoatBotHomeMode();
   const preview = useMobileBotPreview();
   const botId = route.params?.botId;
