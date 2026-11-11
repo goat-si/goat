@@ -18,9 +18,8 @@ import {
   type DetachedProcess,
   type DetachedProcessTable,
   makeDetachedAppServers,
-  PID_HANDSHAKE_SCRIPT,
-  privateSocketDirectory,
 } from "./CodexDetachedAppServer.ts";
+import { PID_HANDSHAKE_SCRIPT, privateSocketDirectory } from "./CodexDetachedLaunch.ts";
 
 /** Maintainer override: `socket` or `stdio` forces a transport; unset follows each project's setting. */
 export const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
