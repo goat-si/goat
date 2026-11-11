@@ -7,8 +7,6 @@ import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runti
 import { ARCHIVE, remoteShell } from "./tunnel.fixture.ts";
 import type { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
-export const OLDER = "1.2.3-preview.9";
-
 export const isAlive = (pid: number) => {
   try {
     process.kill(pid, 0);
