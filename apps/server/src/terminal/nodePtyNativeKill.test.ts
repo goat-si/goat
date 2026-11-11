@@ -2,49 +2,105 @@ import * as NodeModule from "node:module";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
-// The patched agent is the shared CJS module at call time, so the test reads the shipped code.
+// The patched agent is the shared CJS module at call time, so the test drives the shipped code.
 const requireCjs = NodeModule.createRequire(import.meta.url);
-const {
-  WindowsPtyAgent,
-}: {
-  WindowsPtyAgent: {
-    prototype: {
-      _killConnectedPty(this: {
-        _connected: boolean;
-        _ptyNative: { kill: (pty: number, useConptyDll: boolean) => void };
-        _pty: number;
-        _useConptyDll: boolean;
-      }): void;
-    };
-  };
-} = requireCjs("node-pty/lib/windowsPtyAgent.js");
 
-const PTY = 1;
-
-function agent(connected: boolean) {
-  const nativeKill = vi.fn();
-  return {
-    nativeKill,
-    agent: {
-      _connected: connected,
-      _ptyNative: { kill: nativeKill },
-      _pty: PTY,
-      _useConptyDll: false,
-    },
-  };
+type NativeKill = (pty: number, useConptyDll: boolean) => void;
+type Connect = (...args: ReadonlyArray<unknown>) => { pid: number };
+interface AgentState {
+  _useConptyDll: boolean;
+  _innerPid: number;
+  _connected: boolean;
+  _pty: number;
+  _exitCode?: number;
+  _pendingPtyInfo?: { pty: number; commandLine: string; cwd: string; env: ReadonlyArray<string> };
+  _connectionTimeout?: ReturnType<typeof setTimeout>;
+  _ptyNative: { kill: NativeKill };
+  _conoutSocketWorker: { dispose: () => void };
+  _inSocket: { destroy: () => void; readable: boolean };
+  _outSocket: { destroy: () => void; readable: boolean };
+  _onError: { fire: (error: unknown) => void };
+}
+interface Agent extends AgentState {
+  _completePtyConnection(): void;
+  _failPtyConnection(error: Error): void;
+  kill(): void;
 }
 
-describe("node-pty native kill on an unconnected pty", () => {
+const utils: { loadNativeModule: (name: string) => { module: unknown } } =
+  requireCjs("node-pty/lib/utils.js");
+const { WindowsPtyAgent }: { WindowsPtyAgent: new (...args: ReadonlyArray<unknown>) => Agent } =
+  requireCjs("node-pty/lib/windowsPtyAgent.js");
+
+let connect: Connect = () => ({ pid: 0 });
+const loadNative = utils.loadNativeModule;
+utils.loadNativeModule = () => ({
+  module: {
+    connect: (...args: ReadonlyArray<unknown>) => connect(...args),
+    startProcess: () => {
+      throw new Error("the test builds agents from the prototype");
+    },
+  },
+});
+// One construction caches the fake ConPTY module that connect() reads.
+expect(() => new WindowsPtyAgent("cmd.exe", [], {}, ".", 80, 24, false)).toThrow();
+utils.loadNativeModule = loadNative;
+
+function agent(): { agent: Agent; nativeKill: ReturnType<typeof vi.fn<NativeKill>> } {
+  const nativeKill = vi.fn<NativeKill>();
+  const state: AgentState = {
+    _useConptyDll: false,
+    _innerPid: 0,
+    _connected: false,
+    _pty: 1,
+    _pendingPtyInfo: { pty: 1, commandLine: "claude.cmd", cwd: ".", env: [] },
+    _ptyNative: { kill: nativeKill },
+    _conoutSocketWorker: { dispose: vi.fn() },
+    _inSocket: { destroy: vi.fn(), readable: true },
+    _outSocket: { destroy: vi.fn(), readable: true },
+    _onError: { fire: vi.fn() },
+  };
+  return { agent: Object.assign(Object.create(WindowsPtyAgent.prototype), state), nativeKill };
+}
+
+describe("node-pty native kill on a Windows pty", () => {
   // regression: #2785 the native kill on a pty that never connected corrupted the Windows heap
-  it("leaves the native pty alone when ConPTY never attached a process", () => {
-    const { agent: unconnected, nativeKill } = agent(false);
-    WindowsPtyAgent.prototype._killConnectedPty.call(unconnected);
+  it("a failed ConPTY connect tears down without the native kill", () => {
+    connect = () => {
+      throw new Error("Cannot create process, error code: 2");
+    };
+    const { agent: failed, nativeKill } = agent();
+    failed._completePtyConnection();
     expect(nativeKill).not.toHaveBeenCalled();
+    expect(failed._exitCode).toBe(2);
+    expect(failed._onError.fire).toHaveBeenCalledOnce();
+    expect(failed._conoutSocketWorker.dispose).toHaveBeenCalledOnce();
   });
 
-  it("kills the native pty once ConPTY attached a process", () => {
-    const { agent: connected, nativeKill } = agent(true);
-    WindowsPtyAgent.prototype._killConnectedPty.call(connected);
-    expect(nativeKill).toHaveBeenCalledWith(PTY, false);
+  it("a connection timeout before ConPTY connected skips the native kill", () => {
+    const { agent: waiting, nativeKill } = agent();
+    waiting._failPtyConnection(new Error("Timed out waiting for ConPTY output worker"));
+    expect(nativeKill).not.toHaveBeenCalled();
+    expect(waiting._onError.fire).toHaveBeenCalledOnce();
+  });
+
+  it("kill() before the deferred connect skips the native kill and the connect never runs", () => {
+    const connectSpy = vi.fn<Connect>(() => ({ pid: 0 }));
+    connect = connectSpy;
+    const { agent: pending, nativeKill } = agent();
+    pending.kill();
+    pending._completePtyConnection();
+    expect(nativeKill).not.toHaveBeenCalled();
+    expect(connectSpy).not.toHaveBeenCalled();
+    expect(pending._conoutSocketWorker.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("kill() after ConPTY connected still kills the native pty", () => {
+    connect = () => ({ pid: 0 });
+    const { agent: running, nativeKill } = agent();
+    running._completePtyConnection();
+    expect(running._connected).toBe(true);
+    running.kill();
+    expect(nativeKill).toHaveBeenCalledWith(1, false);
   });
 });
