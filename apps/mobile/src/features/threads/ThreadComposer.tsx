@@ -31,6 +31,7 @@ import {
 } from "@goat/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
+import { useModelMentionOptions } from "./useModelMentionOptions";
 import {
   useEffect,
   useEffectEvent,
@@ -478,6 +479,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   });
   const sendLabel = sendPresentation.label;
   const currentModelSelection = props.selectedThread.modelSelection;
+  const mentionModelOptions = useModelMentionOptions(
+    props.serverConfig,
+    currentModelSelection,
+    props.selectedThread.projectId,
+  );
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const modelUnavailable =
     props.connectionState === "connected" &&
@@ -555,6 +561,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         ? undefined
         : props.onUpdateInteractionMode,
     offersUsageLimits: usageLimitsOffered,
+    modelOptions: mentionModelOptions,
+    modelProviders: props.serverConfig?.providers,
     onUsageLimits:
       usageLimitsOffered && draftAttachments.length === 0 ? openUsageLimits : undefined,
   });

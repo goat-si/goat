@@ -68,6 +68,9 @@ import {
 import type { ComposerCommandItem } from "./ComposerCommandPopover";
 import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
 import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
+import { buildComposerModelItems } from "./composerModelMentions";
+import { formatComposerModelMention } from "@goat/client-runtime/composer-model-mentions";
+import type { ModelOption } from "../../lib/modelOptions";
 
 const providerWorkspaceSnapshotRefresh = createProviderWorkspaceSnapshotRefreshAtomFamily({
   providers: serverEnvironment.providersValueAtom,
@@ -211,6 +214,8 @@ export function resolveComposerCommandSelection(input: {
     replacement = `/${item.command} `;
   } else if (item.type === "provider-slash-command") {
     replacement = `/${item.command.name} `;
+  } else if (item.type === "model") {
+    replacement = `${formatComposerModelMention(item.option.selection.instanceId, item.option.selection.model)} `;
   }
   return {
     ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, replacement),
@@ -237,6 +242,8 @@ export function useComposerCommandMenu({
   onChangeDraftMessage,
   onUpdateInteractionMode,
   onUsageLimits,
+  modelOptions = [],
+  modelProviders = [],
 }: {
   readonly draftMessage: string;
   readonly ownerKey: string | null;
@@ -272,6 +279,8 @@ export function useComposerCommandMenu({
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
+  readonly modelOptions?: ReadonlyArray<ModelOption>;
+  readonly modelProviders?: ReadonlyArray<ServerProvider>;
 }) {
   const navigation = useNavigation();
   const currentThreadId = thread?.id ?? null;
@@ -546,6 +555,7 @@ export function useComposerCommandMenu({
             description: parts.length > 1 ? parts.slice(0, -1).join("/") : "",
           };
         }),
+        ...buildComposerModelItems(modelOptions, trigger.query, modelProviders),
       ];
     }
 
