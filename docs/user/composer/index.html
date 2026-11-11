@@ -201,6 +201,9 @@ speech model installed there. The choice belongs to this device; select <strong>
 existing voice input</strong> to turn it off. Someone with voice management permission can
 download, select, or remove models from <strong>Manage voice models</strong> in the same menu.
 Connections through a hub do not currently support this option.
+Model speed figures are CPU and GPU reference measurements, not timings from your
+environment. When acceleration is automatic, both are shown because transcription
+may fall back to the CPU.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.</p>
 <p>Model management requires the explicit <code>voice:manage</code> permission; ordinary pairing
@@ -323,6 +326,8 @@ stop the turn only when it is working on the goal. Other goal commands wait for
 the turn to end.</li>
 </ul>
 <h2 id="context-in-your-message">Context in your message</h2>
+<p>Type <code>@</code> and a model or provider name to name a model for the agent, for example when delegating.
+This adds a model reference to the message; it does not change the thread’s model.</p>
 <p>Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,
 a review comment from a diff or file, a preview annotation, or a file. You can type before and
 after a chip, move it by cutting and pasting, and delete it like a character. Hover a chip for

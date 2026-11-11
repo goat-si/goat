@@ -264,7 +264,8 @@ review is terminal. An open or unsynced link keeps it active.</p>
 turn off automatic watching. Automatic watches can wake the agent without keeping the thread in
 <strong>Working</strong>. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
 with <code>goat_call {path:"pull_request.watch"}</code> and keep the thread working between wakes.</p>
-<p>The server checks every two minutes. By default, failed checks, passing required checks, and other
+<p>The server checks every two minutes. Checks waiting for workflow approval are reported once and
+follow the failed-check notification setting. By default, failed checks, passing required checks, and other
 people’s comments or reviews wake the agent. Your own comments do not. Bot comments are ignored
 unless the bot is listed in <strong>Bots that count as people</strong>. Merge conflicts do not wake a thread idle
 for more than 3 days. In <strong>Settings → Organization</strong>, choose <strong>React</strong> to wake the agent immediately,

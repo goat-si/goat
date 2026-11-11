@@ -28,7 +28,9 @@ update it through that manager instead. For example, a Nix profile installation 
 <h2 id="what-carries-over">What Carries Over</h2>
 <p>GOAT discovers the models reported by Pi and exposes their supported thinking levels. The
 thinking picker marks the discovered active model’s configured level as its default without
-overriding it. Other models keep their Pi defaults when no level is selected. Threads
+overriding it. Other models keep their Pi defaults when no level is selected. When a model’s Pi
+definition advertises <code>serviceTiers</code>, GOAT offers Standard and those tiers in its model options.
+Standard uses the provider’s default; selecting a tier sends it with requests. Threads
 use Pi’s native session files for resume, rollback, and forks within the same Pi instance. Forks
 preserve the native conversation through the selected turn in the destination workspace.
 Switching providers uses portable conversation context. Extension
