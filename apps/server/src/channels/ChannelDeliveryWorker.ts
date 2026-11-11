@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -73,6 +74,7 @@ const make = Effect.gen(function* () {
   const wake = yield* ChannelWake.ChannelWake;
   const scope = yield* Effect.scope;
   const receipts = new Set<Fiber.Fiber<void, unknown>>();
+  let releasing = 0;
 
   /**
    * Records the hand-over just before an external send; a restart before it sends the row again,
@@ -89,16 +91,39 @@ const make = Effect.gen(function* () {
     const claim = { owner, deliveryId: delivery.deliveryId, attempt: delivery.attempts, now };
     return yield* ledger.markSending(claim).pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning("channel delivery hand-over not recorded", { cause }).pipe(
-          Effect.andThen(
-            ledger.recordDelivery({
+        Effect.gen(function* () {
+          yield* Effect.logWarning("channel delivery hand-over not recorded", { cause });
+          releasing += 1;
+          yield* Effect.gen(function* () {
+            const at = DateTime.formatIso(yield* DateTime.now);
+            yield* ledger.recordDelivery({
               ...claim,
-              outcome: { type: "retry", at: now, errorCode: "unknown" },
+              now: at,
+              outcome: {
+                type: "retry",
+                at: DateTime.formatIso(
+                  DateTime.addDuration(DateTime.makeUnsafe(at), Duration.seconds(5)),
+                ),
+                errorCode: "unknown",
+              },
+            });
+          }).pipe(
+            Effect.tapError((error) =>
+              Effect.logWarning("channel delivery release failed", { error }),
+            ),
+            Effect.retry({
+              schedule: Schedule.spaced("5 seconds"),
+              while: (error) => error.reason === "persistence",
             }),
-          ),
-          Effect.ignore,
-          Effect.as(false),
-        ),
+            Effect.ensuring(
+              Effect.sync(() => {
+                releasing -= 1;
+              }),
+            ),
+          );
+          yield* wake.wake;
+          return false;
+        }),
       ),
     );
   });
@@ -157,7 +182,7 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     let handled = 0;
-    for (;;) {
+    while (handled < MAX_PER_PASS && releasing === 0) {
       const [row] = yield* ledger.claimDueDeliveries({
         owner,
         now: DateTime.formatIso(yield* DateTime.now),
@@ -184,7 +209,7 @@ const make = Effect.gen(function* () {
 
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
     let handled = yield* deliverReceipts(owner);
-    while (handled < MAX_PER_PASS) {
+    while (handled < MAX_PER_PASS && releasing === 0) {
       const claimed = yield* ledger.claimDue({
         owner,
         now: DateTime.formatIso(yield* DateTime.now),

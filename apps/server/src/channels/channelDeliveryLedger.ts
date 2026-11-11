@@ -137,7 +137,7 @@ export const deliveryLedger = (
                     Effect.gen(function* () {
                       const message = decodeOutbound(row.message_json);
                       if (
-                        isInterimMessage(row, message) &&
+                        (yield* isInterimMessage(sql, row, message)) &&
                         (yield* interimAlreadyHeard(sql, row))
                       ) {
                         yield* sql`UPDATE channel_outbox SET state = 'superseded',
@@ -188,10 +188,18 @@ export const deliveryLedger = (
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            const handOverNow = DateTime.formatIso(yield* DateTime.now);
+            const deadline = DateTime.formatIso(
+              DateTime.makeUnsafe(Date.parse(handOverNow) - 60_000),
+            );
             const marked = yield* sql<{ readonly delivery_id: string }>`UPDATE channel_outbox
-              SET send_started_at = ${input.now}
+              SET send_started_at = ${handOverNow}
               WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
-                AND attempts = ${input.attempt} RETURNING delivery_id`;
+                AND attempts = ${input.attempt}
+                AND NOT EXISTS (SELECT 1 FROM channel_inbox i
+                  WHERE channel_outbox.cause_key = 'reply:' || i.input_id
+                    AND i.accepted_at <= ${deadline})
+              RETURNING delivery_id`;
             return marked.length > 0;
           }),
         )

@@ -112,6 +112,27 @@ const countingWake = (count: () => void) =>
   Layer.succeed(ChannelWake.ChannelWake)({ wake: Effect.sync(count), next: Effect.never });
 
 describe("absolute receipt delivery deadlines", () => {
+  it.effect("the hand-over refuses a receipt whose deadline elapsed after it was claimed", () =>
+    Effect.gen(function* () {
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const id = yield* receipt("expired-at-handover");
+      const before = yield* nowIso;
+      const [claimed] = yield* ledger.claimDueDeliveries({ owner, now: before, limit: 1 });
+      assert.strictEqual(claimed?.deliveryId, id);
+      yield* TestClock.setTime(60_000);
+      assert.isFalse(
+        yield* ledger.markSending({
+          owner,
+          deliveryId: id,
+          attempt: claimed!.attempts,
+          now: before,
+        }),
+      );
+      yield* ledger.expireReceipts({ owner, now: yield* nowIso });
+      assert.strictEqual(yield* ledger.getDeliveryState(id), "failed");
+    }).pipe(Effect.provide(layer(() => Effect.die("must not send")))),
+  );
+
   it.effect("a settled receipt wakes the channel loop to send the rows it held back", () => {
     let wakes = 0;
     return Effect.gen(function* () {

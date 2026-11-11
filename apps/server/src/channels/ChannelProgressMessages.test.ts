@@ -3,6 +3,8 @@ import type { ChannelReceptionInput } from "@goat/contracts";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -10,6 +12,10 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
+import * as ChannelWake from "./ChannelWake.ts";
+import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { deliveryIdFor } from "./channelIds.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
@@ -256,6 +262,137 @@ describe("one message before the answer, whatever the order", () => {
         const [moved] = yield* sql<{ readonly state: string }>`
           SELECT state FROM channel_outbox WHERE delivery_id = 'moved'`;
         assert.strictEqual(moved?.state, "superseded");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});
+
+describe("hand-over persistence recovery", () => {
+  it.effect(
+    "releases a failed hand-over after persistence recovers and sends the task's later message",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { task } = yield* startSlackTurn(harness, "release-retry");
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const failed = yield* Deferred.make<void>();
+        const sent: string[] = [];
+        let marks = 0;
+        let releases = 0;
+        const error = new ChannelLedgerError({ reason: "persistence", detail: "unavailable" });
+        const wrapped = {
+          ...ledger,
+          markSending: (input: Parameters<typeof ledger.markSending>[0]) =>
+            ++marks === 1 ? Effect.fail(error) : ledger.markSending(input),
+          recordDelivery: (input: Parameters<typeof ledger.recordDelivery>[0]) =>
+            input.outcome.type === "retry" && ++releases === 1
+              ? Deferred.succeed(failed, undefined).pipe(Effect.andThen(Effect.fail(error)))
+              : ledger.recordDelivery(input),
+        };
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const rows = ["release-first", "release-later"].map((key) => ({
+          deliveryId: deliveryIdFor(key),
+          causeKey: key,
+          taskId: task.taskId,
+          message: {
+            deliveryId: deliveryIdFor(key),
+            destination: task.originAddress,
+            kind: "question" as const,
+            text: key,
+            taskId: task.taskId,
+          },
+        }));
+        yield* ledger.enqueueDeliveries(rows, now);
+        const services = ChannelDeliveryWorker.layer.pipe(
+          Layer.provide(Layer.succeed(ChannelLedger.ChannelLedger)(wrapped)),
+          Layer.provide(
+            Layer.mock(ChannelGateway.ChannelGateway)({
+              send: (message) =>
+                Effect.sync(() => {
+                  sent.push(message.text);
+                  return { deliveryId: message.deliveryId, acceptedAt: now };
+                }),
+            }),
+          ),
+          Layer.provide(ChannelWake.layer),
+        );
+        yield* Effect.gen(function* () {
+          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+          const pass = yield* worker
+            .deliverDue((yield* ChannelRuntime.ChannelRuntime).ownerToken)
+            .pipe(Effect.forkChild);
+          yield* Effect.raceFirst(
+            Deferred.await(failed),
+            Fiber.join(pass).pipe(Effect.andThen(Effect.die("release was not attempted"))),
+          );
+          yield* TestClock.adjust("5 seconds");
+          yield* Fiber.join(pass);
+          assert.strictEqual(
+            yield* ledger.getDeliveryState(deliveryIdFor("release-first")),
+            "pending",
+          );
+          assert.deepStrictEqual(sent, []);
+          yield* TestClock.adjust("5 seconds");
+          yield* worker.deliverDue((yield* ChannelRuntime.ChannelRuntime).ownerToken);
+          assert.deepStrictEqual(sent, ["release-first", "release-later"]);
+        }).pipe(Effect.provide(Layer.fresh(services)));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});
+
+describe("pre-upgrade narration", () => {
+  it.effect(
+    "counts legacy progress and suppresses legacy placement and moves, but sends questions and failures",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { runtime, task, sql, sentSince, ackKey } = yield* startSlackTurn(
+          harness,
+          "legacy-interim",
+        );
+        yield* sql`UPDATE channel_outbox SET state = 'failed' WHERE cause_key = ${ackKey}`;
+        const [ack] = yield* sql<{
+          readonly message_json: string;
+          readonly destination_kind: string;
+        }>`
+        SELECT message_json, destination_kind FROM channel_outbox WHERE cause_key = ${ackKey}`;
+        const [version] = yield* sql<{ readonly n: number }>`
+        SELECT MAX(task_version) AS n FROM channel_task_events WHERE task_id = ${task.taskId}`;
+        const rows = [
+          ["legacy-progress", "task.progress", "receipt", "Working"],
+          ["legacy-placement", "task.dispatch.claimed", "receipt", "Placed"],
+          ["legacy-move", "task.moved", "receipt", "Moved"],
+          ["legacy-question", "task.question.opened", "question", "Proceed?"],
+          ["legacy-failure", "task.failed", "failure", "Failed"],
+        ] as const;
+        for (const [index, [id, type, kind, text]] of rows.entries()) {
+          yield* sql`INSERT INTO channel_task_events (event_id, task_id, task_version, type, event_json, occurred_at)
+          VALUES (${id}, ${task.taskId}, ${version!.n + index + 1}, ${type}, '{}', '1970-01-01T00:00:00.000Z')`;
+          yield* sql`INSERT INTO channel_outbox ${sql.insert({
+            delivery_id: id,
+            cause_key: "narration:" + id + ":origin",
+            input_id: null,
+            task_id: task.taskId,
+            kind,
+            destination_kind: ack!.destination_kind,
+            message_json: JSON.stringify({
+              ...JSON.parse(ack!.message_json),
+              deliveryId: id,
+              kind,
+              text,
+              taskId: task.taskId,
+            }),
+            state: "pending",
+            attempts: 0,
+            next_attempt_at: "1970-01-01T00:00:00.000Z",
+            created_at: "1970-01-01T00:00:00.000Z",
+            updated_at: "1970-01-01T00:00:00.000Z",
+          })}`;
+        }
+        const before = harness.slackSent.length;
+        yield* runtime.drain;
+        assert.deepStrictEqual(sentSince(before), ["Working", "Proceed?", "Failed"]);
       }).pipe(Effect.provide(harness.layer));
     },
   );
