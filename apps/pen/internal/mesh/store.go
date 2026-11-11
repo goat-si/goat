@@ -456,9 +456,6 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 		return ErrRemoved
 	case ok && disk.MeshID != s.MeshID && !adopt:
 		return ErrReplaced
-	case ok && disk.MeshID == s.MeshID && f.Shares:
-		// Under shares a record the set let go stays gone: no union with the file.
-		f.SelfN = max(f.SelfN, disk.SelfN)
 	case ok && disk.MeshID == s.MeshID:
 		have := make(map[string]bool, len(recs))
 		for _, r := range recs {
@@ -472,7 +469,13 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 		f.SelfN = max(f.SelfN, disk.SelfN)
 	}
 	if f.Shares {
-		f.Records = canonicalOrder(recs, bareOf(byHashOf(recs)))
+		// Another process may have written records this store has not seen: keep the shares of both.
+		kept, _ := selectShares(recs)
+		recs = recs[:0]
+		for _, r := range kept {
+			recs = append(recs, r)
+		}
+		f.Records = canonicalOrder(recs, bareOf(kept))
 	} else {
 		f.Records = CanonicalOrder(recs)
 	}
