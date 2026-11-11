@@ -192,6 +192,11 @@ describe("discoverGrokSkills", () => {
 
       expect(spawnOptions[0]?.env).toEqual({
         GROK_DISABLE_AUTOUPDATER: "1",
+        MISE_OFFLINE: "1",
+        npm_config_offline: "true",
+        NPM_CONFIG_OFFLINE: "true",
+        UV_OFFLINE: "1",
+        COREPACK_ENABLE_NETWORK: "0",
         GROK_HOME: "/home/dev/.grok",
       });
       expect(environment.GROK_DISABLE_AUTOUPDATER).toBe("0");

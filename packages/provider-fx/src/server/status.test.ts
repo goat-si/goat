@@ -77,6 +77,27 @@ const check = (statusJson: string, versionDelay: Duration.Input = 0) =>
   }).pipe(Effect.provide(NodeServices.layer));
 
 describe("checkFxProviderStatus", () => {
+  it.effect("does not let a missing mise shim install fx during a status probe", () =>
+    Effect.gen(function* () {
+      let installed = false;
+      const spawner = ChildProcessSpawner.make((command) => {
+        const offline =
+          ChildProcess.isStandardCommand(command) && command.options.env?.MISE_OFFLINE === "1";
+        if (!offline) installed = true;
+        return Effect.succeed(
+          offline
+            ? processHandle("mise ERROR tool fx is not installed\nmise Version: 2026.11.5", 1)
+            : processHandle("fx 0.0.13", 0),
+        );
+      });
+      const status = yield* checkFxProviderStatus(settings, {}).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.isFalse(installed);
+      assert.isFalse(status.installed);
+      assert.isNull(status.version);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("reports a deleted process cwd as a working directory failure", () =>
     Effect.gen(function* () {
       using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {

@@ -105,6 +105,35 @@ export function isCommandMissingCause(error: unknown): boolean {
   return error instanceof PlatformError.PlatformError && error.reason._tag === "NotFound";
 }
 
+export { providerProbeEnvironment } from "./probeEnvironment.ts";
+
+export function isMissingMiseToolResult(result: CommandResult): boolean {
+  const output = `${result.stdout}\n${result.stderr}`;
+  return (
+    result.code !== 0 &&
+    /\bmise\b/i.test(output) &&
+    /not installed|not found|no versions found|failed to install/i.test(output)
+  );
+}
+
+export function isMissingProbeToolResult(result: CommandResult): boolean {
+  if (isMissingMiseToolResult(result)) return true;
+  const output = `${result.stdout}\n${result.stderr}`;
+  return (
+    result.code !== 0 &&
+    (/\bENOTCACHED\b/i.test(output) ||
+      /\buv\b[\s\S]*\boffline\b[\s\S]*(?:not found|not available|no cached)/i.test(output) ||
+      /corepack[\s\S]*(?:network access is disabled|COREPACK_ENABLE_NETWORK)/i.test(output))
+  );
+}
+
+export function parseCliVersionResult(
+  result: CommandResult,
+  parse: (output: string) => string | null = parseGenericCliVersion,
+): string | null {
+  return result.code === 0 ? parse(`${result.stdout}\n${result.stderr}`) : null;
+}
+
 function withEscalation(input: ChildProcess.Command): ChildProcess.Command {
   if (ChildProcess.isStandardCommand(input)) {
     return ChildProcess.make(input.command, input.args, {
@@ -135,7 +164,11 @@ export const spawnAndCollect = Effect.fn("snapshotProbe.spawnAndCollect")(functi
   );
 
   const result: CommandResult = { stdout, stderr, code: exitCode };
-  if (yield* isWindowsCommandNotFound(exitCode, stderr)) {
+  const missingMiseTool =
+    ChildProcess.isStandardCommand(command) &&
+    command.options.env?.MISE_OFFLINE === "1" &&
+    isMissingProbeToolResult(result);
+  if (missingMiseTool || (yield* isWindowsCommandNotFound(exitCode, stderr))) {
     return yield* new ProviderCommandNotFoundError({
       binaryPath,
       exitCode,

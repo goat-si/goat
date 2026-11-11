@@ -7,6 +7,7 @@ import {
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
 import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver";
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
+import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";
@@ -353,12 +354,18 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   const runCommand = Effect.fn("CodexInstallation.runCommand")(function* (
     command: string,
     args: ReadonlyArray<string>,
+    env?: NodeJS.ProcessEnv,
   ) {
-    const resolved = yield* resolveSpawnCommand(command, args).pipe(
-      Effect.provideService(HostProcess.Platform, platform),
-    );
+    const resolved = yield* resolveSpawnCommand(
+      command,
+      args,
+      env === undefined ? {} : { env },
+    ).pipe(Effect.provideService(HostProcess.Platform, platform));
     const child = yield* spawner.spawn(
-      ChildProcess.make(resolved.command, resolved.args, { shell: resolved.shell }),
+      ChildProcess.make(resolved.command, resolved.args, {
+        shell: resolved.shell,
+        ...(env === undefined ? {} : { env }),
+      }),
     );
     const [output, , exitCode] = yield* Effect.all(
       [
@@ -377,12 +384,14 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   }, Effect.scoped);
   const probeStartupConfig = Effect.fn("CodexInstallation.probeStartupConfig")(
     function* (executablePath: string) {
-      const resolved = yield* resolveSpawnCommand(executablePath, [
-        "app-server",
-        "--print-startup-config",
-      ]).pipe(Effect.provideService(HostProcess.Platform, platform));
+      const env = providerProbeEnvironment(environment);
+      const resolved = yield* resolveSpawnCommand(
+        executablePath,
+        ["app-server", "--print-startup-config"],
+        { env },
+      ).pipe(Effect.provideService(HostProcess.Platform, platform));
       const child = yield* spawner.spawn(
-        ChildProcess.make(resolved.command, resolved.args, { shell: resolved.shell }),
+        ChildProcess.make(resolved.command, resolved.args, { shell: resolved.shell, env }),
       );
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [
@@ -483,13 +492,21 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       let startupCandidate: CodexExecutable | null = null;
       const executable = yield* Effect.gen(function* () {
         if (candidate === undefined) {
-          const output = yield* runCommand(executablePath, ["--version"]);
+          const output = yield* runCommand(
+            executablePath,
+            ["--version"],
+            diagnose ? providerProbeEnvironment(environment) : undefined,
+          );
           const version = /^codex-cli (\d+\.\d+\.\d+)$/u.exec(output.trim())?.[1];
           if (!version) return null;
           // Prereleases retain the existing conservative version policy. The
           // stable gate stays off until 0.164; 0.163 has no one-shot flag.
           if (!satisfiesSemverRange(version, ">=0.164.0"))
-            yield* runCommand(executablePath, ["app-server", "--help"]);
+            yield* runCommand(
+              executablePath,
+              ["app-server", "--help"],
+              diagnose ? providerProbeEnvironment(environment) : undefined,
+            );
           candidate = { executablePath, source: "local", version, managedVersionDirectory: null };
         }
         if (!candidate || !diagnose || !satisfiesSemverRange(candidate.version, ">=0.164.0"))
@@ -513,7 +530,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       );
       // Config and cloud requirements can change without touching the binary.
       // Cache discovery only; every status resolution gets a fresh diagnostic.
-      localCache.set(executablePath, { fingerprint, executable: candidate ?? null });
+      if (candidate) localCache.set(executablePath, { fingerprint, executable: candidate });
       if (!executable) return null;
       const advisory = yield* compatibility(executable.version);
       return advisory?.status === "supported" ? executable : null;

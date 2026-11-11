@@ -18,11 +18,49 @@ import {
   classifySpawnFailure,
   collectStreamAsString,
   isCommandMissingCause,
+  isMissingMiseToolResult,
+  isMissingProbeToolResult,
+  parseCliVersionResult,
+  providerProbeEnvironment,
   parseGenericCliVersion,
   ProviderCommandNotFoundError,
   providerModelsFromSettings,
   spawnAndCollect,
 } from "./snapshotProbe.ts";
+
+it("keeps mise offline for probes and never treats its error version as the CLI version", () => {
+  const environment = { PATH: "/bin", MISE_OFFLINE: "0" };
+  expect(providerProbeEnvironment(environment)).toEqual({
+    PATH: "/bin",
+    MISE_OFFLINE: "1",
+    npm_config_offline: "true",
+    NPM_CONFIG_OFFLINE: "true",
+    UV_OFFLINE: "1",
+    COREPACK_ENABLE_NETWORK: "0",
+  });
+  expect(environment.MISE_OFFLINE).toBe("0");
+  const result = {
+    code: 1,
+    stdout: "",
+    stderr: "mise ERROR Failed to install tool: no versions found\nmise Version: 2026.11.5",
+  };
+  expect(isMissingMiseToolResult(result)).toBe(true);
+  expect(parseCliVersionResult(result)).toBeNull();
+  expect(isMissingMiseToolResult({ ...result, code: 0 })).toBe(false);
+  expect(isMissingMiseToolResult({ code: 1, stdout: "", stderr: "tool reported an error" })).toBe(
+    false,
+  );
+  expect(
+    isMissingProbeToolResult({ code: 1, stdout: "", stderr: "npm error code ENOTCACHED" }),
+  ).toBe(true);
+  expect(
+    isMissingProbeToolResult({
+      code: 1,
+      stdout: "",
+      stderr: "corepack: network access is disabled",
+    }),
+  ).toBe(true);
+});
 
 describe("spawn failure diagnosis", () => {
   it("reports a deleted inherited cwd as inaccessible after a spawn failure (#2476)", () => {

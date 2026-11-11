@@ -43,6 +43,20 @@ function catalogWithInspection(
 }
 
 describe("acpRegistrySnapshotReadiness", () => {
+  it("marks an unprepared agent as not installed when discovery cannot resolve it", () => {
+    const snapshot = buildCheckedAcpRegistrySnapshot({
+      ...identity,
+      settings: decodeSettings({ agentId: "test-agent" }),
+      checkedAt: "2026-08-13T10:00:00.000Z",
+      inspection: { status: "ready", agentId: "test-agent", version: "1.0.0", distribution: "npx" },
+      probeError: new AcpRegistryOperationError({
+        reason: "runner_unavailable",
+        message: "Agent is not prepared",
+      }),
+    });
+    expect(snapshot.installed).toBe(false);
+    expect(snapshot.version).toBeNull();
+  });
   it("treats a live empty command advertisement as an authoritative replacement", () => {
     const provider = buildCheckedAcpRegistrySnapshot({
       ...identity,
@@ -394,7 +408,14 @@ describe("acpRegistrySnapshotReadiness", () => {
         ),
       );
 
-      expect(receivedEnvironment).toBe(environment);
+      expect(receivedEnvironment).toEqual({
+        ...environment,
+        MISE_OFFLINE: "1",
+        npm_config_offline: "true",
+        NPM_CONFIG_OFFLINE: "true",
+        UV_OFFLINE: "1",
+        COREPACK_ENABLE_NETWORK: "0",
+      });
       expect(snapshot).toMatchObject({
         auth: { status: "unknown" },
         models: [{ slug: "agent-model" }],
