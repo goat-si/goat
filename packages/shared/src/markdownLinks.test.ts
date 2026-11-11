@@ -158,6 +158,14 @@ describe("resolveMarkdownFileLinkTarget", () => {
     expect(resolveMarkdownFileLinkTarget("./foo%5Cbar.ts", "/repo")).toBe("/repo/./foo\\bar.ts");
   });
 
+  // A POSIX file name may contain a backslash, so only a Windows cwd treats it as a separator.
+  it.each(["src%5CExample.cs", "src\\Example.cs"])(
+    "does not split %s at its backslash against a POSIX cwd",
+    (href) => {
+      expect(resolveMarkdownFileLinkTarget(href, "/repo")).not.toBe("/repo/src/Example.cs");
+    },
+  );
+
   it("does not treat filename line references as external schemes", () => {
     expect(resolveMarkdownFileLinkTarget("script.ts:10", "/Users/alex/project")).toBe(
       "/Users/alex/project/script.ts:10",

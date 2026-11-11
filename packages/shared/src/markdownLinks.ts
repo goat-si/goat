@@ -285,7 +285,10 @@ function hasExternalScheme(path: string): boolean {
   return !POSITION_ONLY_PATTERN.test(rest);
 }
 
-export function parseMarkdownFileLink(href: string): FilePathPosition | null {
+export function parseMarkdownFileLink(
+  href: string,
+  options: { readonly backslashSeparators?: boolean } = {},
+): FilePathPosition | null {
   const normalized = normalizeMarkdownLinkDestination(href);
   if (normalized.length === 0 || normalized.startsWith("#") || normalized.startsWith("//")) {
     return null;
@@ -302,7 +305,9 @@ export function parseMarkdownFileLink(href: string): FilePathPosition | null {
   // `src\a.ts` is Windows-relative. A link that already parses keeps its spelling, since POSIX
   // names may contain `\`; a rooted `\\host` or `\foo` would change root if rewritten.
   if (position || /^[\\/]/.test(path) || isWindowsAbsolutePath(path)) return position;
-  return path.includes("\\") ? parseFilePathLink(path.replaceAll("\\", "/"), hash) : null;
+  return options.backslashSeparators && path.includes("\\")
+    ? parseFilePathLink(path.replaceAll("\\", "/"), hash)
+    : null;
 }
 
 function parseFilePathLink(path: string, hash: string): FilePathPosition | null {
@@ -404,7 +409,10 @@ export function resolveMarkdownFileLinkTarget(
   baseDir: string | undefined = cwd,
 ): string | null {
   if (!href) return null;
-  const target = parseMarkdownFileLink(href);
+  // Only a Windows base treats `\` as a separator; on POSIX it can be part of a file name.
+  const target = parseMarkdownFileLink(href, {
+    backslashSeparators: baseDir !== undefined && isWindowsAbsolutePath(baseDir),
+  });
   if (!target) return null;
 
   const pathWithPosition = formatFilePathPosition(target);
