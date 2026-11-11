@@ -117,15 +117,15 @@ it.effect(
     }),
 );
 
-it.effect("checks that overlap share one listing of the process", () =>
+/** Two checks overlap: the second starts while the first waits for the process's answer. */
+const overlappingChecks = (catalog: ReadonlyArray<ServerProviderModel>) =>
   Effect.gen(function* () {
     const lists = yield* Ref.make(0);
     const listing = yield* Deferred.make<void>();
     const answer = yield* Deferred.make<void>();
-    // No GOAT catalog, so an unlisted model is unconfirmed and the answer can be shared.
     const modelStatus = makeCodexModelArrivals({
-      atStart: [],
-      offered: Effect.succeed([]),
+      atStart: catalog.filter((entry) => entry.slug !== added),
+      offered: Effect.succeed(catalog),
       listServed: Ref.update(lists, (count) => count + 1).pipe(
         Effect.andThen(Deferred.succeed(listing, undefined)),
         Effect.andThen(Deferred.await(answer)),
@@ -137,11 +137,21 @@ it.effect("checks that overlap share one listing of the process", () =>
     // The second check runs until it waits, as an open started meanwhile on another thread would.
     const second = yield* modelStatus(added).pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.succeed(answer, undefined);
-    assert.deepStrictEqual(
-      [yield* Fiber.join(first), yield* Fiber.join(second)],
-      ["unconfirmed", "unconfirmed"],
-    );
-    assert.strictEqual(yield* Ref.get(lists), 1);
+    const answers = [yield* Fiber.join(first), yield* Fiber.join(second)];
+    return { answers, lists: yield* Ref.get(lists) };
+  });
+
+it.effect("checks that overlap share one listing of the process, refusing or not", () =>
+  Effect.gen(function* () {
+    // Without GOAT's catalog an unlisted model is unconfirmed; with it, the model is predated.
+    assert.deepStrictEqual(yield* overlappingChecks([]), {
+      answers: ["unconfirmed", "unconfirmed"],
+      lists: 1,
+    });
+    assert.deepStrictEqual(yield* overlappingChecks([model(known), model(added)]), {
+      answers: ["predated", "predated"],
+      lists: 1,
+    });
   }),
 );
 

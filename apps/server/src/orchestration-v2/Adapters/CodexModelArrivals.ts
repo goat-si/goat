@@ -82,8 +82,9 @@ export const makeCodexModelArrivals = <E>(input: {
   const atStart = offeredFromCatalog(input.atStart);
   let served: ReadonlySet<string> | undefined;
   let asked: { readonly atMs: number; readonly answered: boolean } | undefined;
+  let listings = 0;
   let warned = false;
-  // Overlapping checks wait for one listing and then reuse its answer.
+  // Overlapping checks take turns; one that waited behind a listing reuses its answer.
   const listing = Semaphore.makeUnsafe(1);
   const lists = input.listServed.pipe(
     Effect.tap((slugs) => Effect.sync(() => (served = new Set(slugs)))),
@@ -92,6 +93,7 @@ export const makeCodexModelArrivals = <E>(input: {
     Effect.tap((answer) =>
       Effect.map(Clock.currentTimeMillis, (atMs) => {
         asked = { atMs, answered: Option.isSome(answer) };
+        listings += 1;
       }),
     ),
   );
@@ -103,6 +105,7 @@ export const makeCodexModelArrivals = <E>(input: {
     const entry = offered.find((candidate) => candidate.slug === model);
     if (entry?.isCustom === true) return "ready" as ProviderModelStatus;
     const catalogued = offeredFromCatalog(offered).size > 0;
+    const listingsBefore = listings;
     // Exact: a provider's own catalog matches slugs exactly, and GOAT cannot see which catalog it uses.
     const listed: Option.Option<boolean> =
       served?.has(model) === true
@@ -113,11 +116,13 @@ export const makeCodexModelArrivals = <E>(input: {
               Effect.gen(function* () {
                 if (served?.has(model) === true) return Option.some(true);
                 const last = asked;
+                // A listing that finished while this check waited is as recent as the check itself.
+                const waited = last !== undefined && listings > listingsBefore;
                 const quiet =
                   last !== undefined &&
                   (yield* Clock.currentTimeMillis) - last.atMs < LISTING_QUIET_MS;
                 // Codex can learn models online, so a miss that would refuse is always asked again.
-                if (quiet && !(last.answered && catalogued))
+                if (waited || (quiet && !(last.answered && catalogued)))
                   return last.answered ? Option.some(false) : Option.none<boolean>();
                 return Option.map(yield* lists, (slugs) => slugs.includes(model));
               }),
