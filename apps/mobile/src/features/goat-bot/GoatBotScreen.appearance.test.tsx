@@ -14,6 +14,7 @@ const screenSession = vi.hoisted(() => ({
   supportsTaskThreads: false,
   requestedTaskId: undefined as string | null | undefined,
   workTaskId: undefined as string | undefined,
+  homeOpen: false,
   chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
 }));
 vi.mock("./MobileBotWork", () => ({
@@ -21,8 +22,10 @@ vi.mock("./MobileBotWork", () => ({
     taskId?: string;
     taskCard?: ReactNode;
     chatTasks?: ReadonlyArray<{ readonly key: string }>;
+    open?: boolean;
   }) => {
     screenSession.workTaskId = props.taskId;
+    screenSession.homeOpen = props.open ?? false;
     screenSession.chatTasks = props.chatTasks ?? [];
     return <section aria-label="Task header">{props.taskCard}</section>;
   },
@@ -32,7 +35,12 @@ const list = vi.hoisted(() => ({
   scrollToIndex: vi.fn(),
 }));
 vi.mock("./GoatBotFace", () => ({
-  GoatBotHeaderFace: () => null,
+  GoatBotHeaderFace: (props: { title: string; onPress?: () => void }) =>
+    props.onPress ? (
+      <button aria-label={`Chip ${props.title}`} onClick={props.onPress}>
+        {props.title}
+      </button>
+    ) : null,
   GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
     <i data-face={`${props.state}:${props.inView}`} />
   ),
@@ -140,6 +148,21 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+const models = vi.hoisted(() => ({
+  main: null as null | Record<string, unknown>,
+  member: null as null | Record<string, unknown>,
+}));
+vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => models.main }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({
+  useMobileGoatBotMemberModelMenu: () => models.member,
+}));
+vi.mock("./GoatBotModelPill", () => ({
+  GoatBotModelPill: (props: { menu: { label: string; opens: boolean } }) => (
+    <button aria-label="Model" data-opens={String(props.menu.opens)}>
+      {props.menu.label}
+    </button>
+  ),
+}));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
@@ -304,6 +327,7 @@ it("keeps answer chips and the send button off the retired blue message palette"
   await rowView.unmount();
 
   const screenView = await render(<GoatBotScreen visible />);
+  await typeInto(screenView.container, "Hello");
   const send = screenView.container.querySelector('[aria-label="Send message"]');
   const composer = screenView.container.querySelector('[aria-label="Message GOAT Bot"]');
   expect(JSON.parse(composer?.getAttribute("data-style") ?? "null")).toMatchObject({
@@ -325,6 +349,73 @@ it("keeps answer chips and the send button off the retired blue message palette"
   });
   expect(screenView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await screenView.unmount();
+});
+
+it("shows Send only once there is something to send", async () => {
+  const view = await render(<GoatBotScreen visible />);
+  const send = () => view.container.querySelector('[aria-label="Send message"]');
+  expect(send()).toBeNull();
+  await typeInto(view.container, "Hello");
+  expect(send()).not.toBeNull();
+  await typeInto(view.container, "   ");
+  expect(send()).toBeNull();
+  await view.unmount();
+});
+
+it("puts the bot's model in the composer, opening a member's menu even when it cannot change", async () => {
+  const select = vi.fn();
+  models.main = {
+    label: "gpt-6-luna",
+    accessibilityLabel: "GOAT Bot model: gpt-6-luna",
+    items: [],
+    disabled: true,
+    select,
+  };
+  const main = await render(<GoatBotScreen visible />);
+  const pill = () => main.container.querySelector('[aria-label="Model"]');
+  expect(pill()?.textContent).toBe("gpt-6-luna");
+  expect(pill()?.getAttribute("data-opens")).toBe("false");
+  await main.unmount();
+
+  models.member = {
+    label: "claude-opus",
+    accessibilityLabel: "Scout model: claude-opus",
+    title: "You can't change Scout's model",
+    canChange: false,
+    items: [],
+    select,
+  };
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+    avatar: null,
+  } as unknown as import("@goat/contracts").BotProfile;
+  const member = await render(<GoatBotScreen visible member={scout} />);
+  const memberPill = member.container.querySelector('[aria-label="Model"]');
+  expect(memberPill?.textContent).toBe("claude-opus");
+  expect(memberPill?.getAttribute("data-opens")).toBe("true");
+  await member.unmount();
+  models.main = null;
+  models.member = null;
+});
+
+it("opens the bot's home from the header chip, which a task's own screen does not have", async () => {
+  const chat = await render(<GoatBotScreen visible />);
+  const chip = chat.container.querySelector<HTMLButtonElement>('[aria-label="Chip GOAT Bot"]');
+  expect(screenSession.homeOpen).toBe(false);
+  await act(async () => chip?.click());
+  expect(screenSession.homeOpen).toBe(true);
+  await chat.unmount();
+
+  screenSession.supportsTaskThreads = true;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const taskView = await render(<GoatBotScreen visible taskId={task} />);
+  expect(taskView.container.querySelector('[aria-label="Chip GOAT Bot"]')).toBeNull();
+  await taskView.unmount();
+  screenSession.supportsTaskThreads = false;
 });
 
 it("marks what the bot said since the last read, and points up to it until the person catches up", async () => {

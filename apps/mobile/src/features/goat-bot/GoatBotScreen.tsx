@@ -37,7 +37,7 @@ import { botThreadDetail, openBotThreadAction } from "./goatBotThreadNavigation"
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
-import { GoatBotHeaderFace } from "./GoatBotFace";
+import { GoatBotChipFace, GoatBotHeaderFace } from "./GoatBotFace";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
@@ -51,8 +51,12 @@ import {
   goatBotRowGap,
   goatBotTime,
 } from "./GoatBotMessageParts";
+import { GoatBotModelPill } from "./GoatBotModelPill";
+import { goatBotModelPillMenu } from "./goatBotModelPillMenu";
 import { GoatBotReplyCards } from "./GoatBotReplyCards";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
+import { useMobileGoatBotModelMenu } from "./useMobileGoatBotModel";
+import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
 import {
   type GoatBotChatItem,
   GoatBotUnreadDividerRow,
@@ -289,6 +293,10 @@ export function GoatBotScreen(props: {
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
   const [text, setText] = useState("");
+  const [homeOpen, setHomeOpen] = useState(false);
+  const openHome = useCallback(() => setHomeOpen(true), []);
+  const memberModelMenu = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
+  const mainModelMenu = useMobileGoatBotModelMenu();
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const draftFiles = useRef(new Map<string, () => void>());
   const pickerLifetime = useRef<AbortController | null>(null);
@@ -394,7 +402,9 @@ export function GoatBotScreen(props: {
   const taskCard = taskId
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
-  const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
+  const hasDraft = text.trim().length > 0 || attachments.length > 0;
+  const canSubmit = session.canSend && hasDraft;
+  const modelMenu = goatBotModelPillMenu(memberModelMenu, mainModelMenu, member !== null);
   const chatTasks = useMemo(
     () =>
       taskId === undefined && session.supportsTaskThreads
@@ -409,6 +419,7 @@ export function GoatBotScreen(props: {
           activity={session.activity ?? null}
           title={title}
           emoji={botEmoji}
+          onPress={taskId ? undefined : openHome}
           {...(member
             ? {
                 conversation: {
@@ -422,6 +433,24 @@ export function GoatBotScreen(props: {
       <View style={{ paddingTop: topInset }}>
         <MobileBotWork
           taskId={taskId}
+          open={homeOpen}
+          onOpenChange={setHomeOpen}
+          chipFace={
+            Platform.OS === "android" ? (
+              <GoatBotChipFace
+                activity={session.activity ?? null}
+                emoji={botEmoji}
+                {...(member
+                  ? {
+                      conversation: {
+                        environmentId: member.environmentId,
+                        threadId: member.sessionThreadId,
+                      },
+                    }
+                  : {})}
+              />
+            ) : null
+          }
           visible={props.visible}
           onOpenTask={onSelectTask}
           onOpenThread={onSelectThread}
@@ -586,7 +615,31 @@ export function GoatBotScreen(props: {
           attachments={attachments}
           onRemove={removeAttachment}
         />
-        <View className="flex-row items-end gap-2">
+        {/* Two rows on a phone: the field, then attach, model and send under the thumb. */}
+        <TextInput
+          accessibilityLabel={`Message ${title}`}
+          placeholder={`Message ${title}`}
+          placeholderTextColorClassName="accent-placeholder"
+          value={text}
+          onChangeText={setText}
+          multiline
+          editable={session.canSend}
+          accessibilityState={{ disabled: !session.canSend }}
+          onContentSizeChange={(event) =>
+            setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
+          }
+          className="px-3 py-2 text-foreground"
+          style={{
+            height: Math.min(inputHeight, inputMaxHeight),
+            minHeight: 44,
+            borderRadius: 22,
+            borderWidth: 0.5,
+            borderColor: themeAppearance === "light" ? "#C6C6C8" : "#545458",
+            backgroundColor: themeAppearance === "light" ? "#F2F2F7" : "#1C1C1E",
+            ...bodyText,
+          }}
+        />
+        <View className="min-h-[44px] flex-row items-center gap-2">
           {support ? (
             <GoatBotAttachButton
               disabled={!session.canSend}
@@ -612,48 +665,30 @@ export function GoatBotScreen(props: {
               }}
             />
           ) : null}
-          <TextInput
-            accessibilityLabel={`Message ${title}`}
-            placeholder={`Message ${title}`}
-            placeholderTextColorClassName="accent-placeholder"
-            value={text}
-            onChangeText={setText}
-            multiline
-            editable={session.canSend}
-            accessibilityState={{ disabled: !session.canSend }}
-            onContentSizeChange={(event) =>
-              setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
-            }
-            className="flex-1 px-3 py-2 text-foreground"
-            style={{
-              height: Math.min(inputHeight, inputMaxHeight),
-              minHeight: 44,
-              borderRadius: 22,
-              borderWidth: 0.5,
-              borderColor: themeAppearance === "light" ? "#C6C6C8" : "#545458",
-              backgroundColor: themeAppearance === "light" ? "#F2F2F7" : "#1C1C1E",
-              ...bodyText,
-            }}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-            disabled={!canSubmit}
-            onPress={send}
-            className="items-center justify-center"
-            style={{
-              width: 44,
-              height: 44,
-              opacity: canSubmit ? 1 : 0.45,
-            }}
-          >
-            <View
-              className="items-center justify-center bg-composer-send"
-              style={{ width: 28, height: 28, borderRadius: 14 }}
+          {modelMenu ? <GoatBotModelPill menu={modelMenu} /> : null}
+          <View className="flex-1" />
+          {/* Send shows only once there is something to send. */}
+          {hasDraft ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              disabled={!canSubmit}
+              onPress={send}
+              className="items-center justify-center"
+              style={{
+                width: 44,
+                height: 44,
+                opacity: canSubmit ? 1 : 0.45,
+              }}
             >
-              <Text className="text-xl font-semibold text-white">↑</Text>
-            </View>
-          </Pressable>
+              <View
+                className="items-center justify-center bg-composer-send"
+                style={{ width: 28, height: 28, borderRadius: 14 }}
+              >
+                <Text className="text-xl font-semibold text-white">↑</Text>
+              </View>
+            </Pressable>
+          ) : null}
         </View>
       </Animated.View>
     </KeyboardAvoidingView>
