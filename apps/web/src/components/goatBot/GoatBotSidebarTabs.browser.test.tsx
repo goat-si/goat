@@ -44,7 +44,10 @@ vi.mock("@tanstack/react-router", async (original) => ({
 vi.mock("./useGoatBotHome", () => ({ useGoatBotHome: () => undefined }));
 vi.mock("./useGoatBotSession", () => ({ useGoatBotEnabled: () => ({ enabled: true }) }));
 vi.mock("./useGoatBotWaitingCount", () => ({ useGoatBotWaitingCount: () => 3 }));
-vi.mock("./useGoatBotMemberStatus", () => ({ useGoatBotMemberWaitingCount: () => 0 }));
+vi.mock("./useGoatBotMemberStatus", () => ({
+  useGoatBotMemberWaitingCount: () => 0,
+  useGoatBotMemberStatus: () => ({ waitingCount: 0, latest: undefined }),
+}));
 vi.mock("~/state/entities", async (original) => {
   const entities = await original<typeof import("~/state/entities")>();
   return {
