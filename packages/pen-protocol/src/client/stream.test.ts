@@ -165,6 +165,15 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     expect(await c.stream.read()).toBeNull();
   });
 
+  it("after an earlier close too, a bad held record stops the drain: DATA after it is never read", async () => {
+    const c = await connected({
+      beforeStream: [Uint8Array.of(9), data(Uint8Array.of(42))],
+      closeBefore: 1000,
+    });
+    expect(c.stream.stats().buffered).toBe(0);
+    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
+  });
+
   it("records held before the stream opens stop at a bad one: DATA after it is never read", async () => {
     const c = await connected({ beforeStream: [Uint8Array.of(9), data(Uint8Array.of(1, 2, 3))] });
     expect(c.socket.closedWith).toBe(4400);
