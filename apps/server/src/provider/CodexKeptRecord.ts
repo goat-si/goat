@@ -152,3 +152,16 @@ export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(
   yield* input.unlist;
   return "unlist" as const;
 });
+
+export const fenceCount = (record: DetachedAppServerRecord) =>
+  (record.goalBlocks?.length ?? 0) + (record.stopObligations?.length ?? 0);
+
+/** A fence written after settleKept removed its record restores it; any other write still fails. */
+export const restoreRetired = <E>(
+  retired: DetachedAppServerRecord | undefined,
+  change: (record: DetachedAppServerRecord) => DetachedAppServerRecord,
+  error: E,
+) =>
+  retired !== undefined && fenceCount(change(retired)) > 0
+    ? Effect.succeed(retired)
+    : Effect.fail(error);

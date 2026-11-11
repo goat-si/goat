@@ -14,7 +14,7 @@ import type { CodexAppServerMessageChannel } from "effect-codex-app-server/clien
 import { blocksSession, recordKey, servesSession } from "./CodexRecordSessions.ts";
 import { goalKey, sameGoal, sameStop, stopKey } from "./CodexFenceKeys.ts";
 import { CodexDetachedAppServerError } from "./CodexDetachedAppServerError.ts";
-import { type KeptRecordOpen, settleKeptRecord } from "./CodexKeptRecord.ts";
+import * as KeptRecord from "./CodexKeptRecord.ts";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
@@ -226,6 +226,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const recordGate = yield* Semaphore.make(1);
   const fences = new Map<string, DetachedAppServerRecord>();
   const failedFences = new Map<string, ThreadId>();
+  // Records settleKept removed (at most 32); a fence written after removal restores its record.
+  const retiredRecords = new Map<string, DetachedAppServerRecord>();
   const shuttingDown = yield* Ref.make(false);
   const blocked = yield* Ref.make(new Map<string, DetachedAppServerRecord>());
   /** Set when a record cannot be attributed to a provider instance or the records cannot be listed. */
@@ -438,12 +440,18 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   ) =>
     recordGate.withPermit(
       Effect.gen(function* () {
-        const record = yield* readRecord(paths(key.recordName).record);
+        const record = yield* readRecord(paths(key.recordName).record).pipe(
+          Effect.catch((error) =>
+            KeptRecord.restoreRetired(retiredRecords.get(key.recordName), change, error),
+          ),
+        );
         if (record.name !== key.recordName || record.instanceId !== key.instanceId)
           return yield* new CodexDetachedAppServerError({
             detail: "The Codex process record does not match this provider.",
           });
         const next = change(record);
+        if (retiredRecords.has(next.name) && KeptRecord.fenceCount(next) === 0)
+          return yield* removeRecordUnlocked(next);
         yield* writeRecordUnlocked(next);
         fences.set(next.name, next);
       }),
@@ -857,8 +865,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   );
 
   /** A kept record whose group exited is retired, or unlisted while its fences guard other threads. */
-  const settleKept = (input: KeptRecordOpen) =>
-    settleKeptRecord({
+  const settleKept = (input: KeptRecord.KeptRecordOpen) =>
+    KeptRecord.settleKeptRecord({
       ...input,
       record: fences.get(input.name),
       busy: owned.has(input.name) || launching.has(input.name) || stopping.has(input.name),
@@ -877,6 +885,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             // A fence write that names this record and has not landed lives only in memory.
             const pending = [...failedFences.keys()].some((k) => JSON.parse(k)[2] === record.name);
             if (keep || pending || fenced.length > 0) return Effect.succeed("kept" as const);
+            if (retiredRecords.size >= 32) retiredRecords.clear();
+            retiredRecords.set(current.name, current);
             return removeRecordUnlocked(current).pipe(Effect.as("removed" as const));
           }),
         ),

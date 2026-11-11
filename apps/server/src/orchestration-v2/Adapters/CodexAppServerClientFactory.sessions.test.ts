@@ -402,33 +402,30 @@ it.effect.each([
     }).pipe(Effect.scoped),
 );
 
-it.effect(
-  "a fence write that fails after another open removed the record refuses this thread",
-  () =>
-    Effect.gen(function* () {
-      const kept = recordFixture("codex-444444444444", 1011, sessionA);
-      const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
-      gone.add(kept.pgid);
-      const paused = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      control.gate = Deferred.succeed(paused, undefined).pipe(
-        Effect.andThen(Deferred.await(release)),
-      );
-      const goal = { threadId: ThreadId.make("thread-late"), nativeThreadId: "native-late" };
-      yield* Effect.gen(function* () {
-        const late = yield* open(goal.threadId, sessionA).pipe(Effect.exit, Effect.forkScoped);
-        yield* Deferred.await(paused);
-        control.gate = Effect.void;
-        yield* open("thread-first", sessionA);
-        assert.notInclude(yield* recordFiles, kept.name + ".json");
-        yield* detached
-          .recordGoalBlock({ instanceId: codex, recordName: kept.name }, goal)
-          .pipe(Effect.flip);
-        yield* Deferred.succeed(release, undefined);
-        assert.equal((yield* Fiber.join(late))._tag, "Failure");
-        assert.equal(launched.length, 1);
-      }).pipe(Effect.scoped);
-    }).pipe(Effect.scoped),
+it.effect("a fence written after another open removed the record refuses this thread", () =>
+  Effect.gen(function* () {
+    const kept = recordFixture("codex-444444444444", 1011, sessionA);
+    const { open, detached, control, launched, gone, recordFiles } = yield* harness([kept]);
+    gone.add(kept.pgid);
+    const paused = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    control.gate = Deferred.succeed(paused, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+    );
+    const goal = { threadId: ThreadId.make("thread-late"), nativeThreadId: "native-late" };
+    yield* Effect.gen(function* () {
+      const late = yield* open(goal.threadId, sessionA).pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(paused);
+      control.gate = Effect.void;
+      yield* open("thread-first", sessionA);
+      assert.notInclude(yield* recordFiles, kept.name + ".json");
+      yield* detached.recordGoalBlock({ instanceId: codex, recordName: kept.name }, goal);
+      assert.include(yield* recordFiles, kept.name + ".json");
+      yield* Deferred.succeed(release, undefined);
+      assert.equal((yield* Fiber.join(late))._tag, "Failure");
+      assert.equal(launched.length, 1);
+    }).pipe(Effect.scoped);
+  }).pipe(Effect.scoped),
 );
 
 it.effect("a fence write for another thread that has not landed keeps the record", () =>
@@ -448,6 +445,34 @@ it.effect("a fence write for another thread that has not landed keeps the record
       yield* open("thread-other", sessionA);
       assert.equal(launched.length, 1);
       assert.include(yield* recordFiles, kept.name + ".json");
+    }).pipe(Effect.scoped);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a fence written after a kept record was retired restores the record with it", () =>
+  Effect.gen(function* () {
+    const kept = recordFixture("codex-666666666666", 1013, sessionA);
+    const { open, detached, gone, recordFiles } = yield* harness([kept]);
+    gone.add(kept.pgid);
+    const key = { instanceId: codex, recordName: kept.name };
+    const stop = {
+      threadId: ThreadId.make("thread-lost"),
+      nativeThreadId: "native-lost",
+      nativeTurnId: "turn-lost",
+    };
+    yield* Effect.gen(function* () {
+      yield* open("thread-first", sessionA);
+      assert.notInclude(yield* recordFiles, kept.name + ".json");
+      yield* detached.recordStopObligation(key, stop);
+      assert.include(yield* recordFiles, kept.name + ".json");
+      assert.deepEqual(yield* detached.getStopObligations(stop.threadId), [
+        { record: { ...key, providerSessionId: sessionA }, block: stop },
+      ]);
+      // Settling the fence removes the restored record again; a clear alone never restores one.
+      yield* detached.clearStopObligation(key, stop);
+      assert.notInclude(yield* recordFiles, kept.name + ".json");
+      yield* detached.clearStopObligation(key, stop).pipe(Effect.flip);
+      assert.notInclude(yield* recordFiles, kept.name + ".json");
     }).pipe(Effect.scoped);
   }).pipe(Effect.scoped),
 );
