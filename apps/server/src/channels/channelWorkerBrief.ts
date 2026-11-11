@@ -200,6 +200,7 @@ export const turnInstruction = (
       " and your artifacts folder for saved outputs is " +
       files.artifacts +
       " (create them when you first write there).",
+    "When your answer is a file you saved for the person, name it in your answer by its path inside the artifacts folder in inline code, such as `reports/summary.md`, so GOAT can show it.",
     GOAT_BOT_ROUTING_RULE,
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,

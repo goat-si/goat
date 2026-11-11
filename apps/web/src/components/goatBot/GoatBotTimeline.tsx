@@ -35,6 +35,7 @@ import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
+import { GoatBotReplyFiles } from "./GoatBotReplyFiles";
 import {
   GoatBotActivityLine,
   GoatBotMessageTime,
@@ -521,6 +522,7 @@ export function GoatBotTimeline({
                         </Tooltip>
                       </div>
                     </div>
+                    <GoatBotReplyFiles text={row.text} />
                   </li>
                 );
               }
