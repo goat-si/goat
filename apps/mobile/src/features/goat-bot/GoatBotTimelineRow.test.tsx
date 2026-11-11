@@ -752,6 +752,21 @@ describe("a reply with a table", () => {
     expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
   });
 
+  it("leaves a table in the bubble when nested lists or quotes above could still hold it", async () => {
+    const indented = table.map((line) => `  ${line}`);
+    for (const above of [
+      ["- An outer step", "  - An inner step"],
+      ["- A step", "  > A quote inside it"],
+      ["- An outer step", "\t- An inner step"],
+    ]) {
+      await render(bot({ text: [...above, "", ...indented].join("\n") }));
+      expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
+      await view.unmount();
+      h.dispose();
+    }
+    await render(bot({ text: "x" }));
+  });
+
   it("keeps a table card in place while the reply streams on", async () => {
     clipboard.copy.mockClear();
     const opening = ["Done.", "", ...table].join("\n");

@@ -30,7 +30,7 @@ describe("goatBotChangeRequestLinks", () => {
 
   it("writes the label in where the same address also sits under the bot's words", () => {
     const out = links(`${pr(7)} is [the fix](${pr(7)}).`);
-    expect(out.markdown).toBe(`[#7](${pr(7)}) is [the fix](${pr(7)}).`);
+    expect(out.markdown).toBe(`[#7](<${pr(7)}>) is [the fix](${pr(7)}).`);
     expect(out.labels.size).toBe(0);
   });
 

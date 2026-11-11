@@ -82,9 +82,18 @@ export function goatBotChangeRequestContext(markdown: string): GoatBotReplyRepos
   return goatBotReplyRepository(linkUrls(linkNodes(parser.parse(markdown))));
 }
 
-/** A link destination as Markdown, in angle brackets when its characters would end it early. */
+/**
+ * A parsed link address written back as a Markdown destination that reads back the same: angle
+ * brackets hold spaces and parentheses; backslashes, brackets and entities are escaped, and a
+ * line break, which cannot sit in a destination, is percent-encoded.
+ */
 function markdownDestination(url: string): string {
-  return /[\s()<>\\]/u.test(url) ? `<${url.replace(/[<>\\]/gu, "\\$&")}>` : url;
+  const escaped = url
+    .replace(/[\\<>]/gu, "\\$&")
+    .replaceAll("&", "&amp;")
+    .replaceAll("\n", "%0A")
+    .replaceAll("\r", "%0D");
+  return `<${escaped}>`;
 }
 
 /**
@@ -154,7 +163,8 @@ function quotedRanges(text: string): ReadonlyArray<readonly [number, number]> {
         open = next;
       } else if (open === 0) visit(child);
     }
-    if (open > 0) ranges.push([from, text.length]);
+    // An unclosed tag quotes no further than its own paragraph.
+    if (open > 0) ranges.push([from, node.position?.end.offset ?? text.length]);
   };
   visit(parser.parse(text));
   return ranges;

@@ -31,6 +31,9 @@ const CONTAINER = /^ {0,3}(?:>|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$))/;
 // A list item's marker and the spaces after it: lines indented this far after a blank line still
 // belong to the item.
 const LIST_ITEM = /^( {0,3}(?:[-*+]|\d{1,9}[.)]))( *)(\S?)/;
+// A list item or quote opening another one on the same line, such as "> - a" or "- > a".
+const NESTED_ON_LINE =
+  /^ {0,3}(?:>|[-*+][ \t]|\d{1,9}[.)][ \t])[ \t]*(?:>|[-*+][ \t]|\d{1,9}[.)][ \t])/;
 const LEAD = /^ {1,3}(?=\S)/;
 
 /** How many cells a table row has, counting pipes a backslash does not escape. */
@@ -63,6 +66,9 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
   // The list item or quote above, if any, after which an indented line may belong to it: a quote
   // ends at a blank line, a list item takes later lines indented as far as its text.
   let container: { readonly quote: true } | { readonly indent: number } | null = null;
+  // Whether more than one list or quote level may be open, or a tab makes the indent unclear. Only
+  // the innermost is tracked, so then just an unindented line is surely outside them all.
+  let nested = false;
   // Whether the lines read last are an indented code block.
   let indentedCode = false;
   // Whether the paragraph run since the last blank line holds a list item, quote, HTML, code or
@@ -111,9 +117,16 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
     }
     if (line.trim() !== "") {
       const afterBlank = index === 0 || (lines[index - 1] ?? "").trim() === "";
+      const lead = /^[ \t]*/.exec(line)?.[0] ?? "";
+      if (container !== null && lead.includes("\t")) nested = true;
       if (afterBlank && container !== null && !CONTAINER.test(line)) {
-        const indent = /^ */.exec(line)?.[0].length ?? 0;
-        if ("quote" in container || indent < container.indent) container = null;
+        const ends = nested
+          ? lead.length === 0
+          : "quote" in container || lead.length < container.indent;
+        if (ends) {
+          container = null;
+          nested = false;
+        }
       }
       indentedCode =
         /^(?: {4}|\t)/.test(line) && container === null && (indentedCode || afterBlank);
@@ -121,6 +134,9 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
     if (!indentedCode && DEFINITION_START.test(line)) return whole;
     if (CONTAINER.test(line)) {
       const item = LIST_ITEM.exec(line);
+      const indented = /^[ \t]/.test(line);
+      if (NESTED_ON_LINE.test(line) || (container !== null && indented)) nested = true;
+      else if (!indented) nested = false;
       // Text one to four spaces after the marker sets the item's indent; otherwise one space does.
       const gap = item?.[2]?.length ?? 0;
       container =
