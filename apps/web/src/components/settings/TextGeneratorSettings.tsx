@@ -34,22 +34,23 @@ export function TextGeneratorSettings(props: {
     enabled: previous?.enabled ?? true,
   };
   const valid = model.trim().length > 0 && validConfig(config);
-  const save = async () => {
+  const save = () => {
     if (!valid || busy || !props.canManage) return;
     const id = editing ?? ProviderInstanceId.make(`text-api-${randomUUID()}`);
     setBusy(true);
-    try {
-      if (await props.onPatch({ textGenerators: { [id]: config } })) {
+    // A promise chain, since React Compiler cannot compile try/finally without catch.
+    return props
+      .onPatch({ textGenerators: { [id]: config } })
+      .then((saved) => {
+        if (!saved) return;
         setLabel("");
         setBaseUrl("");
         setModel("");
         setApiKey("");
         setEditing(null);
         setClearKey(false);
-      }
-    } finally {
-      setBusy(false);
-    }
+      })
+      .finally(() => setBusy(false));
   };
   return (
     <SettingsSection title="Text generators">
