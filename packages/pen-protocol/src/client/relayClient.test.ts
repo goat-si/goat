@@ -123,6 +123,27 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(seen).toEqual(["data:1", "close:4400"]);
   });
 
+  it("a link takes one receiver: a second attach, reentrant or later, is refused", async () => {
+    const later = await opened();
+    later.link.attach(() => undefined);
+    later.link.close(1000);
+    expect(() => later.link.attach(() => undefined)).toThrow(
+      expect.objectContaining({ code: "relay-attached" }),
+    );
+
+    const reentrant = await opened();
+    reentrant.socket.receive(Uint8Array.of(1));
+    let refused: unknown;
+    reentrant.link.attach(() => {
+      try {
+        reentrant.link.attach(() => undefined);
+      } catch (error) {
+        refused = error;
+      }
+    });
+    expect(refused).toMatchObject({ code: "relay-attached" });
+  });
+
   it("a link this side closed before attach still hands over what arrived first", async () => {
     const { socket, link } = await opened();
     socket.receive(Uint8Array.of(1));

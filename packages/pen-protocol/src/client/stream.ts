@@ -210,8 +210,14 @@ class Stream implements PenStream {
         const record = new Uint8Array(chunk.length + 1);
         record[0] = TYPE_DATA;
         record.set(chunk, 1);
-        this.session.send(record);
+        // Counted before the send: the node's CREDIT for it may come back before send() returns.
         this.#inflight += chunk.length;
+        try {
+          this.session.send(record);
+        } catch (error) {
+          this.#inflight -= chunk.length;
+          throw error;
+        }
       }
     } finally {
       this.#writing = false;

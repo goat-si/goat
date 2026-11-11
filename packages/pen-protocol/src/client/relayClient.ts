@@ -52,7 +52,7 @@ export interface RelayLink {
   readonly relay: string;
   /** The next binary message, before a receiver is attached. Rejects with relay-closed when the socket closes. */
   receive(): Promise<Uint8Array>;
-  /** From now on every binary message goes to the receiver synchronously, in order (held ones first). */
+  /** From now on every binary message goes to the receiver synchronously, in order (held ones first). Once per link. */
   attach(receiver: (message: Uint8Array) => void, onClose?: (code: number) => void): void;
   send(message: Uint8Array): void;
   /** Sends the text ping used by the ping race. */
@@ -118,6 +118,7 @@ class Link implements RelayLink {
   /** While held messages are handed over, a peer close waits: its notice comes after the drain. */
   #draining = false;
   #closeDeferred = false;
+  #attached = false;
   /** The observer last told of the close: none is told twice, even when attach() and #finish() both reach it. */
   #toldClose: ((code: number) => void) | undefined;
   #closeCode = 1006;
@@ -239,6 +240,10 @@ class Link implements RelayLink {
   }
 
   attach(receiver: (message: Uint8Array) => void, onClose?: (code: number) => void): void {
+    // One receiver per link (a SecureSession takes it): a second, reentrant or later, could replace or lose the first
+    // one's close notice.
+    if (this.#attached) throw new PenError("relay-attached", "a relay link takes one receiver");
+    this.#attached = true;
     this.#onClose = onClose;
     const closedBefore = this.#state === "closed";
     const requests = this.#closeRequests;

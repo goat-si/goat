@@ -130,6 +130,22 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     expect(got).toEqual(expected);
   });
 
+  it("CREDIT the node returns while the DATA send is still on the stack is accepted", async () => {
+    const c = await connected();
+    const send = c.socket.send.bind(c.socket);
+    let credited = false;
+    c.socket.send = (data) => {
+      send(data);
+      if (!credited && typeof data !== "string") {
+        credited = true;
+        c.send(record(2, u32le(1)));
+      }
+    };
+    await c.stream.write(Uint8Array.of(7));
+    expect(c.socket.closedWith).toBeUndefined();
+    expect(c.stream.stats().inflight).toBe(0);
+  });
+
   it("CREDIT goes out once 64 KiB has been read, not before, and for the remainder after the node's FIN", async () => {
     const c = await connected();
     c.send(data(new Uint8Array(40 * KiB)));
