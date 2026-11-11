@@ -7,6 +7,7 @@ import {
   goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
   type GoatBotAccent,
+  type GoatBotReplyRepository,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
@@ -181,10 +182,11 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </View>
     );
   }
-  const renderText = (text: string) =>
+  const renderText = (text: string, repository?: GoatBotReplyRepository | null) =>
     hasGoatBotMarkdown(text) ? (
       <GoatBotMarkdown
         text={text}
+        repository={repository}
         failed={row.tone === "failure"}
         environmentId={props.environmentId ?? null}
         onSelectThread={props.onSelectThread}
@@ -196,7 +198,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         style={bodyText}
         accessibilityLabel={row.tone === "failure" ? `Failed: ${text}` : undefined}
       >
-        <GoatBotLinkedText text={text} />
+        <GoatBotLinkedText text={text} repository={repository} />
       </Text>
     );
   const memory = row.memory ? <MemoryReportLink reference={row.memory} /> : null;
