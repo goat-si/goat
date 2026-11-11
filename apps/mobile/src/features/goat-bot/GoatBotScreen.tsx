@@ -172,7 +172,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
                 key={file.id}
                 numberOfLines={1}
                 className="text-goat-person-message-foreground"
-                style={{ opacity: 0.85, ...bodyText, ...onAccent }}
+                // The text colour was chosen for the opaque accent; dimming it would lose contrast.
+                style={{ ...(onAccent ? {} : { opacity: 0.85 }), ...bodyText, ...onAccent }}
               >
                 {(file.type === "image" ? "Photo · " : "File · ") + file.name}
               </Text>
@@ -258,7 +259,14 @@ export function GoatBotScreen(props: {
   const copy = availabilityCopy(mainName, title);
   const botEmoji = member ? mobileGoatBotMemberPicture(member) : props.main?.avatar;
   // A member bot's color carries the person's messages and Send; the main bot keeps the theme's.
-  const accent = goatBotAccent(member);
+  // Kept while the role and colour stay the same, so the list redraws its rows only when they change.
+  const accentRole = member?.role;
+  const accentColor = member?.color?.toUpperCase();
+  const accent = useMemo(
+    () =>
+      accentRole === undefined ? null : goatBotAccent({ role: accentRole, color: accentColor }),
+    [accentRole, accentColor],
+  );
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -598,6 +606,8 @@ export function GoatBotScreen(props: {
             unread.onViewable(viewableItems.map((entry) => entry.index))
           }
           renderItem={renderItem}
+          // Rows are memoized by key and data; a new accent must reach the pills already shown.
+          extraData={accent}
           initialScrollAtEnd
           maintainScrollAtEnd
           alignItemsAtEnd
@@ -752,7 +762,7 @@ export function GoatBotScreen(props: {
                 }}
               >
                 <Text
-                  className="text-xl font-semibold text-white"
+                  className="text-xl font-semibold text-primary-foreground"
                   style={accent ? { color: accent.foreground } : undefined}
                 >
                   ↑

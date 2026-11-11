@@ -911,3 +911,48 @@ it("draws the person's messages and Send in a member bot's color, with text that
     send: undefined,
   });
 });
+
+it("redraws messages already shown when the member's color changes, and keeps attachment labels fully opaque on it", async () => {
+  const you = {
+    kind: "user",
+    id: "you",
+    text: "Here",
+    attachments: [{ id: "a1", type: "file", name: "notes.txt" }],
+    createdAt: "2026-11-11T10:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    sendKey: null,
+    requestKey: null,
+    delivery: { state: "sent" },
+    showReceipt: false,
+  } as unknown as GoatBotRow;
+  const member = (color: string) =>
+    ({
+      botId: "scout",
+      name: "Scout",
+      role: "member",
+      environmentId: "env",
+      sessionThreadId: "scout-thread",
+      state: "active",
+      avatar: null,
+      color,
+    }) as unknown as import("@goat/contracts").BotProfile;
+  screenSession.rows = [you];
+  const view = await render(<GoatBotScreen visible member={member("#1D3A8A")} />);
+  try {
+    const first = list.props?.extraData;
+    expect(first).toBeDefined();
+    // A fresh profile object with the same color keeps the rows as they are.
+    await view.rerender(<GoatBotScreen visible member={member("#1d3a8a")} />);
+    expect(list.props?.extraData).toBe(first);
+    await view.rerender(<GoatBotScreen visible member={member("#D9A21B")} />);
+    expect(list.props?.extraData).not.toBe(first);
+    const label = [...view.container.querySelectorAll("span")].find((node) =>
+      node.textContent?.includes("notes.txt"),
+    );
+    expect(JSON.parse(label?.getAttribute("data-style") ?? "{}").opacity ?? 1).toBe(1);
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});

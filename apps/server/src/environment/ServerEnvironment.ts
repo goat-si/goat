@@ -334,6 +334,7 @@ export const make = Effect.gen(function* () {
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,
+      runtimeRelaunch: true,
       runtimeSessions: true,
       channelLedger: true,
       goatBotHome: true,
