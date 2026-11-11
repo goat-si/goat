@@ -270,18 +270,21 @@ when the provider supports compaction.</p>
 <p>Claude instances can also compact idle threads for you. See
 <a href="/goat/docs/user/providers-claude/#compact-long-conversations">compact long conversations</a>.</p>
 <h2 id="side-chat">Side chat</h2>
-<p>On web and desktop, send <code>/side &lt;question&gt;</code> to ask about the current thread without
-adding to it. The question opens in a <strong>Side chat</strong> tab in the right panel, and its
-answers never enter the thread’s history. Send <code>/side</code> alone, use the side chat button
-in the thread header, or press <code>Mod+/</code> to open or close the tab.</p>
+<p>Send <code>/side &lt;question&gt;</code> to ask about the current thread without adding to it. Its
+answers never enter the thread’s history. On web and desktop, the question opens
+in a <strong>Side chat</strong> tab in the right panel. Send <code>/side</code> alone, use the side chat button
+in the thread header, or press <code>Mod+/</code> to open or close the tab. On mobile, <code>/side</code> is
+in the <code>/</code> menu at the start of a message in an existing thread, and the side chat opens
+as its own screen; <code>/side</code> alone opens it without asking anything, and <code>/btw</code> works the
+same way.</p>
 <p>The side chat starts from the conversation up to the last finished turn, and every
 question you send it also carries the thread’s current state: whether it is working,
 interrupted, or waiting on you, its goal, its task list, and its latest messages. You can
-ask what the thread is doing while the agent is still working, and the side chat header
-shows the thread’s status. It has the full composer, with the thread’s model, workspace,
-and permission mode. It is meant for questions and leaves files alone unless you ask it
-to change something. Use <strong>Start a new side chat</strong> to discard it, or <strong>Open as a full
-thread</strong> to continue it on its own.</p>
+ask what the thread is doing while the agent is still working. It has the full composer,
+with the thread’s model, workspace, and permission mode. It is meant for questions and
+leaves files alone unless you ask it to change something. On web and desktop, the side
+chat header shows the thread’s status; use <strong>Start a new side chat</strong> to discard it, or
+<strong>Open as a full thread</strong> to continue it on its own.</p>
 <h2 id="goals">Goals</h2>
 <p>With Codex and Claude, send <code>/goal</code> followed by what “done” means, for example
 <code>/goal all tests in packages/api pass</code>. The agent keeps working across turns
