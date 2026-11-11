@@ -137,7 +137,7 @@ const SCHEMA_26CB3A74EF = [
 ];
 
 describe("opening the data an older version wrote", () => {
-  it("keeps every row of the 26cb3a74ef schema and adds started_at, so sessions, codes, assertions, accounts and resets read back", () => {
+  it("keeps a row in each of the nine 26cb3a74ef tables, adds started_at, and starts the reset stamp from the old resets", () => {
     const db = new NodeSqlite.DatabaseSync(":memory:");
     for (const statement of SCHEMA_26CB3A74EF) db.exec(statement);
     const now = 1_794_300_000_000;
@@ -158,8 +158,28 @@ describe("opening the data an older version wrote", () => {
     db.prepare(
       "INSERT INTO nodes (node_id, sub, sign_pub, noise_pub, name, registered_at) VALUES ('node-1', 'sub-1', 's0', 'n0', 'hub', ?)",
     ).run(now);
+    db.prepare("INSERT INTO counters (key, window, count) VALUES ('page:src', ?, 3)").run(
+      Math.floor(now / 60_000),
+    );
+    db.prepare(
+      "INSERT INTO lockouts (source, wrong, first_at, locked_until) VALUES ('src-2', 5, ?, ?)",
+    ).run(now - 1_000, now + 500_000);
+    db.prepare(
+      "INSERT INTO jwks (url, body, fetched_at) VALUES ('https://issuer.example/jwks', '{\"keys\":[]}', ?)",
+    ).run(now - 2_000);
 
+    // The old object never wrote the KV key "stamp"; storage(db) starts with an empty KV, as it does.
     const store = new Store(storage(db));
+
+    // The rate-limit counter of this minute continues, a lockout still in force holds and counts on,
+    // and the cached JWKS entry reads back.
+    expect(store.hit("page:src", now)).toBe(4);
+    expect(store.lockedUntil("src-2")).toBe(now + 500_000);
+    expect(store.recordWrongCode("src-2", now)).toBe(0);
+    expect(store.jwks("https://issuer.example/jwks")).toEqual({
+      body: '{"keys":[]}',
+      fetched_at: now - 2_000,
+    });
 
     expect(store.deviceByUserCode("ABCD2345")?.status).toBe("pending");
     const session = store.session("w1", now);
@@ -184,7 +204,14 @@ describe("opening the data an older version wrote", () => {
         now,
       ),
     ).toEqual({ ok: true });
+    // A session written before the upgrade has started_at 0, so it counts as older than any reset,
+    // including none (resetAt 0): web.ts refuses that one sign-in in flight across the upgrade.
+    expect(session?.started_at ?? -1).toBeLessThanOrEqual(store.resetAt("sub-1"));
+    // With no stamp in KV yet, the first reset stamps at its own time, later than every old reset
+    // and every old assertion; a sign-in started after it stamps later still.
     store.reset("sub-1", now + 1);
+    expect(store.resetAt("sub-1")).toBe(now + 1);
+    expect(store.stamp(now + 1)).toBe(now + 2);
     expect(store.session("w1", now)?.sub).toBe("");
     expect(store.deviceByUserCode("ABCD2345")?.status).toBe("denied");
     expect(store.meshOf("sub-1")).toBeNull();
