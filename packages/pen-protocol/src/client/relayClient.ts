@@ -3,7 +3,7 @@
 import { PenError, reportListenerError } from "./errors.ts";
 import type { Clock, Timer } from "./runtime.ts";
 
-export const RELAY_LIMITS = {
+export const RELAY_LIMITS = Object.freeze({
   message: 1024 * 1024,
   ackEvery: 64 * 1024,
   pingMs: 30_000,
@@ -16,7 +16,7 @@ export const RELAY_LIMITS = {
   sendMax: 4 * 1024 * 1024,
   stallMs: 30_000,
   recheckMs: 25,
-} as const;
+} as const);
 
 export interface RelaySocketEvent {
   readonly data?: unknown;

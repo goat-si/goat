@@ -15,7 +15,7 @@ import {
   WEBSOCKET_LIMITS,
 } from "./websocket.ts";
 
-export const PEN_WEBSOCKET_LIMITS = {
+export const PEN_WEBSOCKET_LIMITS = Object.freeze({
   /** Frames waiting for stream credit. One frame of any allowed size is admitted when nothing waits. */
   outboundBytes: 4 * 1024 * 1024,
   outboundFrames: 1024,
@@ -23,7 +23,7 @@ export const PEN_WEBSOCKET_LIMITS = {
   handshakeMs: 30_000,
   /** How long a close waits for the server's close frame. */
   closeMs: 5_000,
-} as const;
+} as const);
 
 type Listener = (event: { type?: string; data?: unknown; code?: number; reason?: string }) => void;
 type EventType = "open" | "message" | "error" | "close";

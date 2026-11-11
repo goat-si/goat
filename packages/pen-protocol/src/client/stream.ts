@@ -3,7 +3,7 @@
 import { PenError } from "./errors.ts";
 import type { SecureSession } from "./race.ts";
 
-export const STREAM_LIMITS = {
+export const STREAM_LIMITS = Object.freeze({
   window: 512 * 1024,
   maxData: 65_518,
   creditEvery: 64 * 1024,
@@ -11,7 +11,7 @@ export const STREAM_LIMITS = {
   maxWrite: 1024 * 1024,
   /** The most one read() returns. */
   readChunk: 64 * 1024,
-} as const;
+} as const);
 
 const TYPE_DATA = 0x00;
 const TYPE_FIN = 0x01;

@@ -11,7 +11,7 @@ import {
 } from "./relayClient.ts";
 import type { Clock, Random, Timer } from "./runtime.ts";
 
-export const RACE_LIMITS = {
+export const RACE_LIMITS = Object.freeze({
   /** Bounds the dials of a race (Go relay.DialRaceTimeout). */
   dialMs: 15_000,
   /** Each connected socket's handshake, from message 1 to a verified message 2 (Go session.HandshakeTimeout). */
@@ -19,7 +19,7 @@ export const RACE_LIMITS = {
   /** Records held before the stream takes the session. */
   heldRecords: 64,
   heldBytes: 1024 * 1024,
-} as const;
+} as const);
 
 /** The race kind 0x03 service-pair uses: CONTRACT v1.3 races the handshake; join and kind 0x04 keep the ping race. */
 export const SERVICE_PAIR_RACE: "handshake" | "ping" = "handshake";

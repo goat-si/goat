@@ -12,13 +12,13 @@ import {
 import type { Clock, Timer } from "./runtime.ts";
 import type { PenStream } from "./stream.ts";
 
-export const FETCH_LIMITS = {
+export const FETCH_LIMITS = Object.freeze({
   /** From the request's last byte to the response head (the pairing poll is held at most 25 s). */
   headMs: 30_000,
   bodyIdleMs: 60_000,
   queue: 16,
   writePiece: 1024 * 1024,
-} as const;
+} as const);
 
 export interface PenFetchOptions {
   /** The one origin this fetch serves, e.g. the Pen route's base URL. Other origins are refused (H47). */

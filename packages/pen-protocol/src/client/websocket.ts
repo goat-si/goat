@@ -6,14 +6,21 @@ import { type HeaderList, serializeRequest } from "./http1.ts";
 import { type Random, takeRandom } from "./runtime.ts";
 import { Utf8Decoder } from "./utf8.ts";
 
-export const WEBSOCKET_LIMITS = {
+export const WEBSOCKET_LIMITS = Object.freeze({
   message: 16 * 1024 * 1024,
   fragments: 1024,
   control: 125,
   closeReason: 123,
-} as const;
+} as const);
 
-export const Opcode = { Continuation: 0, Text: 1, Binary: 2, Close: 8, Ping: 9, Pong: 10 } as const;
+export const Opcode = Object.freeze({
+  Continuation: 0,
+  Text: 1,
+  Binary: 2,
+  Close: 8,
+  Ping: 9,
+  Pong: 10,
+} as const);
 
 export type FrameEvent =
   | { readonly type: "message"; readonly data: string | Uint8Array }

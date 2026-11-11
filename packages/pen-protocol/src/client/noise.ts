@@ -14,7 +14,7 @@ import {
 import { PenError } from "./errors.ts";
 import type { Random } from "./runtime.ts";
 
-export const Kind = { Session: 0x01, Join: 0x03, Account: 0x04 } as const;
+export const Kind = Object.freeze({ Session: 0x01, Join: 0x03, Account: 0x04 } as const);
 export type Kind = (typeof Kind)[keyof typeof Kind];
 
 export const MAX_PLAINTEXT = 65_519;

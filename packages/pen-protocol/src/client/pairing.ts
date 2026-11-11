@@ -4,7 +4,7 @@ import { hkdfSha256, sha256 } from "./crypto.ts";
 import { PenError } from "./errors.ts";
 
 /** The schemes a GOAT app build registers (packages/shared/src/mobileAppIdentity.ts APP_SCHEMES). */
-export const PAIR_LINK_SCHEMES = ["goat", "goat-dev", "goat-preview"] as const;
+export const PAIR_LINK_SCHEMES = Object.freeze(["goat", "goat-dev", "goat-preview"] as const);
 export const PAIR_QR_VERSION = 1;
 export const PAIR_QR_MIN = 88;
 export const PAIR_QR_MAX = 216;

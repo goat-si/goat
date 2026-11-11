@@ -4,7 +4,7 @@ import { asciiEncode, ByteBuffer, toBase64 } from "./bytes.ts";
 import { sha1Hash } from "./crypto.ts";
 import { PenError } from "./errors.ts";
 
-export const HTTP1_LIMITS = {
+export const HTTP1_LIMITS = Object.freeze({
   statusLine: 1024,
   headerLine: 8 * 1024,
   head: 32 * 1024,
@@ -14,7 +14,7 @@ export const HTTP1_LIMITS = {
   chunkSizeDigits: 8,
   /** The buffered (JSON) body cap. */
   body: 8 * 1024 * 1024,
-} as const;
+} as const);
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 

@@ -8,11 +8,20 @@ import { PenError } from "./errors.ts";
 import {
   cipherStateAt,
   encodePayloadLine,
+  Kind,
   MAX_PLAINTEXT,
   REKEY_INTERVAL,
   startInitiator,
 } from "./noise.ts";
 import { respond } from "./testing/noiseResponder.ts";
+import { HTTP1_LIMITS } from "./http1.ts";
+import { PAIR_LINK_SCHEMES } from "./pairing.ts";
+import { FETCH_LIMITS } from "./penFetch.ts";
+import { PEN_WEBSOCKET_LIMITS } from "./penWebSocket.ts";
+import { RACE_LIMITS } from "./race.ts";
+import { RELAY_LIMITS } from "./relayClient.ts";
+import { STREAM_LIMITS } from "./stream.ts";
+import { Opcode, WEBSOCKET_LIMITS } from "./websocket.ts";
 
 const fixedRandom = (hex: string) => () => fromHex(hex);
 const localStatic = (privHex: string) => {
@@ -42,6 +51,23 @@ function initiate(data: (typeof cases)[number]["data"], psk: Uint8Array | undefi
 }
 
 describe("Noise initiator against vectors/session.json (CONTRACT Sessions, Record layer)", () => {
+  it("the exported kinds, opcodes, schemes and limits are frozen, so an importer cannot change what the client accepts", () => {
+    const exported = {
+      Kind,
+      Opcode,
+      PAIR_LINK_SCHEMES,
+      HTTP1_LIMITS,
+      FETCH_LIMITS,
+      PEN_WEBSOCKET_LIMITS,
+      RACE_LIMITS,
+      RELAY_LIMITS,
+      STREAM_LIMITS,
+      WEBSOCKET_LIMITS,
+    };
+    for (const [name, value] of Object.entries(exported))
+      expect(Object.isFrozen(value), name).toBe(true);
+  });
+
   it.each(cases)("$name: message 1 equals the Go transcript byte for byte", ({ data, psk }) => {
     expect(toHex(initiate(data, psk).message1)).toBe(data.message1);
   });
