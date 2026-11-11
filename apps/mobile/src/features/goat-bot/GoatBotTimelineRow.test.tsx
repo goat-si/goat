@@ -75,6 +75,9 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ b
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
+// The chat's step reader and file opener load the environment runtime.
+vi.mock("../../state/threads", () => ({ environmentThreadDetails: {} }));
+vi.mock("./openBotLibraryFile", () => ({ openBotLibraryFile: async () => null }));
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));

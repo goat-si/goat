@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
@@ -244,7 +244,8 @@ async function standInOpen(relativePath: string) {
 }
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
-import { GoatBotFilesProvider } from "./GoatBotReplyFiles";
+import { chatFilesScope, GoatBotFilesProvider } from "./GoatBotReplyFiles";
+import { useBotFileOpener } from "./MobileBotFileViewer";
 
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -314,15 +315,34 @@ function chat(
   shown: ReturnType<typeof bot>[] = rows,
 ) {
   return (
-    <GoatBotFilesProvider
-      environmentId={EnvironmentId.make("env")}
-      threadId={ThreadId.make(threadId)}
-      botName="GOAT Bot"
-      replies={repliesOf(rows, streaming)}
-    >
+    <Chat threadId={threadId} replies={repliesOf(rows, streaming)}>
       {shown.map((row) => (
         <GoatBotTimelineRow key={row.id} {...props} row={row} />
       ))}
+    </Chat>
+  );
+}
+// The screen owns the chat's opener and hands it to the provider; this does the same.
+function Chat(props: {
+  threadId: string;
+  replies: ReturnType<typeof repliesOf>;
+  children: ReactNode;
+}) {
+  const environmentId = EnvironmentId.make("env");
+  const threadId = ThreadId.make(props.threadId);
+  const opener = useBotFileOpener(
+    environmentId,
+    "GOAT Bot",
+    chatFilesScope(environmentId, threadId),
+  );
+  return (
+    <GoatBotFilesProvider
+      environmentId={environmentId}
+      threadId={threadId}
+      replies={props.replies}
+      opener={opener}
+    >
+      {props.children}
     </GoatBotFilesProvider>
   );
 }
@@ -615,6 +635,8 @@ function screenFor(threadId: string, rows: ReturnType<typeof bot>[]) {
     historyEnvironmentId: EnvironmentId.make("env"),
     threadId: ThreadId.make(threadId),
     streamingReplyIds: new Set<string>(),
+    visibleTurnItems: [],
+    boundedSnapshots: false,
   };
   return <GoatBotScreen visible />;
 }

@@ -16,6 +16,7 @@ const route = vi.hoisted(() => ({
   member: null as null | { botId: string; environmentId: string; sessionThreadId: string },
   memberPreview: null as null | { unread: boolean; at: string },
   previewRefs: [] as unknown[],
+  screenForeground: undefined as boolean | undefined,
 }));
 vi.mock("react-native", () => ({
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
@@ -55,8 +56,9 @@ vi.mock("./useMobileBotRoster", () => ({
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => ({ canManage: false }) }));
 vi.mock("./GoatBotScreen", () => ({
-  GoatBotScreen: (props: { readSnapshot?: GoatBotVisitSnapshot | null }) => {
+  GoatBotScreen: (props: { readSnapshot?: GoatBotVisitSnapshot | null; foreground?: boolean }) => {
     route.snapshot = props.readSnapshot;
+    route.screenForeground = props.foreground;
     return null;
   },
 }));
@@ -197,4 +199,17 @@ it("records a member chat's visit against the member's own conversation while it
   await act(async () => root.unmount());
   route.member = null;
   route.memberPreview = null;
+});
+
+it("tells the chat when the app is in the background, so it stops reading GOAT Bot's steps", async () => {
+  Object.assign(route, { focused: true, foreground: true, active: true, threadId: "fg-thread" });
+  const view = await mount();
+  expect(route.screenForeground).toBe(true);
+  route.foreground = false;
+  await view.show();
+  expect(route.screenForeground).toBe(false);
+  route.foreground = true;
+  await view.show();
+  expect(route.screenForeground).toBe(true);
+  await view.unmount();
 });
