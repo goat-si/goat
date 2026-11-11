@@ -130,14 +130,16 @@ export const makeMove = (deps: MoveDeps) =>
     // Once the old alias's device may have changed, an error must not hide the partial move.
     let mutating = false;
     let later = "";
-    const revoked = () =>
-      sourceGone || steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
+    const revokedHere = () =>
+      steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
     const said = (message: string) =>
-      !revoked()
+      !revokedHere() && !sourceGone
         ? message
         : proven
           ? `${message} ${from} already left this Home: its link and tunnel are gone, so it no longer routes through it. ${later}`
-          : `${message} The link of ${from} on this Home was revoked, but GOAT has not proven that its link record and tunnel are gone, so whether ${from} still routes through this Home is unproven. ${later}`;
+          : revokedHere()
+            ? `${message} The link of ${from} on this Home was revoked, but GOAT has not proven that its link record and tunnel are gone, so whether ${from} still routes through this Home is unproven. ${later}`
+            : `${message} This Home has no link record for ${from}, but GOAT has not proven that its tunnel is gone, so whether ${from} still routes through this Home is unproven. ${later}`;
     const stop = (message: string) => done("failed", said(message), bound);
     const failedAfter = (error: { readonly message: string }) => {
       const added = steps.find(({ step, outcome }) => step === "link_add" && outcome === "ok");

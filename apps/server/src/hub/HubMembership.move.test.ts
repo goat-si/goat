@@ -254,8 +254,11 @@ it.effect("a stop after the old link is gone still says so and how to continue",
       fromTunnelPort: 42255,
     });
     expect(stopped.state).toBe("failed");
-    // This call stopped before rechecking the old tunnel, so it does not claim routing stopped.
+    // This call stopped before rechecking the old tunnel, so it does not claim routing stopped,
+    // and it saw only an absent record, not a revoke of its own.
     expect(stopped.message).toContain("unproven");
+    expect(stopped.message).toContain("no link record for mini");
+    expect(stopped.message).not.toContain("revoked");
     expect(stopped.message).toContain("fromTunnelPort 42255");
   }),
 );
