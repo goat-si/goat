@@ -1013,6 +1013,8 @@ export type OrchestrationV2ProviderSessionDetached =
   typeof OrchestrationV2ProviderSessionDetached.Type;
 
 const PendingBackgroundTaskFields = {
+  command: Schema.optional(Schema.String),
+  startedAt: Schema.optional(IsoDateTime),
   taskId: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
   /** The subagent task that started this work and waits on it. */
@@ -1198,6 +1200,8 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   ...Restart.SurvivingRestartFields,
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
+  /** Model reported by the provider for this turn, when available. */
+  model: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
 

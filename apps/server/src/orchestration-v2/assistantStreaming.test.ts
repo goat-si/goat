@@ -39,6 +39,19 @@ const assistantEvent = (text: string): ProviderAdapter.ProviderAdapterV2Event =>
   },
 });
 
+it("keeps at most 256 streaming items, forgetting the least recently updated", () => {
+  const filter = makeAssistantStreamingFilter("paragraph");
+  const item = (index: number, text: string) => {
+    const event = assistantEvent(text);
+    if (event.type !== "turn_item.updated") throw new Error("Expected assistant item");
+    return { ...event, turnItem: { ...event.turnItem, id: TurnItemId.make(`item-${index}`) } };
+  };
+  for (let index = 0; index < 300; index++) filter(item(index, "First\n\n"), 0);
+  // A tracked item updated again within 400 ms waits; a forgotten one is delivered as new.
+  expect(filter(item(299, "First\n\nSecond\n\n"), 100)).toBeNull();
+  expect(filter(item(0, "First\n\nSecond\n\n"), 100)).not.toBeNull();
+});
+
 it.each(["paragraph", "turn"] as const)(
   "passes only the first receipt line before the %s gate",
   (mode) => {

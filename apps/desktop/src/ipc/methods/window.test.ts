@@ -31,6 +31,7 @@ import {
   getRelayTelemetryEnabled,
   pickProjectFavicon,
   probeRemoteEditors,
+  syncHtmlFullscreen,
 } from "./window.ts";
 
 const readyWslConfig: DesktopBackendManager.DesktopBackendStartConfig = {
@@ -303,6 +304,120 @@ describe("pickProjectFavicon", () => {
       assert.strictEqual(pickFiles.mock.calls.length, 0);
     }),
   );
+});
+
+describe("syncHtmlFullscreen", () => {
+  const fullscreenWindow = (fullscreen: boolean, { animatedExit = false } = {}) => {
+    let current = fullscreen;
+    let exiting = false;
+    const queued: boolean[] = [];
+    const leaveListeners: Array<() => void> = [];
+    const navigationListeners: Array<
+      (details: { isMainFrame: boolean; isSameDocument: boolean }) => void
+    > = [];
+    const leave = () => {
+      current = false;
+      for (const listener of leaveListeners) listener();
+    };
+    // Like macOS, an animated exit keeps reporting fullscreen and queues requests until it ends.
+    const setFullScreen = vi.fn((next: boolean) => {
+      if (exiting) queued.push(next);
+      else if (next) current = true;
+      else if (!current) return;
+      else if (animatedExit) exiting = true;
+      else leave();
+    });
+    const finishExit = () => {
+      exiting = false;
+      leave();
+      for (const next of queued.splice(0)) setFullScreen(next);
+    };
+    const window = {
+      webContents: {
+        id: 1,
+        on: (
+          event: string,
+          listener: (details: { isMainFrame: boolean; isSameDocument: boolean }) => void,
+        ) => {
+          if (event === "did-start-navigation") navigationListeners.push(listener);
+        },
+      },
+      isDestroyed: () => false,
+      isFullScreen: () => current,
+      setFullScreen,
+      on: (event: string, listener: () => void) => {
+        if (event === "leave-full-screen") leaveListeners.push(listener);
+      },
+    } as unknown as Electron.BrowserWindow;
+    const layer = Layer.mock(ElectronWindow.ElectronWindow)({ main: Effect.succeedSome(window) });
+    const navigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+      for (const listener of navigationListeners) listener(details);
+    };
+    return { window, setFullScreen, finishExit, navigate, layer };
+  };
+  const fromMainRenderer = { sender: { id: 1 } };
+
+  it.effect("gives the screen back when the app reloads during fullscreen playback", () => {
+    const { window, navigate, layer } = fullscreenWindow(false);
+    return Effect.gen(function* () {
+      yield* syncHtmlFullscreen.handler(true, fromMainRenderer);
+      navigate({ isMainFrame: false, isSameDocument: false });
+      navigate({ isMainFrame: true, isSameDocument: true });
+      assert.isTrue(window.isFullScreen());
+      // The reloaded page has no fullscreen element and never reports leaving it.
+      navigate({ isMainFrame: true, isSameDocument: false });
+      assert.isFalse(window.isFullScreen());
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("takes the screen for the app's own fullscreen element and gives it back", () => {
+    const { window, layer } = fullscreenWindow(false);
+    return Effect.gen(function* () {
+      yield* syncHtmlFullscreen.handler(true, fromMainRenderer);
+      assert.isTrue(window.isFullScreen());
+
+      yield* syncHtmlFullscreen.handler(false, fromMainRenderer);
+      assert.isFalse(window.isFullScreen());
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps a window the user had already made fullscreen", () => {
+    const { window, setFullScreen, layer } = fullscreenWindow(true);
+    return Effect.gen(function* () {
+      yield* syncHtmlFullscreen.handler(true, fromMainRenderer);
+      yield* syncHtmlFullscreen.handler(false, fromMainRenderer);
+
+      assert.isTrue(window.isFullScreen());
+      assert.strictEqual(setFullScreen.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("hands the window back once the user leaves OS fullscreen during playback", () => {
+    const { window, layer } = fullscreenWindow(false);
+    return Effect.gen(function* () {
+      yield* syncHtmlFullscreen.handler(true, fromMainRenderer);
+      window.setFullScreen(false);
+      window.setFullScreen(true);
+      yield* syncHtmlFullscreen.handler(false, fromMainRenderer);
+
+      assert.isTrue(window.isFullScreen());
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("takes the screen again when the video returns during an animated exit", () => {
+    const { window, finishExit, layer } = fullscreenWindow(false, { animatedExit: true });
+    return Effect.gen(function* () {
+      yield* syncHtmlFullscreen.handler(true, fromMainRenderer);
+      yield* syncHtmlFullscreen.handler(false, fromMainRenderer);
+      yield* syncHtmlFullscreen.handler(true, fromMainRenderer);
+      finishExit();
+      assert.isTrue(window.isFullScreen());
+
+      yield* syncHtmlFullscreen.handler(false, fromMainRenderer);
+      finishExit();
+      assert.isFalse(window.isFullScreen());
+    }).pipe(Effect.provide(layer));
+  });
 });
 
 it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(

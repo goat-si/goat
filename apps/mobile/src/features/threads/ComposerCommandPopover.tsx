@@ -21,7 +21,9 @@ import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { GlassSurface } from "../../components/ui/GlassSurface";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
+import { ProviderIcon } from "../../components/ProviderIcon";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
+import type { ComposerModelItem } from "./composerModelMentions";
 export type ComposerCommandItem =
   | {
       readonly id: string;
@@ -66,7 +68,8 @@ export type ComposerCommandItem =
       readonly label: string;
       readonly description: string;
     }
-  | ComposerCapabilityItem;
+  | ComposerCapabilityItem
+  | ComposerModelItem;
 
 interface ComposerCommandPopoverProps {
   readonly items: ReadonlyArray<ComposerCommandItem>;
@@ -115,6 +118,7 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
     case "skill":
       return SKILL_SOURCE_SYMBOL_BY_KIND[resolveProviderSkillSourceKind(item.skill)];
     case "path":
+    case "model":
       return null;
     case "thread":
       return "text.bubble";
@@ -186,6 +190,12 @@ const CommandRow = memo(function CommandRow(props: {
     >
       {props.item.type === "path" ? (
         <PierreEntryIcon path={props.item.path} kind={props.item.kind} size={16} />
+      ) : props.item.type === "model" ? (
+        <ProviderIcon
+          provider={props.item.option.providerDriver}
+          iconUrl={props.item.option.providerIconUrl}
+          size={16}
+        />
       ) : props.item.type === "capability" && props.item.app?.icon !== undefined ? (
         <Image
           accessibilityIgnoresInvertColors

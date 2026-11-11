@@ -259,6 +259,9 @@ speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
 download, select, or remove models from **Manage voice models** in the same menu.
 Connections through a hub do not currently support this option.
+Model speed figures are CPU and GPU reference measurements, not timings from your
+environment. When acceleration is automatic, both are shown because transcription
+may fall back to the CPU.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.
 
@@ -411,6 +414,9 @@ row above the composer shows the goal and its progress.
   the turn to end.
 
 ## Context in your message
+
+Type `@` and a model or provider name to name a model for the agent, for example when delegating.
+This adds a model reference to the message; it does not change the thread's model.
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,
 a review comment from a diff or file, a preview annotation, or a file. You can type before and

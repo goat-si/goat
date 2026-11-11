@@ -9,6 +9,7 @@
 - [Secrets](./user/secrets.md)
 - [Terminal history](./user/terminal.md)
 - [Source control](./user/source-control.md)
+- [Text generation](./user/text-generation.md)
 - [Project settings](./user/project-settings.md)
 - [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)

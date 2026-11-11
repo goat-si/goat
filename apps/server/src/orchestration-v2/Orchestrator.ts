@@ -198,6 +198,7 @@ import {
   followsCurrentConversation,
   isUndeliveredMailboxSteer,
   queuedRunModelSelection,
+  queueTailModelSelection,
 } from "./NotificationMailbox.ts";
 import { foldIntoQueuedNotice } from "./TurnDigest.ts";
 import { EventSinkV2 } from "./EventSink.ts";
@@ -486,10 +487,9 @@ export interface OrchestratorV2Shape
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<ShellSnapshotRead, OrchestratorV2Error>;
-  readonly listActiveSubagentThreadIds: () => Effect.Effect<
-    ReadonlyArray<ThreadId>,
-    OrchestratorV2Error
-  >;
+  readonly listActiveSubagentThreadIds: (
+    page?: Parameters<ProjectionStoreV2["Service"]["listActiveSubagentThreadIds"]>[0],
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, OrchestratorV2Error>;
   readonly countThreads: () => Effect.Effect<number, OrchestratorV2Error>;
   /** Each active thread's parent and launcher, for walking launched threads cheaply. */
   readonly listLaunchEdges: () => Effect.Effect<
@@ -5448,7 +5448,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
       projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
-    const modelSelection = command.modelSelection ?? projection.thread.modelSelection;
+    let modelSelection = command.modelSelection ?? projection.thread.modelSelection;
     let dispatchMode = resolveMessageDispatchIntent(
       projection,
       command.dispatchMode,
@@ -5521,7 +5521,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : parsedGoalCommand;
     let goalStopRunId: RunId | undefined;
     if (goalCommand !== null) {
-      yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
       // A goal command never joins a running turn. One that starts or ends goal
       // work stops the run and goes first in the queue; the rest wait. A send
       // that asked to be queued (no delivery intent) only queues, and a run
@@ -5724,6 +5723,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
 
     if (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") {
+      yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
       yield* dispatchSteerIntoRun({
         command,
         events,
@@ -5783,6 +5783,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       dispatchMode.type === "start_immediately" ||
       dispatchMode.type === "queue_after_active";
     const shouldQueue = queueBehindRun !== undefined && startsOrQueuesRun;
+    const incomingMessage = { ...command, delegatedCompletion };
+    if (
+      shouldQueue &&
+      command.modelSelection === undefined &&
+      goalStopRunId === undefined &&
+      !followsCurrentConversation(incomingMessage) &&
+      !isBufferedProviderNotification(incomingMessage)
+    ) {
+      modelSelection = queueTailModelSelection(projection);
+    }
+    yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
     // A notice that starts now carries what watched pull requests kept as context (#1055).
     const held = shouldQueue
       ? undefined
@@ -13772,9 +13783,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError));
     }),
     listActiveSubagentThreadIds: Effect.fn("OrchestratorV2.listActiveSubagentThreadIds")(
-      function () {
+      function (page) {
         return projectionStore
-          .listActiveSubagentThreadIds()
+          .listActiveSubagentThreadIds(page)
           .pipe(Effect.mapError(shellProjectionError));
       },
     ),

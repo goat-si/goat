@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { readPreviewShown } from "../lib/previewShown";
 import * as Schema from "effect/Schema";
 import {
   useEffect,
@@ -28,7 +29,6 @@ import { isEditableFocused } from "../lib/editableFocus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
-import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -153,9 +153,7 @@ function readRoutePanelsOpen(router: AnyRouter) {
       useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
       routeThreadRef,
     ).terminalOpen,
-    previewOpen:
-      selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, routeThreadRef) ===
-      "preview",
+    previewOpen: readPreviewShown(routeThreadRef),
   };
 }
 

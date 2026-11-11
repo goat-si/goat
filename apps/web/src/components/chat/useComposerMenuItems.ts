@@ -27,6 +27,10 @@ import {
 } from "@goat/shared/composerPullRequestMatches";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import { previewTabMenuItems } from "~/lib/previewTabDraft";
+import { matchComposerModelItems } from "./composerModelMentions";
+import type { ModelEsque } from "./providerIconUtils";
+import type { ProviderInstanceEntry } from "../../providerInstances";
+import type { ProviderInstanceId } from "@goat/contracts";
 
 import type { ComposerTrigger } from "../../composer-logic";
 import { basenameOfPath } from "../../pierre-icons";
@@ -83,6 +87,7 @@ export function useComposerMenuItems({
   interactionMode,
   capabilityTargetDrivers,
   workspaceSkillsScanning,
+  modelMentions,
 }: {
   readonly composerTrigger: ComposerTrigger | null;
   readonly environmentId: EnvironmentId;
@@ -104,6 +109,10 @@ export function useComposerMenuItems({
   /** The drivers of every provider this send goes to, so @computer judges the real targets. */
   readonly capabilityTargetDrivers: ReadonlyArray<string>;
   readonly workspaceSkillsScanning: boolean;
+  readonly modelMentions: {
+    readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+    readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  };
 }) {
   // Thread mentions rank by recency as of when the composer mounted.
   const [now] = useState(() => Date.now());
@@ -253,6 +262,7 @@ export function useComposerMenuItems({
           label: basenameOfPath(entry.path),
           description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
         })),
+        ...matchComposerModelItems({ ...modelMentions, query: composerTrigger.query }),
       ];
     }
     if (composerTrigger.kind === "slash-command") {

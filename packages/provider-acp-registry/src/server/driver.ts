@@ -32,7 +32,10 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "@goat/provider-core/server/driver";
-import { providerModelsFromSettings } from "@goat/provider-core/server/snapshotProbe";
+import {
+  providerModelsFromSettings,
+  providerProbeEnvironment,
+} from "@goat/provider-core/server/snapshotProbe";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -346,8 +349,8 @@ export function buildCheckedAcpRegistrySnapshot(
     ...(input.inspection.status === "ready" && input.inspection.documentationUrl
       ? { documentationUrl: input.inspection.documentationUrl }
       : {}),
-    installed: readiness.installed,
-    version: readiness.version,
+    installed: input.probeError?.reason === "runner_unavailable" ? false : readiness.installed,
+    version: input.probeError?.reason === "runner_unavailable" ? null : readiness.version,
     // Failed discovery is a warning: an installed agent may still run real turns.
     status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
@@ -412,7 +415,7 @@ export const checkAcpRegistryProviderStatus = Effect.fn("AcpRegistryDriver.check
         instanceId: input.instanceId,
         settings: input.settings,
         cwd: input.cwd,
-        environment: input.environment,
+        environment: providerProbeEnvironment(input.environment),
       }),
     );
     return Result.isFailure(probed)

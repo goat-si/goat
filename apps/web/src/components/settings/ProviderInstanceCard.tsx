@@ -54,6 +54,12 @@ import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
 import { SecretInput } from "./SecretInput";
 import { SecretReferencePicker } from "./SecretReferencePicker";
+import {
+  makeEnvironmentDraftRow,
+  nextEnvironmentVariableDraftId,
+  reseedEnvironmentRows,
+  type EnvironmentDraftRow,
+} from "./environmentDraftRows";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -95,32 +101,6 @@ function ProviderStatusDiagnostic({
       <TooltipPopup side="top">{detail}</TooltipPopup>
     </Tooltip>
   );
-}
-
-let environmentVariableDraftId = 0;
-const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
-
-type EnvironmentDraftRow = {
-  readonly id: string;
-  readonly name: string;
-  readonly value: string;
-  readonly sensitive: boolean;
-  readonly valueRedacted?: boolean;
-  readonly secret?: SecretReference;
-};
-
-function makeEnvironmentDraftRow(
-  variable: ProviderInstanceEnvironmentVariable,
-  index: number,
-): EnvironmentDraftRow {
-  return {
-    id: `${index}:${variable.name}`,
-    name: variable.name,
-    value: variable.value,
-    sensitive: variable.sensitive,
-    ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
-    ...(variable.secret !== undefined ? { secret: variable.secret } : {}),
-  };
 }
 
 function providerEnvironmentsEqual(
@@ -351,9 +331,8 @@ export function ProviderEnvironmentSection(props: {
     ) {
       return;
     }
-    setRows(props.environment.map(makeEnvironmentDraftRow));
+    setRows(reseedEnvironmentRows(props.environment, previousEnvironment));
   }, [props.environment]);
-
   const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
     const published: ProviderInstanceEnvironmentVariable[] = [];
     for (const row of nextRows) {

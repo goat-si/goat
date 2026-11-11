@@ -12,6 +12,7 @@ import {
   listedForAwareness,
   type ProjectionAwarenessReader,
 } from "./ProjectionAwareness.ts";
+import { selectSubagentPage, subagentPageLimit, type SubagentPage } from "./SubagentPagination.ts";
 import {
   makeMessageLookup,
   sortMessagesByTurnItemOrder,
@@ -624,10 +625,9 @@ export interface ProjectionStoreV2Shape
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<ShellSnapshotRead, ProjectionStoreV2Error>;
-  readonly listActiveSubagentThreadIds: () => Effect.Effect<
-    ReadonlyArray<ThreadId>,
-    ProjectionStoreV2Error
-  >;
+  readonly listActiveSubagentThreadIds: (
+    page?: SubagentPage,
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
   /** Threads that are not deleted, archived ones included. */
   readonly countThreads: () => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly listLaunchEdges: () => Effect.Effect<
@@ -7136,13 +7136,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     }, Effect.mapError(shellSnapshotReadError));
 
     const listActiveSubagentThreadIds = Effect.fn("ProjectionStore.listActiveSubagentThreadIds")(
-      function* () {
+      function* (page?: SubagentPage) {
         const rows = yield* sql<{ readonly thread_id: string }>`
         SELECT thread_id
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
           AND json_extract(payload_json, '$.archivedAt') IS NULL
           AND json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
+          AND (${page?.after ?? null} IS NULL OR thread_id > ${page?.after ?? null})
+        ORDER BY thread_id
+        LIMIT ${subagentPageLimit(page)}
       `;
         return rows.map((row) => ThreadId.make(row.thread_id));
       },
@@ -7703,16 +7706,18 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         return [...existing.values()].filter(({ thread }) => thread.deletedAt === null).length;
       }),
       listActiveSubagentThreadIds: Effect.fn("ProjectionStore.listActiveSubagentThreadIds")(
-        function* () {
+        function* (page?: SubagentPage) {
           const existing = (yield* Ref.get(replayState)).projections;
-          return [...existing.values()]
-            .filter(
-              ({ thread }) =>
+          function* ids() {
+            for (const { thread } of existing.values())
+              if (
                 thread.deletedAt === null &&
                 thread.archivedAt === null &&
-                thread.lineage.relationshipToParent === "subagent",
-            )
-            .map(({ thread }) => thread.id);
+                thread.lineage.relationshipToParent === "subagent"
+              )
+                yield thread.id;
+          }
+          return page === undefined ? [...ids()] : selectSubagentPage(ids(), page);
         },
       ),
       listLaunchEdges: Effect.fn("ProjectionStore.listLaunchEdges")(function* () {

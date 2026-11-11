@@ -38,8 +38,8 @@ export function buildAutoSettleMenuActions(
       title: "Auto-settle behavior",
       image: "timer",
       subactions: [
-        { id: "auto-settle:enabled", title: "Enabled", state: enabled ? "on" : "off" },
-        { id: "auto-settle:disabled", title: "Disabled", state: enabled ? "off" : "on" },
+        { id: "auto-settle:enabled", title: "Follow settings", state: enabled ? "on" : "off" },
+        { id: "auto-settle:disabled", title: "Never", state: enabled ? "off" : "on" },
       ],
     },
   ];

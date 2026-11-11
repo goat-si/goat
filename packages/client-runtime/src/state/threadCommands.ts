@@ -1,4 +1,4 @@
-import { ORCHESTRATION_V2_WS_METHODS, type ThreadId } from "@goat/contracts";
+import { ORCHESTRATION_V2_WS_METHODS, type ModelSelection, type ThreadId } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -312,6 +312,13 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    setModelSelection: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-model-selection",
+      execute: (input: UpdateThreadMetadataInput & { readonly modelSelection: ModelSelection }) =>
+        updateThreadMetadata(input),
+      scheduler,
+      concurrency,
+    }),
     linkPullRequest: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:link-pull-request",
       execute: (input: LinkThreadPullRequestInput) => linkThreadPullRequest(input),
@@ -480,6 +487,11 @@ export function createThreadEnvironmentAtoms<R, E>(
   return {
     ...commands,
     snapshotAtom: optimistic.snapshotAtom,
+    pendingThreadIdsAtom: optimistic.pendingThreadIdsAtom,
+    setModelSelection: optimistic.wrap(commands.setModelSelection, (thread, input) => ({
+      ...thread,
+      modelSelection: input.modelSelection,
+    })),
     settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
       !accepted &&
       (thread.pendingRuntimeRequest !== null ||

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ProviderDriverKind } from "@goat/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
+import type { ModelOption } from "../../lib/modelOptions";
+import { buildComposerModelItems } from "./composerModelMentions";
 
 vi.hoisted(() =>
   Object.assign(globalThis, {
@@ -89,6 +91,41 @@ describe("resolveComposerMenuSelection", () => {
       }),
     ).toEqual({ start: 11, end: 11 });
   });
+});
+
+it("lists a catalog model and inserts its reference without switching the thread", () => {
+  const instanceId = ProviderInstanceId.make("codex");
+  const provider = {
+    instanceId,
+    driver: ProviderDriverKind.make("codex"),
+    enabled: true,
+    installed: true,
+    status: "ready",
+    auth: { status: "authenticated" },
+  } as ServerProvider;
+  const option = {
+    key: "codex:gpt-5.5",
+    label: "GPT-5.5",
+    subtitle: "",
+    providerKey: "codex",
+    providerLabel: "Codex",
+    providerDriver: "codex",
+    isDefault: false,
+    isLegacy: false,
+    capabilities: null,
+    selection: { instanceId, model: "gpt-5.5" },
+  } satisfies ModelOption;
+  const [item] = buildComposerModelItems([option], "", [provider]);
+  expect(item).toMatchObject({ type: "model", label: "GPT-5.5" });
+  if (!item) throw new Error("model missing");
+  expect(
+    resolveComposerCommandSelection({
+      draftMessage: "Compare @",
+      trigger: { rangeStart: 8, rangeEnd: 9 },
+      item,
+      allowInteractionMode: true,
+    }),
+  ).toMatchObject({ text: "Compare model:codex/gpt-5.5 ", interactionMode: null });
 });
 
 describe("mobile slash commands", () => {
