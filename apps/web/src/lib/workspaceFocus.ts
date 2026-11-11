@@ -240,25 +240,61 @@ export function createWorkspaceFocusController(doc: Document) {
     return area ? focusArea(area) : false;
   };
 
-  // Focus that drops to the body because its element was hidden, made inert, or removed
-  // returns to the same control when React remounted it, else to its area, else the content.
+  // Focus that drops to the body because its element was hidden, made inert, or removed returns
+  // to a remounted control, else its area, or the composer for a finished timeline prompt.
+  // A control disabled in place (a request in flight) keeps it until it re-enables or goes away.
+  let stopWaiting = () => {};
   const recover = (event: FocusEvent) => {
     const lost = event.target;
     if (!(lost instanceof HTMLElement) || event.relatedTarget) return;
     const areaName = workspaceArea(lost)?.dataset.workspaceArea;
+    const recoveryArea = areaName === "conversation" ? "composer" : areaName;
     const label = lost.getAttribute("aria-label");
-    requestAnimationFrame(() => {
-      if (doc.activeElement !== doc.body || !doc.hasFocus() || isWorkspaceElementVisible(lost))
-        return;
+    const lostToDisabling = lost.matches(":disabled");
+    const restore = () => {
       const remounted = Array.from(doc.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).find(
         (element) =>
           element.tagName === lost.tagName &&
           ((lost.id && element.id === lost.id) ||
             (label && element.getAttribute("aria-label") === label)) &&
-          isWorkspaceElementVisible(element),
+          isWorkspaceElementVisible(element) &&
+          !element.matches(":disabled"),
       );
       if (remounted) remounted.focus({ preventScroll: true });
-      else if (!areaName || !focus(areaName)) focus("content");
+      else if (!recoveryArea || !focus(recoveryArea)) focus("content");
+    };
+    const waitWhileDisabled = () => {
+      stopWaiting();
+      const area = workspaceArea(lost) ?? doc.body;
+      const watcher = new MutationObserver(() => {
+        if (doc.activeElement !== doc.body) return stopWaiting();
+        if (!isWorkspaceElementVisible(lost)) {
+          stopWaiting();
+          restore();
+        } else if (!lost.matches(":disabled")) {
+          stopWaiting();
+          lost.focus({ preventScroll: true });
+        }
+      });
+      const stop = () => {
+        watcher.disconnect();
+        doc.removeEventListener("focusin", stop);
+        stopWaiting = () => {};
+      };
+      stopWaiting = stop;
+      watcher.observe(area, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["disabled", "hidden", "inert"],
+      });
+      doc.addEventListener("focusin", stop);
+    };
+    requestAnimationFrame(() => {
+      if (doc.activeElement !== doc.body || !doc.hasFocus()) return;
+      if (!isWorkspaceElementVisible(lost)) restore();
+      else if (lost.matches(":disabled")) waitWhileDisabled();
+      else if (lostToDisabling) lost.focus({ preventScroll: true });
     });
   };
   doc.addEventListener("focusout", recover);
