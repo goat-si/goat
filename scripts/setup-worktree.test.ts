@@ -62,6 +62,11 @@ it("reads the vite-plus release the workspace catalog pins, and nothing else", (
   assert.equal(pinnedVitePlusVersion('catalog:\n  vite-plus: "1.4.0" # pinned\n'), "1.4.0");
   assert.isUndefined(pinnedVitePlusVersion('overrides:\n  vite-plus: "catalog:"\n'));
   assert.isUndefined(pinnedVitePlusVersion("catalog:\n  vite-plus: ^1.4.0\n"));
+  // An exact override must not stand in for a catalog entry that is not exact.
+  assert.isUndefined(
+    pinnedVitePlusVersion("catalog:\n  vite-plus: ^1.4.0\noverrides:\n  vite-plus: 2.0.0\n"),
+  );
+  assert.isUndefined(pinnedVitePlusVersion("overrides:\n  vite-plus: 2.0.0\n"));
 });
 
 it("recognizes only missing corepack pnpm launchers", () => {
@@ -106,7 +111,7 @@ function setupFixture(
   );
   const windows = HostProcess.Platform.defaultValue() === "win32";
   // Stands in for `npx --package=node@<pin> -- node <script>`: the pin becomes this Node.
-  const nodeRunner = `if [ "$3" = "--" ] && [ "$4" = "node" ]; then printf '%s' "$SETUP_TEST_PIN" > package.json; exec "$SETUP_TEST_NODE" "$5"; fi\n`;
+  const nodeRunner = `if [ "$3" = "--" ] && [ "$4" = "node" ]; then printf '%s' "$SETUP_TEST_PIN" > package.json; export SETUP_TEST_RERUN_PID=$$; exec "$SETUP_TEST_NODE" "$5"; fi\n`;
   // A runner whose own child outlives it unless the whole group is signalled. The child
   // says it is ready only once its trap is set, so a signal cannot arrive before it.
   const hangingRunner = `"$(dirname "$0")/npx-child" &\nwait\n`;
@@ -130,7 +135,7 @@ function setupFixture(
     const noise = "x".repeat(60);
     const contents = windows
       ? `@echo off\r\necho ${name}>>"%SETUP_TEST_LOG%"\r\n${name === "pnpm" ? `echo ${pnpmOutput} 1>&2\r\nfor /L %%i in (1,1,${trailingLines}) do echo ${noise} 1>&2\r\nexit /b 1` : "exit /b 0"}\r\n`
-      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `printf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit \${SETUP_TEST_PNPM_EXIT:-1}` : `${npxBody}exit 0`}\n`;
+      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `if [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nprintf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit \${SETUP_TEST_PNPM_EXIT:-1}` : `${npxBody}exit 0`}\n`;
     NodeFS.writeFileSync(NodePath.join(bin, `${name}${windows ? ".cmd" : ""}`), contents, {
       mode: 0o755,
     });
@@ -273,7 +278,10 @@ describe("worktree setup contract", () => {
         assert.include(failed, "ERR_PNPM_OUTDATED_LOCKFILE");
         assert.notInclude(failed, "could not start itself");
         assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
-        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-rerun-result")));
+        assert.deepEqual(
+          NodeFS.readdirSync(state).filter((name) => name.startsWith("setup-rerun-")),
+          [],
+        );
         // npx supplied Node and pnpm failed under it: no second runner, no second install.
         assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
           "npx",
@@ -284,6 +292,56 @@ describe("worktree setup contract", () => {
       }
     },
   );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a rerun killed mid-install ends setup as failed and no other runner installs again",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(`${major + 1}.0.0`, "install was running", 0, "runs-node");
+      fixture.env.SETUP_TEST_KILL_RERUN = "1";
+      try {
+        const result = fixture.run();
+        assert.notEqual(result.status, 0, result.stderr);
+        const state = NodePath.join(fixture.root, ".goat");
+        assert.include(
+          NodeFS.readFileSync(NodePath.join(state, "setup-failed"), "utf8"),
+          "ended without finishing",
+        );
+        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-running")));
+        assert.deepEqual(
+          NodeFS.readdirSync(state).filter((name) => name.startsWith("setup-rerun-")),
+          [],
+        );
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
+          "npx",
+          "pnpm",
+        ]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it("a rerun flag with no setup behind it changes nothing: the run owns its markers", () => {
+    const fixture = setupFixture(process.versions.node, "ERR_PNPM_OUTDATED_LOCKFILE");
+    fixture.env.GOAT_SETUP_PINNED_NODE = "1";
+    const state = NodePath.join(fixture.root, ".goat");
+    NodeFS.mkdirSync(state);
+    NodeFS.writeFileSync(NodePath.join(state, "setup-done"), "");
+    try {
+      const result = fixture.run();
+      assert.equal(result.status, 1, result.stderr);
+      assert.include(
+        NodeFS.readFileSync(NodePath.join(state, "setup-failed"), "utf8"),
+        "ERR_PNPM_OUTDATED_LOCKFILE",
+      );
+      assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
+      assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-running")));
+    } finally {
+      fixture.cleanup();
+    }
+  });
 
   it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "a cancel reaches everything the pinned-Node rerun started, and leaves only setup-failed",

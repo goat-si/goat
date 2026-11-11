@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - runs before `vp i`, so only Node built-ins exist.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
@@ -12,8 +13,11 @@ const worktree = NodePath.dirname(import.meta.dirname);
 
 /** Set for the setup this one starts under the pinned Node, so it never starts a third. */
 const PINNED_NODE_RERUN = "GOAT_SETUP_PINNED_NODE";
-/** Where a rerun leaves its outcome; the setup that started it owns the markers agents read. */
-const RERUN_RESULT = "setup-rerun-result";
+/**
+ * One file per rerun, named by a token only its starter knows: the starter writes "requested",
+ * the rerun "started" and then how it ended. The starter owns the markers agents read.
+ */
+const RERUN_FILE_PREFIX = "setup-rerun-";
 
 /**
  * Ways to run setup again under the pinned Node when PATH's Node is another release.
@@ -45,7 +49,16 @@ export function pinnedNodeRunners(input: {
 
 /** The vite-plus release pnpm-workspace.yaml pins, so npx runs that one and not the latest. */
 export function pinnedVitePlusVersion(workspaceYaml: string): string | undefined {
-  return /^ {2}vite-plus: ["']?(\d+\.\d+\.\d+)["']?\s*(?:#.*)?$/m.exec(workspaceYaml)?.[1];
+  // Only the catalog pins a release; an override of the same name must not stand in for it.
+  const lines = workspaceYaml.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trimEnd() === "catalog:");
+  if (start === -1) return undefined;
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() !== "" && !/^\s/.test(line)) break;
+    const pin = /^ {2}vite-plus: ["']?(\d+\.\d+\.\d+)["']?\s*(?:#.*)?$/.exec(line)?.[1];
+    if (pin !== undefined) return pin;
+  }
+  return undefined;
 }
 
 export function worktreeInstallCandidates(tools: {
@@ -130,11 +143,23 @@ async function main(): Promise<void> {
   const runningMarker = NodePath.join(markerDir, "setup-running");
   const doneMarker = NodePath.join(markerDir, "setup-done");
   const failedMarker = NodePath.join(markerDir, "setup-failed");
-  const rerunResult = NodePath.join(markerDir, RERUN_RESULT);
   // A rerun writes no marker: the setup that started it stays the live setup-running process.
-  const isRerun = process.env[PINNED_NODE_RERUN] === "1";
+  // The flag alone does not make a rerun; its starter's request file must be there too.
+  const rerunToken = process.env[PINNED_NODE_RERUN];
+  const requestedFile =
+    rerunToken !== undefined && /^[0-9a-f-]{36}$/.test(rerunToken)
+      ? NodePath.join(markerDir, `${RERUN_FILE_PREFIX}${rerunToken}`)
+      : undefined;
+  const rerunFile =
+    requestedFile !== undefined &&
+    NodeFS.existsSync(requestedFile) &&
+    NodeFS.readFileSync(requestedFile, "utf8") === "requested\n"
+      ? requestedFile
+      : undefined;
+  const isRerun = rerunFile !== undefined;
   createMarkerDirectory(markerDir);
-  if (!isRerun) {
+  if (rerunFile !== undefined) NodeFS.writeFileSync(rerunFile, "started\n");
+  else {
     NodeFS.rmSync(doneMarker, { force: true });
     NodeFS.rmSync(failedMarker, { force: true });
     NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
@@ -145,17 +170,16 @@ async function main(): Promise<void> {
     failureDetail = error.stack ?? String(error);
   });
   process.on("exit", (code) => {
-    if (isRerun) {
+    if (rerunFile !== undefined) {
       const outcome =
         code === 0
           ? "done\n"
           : rerunFoundUnsupportedNode
             ? "unsupported-node\n"
             : `failed\n${failureDetail}\n`;
-      NodeFS.writeFileSync(rerunResult, outcome);
+      NodeFS.writeFileSync(rerunFile, outcome);
       return;
     }
-    NodeFS.rmSync(rerunResult, { force: true });
     if (code === 0) NodeFS.writeFileSync(doneMarker, "");
     else {
       NodeFS.rmSync(doneMarker, { force: true });
@@ -195,7 +219,9 @@ async function main(): Promise<void> {
       process.stderr.write(
         `Worktree setup: Node.js ${process.versions.node} is not the pinned ${pinned}; running setup under it with ${runner.tool}.\n`,
       );
-      NodeFS.rmSync(rerunResult, { force: true });
+      const token = NodeCrypto.randomUUID();
+      const requestFile = NodePath.join(markerDir, `${RERUN_FILE_PREFIX}${token}`);
+      NodeFS.writeFileSync(requestFile, "requested\n");
       const rerun = NodeChildProcess.spawn(runner.command, {
         cwd: worktree,
         shell: true,
@@ -203,7 +229,7 @@ async function main(): Promise<void> {
         detached: true,
         // Piped, so `close` waits for every process the runner started, as the install below does.
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, [PINNED_NODE_RERUN]: "1" },
+        env: { ...process.env, [PINNED_NODE_RERUN]: token },
       });
       activeRerun = rerun;
       let rerunOutput = "";
@@ -219,23 +245,34 @@ async function main(): Promise<void> {
       }
       const status = await new Promise<number | null>((resolve) => rerun.on("close", resolve));
       activeRerun = undefined;
+      // What the rerun itself says happened; a runner's exit code alone cannot tell these apart.
+      const outcome = NodeFS.existsSync(requestFile)
+        ? NodeFS.readFileSync(requestFile, "utf8")
+        : "requested\n";
+      NodeFS.rmSync(requestFile, { force: true });
+      const tail = rerunOutput.trimEnd().split("\n").slice(-10).join("\n") || "no output";
       if (cancelSignal) {
         failureDetail = `Cancelled by ${cancelSignal}.`;
         process.exit(status || 1);
       }
-      // What the rerun itself says happened; a runner's exit code alone cannot tell these apart.
-      const outcome = NodeFS.existsSync(rerunResult)
-        ? NodeFS.readFileSync(rerunResult, "utf8")
-        : undefined;
-      if (outcome === "done\n") process.exit(0);
-      if (outcome?.startsWith("failed\n")) {
+      if (outcome === "done\n" && status === 0) process.exit(0);
+      if (outcome === "done\n") {
+        failureDetail = `${runner.tool} exited with ${status ?? "a signal"} after setup finished.\n${tail}`;
+        process.exit(status || 1);
+      }
+      if (outcome.startsWith("failed\n")) {
         failureDetail = outcome.slice("failed\n".length).trimEnd();
+        process.exit(status || 1);
+      }
+      if (outcome === "started\n") {
+        // Killed or crashed mid-setup. Its output has closed, so nothing it started still writes.
+        failureDetail = `Setup under ${runner.tool} ended without finishing.\n${tail}`;
         process.exit(status || 1);
       }
       tried.push(
         outcome === "unsupported-node\n"
           ? `${runner.tool}: it ran setup under a Node.js that is not ${pinned}`
-          : `${runner.tool}: ${rerunOutput.trimEnd().split("\n").slice(-10).join("\n") || "no output"}`,
+          : `${runner.tool}: ${tail}`,
       );
     }
     failureDetail =
