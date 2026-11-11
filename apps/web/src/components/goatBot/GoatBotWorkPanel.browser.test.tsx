@@ -232,6 +232,7 @@ it("steps back from a peek to its row with Escape", async () => {
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
+      onOpenFile={() => {}}
     />,
   );
   await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
@@ -288,6 +289,7 @@ it("leaves focus in the composer when a peeked task leaves the list", async () =
         environmentId={EnvironmentId.make("env")}
         threadId={ThreadId.make("bot")}
         peekRows={() => []}
+        onOpenFile={() => {}}
       />
     </>
   );
