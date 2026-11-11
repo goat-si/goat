@@ -118,6 +118,8 @@ class Link implements RelayLink {
   #draining = false;
   #closeDeferred = false;
   #attached = false;
+  /** Set while #finish closes the socket: an observer attached meanwhile hears of the close from #finish, after it. */
+  #finishing = false;
   /** Socket events that came while the link was inside a socket call or another event, in arrival order. */
   #queued: Array<() => void> = [];
   #depth = 0;
@@ -308,7 +310,7 @@ class Link implements RelayLink {
     this.#held = [];
     this.#heldBytes = 0;
     this.#receiver = receiver;
-    if (closedBefore || this.#closeDeferred) {
+    if ((closedBefore || this.#closeDeferred) && !this.#finishing) {
       this.#closeDeferred = false;
       this.#notifyClose();
     }
@@ -469,7 +471,12 @@ class Link implements RelayLink {
     for (const waiter of this.#receivers.splice(0)) waiter.reject(error);
     for (const writer of this.#writers.splice(0)) writer.reject(error);
     this.#resolveClosed(code);
-    closeSocket?.();
+    this.#finishing = true;
+    try {
+      closeSocket?.();
+    } finally {
+      this.#finishing = false;
+    }
     if (this.#draining) this.#closeDeferred = true;
     else this.#notifyClose();
   }
