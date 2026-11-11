@@ -53,3 +53,32 @@ it("stays on the newest message when a message grows after it rendered", async (
   await vi.waitFor(() => expect(distanceFromBottom(element)).toBeLessThanOrEqual(1));
   host.remove();
 });
+
+it("keeps following when a scroll event from its own move arrives after a message grew", async () => {
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  document.body.append(host);
+  await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
+    container: host,
+    router: false, // The timeline renders no links that need a router.
+  });
+  const element = scroller(screen.container);
+  await vi.waitFor(() => expect(distanceFromBottom(element)).toBeLessThanOrEqual(1));
+  // The browser delivers scroll events before resize callbacks: a late scroll event from the
+  // timeline's own move to the bottom lands after the message grew, before it is followed.
+  await act(() => {
+    const last = screen.container.querySelector<HTMLElement>("li:last-child");
+    if (last) last.style.paddingBottom = "300px";
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await vi.waitFor(() => expect(distanceFromBottom(element)).toBeLessThanOrEqual(1));
+  // Scrolling up by hand still stops the following.
+  element.scrollTop = 0;
+  element.dispatchEvent(new Event("scroll"));
+  await act(() => {
+    const last = screen.container.querySelector<HTMLElement>("li:last-child");
+    if (last) last.style.paddingBottom = "600px";
+  });
+  await vi.waitFor(() => expect(element.scrollTop).toBe(0));
+  host.remove();
+});

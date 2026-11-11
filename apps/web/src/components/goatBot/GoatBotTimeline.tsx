@@ -125,6 +125,8 @@ export function GoatBotTimeline({
   const listRef = useRef<HTMLOListElement>(null);
   const timePrefix = useId();
   const followingRef = useRef(true);
+  // Where the transcript was last scrolled, by the reader or by following.
+  const lastScrollTopRef = useRef(0);
   const [nowMs] = useState(() => Date.now());
   const replying = useReplying(replyingSince);
   const working = useContext(GoatBotActivityContext);
@@ -143,15 +145,25 @@ export function GoatBotTimeline({
   });
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
-    followingRef.current =
-      element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
+    const top = element.scrollTop;
+    // Only moving up stops following. A scroll event the timeline's own move left behind can
+    // arrive after a message grew, far from the new bottom, without the reader moving at all.
+    if (element.scrollHeight - top - element.clientHeight < FOLLOW_THRESHOLD_PX) {
+      followingRef.current = true;
+    } else if (top < lastScrollTopRef.current) {
+      followingRef.current = false;
+    }
+    lastScrollTopRef.current = top;
     updateEdges();
   };
   // Messages finish laying out after they render (Markdown, highlighting, images), and the
   // column can get its height after mounting; a reader following the newest message stays there.
   const followResize = useStableCallback(() => {
     const scroll = scrollRef.current;
-    if (scroll !== null && followingRef.current) scroll.scrollTop = scroll.scrollHeight;
+    if (scroll !== null && followingRef.current) {
+      scroll.scrollTop = scroll.scrollHeight;
+      lastScrollTopRef.current = scroll.scrollTop;
+    }
     updateEdges();
   });
   useLayoutEffect(() => {
@@ -167,6 +179,7 @@ export function GoatBotTimeline({
     const element = scrollRef.current;
     if (element !== null && (rows.length > 0 || activityText !== null) && followingRef.current) {
       element.scrollTop = element.scrollHeight;
+      lastScrollTopRef.current = element.scrollTop;
     }
     updateEdges();
   }, [rows, activityText, updateEdges]);
