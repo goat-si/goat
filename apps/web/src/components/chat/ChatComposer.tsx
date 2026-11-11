@@ -278,6 +278,7 @@ import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { resolveProviderSlashCommandsForCwd } from "@goat/client-runtime/providerSkills";
 import { useOfferedSkills } from "./providerSkillsWithBuiltIns";
 import { useDelayedStatus } from "../../hooks/useDelayedStatus";
+import type { ComposerForkCommand } from "../../hooks/useForkThread";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -414,6 +415,7 @@ export interface ChatComposerProps {
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
   onUsageLimitsCommand?: (() => void) | undefined;
+  forkCommand?: ComposerForkCommand | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -1201,6 +1203,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     threadPullRequests,
     planModeUiEnabled,
     sideChatAvailable,
+    forkDescription: props.forkCommand?.description ?? null,
     compactSlashCommandAvailable,
     selectedProvider,
     selectedProviderSkills,
@@ -1905,7 +1908,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
-  const { onUsageLimitsCommand } = props;
+  const { onUsageLimitsCommand, forkCommand } = props;
   const navigate = useNavigate();
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
@@ -1915,6 +1918,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
+    const clearTrigger = (focusEditorAfterReplace?: false) =>
+      applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        ...(focusEditorAfterReplace === false ? { focusEditorAfterReplace } : {}),
+      });
     // Replaces the typed trigger, swallowing one following space so chips never double it.
     const replaceTriggerWith = (replacement: string) => {
       const end = extendReplacementRangeForTrailingSpace(
@@ -1952,15 +1960,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
-      if (item.command === "model") {
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-          focusEditorAfterReplace: false,
-        });
-        if (applied) {
-          setComposerHighlightedItemId(null);
-          setIsComposerModelPickerOpen(true);
-        }
+      if (item.command === "model" || item.command === "fork") {
+        if (!clearTrigger(false)) return;
+        setComposerHighlightedItemId(null);
+        if (item.command === "model") setIsComposerModelPickerOpen(true);
+        else forkCommand?.run();
         return;
       }
       if (item.command === "side") {
@@ -1973,21 +1977,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       if (!planModeUiEnabled) return;
       void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
-      const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-      });
-      if (applied) {
-        setComposerHighlightedItemId(null);
-      }
+      if (clearTrigger()) setComposerHighlightedItemId(null);
       return;
     }
     if (item.type === "provider-slash-command") {
       if (item.command.name === USAGE_LIMITS_COMMAND.name && onUsageLimitsCommand) {
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-          focusEditorAfterReplace: false,
-        });
-        if (applied) {
+        if (clearTrigger(false)) {
           setComposerHighlightedItemId(null);
           onUsageLimitsCommand();
         }

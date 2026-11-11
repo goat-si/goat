@@ -14,7 +14,7 @@ import {
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default" | "side";
+export type ComposerSlashCommand = "model" | "plan" | "default" | "side" | "fork";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
 
 export interface ComposerTrigger {
@@ -352,6 +352,10 @@ export function parseStandaloneComposerSlashCommand(text: string): "plan" | "def
   const command = match[1]?.toLowerCase();
   if (command === "plan") return "plan";
   return "default";
+}
+
+export function isStandaloneForkCommand(text: string): boolean {
+  return /^\/fork\s*$/i.test(text.trim());
 }
 
 /**

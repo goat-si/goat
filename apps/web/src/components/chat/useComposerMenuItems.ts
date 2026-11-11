@@ -78,6 +78,7 @@ export function useComposerMenuItems({
   threadPullRequests,
   planModeUiEnabled,
   sideChatAvailable,
+  forkDescription,
   compactSlashCommandAvailable,
   selectedProvider,
   selectedProviderSkills,
@@ -97,6 +98,8 @@ export function useComposerMenuItems({
   readonly threadPullRequests: ReadonlyArray<ThreadPullRequestLink> | undefined;
   readonly planModeUiEnabled: boolean;
   readonly sideChatAvailable: boolean;
+  /** Offers /fork when set; the text says which workspaces it can choose. */
+  readonly forkDescription: string | null;
   readonly compactSlashCommandAvailable: boolean;
   readonly selectedProvider: ProviderDriverKind;
   readonly selectedProviderSkills: ServerProvider["skills"];
@@ -300,6 +303,17 @@ export function useComposerMenuItems({
               },
             ] as const)
           : []),
+        ...(forkDescription === null
+          ? []
+          : [
+              {
+                id: "slash:fork",
+                type: "slash-command" as const,
+                command: "fork" as const,
+                label: "/fork",
+                description: forkDescription,
+              },
+            ]),
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const slashMenuSkills = getProviderSkillsForSlashMenu(
         selectedProviderSkills,

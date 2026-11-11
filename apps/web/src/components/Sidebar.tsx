@@ -110,6 +110,8 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { forkMenuWorkspace, readThreadForkMenuState, useForkThread } from "../hooks/useForkThread";
+import { startThreadOnBranch } from "../hooks/threadMenuActions";
 import { useStartChatNew } from "../hooks/useStartChatNew";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
@@ -828,6 +830,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const startChatNew = useStartChatNew();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
+  const forkThread = useForkThread();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -2495,6 +2498,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+              fork: readThreadForkMenuState(threadRef),
               supports: {
                 settlement: supportsSettlement,
                 autoSettleOptOut: supportsAutoSettleOptOut,
@@ -2539,27 +2543,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 projectId: thread.projectId,
               });
             return;
-          case "new-thread-on-branch": {
-            const result = await settlePromise(() =>
-              handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
-                branch: thread.branch,
-                worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
-                startFromOrigin: false,
-              }),
-            );
-            if (result._tag === "Failure") {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Could not create thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            }
+          case "new-thread-on-branch":
+            await startThreadOnBranch(handleNewThread, thread);
             return;
-          }
+          case "fork:current":
+          case "fork:worktree":
+            await forkThread(threadRef, forkMenuWorkspace(clicked.value));
+            return;
           case "settle":
             attemptSettle(threadRef);
             return;

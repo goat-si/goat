@@ -2929,6 +2929,7 @@ export default function ChatView(props: ChatViewProps) {
     onTimelineRollbackCheckpointStable,
   } = useTimelineRewind({
     isCloudThread,
+    isGitRepo,
     environmentId,
     routeThreadRef,
     routeThreadKey,
@@ -3069,7 +3070,7 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentUnavailable,
     defaultRuntimeMode,
   });
-  const { onSend, continueThreadOnSsh } = useComposerSend({
+  const { onSend, continueThreadOnSsh, forkCommand } = useComposerSend({
     environmentId,
     routeThreadRef,
     primaryEnvironmentId,
@@ -3842,6 +3843,7 @@ export default function ChatView(props: ChatViewProps) {
                                 isRevertingCheckpoint={isRevertingCheckpoint}
                                 sshWorktreeSelected={sshDestination !== null}
                                 sideChatAvailable={sideChatAvailable}
+                                forkCommand={forkCommand}
                                 sendDisabledReason={
                                   cloudState.composerBlockReason ??
                                   sshSendBlockReason ??

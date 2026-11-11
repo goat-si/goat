@@ -144,6 +144,7 @@ import {
 } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useCanPromoteThread, usePromoteThread } from "./promoteThread";
+import { useForkPaletteItems } from "../hooks/useForkPaletteItems";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -559,6 +560,7 @@ function OpenCommandPaletteDialog(props: {
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
   const canPromoteActiveThread = useCanPromoteThread(activeThread);
+  const forkPaletteItems = useForkPaletteItems(activeThread ?? null);
   const promoteThread = usePromoteThread();
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
@@ -1413,6 +1415,7 @@ function OpenCommandPaletteDialog(props: {
     icon: <CloudDownloadIcon className={ITEM_ICON_CLASS} />,
   });
   if (sshFetchBackItem !== null) actionItems.push(sshFetchBackItem);
+  actionItems.push(...forkPaletteItems);
 
   if (
     activeThread !== null &&

@@ -24,11 +24,7 @@ import {
   type ServerConfig as GoatServerConfig,
   type UsageLimitsReport,
 } from "@goat/contracts";
-import {
-  collectProviderUsageLimits,
-  hasProviderUsageLimits,
-  isUsageLimitsCommand,
-} from "@goat/shared/usageLimits";
+import { collectProviderUsageLimits, hasProviderUsageLimits } from "@goat/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
 import { useModelMentionOptions } from "./useModelMentionOptions";
@@ -109,7 +105,8 @@ import { FOLLOW_UP_ACTION_LABEL, SendActionButton } from "./SendActionButton";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
 import { ComposerPopoverAnchor } from "./ComposerPopoverAnchor";
 import { ComposerQueuedEditAttachments } from "./ComposerQueuedEdit";
-import { useComposerCommandMenu } from "./use-composer-command-menu";
+import { resolveComposerSendIntercept, useComposerCommandMenu } from "./use-composer-command-menu";
+import { useComposerFork } from "./useForkThread";
 import {
   ComposerDictationCancelAction,
   ComposerDictationDraftContent,
@@ -479,11 +476,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   });
   const sendLabel = sendPresentation.label;
   const currentModelSelection = props.selectedThread.modelSelection;
-  const mentionModelOptions = useModelMentionOptions(
-    props.serverConfig,
-    currentModelSelection,
-    props.selectedThread.projectId,
-  );
+  const modelMentions = useModelMentionOptions(props, currentModelSelection);
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const modelUnavailable =
     props.connectionState === "connected" &&
@@ -539,6 +532,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     }
     return report !== null;
   };
+  const composerFork = useComposerFork({
+    thread: props.selectedThread,
+    serverConfig: props.serverConfig,
+    project,
+    enabled: !props.isDraft && queuedEdit === null,
+    canOperate: props.canOperateThread,
+  });
   const composerMenu = useComposerCommandMenu({
     draftMessage: draftMessage,
     ownerKey: composerDraftKey,
@@ -554,6 +554,9 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     serverConfig: props.serverConfig,
     hasThread: !props.isDraft,
     offersSideChat: props.canOperateThread && queuedEdit === null,
+    offersFork: composerFork.offersFork,
+    reservesFork: composerFork.interceptsFork,
+    onFork: composerFork.startFork,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
     onUpdateInteractionMode:
@@ -561,8 +564,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         ? undefined
         : props.onUpdateInteractionMode,
     offersUsageLimits: usageLimitsOffered,
-    modelOptions: mentionModelOptions,
-    modelProviders: props.serverConfig?.providers,
+    ...modelMentions,
     onUsageLimits:
       usageLimitsOffered && draftAttachments.length === 0 ? openUsageLimits : undefined,
   });
@@ -665,8 +667,19 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       pendingNativeImagePasteCountRef.current > 0
     )
       return;
-    if (usageLimitsOffered && isUsageLimitsCommand(draftMessage) && draftAttachments.length === 0) {
+    const intercept = resolveComposerSendIntercept({
+      text: draftMessage,
+      attachmentCount: draftAttachments.length,
+      usageLimitsOffered,
+      inThread: composerFork.interceptsFork,
+    });
+    if (intercept === "usage-limits") {
       if (openUsageLimits()) onChangeDraftMessage("");
+      return;
+    }
+    if (intercept === "fork") {
+      if (composerFork.offersFork) onChangeDraftMessage("");
+      composerFork.startFork();
       return;
     }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);

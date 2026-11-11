@@ -191,6 +191,7 @@ export interface FakeThread {
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
   readonly shell?: Partial<OrchestrationV2ThreadShell>;
+  readonly plans?: OrchestrationV2ThreadProjection["plans"];
 }
 
 /** A thread of `turns` user prompts, each answered in markdown with a list and inline code. */
@@ -298,7 +299,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
     providerTurns: [],
     runtimeRequests: [],
     messages: [],
-    plans: [],
+    plans: [...(thread.plans ?? [])],
     turnItems: [...thread.items],
     checkpointScopes: [],
     checkpoints: [],
@@ -390,14 +391,27 @@ const handlers: Record<string, (input: never) => unknown> = {
     subscribe([{ version: 1 as const, type: "snapshot" as const, config: currentServerConfig }]),
 };
 
+type RpcHandler = (input: never) => unknown;
+export type FakeRpcHandlers = Readonly<Record<string, RpcHandler>>;
+let rpcOverrides: FakeRpcHandlers = {};
+let requests: Array<{ readonly method: string; readonly input: unknown }> = [];
+
+/** What the app sent for one method since the environment was installed, oldest first. */
+export function rpcRequests(method: string): ReadonlyArray<unknown> {
+  return requests.filter((request) => request.method === method).map(({ input }) => input);
+}
+
 // Unanswered calls stay pending, like a server that has not replied yet.
 const client = new Proxy(handlers, {
-  get: (target, method: string) =>
-    target[method] ??
-    (() => {
+  get: (target, method: string) => {
+    const handle = rpcOverrides[method] ?? target[method];
+    return (input: never) => {
+      requests.push({ method, input });
+      if (handle) return handle(input);
       const rpc = WsRpcGroup.requests.get(method);
       return rpc && RpcSchema.isStreamSchema(rpc.successSchema) ? Stream.never : Effect.never;
-    }),
+    };
+  },
 });
 
 const session: EnvironmentConnectionLease["session"] = {
@@ -446,10 +460,14 @@ export function installFakeEnvironment(
     capabilities?: Partial<ServerConfig["environment"]["capabilities"]>;
     onCommand?: (command: OrchestrationV2Command) => Promise<{ sequence: number }>;
     models?: ServerConfig["providers"][number]["models"];
+    /** Answers for RPCs the fake leaves pending, keyed by method; each returns an Effect. */
+    rpc?: FakeRpcHandlers;
   },
 ): Disposable {
   threads = fixtures;
   commandHandler = options?.onCommand ?? null;
+  rpcOverrides = options?.rpc ?? {};
+  requests = [];
   currentServerConfig = {
     ...serverConfig,
     providers: options?.models
@@ -485,6 +503,8 @@ export function installFakeEnvironment(
       globalThis.fetch = realFetch;
       threads = [];
       commandHandler = null;
+      rpcOverrides = {};
+      requests = [];
       currentServerConfig = serverConfig;
     },
   };

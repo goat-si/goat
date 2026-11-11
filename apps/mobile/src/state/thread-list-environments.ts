@@ -10,7 +10,13 @@ import * as Equal from "effect/Equal";
 
 export type ThreadListProvider = Pick<
   ServerProvider,
-  "instanceId" | "driver" | "enabled" | "displayName" | "accentColor" | "iconUrl"
+  | "instanceId"
+  | "driver"
+  | "enabled"
+  | "displayName"
+  | "accentColor"
+  | "iconUrl"
+  | "executionLocation"
 >;
 
 const capabilityKeys = [
@@ -21,19 +27,21 @@ const capabilityKeys = [
   "threadPinReorder",
   "threadActiveReorder",
   "threadTitleRegeneration",
+  "threadForkWorkspace",
 ] as const;
 
 function selectEnvironment(config: ServerConfig, isConnected: boolean) {
   return {
     isConnected,
     providers: config.providers.map(
-      ({ instanceId, driver, enabled, displayName, accentColor, iconUrl }) => ({
+      ({ instanceId, driver, enabled, displayName, accentColor, iconUrl, executionLocation }) => ({
         instanceId,
         driver,
         enabled,
         displayName,
         accentColor,
         iconUrl,
+        executionLocation,
       }),
     ),
     machineKind: resolveEnvironmentMachineKind(config),
@@ -58,7 +66,8 @@ function sameProviders(
         provider.enabled === other.enabled &&
         provider.displayName === other.displayName &&
         provider.accentColor === other.accentColor &&
-        provider.iconUrl === other.iconUrl
+        provider.iconUrl === other.iconUrl &&
+        provider.executionLocation === other.executionLocation
       );
     })
   );
@@ -74,6 +83,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
   const pinReorderEnvironmentIds = new Set<EnvironmentId>();
   const activeReorderEnvironmentIds = new Set<EnvironmentId>();
   const titleRegenerationEnvironmentIds = new Set<EnvironmentId>();
+  const forkWorkspaceEnvironmentIds = new Set<EnvironmentId>();
   const snoozePresetsByEnvironmentId = new Map<EnvironmentId, ListEnvironment["snoozePresets"]>();
   for (const [
     id,
@@ -90,6 +100,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
     if (isConnected && capabilities.threadActiveReorder === true)
       activeReorderEnvironmentIds.add(id);
     if (capabilities.threadTitleRegeneration === true) titleRegenerationEnvironmentIds.add(id);
+    if (capabilities.threadForkWorkspace === true) forkWorkspaceEnvironmentIds.add(id);
   }
   return {
     providersByEnvironmentId,
@@ -101,6 +112,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
+    forkWorkspaceEnvironmentIds,
     snoozePresetsByEnvironmentId,
   };
 }

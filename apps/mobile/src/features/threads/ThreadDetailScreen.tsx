@@ -178,6 +178,7 @@ import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
+import { SideChatParentRow } from "./SideChatParentRow";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
@@ -1365,11 +1366,9 @@ function ThreadDetailBody(
     }
     feedTouchStartRef.current = null;
   };
-
   const handleFeedTouchCancel = () => {
     feedTouchStartRef.current = null;
   };
-
   return (
     <View className="flex-1" onLayout={handleScreenLayout}>
       {!usesNativeWorkspaceColumns ? <NativeLayoutObserver onChange={setScreenMetrics} /> : null}
@@ -1568,6 +1567,7 @@ function ThreadDetailBody(
                   </Text>
                 ) : null}
                 <ComposerCards maxWidth={contentMaxWidth} onHeight={handleCardsHeight}>
+                  <SideChatParentRow thread={props.selectedThread} />
                   {!props.draftMode &&
                   props.serverConfig?.environment.capabilities.worktreeRestore === true ? (
                     <ThreadWorkspaceBanner

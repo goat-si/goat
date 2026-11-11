@@ -2,6 +2,8 @@ import type { MenuAction } from "@react-native-menu/menu";
 
 const DIRECT_ACTIONS = new Set([
   "new-thread-on-branch",
+  "fork",
+  "fork:current",
   "copy-thread",
   "copy-thread-id",
   "settle",
