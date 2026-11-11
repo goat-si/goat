@@ -134,9 +134,9 @@ learns, with proof, which member is calling. GOAT will be the first such program
   the node key": the OS user that runs pen.
 - **A delivery commits under the registry lock.** After the program's answer verifies and before the identity line is
   written, `serviceBook.commit` checks that the registration is still the current one for its name and records the
-  connection on it. Replacement and removal take the same lock and close every connection committed to the
-  registration that ended, so an old program never receives an identity line after it lost its name, and a program
-  that exits takes its live connections with it.
+  connection on it. Replacement and removal take the same lock, so nothing commits to a registration that has ended,
+  and they close every connection already committed to it. A delivery that committed just before a replacement can
+  still write its identity line to the old program; the replacement closes that connection right after.
 - **The ready line is for services only.** `pen pipe --node --noise @<service>` prints it; the same exact form with a port
   (what `pen-<nodeId>` ssh blocks run) does not, because ssh shows a ProxyCommand's stderr to the person and checks the
   host key itself. `PEN_TRACE` is ignored in the exact form so nothing precedes the ready line.

@@ -598,12 +598,13 @@ may authorize from this list. The `watch` op keeps its v1.1 lines.
 
 ### SSH config for exact routes
 
-`pen ssh-config` writes a `Host pen-<nodeId>` block for every member, after the name blocks and before the `pen-*`
-block, with `ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's
-known_hosts, and, where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's
-shared connection never carries it. The `pen-<name>` blocks and the `pen-*` block are unchanged. A name equal to a
-member's node id keeps its name block, which OpenSSH reads first, so that one alias is not exact; a program that
-checks an alias's effective route before using it refuses it.
+`pen ssh-config` writes a `Host pen-<nodeId>` block for every member whose node id no member uses as a name
+(itself included), after the name blocks and before the `pen-*` block, with
+`ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's known_hosts, and,
+where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's shared connection
+never carries it. The `pen-<name>` blocks and the `pen-*` block are unchanged. A node id that some member uses as a
+name gets no exact block, so that alias keeps its old meaning and is not exact; a program that checks an alias's
+effective route before using it refuses it.
 
 ## Close codes
 
