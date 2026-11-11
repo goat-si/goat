@@ -101,9 +101,12 @@ and every minute, and `pen ls` shows the error until then. Meanwhile the daemon 
 a revoke it holds but could not write still closes that peer's sessions, which errs toward the revoke; a
 restart before a successful save forgets it until a member sends it again.
 
-The record space is shared: no signer has a quota, so one member can fill it with valid records (3840
-ordinary ones, then revokes to 4096), after which no member can record anything, its own revoke included.
-The remedy is a new mesh; issue #2864 tracks a bound that admitted keys cannot multiply.
+A version 1 mesh's record space has no shares: one member can fill it with valid records (3840 ordinary
+ones, then revokes to 4096), after which no member can record anything, its own revoke included. `pen up` and
+`pen login` now found meshes of the shared epoch ([ADR-0026](../../structure/decisions/ADR-0026-pen-record-quotas.md)):
+records have `v` 2, each admission lineage keeps fixed shares chosen from the candidates alone
+(`selectShares`), admission is read from the kept admits rather than a record's past, and a hash a kept
+record names without its record is kept bare. A version 1 mesh keeps the old rules until it is moved.
 
 ## Lock order
 

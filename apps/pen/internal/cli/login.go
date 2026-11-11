@@ -225,7 +225,7 @@ func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 		return errors.New("nothing changed")
 	}
 	if cur == nil {
-		if _, err := mesh.Found(l.st, l.id, l.name, time.Now().UnixMilli()); err != nil {
+		if _, err := mesh.FoundV(mesh.EpochShared, l.st, l.id, l.name, time.Now().UnixMilli()); err != nil {
 			return err
 		}
 	}

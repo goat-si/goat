@@ -174,9 +174,10 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   stored, so a set full of other records can still revoke and every set fits a 4096-hash `have`. A node reloading its
   own saved set applies no cap. A node that refuses a received record for a cap closes that sync 4508 without its
   `done`, and one that cannot save what it received closes it 4507, so the sender learns the records were not taken.
-  Limit: no signer has a share of the record space, so one member can fill it with valid records (ordinary ones to
-  3840, then revokes to 4096), after which every node refuses every new record, the revoke of that member included;
-  the remedy is a new mesh.
+  Limit (version 1 meshes): no signer has a share of the record space, so one member can fill it with valid records
+  (ordinary ones to 3840, then revokes to 4096), after which every node refuses every new record, the revoke of that
+  member included; the remedy is a mesh of the shared epoch, which `pen` now founds (ADR-0026: in it, the caps and
+  "in its past" checks above are replaced by per-lineage shares and admission read from the kept admits).
 
 ### View
 
@@ -496,10 +497,11 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
   fill it. Relay implementation only; no wire change.
-- v1.1 (2026-11-11): a mesh whose found record has `v` 2 is of the shared epoch (ADR-0026, not yet founded by
-  `pen`): all its records have `v` 2, a node of it announces `"pen":"2.0"` in the sync hello and closes 4509 when
+- v1.1 (2026-11-11): a mesh whose found record has `v` 2 is of the shared epoch (ADR-0026): all its records have `v` 2, a node of it announces `"pen":"2.0"` in the sync hello and closes 4509 when
   the peer does not, a record names its signer's previous record directly in `prev` or has no effect, and each
   admission lineage keeps fixed shares of records (structure/decisions/ADR-0026). Older nodes drop `v` 2 records.
+  A node holding no records yet (joining) may announce anything and is sent the records. `pen up` and `pen login`
+  found meshes of this epoch.
 - v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
   (else 4429), and past 8 pending sessions per node the address holding the most loses its oldest (4429). Go relay
   only; the Worker keeps the node-wide rule. No wire change.

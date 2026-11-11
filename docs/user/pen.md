@@ -151,7 +151,13 @@ on that member says why:
   fix the folder's permissions; the member retries on its own every minute and at each sync, and takes no change
   until it can save.
 - "its mesh is full (4508)": the mesh holds 3840 records, the most Pen keeps for new members, names, locks and
-  sign-in changes (removals still fit up to 4096). Start over in a new mesh, below.
+  sign-in changes (removals still fit up to 4096). This happens only in meshes founded before the current Pen;
+  start over in a new mesh, below. A mesh founded by the current Pen gives each group of machines (the founder,
+  and each of the founder's first 15 machines with the machines they admit) its own room, so one machine cannot
+  fill it for the others, and any machine outside that group can still remove it.
+- "it runs an older Pen than this mesh needs (4509)": the member holds records of this mesh but runs a Pen from
+  before meshes shared their room out. Update Pen on that machine; machines of a mesh founded by the current Pen
+  all need the current Pen, and an older one cannot join it.
 
 ### Start over in a new mesh
 
@@ -162,7 +168,8 @@ member.
 1. On every machine: `pen down`, then delete these files from the state folder (`~/.pen`, or `PEN_HOME`):
    `mesh.json`, `offers.json`, `pending.json`, `forgets.json`, `versions.json`, `joined.json` and `login.json`.
    (`pen up` on a machine that still has `mesh.json` starts its old mesh again; it does not found a new one.)
-2. On the first machine: `pen up`. It founds a new mesh with this machine as its only member.
+2. On the first machine: `pen up`. It founds a new mesh with this machine as its only member. Update Pen on every
+   machine first: a new mesh needs the current Pen on all of them.
 3. On each other machine: `pen join <token>` with a token from `pen invite` on a machine already in the new mesh.
    Joining replaces the machine's relay list with the inviting machine's. A machine that used other relays on
    purpose puts them back with `pen relay add <url>` (and `pen relay rm <url>` for one it does not want); `pen relay
