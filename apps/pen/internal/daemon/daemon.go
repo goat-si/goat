@@ -108,6 +108,8 @@ type Daemon struct {
 	lastView   *mesh.View
 	// saveErr is the last mesh save's error (nil once a save succeeds), shown by pen ls.
 	saveErr error
+	// hostKeysErr names the sshd key files the last host key check could not read, shown by pen ls.
+	hostKeysErr string
 
 	khMu sync.Mutex
 	// sshUser is published in this node's hostkeys records.

@@ -45,7 +45,7 @@ inst() {
 	n="$1"
 	shift
 	mkdir -p "$work/$n/tmp"
-	curl -fsSL "$relay/install.sh" | TMPDIR="$work/$n/tmp" HOME="$work/$n" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
+	curl -fsSL "$relay/install.sh" | TMPDIR="$work/$n/tmp" HOME="$work/$n" SHELL="${shell:-/bin/sh}" ZDOTDIR="${zdotdir:-}" PEN_NO_MODIFY_PATH="${nopath:-}" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
 }
 # install.sh downloads into a folder under TMPDIR; it must be gone also when install.sh ends by running pen.
 notmp() {
@@ -67,6 +67,44 @@ if pen z ls 2>"$work/z.err"; then
 fi
 grep -q "no mesh here yet; run pen login" "$work/z.err" || { echo "FAIL: pen ls after a bare install said:"; cat "$work/z.err"; exit 1; }
 echo "ok: a bare install.sh installs pen and founds nothing"
+
+# The test's PATH lacks each scratch ~/.local/bin, as on a machine that never had one.
+marked() { grep -c '# added by pen install.sh' "$1" 2>/dev/null || true; }
+# finds <home> <shell and flags...>: a fresh shell with only that home and a bare PATH finds pen (the last
+# line: a system bashrc may print its own greeting first).
+finds() {
+	h="$1"
+	shift
+	[ "$(env -i HOME="$h" PATH=/usr/bin:/bin "$@" -c 'command -v pen' 2>/dev/null | tail -n 1)" = "$h/.local/bin/pen" ]
+}
+inst z >"$work/z2.out"
+[ "$(marked "$work/z/.profile")" = 1 ] || { echo "FAIL: two installs did not leave one PATH line in ~/.profile:"; cat "$work/z/.profile"; exit 1; }
+grep -q "added $work/z/.local/bin to your PATH in $work/z/.profile" "$work/z.out" || { echo "FAIL: install.sh did not say it changed PATH:"; cat "$work/z.out"; exit 1; }
+finds "$work/z" sh -l || { echo "FAIL: a login sh does not find pen after install.sh"; exit 1; }
+shell=/bin/bash inst x >"$work/x.out"
+shell=""
+[ "$(marked "$work/x/.profile")" = 1 ] && [ "$(marked "$work/x/.bashrc")" = 1 ] || { echo "FAIL: install.sh for bash did not mark ~/.profile and ~/.bashrc once each:"; cat "$work/x.out"; exit 1; }
+finds "$work/x" bash -l || { echo "FAIL: a login bash does not find pen after install.sh"; exit 1; }
+finds "$work/x" bash -i || { echo "FAIL: an interactive non-login bash (a desktop terminal) does not find pen after install.sh"; exit 1; }
+if command -v zsh >/dev/null; then
+	shell=/bin/zsh inst v >/dev/null
+	shell=""
+	finds "$work/v" zsh || { echo "FAIL: zsh does not find pen after install.sh"; exit 1; }
+fi
+# zsh reads its files from ZDOTDIR when that is set; fish reads none of these files.
+mkdir -p "$work/u/zd"
+shell=/bin/zsh zdotdir="$work/u/zd" inst u >/dev/null
+shell=""
+zdotdir=""
+[ "$(marked "$work/u/zd/.zshenv")" = 1 ] && [ ! -e "$work/u/.zshenv" ] || { echo "FAIL: install.sh for zsh ignored ZDOTDIR"; exit 1; }
+shell=/usr/bin/fish inst t >"$work/t.out"
+shell=""
+[ ! -e "$work/t/.profile" ] && grep -q "fish_add_path $work/t/.local/bin" "$work/t.out" || { echo "FAIL: install.sh for fish wrote a file fish does not read, or gave no fish_add_path line:"; cat "$work/t.out"; exit 1; }
+nopath=1 inst y >"$work/y.out"
+nopath=""
+[ ! -e "$work/y/.profile" ] || { echo "FAIL: PEN_NO_MODIFY_PATH=1 still wrote ~/.profile"; exit 1; }
+grep -q "add $work/y/.local/bin to your PATH" "$work/y.out" || { echo "FAIL: with PEN_NO_MODIFY_PATH=1 install.sh did not say how to run pen:"; cat "$work/y.out"; exit 1; }
+echo "ok: install.sh adds one marked PATH line that login and interactive shells read, and PEN_NO_MODIFY_PATH=1 skips it"
 
 inst a --name a --up
 notmp a --up

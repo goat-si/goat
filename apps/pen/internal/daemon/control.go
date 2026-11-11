@@ -65,6 +65,8 @@ type LsReply struct {
 	// mesh's records, against the caps.
 	SaveError string `json:"saveError,omitempty"`
 	Records   int    `json:"records"`
+	// HostKeysError names sshd public key files that exist but could not be read, and the fix.
+	HostKeysError string `json:"hostKeysError,omitempty"`
 	// StateDir is this machine's state folder, filled in by the command line for its advice.
 	StateDir string `json:"-"`
 }
@@ -295,6 +297,7 @@ func (d *Daemon) ls() LsReply {
 	if d.saveErr != nil {
 		out.SaveError = d.saveErr.Error()
 	}
+	out.HostKeysError = d.hostKeysErr
 	d.mu.Unlock()
 	for _, f := range d.forgets.refusedList() {
 		u := Unforgotten{NodeID: f.NodeID, LoginURL: f.LoginURL}
