@@ -433,7 +433,8 @@ func TestSSHConfigWritesAnExactNodeIDBlockPerMemberWithoutConnectionReuse(t *tes
 	if blk == "" {
 		t.Fatalf("no pen-<nodeId> block:\n%s", cfg)
 	}
-	if !strings.Contains(blk, " pipe --node "+am.NodeID+" --noise "+am.NoisePub+" 22\n") || strings.Contains(blk, "%n") {
+	// On Windows the prefix carries --home after "pipe" (ssh runs ProxyCommand without a shell there).
+	if !strings.Contains(blk, " pipe ") || !strings.Contains(blk, " --node "+am.NodeID+" --noise "+am.NoisePub+" 22\n") || strings.Contains(blk, "%n") {
 		t.Fatalf("pen-<nodeId> block is not the exact form:\n%s", blk)
 	}
 	if i := strings.Index(cfg, "Host pen-"+am.NodeID+"\n"); i < strings.Index(cfg, "Host pen-a\n") || i > strings.Index(cfg, "Host pen-*\n") {
