@@ -101,6 +101,20 @@ func startTask(st *state.Store) error {
 		return err
 	}
 	name := taskName(account)
+	// One start at a time per state folder: a supervisor reads one start request, so a second pen up
+	// replacing it meanwhile would leave the first waiting for a refusal it can no longer recognise.
+	// This is its own lock: the state lock must stay free for the daemon being started.
+	release, err := state.TryLock(st.Path(startLock))
+	if errors.Is(err, state.ErrLocked) {
+		if startLockWaits != nil {
+			startLockWaits()
+		}
+		release, err = state.LockWait(st.Path(startLock))
+	}
+	if err != nil {
+		return err
+	}
+	defer release()
 	path := st.Path(".pen-task.xml")
 	def, err := renderTask(exe, account)
 	if err != nil {
@@ -159,6 +173,12 @@ var taskNow, taskSleep = time.Now, time.Sleep
 
 // startRequest holds the id of the latest start pen up asked the task for.
 const startRequest = "start-request"
+
+// startLockWaits is called when a task start waits for another one (a seam for tests).
+var startLockWaits func()
+
+// startLock is held by pen up from registering the task until its start is decided.
+const startLock = "start.lock"
 
 // startRequestOf is the start the supervisor was run for: the id pen up wrote last ("" for none).
 func startRequestOf(st *state.Store) string {

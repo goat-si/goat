@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -553,5 +554,61 @@ func TestSupervisorRecordsItsRefusalForTheStartRequestItSaw(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(st.Path(refusedRecord)); !strings.HasPrefix(string(b), "req7\npen: ") {
 		t.Fatalf("start-refused = %q, want the reason for req7", b)
+	}
+}
+
+// Two pen up starting the task at once take turns: the supervisor reads one start request at a time, so
+// each caller gets the refusal of the start it asked for instead of losing it to the other's id.
+func TestOverlappingTaskStartsEachGetTheirOwnRefusal(t *testing.T) {
+	var st *state.Store
+	var mu sync.Mutex
+	bWaiting := make(chan struct{})
+	var once sync.Once
+	bReached := func() { once.Do(func() { close(bWaiting) }) }
+	var bErr error
+	bDone := make(chan struct{})
+	runs := 0
+	refuse := func() {
+		// What a supervisor does: read the current request, then record its refusal for it.
+		req, err := os.ReadFile(st.Path(startRequest))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if err := st.WriteAtomic(refusedRecord, []byte(string(req)+"\npen: refused for this start\n"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	st, _ = windowsHome(t, func(verb string, _ []string) error {
+		if verb != "/Run" {
+			return nil
+		}
+		mu.Lock()
+		runs++
+		first := runs == 1
+		mu.Unlock()
+		if first {
+			// Caller B starts while A waits for its supervisor.
+			go func() {
+				defer close(bDone)
+				bErr = startTask(st)
+			}()
+			<-bWaiting
+		} else {
+			bReached() // without turns, B gets here while A still waits
+		}
+		refuse()
+		return nil
+	})
+	fakeTaskClock(t)
+	old := startLockWaits
+	t.Cleanup(func() { startLockWaits = old })
+	startLockWaits = bReached
+	if err := startTask(st); err == nil || !strings.Contains(err.Error(), "refused for this start") {
+		t.Fatalf("caller A: %v, want the refusal of its own start", err)
+	}
+	<-bDone
+	if bErr == nil || !strings.Contains(bErr.Error(), "refused for this start") {
+		t.Fatalf("caller B: %v, want the refusal of its own start", bErr)
 	}
 }
