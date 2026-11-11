@@ -225,3 +225,35 @@ it("takes the reply's repository from its links, not from an address quoted in c
     .toBeVisible();
   expect(screen.getByRole("link", { name: "#7", exact: true }).query()).toBeNull();
 });
+
+it("reads a bare reference after a table against the whole reply's repository", async () => {
+  const table = ["| Check | State |", "| --- | --- |", "| build | green |"];
+  const single = [
+    "Opened https://github.com/goat-si/goat/pull/2850.",
+    "",
+    ...table,
+    "",
+    "It replaces #2849.",
+  ].join("\n");
+  const mixed = [
+    "Opened https://github.com/goat-si/goat/pull/2850 and https://github.com/other/repo/pull/7.",
+    "",
+    ...table,
+    "",
+    "It replaces #2849.",
+  ].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[bot("single", single), bot("mixed", mixed)]}
+    />,
+  );
+  // One repository in the reply: the reference after the table links there.
+  const references = await screen.getByRole("link", { name: "#2849" }).all();
+  expect(references).toHaveLength(1);
+  expect(references[0]).toHaveAttribute("href", "https://github.com/goat-si/goat/issues/2849");
+  // Two repositories: the reference could mean either, so it stays text in that reply.
+  const mixedRow = screen.container.querySelectorAll("li")[1];
+  expect(mixedRow?.textContent).toContain("It replaces #2849.");
+});

@@ -13,6 +13,11 @@ export interface GoatBotReplyPart {
 
 export interface GoatBotReplySplit {
   readonly parts: ReadonlyArray<GoatBotReplyPart>;
+  /**
+   * Every link address in the whole reply, set when it splits into several cards, so each card
+   * reads a bare reference against the reply's repository rather than only its own links.
+   */
+  readonly linkUrls?: ReadonlyArray<string>;
 }
 
 // ChatMarkdown's block grammar, so a card holds exactly the table that document draws.
@@ -92,7 +97,7 @@ function splitAtTables(text: string): GoatBotReplySplit {
   }
   flush();
 
-  return { parts: parts.length > 0 ? parts : whole.parts };
+  return parts.length > 1 ? { parts, linkUrls: linkUrlsOf(tree.children) } : whole;
 }
 
 const card = (kind: GoatBotReplyPart["kind"], text: string, source: string): GoatBotReplyPart => ({
@@ -137,6 +142,15 @@ function referencedIdentifiers(text: string): ReadonlySet<string> {
   };
   collect(parser.parse(text).children);
   return identifiers;
+}
+
+function linkUrlsOf(nodes: ReadonlyArray<Nodes>, into: string[] = []): string[] {
+  for (const node of nodes) {
+    if (node.type === "link") into.push(node.url);
+    else if (node.type !== "inlineCode" && node.type !== "code" && "children" in node)
+      linkUrlsOf(node.children, into);
+  }
+  return into;
 }
 
 const isDefinition = (node: Nodes) =>

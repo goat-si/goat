@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { MarkdownTableCopyOnCard } from "../chat/markdownTableCopyOnCard";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
+import { goatBotReplyMarkdownPlugins } from "./goatBotReplyMarkdown";
 import type { GoatBotReplySplit } from "./goatBotReplyParts";
 
 /**
@@ -20,6 +21,8 @@ export function GoatBotReplyCards({
   readonly trail: ReactNode;
 }) {
   const last = reply.parts.length - 1;
+  const markdownPlugins =
+    reply.linkUrls === undefined ? undefined : goatBotReplyMarkdownPlugins(reply.linkUrls);
   return (
     <div className="flex w-full max-w-[min(100%,34rem)] min-w-0 flex-col items-start gap-1">
       {reply.parts.map((part, index) =>
@@ -30,7 +33,11 @@ export function GoatBotReplyCards({
             className="goat-bot-prose goat-bot-card goat-bot-table w-full min-w-0"
           >
             <MarkdownTableCopyOnCard value>
-              <GoatBotLinkedText text={part.source} environmentId={environmentId} />
+              <GoatBotLinkedText
+                text={part.source}
+                environmentId={environmentId}
+                {...(markdownPlugins === undefined ? {} : { markdownPlugins })}
+              />
             </MarkdownTableCopyOnCard>
             {index === last ? trail : null}
           </div>
@@ -40,7 +47,11 @@ export function GoatBotReplyCards({
             key={index}
             className="goat-bot-prose goat-bot-card w-fit max-w-full min-w-0"
           >
-            <GoatBotLinkedText text={part.source} environmentId={environmentId} />
+            <GoatBotLinkedText
+              text={part.source}
+              environmentId={environmentId}
+              {...(markdownPlugins === undefined ? {} : { markdownPlugins })}
+            />
             {index === last ? trail : null}
           </div>
         ),
