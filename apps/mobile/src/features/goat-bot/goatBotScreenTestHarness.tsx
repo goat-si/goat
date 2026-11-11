@@ -23,6 +23,11 @@ const screenSession = vi.hoisted(() => ({
   draft: null as null | ((text: string) => boolean),
 }));
 // Event lines resolve their routine or task against the home's reads, which these tests do not load.
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+vi.mock("./GoatBotReplyFiles", () => ({
+  GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
+  GoatBotReplyFiles: () => null,
+}));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));
@@ -276,6 +281,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
       replyingSince: null,
       activity: screenSession.activity,
       supportsTaskThreads: screenSession.supportsTaskThreads,
+      streamingReplyIds: new Set<string>(),
     };
   },
 }));

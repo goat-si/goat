@@ -1,4 +1,5 @@
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
+import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 export { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 import { isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.ts";
@@ -766,10 +767,19 @@ export const layer: Layer.Layer<
         });
         if (!repaired.committed) return;
       }
+      // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
+      const noteContinuation = isRestartNoteContinuation(
+        run,
+        projection.runs,
+        projection.providerTurns,
+        projection.attempts,
+      );
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           runId: run.id,
-          startsTurn: input.reattach !== true,
+          startsTurn:
+            input.reattach !== true &&
+            !(yield* startsNoModelTurn(codexSurvivors, run, message, noteContinuation)),
           ...(run.delegatedTaskId === undefined ? {} : { delegatedTaskId: run.delegatedTaskId }),
           threadId: projection.thread.id,
           providerSessionId,
@@ -834,13 +844,6 @@ export const layer: Layer.Layer<
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
       const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
       const goalCommand = goalDriver && parseGoalCommand(message) !== null;
-      // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
-      const noteContinuation = isRestartNoteContinuation(
-        run,
-        projection.runs,
-        projection.providerTurns,
-        projection.attempts,
-      );
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,

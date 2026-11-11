@@ -43,17 +43,12 @@ export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.
   const isolationAvailable = codexAppServerIsolationAvailable(
     codexSocketTransportMode(platform, environment),
   );
+  // Dispatch and the run-update reactor wait on placement, so it reads only what the runtime knows.
   const sharedPredates = Effect.fnUntraced(function* (shared: ProviderSessionId, model?: string) {
     if (model === undefined || input.sessions === undefined) return false;
-    const { sessions } = input;
-    const check = Effect.gen(function* () {
-      const live = yield* sessions.get(shared);
-      if (Option.isNone(live) || live.value.modelStatus === undefined) return false;
-      return (yield* live.value.modelStatus(model)) === "predated";
-    });
-    // Dispatch waits on this; a slow answer leaves the thread to the session's own open check.
-    const predates = yield* check.pipe(Effect.timeoutOption("2 seconds"), Effect.option);
-    return Option.getOrElse(Option.flatten(predates), () => false);
+    const live = yield* input.sessions.get(shared).pipe(Effect.orElseSucceed(Option.none));
+    if (Option.isNone(live) || live.value.modelStatus === undefined) return false;
+    return (yield* live.value.modelStatus(model, { cachedOnly: true })) === "predated";
   });
   const providerSessionIdFor = Effect.fn("ProviderSessionPlacement.providerSessionIdFor")(
     function* (placement: {

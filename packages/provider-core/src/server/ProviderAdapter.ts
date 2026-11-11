@@ -643,9 +643,18 @@ export interface ProviderAdapterV2SessionRuntime {
   /**
    * Whether this process can run a model GOAT offers from the provider's catalog: `predated` when it
    * started before the model was added, so a new process would know it; `missing` when it does not
-   * list a model GOAT already offered when it started; `unconfirmed` when it did not answer.
+   * list a model GOAT already offered when it started; `unconfirmed` when GOAT cannot tell, and
+   * the turn runs as it would without the check.
    */
-  readonly modelStatus?: (model: string) => Effect.Effect<ProviderModelStatus>;
+  readonly modelStatus?: (
+    model: string,
+    /**
+     * `cachedOnly` answers from what the runtime already knows, never asking the process. `since`
+     * is when the turn's open began (Clock milliseconds); an answer the process gave after it is
+     * as recent as the open, so it is reused.
+     */
+    options?: { readonly cachedOnly?: boolean; readonly since?: number | undefined },
+  ) => Effect.Effect<ProviderModelStatus>;
   /** Set when a reopen of this session must wait until its scope has closed, process included. */
   readonly reopenAfterClose?: true;
   /** Root-subscription probe; replacement checks opt in to subagents owned by the live process. */
