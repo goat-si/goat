@@ -25,7 +25,11 @@ through relays, which forward it without being able to read it.
 curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh
 ```
 
-This puts `pen` in `~/.local/bin` and prints what to run next. It does not start or join a mesh.
+This puts `pen` in `~/.local/bin` and prints what to run next. It does not start or join a mesh. When
+`~/.local/bin` is not on your PATH, it adds one marked line to your shell's startup files (`.zshenv` in
+`$ZDOTDIR` or your home for zsh, `~/.bashrc` and `~/.bash_profile` or `~/.profile` for bash, otherwise
+`~/.profile`), so new terminals find `pen`; for fish it prints the `fish_add_path` line to run instead.
+`curl ... | PEN_NO_MODIFY_PATH=1 sh` leaves your files alone.
 To install and connect in one step, add one of these after `sh -s --`:
 
 | Option           | What it does                                                    |
@@ -44,7 +48,8 @@ On Windows, run this in PowerShell:
 ```
 
 This puts `pen.exe` in `%LOCALAPPDATA%\Programs\pen` and adds that folder to your PATH for new terminals. The
-same options go after the last parenthesis, for example `... install.ps1))) --login`.
+same options go after the last parenthesis, for example `... install.ps1))) --login`. Set
+`$env:PEN_NO_MODIFY_PATH = '1'` first to leave your PATH alone.
 
 ## Sign in with Google
 
@@ -97,7 +102,19 @@ Run `pen ssh-config --install` on the machine where GOAT runs. It adds an SSH ho
 `pen-<name>` for every member, with the member's login user and host keys, and keeps the list
 current as machines join or leave. GOAT finds these hosts like any other SSH host, so you can
 [open projects and start work](./remote-access.md#desktop-managed-ssh) on a member by choosing
-`pen-<name>`. `pen ssh-config --uninstall` removes them.
+`pen-<name>`. `pen ssh-config --uninstall` removes them. Each member also gets `pen-<nodeId>` (the full id is in `pen ls --json`), which reaches exactly that machine and never shares a connection with another ssh (unless a member is named with that id; that alias keeps its old meaning).
+
+Pen's hosts set no key to log in with, and a `pen-<name>` host does not take the `IdentityFile` of another host
+you set up for the same machine. If you log in to a member with a key that is not one of ssh's defaults, add a
+block for its Pen host to `~/.ssh/config`:
+
+```
+Host pen-desktop
+    IdentityFile ~/.ssh/id_ed25519_desktop
+```
+
+If `ssh pen-<name>` says no host key is known for it, that member has published none: `pen ls` lists such
+members, and `pen ls` on the member itself says which key files it could not read and how to fix it.
 
 An SSH connection stays open for 10 minutes after you close it, so the next `ssh pen-<name>` starts
 almost at once. `ssh -o ControlPath=none pen-<name>` opens a separate connection. Windows's ssh cannot keep a
@@ -108,6 +125,18 @@ then publishes its host keys and your login name. When your Windows account is a
 reads the keys allowed to log in from `C:\ProgramData\ssh\administrators_authorized_keys`, not from
 `.ssh\authorized_keys` in your profile. For a domain or work account, Pen publishes no login name: use
 `ssh <user>@pen-<name>`. Without OpenSSH Server, `pen forward` still reaches the machine's other ports.
+
+Some Windows installs let only administrators read OpenSSH's public host keys, so Pen cannot publish them. Pen
+does not ask the SSH server for them instead, since another account on the machine could answer in its place.
+`pen ls` on that machine says so; to fix it, run this in an administrator PowerShell, then `pen down` and
+`pen up`:
+
+```powershell
+icacls 'C:\ProgramData\ssh\ssh_host_*_key.pub' /grant '*S-1-5-11:(R)'
+```
+
+This lets signed-in accounts read the public keys, which the SSH server shows every client anyway; the private
+keys stay as they were.
 
 To reach another port, `pen forward 8080 <member>:8080` listens on this machine's port 8080 and
 connects each connection to port 8080 on the member.
@@ -151,7 +180,13 @@ on that member says why:
   fix the folder's permissions; the member retries on its own every minute and at each sync, and takes no change
   until it can save.
 - "its mesh is full (4508)": the mesh holds 3840 records, the most Pen keeps for new members, names, locks and
-  sign-in changes (removals still fit up to 4096). Start over in a new mesh, below.
+  sign-in changes (removals still fit up to 4096). This happens only in meshes founded before the current Pen;
+  start over in a new mesh, below. A mesh founded by the current Pen gives each group of machines (the founder,
+  and each machine the founder invites with the machines it admits; up to 15 groups) its own room, so one
+  machine cannot fill it for the others, and any machine outside that group can still remove it.
+- "it runs an older Pen than this mesh needs (4509)": the member holds records of this mesh but runs a Pen from
+  before meshes shared their room out. Update Pen on that machine; machines of a mesh founded by the current Pen
+  all need the current Pen, and an older one cannot join it.
 
 ### Start over in a new mesh
 
@@ -162,7 +197,8 @@ member.
 1. On every machine: `pen down`, then delete these files from the state folder (`~/.pen`, or `PEN_HOME`):
    `mesh.json`, `offers.json`, `pending.json`, `forgets.json`, `versions.json`, `joined.json` and `login.json`.
    (`pen up` on a machine that still has `mesh.json` starts its old mesh again; it does not found a new one.)
-2. On the first machine: `pen up`. It founds a new mesh with this machine as its only member.
+2. On the first machine: `pen up`. It founds a new mesh with this machine as its only member. Update Pen on every
+   machine first: a new mesh needs the current Pen on all of them.
 3. On each other machine: `pen join <token>` with a token from `pen invite` on a machine already in the new mesh.
    Joining replaces the machine's relay list with the inviting machine's. A machine that used other relays on
    purpose puts them back with `pen relay add <url>` (and `pen relay rm <url>` for one it does not want); `pen relay
@@ -211,6 +247,11 @@ You can run your own relay with `pen relay serve` on a machine with a public add
 `pen login`, `pen join` and `pen up` install a user service (systemd on Linux, launchd on macOS)
 where they can, so Pen comes back after a restart. With `--no-service`, Pen runs in the background
 until the machine restarts; run `pen up` again afterwards. `pen down` stops it.
+On Linux without a systemd user manager (many containers, or `su` without a login session), `pen up` says that
+nothing will start Pen again and prints the command to run at startup. Run it as the same user, with that user's
+home, for example from that user's `crontab -e`; a startup script that runs as root would start a different
+machine from root's home. With systemd but lingering off, `pen up` prints the `sudo loginctl enable-linger` line:
+without it, systemd stops Pen when your last session on the machine ends.
 Pen writes its log to `~/.pen/daemon.log` (on Linux with a service, to the user journal) and keeps
 it under 4 MiB, with the previous part in `daemon.log.1`.
 

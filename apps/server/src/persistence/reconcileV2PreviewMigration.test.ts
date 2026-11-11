@@ -152,6 +152,7 @@ describe("V2 preview upgrade", () => {
         [135, "ChannelBotIds"],
         [136, "ScheduledBotRoutines"],
         [137, "RemoteDispatchDeleteIntent"],
+        [138, "ChannelInterimMessages"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -314,6 +315,7 @@ describe("V2 preview upgrade", () => {
         [135, "ChannelBotIds"],
         [136, "ScheduledBotRoutines"],
         [137, "RemoteDispatchDeleteIntent"],
+        [138, "ChannelInterimMessages"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

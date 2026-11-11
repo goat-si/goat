@@ -10,6 +10,10 @@ import {
   type NativeMemoryHarness,
 } from "../../testing/memoryNativeHarness";
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
+// Event lines resolve their routine or task against the home's reads, which this test does not load.
+vi.mock("./useGoatBotEventTargets", () => ({
+  useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
+}));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 vi.mock("./GoatBotFace", () => ({
   GoatBotHeaderFace: () => null,

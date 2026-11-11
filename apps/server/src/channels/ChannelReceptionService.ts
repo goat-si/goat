@@ -913,6 +913,7 @@ const make = Effect.gen(function* () {
       }
 
       if (origin.kind === "goat" && !routine) {
+        // The task and answer the accepted copy decided stay on the message (TimelineRecords).
         yield* timeline
           .record({
             threadId: origin.threadId,
@@ -1499,6 +1500,7 @@ const make = Effect.gen(function* () {
               payload: {
                 questionId: action.questionId,
                 answer: action.answer,
+                inputId,
                 sender: senderOf(answerer, message.connectionId),
               },
             },
@@ -1685,6 +1687,8 @@ const make = Effect.gen(function* () {
         mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
         options: "options" in base ? base.options : undefined,
         questionId: "questionId" in base ? base.questionId : undefined,
+        interim: "interim" in base,
+        questionKind: "questionKind" in base ? base.questionKind : undefined,
       });
       const deliveries =
         goatOutcome && bot !== undefined

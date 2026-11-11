@@ -63,6 +63,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_goal_pause",
   "goat_goal_resume",
   "goat_goatclaw_sync",
+  "goat_handoff_withdraw",
   "goat_host_cordon",
   "goat_host_drain",
   "goat_host_link_create",

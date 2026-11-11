@@ -371,19 +371,24 @@ const make = Effect.gen(function* () {
       LIMIT 1`.pipe(Effect.map((rows) => rows.length > 0));
 
   const remove: ChannelBotMembers["Service"]["remove"] = (input, owner) =>
-    change(owner, input.botId, (record, at) =>
-      Effect.gen(function* () {
-        if (record.state === "deleted") return record;
-        yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
-        if (yield* hasOpenWork(owner.ownerId, record.botId).pipe(Effect.mapError(failed)))
-          return yield* fail("bot_busy");
-        return {
-          ...record,
-          state: "deleted" as const,
-          lifecycle: marker("archive", at),
-          updatedAt: at,
-        };
-      }),
+    // The repair commits on its own first, so it announces every owner whose tasks it moved.
+    ledger.ensureTaskBotsRepaired().pipe(
+      Effect.mapError(failed),
+      Effect.andThen(
+        change(owner, input.botId, (record, at) =>
+          Effect.gen(function* () {
+            if (record.state === "deleted") return record;
+            if (yield* hasOpenWork(owner.ownerId, record.botId).pipe(Effect.mapError(failed)))
+              return yield* fail("bot_busy");
+            return {
+              ...record,
+              state: "deleted" as const,
+              lifecycle: marker("archive", at),
+              updatedAt: at,
+            };
+          }),
+        ),
+      ),
     );
 
   const restore: ChannelBotMembers["Service"]["restore"] = (input, owner) =>
@@ -416,6 +421,8 @@ const make = Effect.gen(function* () {
   const openAsks: ChannelBotMembers["Service"]["openAsks"] = Effect.fn(
     "ChannelBotMembers.openAsks",
   )(function* (owner: Owner) {
+    // Older tasks name their bot only after the repair; asks are filtered by bot.
+    yield* ledger.ensureTaskBotsRepaired();
     // The main bot takes channel work before its GOAT thread exists, so it is always asked.
     const members = (yield* profiles.list(owner)).map((bot) => bot.botId);
     return yield* listOpenAsks({

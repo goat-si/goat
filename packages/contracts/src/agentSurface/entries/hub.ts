@@ -96,6 +96,7 @@ export const hubEntries = {
     verb: "device_join",
     name: "goat_hub_device_join",
     toolkit: "hostStatus",
+    operation: "handoff",
     summary: "Join a device to this OpenCodex Home as a Remote Link Child or Hub client.",
     description:
       "Join a device to this environment's Home. Membership alone is not Ready; goat_host_status reports Child setup. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check membership.",
@@ -116,6 +117,7 @@ export const hubEntries = {
     verb: "device_leave",
     name: "goat_hub_device_leave",
     toolkit: "hostStatus",
+    operation: "handoff",
     summary: "Remove a Remote Link Child or Hub client from this OpenCodex Home.",
     description:
       "Remove a device from this environment's Home. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check membership.",
@@ -136,11 +138,12 @@ export const hubEntries = {
     verb: "device_repair",
     name: "goat_hub_device_repair",
     toolkit: "hostStatus",
+    operation: "handoff",
     summary: "Repair a device's parity with this OpenCodex Home.",
     description:
       "Repair a device's Home connection. May sync, restart or reconnect. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check it.",
     guide:
-      "The ladder re-verifies after each executed step and stops when no check fails; unproven checks alone do not trigger repairs or prevent that stopping condition. Step 1 runs ocx sync on the device for P6 or P7 failures. Step 2 runs ocx restart there for P5; it defers if the reported top-level running count is nonzero or activity cannot be established. That count excludes subagents, so active subagent turns alone do not block a restart. Step 3 runs ocx link reconnect on this Home for P2 or P3 failures, only when a Remote Link record exists. Needs hub.manage. After steps 1–3, re-link consent is requested only if failures remain, the device has a Remote Link record, no restart was deferred, and the offered fingerprint can be probed. A thread receives a handoff whose ID equals decisionId; other callers get a decision-inbox item. Re-linking first disconnects and restarts the device, verifies standalone health, revokes the old Home link and checks that its record and tunnels are gone, then joins again. Approval is bound to the offered fingerprint; it does not execute the re-link until the tool is called again.",
+      "The ladder re-verifies after each executed step and stops when no check fails; unproven checks alone do not trigger repairs or prevent that stopping condition. Step 1 runs ocx sync on the device for P6 or P7 failures. Step 2 runs ocx restart there for P5; it defers if the reported top-level running count is nonzero or activity cannot be established. That count excludes subagents, so active subagent turns alone do not block a restart. Step 3 runs ocx link reconnect on this Home for P2 or P3 failures, only when a Remote Link record exists. Needs hub.manage. After steps 1–3, re-link consent is requested only if failures remain, the device has a Remote Link record, no restart was deferred, and the offered fingerprint can be probed. A thread receives a handoff whose ID equals decisionId; other callers get a decision-inbox item. Re-linking first disconnects and restarts the device, verifies standalone health, revokes the old Home link and checks that its record and tunnels are gone, then joins again. Approval is bound to the offered fingerprint and the link it replaces; it does not execute the re-link until the tool is called again, and a link replaced in between needs a new approval.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,

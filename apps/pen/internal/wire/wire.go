@@ -27,6 +27,9 @@ const (
 	// CodeMeshFull closes a mesh sync that brought a record the member refused for its record
 	// cap. Relays never use it (their 4429 means busy).
 	CodeMeshFull uint16 = 4508
+	// CodeEpoch closes a mesh sync between a node of a mesh of the shared epoch (ADR-0026) and a
+	// peer that does not announce it.
+	CodeEpoch uint16 = 4509
 )
 
 // Mux frame types on the uplink.
