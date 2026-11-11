@@ -4,6 +4,7 @@
  * @module HumanStepAuthority
  */
 import type { SessionPrincipalKind } from "@goat/contracts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 
 export type HumanStepResolver =
   | { readonly kind: "person" }
