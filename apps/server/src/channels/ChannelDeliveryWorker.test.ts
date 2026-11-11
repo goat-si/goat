@@ -6,12 +6,15 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { ANSWER_DECISION_ATTEMPTS, MAX_ATTEMPTS } from "./channelDeliveryAttempts.ts";
+import { dueDeliverySelection } from "./channelDeliveryLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -90,6 +93,130 @@ describe("ChannelDeliveryWorker", () => {
         assert.strictEqual(yield* ledger.getDeliveryState(deliveryIdFor("second")), "pending");
       }).pipe(Effect.provide(layerHangingSend(started)));
     }),
+  );
+});
+
+const goat = { kind: "goat", environmentId: "environment-1", threadId: "goat-bot" };
+const localDelivery = (causeKey: string, extra: object = {}) => ({
+  deliveryId: deliveryIdFor(causeKey),
+  causeKey,
+  message: decodeOutbound({
+    deliveryId: deliveryIdFor(causeKey),
+    destination: goat,
+    kind: "result",
+    text: causeKey,
+    ...extra,
+  }),
+});
+const ledgerOnly = ChannelLedger.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
+
+describe("local deliveries", () => {
+  it.effect(
+    "a GOAT write that never finishes is cut off and retried later, and the rows behind it still go (#2977)",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const interrupted = yield* Deferred.make<void>();
+        const sent: Array<string> = [];
+        let stuck = true;
+        const layer = ChannelDeliveryWorker.layer.pipe(
+          Layer.provideMerge(
+            Layer.mock(ChannelGateway.ChannelGateway)({
+              send: (message) =>
+                message.text === "stuck" && stuck
+                  ? Deferred.succeed(started, undefined).pipe(
+                      Effect.andThen(Effect.never),
+                      Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+                    )
+                  : Effect.sync(() => {
+                      sent.push(message.text);
+                      return { deliveryId: message.deliveryId, acceptedAt: NOW };
+                    }),
+            }),
+          ),
+          Layer.provide(ChannelWake.layer),
+          Layer.provideMerge(ledgerOnly),
+        );
+        yield* Effect.gen(function* () {
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+          yield* TestClock.setTime(Date.parse(NOW));
+          yield* ledger.claimOwnership({
+            token: OWNER,
+            now: NOW,
+            staleBefore: "2026-10-11T23:59:30.000Z",
+          });
+          yield* ledger.enqueueDeliveries([localDelivery("stuck"), localDelivery("behind")], NOW);
+          const pass = yield* Effect.forkChild(worker.deliverDue(OWNER));
+          yield* Deferred.await(started);
+          // Longer than a local write is given.
+          yield* TestClock.adjust("1 minute");
+          assert.strictEqual(yield* Fiber.join(pass), 2);
+          // The cut-off write is stopped, so it cannot land after its row was settled.
+          yield* Deferred.await(interrupted);
+          assert.deepStrictEqual(sent, ["behind"]);
+          assert.strictEqual(yield* ledger.getDeliveryState(deliveryIdFor("stuck")), "pending");
+
+          stuck = false;
+          yield* TestClock.adjust("1 minute");
+          yield* worker.deliverDue(OWNER);
+          assert.deepStrictEqual(sent, ["behind", "stuck"]);
+          assert.strictEqual(yield* ledger.getDeliveryState(deliveryIdFor("stuck")), "delivered");
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
+  it.effect.each([
+    { label: "a GOAT delivery", extra: {}, limit: MAX_ATTEMPTS },
+    {
+      label: "an answer decision",
+      extra: { personAnswer: { answersQuestionId: null } },
+      limit: ANSWER_DECISION_ATTEMPTS,
+    },
+  ])(
+    "$label interrupted by a restart on every attempt stops after its own attempts (#2977)",
+    ({ extra, limit }) =>
+      Effect.gen(function* () {
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* ledger.claimOwnership({
+          token: OWNER,
+          now: NOW,
+          staleBefore: "2026-10-11T23:59:30.000Z",
+        });
+        yield* ledger.enqueueDeliveries([localDelivery("interrupted", extra)], NOW);
+        let claims = 0;
+        for (let restart = 0; restart < limit + 3; restart += 1) {
+          const [claimed] = yield* ledger.claimDueDeliveries({ owner: OWNER, now: NOW, limit: 1 });
+          if (claimed !== undefined) claims += 1;
+          yield* ledger.settleInterruptedDeliveries({ owner: OWNER, now: NOW });
+        }
+        assert.strictEqual(claims, limit);
+        // The last write may have landed, so the row is not called failed.
+        assert.strictEqual(
+          yield* ledger.getDeliveryState(deliveryIdFor("interrupted")),
+          "ambiguous",
+        );
+      }).pipe(Effect.provide(ledgerOnly)),
+  );
+
+  it.effect("a claim finds due rows by due time, so rows waiting for later cost it nothing", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      for (const receiptsOnly of [true, false]) {
+        const query = dueDeliverySelection(sql, { now: NOW, limit: 1, receiptsOnly });
+        const plan = (yield* sql<{
+          readonly detail: string;
+        }>`EXPLAIN QUERY PLAN ${query}`).map((row) => row.detail);
+        assert.isTrue(
+          plan.some((detail) =>
+            detail.includes(
+              "USING INDEX channel_outbox_due_time_idx (state=? AND next_attempt_at<?)",
+            ),
+          ),
+          plan.join("\n"),
+        );
+      }
+    }).pipe(Effect.provide(ledgerOnly)),
   );
 });
 
