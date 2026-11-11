@@ -119,6 +119,35 @@ it.effect("an approval used while its wake waits behind the running turn withdra
   ),
 );
 
+it.effect("an approval used while its wake is being sent withdraws that wake once queued", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // The change succeeds after the reactor checked use but before its wake is queued, so the
+      // use finds no queued wake to withdraw.
+      world.outage.beforeWake = world.approvals
+        .markUsed({
+          threadId,
+          handoffId: summary.handoffId,
+          action: "hub.join",
+        })
+        .pipe(Effect.orDie);
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      yield* world.worker.drain();
+      const run = (yield* world.orchestrator.getThreadProjection(threadId)).runs.find(
+        (candidate) =>
+          candidate.userMessageId === `message:handoff-wake:${summary.handoffId}:completed`,
+      );
+      expect(run?.status).toBe("cancelled");
+    }),
+  ),
+);
+
 it.effect("tells the agent to finish an approved storage cleanup with an argument it accepts", () =>
   withWorld((world) =>
     Effect.gen(function* () {

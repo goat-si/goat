@@ -832,7 +832,7 @@ const make = Effect.gen(function* () {
           caller,
           "repair",
           input.decisionId,
-          decisionBinding("relink", alias, offered.fingerprint),
+          decisionBinding("relink", alias, `${offered.fingerprint} ${record.id}`),
         );
         yield* audit(caller, "hub.relink", alias, "started", input.decisionId);
         const failure = yield* leaveDevice(alias, record.id, caller.connection, steps);
@@ -901,7 +901,7 @@ const make = Effect.gen(function* () {
       const requested = yield* consent.request(caller, "repair", {
         title: `Re-link ${alias}`,
         context: `${exhausted} Re-linking revokes link ${record.id}, disconnects ${alias} and joins it again with ${offered.keyType} ${offered.fingerprint}; routing is briefly gone.`,
-        binding: decisionBinding("relink", alias, offered.fingerprint),
+        binding: decisionBinding("relink", alias, `${offered.fingerprint} ${record.id}`),
         approve: "Re-link",
         consequence: `${alias} loses routing until the new link is verified.`,
       });

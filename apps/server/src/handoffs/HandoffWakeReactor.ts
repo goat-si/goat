@@ -45,6 +45,7 @@ import {
 } from "../provider/ProviderSettingsProgress.ts";
 import { forkParked } from "../serverActivation.ts";
 import { approvalUsed } from "./approvalConsumption.ts";
+import { cancelQueuedApprovalWake } from "./approvalWakeWithdraw.ts";
 import * as Handoffs from "./Handoffs.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -295,14 +296,18 @@ const make = Effect.gen(function* () {
         // A request whose call is waiting, or already returned this answer, needs no wake.
         return yield* handoffs.deliverComputerUseWake(current, dispatchWake(threadId, wake));
       }
-      if (
-        handoff.state === "completed" &&
-        continuedByAgent(handoff.target.path) &&
-        (yield* approvalUsed(handoff.handoffId).pipe(
-          Effect.provideService(SqlClient.SqlClient, sql),
-        ))
-      ) {
-        retries.delete(wake.messageId);
+      const used = approvalUsed(handoff.handoffId).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+      if (handoff.state === "completed" && continuedByAgent(handoff.target.path)) {
+        if (yield* used) {
+          retries.delete(wake.messageId);
+          return;
+        }
+        yield* dispatchWake(threadId, wake);
+        // A use that landed during the dispatch found no queued wake to withdraw; do it here.
+        if (yield* used)
+          yield* cancelQueuedApprovalWake(threads, { threadId, handoffId: handoff.handoffId });
         return;
       }
       if (

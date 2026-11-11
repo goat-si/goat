@@ -65,6 +65,8 @@ export interface World {
     removeFailing: number;
     arrived: Deferred.Deferred<void>;
     readonly sent: Array<string>;
+    /** Runs just before a wake reaches the orchestrator, as a concurrent change would. */
+    beforeWake: Effect.Effect<void> | undefined;
   };
 }
 
@@ -121,6 +123,7 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         removeFailing: 0,
         arrived: yield* Deferred.make<void>(),
         sent: [],
+        beforeWake: undefined,
       };
       const session: AuthClientSession = {
         sessionId: person,
@@ -145,7 +148,10 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
             return orchestrator.dispatch(command);
           outage.sent.push(command.commandId);
           Deferred.doneUnsafe(outage.arrived, Effect.void);
-          if (outage.failing === 0) return orchestrator.dispatch(command);
+          if (outage.failing === 0)
+            return (outage.beforeWake ?? Effect.void).pipe(
+              Effect.andThen(orchestrator.dispatch(command)),
+            );
           outage.failing -= 1;
           // A planning failure: the orchestrator keeps a rejected receipt under this command id.
           return Effect.sleep(outage.slowMs).pipe(

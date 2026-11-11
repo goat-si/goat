@@ -379,5 +379,9 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     unlink: (alias: string) => {
       links.delete(alias);
     },
+    /** Someone links the alias again by hand, under a new link id. */
+    replaceLink: (alias: string, id: string) => {
+      links.set(alias, id);
+    },
   };
 });

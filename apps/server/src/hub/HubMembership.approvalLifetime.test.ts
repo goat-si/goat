@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { scope, setup, threadScope } from "./HubMembership.testkit.ts";
+import { scope, setup, threadScope, verdict } from "./HubMembership.testkit.ts";
 
 const linkAdds = (calls: ReadonlyArray<string>) =>
   calls.filter((call) => call.includes("link add"));
@@ -55,5 +55,23 @@ it.effect("an approved leave whose revoke fails keeps the approval for another t
     expect((yield* hub.membership.leave(threadScope, input)).state).toBe("failed");
     expect(hub.calls.filter((call) => call.includes("link revoke"))).toHaveLength(2);
     expect(yield* hub.consumed).toEqual([]);
+  }),
+);
+
+it.effect("a re-link approval does not cover a link that was replaced after it was asked", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      linked: ["macmini-ts"],
+      verdicts: [verdict(["P2"]), verdict(["P2"]), verdict()],
+    });
+    const asked = yield* hub.membership.repair(threadScope, { deviceAlias: "macmini-ts" });
+    expect(asked.state).toBe("needs_human");
+    yield* hub.answer(asked.decisionId!);
+    hub.replaceLink("macmini-ts", "lnk_aaaaaaaaaaaaaaaa");
+    const refused = yield* hub.membership
+      .repair(threadScope, { deviceAlias: "macmini-ts", decisionId: asked.decisionId! })
+      .pipe(Effect.flip);
+    expect(refused.message).toContain("does not cover this change");
+    expect(hub.calls.some((call) => call.includes("link revoke"))).toBe(false);
   }),
 );
