@@ -86,8 +86,29 @@ pen="pen"
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) ;;
 *)
-	echo "add $HOME/.local/bin to your PATH to run pen directly"
 	pen="$HOME/.local/bin/pen"
+	# The login shell's own profile: bash reads the first of these three that exists.
+	case "${SHELL:-}" in
+	*/zsh) profile="$HOME/.zprofile" ;;
+	*/bash)
+		profile="$HOME/.profile"
+		for p in "$HOME/.bash_profile" "$HOME/.bash_login"; do
+			if [ -f "$p" ]; then
+				profile="$p"
+				break
+			fi
+		done
+		;;
+	*) profile="$HOME/.profile" ;;
+	esac
+	mark="# added by pen install.sh (PEN_NO_MODIFY_PATH=1 skips this)"
+	if [ "${PEN_NO_MODIFY_PATH:-}" = 1 ]; then
+		echo "add $HOME/.local/bin to your PATH to run pen directly"
+	elif grep -qF "$mark" "$profile" 2>/dev/null || printf '\n%s %s\n' 'export PATH="$HOME/.local/bin:$PATH"' "$mark" >>"$profile" 2>/dev/null; then
+		echo "added $HOME/.local/bin to your PATH in $profile (new login shells see it)"
+	else
+		echo "add $HOME/.local/bin to your PATH to run pen directly (could not write $profile)"
+	fi
 	;;
 esac
 "$HOME/.local/bin/pen" relay download "$PEN_RELAY" >/dev/null

@@ -13,7 +13,8 @@ curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --up   
 ```
 
 A bare install puts `pen` in `~/.local/bin` and prints the next commands; it starts no mesh. `--name <name>` names the
-machine for `--join`, `--login` or `--up`.
+machine for `--join`, `--login` or `--up`. When `~/.local/bin` is missing from PATH, install.sh adds one marked line to
+the login profile (`PEN_NO_MODIFY_PATH=1` skips it), as install.ps1 adds its folder to the user PATH.
 
 ## Join a machine
 
@@ -53,7 +54,9 @@ the member's name. `pen dashboard --stop` closes the page and ends every session
 
 `pen up`, `pen join` and `pen login` install a systemd user service or a launchd agent where they can. With
 `--no-service`, or where neither exists, the daemon runs detached and owned by PID 1, so ending the shell or command that
-started it does not stop it. It does not come back after a reboot; run `pen up` again, or use the service.
+started it does not stop it. It does not come back after a reboot; run `pen up` again, or use the service. Where no
+service manager answered, `pen up` says so on stderr with the startup line to add; under systemd with lingering off it
+prints the `loginctl enable-linger` line.
 
 ## SSH and GOAT
 
