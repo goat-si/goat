@@ -20,6 +20,7 @@ const harness = vi.hoisted(() => ({
   refreshProviders: vi.fn(),
   navigate: vi.fn(),
   scopeAllowed: true,
+  connected: true,
   manage: (_registry: AtomRegistry.AtomRegistry, _allowed: boolean) => {},
   publish: (_registry: AtomRegistry.AtomRegistry, _value: SshHandoffProgressResult) => {},
 }));
@@ -69,6 +70,11 @@ vi.mock("../../state/server", async () => {
   };
 });
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => harness.scopeAllowed }));
+vi.mock("../../state/presentation", () => ({
+  useEnvironmentPresentation: () => ({
+    presentation: { connection: { phase: harness.connected ? "connected" : "reconnecting" } },
+  }),
+}));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: { label: string }) =>
     command.label === "openHandoff"
@@ -190,6 +196,7 @@ beforeEach(() => {
   });
   harness.respond.mockReset().mockResolvedValue({ _tag: "Success", value: handoff });
   harness.scopeAllowed = true;
+  harness.connected = true;
   harness.refresh.mockReset();
   harness.navigate.mockReset();
   harness.refreshProviders.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
@@ -479,6 +486,16 @@ it.each([
   expect(container.textContent).toContain(message);
   expect(container.textContent).not.toContain("GOAT is setting up");
   expect(container.textContent).not.toContain("GOAT is updating");
+});
+it("asks to reconnect instead of answering while its environment is away", async () => {
+  harness.connected = false;
+  await render({ ...handoff, state: "pending" });
+  expect(container.textContent).toContain("Reconnect to answer.");
+  const review = [...container.querySelectorAll("button")].find(
+    (node) => node.textContent === "Review request",
+  );
+  expect(review?.disabled).toBe(true);
+  expect(harness.open).not.toHaveBeenCalled();
 });
 it("preserves the generic terminal completion and cancellation actions", async () => {
   await render({

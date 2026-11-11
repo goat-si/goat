@@ -209,7 +209,7 @@ import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
-import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
+import { ComposerThreadBars } from "./ComposerThreadBars";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
@@ -1602,7 +1602,7 @@ function ThreadDetailBody(
                     thread={props.selectedThread}
                     environmentId={props.environmentId}
                   />
-                  <ThreadGuestShareBar
+                  <ComposerThreadBars
                     threadRef={props.selectedThreadDetailRef}
                     canOperateThread={props.canOperateThread}
                   />
