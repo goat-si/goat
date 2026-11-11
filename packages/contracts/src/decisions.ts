@@ -94,6 +94,8 @@ export const DecisionFeed = Schema.Struct({
   items: Schema.Array(DecisionItem),
   /** Every open approval handoff; older servers omit it, so absent means "cannot list". */
   handoffs: Schema.optionalKey(Schema.Array(DecisionHandoff)),
+  /** Set when more approvals are open than the feed sends (the newest are sent). */
+  handoffsTotal: Schema.optionalKey(Schema.Number),
 });
 export type DecisionFeed = typeof DecisionFeed.Type;
 export const DecisionGetInput = Schema.Struct({

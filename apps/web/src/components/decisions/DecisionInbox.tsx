@@ -1,4 +1,7 @@
-import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
+import {
+  type DecisionItem,
+  isDecisionItemWaiting,
+} from "@goat/client-runtime/state/decision-inbox";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useId } from "react";
@@ -75,6 +78,7 @@ export function DecisionInbox() {
                 onSubmit={(response) => submit(current.id, response)}
                 onSkip={skip}
                 partial={snapshot.isLoading || snapshot.errors.length > 0}
+                feedAway={isDecisionItemWaiting(snapshot, current)}
                 blockedBySync={
                   snapshot.loadingRefs.some(
                     (ref) =>
@@ -124,6 +128,7 @@ function DecisionCard({
   total,
   partial,
   blockedBySync,
+  feedAway,
 }: {
   item: DecisionItem;
   drafts: Inbox["drafts"][string];
@@ -136,6 +141,8 @@ function DecisionCard({
   total: number;
   partial: boolean;
   blockedBySync: boolean;
+  /** A feed-owned item whose environment's feed is away: shown, not answerable. */
+  feedAway: boolean;
 }) {
   const titleId = useId();
   const shell = useThreadShell(item.ref);
@@ -210,6 +217,7 @@ function DecisionCard({
           environmentId={item.ref.environmentId}
           handoff={item.handoff}
           inherited={false}
+          offline={feedAway}
         />
       ) : null}
       {item.kind === "approval" ? (

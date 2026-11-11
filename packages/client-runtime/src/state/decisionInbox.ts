@@ -11,7 +11,7 @@ import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/reactivity";
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
-import { arrayElementsEqual, parseThreadKey, threadKey, threadRefsEqual } from "./entities.ts";
+import { parseThreadKey, threadKey, threadRefsEqual } from "./entities.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
 import type { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
 import type { ThreadPendingApproval, ThreadPendingUserInput } from "./threadRequests.ts";
@@ -139,6 +139,17 @@ export function isDecisionItemWaiting(
   );
 }
 
+/** Same approvals in the same states: feed updates decode fresh objects, so compare what shows. */
+function sameHandoffs(left: ReadonlyArray<Handoff>, right: ReadonlyArray<Handoff>) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (handoff, index) =>
+        handoff.handoffId === right[index]?.handoffId && handoff.state === right[index]?.state,
+    )
+  );
+}
+
 export function orderDecisionQueue(
   items: ReadonlyArray<DecisionItem>,
   skipOrder: ReadonlyArray<string>,
@@ -209,16 +220,21 @@ export function createDecisionInboxAtoms(input: {
 
   // The last approval list each enabled environment's feed gave. A disconnected environment keeps
   // its list, so an approval stays listed (and cannot be answered) until a loaded feed drops it.
-  let knownHandoffs: ReadonlyMap<EnvironmentId, ReadonlyArray<DecisionHandoff>> = new Map();
+  type Known = { readonly handoffs: ReadonlyArray<DecisionHandoff>; readonly open: number };
+  let knownHandoffs: ReadonlyMap<EnvironmentId, Known> = new Map();
   const knownHandoffsAtom = Atom.make((get) => {
     const connected = get(connectedAtom);
-    const next = new Map<EnvironmentId, ReadonlyArray<DecisionHandoff>>();
+    const next = new Map<EnvironmentId, Known>();
     for (const [id, entry] of get(input.catalogValueAtom).entries) {
       if (!entry.enabled) continue;
       const feed =
         input.feedAtom !== undefined && connected.includes(id) ? get(input.feedAtom(id)) : null;
-      const handoffs = feed?.handoffs ?? knownHandoffs.get(id);
-      if (handoffs !== undefined && handoffs.length > 0) next.set(id, handoffs);
+      // A feed that sends only the newest approvals says how many are open in all.
+      const known: Known | undefined =
+        feed?.handoffs === undefined
+          ? knownHandoffs.get(id)
+          : { handoffs: feed.handoffs, open: feed.handoffsTotal ?? feed.handoffs.length };
+      if (known !== undefined && known.open > 0) next.set(id, known);
     }
     knownHandoffs = next;
     return next;
@@ -261,9 +277,9 @@ export function createDecisionInboxAtoms(input: {
       }
     }
     // Approval handoffs always wait on the person, including while their environment is away.
-    for (const handoffs of get(knownHandoffsAtom).values()) {
-      count += handoffs.length;
-      total += handoffs.length;
+    for (const known of get(knownHandoffsAtom).values()) {
+      count += known.open;
+      total += known.open;
     }
     const refs = [...unique.entries()]
       .sort(([left], [right]) => compareStrings(left, right))
@@ -309,8 +325,8 @@ export function createDecisionInboxAtoms(input: {
         });
       }
     }
-    for (const [environmentId, handoffs] of get(knownHandoffsAtom)) {
-      for (const entry of handoffs) {
+    for (const [environmentId, known] of get(knownHandoffsAtom)) {
+      for (const entry of known.handoffs) {
         items.push({
           id: handoffKey(environmentId, entry.handoff.handoffId),
           ref: { environmentId, threadId: entry.handoff.requestedBy.threadId },
@@ -373,22 +389,38 @@ export function createDecisionInboxAtoms(input: {
     let value: ReadonlyArray<Handoff> = [];
     return Atom.make((get) => {
       const feed = input.feedAtom === undefined ? null : get(input.feedAtom(ref.environmentId));
+      const forThread = (handoffs: ReadonlyArray<DecisionHandoff>) =>
+        handoffs.flatMap((entry) =>
+          entry.handoff.requestedBy.threadId === ref.threadId ? [entry.handoff] : [],
+        );
+      // While the feed is away, the last list it gave stays docked; feedAwayAtom disables it.
       const next =
         feed === null
-          ? []
+          ? forThread(get(knownHandoffsAtom).get(ref.environmentId)?.handoffs ?? [])
           : feed.handoffs === undefined
             ? get(input.details.pendingHandoffsAtom(ref))
-            : feed.handoffs.flatMap((entry) =>
-                entry.handoff.requestedBy.threadId === ref.threadId ? [entry.handoff] : [],
-              );
-      if (!arrayElementsEqual(value, next)) value = next;
+            : forThread(feed.handoffs);
+      if (!sameHandoffs(value, next)) value = next;
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`decision-inbox-open-approvals:${key}`));
   });
+
+  /**
+   * Whether the environment's approvals cannot be answered yet: it is disconnected, or its feed has
+   * not loaded since. Known approvals stay shown but disabled until a loaded feed confirms them.
+   */
+  const feedAwayAtomFamily = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get) =>
+        !get(connectedAtom).includes(environmentId) ||
+        (input.feedAtom !== undefined && get(input.feedAtom(environmentId)) === null),
+    ).pipe(Atom.withLabel("decision-inbox-feed-away:" + environmentId)),
+  );
 
   return {
     summaryAtom,
     itemsAtom,
     openApprovalsAtom: (ref: ScopedThreadRef) => openApprovalsAtomFamily(threadKey(ref)),
+    feedAwayAtom: (environmentId: EnvironmentId) => feedAwayAtomFamily(environmentId),
   };
 }

@@ -2643,6 +2643,8 @@ export const ThreadFeed = memo(function ThreadFeed({
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = {
     disclosureLayout,
+    // Handoff cards read it through renderItem; a visible card must follow a reconnect.
+    offline: props.offline,
     reduceMotion,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,

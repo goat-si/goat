@@ -1,248 +1,34 @@
 import {
-  type DecisionFeed,
   type DecisionItem as DurableDecision,
   EnvironmentId,
-  type Handoff,
-  ProviderInstanceId,
-  NodeId,
   RuntimeRequestId,
   ThreadId,
-  TurnItemId,
-  type OrchestrationV2ThreadProjection,
-  type ScopedThreadRef,
 } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
-import * as Option from "effect/Option";
-import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
-import type {
-  EnvironmentConnectionPhase,
-  EnvironmentPresentation,
-} from "../connection/presentation.ts";
-import { PrimaryConnectionTarget } from "../connection/model.ts";
+import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 import {
   createDecisionInboxAtoms,
   isDecisionItemRemoved,
-  isDecisionItemWaiting,
   orderDecisionQueue,
   skipDecisionItem,
-  type DecisionItem,
 } from "./decisionInbox.ts";
-import type { EnvironmentCatalogState } from "./connections.ts";
 import { threadKey } from "./entities.ts";
-import { presentThreadShell } from "./models.ts";
-import {
-  v2Now,
-  v2Projection,
-  v2ShellSnapshot,
-  v2ThreadShell,
-} from "./orchestrationV2TestFixtures.ts";
+import { v2Now, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { createEnvironmentThreadShellAtoms } from "./threadShell.ts";
-import { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
-import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 
-const a = EnvironmentId.make("a");
-const b = EnvironmentId.make("b");
-const ref = (environmentId = a, id = "thread") => ({ environmentId, threadId: ThreadId.make(id) });
-const shell = (scope: ScopedThreadRef, overrides: Partial<typeof v2ThreadShell> = {}) =>
-  presentThreadShell(scope.environmentId, {
-    ...v2ThreadShell,
-    id: scope.threadId,
-    pendingRuntimeRequest: { id: RuntimeRequestId.make("flag"), kind: "command", createdAt: v2Now },
-    ...overrides,
-  });
-const request = (
-  id: string,
-  createdAt: string,
-): OrchestrationV2ThreadProjection["runtimeRequests"][number] => ({
-  id: RuntimeRequestId.make(id),
-  nodeId: NodeId.make("node"),
-  providerTurnId: null,
-  nativeRequestRef: null,
-  kind: "command",
-  status: "pending",
-  responseCapability: { type: "not_resumable", reason: "Provider session cannot be resumed" },
-  createdAt: DateTime.makeUnsafe(createdAt),
-  resolvedAt: null,
-});
-function harness() {
-  const tasks: Array<() => void> = [];
-  const registry = AtomRegistry.make({
-    scheduleTask: (task) => {
-      tasks.push(task);
-      return () => {};
-    },
-  });
-  const flush = () => {
-    for (let task = tasks.shift(); task !== undefined; task = tasks.shift()) task();
-  };
-  const entries = new Map(
-    [a, b].map((environmentId) => [
-      environmentId,
-      {
-        target: new PrimaryConnectionTarget({
-          environmentId,
-          label: environmentId,
-          httpBaseUrl: "https://example.test",
-          wsBaseUrl: "wss://example.test",
-        }),
-        profile: Option.none(),
-        enabled: true,
-      },
-    ]),
-  );
-  const catalog = Atom.make<EnvironmentCatalogState>({ isReady: true, entries });
-  const presentations = Atom.family((id: EnvironmentId) =>
-    Atom.make<EnvironmentPresentation | null>({
-      entry: entries.get(id)!,
-      connection: { phase: "connected", error: null, traceId: null },
-      serverConfig: null,
-    }),
-  );
-  const shells = Atom.make([shell(ref(a)), shell(ref(b))]);
-  const data = Atom.family((_key: string) =>
-    Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE)).pipe(Atom.keepAlive),
-  );
-  const activeSources = new Set<string>();
-  const sourceReads = new Map<string, number>();
-  const sources = Atom.family((key: string) =>
-    Atom.make((get) => {
-      activeSources.add(key);
-      sourceReads.set(key, (sourceReads.get(key) ?? 0) + 1);
-      get.addFinalizer(() => activeSources.delete(key));
-      return get(data(key));
-    }).pipe(Atom.setIdleTTL(0)),
-  );
-  const details = createEnvironmentThreadDetailAtoms((env, thread) =>
-    sources(threadKey({ environmentId: env, threadId: thread })),
-  );
-  let detailReads = 0;
-  const feeds = Atom.family((_id: EnvironmentId) => Atom.make<DecisionFeed | null>(null));
-  const inbox = createDecisionInboxAtoms({
-    catalogValueAtom: catalog,
-    threadShellsAtom: shells,
-    presentationAtom: presentations,
-    feedAtom: feeds,
-    details: {
-      ...details,
-      pendingRequestsAtom: (scope) => {
-        detailReads += 1;
-        return details.pendingRequestsAtom(scope);
-      },
-    },
-  });
-  const set = (
-    scope: ScopedThreadRef,
-    requests: OrchestrationV2ThreadProjection["runtimeRequests"],
-    status: EnvironmentThreadState["status"] = "live",
-    error: string | null = null,
-    turnItems: OrchestrationV2ThreadProjection["turnItems"] = [],
-  ) =>
-    registry.set(
-      data(threadKey(scope)),
-      AsyncResult.success({
-        ...EMPTY_ENVIRONMENT_THREAD_STATE,
-        status,
-        error: Option.fromNullOr(error),
-        data:
-          status === "deleted"
-            ? Option.none()
-            : Option.some({
-                ...v2Projection,
-                thread: { ...v2Projection.thread, id: scope.threadId },
-                runtimeRequests: requests,
-                turnItems,
-              }),
-      }),
-    );
-  return {
-    registry,
-    catalog,
-    presentations,
-    shells,
-    inbox,
-    feeds,
-    details,
-    set,
-    flush,
-    activeSources,
-    sourceReads,
-    detailReads: () => detailReads,
-  };
-}
-const requestOf = (entry: DecisionItem) => {
-  if (entry.kind === "decision" || entry.kind === "handoff")
-    throw new Error("Expected a thread request");
-  return entry.request;
-};
-const item = (id: string, createdAt: string): DecisionItem => ({
-  id,
-  createdAt,
-  ref: ref(),
-  routing: { routedTo: "person" },
-  kind: "approval",
-  request: {
-    requestId: RuntimeRequestId.make(id),
-    requestKind: "command",
-    createdAt,
-    responseCapability: "live",
-  },
-});
+import {
+  a,
+  b,
+  ref,
+  shell,
+  request,
+  harness,
+  requestOf,
+  item,
+  questionItem,
+} from "./decisionInbox.testkit.ts";
 
-const questionItem: OrchestrationV2ThreadProjection["turnItems"][number] = {
-  id: TurnItemId.make("inbox-question-item"),
-  threadId: ref(a).threadId,
-  runId: null,
-  nodeId: NodeId.make("node"),
-  providerThreadId: null,
-  providerTurnId: null,
-  nativeItemRef: null,
-  parentItemId: null,
-  ordinal: 0,
-  status: "completed",
-  title: null,
-  startedAt: v2Now,
-  completedAt: v2Now,
-  updatedAt: v2Now,
-  type: "user_input_request",
-  requestId: RuntimeRequestId.make("question"),
-  responseMode: "message",
-  questions: [
-    {
-      id: "next",
-      header: "Next",
-      question: "What should happen next?",
-      required: true,
-      allowCustomAnswer: false,
-      multiSelect: false,
-      options: [{ label: "Continue", value: "  continue  ", description: "Resume work" }],
-    },
-  ],
-};
-const approval = (id: string): Handoff => ({
-  handoffId: TurnItemId.make(id),
-  kind: "approval",
-  title: `Approve ${id}`,
-  reason: "Needed",
-  requestedBy: {
-    threadId: ref(a).threadId,
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    path: "hub.device_join",
-  },
-  target: { environmentId: a, path: "hub.device_join" },
-  dedupeKey: id,
-  state: "pending",
-  expiresAt: null,
-  createdAt: v2Now,
-  actor: { type: "agent", threadId: ref(a).threadId },
-});
-const handoffItem = (handoff: Handoff): OrchestrationV2ThreadProjection["turnItems"][number] => ({
-  ...questionItem,
-  id: handoff.handoffId,
-  status: handoff.state === "pending" ? "waiting" : "completed",
-  type: "human_handoff",
-  handoff,
-});
 const nonconnectedPhases: ReadonlyArray<EnvironmentConnectionPhase | null> = [
   "available",
   "offline",
@@ -865,113 +651,6 @@ describe("decision inbox", () => {
       expect(isDecisionItemRemoved(value, decisionId)).toBe(false);
       h.registry.set(h.feeds(a), { items: [question] });
       expect(isDecisionItemRemoved(h.registry.get(h.inbox.itemsAtom), decisionId)).toBe(true);
-    } finally {
-      stopItems();
-      stopSummary();
-      h.registry.dispose();
-    }
-  });
-
-  it("lists, counts and docks an open approval handoff from the feed until the feed drops it", () => {
-    const h = harness();
-    const stopSummary = h.registry.mount(h.inbox.summaryAtom);
-    const stopItems = h.registry.mount(h.inbox.itemsAtom);
-    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
-    try {
-      h.registry.set(h.shells, []);
-      h.registry.set(h.feeds(a), {
-        items: [],
-        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
-      });
-      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
-      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 1 });
-      const value = h.registry.get(h.inbox.itemsAtom);
-      expect(value.items.map((entry) => [entry.kind, entry.routing.threadTitle])).toEqual([
-        ["handoff", "Hub"],
-      ]);
-      expect(
-        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
-      ).toEqual(["one"]);
-      expect(h.registry.get(h.inbox.openApprovalsAtom(ref(b)))).toEqual([]);
-      const id = value.items[0]!.id;
-      h.registry.set(h.feeds(a), { items: [], handoffs: [] });
-      expect(isDecisionItemRemoved(h.registry.get(h.inbox.itemsAtom), id)).toBe(true);
-      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 0, total: 0 });
-      expect(h.registry.get(h.inbox.openApprovalsAtom(ref(a)))).toEqual([]);
-    } finally {
-      stopDock();
-      stopItems();
-      stopSummary();
-      h.registry.dispose();
-    }
-  });
-
-  it("docks a thread's loaded approval handoffs when its server's feed cannot list them", () => {
-    const h = harness();
-    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
-    try {
-      h.registry.set(h.feeds(a), { items: [] });
-      h.set(ref(a), [], "live", null, [
-        handoffItem(approval("loaded")),
-        handoffItem({ ...approval("done"), state: "completed" }),
-      ]);
-      expect(
-        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
-      ).toEqual(["loaded"]);
-    } finally {
-      stopDock();
-      h.registry.dispose();
-    }
-  });
-  it("keeps a feed approval waiting, not resolved, while its environment's feed is away", () => {
-    const entry: DecisionItem = {
-      id: JSON.stringify(["handoff", a, "one"]),
-      ref: ref(a),
-      createdAt: "2026-11-11T00:00:00.000Z",
-      routing: { routedTo: "person" },
-      kind: "handoff",
-      handoff: approval("one"),
-    };
-    const snapshot = { feedEnvironments: [], loadingRefs: [], errors: [] };
-    expect(isDecisionItemWaiting(snapshot, entry)).toBe(true);
-    expect(isDecisionItemWaiting({ ...snapshot, feedEnvironments: [a] }, entry)).toBe(false);
-  });
-  it("keeps a known approval listed, counted and waiting while its environment disconnects, until its feed drops it", () => {
-    const h = harness();
-    const stopSummary = h.registry.mount(h.inbox.summaryAtom);
-    const stopItems = h.registry.mount(h.inbox.itemsAtom);
-    const phase = (environmentId: EnvironmentId, value: EnvironmentConnectionPhase) =>
-      h.registry.set(h.presentations(environmentId), {
-        ...h.registry.get(h.presentations(environmentId))!,
-        connection: { phase: value, error: null, traceId: null },
-      });
-    try {
-      h.registry.set(h.shells, []);
-      h.registry.set(h.feeds(a), {
-        items: [],
-        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
-      });
-      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
-      const id = h.registry.get(h.inbox.itemsAtom).items[0]!.id;
-
-      phase(a, "reconnecting");
-      const away = h.registry.get(h.inbox.itemsAtom);
-      expect(away.items.map((entry) => entry.id)).toEqual([id]);
-      expect(isDecisionItemRemoved(away, id)).toBe(false);
-      expect(isDecisionItemWaiting(away, away.items[0]!)).toBe(true);
-      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 1 });
-
-      // Back, but its feed has not reloaded yet: still known, still waiting.
-      h.registry.set(h.feeds(a), null);
-      phase(a, "connected");
-      expect(h.registry.get(h.inbox.itemsAtom).items.map((entry) => entry.id)).toEqual([id]);
-
-      // An authoritative feed without it removes it.
-      h.registry.set(h.feeds(a), { items: [], handoffs: [] });
-      const settled = h.registry.get(h.inbox.itemsAtom);
-      expect(settled.items).toEqual([]);
-      expect(isDecisionItemRemoved(settled, id)).toBe(true);
-      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 0, total: 0 });
     } finally {
       stopItems();
       stopSummary();

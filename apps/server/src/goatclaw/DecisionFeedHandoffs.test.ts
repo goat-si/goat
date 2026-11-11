@@ -22,9 +22,11 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Feed from "./DecisionFeed.ts";
 import type * as Inbox from "./DecisionInbox.ts";
 import { fixture, seedThread } from "./DecisionDestination.testkit.ts";
+import { MAX_FEED_HANDOFFS, openApprovalHandoffs } from "./openApprovalHandoffs.ts";
 
 const encodeItem = Schema.encodeSync(Schema.fromJsonString(OrchestrationV2TurnItemJson));
-const createdAt = DateTime.makeUnsafe("2026-11-11T08:00:00Z");
+const defaultCreatedAt = DateTime.makeUnsafe("2026-11-11T08:00:00Z");
+const createdAt = defaultCreatedAt;
 const client: Inbox.DecisionCaller = {
   kind: "client",
   sessionId: "owner",
@@ -36,6 +38,7 @@ const approvalItem = (
   threadId: string,
   id: string,
   state: "pending" | "completed",
+  createdAt = defaultCreatedAt,
 ): Extract<OrchestrationV2TurnItem, { type: "human_handoff" }> => {
   const handoffId = TurnItemId.make(id);
   return {
@@ -140,4 +143,25 @@ it.effect("an open approval handoff is in the decision feed until a person answe
       Effect.provide(Feed.layer.pipe(Layer.provideMerge(fixture()), Layer.provide(sinkLayer))),
     );
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "the feed sends the newest open approvals up to its limit and says how many are open",
+  () =>
+    Effect.gen(function* () {
+      yield* seedThread("asking");
+      for (let index = 0; index <= MAX_FEED_HANDOFFS; index += 1)
+        yield* writeItem(
+          approvalItem(
+            "asking",
+            "approval-" + String(index).padStart(4, "0"),
+            "pending",
+            DateTime.add(defaultCreatedAt, { seconds: index }),
+          ),
+        );
+      const result = yield* openApprovalHandoffs();
+      expect(result.handoffs).toHaveLength(MAX_FEED_HANDOFFS);
+      expect(result.total).toBe(MAX_FEED_HANDOFFS + 1);
+      expect(result.handoffs[0]?.handoff.handoffId).toBe("approval-0001");
+    }).pipe(Effect.provide(fixture())),
 );

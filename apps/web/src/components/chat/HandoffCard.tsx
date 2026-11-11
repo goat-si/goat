@@ -61,6 +61,8 @@ type HandoffCardProps = {
   inherited: boolean;
   /** Above the composer, where the banner around it supplies the surface. */
   layout?: "dock";
+  /** Its environment's approvals cannot be confirmed yet (feed away); answering waits for it. */
+  offline?: boolean;
 };
 
 export function HandoffCard(props: HandoffCardProps) {
@@ -198,7 +200,8 @@ function HandoffCardContent(props: HandoffCardProps) {
   );
   const pending = isHandoffPending(handoff.state);
   // Answers go to the environment that shows the card; without it they cannot be sent.
-  const offline = useEnvironmentConnectionPhase(props.environmentId) !== "connected";
+  const disconnected = useEnvironmentConnectionPhase(props.environmentId) !== "connected";
+  const offline = disconnected || props.offline === true;
   const act = async (
     action: "opened" | "completed" | "declined" | "cancelled",
     computerUseScope?: "session" | "always",

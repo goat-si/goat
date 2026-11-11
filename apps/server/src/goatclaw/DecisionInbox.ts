@@ -602,7 +602,7 @@ const make = Effect.gen(function* () {
     // Archived threads stay out of the inbox, as they do from thread shells.
     for (const row of yield* pendingRows(undefined, -1))
       if (row.archived_at === null) items.push(yield* project(row, undefined));
-    const handoffs = yield* openApprovalHandoffs().pipe(
+    const approvals = yield* openApprovalHandoffs().pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
       Effect.mapError(storageFailure),
     );
@@ -611,7 +611,8 @@ const make = Effect.gen(function* () {
         viewer,
         yield* routing.annotate(environmentId, items.sort(compareDecisions)),
       ),
-      handoffs,
+      handoffs: approvals.handoffs,
+      ...(approvals.total > approvals.handoffs.length ? { handoffsTotal: approvals.total } : {}),
     };
   });
   return DecisionInbox.of({

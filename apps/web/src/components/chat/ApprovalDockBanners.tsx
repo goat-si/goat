@@ -12,7 +12,11 @@ import { HandoffCard } from "./HandoffCard";
 // Up to two show in full; past two, one row stands for them all so the composer stays in view.
 const MAX_SEPARATE_APPROVALS = 2;
 
-function DockedApproval(props: { environmentId: EnvironmentId; handoff: Handoff }) {
+function DockedApproval(props: {
+  environmentId: EnvironmentId;
+  handoff: Handoff;
+  offline: boolean;
+}) {
   return (
     <div role="alert" className="flex min-w-0 gap-2">
       <ComposerBanner.Icon className="h-(--composer-banner-icon-column) self-start">
@@ -24,6 +28,7 @@ function DockedApproval(props: { environmentId: EnvironmentId; handoff: Handoff 
           handoff={props.handoff}
           inherited={false}
           layout="dock"
+          offline={props.offline}
         />
       </div>
     </div>
@@ -37,6 +42,7 @@ function DockedApproval(props: { environmentId: EnvironmentId; handoff: Handoff 
 function approvalBannerItems(input: {
   readonly environmentId: EnvironmentId;
   readonly handoffs: ReadonlyArray<Handoff>;
+  readonly offline: boolean;
   readonly expanded: boolean;
   readonly onToggle: () => void;
 }): Array<ComposerBannerStackItem | ComposerBannerStackContent> {
@@ -56,6 +62,7 @@ function approvalBannerItems(input: {
                 key={handoff.handoffId}
                 environmentId={environmentId}
                 handoff={handoff}
+                offline={input.offline}
               />
             ))}
           </div>
@@ -84,6 +91,7 @@ function approvalBannerItems(input: {
                       key={handoff.handoffId}
                       environmentId={environmentId}
                       handoff={handoff}
+                      offline={input.offline}
                     />
                   ))}
                 </div>
@@ -98,15 +106,20 @@ function approvalBannerItems(input: {
 const NO_APPROVALS = Atom.make<ReadonlyArray<Handoff>>([]).pipe(
   Atom.withLabel("no-open-approvals"),
 );
+const NO_AWAY = Atom.make(false).pipe(Atom.withLabel("no-feed-away"));
 
 /** The composer banners for the open approvals of the thread on screen. */
 export function useApprovalBanners(ref: ScopedThreadRef | null) {
   const handoffs = useAtomValue(ref === null ? NO_APPROVALS : decisionInbox.openApprovalsAtom(ref));
+  const offline = useAtomValue(
+    ref === null ? NO_AWAY : decisionInbox.feedAwayAtom(ref.environmentId),
+  );
   const [expanded, setExpanded] = useState(false);
   if (ref === null) return [];
   return approvalBannerItems({
     environmentId: ref.environmentId,
     handoffs,
+    offline,
     expanded,
     onToggle: () => setExpanded((value) => !value),
   });

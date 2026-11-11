@@ -20,8 +20,9 @@ function OpenApprovalsDock(props: { readonly threadRef: ScopedThreadRef }) {
   // The composer stays on screen however long the cards are; the cards scroll instead.
   const maxHeight = Math.round(useWindowDimensions().height * 0.4);
   // Answers go to the thread's environment; while it is away the cards ask to reconnect.
-  const offline =
-    useRemoteEnvironmentRuntime(props.threadRef.environmentId)?.connectionState !== "connected";
+  const feedAway = useAtomValue(decisionInbox.feedAwayAtom(props.threadRef.environmentId));
+  const runtime = useRemoteEnvironmentRuntime(props.threadRef.environmentId);
+  const offline = feedAway || runtime?.connectionState !== "connected";
   if (handoffs.length === 0) return null;
   const cards = handoffs.map((handoff) => (
     <HumanHandoffCard
