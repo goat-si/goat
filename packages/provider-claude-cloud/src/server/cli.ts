@@ -9,7 +9,9 @@ import * as Scope from "effect/Scope";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
+import { resolveSpawnCommand } from "@goat/shared/shell";
 import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
 import {
   ClaudeCloudError,
@@ -376,6 +378,7 @@ const ownPty = Effect.fnUntraced(function* (
 const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const pty = yield* PtyAdapter.PtyAdapter;
+  const platform = yield* HostProcess.Platform;
   const provideSpawner = <A, E>(
     effect: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
   ) => Effect.provideService(effect, ChildProcessSpawner.ChildProcessSpawner, spawner);
@@ -392,6 +395,16 @@ const make = Effect.gen(function* () {
     cwd: string,
   ) {
     const environment = yield* checkLogin(login);
+    const command =
+      platform === "win32" && /\.(?:cmd|bat)$/i.test(login.binary)
+        ? yield* resolveSpawnCommand(login.binary, [], { env: environment }).pipe(
+            Effect.provideService(HostProcess.Platform, platform),
+          )
+        : undefined;
+    const shell = command?.shell
+      ? (environment.ComSpec ?? environment.COMSPEC ?? "cmd.exe")
+      : login.binary;
+    const args = command?.shell ? `/d /s /c "${command.command}"` : [];
     let raw = "";
     let confirmed = false;
     let exit: PtyAdapter.PtyExitEvent | undefined;
@@ -419,7 +432,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* ownPty(
           pty,
-          { shell: login.binary, args: [], cwd, cols: 120, rows: 30, env: environment },
+          { shell, args, cwd, cols: 120, rows: 30, env: environment },
           {
             data: (chunk, process) => {
               if (raw.length <= LIMIT) raw = (raw + chunk).slice(0, LIMIT + 1);

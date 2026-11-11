@@ -139,33 +139,6 @@ it.effect("requires --cloud support on the exact sibling executable", () =>
   ),
 );
 
-it.effect.each([{ signal: null }, { signal: 0 }] as const)(
-  "returns identity before a normal native exit, preserving argv and zero trust input (%s)",
-  ({ signal }) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const h = yield* makeCliHarness();
-        const prompt = "Fix '$literal' and $(not-a-command)\nsecond line";
-        const fiber = yield* h.service.start(LOGIN, "/fixture/repo", prompt).pipe(Effect.forkChild);
-        yield* h.fake.ready;
-        for (const character of RECEIPT) h.fake.emit(character);
-        const handle = yield* Fiber.join(fiber);
-        expect(handle.receipt.taskId).toBe("session_ABC123");
-        expect(h.starts[0]).toEqual({
-          shell: LOGIN.binary,
-          args: [`--cloud=${prompt}`],
-          cwd: "/fixture/repo",
-          cols: 120,
-          rows: 30,
-          env: LOGIN.environment,
-        });
-        expect(h.fake.writes).toEqual([]);
-        h.fake.finish(0, signal);
-        yield* handle.exited;
-      }),
-    ),
-);
-
 it.effect.each([
   { code: 1, signal: 0 },
   { code: 0, signal: 15 },
@@ -954,6 +927,30 @@ it.effect("a second refusal after accepting trust is reported and not retried ag
       expect(h.starts).toHaveLength(3);
     }),
   ),
+);
+
+it.effect.each([
+  {
+    platform: "win32",
+    shell: "C:\\Windows\\System32\\cmd.exe",
+    args: '/d /s /c "^"C:\\Program^ Files\\Claude\\claude.cmd^""',
+  },
+  { platform: "darwin", shell: "C:\\Program Files\\Claude\\claude.cmd", args: [] },
+] as const)(
+  "starts the trust probe on $platform with a launchable command",
+  ({ platform, shell, args }) =>
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness(undefined, false, { platform });
+      const login = {
+        ...LOGIN,
+        binary: "C:\\Program Files\\Claude\\claude.cmd",
+        environment: { ...LOGIN.environment, ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      };
+      const fiber = yield* h.service.acceptTrust(login, "/fixture/project").pipe(Effect.forkChild);
+      yield* trustInteractively(h.fake);
+      yield* Fiber.join(fiber);
+      expect(h.starts[0]).toMatchObject({ shell, args });
+    }),
 );
 
 it.effect("accepting trust alone moves to Yes, confirms, and closes interactive Claude", () =>

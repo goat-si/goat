@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cli from "./cli.ts";
 
 export class FakePty implements PtyAdapter.PtyProcess {
@@ -194,8 +195,10 @@ export const makeCliHarness = Effect.fnUntraced(function* (
     readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode>;
     readonly rejectPtySpawn?: boolean;
     readonly fileSystem?: Partial<FileSystem.FileSystem>;
+    readonly platform?: NodeJS.Platform;
   } = {},
 ) {
+  const platform = options.platform ?? (yield* HostProcess.Platform);
   const fake = new FakePty();
   // Later spawns: the trust retry opens interactive Claude, then starts the cloud session again.
   const fakes = [fake, new FakePty(), new FakePty()];
@@ -238,6 +241,7 @@ export const makeCliHarness = Effect.fnUntraced(function* (
       Cli.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            Layer.succeed(HostProcess.Platform, platform),
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
             FileSystem.layerNoop(options.fileSystem ?? {}),
             Path.layer,

@@ -57,6 +57,7 @@ const LANES = ["all", "server", "memory-growth", "windows", "quick"];
  * the job and a trigger: a pull request changing a file under one selects test-windows.
  */
 const WINDOWS_SUITES = [
+  "packages/provider-claude-cloud/src/server/cli",
   "apps/desktop/src/cua/",
   "apps/server/src/cua/",
   "apps/server/src/memory/imports/MemoryImportReaderWindows",
