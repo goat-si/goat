@@ -9,6 +9,7 @@ import type { ChannelReadBotArtifactInput, EnvironmentId } from "@goat/contracts
 import type { AttachmentPreviewFile } from "../../lib/attachmentDownload";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { openBotFileRead } from "./goatBotFileReads";
 
 export interface ImagePreview {
   readonly name: string;
@@ -35,21 +36,27 @@ export async function openBotLibraryFile(
 ): Promise<BotLibraryOpenResult> {
   const name = botArtifactName(relativePath);
   try {
-    const result = await readWholeBotArtifact(
-      relativePath,
-      async (input: ChannelReadBotArtifactInput) => {
-        const answer = await runAtomCommand(
-          appAtomRegistry,
-          channelEnvironment.readBotArtifact,
-          { environmentId, input },
-          { label: "GOAT Bot Library file", reportFailure: false },
-        );
-        if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
-        return answer.value;
-      },
+    // The open holds the server for its whole read, ahead of any waiting chat previews.
+    const result = await openBotFileRead(
+      environmentId,
+      () =>
+        readWholeBotArtifact(
+          relativePath,
+          async (input: ChannelReadBotArtifactInput) => {
+            const answer = await runAtomCommand(
+              appAtomRegistry,
+              channelEnvironment.readBotArtifact,
+              { environmentId, input },
+              { label: "GOAT Bot Library file", reportFailure: false },
+            );
+            if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
+            return answer.value;
+          },
+          signal,
+        ),
       signal,
     );
-    if (signal.aborted) return DONE;
+    if (result === null || signal.aborted) return DONE;
     if (result.status !== "ok") {
       return { kind: "message", message: botArtifactOpenMessage(name, result, botName) };
     }

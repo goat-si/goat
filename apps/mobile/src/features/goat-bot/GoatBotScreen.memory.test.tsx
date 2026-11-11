@@ -11,6 +11,11 @@ import {
 } from "../../testing/memoryNativeHarness";
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
 // Event lines resolve their routine or task against the home's reads, which this test does not load.
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+vi.mock("./GoatBotReplyFiles", () => ({
+  GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
+  GoatBotReplyFiles: () => null,
+}));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));

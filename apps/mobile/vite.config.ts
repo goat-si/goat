@@ -81,6 +81,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotQuestionAnswer.test.tsx",
   "src/features/goat-bot/GoatBotScreen.answering.test.tsx",
   "src/features/goat-bot/GoatBotTimelineRow.links.test.tsx",
+  "src/features/goat-bot/GoatBotTimelineRow.files.test.tsx",
   "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
   "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
