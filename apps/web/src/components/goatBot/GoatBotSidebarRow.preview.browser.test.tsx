@@ -8,9 +8,10 @@ import {
   type OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import { act, useSyncExternalStore, type ReactNode } from "react";
+import { act, cloneElement, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   botRef: null as { environmentId: EnvironmentId; threadId: ThreadId } | null,
@@ -50,7 +51,8 @@ vi.mock("~/globalAgentRoute", () => ({
 vi.mock("~/threadRoutes", () => ({ resolveThreadRouteTarget: () => null }));
 vi.mock("./useBotRoster", () => ({ useBotThreads: () => ({ rows: [], supported: false }) }));
 vi.mock("./GoatBotMemberRows", () => ({ GoatBotMainMenu: () => null }));
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
   useLocation: ({
     select,
   }: {
@@ -78,11 +80,14 @@ vi.mock("../ui/sidebar", () => ({
   SidebarGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SidebarMenu: ({ children }: { children: ReactNode }) => <ul>{children}</ul>,
   SidebarMenuItem: ({ children }: { children: ReactNode }) => <li>{children}</li>,
-  SidebarMenuButton: ({ children }: { children: ReactNode }) => <button>{children}</button>,
+  SidebarMenuButton: ({ render: link, children }: { render: ReactElement; children: ReactNode }) =>
+    cloneElement(link, {}, children),
   useSidebar: () => ({ isMobile: false, setOpenMobile: vi.fn() }),
 }));
 vi.mock("../ui/badge", () => ({
-  Badge: ({ children }: { children: ReactNode }) => <b>{children}</b>,
+  Badge: ({ children, ...props }: { children: ReactNode; "aria-label"?: string }) => (
+    <b aria-label={props["aria-label"]}>{children}</b>
+  ),
 }));
 vi.mock("~/state/entities", () => ({
   useThreadShell: (ref: unknown) => {
@@ -167,7 +172,7 @@ it("subscribes only with a supported bot and updates preview and unread dot as m
     notify();
   });
   expect(container.textContent).toContain("First reply");
-  expect(container.querySelector('[aria-label="Unread GOAT Bot messages"]')).not.toBeNull();
+  expect(container.textContent).toContain("GOAT Bot, unread");
   expect(container.textContent).toContain("2");
   await act(() => {
     state.items = [...state.items, projectedBot("b2", "2026-10-12T12:02:00.000Z", "Second reply")];
@@ -178,7 +183,7 @@ it("subscribes only with a supported bot and updates preview and unread dot as m
     state.active = true;
     notify();
   });
-  expect(container.querySelector('[aria-label="Unread GOAT Bot messages"]')).toBeNull();
+  expect(container.textContent).not.toContain(", unread");
 });
 
 it("skips detail on old servers and unmounts the row when bot mode is off", async () => {
@@ -207,7 +212,7 @@ it("keeps the bot name visible with badges in a 220px container", async () => {
 it("shows the waiting face on the row while tasks wait for the person", async () => {
   state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
   await act(() => root.render(<GoatBotSidebarRow />));
-  expect(container.querySelector('[role="img"][aria-label="Waiting for you"]')).not.toBeNull();
+  expect(container.querySelector('[role="img"][aria-label="2 waiting for you"]')).not.toBeNull();
 });
 
 it("shows the working face while a task in the conversation runs", async () => {
@@ -240,4 +245,52 @@ it("shows the working face while a task in the conversation runs", async () => {
   ];
   await act(() => root.render(<GoatBotSidebarRow />));
   expect(container.querySelector('[role="img"][aria-label="Working"]')).not.toBeNull();
+});
+
+function runningChip(at: string): OrchestrationV2ProjectedTurnItem {
+  const card = projectedBot("card", at, "");
+  return {
+    ...card,
+    item: {
+      ...card.item,
+      type: "notification",
+      source: { kind: "background_task" },
+      outcome: "updated",
+      summary: "Work updated",
+      ledgerTask: {
+        taskId: "task-1",
+        conversationId: "conv-1",
+        taskVersion: 1,
+        title: "Check the disks",
+        status: "running",
+        originKind: "goat",
+        requesterLabel: "Jun",
+        createdAt: at,
+        updatedAt: at,
+        openQuestionCount: 0,
+      },
+    } as unknown as OrchestrationV2TurnItem,
+  };
+}
+
+it("an unread working main row starts its name with Working", async () => {
+  state.waiting = 0;
+  state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
+  state.items = [
+    runningChip("2026-10-12T12:01:00.000Z"),
+    projectedBot("b1", "2026-10-12T12:02:00.000Z", "On it"),
+  ];
+  await using screen = await render(<GoatBotSidebarRow />, { router: false });
+  await expect
+    .element(screen.getByRole("link", { name: /^Working\s*GOAT Bot\s?, unread/ }))
+    .toBeVisible();
+});
+
+it("the main row says waiting once, with the count", async () => {
+  state.waiting = 2;
+  state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
+  await using screen = await render(<GoatBotSidebarRow />, { router: false });
+  const link = screen.getByRole("link", { name: /^2 waiting for you\s*GOAT Bot/ });
+  await expect.element(link).toBeVisible();
+  await expect.element(link).not.toHaveAccessibleName(/waiting[\s\S]*waiting/i);
 });

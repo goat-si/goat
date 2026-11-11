@@ -208,19 +208,14 @@ function GoatBotConversationRow({
       {...readMenu}
       render={<Link to={GOAT_BOT_PATH} />}
     >
+      {/* The face's label leads the link's name; the dot is said after the name. */}
       <span
         className="flex size-2.5 shrink-0 items-center justify-center group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0"
-        aria-hidden={!preview?.unread}
+        aria-hidden
       >
-        {preview?.unread ? (
-          <span
-            className="size-2.5 rounded-full bg-info"
-            role="img"
-            aria-label={`Unread ${name} messages`}
-          />
-        ) : null}
+        {preview?.unread ? <span className="size-2.5 rounded-full bg-info" /> : null}
       </span>
-      <GoatBotMainAvatar size="md" place="list" emoji={avatar} />
+      <GoatBotMainAvatar size="md" place="list" emoji={avatar} countInLabel />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <span
@@ -231,6 +226,7 @@ function GoatBotConversationRow({
             }
           >
             {name}
+            {preview?.unread ? <span className="sr-only">, unread</span> : null}
           </span>
           {at ? (
             <span
@@ -241,7 +237,7 @@ function GoatBotConversationRow({
             </span>
           ) : null}
           {count !== undefined && count > 0 ? (
-            <Badge size="sm" variant="secondary" aria-label={`${count} waiting for you`}>
+            <Badge size="sm" variant="secondary" aria-hidden>
               {count}
             </Badge>
           ) : null}

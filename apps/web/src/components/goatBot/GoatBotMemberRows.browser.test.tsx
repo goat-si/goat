@@ -19,6 +19,7 @@ const server = vi.hoisted(() => ({
   busy: false,
   toasts: [] as Array<{ title: string; description?: string }>,
   latest: {} as Record<string, { text: string; at: string; author: "bot" | "person" }>,
+  waiting: {} as Record<string, number>,
 }));
 const publish = () => {
   for (const listener of server.listeners) listener();
@@ -85,13 +86,21 @@ vi.mock("../ui/toast", () => ({
     add: (toast: { title: string; description?: string }) => server.toasts.push(toast),
   },
 }));
-vi.mock("./GoatBotAvatar", () => ({ GoatBotSessionAvatar: () => null }));
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberStatus: (bot: BotProfile) => ({
-    waitingCount: 0,
+    waitingCount: server.waiting[bot.botId] ?? 0,
     latest: server.latest[bot.botId],
   }),
+  useGoatBotMemberWaitingCount: (bot: BotProfile) => server.waiting[bot.botId] ?? 0,
 }));
+// The row's face reads its bot status alone: no conversation shell or items are loaded here.
+vi.mock("~/state/entities", () => ({
+  useThreadShell: () => null,
+  resolveThreadDetailRef: () => null,
+  useThreadVisibleTurnItems: () => [],
+}));
+vi.mock("./GoatBotModeButton", () => ({ useGoatBotPreferred: () => false }));
+vi.mock("./useGoatBotWaitingCount", () => ({ useGoatBotWaitingCount: () => 0 }));
 vi.mock("../ui/sidebar", () => ({
   SidebarGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SidebarMenu: ({ children }: { children: ReactNode }) => <ul>{children}</ul>,
@@ -135,6 +144,7 @@ function setup() {
   server.busy = false;
   server.toasts = [];
   server.latest = {};
+  server.waiting = {};
 }
 
 it("hides a member under Hidden bots and shows it again", async () => {
@@ -204,4 +214,24 @@ it("a member's row shows its newest message, the person's prefixed with You, els
   await expect.element(screen.getByText("You: is main green?")).toBeVisible();
   await expect.element(screen.getByText("Brand new.")).toBeVisible();
   expect(screen.getByText("Reads papers.").query()).toBeNull();
+});
+
+it("a member whose person message is unanswered reads Reading first", async () => {
+  setup();
+  const now = Date.parse("2026-11-07T01:00:30.000Z");
+  using _now = vi.spyOn(Date, "now").mockReturnValue(now);
+  server.latest = {
+    research: { text: "is main green?", at: "2026-11-07T01:00:00.000Z", author: "person" },
+  };
+  await using screen = await render(<Roster />, { router: false });
+  await expect.element(screen.getByRole("link", { name: /^Reading\s*Research/ })).toBeVisible();
+});
+
+it("says waiting once, with the count, on a member whose tasks wait for the person", async () => {
+  setup();
+  server.waiting = { research: 2 };
+  await using screen = await render(<Roster />, { router: false });
+  const link = screen.getByRole("link", { name: /^2 waiting for you\s*Research/ });
+  await expect.element(link).toBeVisible();
+  await expect.element(link).not.toHaveAccessibleName(/waiting[\s\S]*waiting/i);
 });
