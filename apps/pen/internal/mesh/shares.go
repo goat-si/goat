@@ -1,6 +1,9 @@
 package mesh
 
-import "sort"
+import (
+	"bytes"
+	"sort"
+)
 
 // SetLineageShares switches the store to ADR-0026 shares; a mesh of the new epoch sets it.
 func (s *Store) SetLineageShares() {
@@ -19,9 +22,17 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 	}
 	type share struct {
 		lineage int
-		control bool
+		lock    bool
+	}
+	// A revoke is kept when it is the smallest of some (subject, signer's lineage, compromised): a
+	// lineage spends only its own places, and every lineage can revoke every key once.
+	type revokeSlot struct {
+		subject     string
+		lineage     int
+		compromised bool
 	}
 	groups := map[share][]*Record{}
+	revokes := map[revokeSlot]*Record{}
 	for _, r := range cands {
 		if r.B.Type == TypeFound || r.B.Type == TypeAdmit {
 			continue
@@ -30,18 +41,29 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 		if !ok {
 			continue
 		}
-		control := (r.B.Type == TypeRevoke || r.B.Type == TypeLock) && !r.Opaque
-		if r.B.Type == TypeRevoke && !r.Opaque && !allIntroduced(keys, r.B.Subjects) {
+		if r.B.Type == TypeRevoke && !r.Opaque {
+			if !allIntroduced(keys, r.B.Subjects) {
+				continue
+			}
+			for _, sub := range r.B.Subjects {
+				slot := revokeSlot{sub, k.lineage, r.B.Compromised != nil && *r.B.Compromised}
+				if best := revokes[slot]; best == nil || bytes.Compare(r.Sum[:], best.Sum[:]) < 0 {
+					revokes[slot] = r
+				}
+			}
 			continue
 		}
-		key := share{k.lineage, control}
+		key := share{k.lineage, r.B.Type == TypeLock && !r.Opaque}
 		groups[key] = append(groups[key], r)
+	}
+	for _, r := range revokes {
+		kept[r.Hash] = r
 	}
 	for key, rs := range groups {
 		sortByHash(rs)
 		n := ShareOrdinary
-		if key.control {
-			n = ShareControl
+		if key.lock {
+			n = ShareLocks
 		}
 		for _, r := range rs[:min(n, len(rs))] {
 			kept[r.Hash] = r
