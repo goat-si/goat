@@ -317,7 +317,10 @@ func (d *Daemon) deliverTo(ctx context.Context, reg *serviceReg, remote []byte, 
 	}
 	var j []byte
 	if l != nil {
-		if j, err = d.clientLine(reg, tc, l); err != nil {
+		// The commit and line 3 happen under the session's gate, which its close owner takes first.
+		l.gate.Lock()
+		defer l.gate.Unlock()
+		if j, err = d.commitClient(reg, tc, l); err != nil {
 			return nil, err
 		}
 	} else if j, err = d.memberLine(reg, tc, remote); err != nil {
@@ -462,7 +465,7 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	d.spawn(reg.out.run)
 	reg.wmu.Unlock()
 	if old != nil {
-		closeAll(conns)
+		d.endRegistration(old, conns)
 		// The old holder's lines may still wait in its queue; replaced ends it without waiting for them.
 		old.wmu.Lock()
 		old.wmu.Unlock()
@@ -470,7 +473,7 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	}
 	defer func() {
 		reg.out.fail()
-		closeAll(d.svc.end(reg))
+		d.endRegistration(reg, d.svc.end(reg))
 		if d.opt.ServiceEnded != nil {
 			d.opt.ServiceEnded(reg.id)
 		}

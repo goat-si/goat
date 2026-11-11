@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 // Options configure a daemon. Zero values pick the production defaults.
@@ -159,6 +161,12 @@ type live struct {
 	client bool
 	reg    *serviceReg
 	k      uint64
+	// gate orders a client delivery's commit and identity line before its close; closing, closed and conn are
+	// guarded by d.mu (clients.go).
+	gate    sync.Mutex
+	closing bool
+	closed  chan struct{}
+	conn    net.Conn
 }
 
 type seenInfo struct {
@@ -586,8 +594,9 @@ func (d *Daemon) retrySave() {
 
 // viewChanged closes sessions of keys that are no longer members, tells watchers, rewrites known_hosts.
 func (d *Daemon) viewChanged() {
-	v := d.view()
 	d.mu.Lock()
+	// Read under d.mu, so a sweep always applies the newest view and a stale callback never sweeps an older one.
+	v := d.view()
 	if v == d.lastView {
 		d.mu.Unlock()
 		return
@@ -595,8 +604,10 @@ func (d *Daemon) viewChanged() {
 	old := d.lastView
 	d.lastView = v
 	var doomed []*live
+	// A client session closes only when the view makes its key a member or a revoked member.
+	clients, _ := d.selectLocked(func(l *live) bool { return memberOrRevoked(v, l.remote) })
 	for k, l := range d.sessions {
-		if l.deferred {
+		if l.deferred || l.client {
 			continue
 		}
 		pub, _ := ident.DecodeKey(l.remote)
@@ -618,6 +629,9 @@ func (d *Daemon) viewChanged() {
 	d.mu.Unlock()
 	for _, l := range doomed {
 		l.sec.Close(4401)
+	}
+	for _, l := range clients {
+		d.closeOwned(l, wire.CodeNotAdmitted)
 	}
 	d.forgetRevoked(old, v)
 	d.writeKnownHosts()

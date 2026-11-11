@@ -245,6 +245,11 @@ func (d *Daemon) opClients(reg *serviceReg, b []byte, extra map[string]any) (*ho
 		return refuse(reason)
 	}
 	e, ok, reason := d.svc.setClients(reg, uint64(gen), list)
+	var mine []*live
+	var waits []chan struct{}
+	if ok {
+		mine, waits = d.dropClientsLocked(reg, list)
+	}
 	d.mu.Unlock()
 	if reason != "" {
 		return refuse(reason)
@@ -252,6 +257,8 @@ func (d *Daemon) opClients(reg *serviceReg, b []byte, extra map[string]any) (*ho
 	if !ok {
 		return nil, false
 	}
+	// The answer is written only after every session of a dropped key and its delivery are closed.
+	d.closeAndWait(mine, waits)
 	e.fill(jsonLine(map[string]any{"t": "clients", "gen": gen}))
 	return e, true
 }

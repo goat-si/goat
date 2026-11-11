@@ -80,6 +80,9 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 			}
 			return nil, err
 		}
+		if kind == session.KindAccount && d.svc.listedAnywhere(ident.B64.EncodeToString(remote)) {
+			return nil, errNotAdmitted
+		}
 		psk, err := d.admit(kind, remote, p)
 		if err != nil || kind != session.KindAccount {
 			return psk, err
