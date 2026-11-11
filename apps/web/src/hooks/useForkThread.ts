@@ -298,14 +298,17 @@ export interface ComposerForkCommand {
   readonly run: () => void;
 }
 
-/** The composer's /fork, or undefined where this connection or thread cannot fork. */
+/**
+ * The composer's /fork, or undefined where this connection or thread cannot fork. A typed /fork
+ * runs it before any other send branch, so it never reaches the provider.
+ */
 export function useComposerForkCommand(input: {
-  readonly threadRef: ScopedThreadRef | null;
+  readonly activeThreadRef: ScopedThreadRef | null;
   readonly isServerThread: boolean;
   readonly isGitRepo: boolean;
   readonly isCloudThread: boolean;
 }): ComposerForkCommand | undefined {
-  const threadRef = input.isServerThread ? input.threadRef : null;
+  const threadRef = input.isServerThread ? input.activeThreadRef : null;
   const availability = useThreadForkAvailability(threadRef, {
     isGitRepository: input.isGitRepo,
     cloud: input.isCloudThread,
