@@ -72,7 +72,11 @@ async function mount(
   canSubmit = true,
   mode: "edit" | "create" = "edit",
   children?: ReactNode,
-  more: { readonly colorEditable?: boolean; readonly color?: string | null } = {},
+  more: {
+    readonly colorEditable?: boolean;
+    readonly color?: string | null;
+    readonly draftName?: string;
+  } = {},
 ) {
   const onClose = vi.fn();
   container = document.createElement("div");
@@ -89,6 +93,7 @@ async function mount(
         }
         canSubmit={canSubmit}
         colorEditable={more.colorEditable}
+        draftName={more.draftName}
         onSubmit={onSubmit}
         onClose={onClose}
       >
@@ -257,4 +262,19 @@ it("changes or clears an existing bot's colour on Edit, and offers none to an ol
   await type("Name", "Scout");
   await act(async () => create().click());
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: null, purpose: "" });
+});
+
+it("starts Edit from a name typed elsewhere and saves it, alone or with other changes", async () => {
+  const onSubmit = vi.fn(async (_changes: object) => null);
+  await mount(onSubmit, true, "edit", undefined, { draftName: "Ada" });
+  expect(field("Name").value).toBe("Ada");
+  // Nothing else changed: the typed name alone is the change.
+  await act(async () => save().click());
+  expect(onSubmit).toHaveBeenLastCalledWith({ name: "Ada" });
+  await act(async () => root?.unmount());
+  root = undefined;
+  await mount(onSubmit, true, "edit", undefined, { draftName: "Ada" });
+  await type("Purpose", "Watch the deploys.");
+  await act(async () => save().click());
+  expect(onSubmit).toHaveBeenLastCalledWith({ name: "Ada", purpose: "Watch the deploys." });
 });

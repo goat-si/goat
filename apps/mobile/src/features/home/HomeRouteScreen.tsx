@@ -8,7 +8,7 @@ import {
 } from "../../native/v5-workspace-context";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
-import { useIsFocused, useNavigation } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, useWindowDimensions } from "react-native";
 
@@ -49,8 +49,6 @@ import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail"
 
 export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
-  // The bot list reads what waits on the person again whenever this screen comes back.
-  const focused = useIsFocused();
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
   const columnMetrics = useNativeColumnLayoutMetrics();
   const deviceType = useDeviceType();
@@ -300,7 +298,8 @@ export function HomeRouteScreen() {
           />
         )}
         {homeHeader}
-        <MobileBotList showSegments={Platform.OS !== "android"} visible={focused} />
+        {/* On screen, tab included: the roster's refreshes and a New bot's chat follow real visibility. */}
+        <MobileBotList showSegments={Platform.OS !== "android"} visible={visible} />
       </>
     );
 

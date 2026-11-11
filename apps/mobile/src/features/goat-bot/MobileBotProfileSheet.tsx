@@ -27,8 +27,10 @@ export function MobileBotProfileSheet(props: {
   readonly extraChanged?: boolean;
   /** The server stores a member's colour; absent or false shows no swatches and sends none. */
   readonly colorEditable?: boolean | undefined;
+  /** Starts the name field from words typed elsewhere; changes still count against `initial`. */
+  readonly draftName?: string | undefined;
 }) {
-  const [name, setName] = useState(props.initial.name);
+  const [name, setName] = useState(props.draftName ?? props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
   const [color, setColor] = useState<string | null>(props.initial.color ?? null);
