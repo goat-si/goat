@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 func sharedStore(b *builder) *Store {
@@ -129,5 +131,45 @@ func TestSharedStoresAgreeWhateverTheArrivalOrder(t *testing.T) {
 		if !a.Has(r.Hash) || !c.Has(r.Hash) {
 			t.Fatalf("honest record %s was lost (a %v, c %v)", r.Hash, a.Has(r.Hash), c.Has(r.Hash))
 		}
+	}
+}
+
+// A save of a shared store keeps records another process wrote to the file, within the shares.
+func TestASharedSaveKeepsRecordsAnotherProcessWroteWithinTheShares(t *testing.T) {
+	f, o := detID(1), detID(2)
+	b, found := newMesh(t, f)
+	ao := b.admit(f, o, found)
+	named := b.sign(o, TypeName, []*Record{ao}, Fields{Subject: pub(o), Name: "o"})
+	st, err := state.OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemonSide := NewStore(st, b.meshID)
+	daemonSide.SetLineageShares()
+	if _, err := daemonSide.Merge([]*Record{found, ao}); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemonSide.Save(); err != nil {
+		t.Fatal(err)
+	}
+	cliSide, err := Load(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cliSide.Merge([]*Record{named}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cliSide.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemonSide.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Load(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.Has(named.Hash) {
+		t.Fatal("a save of the shared store dropped a record another process wrote")
 	}
 }
