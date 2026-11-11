@@ -1,6 +1,6 @@
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
-import { deliveryLedger } from "./channelDeliveryLedger.ts";
+import { deliveryLedger, type UnsentDeliveryRelease } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -594,7 +594,7 @@ export class ChannelLedger extends Context.Service<
       readonly connectionId: string;
       readonly externalActorId: string;
     }) => Effect.Effect<boolean, ChannelLedgerError>;
-  }
+  } & UnsentDeliveryRelease
 >()("goat/channels/ChannelLedger") {}
 
 const ReplyState = Schema.Struct({ text: Schema.String, sentAt: Schema.optional(Schema.String) });
