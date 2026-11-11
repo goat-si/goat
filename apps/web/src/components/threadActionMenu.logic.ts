@@ -5,6 +5,9 @@ export type ThreadActionMenuId =
   | "continue-on-ssh"
   | "find"
   | "new-thread-on-branch"
+  | "fork"
+  | "fork:current"
+  | "fork:worktree"
   | "promote"
   | "filter-by-project"
   | "turn-into-project"
@@ -103,10 +106,53 @@ export interface ThreadActionMenuState {
   readonly canShareWithGuest?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
+  /** Absent or null hides forking, as for side chats. */
+  readonly fork?: ThreadForkMenuState | null;
+}
+
+export interface ThreadForkMenuState {
+  readonly canFork: boolean;
+  readonly canForkIntoWorktree: boolean;
+  /** Selects "Fork thread in same worktree". */
+  readonly inWorktree: boolean;
+  /** A hub-proxied server without fork support; the hub refuses a raw thread.fork. */
+  readonly needsServerUpdate: boolean;
+}
+
+function forkMenuItems(
+  fork: ThreadForkMenuState | null | undefined,
+): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
+  if (!fork) return [];
+  const currentLabel = fork.inWorktree ? "Fork thread in same worktree" : "Fork thread";
+  if (fork.canForkIntoWorktree) {
+    return [
+      {
+        id: "fork",
+        label: "Fork thread",
+        icon: "git-fork",
+        disabled: !fork.canFork,
+        children: [
+          { id: "fork:current", label: currentLabel },
+          { id: "fork:worktree", label: "Fork thread in new worktree" },
+        ],
+      },
+    ];
+  }
+  return [
+    {
+      id: "fork:current",
+      label: fork.needsServerUpdate ? `${currentLabel} (update this server)` : currentLabel,
+      icon: "git-fork",
+      disabled: !fork.canFork,
+    },
+  ];
 }
 
 const GLOBAL_AGENT_HIDDEN_ACTIONS: ReadonlySet<ThreadActionMenuId> = new Set([
   "new-thread-on-branch",
+  "fork",
+  "fork:current",
+  "fork:worktree",
   "filter-by-project",
   "project-settings",
   "rename",
@@ -155,6 +201,7 @@ export function buildThreadActionMenuItems(
           },
         ]
       : []),
+    ...forkMenuItems(state.fork),
     ...(state.canOpenSshHandoff
       ? [{ id: "continue-on-ssh" as const, label: "Continue on SSH host…", icon: "terminal" }]
       : []),
