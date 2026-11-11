@@ -33,7 +33,7 @@ export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.
     readonly get: (
       providerSessionId: ProviderSessionId,
     ) => Effect.Effect<
-      Option.Option<Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "predatesModel">>,
+      Option.Option<Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "modelStatus">>,
       E
     >;
   };
@@ -48,8 +48,8 @@ export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.
     const { sessions } = input;
     const check = Effect.gen(function* () {
       const live = yield* sessions.get(shared);
-      if (Option.isNone(live) || live.value.predatesModel === undefined) return false;
-      return yield* live.value.predatesModel(model);
+      if (Option.isNone(live) || live.value.modelStatus === undefined) return false;
+      return (yield* live.value.modelStatus(model)) === "predated";
     });
     // Dispatch waits on this; a slow answer leaves the thread to the session's own open check.
     const predates = yield* check.pipe(Effect.timeoutOption("2 seconds"), Effect.option);

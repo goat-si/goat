@@ -237,7 +237,10 @@ it.effect("a new thread on a model the shared Codex process predates opens its o
             get: (id) =>
               Effect.succeed(
                 id === sharedId
-                  ? Option.some({ predatesModel: (model) => Effect.succeed(model === addedModel) })
+                  ? Option.some({
+                      modelStatus: (model) =>
+                        Effect.succeed(model === addedModel ? "predated" : "ready"),
+                    })
                   : Option.none(),
               ),
           },

@@ -7283,7 +7283,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ...(offeredModels === undefined || offeredAtStart === undefined
             ? {}
             : {
-                predatesModel: makeCodexModelArrivals({
+                modelStatus: makeCodexModelArrivals({
                   atStart: offeredAtStart,
                   offered: offeredModels,
                   listServed: ensureInitialized.pipe(

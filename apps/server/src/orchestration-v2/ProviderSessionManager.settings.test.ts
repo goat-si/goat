@@ -72,6 +72,8 @@ interface Fixture {
   keptProcessKnows: ReadonlyArray<string> | undefined;
   /** Commands or tools still running in the process outside any turn. */
   backgroundWork: boolean;
+  /** Catalog models a freshly started process still does not list, as with a project's own catalog. */
+  readonly freshProcessLacks: Array<string>;
 }
 
 const makeFixture = Effect.gen(function* () {
@@ -86,6 +88,7 @@ const makeFixture = Effect.gen(function* () {
     catalog: [modelSelection.model],
     keptProcessKnows: undefined,
     backgroundWork: false,
+    freshProcessLacks: [],
   };
   fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
   return fixture;
@@ -107,7 +110,12 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
       yield* Ref.update(fixture.opens, (count) => count + 1);
       yield* Effect.addFinalizer(() => Queue.offer(fixture.closed, undefined));
       const now = yield* DateTime.now;
-      const known = new Set(fixture.keptProcessKnows ?? fixture.catalog);
+      // A kept process read its catalog in an earlier run, so what was offered at this open says nothing.
+      const offeredAtStart = new Set(fixture.keptProcessKnows === undefined ? fixture.catalog : []);
+      const known = new Set(
+        fixture.keptProcessKnows ??
+          fixture.catalog.filter((model) => !fixture.freshProcessLacks.includes(model)),
+      );
       fixture.keptProcessKnows = undefined;
       return {
         instanceId,
@@ -130,8 +138,14 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
         hasPendingBackgroundWork: Effect.sync(() => fixture.backgroundWork),
         holdsLiveWork: ({ pastPinCeiling }) =>
           pastPinCeiling ? fixture.liveWork.confirm : Effect.succeed(fixture.liveWork.held),
-        predatesModel: (model) =>
-          Effect.succeed(fixture.catalog.includes(model) && !known.has(model)),
+        modelStatus: (model) =>
+          Effect.succeed(
+            !fixture.catalog.includes(model) || known.has(model)
+              ? "ready"
+              : offeredAtStart.has(model)
+                ? "missing"
+                : "predated",
+          ),
         ensureThread: () => unused("ensureThread"),
         resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
         // The turn runs until the test ends it; ending it fails the start, which settles it.
@@ -574,6 +588,26 @@ it.effect(
           runtimePolicy,
         });
         assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+      }).pipe(Effect.provide(layer(fixture)));
+    }),
+);
+
+it.effect(
+  "a model GOAT offers but a fresh process does not list is refused without restarting",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      yield* Effect.gen(function* () {
+        const { open } = yield* sharedSession;
+        fixture.catalog.push(addedModel);
+        fixture.freshProcessLacks.push(addedModel);
+        yield* open(threadA);
+        for (const threadId of [threadA, threadB]) {
+          const refused = yield* open(threadId, addedModel).pipe(Effect.exit);
+          assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), "would not help");
+        }
+        assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
       }).pipe(Effect.provide(layer(fixture)));
     }),
 );

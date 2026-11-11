@@ -4,6 +4,7 @@ import type {
   ServerProviderModel,
   ThreadId,
 } from "@goat/contracts";
+import type { ProviderModelStatus } from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -35,9 +36,10 @@ export const reconnectsKeptProcess = Effect.fn("CodexModelArrivals.reconnectsKep
 );
 
 /**
- * Codex's app-server reads its catalog only at startup and runs an unknown model on fallback metadata
- * that sends every MCP tool inline. A model predates the process when GOAT began offering it after the
- * process started and the process does not show that it knows it; custom models never count.
+ * Codex's app-server reads its catalog only at startup and runs an unknown model with every MCP tool
+ * inline, so a catalog model is ready only when the serving process lists it; otherwise it is predated
+ * (offered only after the process started), missing (offered then too) or unconfirmed (no answer).
+ * Custom models are GOAT's and never checked.
  */
 export const makeCodexModelArrivals = <E>(input: {
   /** The models GOAT offered just before this process started; empty when that is unknown. */
@@ -55,13 +57,14 @@ export const makeCodexModelArrivals = <E>(input: {
     served = new Set(yield* input.listServed);
     return served.has(model);
   });
-  return Effect.fn("CodexModelArrivals.predatesModel")(function* (model: string) {
-    if (atStart.has(model) || !offeredFromCatalog(yield* input.offered).has(model)) return false;
-    // A listing that fails or stalls cannot show the process knows the model.
-    return !(yield* lists(model).pipe(
+  return Effect.fn("CodexModelArrivals.modelStatus")(function* (model: string) {
+    if (!offeredFromCatalog(yield* input.offered).has(model)) return "ready" as ProviderModelStatus;
+    const listed = yield* lists(model).pipe(
       Effect.timeoutOption("10 seconds"),
-      Effect.map((listed) => listed._tag === "Some" && listed.value),
-      Effect.orElseSucceed(() => false),
-    ));
+      Effect.orElseSucceed(() => Option.none<boolean>()),
+    );
+    if (Option.isNone(listed)) return "unconfirmed";
+    if (listed.value) return "ready";
+    return atStart.has(model) ? "missing" : "predated";
   });
 };

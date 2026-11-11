@@ -14,14 +14,24 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 export const RETIRE_PROBE_MS = 5_000;
 export const RETIRED_DETAIL = "The provider's settings changed; its process restarts with them.";
 
-/** A turn cannot start on a process that still runs work under the previous settings or catalog. */
+/** A turn cannot start on the current process: its settings changed, or it cannot run the turn's model. */
 export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRestartRequiredError>()(
   "ProviderRestartRequiredError",
-  { runningTurns: Schema.Number, model: Schema.optional(Schema.String) },
+  {
+    runningTurns: Schema.Number,
+    model: Schema.optional(Schema.String),
+    modelStatus: Schema.optional(Schema.Literals(["predated", "missing", "unconfirmed"])),
+  },
 ) {
   override get message(): string {
-    if (this.model !== undefined)
-      return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes, sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
+    switch (this.model === undefined ? undefined : this.modelStatus) {
+      case "missing":
+        return `This provider's process does not list ${this.model}, although GOAT offers it and already did when that process started, so a restart would not help. Pick another model, or check this project's provider configuration for its model catalog.`;
+      case "unconfirmed":
+        return `GOAT could not confirm that this provider's process can run ${this.model}, because it did not answer for its model list. Once the work still running on it finishes, sending again starts a new process. Try again shortly or pick another model.`;
+      case "predated":
+        return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes, sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
+    }
     const work =
       this.runningTurns === 0
         ? "an active goal, a subagent or a pending approval"
@@ -64,32 +74,37 @@ export interface RetirableSession {
     | "providerSessionId"
     | "holdsLiveWork"
     | "hasPendingBackgroundWork"
-    | "predatesModel"
+    | "modelStatus"
   >;
 }
 
-/** `outdated`: the process predates the requested model and still runs work; nothing is marked. */
-export type Retirement = "current" | "released" | "retiring" | "outdated";
+type ModelRefusal = Exclude<ProviderAdapter.ProviderModelStatus, "ready">;
 
-/** A retiring session still takes turns from threads with a turn running on it; an outdated one refuses this turn. */
+/** A model state refuses the turn without marking the session; nothing is drained for it. */
+export type Retirement = "current" | "released" | "retiring" | ModelRefusal;
+
+const isModelRefusal = (retired: Retirement): retired is ModelRefusal =>
+  retired === "predated" || retired === "missing" || retired === "unconfirmed";
+
+/** A retiring session still takes turns from threads with a turn running on it; a model state refuses this turn. */
 export const refuses = (retired: Retirement, threadHasRunningTurn: boolean) =>
-  retired === "outdated" || (retired === "retiring" && !threadHasRunningTurn);
+  isModelRefusal(retired) || (retired === "retiring" && !threadHasRunningTurn);
 
 export const restartRequired = (retired: Retirement, runningTurns: number, model?: string) =>
   new ProviderRestartRequiredError({
     runningTurns,
-    ...(retired === "outdated" && model !== undefined ? { model } : {}),
+    ...(model === undefined || !isModelRefusal(retired) ? {} : { model, modelStatus: retired }),
   });
 
-/** Refuses a turn on a process, however it was opened, that predates the turn's model. */
-export const refuseOutdated = Effect.fnUntraced(function* <E>(
-  runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "predatesModel">,
+/** Refuses a turn on a process, however it was opened, that cannot run the turn's model. */
+export const refuseUnready = Effect.fnUntraced(function* <E>(
+  runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "modelStatus">,
   model: string | undefined,
   refuse: (cause: ProviderRestartRequiredError) => E,
 ) {
-  if (model === undefined || runtime.predatesModel === undefined) return;
-  if (yield* runtime.predatesModel(model).pipe(unlessInterrupted(false)))
-    return yield* Effect.fail(refuse(new ProviderRestartRequiredError({ runningTurns: 0, model })));
+  if (model === undefined || runtime.modelStatus === undefined) return;
+  const status = yield* runtime.modelStatus(model);
+  if (status !== "ready") return yield* Effect.fail(refuse(restartRequired(status, 0, model)));
 });
 
 /**
@@ -148,22 +163,25 @@ export const make = <
     const key = String(providerSessionId);
     // Turn starts and ends replace the entry, so every decision reads it again after a yield.
     const read = Ref.get(input.sessions).pipe(Effect.map((current) => current.get(key)));
-    const releaseIdle = Effect.fnUntraced(function* (busy: "retiring" | "outdated") {
+    const releaseIdle = Effect.fnUntraced(function* (
+      busy: "retiring" | "predated" | "unconfirmed",
+    ) {
       const latest = yield* read;
       if (latest === undefined) return "released" as Retirement;
       if (latest.busyTurns.size > 0) return busy;
-      // Commands and tools still running in the process end with it; only a catalog restart waits.
-      const working =
-        busy === "outdated" &&
-        latest.runtime.hasPendingBackgroundWork !== undefined &&
-        (yield* latest.runtime.hasPendingBackgroundWork.pipe(unlessInterrupted(true)));
-      if (working) return busy;
       const held =
         latest.runtime.holdsLiveWork !== undefined &&
         (yield* latest.runtime
           .holdsLiveWork({ pastPinCeiling: false })
           .pipe(unlessInterrupted(true)));
       if (held) return busy;
+      // Commands and tools still running in the process end with it; only a catalog restart waits.
+      // Read last, from memory, so nothing but the release's own busy-turn check follows it.
+      const working =
+        busy !== "retiring" &&
+        latest.runtime.hasPendingBackgroundWork !== undefined &&
+        (yield* latest.runtime.hasPendingBackgroundWork.pipe(unlessInterrupted(true)));
+      if (working) return busy;
       yield* input.release(providerSessionId).pipe(logged(providerSessionId));
       return (yield* read) === undefined ? "released" : busy;
     });
@@ -184,11 +202,10 @@ export const make = <
       yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
     }
     if (stale) return yield* releaseIdle("retiring");
-    const predates =
-      model !== undefined &&
-      marked.runtime.predatesModel !== undefined &&
-      (yield* marked.runtime.predatesModel(model).pipe(unlessInterrupted(false)));
-    return predates ? yield* releaseIdle("outdated") : "current";
+    if (model === undefined || marked.runtime.modelStatus === undefined) return "current";
+    const status = yield* marked.runtime.modelStatus(model);
+    if (status === "ready") return "current";
+    return status === "missing" ? status : yield* releaseIdle(status);
   });
 
   /** Rechecks every live session whenever provider instances change. */

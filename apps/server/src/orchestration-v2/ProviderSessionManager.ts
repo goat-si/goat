@@ -2835,7 +2835,7 @@ export const layerWithOptions = (
                   );
                 }),
               )
-              .pipe(Effect.tap((runtime) => Retirement.refuseOutdated(runtime, model, openError)));
+              .pipe(Effect.tap((runtime) => Retirement.refuseUnready(runtime, model, openError)));
           }),
         isLive: (providerSessionId) =>
           Ref.get(sessions).pipe(
