@@ -1,0 +1,59 @@
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+
+import { scope, setup, threadScope } from "./HubMembership.testkit.ts";
+
+const linkAdds = (calls: ReadonlyArray<string>) =>
+  calls.filter((call) => call.includes("link add"));
+
+it.effect(
+  "after a successful join the same decisionId is refused, even once the link is gone",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup();
+      const asked = yield* hub.membership.join(threadScope, { deviceAlias: "lidge-ts" });
+      expect(asked.state).toBe("needs_human");
+      yield* hub.answer(asked.decisionId!);
+      const joined = yield* hub.membership.join(threadScope, {
+        deviceAlias: "lidge-ts",
+        decisionId: asked.decisionId!,
+      });
+      expect(joined.state).toBe("child");
+      expect(yield* hub.consumed).toEqual([{ approval_id: asked.decisionId }]);
+      hub.unlink("lidge-ts");
+      const again = yield* hub.membership
+        .join(threadScope, { deviceAlias: "lidge-ts", decisionId: asked.decisionId! })
+        .pipe(Effect.flip);
+      expect(again.message).toContain("already used");
+      expect(linkAdds(hub.calls)).toHaveLength(1);
+    }),
+);
+
+it.effect("two concurrent joins with one approval add one link", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup();
+    const asked = yield* hub.membership.join(scope, { deviceAlias: "lidge-ts" });
+    yield* hub.approve(asked.decisionId!);
+    const input = { deviceAlias: "lidge-ts", decisionId: asked.decisionId! };
+    const results = yield* Effect.all(
+      [hub.membership.join(scope, input), hub.membership.join(scope, input)],
+      { concurrency: "unbounded" },
+    );
+    expect(results.map((result) => result.state)).toEqual(["child", "child"]);
+    expect(linkAdds(hub.calls)).toHaveLength(1);
+  }),
+);
+
+it.effect("an approved leave whose revoke fails keeps the approval for another try", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ profile: "hub-admin", linked: ["box"], revokeFails: true });
+    const asked = yield* hub.membership.leave(threadScope, { deviceAlias: "box" });
+    expect(asked.state).toBe("needs_human");
+    yield* hub.answer(asked.decisionId!);
+    const input = { deviceAlias: "box", decisionId: asked.decisionId! };
+    expect((yield* hub.membership.leave(threadScope, input)).state).toBe("failed");
+    expect((yield* hub.membership.leave(threadScope, input)).state).toBe("failed");
+    expect(hub.calls.filter((call) => call.includes("link revoke"))).toHaveLength(2);
+    expect(yield* hub.consumed).toEqual([]);
+  }),
+);

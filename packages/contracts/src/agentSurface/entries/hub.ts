@@ -96,6 +96,7 @@ export const hubEntries = {
     verb: "device_join",
     name: "goat_hub_device_join",
     toolkit: "hostStatus",
+    operation: "handoff",
     summary: "Join a device to this OpenCodex Home as a Remote Link Child or Hub client.",
     description:
       "Join a device to this environment's Home. Membership alone is not Ready; goat_host_status reports Child setup. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check membership.",
@@ -116,6 +117,7 @@ export const hubEntries = {
     verb: "device_leave",
     name: "goat_hub_device_leave",
     toolkit: "hostStatus",
+    operation: "handoff",
     summary: "Remove a Remote Link Child or Hub client from this OpenCodex Home.",
     description:
       "Remove a device from this environment's Home. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check membership.",
@@ -136,6 +138,7 @@ export const hubEntries = {
     verb: "device_repair",
     name: "goat_hub_device_repair",
     toolkit: "hostStatus",
+    operation: "handoff",
     summary: "Repair a device's parity with this OpenCodex Home.",
     description:
       "Repair a device's Home connection. May sync, restart or reconnect. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check it.",

@@ -16,9 +16,12 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { approvalUsed, consumeApproval, markApprovalUsed } from "./approvalConsumption.ts";
+import { cancelQueuedApprovalWake } from "./approvalWakeWithdraw.ts";
 import * as Handoffs from "./Handoffs.ts";
 
 type Binding = Readonly<Record<string, unknown>>;
@@ -46,6 +49,17 @@ export class ApprovalHandoffs extends Context.Service<
       readonly targetPath: string;
       readonly binding: Binding;
     }) => Effect.Effect<void, OrchestratorMcpFailure>;
+    /**
+     * Records that the approved change happened, after which the approval covers nothing. With
+     * `once`, an approval already used is refused (a change that starts as it is used). An
+     * "approved" wake still waiting in the queue is withdrawn: its "call again" would only fail.
+     */
+    readonly markUsed: (input: {
+      readonly threadId: ThreadId;
+      readonly handoffId: string;
+      readonly action: string;
+      readonly once?: boolean;
+    }) => Effect.Effect<void, OrchestratorMcpFailure>;
   }
 >()("goat/handoffs/ApprovalHandoffs") {}
 
@@ -53,6 +67,7 @@ const make = Effect.gen(function* () {
   const handoffs = yield* Handoffs.Handoffs;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
+  const sql = yield* SqlClient.SqlClient;
 
   const request: ApprovalHandoffs["Service"]["request"] = Effect.fn("ApprovalHandoffs.request")(
     function* (input) {
@@ -116,10 +131,32 @@ const make = Effect.gen(function* () {
         return yield* invalid(
           "That approval expired. Call again without that approval id to ask again.",
         );
+      if (
+        yield* approvalUsed(input.handoffId).pipe(Effect.provideService(SqlClient.SqlClient, sql))
+      )
+        return yield* invalid("That approval was already used.");
     },
   );
 
-  return ApprovalHandoffs.of({ request, verify });
+  const markUsed: ApprovalHandoffs["Service"]["markUsed"] = Effect.fn("ApprovalHandoffs.markUsed")(
+    function* (input) {
+      yield* (input.once === true ? consumeApproval : markApprovalUsed)(
+        input.handoffId,
+        input.action,
+      ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      // The change already happened; a wake left queued only repeats the same "call again".
+      yield* cancelQueuedApprovalWake(threads, {
+        threadId: input.threadId,
+        handoffId: TurnItemId.make(input.handoffId),
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("approval wake was not withdrawn", { cause }),
+        ),
+      );
+    },
+  );
+
+  return ApprovalHandoffs.of({ request, verify, markUsed });
 });
 
 export const layer = Layer.effect(ApprovalHandoffs, make);

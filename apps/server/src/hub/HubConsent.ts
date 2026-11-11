@@ -1,9 +1,7 @@
 /**
- * Who approves a hub membership change. A thread asks through an approval handoff, and the
- * handoff id is its decisionId; a person or an outside client without a thread asks through the
- * decision inbox. Either approval is bound to the action, alias and key, and is used once.
- *
- * @module HubConsent
+ * Who approves a hub membership change: a thread through a handoff whose id is its decisionId,
+ * others through the decision inbox. Either is bound to the action, alias and key, and covers
+ * that change until it succeeds once or expires; a failed attempt does not spend it.
  */
 import {
   HUB_DEVICE_HANDOFF_PATHS,
@@ -16,7 +14,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
-import { consumeApproval } from "../handoffs/approvalConsumption.ts";
+import { approvalUsed, markApprovalUsed } from "../handoffs/approvalConsumption.ts";
 
 const DECISION_TTL_MS = 24 * 60 * 60 * 1000;
 export type HubConsentAction = keyof typeof HUB_DEVICE_HANDOFF_PATHS;
@@ -108,10 +106,8 @@ export const makeHubConsent = Effect.gen(function* () {
       return yield* invalid("That decision was not approved.");
     const rows = yield* sql<{
       readonly answered_by: string | null;
-      readonly used: number;
       readonly binding: string | null;
-    }>`SELECT answered_by, (SELECT COUNT(*) FROM audit_events WHERE decision_id = ${decisionId}
-      AND action LIKE 'hub.%' AND outcome = 'started') AS used,
+    }>`SELECT answered_by,
       (SELECT binding FROM approval_bindings WHERE approval_id = ${decisionId}) AS binding
       FROM decision_items WHERE id = ${decisionId}`.pipe(Effect.mapError(storageFailure));
     if (rows[0]?.binding !== binding)
@@ -123,10 +119,14 @@ export const makeHubConsent = Effect.gen(function* () {
       return yield* invalid(
         "That decision was answered by an agent; a person approves hub changes.",
       );
-    if (rows[0].used > 0) return yield* invalid("That decision was already used.");
+    if (yield* approvalUsed(decisionId).pipe(Effect.provideService(SqlClient.SqlClient, sql)))
+      return yield* invalid("That decision was already used.");
   });
 
-  /** Verifies and uses up the approval for this change; call it right before the change starts. */
+  /**
+   * Verifies the approval for this change without spending it; call it right before the change
+   * starts, under the membership permit, and call `used` once the change has happened.
+   */
   const approved = Effect.fn("HubConsent.approved")(function* (
     caller: ConsentCaller,
     action: HubConsentAction,
@@ -144,7 +144,23 @@ export const makeHubConsent = Effect.gen(function* () {
         binding: { binding },
       });
     } else yield* decisionApproved(caller, decisionId, binding);
-    yield* consumeApproval(decisionId, `hub.${action}`).pipe(
+  });
+
+  /** The approved change happened: the approval covers nothing more. */
+  const used = Effect.fn("HubConsent.used")(function* (
+    caller: ConsentCaller,
+    action: HubConsentAction,
+    decisionId: string | undefined,
+  ) {
+    if (decisionId === undefined) return;
+    const thread = askingThread(caller);
+    if (isHandoffId(decisionId) && thread !== undefined)
+      return yield* approvals.markUsed({
+        threadId: thread.threadId,
+        handoffId: decisionId,
+        action: `hub.${action}`,
+      });
+    yield* markApprovalUsed(decisionId, `hub.${action}`).pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
     );
   });
@@ -168,5 +184,5 @@ export const makeHubConsent = Effect.gen(function* () {
           .pipe(Effect.isSuccess);
   };
 
-  return { request, approved, forced };
+  return { request, approved, used, forced };
 });

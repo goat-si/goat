@@ -11,7 +11,6 @@ import {
   HandoffError,
   type ServerSettingsError,
   HandoffHuman,
-  MessageId,
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
@@ -57,7 +56,10 @@ import * as PersonStop from "./computerUsePersonStop.ts";
 import { storeName, matchesArgs } from "./handoffDigest.ts";
 import { decodeAddress, unavailable } from "./handoffDecode.ts";
 import { SshProgressBinding } from "./sshProgressBinding.ts";
+import { heldBy, holdsThread } from "./approvalHold.ts";
+import { withdrawComputerUseWake as withdrawWake } from "./approvalWakeWithdraw.ts";
 export { SshProgressBinding } from "./sshProgressBinding.ts";
+export { approvalAskFailure } from "./approvalHold.ts";
 
 import {
   isProviderContinuationPath,
@@ -105,6 +107,8 @@ export class Handoffs extends Context.Service<
       authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
     ) => Effect.Effect<void, HandoffError | ServerSettingsError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
+    /** The asking thread withdraws its own open approval, which frees it to ask for another. */
+    readonly withdraw: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     readonly endBrowserClaim: (
       input: HandoffReadInput,
       state: "cancelled" | "expired",
@@ -360,48 +364,12 @@ const make = Effect.gen(function* () {
     markConsumed: (id) => savePrivate(id, CONSUMED, true),
     removeRecord: (id) => store.remove(storeName(id)).pipe(Effect.mapError(unavailable)),
   });
-  /**
-   * A person ending an approved computer use grant (a card's Stop, Stop all, End computer use)
-   * stops that agent (#1521). The wake reactor withdraws the grant's approval wake while it has
-   * not taken the screen yet: queued behind the thread's running turn, or still starting. A turn
-   * already running keeps the control the Stop ended.
-   */
   const withdrawComputerUseWake = Effect.fn("Handoffs.withdrawComputerUseWake")(function* (
     input: HandoffReadInput,
   ) {
     yield* continuations.forget(input.handoffId);
-    const records = yield* threads
-      .getThreadRecords(input.threadId, ["runs"], { turnItemTypes: [], messageRoles: [] })
-      .pipe(Effect.mapError(unavailable));
-    const wake = MessageId.make(`message:handoff-wake:${input.handoffId}:completed`);
-    const run = records.runs.find((candidate) => candidate.userMessageId === wake);
-    if (run === undefined) return;
-    // A wake run that started only after the grant ended is a turn the Stop should have kept from
-    // starting. One already working before the Stop keeps going, like every other turn then.
     const ended = (yield* read(input)).resolvedAt;
-    const startedAfterEnd =
-      (run.status === "running" || run.status === "waiting") &&
-      run.startedAt !== null &&
-      ended !== undefined &&
-      DateTime.toEpochMillis(run.startedAt) >= DateTime.toEpochMillis(ended);
-    // A retry after a rejection needs a fresh id; the run's state decides whether one is due.
-    const commandId = CommandId.make(
-      `handoff:${input.handoffId}:withdraw-wake:${run.status}:${NodeCrypto.randomUUID()}`,
-    );
-    if (run.status === "queued")
-      yield* threads
-        .dispatch({ type: "queued-run.cancel", commandId, threadId: input.threadId, runId: run.id })
-        .pipe(Effect.mapError(unavailable));
-    else if (run.status === "preparing" || run.status === "starting" || startedAfterEnd)
-      yield* threads
-        .dispatch({
-          type: "run.interrupt",
-          commandId,
-          threadId: input.threadId,
-          runId: run.id,
-          reason: "A person ended this thread's computer use before this turn started.",
-        })
-        .pipe(Effect.mapError(unavailable));
+    yield* withdrawWake(threads, input, ended).pipe(Effect.mapError(unavailable));
   });
   const clientLabel = makeHandoffClientLabel({ read, environment, sessions });
   const respondLocked = Effect.fn("Handoffs.respondLocked")(
@@ -546,6 +514,8 @@ const make = Effect.gen(function* () {
           handoff.target.path === input.target.path &&
           handoff.dedupeKey === dedupeKey,
       );
+      const holding = holdsThread(input) ? pending.find(holdsThread) : undefined;
+      if (!automatic && holding) return yield* heldBy(holding);
       if (!automatic && duplicate) return handoffSummary(duplicate);
       if (!automatic && pending.length >= 3)
         return yield* new HandoffError({ reason: "limit_reached" });
@@ -621,6 +591,13 @@ const make = Effect.gen(function* () {
         yield* continuations.supersede(input.requestedBy.threadId, pending, handoff.handoffId);
       return handoffSummary(handoff);
     });
+  const withdraw = (input: HandoffReadInput) =>
+    Effect.gen(function* () {
+      const record = yield* read(input);
+      if (!holdsThread(record)) return yield* new HandoffError({ reason: "invalid_request" });
+      if (!isHandoffPending(record.state)) return yield* new HandoffError({ reason: "conflict" });
+      return yield* transition(input, "cancelled", { type: "agent", threadId: input.threadId });
+    }).pipe(lock.withPermits(1));
   const create: Handoffs["Service"]["create"] = (input) =>
     withAdmission(createUnlocked(input).pipe(lock.withPermits(1)));
   const standing = makeComputerUseStanding({
@@ -947,6 +924,7 @@ const make = Effect.gen(function* () {
     withComputerUseSettings: standing.withSettings,
     removeComputerUseAllowedApp: standing.removeAllowedApp,
     read,
+    withdraw,
     endBrowserClaim: makeBrowserClaimEnd({ read, transition, lock }),
     open,
     respond,

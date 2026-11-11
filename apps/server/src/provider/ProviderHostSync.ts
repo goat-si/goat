@@ -85,8 +85,8 @@ import {
   relayableBrowserUrl,
   versionCore,
 } from "./ProviderHostSyncRecipes.ts";
-
 import {
+  askFailed,
   classify,
   type Failure,
   fail,
@@ -984,7 +984,7 @@ const make = Effect.gen(function* () {
           },
           expiresAt: DateTime.add(yield* DateTime.now, { minutes: 15 }),
         })
-        .pipe(Effect.mapError(() => fail("unavailable", "Could not ask for approval. Try again.")));
+        .pipe(Effect.mapError(askFailed));
       return {
         kind: "needs_human" as const,
         handoff,

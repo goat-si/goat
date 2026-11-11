@@ -40,6 +40,7 @@ import {
   phaseMessage,
 } from "./hubDeviceResult.ts";
 import { joinPreflight } from "./hubJoinPreflight.ts";
+import { revokeHubClientKey } from "./hubRevokeKey.ts";
 import { failing, finalState, LADDER } from "./hubLadder.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -276,7 +277,7 @@ const make = Effect.gen(function* () {
   /** Link add, verification and steps 1-3: the shared tail of join and re-link. */
   const link = Effect.fn("HubMembership.link")(function* (
     scope: McpInvocationScope,
-    caller: Pick<Caller, "actor" | "profile" | "provisioning" | "gate" | "connection">,
+    caller: Pick<Caller, "actor" | "profile" | "provisioning" | "gate" | "connection" | "inbox">,
     action: Action,
     alias: string,
     fingerprint: string,
@@ -308,6 +309,7 @@ const make = Effect.gen(function* () {
       });
     }
     steps.push({ step: "link_add", outcome: "ok", detail: linkId });
+    yield* consent.used(caller, action, decisionId);
     const verified = yield* ladder(
       scope,
       caller,
@@ -550,6 +552,7 @@ const make = Effect.gen(function* () {
       return result("join", alias, "failed", detail, steps, { transport });
     }
     steps.push({ step: "connect", outcome: "ok", detail: handoff.dataUrl });
+    yield* consent.used(caller, "join", decisionId);
     const verified = yield* ladder(
       scope,
       caller,
@@ -695,27 +698,6 @@ const make = Effect.gen(function* () {
     );
   });
 
-  /** The hub's half of a Hub client leaving: revoke its data key once the device is standalone. */
-  const revokeKey = Effect.fn("HubMembership.revokeKey")(function* (
-    id: string,
-    steps: HubDeviceStep[],
-  ) {
-    const revoked = yield* ocx.home(
-      ["access", "key", "remove", id, "--yes", "--json"],
-      HOME_TIMEOUT_MS,
-    );
-    steps.push(
-      revoked.code === 0
-        ? { step: "revoke", outcome: "ok", detail: id }
-        : {
-            step: "revoke",
-            outcome: "failed",
-            detail: `ocx access key remove exited ${revoked.code}.`,
-          },
-    );
-    return revoked.code === 0;
-  });
-
   const leave = Effect.fn("HubMembership.leave")(function* (
     scope: McpInvocationScope,
     input: HubDeviceOperationInput,
@@ -793,8 +775,9 @@ const make = Effect.gen(function* () {
       const clean =
         member.kind === "remote-link"
           ? yield* revokeOnHome(alias, member, steps)
-          : yield* revokeKey(member.id, steps);
+          : yield* revokeHubClientKey(ocx, member.id, steps, HOME_TIMEOUT_MS);
       const revoked = steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
+      if (revoked) yield* consent.used(caller, "leave", input.decisionId);
       const state = clean && !forced ? "ready" : revoked ? "degraded" : "failed";
       yield* audit(caller, "hub.leave", alias, state, input.decisionId);
       return result(
