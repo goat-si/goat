@@ -93,7 +93,7 @@ The token is a secret until it is used: anyone holding it can join in its place.
 <code>pen-&lt;name&gt;</code> for every member, with the member’s login user and host keys, and keeps the list
 current as machines join or leave. GOAT finds these hosts like any other SSH host, so you can
 <a href="/goat/docs/user/remote-access/#desktop-managed-ssh">open projects and start work</a> on a member by choosing
-<code>pen-&lt;name&gt;</code>. <code>pen ssh-config --uninstall</code> removes them.</p>
+<code>pen-&lt;name&gt;</code>. <code>pen ssh-config --uninstall</code> removes them. Each member also gets <code>pen-&lt;nodeId&gt;</code> (the full id is in <code>pen ls --json</code>), which reaches exactly that machine and never shares a connection with another ssh (unless a member is named with that id; that alias keeps its old meaning).</p>
 <p>Pen’s hosts set no key to log in with, and a <code>pen-&lt;name&gt;</code> host does not take the <code>IdentityFile</code> of another host
 you set up for the same machine. If you log in to a member with a key that is not one of ssh’s defaults, add a
 block for its Pen host to <code>~/.ssh/config</code>:</p>
