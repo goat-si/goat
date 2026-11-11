@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -77,9 +76,11 @@ func TestWriteAtomicFailsWithoutChangingATargetAReaderKeepsOpen(t *testing.T) {
 	}
 }
 
-// The state lock (LockFileEx) is held per handle: a second Lock in the same process, as two saves on
-// different goroutines take it, returns only after the first release, as flock does for separate opens.
-func TestLockWaitsForAnotherHolderInTheSameProcess(t *testing.T) {
+// Whether a contended LockFileEx waits is decided by its flags: Lock (every state.json, config.json and
+// mesh.json writer) must ask it to wait, exclusively, and TryLock must not. A probe inside the call proves
+// the lock is held by another handle at that moment, and the contended Lock still returns once the
+// holder releases it.
+func TestLockWaitsForAnotherHandleAndTryLockDoesNot(t *testing.T) {
 	st, err := OpenDir(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -88,24 +89,41 @@ func TestLockWaitsForAnotherHolderInTheSameProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var released atomic.Bool
-	done := make(chan bool, 1)
-	go func() {
-		r, err := st.Lock()
-		if err != nil {
-			t.Error(err)
-			done <- true
-			return
+	type call struct {
+		flags     uint32
+		contended bool
+	}
+	calls := make(chan call, 2)
+	old := lockFileEx
+	t.Cleanup(func() { lockFileEx = old })
+	lockFileEx = func(h windows.Handle, flags, reserved, low, high uint32, ol *windows.Overlapped) error {
+		probe := old(h, flags|windows.LOCKFILE_FAIL_IMMEDIATELY, reserved, low, high, new(windows.Overlapped))
+		if probe == nil {
+			windows.UnlockFileEx(h, 0, low, high, new(windows.Overlapped))
 		}
-		done <- released.Load()
-		r()
-	}()
+		calls <- call{flags, errors.Is(probe, windows.ERROR_LOCK_VIOLATION)}
+		return old(h, flags, reserved, low, high, ol)
+	}
 	if _, err := TryLock(st.Path("state.lock")); !errors.Is(err, ErrLocked) {
 		t.Fatalf("TryLock while held: %v, want ErrLocked", err)
 	}
-	released.Store(true)
+	if c := <-calls; c.flags&windows.LOCKFILE_FAIL_IMMEDIATELY == 0 || !c.contended {
+		t.Fatalf("TryLock called LockFileEx with flags %#x (contended %v), want fail-immediately", c.flags, c.contended)
+	}
+	got := make(chan error, 1)
+	go func() {
+		r, err := st.Lock()
+		if err == nil {
+			r()
+		}
+		got <- err
+	}()
+	c := <-calls
+	if c.flags&windows.LOCKFILE_FAIL_IMMEDIATELY != 0 || c.flags&windows.LOCKFILE_EXCLUSIVE_LOCK == 0 || !c.contended {
+		t.Fatalf("Lock called LockFileEx with flags %#x (contended %v), want an exclusive lock that waits", c.flags, c.contended)
+	}
 	release()
-	if !<-done {
-		t.Fatal("a second Lock returned while the first was held")
+	if err := <-got; err != nil {
+		t.Fatalf("the waiting Lock: %v", err)
 	}
 }
