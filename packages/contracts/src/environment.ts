@@ -225,6 +225,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server answers `POST /.well-known/goat/runtime/drain`: it can stop admitting turns, drain,
       and exit on its own for a replacement. Servers without it are attach-only. */
   drainRestart: Schema.optionalKey(Schema.Boolean),
+  /** A drain request may ask the server to start its successor itself (`relaunch`). Older
+      servers ignore that key and only stop, so callers check this first. */
+  runtimeRelaunch: Schema.optionalKey(Schema.Boolean),
   /** Server answers `POST /.well-known/goat/runtime/session`, so an SSH client can attach to it
       without starting its own server. The GOAT app's server is attached this way. */
   runtimeSessions: Schema.optionalKey(Schema.Boolean),

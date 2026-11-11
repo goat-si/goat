@@ -34,7 +34,11 @@ export function GoatBotProfileDialog(props: {
   readonly children?: ReactNode;
   /** One of those fields changed, so a save goes through with no profile change. */
   readonly extraChanged?: boolean;
-  /** The name being saved while a save runs, then null, so a list can show it at once. */
+  /**
+   * The name being saved while a save runs, then null when it failed, so a list can show it at
+   * once. A save that went through leaves the name with the list, which shows it until its own
+   * read of the bots includes it.
+   */
   readonly onPending?: ((name: string | null) => void) | undefined;
   /** The target server stores a member's color; absent or false hides the swatches. */
   readonly colorEditable?: boolean;
@@ -48,6 +52,7 @@ export function GoatBotProfileDialog(props: {
   const blankName = name.trim() === "";
   // A missing name is pointed out once the person leaves the field or saves, not while they start.
   const [nameChecked, setNameChecked] = useState(false);
+  const [nameEdited, setNameEdited] = useState(false);
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -71,10 +76,12 @@ export function GoatBotProfileDialog(props: {
     setError(null);
     props.onPending?.(name.trim());
     const failure = await props.onSubmit(changes);
-    props.onPending?.(null);
     setBusy(false);
     if (failure === null) props.onClose();
-    else setError(failure);
+    else {
+      props.onPending?.(null);
+      setError(failure);
+    }
   }
 
   const purposeField = (
@@ -118,9 +125,12 @@ export function GoatBotProfileDialog(props: {
                 aria-invalid={nameMissing}
                 // Leaving a name the person never typed in, say to open More, is not a mistake yet.
                 onBlur={() => {
-                  if (name !== props.initial.name) setNameChecked(true);
+                  if (nameEdited) setNameChecked(true);
                 }}
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) => {
+                  setNameEdited(true);
+                  setName(event.target.value);
+                }}
               />
             </label>
             <label className="grid gap-1.5 text-sm">

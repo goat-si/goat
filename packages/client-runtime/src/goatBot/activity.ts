@@ -33,10 +33,10 @@ export interface GoatBotActivityTask {
 export interface GoatBotWorkerObservation {
   readonly shell: Pick<
     OrchestrationV2ThreadShell,
-    "activityRunStatus" | "pendingRuntimeRequest"
+    "activityRunStatus" | "pendingRuntimeRequest" | "latestRunStartHeld"
   > | null;
   readonly projection: {
-    readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "status">>;
+    readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "status" | "startHold">>;
     readonly nodes: ReadonlyArray<Pick<OrchestrationV2ExecutionNode, "id" | "runId">>;
     readonly runtimeRequests: ReadonlyArray<
       Pick<OrchestrationV2RuntimeRequest, "nodeId" | "kind" | "status">
@@ -193,7 +193,10 @@ function runEvidence(
     if (isGoatBotSessionThreadId(worker.threadId)) return NO_EVIDENCE;
     const request = shell?.pendingRuntimeRequest ?? null;
     return {
-      status: shell?.activityRunStatus ?? null,
+      status:
+        shell?.activityRunStatus === "starting" && shell.latestRunStartHeld
+          ? "waiting"
+          : (shell?.activityRunStatus ?? null),
       request: request === null ? null : requestText(request.kind, request.blocking),
     };
   }
@@ -205,7 +208,7 @@ function runEvidence(
     (entry) => entry.status === "pending" && runOfNode.get(entry.nodeId) === runId,
   );
   return {
-    status: run.status,
+    status: run.status === "starting" && run.startHold !== undefined ? "waiting" : run.status,
     request: request === undefined ? null : requestText(request.kind, undefined),
   };
 }

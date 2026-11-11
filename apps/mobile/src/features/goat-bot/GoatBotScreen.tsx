@@ -163,7 +163,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
                 key={file.id}
                 numberOfLines={1}
                 className="text-goat-person-message-foreground"
-                style={{ opacity: 0.85, ...bodyText, ...onAccent }}
+                // The text colour was chosen for the opaque accent; dimming it would lose contrast.
+                style={{ ...(onAccent ? {} : { opacity: 0.85 }), ...bodyText, ...onAccent }}
               >
                 {(file.type === "image" ? "Photo · " : "File · ") + file.name}
               </Text>
@@ -202,7 +203,12 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   return (
     <View className="gap-1.5" style={{ marginTop }}>
       {row.firstInGroup && row.proactive ? (
-        <GoatBotUpdateLabel at={row.createdAt} name={botName} emoji={props.botEmoji} />
+        <GoatBotUpdateLabel
+          at={row.createdAt}
+          name={botName}
+          emoji={props.botEmoji}
+          accent={props.accent}
+        />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
       {row.options.length > 0 || row.answer !== undefined ? (
@@ -249,7 +255,14 @@ export function GoatBotScreen(props: {
   const copy = availabilityCopy(mainName, title);
   const botEmoji = member ? mobileGoatBotMemberPicture(member) : props.main?.avatar;
   // A member bot's color carries the person's messages and Send; the main bot keeps the theme's.
-  const accent = goatBotAccent(member);
+  // Kept while the role and colour stay the same, so the list redraws its rows only when they change.
+  const accentRole = member?.role;
+  const accentColor = member?.color?.toUpperCase();
+  const accent = useMemo(
+    () =>
+      accentRole === undefined ? null : goatBotAccent({ role: accentRole, color: accentColor }),
+    [accentRole, accentColor],
+  );
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -430,6 +443,7 @@ export function GoatBotScreen(props: {
           activity={session.activity ?? null}
           title={title}
           emoji={botEmoji}
+          accent={accent}
           onPress={taskId ? undefined : openHome}
           {...(member
             ? {
@@ -451,6 +465,7 @@ export function GoatBotScreen(props: {
               <GoatBotChipFace
                 activity={session.activity ?? null}
                 emoji={botEmoji}
+                accent={accent}
                 {...(member
                   ? {
                       conversation: {
@@ -479,6 +494,7 @@ export function GoatBotScreen(props: {
           turnsWaiting={session.turnsWaiting}
           botName={title}
           botAvatar={botEmoji}
+          botAccent={accent}
           main={props.main ?? null}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
@@ -555,6 +571,8 @@ export function GoatBotScreen(props: {
             unread.onViewable(viewableItems.map((entry) => entry.index))
           }
           renderItem={renderItem}
+          // Rows are memoized by key and data; a new accent must reach the pills already shown.
+          extraData={accent}
           initialScrollAtEnd
           maintainScrollAtEnd
           alignItemsAtEnd
@@ -591,6 +609,7 @@ export function GoatBotScreen(props: {
                   activity={session.activity}
                   botName={title}
                   emoji={botEmoji}
+                  accent={accent}
                   inView={footerInView}
                 />
               </View>
@@ -707,7 +726,7 @@ export function GoatBotScreen(props: {
                 }}
               >
                 <Text
-                  className="text-xl font-semibold text-white"
+                  className="text-xl font-semibold text-primary-foreground"
                   style={accent ? { color: accent.foreground } : undefined}
                 >
                   ↑
