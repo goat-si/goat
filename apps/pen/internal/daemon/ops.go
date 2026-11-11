@@ -109,6 +109,28 @@ func FinishLeave(st *state.Store) error {
 // ErrNotLeaving means the left marker is gone: a node was started again here, and nothing is deleted.
 var ErrNotLeaving = errors.New("this node is not leaving its mesh")
 
+// FinishLeaveOrEmpty decides a resumed pen leave in one hold of the state lock: with the left marker it
+// finishes the deletion (left is true); with no marker and no identity nothing of a node is here; with an
+// identity and no marker a node was started here meanwhile (ErrNotLeaving).
+func FinishLeaveOrEmpty(st *state.Store) (left bool, err error) {
+	unlock, err := st.Lock()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	if _, err := os.Stat(st.Path(LeftMarker)); err == nil {
+		return true, removeNodeFiles(st)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if _, err := st.LoadIdentity(); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return false, ErrNotLeaving
+}
+
 // removeNodeFiles deletes the node's files; the caller holds the state lock. An error names the file:
 // the leave is done in the mesh, but this machine still holds it.
 func removeNodeFiles(st *state.Store) error {
