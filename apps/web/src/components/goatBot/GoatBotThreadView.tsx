@@ -22,6 +22,7 @@ import { useUiStateStore } from "~/uiStateStore";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ThreadVisitWatermark } from "../chat/ThreadVisitWatermark";
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotStepsProvider } from "./GoatBotStepsProvider";
 import { GoatBotActivityContext } from "./GoatBotTimeline";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
@@ -156,6 +157,7 @@ function GoatBotThreadSession({
     retryAvailability();
   }, [confirmedHere, removal, retryAvailability, threadId]);
   const unarchive = useOrchestrationCommand(threadEnvironment.unarchive, { reportFailure: false });
+  const rows = removal === null ? session.rows : NO_PENDING;
   return (
     <GoatBotActivityContext value={removal === null ? session.activity : null}>
       {shell !== null ? <ThreadVisitWatermark threadRef={threadRef} /> : null}
@@ -167,48 +169,54 @@ function GoatBotThreadSession({
           onResolve={resolveRemoval}
         />
       ) : null}
-      <GoatBotChatView
-        {...session}
-        environmentId={environmentId}
-        unreadSince={unreadSince}
-        homeMove={
-          moveTarget
-            ? {
-                label: moveTarget.label,
-                busy: homeSettings.busy,
-                onMove: () => homeSettings.changeHome(moveTarget.environmentId),
-              }
-            : undefined
-        }
-        homeMoveError={homeSettings.error}
-        rows={removal === null ? session.rows : NO_PENDING}
-        removal={removal}
-        canOpenCurrentBot={canOpenCurrentBot}
-        onRestore={
-          member !== null && manage.canManage ? () => void manage.restore(member) : undefined
-        }
-        onUnarchive={
-          member === null && removal === "archived" && session.canOperate
-            ? () =>
-                void unarchive({ environmentId, input: { threadId } }).then((result) => {
-                  if (result._tag === "Failure") {
-                    toastManager.add({
-                      type: "error",
-                      title: `Couldn't unarchive ${botName}`,
-                      description: "It may have been deleted. Check again in a moment.",
-                    });
-                  }
-                  refreshArchivedThreadsForEnvironment(environmentId);
-                })
-            : undefined
-        }
-        onCheckAgain={
-          removal === "unchecked"
-            ? () => refreshArchivedThreadsForEnvironment(environmentId)
-            : undefined
-        }
-        legacyAgentRoute={legacyAgentRoute}
-      />
+      <GoatBotStepsProvider
+        visibleTurnItems={visibleTurnItems}
+        rows={rows}
+        environmentId={removal === null ? environmentId : null}
+      >
+        <GoatBotChatView
+          {...session}
+          environmentId={environmentId}
+          unreadSince={unreadSince}
+          homeMove={
+            moveTarget
+              ? {
+                  label: moveTarget.label,
+                  busy: homeSettings.busy,
+                  onMove: () => homeSettings.changeHome(moveTarget.environmentId),
+                }
+              : undefined
+          }
+          homeMoveError={homeSettings.error}
+          rows={rows}
+          removal={removal}
+          canOpenCurrentBot={canOpenCurrentBot}
+          onRestore={
+            member !== null && manage.canManage ? () => void manage.restore(member) : undefined
+          }
+          onUnarchive={
+            member === null && removal === "archived" && session.canOperate
+              ? () =>
+                  void unarchive({ environmentId, input: { threadId } }).then((result) => {
+                    if (result._tag === "Failure") {
+                      toastManager.add({
+                        type: "error",
+                        title: `Couldn't unarchive ${botName}`,
+                        description: "It may have been deleted. Check again in a moment.",
+                      });
+                    }
+                    refreshArchivedThreadsForEnvironment(environmentId);
+                  })
+              : undefined
+          }
+          onCheckAgain={
+            removal === "unchecked"
+              ? () => refreshArchivedThreadsForEnvironment(environmentId)
+              : undefined
+          }
+          legacyAgentRoute={legacyAgentRoute}
+        />
+      </GoatBotStepsProvider>
     </GoatBotActivityContext>
   );
 }

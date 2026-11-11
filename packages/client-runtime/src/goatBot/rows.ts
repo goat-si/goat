@@ -24,8 +24,10 @@ const quotedParts = (text: string): { readonly quote?: string; readonly reply?: 
 
 /**
  * GOAT Bot's messenger timeline. Only conversation survives: the user's
- * messages, the bot's replies and one card per piece of work. Tool calls,
- * reasoning, plans and the rest of a coding run stay in the worker thread.
+ * messages, the bot's replies and one card per piece of work. The bot thread
+ * holds no tool calls; activitySteps.ts reads them from the session and worker
+ * threads and places a collapsed line between these rows, which it leaves as
+ * they are.
  *
  * The types here are display models with finished labels. Channel metadata
  * reaches them through readers. A turn is not a card, but its chip still says

@@ -105,6 +105,7 @@ vi.mock("./useGoatBotSession", () => ({
       availability: { kind: "ready" },
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
+      visibleTurnItems: [],
       rowsForTask: (id: string) => {
         state.session(id);
         return state.rows;

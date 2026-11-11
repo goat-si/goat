@@ -39,14 +39,25 @@ vi.mock("~/state/entities", async (importOriginal) => ({
 vi.mock("~/state/threads", async (importOriginal) => {
   const { Atom } = await import("effect/reactivity");
   const detail = Atom.make<unknown>(null);
+  // A session's steps read its quiet items, which load the same detail.
+  const quietItems = Atom.make((get) => {
+    get(detail);
+    return [];
+  });
+  const history = Atom.make({ hasMoreHistory: false });
   return {
     ...(await importOriginal<typeof import("~/state/threads")>()),
-    environmentThreadDetails: { threadAtom: () => detail },
+    environmentThreadDetails: {
+      threadAtom: () => detail,
+      quietVisibleTurnItemsAtom: () => quietItems,
+      historyAtom: () => history,
+    },
   };
 });
 
-import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { appAtomRegistry, AppAtomRegistryProvider } from "~/rpc/atomRegistry";
 import { environmentThreadDetails } from "~/state/threads";
+import { GoatBotStepsProvider } from "./GoatBotStepsProvider";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -144,7 +155,30 @@ function Conversation({ items }: { readonly items: OrchestrationV2ProjectedTurnI
   );
 }
 
+/** The main chat as GoatBotThreadView renders it, with the steps of its turns' sessions. */
+function MainChat({ items }: { readonly items: OrchestrationV2ProjectedTurnItem[] }) {
+  const session = useGoatBotSession(items);
+  return (
+    <AppAtomRegistryProvider>
+      <GoatBotActivityContext value={session.activity}>
+        <GoatBotStepsProvider
+          visibleTurnItems={items}
+          rows={session.rows}
+          environmentId={"env" as never}
+        >
+          <GoatBotTimeline rows={[]} onRetry={() => {}} />
+        </GoatBotStepsProvider>
+      </GoatBotActivityContext>
+    </AppAtomRegistryProvider>
+  );
+}
+
 const sessionWorker = { environmentId: "env", threadId: "worker-1", runId: "run-1" } as never;
+const turnWorker = {
+  environmentId: "env",
+  threadId: "goat-bot-session:s1",
+  runId: "run-1",
+} as never;
 
 // A session run waiting on approval while its tool call runs; only the approval may show.
 const projection = (requestStatus: "pending" | "resolved") => ({
@@ -210,4 +244,18 @@ it("never reads a remote worker through a local thread with the same id", async 
   } finally {
     unmountOtherView();
   }
+});
+
+it("keeps a turn's session loaded in the main chat, so the live line reads its run's pending request", async () => {
+  setup();
+  appAtomRegistry.set(detailAtom, projection("pending"));
+  // No other view holds the session: the main chat's steps keep it loaded.
+  await using screen = await render(
+    <MainChat items={conversation({ kind: "turn", worker: turnWorker })} />,
+    { router: false },
+  );
+  await expect
+    .element(screen.getByRole("button", { name: /^Waiting for your approval/ }))
+    .toBeVisible();
+  expect(appAtomRegistry.getNodes().has(detailAtom)).toBe(true);
 });

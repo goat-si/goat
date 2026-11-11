@@ -19,6 +19,7 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
+import { GoatBotStepsProvider } from "./GoatBotStepsProvider";
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
 import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
@@ -170,27 +171,34 @@ export function GoatBotTaskPane({
           remoteWork={remoteWork}
         />
       </div>
-      <GoatBotTimeline
-        taskDetails
+      <GoatBotStepsProvider
+        visibleTurnItems={session.visibleTurnItems}
         rows={timelineRows}
         environmentId={environmentId}
-        onRetry={session.onRetryInput}
-        onDiscard={session.onDiscardInput}
-        onPick={
-          canSend
-            ? (text, answerTask, questionId) =>
-                // A question id goes only with the task that asked it.
-                session.onSendToTask(
-                  taskId,
-                  text,
-                  [],
-                  answerTask === taskId && questionId !== undefined
-                    ? ChannelQuestionId.make(questionId)
-                    : undefined,
-                )
-            : undefined
-        }
-      />
+        taskId={taskId}
+      >
+        <GoatBotTimeline
+          taskDetails
+          rows={timelineRows}
+          environmentId={environmentId}
+          onRetry={session.onRetryInput}
+          onDiscard={session.onDiscardInput}
+          onPick={
+            canSend
+              ? (text, answerTask, questionId) =>
+                  // A question id goes only with the task that asked it.
+                  session.onSendToTask(
+                    taskId,
+                    text,
+                    [],
+                    answerTask === taskId && questionId !== undefined
+                      ? ChannelQuestionId.make(questionId)
+                      : undefined,
+                  )
+              : undefined
+          }
+        />
+      </GoatBotStepsProvider>
       <GoatBotComposer
         disabled={!canSend}
         botName={botName}
