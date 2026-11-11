@@ -673,7 +673,14 @@ export function subscribeOrUnavailable<TTag extends EnvironmentSubscriptionRpcTa
     (_session, stream) => {
       const attempt = ++subscriptionAttempts;
       subscription = attempt;
-      return stream.pipe(Stream.map((value) => ({ subscription: attempt, value })));
+      // A stream that simply ends is as unavailable as a refused one.
+      return stream.pipe(
+        Stream.map((value): SessionStreamUpdate<EnvironmentRpcStreamValue<TTag>> => ({
+          subscription: attempt,
+          value,
+        })),
+        Stream.concat(Stream.sync(() => ({ subscription: attempt, unavailable: true as const }))),
+      );
     },
     undefined,
     () => ({ subscription, unavailable: true as const }),

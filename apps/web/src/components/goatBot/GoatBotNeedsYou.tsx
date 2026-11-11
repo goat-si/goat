@@ -39,7 +39,9 @@ export function GoatBotNeedsYou({
   // Older servers return the newest asks only, whatever the read asks for.
   const pages = environment?.serverConfig?.environment.capabilities.goatBotOpenAsksLimit === true;
   const changes = useGoatBotTaskChanges(environmentId);
-  const [limit, setLimit] = useState(CHANNEL_OPEN_ASKS_DEFAULT_LIMIT);
+  const [wanted, setLimit] = useState(CHANNEL_OPEN_ASKS_DEFAULT_LIMIT);
+  // A reconnect to a server without pages drops back to the newest asks.
+  const limit = pages ? wanted : CHANNEL_OPEN_ASKS_DEFAULT_LIMIT;
   const query = useEnvironmentQuery(
     supported
       ? channelEnvironment.listOpenAsks({

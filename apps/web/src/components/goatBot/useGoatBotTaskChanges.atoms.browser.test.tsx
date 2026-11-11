@@ -9,7 +9,7 @@ import { render } from "../../../test/render";
 
 /** What the server end of the fake connection does for one test, and what it saw. */
 interface ServerRecord {
-  mode: "serve" | "refuse" | "defect";
+  mode: "serve" | "refuse" | "defect" | "end";
   opened: number;
   closed: number;
   onClosed: () => void;
@@ -51,7 +51,9 @@ vi.mock("~/state/channels", async () => {
                 }),
               }),
             )
-          : Stream.never;
+          : record.mode === "end"
+            ? Stream.empty
+            : Stream.never;
       return Stream.make({ revision: 0 }).pipe(
         Stream.concat(after),
         Stream.ensuring(
@@ -227,6 +229,15 @@ it("asks again when a new session starts after a refusal", async () => {
 
 it("reads again on window focus once the stream fails on the client side", async () => {
   using test = setup("defect");
+  await using screen = await render(test.wrap(<Probe name="strip" />), noRouter);
+  await expect.element(screen.getByTestId("strip")).toHaveTextContent("visit:0");
+  window.dispatchEvent(new Event("focus"));
+  await expect.element(screen.getByTestId("strip")).toHaveTextContent("visit:1");
+  expect(test.server.opened).toBe(1);
+});
+
+it("reads again on window focus once the stream ends cleanly", async () => {
+  using test = setup("end");
   await using screen = await render(test.wrap(<Probe name="strip" />), noRouter);
   await expect.element(screen.getByTestId("strip")).toHaveTextContent("visit:0");
   window.dispatchEvent(new Event("focus"));

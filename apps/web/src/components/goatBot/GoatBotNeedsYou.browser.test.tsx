@@ -268,3 +268,19 @@ it("keeps one page on a server that cannot list more", async () => {
   expect(state.navigate.mock.calls.at(-1)?.[0].search).toEqual({ task: "task-0" });
   expect(state.requested).not.toHaveBeenCalledWith({ environmentId, input: { limit: 100 } });
 });
+
+it("drops back to one page when the server stops listing more after Show more", async () => {
+  setup({ asks: many(50), total: 60, truncated: false });
+  await using screen = await render(view());
+  await userEvent.click(screen.getByRole("button", { name: /Needs you · 60/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await vi.waitFor(() =>
+    expect(state.requested).toHaveBeenLastCalledWith({ environmentId, input: { limit: 100 } }),
+  );
+  // A reconnect lands on a server without the capability.
+  state.pages = false;
+  await screen.rerender(view());
+  expect(state.requested).toHaveBeenLastCalledWith({ environmentId, input: {} });
+  await expect.element(screen.getByText("Showing the newest 50 of 60.")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+});
