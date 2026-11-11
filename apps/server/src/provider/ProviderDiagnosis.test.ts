@@ -14,6 +14,7 @@ import {
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
 import { DevinCloudCli } from "@goat/provider-devin-cloud/server";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
@@ -220,12 +221,15 @@ it.effect.each([false, true])(
         ["--help"],
       ]);
       for (const command of spawned) {
-        expect(command.options.env).toEqual({
-          HOME: "/home/user",
-          GIT_PAGER: "",
-          PAGER: "less",
-          CLAUDE_CODE_ENTRYPOINT: "t3-code",
-        });
+        // Readiness checks run offline, so a shim cannot install the CLI while diagnosing it.
+        expect(command.options.env).toEqual(
+          providerProbeEnvironment({
+            HOME: "/home/user",
+            GIT_PAGER: "",
+            PAGER: "less",
+            CLAUDE_CODE_ENTRYPOINT: "t3-code",
+          }),
+        );
       }
       expect(env.GIT_PAGER).toBe("less -FRX");
     }),
