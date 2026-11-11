@@ -149,3 +149,23 @@ it("shows a pull request link as its short reference and links a bare one to the
   // Two repositories in one reply: a bare number could mean either, so it stays text.
   expect(screen.getByRole("link", { name: "#3", exact: true }).query()).toBeNull();
 });
+
+it("takes the reply's repository from its links, not from an address quoted in code", async () => {
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[
+        bot("code", "Run `gh pr view https://github.com/goat-si/goat/pull/1`, then check #2."),
+        bot("fake", "Opened https://github.com.evil.example/a/b/pull/7 for you."),
+      ]}
+    />,
+  );
+  // The address in code names no repository, so the bare number stays text.
+  expect(screen.getByRole("link", { name: "#2", exact: true }).query()).toBeNull();
+  // A look-alike host keeps its full address as its label.
+  await expect
+    .element(screen.getByRole("link", { name: "https://github.com.evil.example/a/b/pull/7" }))
+    .toBeVisible();
+  expect(screen.getByRole("link", { name: "#7", exact: true }).query()).toBeNull();
+});

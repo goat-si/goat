@@ -1,12 +1,8 @@
-import {
-  goatBotReplyRepository,
-  hasGoatBotMarkdown,
-  splitGoatBotTextLinks,
-} from "@goat/client-runtime/goatBot";
+import { hasGoatBotMarkdown, splitGoatBotTextLinks } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 
 import ChatMarkdown from "../ChatMarkdown";
-import { goatBotReplyMarkdownPlugins } from "./goatBotReplyMarkdown";
+import { GOAT_BOT_REPLY_MARKDOWN_PLUGINS } from "./goatBotReplyMarkdown";
 
 const WEB_ADDRESS = /https?:\/\//iu;
 
@@ -31,7 +27,7 @@ export function GoatBotLinkedText({
         environmentId={environmentId ?? undefined}
         fileActions={false}
         lineBreaks
-        extraRemarkPlugins={goatBotReplyMarkdownPlugins(goatBotReplyRepository(text))}
+        extraRemarkPlugins={GOAT_BOT_REPLY_MARKDOWN_PLUGINS}
       />
     );
   }
