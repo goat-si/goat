@@ -296,6 +296,8 @@ describe("two bots", () => {
         const member = yield* createMember("latest");
         // A new member's chat opens with its greeting.
         assert.strictEqual((yield* registry.status(owner, member.botId)).latest?.author, "bot");
+        // The person writes after the greeting.
+        yield* TestClock.adjust("1 second");
         yield* send(member.sessionThreadId, "how is the build?", "m-latest");
         yield* send(botThreadId, "hello main", "main-latest");
         const latest = (yield* registry.status(owner, member.botId)).latest;
