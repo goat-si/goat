@@ -16,6 +16,18 @@ vi.mock("react-native", () => ({
   Switch: () => null,
   View: (props: Props) => <div {...forward(props)}>{props.children}</div>,
   ScrollView: (props: Props) => <div {...forward(props)}>{props.children}</div>,
+  FlatList: (
+    props: {
+      data: ReadonlyArray<{ key: string }>;
+      renderItem: (info: { item: { key: string }; index: number }) => ReactNode;
+    } & Record<string, unknown>,
+  ) => (
+    <div {...forward(props as Props)}>
+      {props.data.map((item, index) => (
+        <div key={item.key}>{props.renderItem({ item, index })}</div>
+      ))}
+    </div>
+  ),
   // The system back (Android's button or gesture) reaches the sheet as onRequestClose.
   Modal: (props: Props & { visible: boolean; onRequestClose?: () => void }) =>
     props.visible ? (
