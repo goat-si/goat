@@ -769,6 +769,7 @@ export const layer: Layer.Layer<
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           runId: run.id,
+          startsTurn: input.reattach !== true,
           ...(run.delegatedTaskId === undefined ? {} : { delegatedTaskId: run.delegatedTaskId }),
           threadId: projection.thread.id,
           providerSessionId,

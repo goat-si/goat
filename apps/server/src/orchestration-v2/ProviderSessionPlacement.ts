@@ -45,11 +45,15 @@ export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.
   );
   const sharedPredates = Effect.fnUntraced(function* (shared: ProviderSessionId, model?: string) {
     if (model === undefined || input.sessions === undefined) return false;
-    const live = yield* input.sessions.get(shared).pipe(Effect.orElseSucceed(Option.none));
-    if (Option.isNone(live) || live.value.predatesModel === undefined) return false;
+    const { sessions } = input;
+    const check = Effect.gen(function* () {
+      const live = yield* sessions.get(shared);
+      if (Option.isNone(live) || live.value.predatesModel === undefined) return false;
+      return yield* live.value.predatesModel(model);
+    });
     // Dispatch waits on this; a slow answer leaves the thread to the session's own open check.
-    const predates = yield* live.value.predatesModel(model).pipe(Effect.timeoutOption("2 seconds"));
-    return Option.getOrElse(predates, () => false);
+    const predates = yield* check.pipe(Effect.timeoutOption("2 seconds"), Effect.option);
+    return Option.getOrElse(Option.flatten(predates), () => false);
   });
   const providerSessionIdFor = Effect.fn("ProviderSessionPlacement.providerSessionIdFor")(
     function* (placement: {

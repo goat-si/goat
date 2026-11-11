@@ -1,7 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import type { ServerProviderModel } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
+import { TestClock } from "effect/testing";
 
 import { makeCodexModelArrivals } from "./CodexModelArrivals.ts";
 
@@ -90,13 +92,30 @@ it.effect("a process opened before GOAT's first model list still predates later 
   }),
 );
 
-it.effect("a process that cannot list its models is never refused or restarted for it", () =>
+it.effect("a process that cannot list its models is treated as not knowing a newer model", () =>
   Effect.gen(function* () {
     const predatesModel = makeCodexModelArrivals({
       atStart: [model(known)],
       offered: Effect.succeed([model(known), model(added)]),
       listServed: Effect.fail("model/list failed"),
     });
-    assert.isFalse(yield* predatesModel(added));
+    assert.isTrue(yield* predatesModel(added));
+    // Models it already had when it started never depend on the listing.
+    assert.isFalse(yield* predatesModel(known));
   }),
+);
+
+it.effect(
+  "a process that does not answer its model list is treated as not knowing a newer model",
+  () =>
+    Effect.gen(function* () {
+      const predatesModel = makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known), model(added)]),
+        listServed: Effect.never,
+      });
+      const answer = yield* predatesModel(added).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      assert.isTrue(yield* Fiber.join(answer));
+    }),
 );

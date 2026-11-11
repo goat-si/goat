@@ -68,6 +68,10 @@ interface Fixture {
   readonly liveWork: { held: boolean; confirm: Effect.Effect<boolean> };
   /** Codex's model catalog on disk; each process knows the catalog as it was when it started. */
   readonly catalog: Array<string>;
+  /** Set when the next open reconnects a process kept from before a restart that knew only these. */
+  keptProcessKnows: ReadonlyArray<string> | undefined;
+  /** Commands or tools still running in the process outside any turn. */
+  backgroundWork: boolean;
 }
 
 const makeFixture = Effect.gen(function* () {
@@ -80,6 +84,8 @@ const makeFixture = Effect.gen(function* () {
     endTurn: yield* Deferred.make<void>(),
     liveWork: { held: false, confirm: Effect.void.pipe(Effect.as(false)) },
     catalog: [modelSelection.model],
+    keptProcessKnows: undefined,
+    backgroundWork: false,
   };
   fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
   return fixture;
@@ -101,7 +107,8 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
       yield* Ref.update(fixture.opens, (count) => count + 1);
       yield* Effect.addFinalizer(() => Queue.offer(fixture.closed, undefined));
       const now = yield* DateTime.now;
-      const known = new Set(fixture.catalog);
+      const known = new Set(fixture.keptProcessKnows ?? fixture.catalog);
+      fixture.keptProcessKnows = undefined;
       return {
         instanceId,
         driver,
@@ -120,6 +127,7 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
         },
         events: Stream.never,
         backgroundTasksEndWithProcess: true,
+        hasPendingBackgroundWork: Effect.sync(() => fixture.backgroundWork),
         holdsLiveWork: ({ pastPinCeiling }) =>
           pastPinCeiling ? fixture.liveWork.confirm : Effect.succeed(fixture.liveWork.held),
         predatesModel: (model) =>
@@ -280,6 +288,7 @@ const sharedSession = Effect.gen(function* () {
       providerSessionId,
       modelSelection: { instanceId, model },
       runtimePolicy,
+      startsTurn: true,
     });
   const runTurn = (threadId: ThreadId) =>
     Effect.gen(function* () {
@@ -523,4 +532,48 @@ it.effect("a model no fresh process would know never restarts or refuses", () =>
       assert.strictEqual(yield* Queue.size(fixture.closed), 0);
     }).pipe(Effect.provide(layer(fixture)));
   }),
+);
+
+it.effect("running commands keep a process a newer model needs; only that turn is refused", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open } = yield* sharedSession;
+      yield* open(threadA);
+      fixture.backgroundWork = true;
+      fixture.catalog.push(addedModel);
+      const refused = yield* open(threadB, addedModel).pipe(Effect.exit);
+      assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
+      assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+
+      fixture.backgroundWork = false;
+      yield* open(threadB, addedModel);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect(
+  "a process kept from before a restart refuses a newer model on its first open and keeps running",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      yield* Effect.gen(function* () {
+        const { manager, open, providerSessionId } = yield* sharedSession;
+        fixture.catalog.push(addedModel);
+        fixture.keptProcessKnows = [modelSelection.model];
+        const refused = yield* open(threadA, addedModel).pipe(Effect.exit);
+        assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
+        assert.isTrue(yield* manager.isLive(providerSessionId));
+        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+        // Recovering the kept process's own work is not a new turn and is never refused.
+        yield* manager.open({
+          threadId: threadA,
+          providerSessionId,
+          modelSelection: { instanceId, model: addedModel },
+          runtimePolicy,
+        });
+        assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+      }).pipe(Effect.provide(layer(fixture)));
+    }),
 );

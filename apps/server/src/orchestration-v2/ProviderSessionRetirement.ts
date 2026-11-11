@@ -20,12 +20,12 @@ export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRes
   { runningTurns: Schema.Number, model: Schema.optional(Schema.String) },
 ) {
   override get message(): string {
+    if (this.model !== undefined)
+      return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes, sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
     const work =
       this.runningTurns === 0
         ? "an active goal, a subagent or a pending approval"
         : `${this.runningTurns} running turn${this.runningTurns === 1 ? "" : "s"}`;
-    if (this.model !== undefined)
-      return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes (${work}), sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
     return `This provider's settings changed. GOAT restarts it with the new settings once the work still running on its current process finishes (${work}). Stop that work to restart now, then try again.`;
   }
 }
@@ -60,7 +60,11 @@ export interface RetirableSession {
   readonly busyTurns: ReadonlySet<string>;
   readonly runtime: Pick<
     ProviderAdapter.ProviderAdapterV2SessionRuntime,
-    "instanceId" | "providerSessionId" | "holdsLiveWork" | "predatesModel"
+    | "instanceId"
+    | "providerSessionId"
+    | "holdsLiveWork"
+    | "hasPendingBackgroundWork"
+    | "predatesModel"
   >;
 }
 
@@ -71,11 +75,22 @@ export type Retirement = "current" | "released" | "retiring" | "outdated";
 export const refuses = (retired: Retirement, threadHasRunningTurn: boolean) =>
   retired === "outdated" || (retired === "retiring" && !threadHasRunningTurn);
 
-export const restartRequired = (retired: Retirement, runningTurns: number, model: string) =>
+export const restartRequired = (retired: Retirement, runningTurns: number, model?: string) =>
   new ProviderRestartRequiredError({
     runningTurns,
-    ...(retired === "outdated" ? { model } : {}),
+    ...(retired === "outdated" && model !== undefined ? { model } : {}),
   });
+
+/** Refuses a turn on a process, however it was opened, that predates the turn's model. */
+export const refuseOutdated = Effect.fnUntraced(function* <E>(
+  runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "predatesModel">,
+  model: string | undefined,
+  refuse: (cause: ProviderRestartRequiredError) => E,
+) {
+  if (model === undefined || runtime.predatesModel === undefined) return;
+  if (yield* runtime.predatesModel(model).pipe(unlessInterrupted(false)))
+    return yield* Effect.fail(refuse(new ProviderRestartRequiredError({ runningTurns: 0, model })));
+});
 
 /**
  * Settings changed: an idle session is released; a busy one is marked to stop within a probe after
@@ -137,6 +152,12 @@ export const make = <
       const latest = yield* read;
       if (latest === undefined) return "released" as Retirement;
       if (latest.busyTurns.size > 0) return busy;
+      // Commands and tools still running in the process end with it; only a catalog restart waits.
+      const working =
+        busy === "outdated" &&
+        latest.runtime.hasPendingBackgroundWork !== undefined &&
+        (yield* latest.runtime.hasPendingBackgroundWork.pipe(unlessInterrupted(true)));
+      if (working) return busy;
       const held =
         latest.runtime.holdsLiveWork !== undefined &&
         (yield* latest.runtime

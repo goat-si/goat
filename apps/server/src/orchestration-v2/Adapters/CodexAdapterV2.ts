@@ -6,6 +6,7 @@ import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
 import { makeCodexMemoryDelivery } from "./CodexMemoryDelivery.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
+import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import { makeCodexAssistantText } from "./CodexAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
@@ -68,7 +69,7 @@ import {
 import { CodexAppServerClientFactory } from "./CodexAppServerClientFactory.ts";
 import type { CodexAdapterV2Hooks, CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
 export type { CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
-import { makeCodexModelArrivals } from "./CodexModelArrivals.ts";
+import { makeCodexModelArrivals, reconnectsKeptProcess } from "./CodexModelArrivals.ts";
 export {
   CodexAppServerClientFactory,
   layerAppServerClientFactory,
@@ -1469,6 +1470,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   const derivedCache = yield* MemoryDerivedCache.MemoryDerivedCache;
   const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
+  const detached = yield* Effect.serviceOption(CodexDetachedAppServers);
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const memorySnapshots = Option.getOrUndefined(
     yield* Effect.serviceOption(MemorySnapshot.MemorySnapshot),
@@ -1567,7 +1569,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             : [];
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
         const { offeredModels } = adapterOptions;
-        const offeredAtStart = offeredModels === undefined ? undefined : yield* offeredModels;
+        // A kept process read its catalog in an earlier GOAT run, so what GOAT offers now says nothing.
+        const kept = yield* reconnectsKeptProcess({
+          detached,
+          survivors,
+          instanceId: adapterOptions.instanceId,
+          providerSessionId: input.providerSessionId,
+          threadId: input.threadId,
+        });
+        const offeredAtStart =
+          offeredModels === undefined ? undefined : kept ? [] : yield* offeredModels;
         const client = yield* clientFactory
           .open({
             instanceId: adapterOptions.instanceId,
