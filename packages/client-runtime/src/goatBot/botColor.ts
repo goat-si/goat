@@ -1,14 +1,17 @@
 import type { BotProfile } from "@goat/contracts";
 
-/** GOAT's accents for member bots. Each reads with the foreground `goatBotAccent` picks. */
+/**
+ * GOAT's accents for member bots. Each takes white text at 5:1 or better, as chat bubbles do;
+ * Amber, light by nature, takes black.
+ */
 export const GOAT_BOT_COLORS = [
-  { name: "Blue", value: "#2F6FED" },
-  { name: "Teal", value: "#0F8B8D" },
-  { name: "Green", value: "#2E8B57" },
+  { name: "Blue", value: "#2563EB" },
+  { name: "Teal", value: "#0F766E" },
+  { name: "Green", value: "#15803D" },
   { name: "Amber", value: "#D9A21B" },
-  { name: "Orange", value: "#E0662B" },
-  { name: "Rose", value: "#D6457A" },
-  { name: "Violet", value: "#7C5CE0" },
+  { name: "Orange", value: "#C2410C" },
+  { name: "Rose", value: "#BE185D" },
+  { name: "Violet", value: "#6D28D9" },
 ] as const;
 
 /** A bot's accent and the text color that stays readable on it. */

@@ -24,6 +24,14 @@ describe("goatBotAccent", () => {
     }
   });
 
+  it("puts white text on every GOAT color but Amber", () => {
+    expect(
+      GOAT_BOT_COLORS.filter(
+        ({ value }) => goatBotAccent(member(value))?.foreground === "#000000",
+      ).map(({ name }) => name),
+    ).toEqual(["Amber"]);
+  });
+
   it("picks black text on light colors and white on dark ones", () => {
     expect(goatBotAccent(member("#ffffff"))).toEqual({
       background: "#FFFFFF",
