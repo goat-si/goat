@@ -61,7 +61,11 @@ describe("readWholeBotArtifact", () => {
     const server = fileServer(file);
     const result = await readWholeBotArtifact(path, server.read);
     expect(result.status).toBe("ok");
-    if (result.status === "ok") expect(result.bytes).toEqual(file);
+    // A deep toEqual walks a megabyte element by element; comparing the bytes directly is enough.
+    if (result.status === "ok") {
+      expect(result.bytes.length).toBe(file.length);
+      expect(result.bytes.findIndex((byte, index) => byte !== file[index])).toBe(-1);
+    }
     expect(server.calls).toEqual([
       { relativePath: path },
       { relativePath: path, offset: CHANNEL_BOT_ARTIFACT_CHUNK_BYTES, version: "v1" },

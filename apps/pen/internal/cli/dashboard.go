@@ -3,23 +3,12 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
-	"runtime"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 )
 
 // openFile opens a local file in the desktop's browser (a seam for tests).
-var openFile = func(path string) error {
-	switch {
-	case runtime.GOOS == "darwin":
-		return exec.Command("open", path).Run()
-	case os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "":
-		return exec.Command("xdg-open", path).Run()
-	}
-	return errNoDesktop
-}
+var openFile = openInBrowser
 
 var errNoDesktop = fmt.Errorf("no desktop to open a browser on")
 

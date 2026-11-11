@@ -224,8 +224,8 @@ func prepareCache(dir string) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("--cache %s is not a directory", dir)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		if err := os.Chmod(dir, 0o700); err != nil {
+	if private, err := state.OwnerOnly(dir); err != nil || !private {
+		if err := state.RestrictDir(dir); err != nil {
 			return fmt.Errorf("--cache %s is open to other users and cannot be made private: %w", dir, err)
 		}
 	}

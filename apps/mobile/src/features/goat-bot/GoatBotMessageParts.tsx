@@ -207,14 +207,20 @@ export function GoatBotActivityLine(props: {
   const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
+  // Screen readers hear when the bot starts, reads or waits, not each step: the live part says
+  // only that, and the step is plain text beside it.
+  const status = `${props.botName} is ${
+    face === "reading" ? "reading" : face === "waiting" ? "waiting for you" : "working"
+  }`;
   return (
     <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
-      <GoatBotProgressFace state={face} emoji={props.emoji} inView={props.inView} />
+      <View accessible accessibilityLiveRegion="polite" accessibilityLabel={status}>
+        <GoatBotProgressFace state={face} emoji={props.emoji} inView={props.inView} />
+      </View>
       <View
         accessible
         accessibilityRole="text"
-        accessibilityLiveRegion="polite"
-        accessibilityLabel={`${props.botName}: ${activity.text}`}
+        accessibilityLabel={activity.text}
         className="min-w-0 flex-1"
       >
         {waits ? (

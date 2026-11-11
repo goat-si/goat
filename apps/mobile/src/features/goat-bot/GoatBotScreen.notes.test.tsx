@@ -70,6 +70,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("./GoatBotFace", () => ({
   GoatBotHeaderFace: () => null,
   GoatBotFaceAvatar: () => null,

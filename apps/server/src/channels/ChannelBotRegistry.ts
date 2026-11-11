@@ -31,6 +31,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -48,6 +49,8 @@ const GOAT_BOT_TITLE = "GOAT bot";
 const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
 
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+/** A roster row shows one line; the rest of the message stays in the chat. */
+const LATEST_TEXT_LIMIT = 200;
 
 export class ChannelBotRegistry extends Context.Service<
   ChannelBotRegistry,
@@ -78,6 +81,7 @@ const make = Effect.gen(function* () {
   const home = yield* ChannelBotHome.ChannelBotHome;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
+  const sql = yield* SqlClient.SqlClient;
   const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -241,6 +245,29 @@ const make = Effect.gen(function* () {
       return visitedAt === null ? undefined : DateTime.formatIso(visitedAt);
     }).pipe(Effect.orElseSucceed(() => undefined));
 
+  /** The newest finished message in the bot's conversation, from its projection. */
+  const latestMessage = (bot: ChannelBotRef | null) =>
+    Effect.gen(function* () {
+      if (bot === null || bot.environmentId !== (yield* environment.getEnvironmentId))
+        return undefined;
+      const [row] = yield* sql<{
+        readonly role: string;
+        readonly created_at: string;
+        readonly text: string;
+      }>`SELECT role, created_at, json_extract(payload_json, '$.text') AS text
+        FROM orchestration_v2_projection_messages
+        WHERE thread_id = ${bot.threadId} AND streaming = 0 AND role IN ('user', 'assistant')
+          AND length(trim(coalesce(json_extract(payload_json, '$.text'), ''))) > 0
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 1`;
+      if (row === undefined) return undefined;
+      return {
+        text: row.text.trim().slice(0, LATEST_TEXT_LIMIT),
+        at: row.created_at,
+        author: row.role === "user" ? ("person" as const) : ("bot" as const),
+      };
+    }).pipe(Effect.orElseSucceed(() => undefined));
+
   const status: ChannelBotRegistry["Service"]["status"] = (
     owner,
     botId = BotId.make(MAIN_BOT_ID),
@@ -249,7 +276,8 @@ const make = Effect.gen(function* () {
       const bot = (yield* ledger.getBotById(owner.ownerId, botId))?.bot ?? null;
       const readThrough = yield* botReadThrough(bot);
       const waitingCount = yield* ledger.countWaitingTasks(owner.ownerId, readThrough, botId);
-      return { bot, waitingCount };
+      const latest = yield* latestMessage(bot);
+      return latest === undefined ? { bot, waitingCount } : { bot, waitingCount, latest };
     }).pipe(Effect.mapError(persistence));
 
   return ChannelBotRegistry.of({ ensure, ensureForReport, status });

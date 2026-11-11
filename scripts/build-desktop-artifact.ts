@@ -62,9 +62,18 @@ import {
   CuaDriverArtifactError,
   stageComputerUseHelper,
   stageCuaDriverExecutable,
+  stageWindowsComputerUseHelper,
   verifyEmbeddedComputerUseHelper,
+  WINDOWS_HELPER_DIR,
+  windowsHelperPayloadMissing,
   withComputerUseHelper,
 } from "./desktop-artifact-computer-use.ts";
+import {
+  DESKTOP_FILE_EXCLUSIONS,
+  LINUX_FILE_EXCLUSIONS,
+  MAC_UNIVERSAL_SINGLE_ARCH_FILES,
+  resolveMacFileExclusions,
+} from "./desktop-artifact-file-exclusions.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import { stageScreenWasmAsset, windowsScreenWasmProblem } from "./lib/screen-wasm-asset.ts";
@@ -220,6 +229,7 @@ interface BuildCliInput {
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
   readonly computerUseHelper?: Option.Option<boolean>;
+  readonly computerUseHelperDir?: Option.Option<string>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
@@ -810,6 +820,7 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "sidecar-invalid",
   "unpacked-native-missing",
   "resource-monitor-missing",
+  "computer-use-helper-missing",
   "wsl-runtime-missing",
   "wsl-runtime-invalid",
   "file-limit-exceeded",
@@ -835,6 +846,9 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
     }
     if (this.reason === "resource-monitor-missing") {
       return "Windows packaged payload is missing the resource monitor executable.";
+    }
+    if (this.reason === "computer-use-helper-missing") {
+      return "Windows packaged payload is missing the GOAT Computer Use helper.";
     }
     if (this.reason === "wsl-runtime-missing") {
       return "Windows packaged payload is missing the WSL runtime archive or SHA-256 sidecar.";
@@ -1018,6 +1032,7 @@ interface ResolvedBuildOptions {
   readonly keepStage: boolean;
   readonly signed: boolean;
   readonly computerUseHelper: boolean;
+  readonly computerUseHelperDir: string | undefined;
   readonly macPasskeys: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -1050,77 +1065,6 @@ interface StagePackageJson {
 
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const DESKTOP_ELECTRON_LANGUAGES = ["en-US"] as const;
-export const DESKTOP_FILE_EXCLUSIONS = [
-  // Cursor walks from argv[1] to platform assets; helpers and native addons need real paths outside ASAR.
-  "!**/node_modules/@cursor/sdk-*/**/*",
-  "!apps/desktop/prod-resources/cursor-sdk",
-  "!apps/desktop/prod-resources/cursor-sdk/**/*",
-  // The resource monitor ships once at resources/resource-monitor, signed with the
-  // app; a second copy inside app.asar would stay ad hoc signed.
-  "!apps/desktop/prod-resources/resource-monitor",
-  "!apps/desktop/prod-resources/resource-monitor/**/*",
-  "!apps/desktop/prod-resources/screen-code/quickjs.wasm",
-  // GOAT always passes the user's installed Claude executable to the SDK,
-  // so the SDK's optional platform packages (each a ~200MB bundled executable)
-  // are dead weight. The trailing dash keeps the SDK's own JS package.
-  "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-  "!**/*.map",
-  "!**/*.d.cts",
-  "!apps/desktop/resources/browser-secret",
-  "!apps/desktop/resources/browser-secret/**/*",
-  "!apps/desktop/prod-resources/browser-secret",
-  "!apps/desktop/prod-resources/browser-secret/**/*",
-  "!apps/desktop/prod-resources/windows-server",
-  "!apps/desktop/prod-resources/windows-server/**/*",
-  "!apps/desktop/prod-resources/ssh-runtime",
-  "!apps/desktop/prod-resources/ssh-runtime/**/*",
-  "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
-  "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
-  "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
-  "!apps/desktop/gnome-extension",
-  "!apps/desktop/gnome-extension/**/*",
-  "!apps/desktop/prod-resources/cua-driver",
-  "!apps/desktop/prod-resources/cua-driver/**/*",
-  "!apps/desktop/resources/cua-driver",
-  "!apps/desktop/resources/cua-driver/**/*",
-  "!apps/desktop/resources/tray",
-  "!apps/desktop/resources/tray/**/*",
-] as const;
-// Windows terminal helpers cannot run on macOS and slow signing and notarization.
-const WINDOWS_PTY_FILE_EXCLUSIONS = [
-  "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
-  "!**/node_modules/node-pty/third_party/conpty/**/*",
-] as const;
-export const MAC_FILE_EXCLUSIONS = [
-  ...WINDOWS_PTY_FILE_EXCLUSIONS,
-  // macOS uses helper stdio for both agents and readiness, never the SDK's native runtime.
-  "!**/node_modules/@trycua/cua-driver/**/*",
-  "!**/node_modules/@trycua/cua-driver-*/**/*",
-] as const;
-// Linux builds node-pty from source; its prebuilds target other platforms.
-export const LINUX_FILE_EXCLUSIONS = [
-  ...WINDOWS_PTY_FILE_EXCLUSIONS,
-  "!**/node_modules/node-pty/prebuilds/darwin-*/**/*",
-] as const;
-
-// Universal apps need prebuilds for both Darwin architectures.
-export function resolveMacFileExclusions(arch?: typeof BuildArch.Type) {
-  if (arch === undefined || arch === "universal") {
-    return [...MAC_FILE_EXCLUSIONS];
-  }
-
-  const unusedArch = arch === "arm64" ? "x64" : "arm64";
-  return [...MAC_FILE_EXCLUSIONS, `!**/node_modules/**/prebuilds/darwin-${unusedArch}/**/*`];
-}
-
-// A universal app ships both halves of every per-architecture native payload
-// (`*-darwin-arm64/` packages, `prebuilds/darwin-x64/`, loader-adjacent
-// `*.darwin-arm64.node` copies), and loaders pick one by process.arch. Both
-// slices carry those thin binaries byte-for-byte, which @electron/universal
-// rejects unless they match x64ArchFiles. Only paths that name one darwin
-// architecture match, so modules rebuilt per slice still get merged with lipo.
-export const MAC_UNIVERSAL_SINGLE_ARCH_FILES =
-  "**/node_modules/**/{*darwin-{arm64,x64}/**,*.darwin-{arm64,x64}.node}";
 // Large ASAR sidecars avoid NSIS extracting thousands of loose files during installs and updates.
 export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
 // Native modules and executables need real paths, so place them in ASAR's .unpacked sibling.
@@ -1785,6 +1729,7 @@ const BuildEnvConfig = Config.all({
   computerUseHelper: Config.Boolean("GOAT_DESKTOP_COMPUTER_USE_HELPER").pipe(
     Config.withDefault(false),
   ),
+  computerUseHelperDir: Config.String("GOAT_DESKTOP_COMPUTER_USE_HELPER_DIR").pipe(Config.option),
   macPasskeys: Config.Boolean("GOAT_DESKTOP_MAC_PASSKEYS").pipe(Config.withDefault(false)),
   verbose: Config.Boolean("GOAT_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
   mockUpdates: Config.Boolean("GOAT_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
@@ -1902,6 +1847,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
           ),
         ));
 
+  const computerUseHelperDir =
+    (
+      Option.getOrUndefined(input.computerUseHelperDir ?? Option.none()) ??
+      Option.getOrUndefined(env.computerUseHelperDir)
+    )?.trim() || undefined;
+
   const wslRuntime =
     Option.getOrUndefined(input.wslRuntime) ?? Option.getOrUndefined(env.wslRuntime);
 
@@ -1933,6 +1884,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     keepStage,
     signed,
     computerUseHelper,
+    computerUseHelperDir,
     macPasskeys: env.macPasskeys,
     verbose,
     mockUpdates,
@@ -3023,6 +2975,12 @@ export function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
 }
 
+/** A "-preview." build runs nightly's helper; a "-pr." build keeps stable's (isNightlyDesktopVersion). */
+export function resolveWindowsHelperChannel(version: string): "stable" | "nightly" | "preview" {
+  if (/-preview\.\d{8}\.\d+$/.test(version)) return "preview";
+  return resolveDesktopUpdateChannel(version) === "nightly" ? "nightly" : "stable";
+}
+
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
 }
@@ -3115,11 +3073,20 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           ],
         }),
     extraResources: [
+      // macOS runs the helper's driver; Windows runs the helper, which carries its own.
       ...DESKTOP_EXTRA_RESOURCES.filter(
-        (resource) => platform !== "mac" || resource.to !== "cua-driver",
+        (resource) => resource.to !== "cua-driver" || platform === "linux",
       ),
       ...(computerUseHelperPath
         ? [{ from: computerUseHelperPath, to: "../Helpers/GOAT Computer Use.app" }]
+        : []),
+      ...(platform === "win"
+        ? [
+            {
+              from: "apps/desktop/prod-resources/" + WINDOWS_HELPER_DIR,
+              to: WINDOWS_HELPER_DIR,
+            },
+          ]
         : []),
       ...(sshRuntimeBundled ? SSH_RUNTIME_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
@@ -3932,6 +3899,14 @@ export const validateWindowsPackagedPayload = Effect.fn(
       missingFiles: ["resource-monitor/goat-resource-monitor.exe"],
     });
   }
+  const missingHelperFiles = yield* windowsHelperPayloadMissing(resourcesDir);
+  if (missingHelperFiles.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "computer-use-helper-missing",
+      packagedAppDir,
+      missingFiles: missingHelperFiles,
+    });
+  }
   const screenWasm = yield* windowsScreenWasmProblem(resourcesDir);
   if (screenWasm) {
     return yield* new WindowsPackagedPayloadValidationError({ packagedAppDir, ...screenWasm });
@@ -4303,6 +4278,16 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     platform: options.platform,
     arch: options.arch,
   });
+  if (options.platform === "win") {
+    yield* stageWindowsComputerUseHelper({
+      repoRoot,
+      stageResourcesDir,
+      channel: resolveWindowsHelperChannel(appVersion),
+      arch: options.arch === "arm64" ? "arm64" : "x64",
+      helperDir: options.computerUseHelperDir,
+      signed: options.signed,
+    });
+  }
   // Signed mac builds always carry the Developer ID helper (#1351); --computer-use-helper adds
   // an ad-hoc one to an unsigned build.
   const computerUseHelper = options.computerUseHelper
@@ -4778,6 +4763,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   computerUseHelper: Flag.Boolean("computer-use-helper").pipe(
     Flag.withDescription(
       "Embed an ad-hoc GOAT Computer Use.app in an unsigned macOS build; signed builds always carry the Developer ID helper (env: GOAT_DESKTOP_COMPUTER_USE_HELPER).",
+    ),
+    Flag.optional,
+  ),
+  computerUseHelperDir: Flag.String("computer-use-helper-dir").pipe(
+    Flag.withDescription(
+      "A GOAT Computer Use helper built on Windows, for a Windows package built on another host (env: GOAT_DESKTOP_COMPUTER_USE_HELPER_DIR).",
     ),
     Flag.optional,
   ),

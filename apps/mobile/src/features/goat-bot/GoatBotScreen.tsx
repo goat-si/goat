@@ -43,7 +43,6 @@ import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
   GoatBotActivityLine,
   GoatBotBotCaption,
-  GoatBotCard,
   GoatBotUpdateLabel,
   GoatBotPersonCaption,
   GoatBotPersonPill,
@@ -52,6 +51,7 @@ import {
   goatBotRowGap,
   goatBotTime,
 } from "./GoatBotMessageParts";
+import { GoatBotReplyCards } from "./GoatBotReplyCards";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import {
   type GoatBotChatItem,
@@ -171,28 +171,25 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </View>
     );
   }
-  const prose = (
-    <>
-      {hasGoatBotMarkdown(row.text) ? (
-        <GoatBotMarkdown
-          text={row.text}
-          failed={row.tone === "failure"}
-          environmentId={props.environmentId ?? null}
-          onSelectThread={props.onSelectThread}
-        />
-      ) : (
-        <Text
-          selectable
-          className={row.tone === "failure" ? "text-danger-foreground" : "text-foreground"}
-          style={bodyText}
-          accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
-        >
-          <GoatBotLinkedText text={row.text} />
-        </Text>
-      )}
-      {row.memory ? <MemoryReportLink reference={row.memory} /> : null}
-    </>
-  );
+  const renderText = (text: string) =>
+    hasGoatBotMarkdown(text) ? (
+      <GoatBotMarkdown
+        text={text}
+        failed={row.tone === "failure"}
+        environmentId={props.environmentId ?? null}
+        onSelectThread={props.onSelectThread}
+      />
+    ) : (
+      <Text
+        selectable
+        className={row.tone === "failure" ? "text-danger-foreground" : "text-foreground"}
+        style={bodyText}
+        accessibilityLabel={row.tone === "failure" ? `Failed: ${text}` : undefined}
+      >
+        <GoatBotLinkedText text={text} />
+      </Text>
+    );
+  const memory = row.memory ? <MemoryReportLink reference={row.memory} /> : null;
   return (
     <View className="gap-1.5" style={{ marginTop }}>
       {row.firstInGroup && row.proactive ? (
@@ -210,10 +207,11 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
             )
           }
         >
-          {prose}
+          {renderText(row.text)}
+          {memory}
         </GoatBotQuestionCard>
       ) : (
-        <GoatBotCard>{prose}</GoatBotCard>
+        <GoatBotReplyCards text={row.text} renderText={renderText} footer={memory} />
       )}
       <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
     </View>

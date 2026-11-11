@@ -5,5 +5,9 @@
     "types": ["node"],
     "lib": ["ESNext", "esnext.disposable"]
   },
-  "include": ["**/*.ts", "../packages/shared/src/errorGuards.ts"]
+  "include": [
+    "**/*.ts",
+    "../packages/shared/src/errorGuards.ts",
+    "../apps/desktop/src/updates/updateChannels.ts"
+  ]
 }

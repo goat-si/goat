@@ -36,7 +36,17 @@ export function GoatBotWorkPeek({
 }) {
   const member = useGoatBotMember();
   return (
-    <section aria-label={title} className="flex min-h-0 min-w-0 flex-1 flex-col text-sm">
+    <section
+      aria-label={title}
+      className="flex min-h-0 min-w-0 flex-1 flex-col text-sm"
+      onKeyDown={(event) => {
+        // Escape steps back to Home before it would close the panel around it.
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onBack();
+      }}
+    >
       <div className="flex min-w-0 flex-col items-start px-3 pt-14 pb-2">
         <Button
           ref={focusElement}

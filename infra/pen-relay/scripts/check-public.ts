@@ -1,7 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off - A standalone pre-deploy check.
 // Refuses to publish public/ when install.sh points at loopback or plain-http relays (a local test
-// build, such as installcheck.sh used to leave) or names a version whose four archives are not all
-// in dl/<version>/ with the sums SHA256SUMS lists (install.sh checks every download against them).
+// build, such as installcheck.sh used to leave), names a version whose six archives are not all in
+// dl/<version>/ with the sums SHA256SUMS lists (install.sh and install.ps1 check every download
+// against them), or when install.ps1 is missing or installs other relays or another version.
 // Usage: node scripts/check-public.ts [public dir]
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -14,6 +15,8 @@ const archives = [
   "pen-linux-arm64.gz",
   "pen-darwin-arm64.gz",
   "pen-darwin-amd64.gz",
+  "pen-windows-amd64.exe.gz",
+  "pen-windows-arm64.exe.gz",
 ];
 const installPath = NodePath.join(dir, "install.sh");
 let install = "";
@@ -26,6 +29,33 @@ try {
 /** The default an install.sh line assigns: NAME="${ENV:-default}". */
 function defaultOf(name: string, env = name): string | undefined {
   return new RegExp(`^${name}="\\$\\{${env}:-([^}]*)\\}"$`, "m").exec(install)?.[1];
+}
+
+// install.ps1 must install what install.sh installs: build.sh fills both from the same arguments.
+const ps1Path = NodePath.join(dir, "install.ps1");
+try {
+  const ps1 = NodeFS.readFileSync(ps1Path, "utf8");
+  /** The default an install.ps1 line assigns: $Var = if ($env:ENV) { $env:ENV } else { 'default' }. */
+  const ps1Default = (name: string, env: string) =>
+    new RegExp(
+      `^\\$${name} = if \\(\\$env:${env}\\) \\{ \\$env:${env} \\} else \\{ '([^']*)' \\}\\r?$`,
+      "m",
+    ).exec(ps1)?.[1];
+  for (const [name, env, sh] of [
+    ["PenRelay", "PEN_RELAY", "PEN_RELAY"],
+    ["PenRelays", "PEN_RELAYS", "PEN_RELAYS"],
+    ["Version", "PEN_VERSION", "VERSION"],
+  ] as const) {
+    const want = defaultOf(sh, env);
+    const got = ps1Default(name, env);
+    if (got === undefined || got !== want) {
+      problems.push(
+        `install.ps1 sets ${env} to ${got ?? "nothing"}, but install.sh to ${want ?? "nothing"}`,
+      );
+    }
+  }
+} catch {
+  problems.push(`${ps1Path} is missing; run apps/pen/scripts/build.sh first`);
 }
 
 if (install) {

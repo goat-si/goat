@@ -3,7 +3,7 @@
  * bounded queue and worker per bot, five tries each; lines queued at shutdown are lost.
  * @module ChannelBotEvents
  */
-import type { BotId, ChannelGatewayError, ThreadId } from "@goat/contracts";
+import type { BotId, ChannelGatewayError, GoatBotEventSubject, ThreadId } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -27,6 +27,8 @@ export interface BotEvent {
   /** The bot or routine the line is about; part of the record key. */
   readonly id: string;
   readonly text: string;
+  /** The routine or task the line names, which a client can open from it. */
+  readonly subject?: GoatBotEventSubject | undefined;
 }
 
 interface QueuedEvent extends BotEvent {
@@ -75,7 +77,14 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
       }
       yield* deps.record({
         threadId,
-        record: { recordKey: recordKeyFor(event), entry: { type: "event", text: event.text } },
+        record: {
+          recordKey: recordKeyFor(event),
+          entry: {
+            type: "event",
+            text: event.text,
+            ...(event.subject === undefined ? {} : { subject: event.subject }),
+          },
+        },
         revision: "v1",
       });
     },
