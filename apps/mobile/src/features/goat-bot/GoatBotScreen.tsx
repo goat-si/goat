@@ -254,6 +254,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         <GoatBotQuestionCard
           row={row}
           canAnswer={props.canSend}
+          accent={props.accent}
           onPick={(answer) =>
             props.onSend(
               answer,
