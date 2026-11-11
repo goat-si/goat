@@ -1009,6 +1009,8 @@ export type OrchestrationV2ProviderSessionDetached =
   typeof OrchestrationV2ProviderSessionDetached.Type;
 
 const PendingBackgroundTaskFields = {
+  command: Schema.optional(Schema.String),
+  startedAt: Schema.optional(IsoDateTime),
   taskId: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
   /** The subagent task that started this work and waits on it. */

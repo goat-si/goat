@@ -1,4 +1,10 @@
 import {
+  claudePendingBackgroundTask,
+  isClaudeOpaqueBackgroundTaskType,
+  mergeClaudeBackgroundTasks,
+  claudeBackgroundDetails,
+} from "./ClaudeBackgroundTasks.ts";
+import {
   claudeCompactionOutcome,
   readToolSearchSetting,
   resolveAutoCompactWindow,
@@ -2840,12 +2846,6 @@ function commandInputFromClaudeTool(toolName: string, input: ClaudeNativeToolInp
   );
 }
 
-// background_tasks_changed can include subagents already counted by their lifecycle.
-const CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS: ReadonlyMap<
-  string,
-  Exclude<OrchestrationV2PendingBackgroundTask["kind"], "subagent">
-> = new Map([["local_bash", "command"]]);
-
 // Claude Code 2.1.292 defers its goal Stop hook for these subagent types.
 // local_bash tasks defer it through the opaque-task roster.
 const CLAUDE_GOAL_DEFERRING_TASK_TYPES: ReadonlySet<string> = new Set([
@@ -2854,35 +2854,6 @@ const CLAUDE_GOAL_DEFERRING_TASK_TYPES: ReadonlySet<string> = new Set([
   "in_process_teammate",
   "local_workflow",
 ]);
-
-function isClaudeOpaqueBackgroundTaskType(taskType: string | null | undefined): boolean {
-  return typeof taskType === "string" && CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS.has(taskType);
-}
-
-function claudePendingBackgroundTask(input: {
-  readonly taskId: string;
-  readonly taskType: string | null;
-  // Only the launching Monitor tool distinguishes a local_bash Monitor from background Bash.
-  readonly startedByMonitor: boolean;
-  readonly description: string | undefined;
-  // Undeclared SDK field: the subagent whose own background work this is.
-  readonly parentTaskId: unknown;
-}): OrchestrationV2PendingBackgroundTask {
-  return {
-    taskId: input.taskId,
-    kind: input.startedByMonitor
-      ? "monitor"
-      : ((input.taskType === null
-          ? undefined
-          : CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS.get(input.taskType)) ?? "background_task"),
-    ...(input.description !== undefined && input.description.trim().length > 0
-      ? { description: input.description }
-      : {}),
-    ...(typeof input.parentTaskId === "string" && input.parentTaskId.trim().length > 0
-      ? { parentTaskId: input.parentTaskId }
-      : {}),
-  };
-}
 
 function claudeTaskTypeFromSdkMessage(message: SDKMessage): string | null {
   if (typeof message !== "object" || message === null) {
@@ -5212,12 +5183,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               } else {
                 updated.set(
                   nativeThreadId,
-                  new Map(tasks.map((task) => [task.taskId, task] as const)),
+                  mergeClaudeBackgroundTasks(current.get(nativeThreadId), tasks),
                 );
               }
               return updated;
             });
-            yield* rememberOpaqueTasks(tasks);
+            yield* rememberOpaqueTasks([
+              ...rosterForNativeThread(
+                yield* Ref.get(pendingBackgroundTasksByNativeThread),
+                nativeThreadId,
+              ).values(),
+            ]);
             if (tasks.length > 0) {
               yield* markWakeEligibleOpaqueBackgroundTasks(
                 nativeThreadId,
@@ -8042,9 +8018,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (!isClaudeNonSubagentTask(message) || message.is_backgrounded === false) {
               return false;
             }
-            yield* upsertPendingBackgroundTask(
-              input.nativeThreadId,
-              claudePendingBackgroundTask({
+            yield* upsertPendingBackgroundTask(input.nativeThreadId, {
+              ...claudePendingBackgroundTask({
                 taskId: message.task_id,
                 taskType: claudeTaskTypeFromSdkMessage(message),
                 startedByMonitor: yield* isClaudeMonitorTask({
@@ -8056,7 +8031,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   typeof message.description === "string" ? message.description : undefined,
                 parentTaskId: Reflect.get(message, "parent_task_id"),
               }),
-            );
+              ...claudeBackgroundDetails(
+                message.tool_use_id === undefined || input.activeContext === null
+                  ? undefined
+                  : findToolCall(input.activeContext, message.tool_use_id),
+              ),
+            });
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             yield* endClaudeMonitorTasks((taskId) => taskId === message.task_id);
