@@ -144,6 +144,22 @@ export function GoatBotTimeline({
     ? goatBotActivity({ reading: true, task: null, worker: null })
     : working;
   const activityText = activity?.text ?? null;
+  // One status region stays mounted for the chat, so its changes are read: working, waiting or
+  // paused, and done once the work ends.
+  // A reply after reading speaks for itself; "done" closes work the bot was doing.
+  const [hadWork, setHadWork] = useState(false);
+  if (activity?.state === "working" && !hadWork) setHadWork(true);
+  if (activity?.state === "reading" && hadWork) setHadWork(false);
+  const announcement =
+    activity === null
+      ? hadWork
+        ? `${botName} is done`
+        : ""
+      : activity.state === "reading" || activity.attention !== undefined
+        ? activity.text
+        : `${botName} is working`;
+  // Opening the activity line keeps the conversation where it is instead of following its growth.
+  const heldScrollTop = useRef<number | null>(null);
   const updateEdges = useStableCallback(() => {
     const scroll = scrollRef.current;
     const wrapper = wrapperRef.current;
@@ -170,7 +186,12 @@ export function GoatBotTimeline({
   // column can get its height after mounting; a reader following the newest message stays there.
   const followResize = useStableCallback(() => {
     const scroll = scrollRef.current;
-    if (scroll !== null && followingRef.current) {
+    const held = heldScrollTop.current;
+    heldScrollTop.current = null;
+    if (scroll !== null && held !== null) {
+      scroll.scrollTop = held;
+      lastScrollTopRef.current = scroll.scrollTop;
+    } else if (scroll !== null && followingRef.current) {
       scroll.scrollTop = scroll.scrollHeight;
       lastScrollTopRef.current = scroll.scrollTop;
     }
@@ -581,10 +602,18 @@ export function GoatBotTimeline({
           })}
           {activity !== null ? (
             <li className={cn("flex", rows.length > 0 && "mt-6")}>
-              <GoatBotActivityLine activity={activity} />
+              <GoatBotActivityLine
+                activity={activity}
+                onToggle={() => {
+                  heldScrollTop.current = scrollRef.current?.scrollTop ?? null;
+                }}
+              />
             </li>
           ) : null}
         </ol>
+        <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {announcement}
+        </span>
       </div>
       {unread && dividerAbove && !pillDismissed ? (
         <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm ring-2 ring-background">

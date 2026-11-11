@@ -26,7 +26,7 @@ function clock(): Disposable {
   return timers;
 }
 
-it.each([90_000, 91_000])("never mounts the reading status when already %i ms old", async (age) => {
+it.each([90_000, 91_000])("never says it is reading a message already %i ms old", async (age) => {
   using _timers = clock();
   const added: Element[] = [];
   const container = document.createElement("div");
@@ -45,9 +45,12 @@ it.each([90_000, 91_000])("never mounts the reading status when already %i ms ol
       <GoatBotTimeline rows={[]} replyingSince={ago(age)} onRetry={() => {}} />,
       { container, router: false },
     );
-    expect(screen.container.querySelector('[role="status"]')).toBeNull();
+    // The one status region is mounted empty; it never says it is reading an old message.
+    const status = screen.container.querySelector('[role="status"]');
+    expect(status?.textContent).toBe("");
     await act(() => vi.runAllTimers());
-    expect(added).toEqual([]);
+    expect(added.map((node) => node.textContent)).toEqual([""]);
+    expect(status?.textContent).toBe("");
   } finally {
     observer.disconnect();
   }
@@ -63,7 +66,7 @@ it("says it is reading until the limit and reads again for a newer message", asy
   const status = () => screen.container.querySelector('[role="status"]');
   expect(status()?.textContent).toBe("Reading your message");
   await act(() => vi.advanceTimersByTime(1_000));
-  expect(status()).toBeNull();
+  expect(status()?.textContent).toBe("");
   await screen.rerender(
     <GoatBotTimeline rows={[]} replyingSince={ago(-1_000)} onRetry={() => {}} />,
   );
@@ -71,7 +74,7 @@ it("says it is reading until the limit and reads again for a newer message", asy
 });
 
 it.each([null, "invalid timestamp", ago(91_000)])(
-  "removes the reading status as soon as replyingSince changes to %s",
+  "clears the reading status as soon as replyingSince changes to %s",
   async (since) => {
     using _timers = clock();
     // Router off: the timeline has no links and fake timers would stall the router's loader.
@@ -79,9 +82,10 @@ it.each([null, "invalid timestamp", ago(91_000)])(
       <GoatBotTimeline rows={[]} replyingSince={ago(0)} onRetry={() => {}} />,
       { router: false },
     );
-    expect(screen.container.querySelector('[role="status"]')).not.toBeNull();
+    const status = () => screen.container.querySelector('[role="status"]')?.textContent;
+    expect(status()).toBe("Reading your message");
     await screen.rerender(<GoatBotTimeline rows={[]} replyingSince={since} onRetry={() => {}} />);
-    expect(screen.container.querySelector('[role="status"]')).toBeNull();
+    expect(status()).toBe("");
   },
 );
 
@@ -130,7 +134,7 @@ it("draws both activity states without any running animation", async () => {
     const status = screen.container.querySelector('[role="status"]');
     expect(status?.textContent).toBe(text);
     // The step and its live status hold still; the face may fade once when its state changes.
-    const step = status?.parentElement?.querySelector("button[aria-expanded]");
+    const step = screen.container.querySelector("button[aria-expanded]");
     if (!(status instanceof HTMLElement) || !(step instanceof HTMLElement))
       throw new Error("expected the activity line");
     expect([
@@ -201,9 +205,12 @@ it("opens a cut-off step to its full text from the keyboard", async () => {
 });
 
 it("shows the waiting face and says so when the work is paused or waits on the person", async () => {
-  for (const text of ["Paused on a usage limit", "Waiting for your approval"]) {
+  for (const [text, attention] of [
+    ["Paused on a usage limit", "paused"],
+    ["Waiting for your approval", "waiting"],
+  ] as const) {
     await using screen = await render(
-      <GoatBotActivityContext value={{ state: "working", text }}>
+      <GoatBotActivityContext value={{ state: "working", text, attention }}>
         <GoatBotTimeline rows={[]} onRetry={() => {}} />
       </GoatBotActivityContext>,
       { router: false },
@@ -211,4 +218,78 @@ it("shows the waiting face and says so when the work is paused or waits on the p
     expect(screen.container.querySelector('[data-face="waiting"]'), text).not.toBeNull();
     expect(screen.container.querySelector('[role="status"]')?.textContent).toBe(text);
   }
+});
+
+it("keeps one status region and says when the work starts, waits, pauses and ends", async () => {
+  using _timers = clock();
+  const timeline = (
+    activity: { state: "working"; text: string; attention?: "waiting" | "paused" } | null,
+  ) => (
+    <GoatBotActivityContext value={activity}>
+      <GoatBotTimeline rows={[]} onRetry={() => {}} />
+    </GoatBotActivityContext>
+  );
+  // Router off: the timeline has no links and fake timers would stall the router's loader.
+  await using screen = await render(timeline(null), { router: false });
+  const region = screen.container.querySelector('[role="status"]');
+  expect(region?.textContent).toBe("");
+  await screen.rerender(timeline({ state: "working", text: "Running the tests" }));
+  expect(region?.textContent).toBe("GOAT Bot is working");
+  await screen.rerender(timeline({ state: "working", text: "Waiting on other work" }));
+  // Waiting on other work needs nothing from the person.
+  expect(region?.textContent).toBe("GOAT Bot is working");
+  expect(screen.container.querySelector('[data-face="working"]')).not.toBeNull();
+  await screen.rerender(
+    timeline({ state: "working", text: "Waiting for your approval", attention: "waiting" }),
+  );
+  expect(region?.textContent).toBe("Waiting for your approval");
+  expect(screen.container.querySelector('[data-face="waiting"]')).not.toBeNull();
+  await screen.rerender(
+    timeline({ state: "working", text: "Paused on a usage limit", attention: "paused" }),
+  );
+  expect(region?.textContent).toBe("Paused on a usage limit");
+  await screen.rerender(timeline(null));
+  expect(region?.textContent).toBe("GOAT Bot is done");
+  // The same element carried every change, so a screen reader heard each one.
+  expect(screen.container.querySelector('[role="status"]')).toBe(region);
+});
+
+it("opens a long step to its whole text and keeps the conversation where it was", async () => {
+  const whole = "Comparing ".repeat(20) + "the end";
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    kind: "bot" as const,
+    id: "m" + index,
+    text: "Message " + index,
+    createdAt: "2026-10-15T00:00:00.000Z",
+    tone: "reply" as const,
+    proactive: false,
+    replyTo: null,
+    options: [],
+    firstInGroup: true,
+    groupPosition: "single" as const,
+  }));
+  await using screen = await render(
+    <div style={{ height: 300, display: "flex" }}>
+      <GoatBotActivityContext
+        value={{ state: "working", text: whole.slice(0, 119) + "…", fullText: whole }}
+      >
+        <GoatBotTimeline rows={rows} onRetry={() => {}} />
+      </GoatBotActivityContext>
+    </div>,
+    { router: false },
+  );
+  const step = screen.getByRole("button", { name: /Comparing/ });
+  await expect.element(step).toBeVisible();
+  const scroller = step.element().closest(".overflow-y-auto") as HTMLElement;
+  // A reader following the newest message sits at the bottom.
+  await expect
+    .poll(() => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight)
+    .toBeLessThan(2);
+  const before = scroller.scrollTop;
+  (step.element() as HTMLElement).focus({ preventScroll: true });
+  await userEvent.keyboard("{Enter}");
+  await expect.poll(() => step.element().textContent ?? "").toContain("the end");
+  // The line grew, and the conversation stayed where it was instead of following the growth.
+  expect(scroller.scrollHeight - scroller.clientHeight).toBeGreaterThan(before);
+  expect(scroller.scrollTop).toBe(before);
 });
