@@ -412,8 +412,12 @@ $env:GOAT_CUA_HELPER_PATH = "$PWD\apps\desktop\.computer-use-helper\computer-use
 
 Start the dev app from the signed-in desktop. A shell reached over SSH or a service runs in
 Session 0, where the helper reports that there is no desktop and the driver refuses to start.
-Stable and nightly helpers must be signed (`--sign-thumbprint`) and serve only the GOAT
-executable installed two folders above them and signed by the same publisher.
+A signed helper serves only the GOAT executable installed two folders above it and signed by the
+same publisher; an unsigned one has no publisher to check and serves any parent. The build
+decides which one it is: `--deferred-signing` for a helper the packaging job signs, and
+`--allow-any-parent` for a helper nothing will sign. A stable release packages on Linux, so it
+builds the helper on a Windows runner and the packaging job signs it with the app's Azure
+Trusted Signing identity. To sign one on this machine instead, pass `--sign-thumbprint`.
 
 ### Linux computer use helper
 

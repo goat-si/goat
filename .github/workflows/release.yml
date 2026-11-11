@@ -118,6 +118,7 @@ jobs:
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
       ref: ${{ needs.resolve_commit.outputs.ref }}
+      windows_signed: ${{ steps.windows_signing.outputs.signed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -220,6 +221,33 @@ jobs:
             --channel "${{ steps.release_meta.outputs.release_channel }}" \
             --current-tag "${{ steps.release_meta.outputs.tag }}" \
             --github-output
+
+      # The Windows helper checks the publisher that started it, so a signed
+      # helper checks its parent and an unsigned one serves any parent. The
+      # build that makes the helper and the packaging that signs it must agree,
+      # so the decision is made once, here, and both read it.
+      - id: windows_signing
+        name: Decide the Windows signing
+        shell: bash
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          set -euo pipefail
+          signed=true
+          for value in "$AZURE_TENANT_ID" "$AZURE_CLIENT_ID" "$AZURE_CLIENT_SECRET" \
+            "$AZURE_TRUSTED_SIGNING_ENDPOINT" "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
+            "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"; do
+            if [[ -z "$value" ]]; then
+              signed=false
+            fi
+          done
+          echo "signed=$signed" >> "$GITHUB_OUTPUT"
 
       # Share only the verification results, not the large registry metadata cache.
       - name: Upload dependency verification
@@ -692,6 +720,157 @@ jobs:
       cli_archive: true
       ssh_runtime_bundle: true
 
+  # GOAT Computer Use is C# compiled by the in-box csc.exe, so a Windows target
+  # builds its helper here, on Windows, and the Linux packaging job signs and
+  # embeds it (#1228).
+  computer_use_helper_win_x64:
+    name: Computer Use helper Windows x64
+    needs: [preflight]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
+    runs-on: windows-2025
+    timeout-minutes: 25
+    outputs:
+      built: ${{ steps.helper.outputs.built }}
+    env:
+      HELPER_CHANNEL: ${{ needs.preflight.outputs.release_channel }}
+      WINDOWS_SIGNED: ${{ needs.preflight.outputs.windows_signed }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.ref }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=@goat/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Build helper
+        id: helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A promoted commit can predate the Windows helper (#1228), and the
+          # workflow file comes from dev while the checkout comes from that
+          # commit, so its build scripts must not be asked for a flag they do
+          # not have.
+          script=scripts/build-computer-use-helper-windows.ts
+          if [ ! -f "$script" ] ||
+            ! grep -q -- 'allow-any-parent' "$script" ||
+            ! grep -q -- 'computer-use-helper-dir' scripts/build-desktop-artifact.ts; then
+            echo "This commit predates the Windows helper; the package keeps the old Cua path."
+            exit 0
+          fi
+          args=(--channel "$HELPER_CHANNEL" --arch x64 --output win-helper)
+          # The packaging job signs the helper exactly when it signs the app, so
+          # the helper checks its parent exactly when it will carry a signature.
+          if [[ "$WINDOWS_SIGNED" == "true" ]]; then
+            args+=(--deferred-signing)
+          else
+            args+=(--allow-any-parent)
+          fi
+          node "$script" "${args[@]}"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload helper
+        if: steps.helper.outputs.built == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: computer-use-helper-win-x64
+          path: win-helper/computer-use-helper
+          if-no-files-found: error
+          retention-days: 1
+
+  computer_use_helper_win_arm64:
+    name: Computer Use helper Windows arm64
+    needs: [preflight]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    outputs:
+      built: ${{ steps.helper.outputs.built }}
+    env:
+      HELPER_CHANNEL: ${{ needs.preflight.outputs.release_channel }}
+      WINDOWS_SIGNED: ${{ needs.preflight.outputs.windows_signed }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.ref }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=@goat/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Build helper
+        id: helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A promoted commit can predate the Windows helper (#1228), and the
+          # workflow file comes from dev while the checkout comes from that
+          # commit, so its build scripts must not be asked for a flag they do
+          # not have.
+          script=scripts/build-computer-use-helper-windows.ts
+          if [ ! -f "$script" ] ||
+            ! grep -q -- 'allow-any-parent' "$script" ||
+            ! grep -q -- 'computer-use-helper-dir' scripts/build-desktop-artifact.ts; then
+            echo "This commit predates the Windows helper; the package keeps the old Cua path."
+            exit 0
+          fi
+          args=(--channel "$HELPER_CHANNEL" --arch arm64 --output win-helper)
+          # The packaging job signs the helper exactly when it signs the app, so
+          # the helper checks its parent exactly when it will carry a signature.
+          if [[ "$WINDOWS_SIGNED" == "true" ]]; then
+            args+=(--deferred-signing)
+          else
+            args+=(--allow-any-parent)
+          fi
+          node "$script" "${args[@]}"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload helper
+        if: steps.helper.outputs.built == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: computer-use-helper-win-arm64
+          path: win-helper/computer-use-helper
+          if-no-files-found: error
+          retention-days: 1
+
   # The Windows jobs start with the other platforms and wait for the same-arch
   # Linux CLI archive after their other setup. Packaging is mostly CPU and
   # small-file work, which Linux runners do faster than Windows ones, so both
@@ -699,7 +878,7 @@ jobs:
   # Windows.
   desktop_win_x64:
     name: Desktop Windows x64
-    needs: [preflight, relay_public_config, build_bundle]
+    needs: [preflight, relay_public_config, build_bundle, computer_use_helper_win_x64]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build_bundle.result == 'success' }}
     uses: ./.github/workflows/release-desktop.yml
     secrets: inherit
@@ -721,10 +900,12 @@ jobs:
       resource_key: win32-x64
       cli_archive: true
       ssh_runtime_bundle: true
+      computer_use_helper_artifact: ${{ needs.computer_use_helper_win_x64.outputs.built == 'true' && 'computer-use-helper-win-x64' || '' }}
+      windows_signed: ${{ needs.preflight.outputs.windows_signed }}
 
   desktop_win_arm64:
     name: Desktop Windows arm64
-    needs: [preflight, relay_public_config, build_bundle]
+    needs: [preflight, relay_public_config, build_bundle, computer_use_helper_win_arm64]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build_bundle.result == 'success' }}
     uses: ./.github/workflows/release-desktop.yml
     secrets: inherit
@@ -746,6 +927,8 @@ jobs:
       resource_key: win32-arm64
       cli_archive: true
       ssh_runtime_bundle: true
+      computer_use_helper_artifact: ${{ needs.computer_use_helper_win_arm64.outputs.built == 'true' && 'computer-use-helper-win-arm64' || '' }}
+      windows_signed: ${{ needs.preflight.outputs.windows_signed }}
 
   release:
     name: Publish GitHub Release
