@@ -60,6 +60,7 @@ const picker = vi.hoisted(() => ({
 }));
 type LayoutHandler = (event: { nativeEvent: { layout: { height: number } } }) => void;
 const layouts = vi.hoisted(() => new Map<string, LayoutHandler>());
+const a11y = vi.hoisted(() => ({ announce: vi.fn(), focus: vi.fn() }));
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -76,6 +77,7 @@ vi.mock("react-native", () => ({
     onLayout,
     accessibilityLiveRegion,
     accessibilityLabel,
+    ref,
   }: {
     children?: ReactNode;
     style?: unknown;
@@ -84,10 +86,12 @@ vi.mock("react-native", () => ({
     onLayout?: LayoutHandler;
     accessibilityLiveRegion?: string;
     accessibilityLabel?: string;
+    ref?: import("react").Ref<HTMLDivElement>;
   }) => {
     if (testID && onLayout) layouts.set(testID, onLayout);
     return (
       <div
+        ref={ref}
         data-style={JSON.stringify(style)}
         data-class={className}
         data-live={accessibilityLiveRegion}
@@ -144,6 +148,8 @@ vi.mock("react-native", () => ({
     />
   ),
   Platform: { OS: "ios" },
+  AccessibilityInfo: { announceForAccessibility: a11y.announce, setAccessibilityFocus: a11y.focus },
+  findNodeHandle: (node: unknown) => node ?? null,
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
@@ -459,6 +465,11 @@ it("marks what the bot said since the last read, and points up to it until the p
       expect.objectContaining({ index: 1, viewPosition: 0 }),
     );
     expect(pill(view.container)).toBeNull();
+    // VoiceOver follows the jump to the "New" line, once.
+    expect(a11y.focus).toHaveBeenCalledTimes(1);
+    expect(a11y.focus.mock.calls[0]?.[0]?.getAttribute("aria-label")).toBe("New messages");
+    await view.rerender(<GoatBotScreen visible readSnapshot={snapshot} />);
+    expect(a11y.focus).toHaveBeenCalledTimes(1);
     await typeInto(view.container, "Thanks");
     await act(async () =>
       view.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click(),
@@ -476,6 +487,67 @@ it("marks what the bot said since the last read, and points up to it until the p
   await taskView.unmount();
   screenSession.supportsTaskThreads = false;
   screenSession.rows = [];
+});
+
+it("keeps a card marked new when it changes again during the visit", async () => {
+  const card = (updatedAt: string): GoatBotRow => ({
+    kind: "task",
+    id: "card",
+    createdAt: "2026-11-11T09:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    card: {
+      key: "task-1",
+      revision: 1,
+      updatedAt,
+      title: "Check disks",
+      statusLabel: "Running",
+      tone: "active",
+      sourceLabel: null,
+      summary: null,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  });
+  const read = { ...bot, id: "read", createdAt: "2026-11-11T10:00:00Z", tone: "reply" as const };
+  const snapshot = {
+    key: "env:bot:1",
+    readUpTo: "2026-11-11T10:01:00Z",
+    newestAtOpen: "2026-11-11T10:05:00Z",
+  };
+  const ids = () => ((list.props?.data ?? []) as GoatBotRow[]).map((row) => row.id);
+  screenSession.rows = [read, card("2026-11-11T10:05:00Z")];
+  const view = await render(<GoatBotScreen visible readSnapshot={snapshot} />);
+  try {
+    expect(ids()).toEqual(["read", "unread-divider", "card"]);
+    screenSession.rows = [read, card("2026-11-11T10:20:00Z")];
+    await view.rerender(<GoatBotScreen visible readSnapshot={snapshot} />);
+    expect(ids()).toEqual(["read", "unread-divider", "card"]);
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
+
+it("tells VoiceOver on iOS when the bot starts waiting on something new, once per wait", async () => {
+  a11y.announce.mockClear();
+  screenSession.activity = { state: "working", text: "Copying files" };
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    screenSession.activity = { state: "working", text: "Waiting for your answer" };
+    await view.rerender(<GoatBotScreen visible />);
+    await view.rerender(<GoatBotScreen visible />);
+    screenSession.activity = { state: "working", text: "Waiting on other work" };
+    await view.rerender(<GoatBotScreen visible />);
+    expect(a11y.announce.mock.calls.map((call) => call[0])).toEqual([
+      "GOAT Bot: Waiting for your answer",
+      "GOAT Bot: Waiting on other work",
+    ]);
+  } finally {
+    screenSession.activity = null;
+    await view.unmount();
+  }
 });
 
 it("uses the light filled composer", async () => {
