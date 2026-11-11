@@ -43,6 +43,25 @@ export interface UnsentDeliveryRelease {
   >;
 }
 
+/**
+ * The rows reconciliation may put back, and whether any such row still waits. Both repeat the
+ * open-row predicate of channel_outbox_due_idx so they read that index instead of the history.
+ */
+export const unsentDeliveryQueries = (
+  sql: SqlClient.SqlClient,
+  input: { readonly before: string; readonly exclude: string; readonly limit: number },
+) => {
+  const unsent = sql`state IN ('pending', 'delivering') AND state = 'delivering'
+    AND send_started_at IS NULL AND destination_kind NOT IN ('goat', 'mcp')
+    AND delivery_id NOT IN (SELECT value FROM json_each(${input.exclude}))`;
+  return {
+    selection: sql`SELECT delivery_id FROM channel_outbox
+      WHERE ${unsent} AND updated_at <= ${input.before}
+      ORDER BY created_at, rowid LIMIT ${input.limit}`,
+    remaining: sql`SELECT EXISTS (SELECT 1 FROM channel_outbox WHERE ${unsent}) AS waiting`,
+  };
+};
+
 export const deliveryLedger = (
   sql: SqlClient.SqlClient,
   fence: (owner: string | undefined) => Effect.Effect<void, SqlError | ChannelLedgerError>,
@@ -271,23 +290,18 @@ export const deliveryLedger = (
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
-            const exclude = encodeIds(input.exclude);
+            const queries = unsentDeliveryQueries(sql, {
+              before: input.before,
+              exclude: encodeIds(input.exclude),
+              limit: input.limit,
+            });
             // The rule restart recovery uses for a row never handed over. The row keeps its place,
             // so the claim's earlier-row rule still holds the task's later rows behind it.
             const released = yield* sql<{ readonly delivery_id: string }>`
               UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
-              WHERE delivery_id IN (
-                SELECT delivery_id FROM channel_outbox
-                WHERE state = 'delivering' AND send_started_at IS NULL
-                  AND destination_kind NOT IN ('goat', 'mcp') AND updated_at <= ${input.before}
-                  AND delivery_id NOT IN (SELECT value FROM json_each(${exclude}))
-                ORDER BY created_at, rowid LIMIT ${input.limit})
+              WHERE delivery_id IN (${queries.selection})
               RETURNING delivery_id`;
-            const [left] = yield* sql<{ readonly waiting: number }>`SELECT EXISTS (
-              SELECT 1 FROM channel_outbox
-              WHERE state = 'delivering' AND send_started_at IS NULL
-                AND destination_kind NOT IN ('goat', 'mcp')
-                AND delivery_id NOT IN (SELECT value FROM json_each(${exclude}))) AS waiting`;
+            const [left] = yield* sql<{ readonly waiting: number }>`${queries.remaining}`;
             return { released: released.length, remaining: left?.waiting === 1 };
           }),
         )

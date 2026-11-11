@@ -354,6 +354,7 @@ describe("hand-over persistence recovery", () => {
           gates.set(deliveryIdFor(key), entry);
           return entry;
         });
+      const ungate = (key: string) => Effect.sync(() => gates.delete(deliveryIdFor(key)));
       const services = ChannelDeliveryWorker.layer.pipe(
         Layer.provide(Layer.succeed(ChannelLedger.ChannelLedger)(wrapped)),
         Layer.provide(
@@ -368,7 +369,7 @@ describe("hand-over persistence recovery", () => {
         Layer.provide(ChannelWake.layer),
       );
       const owner = runtime.ownerToken;
-      return { task, owner, sent, counts, faults, enqueue, state, gate, services };
+      return { task, owner, sent, counts, faults, enqueue, state, gate, ungate, services };
     });
 
   /** The owner token is per server, so another person is a second linked Slack user and task. */
@@ -540,6 +541,48 @@ describe("hand-over persistence recovery", () => {
       }).pipe(Effect.provide(Layer.fresh(services)));
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "a hand-over that commits after its row was put back and claimed again sends nothing",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { owner, sent, faults, enqueue, state, gate, ungate, services } =
+          yield* releaseHarness(harness);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        faults.mark = () => false;
+        yield* enqueue("reclaimed", undefined);
+        const handOver = yield* gate("reclaimed");
+        yield* Effect.gen(function* () {
+          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+          const original = yield* worker.deliverDue(owner).pipe(Effect.forkChild);
+          yield* Deferred.await(handOver.reached);
+          // Put back as if this worker had lost track of the claim, then claimed and sent again.
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const put = yield* ledger.releaseUnsentDeliveries({
+            owner,
+            now,
+            before: now,
+            exclude: [],
+            limit: 20,
+          });
+          assert.strictEqual(put.released, 1);
+          const newer = yield* gate("reclaimed");
+          const again = yield* worker.deliverDue(owner).pipe(Effect.forkChild);
+          yield* Deferred.await(newer.reached);
+          // The original hand-over commits while the newer claim holds the row, and must not send.
+          yield* Deferred.succeed(handOver.open, undefined);
+          yield* Fiber.join(original);
+          assert.deepStrictEqual(sent, []);
+          yield* ungate("reclaimed");
+          yield* Deferred.succeed(newer.open, undefined);
+          yield* Fiber.join(again);
+          assert.deepStrictEqual(sent, ["reclaimed"]);
+          assert.strictEqual(yield* state("reclaimed"), "delivered");
+        }).pipe(Effect.provide(Layer.fresh(services)));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
 
 describe("pre-upgrade narration", () => {

@@ -17,6 +17,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { bindingIdFor, deliveryIdFor } from "./channelIds.ts";
+import { unsentDeliveryQueries } from "./channelDeliveryLedger.ts";
 
 const owner = "deadline-owner";
 const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -113,6 +114,30 @@ const countingWake = (count: () => void) =>
   Layer.succeed(ChannelWake.ChannelWake)({ wake: Effect.sync(count), next: Effect.never });
 
 describe("absolute receipt delivery deadlines", () => {
+  it.effect("reconciliation reads open rows from the due index, without sorting history", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const queries = unsentDeliveryQueries(sql, {
+        before: "2026-01-01T00:00:00.000Z",
+        exclude: "[]",
+        limit: 20,
+      });
+      for (const query of [queries.selection, queries.remaining]) {
+        const plan = (yield* sql<{
+          readonly detail: string;
+        }>`EXPLAIN QUERY PLAN ${query}`).map((row) => row.detail);
+        assert.isTrue(
+          plan.some((detail) => detail.includes("USING INDEX channel_outbox_due_idx")),
+          plan.join("\n"),
+        );
+        assert.isFalse(
+          plan.some((detail) => detail.includes("TEMP B-TREE")),
+          plan.join("\n"),
+        );
+      }
+    }).pipe(Effect.provide(layer(() => Effect.die("must not send")))),
+  );
+
   it.effect("the hand-over refuses a receipt whose deadline elapsed after it was claimed", () =>
     Effect.gen(function* () {
       const ledger = yield* ChannelLedger.ChannelLedger;
