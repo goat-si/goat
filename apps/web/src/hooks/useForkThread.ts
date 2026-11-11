@@ -24,6 +24,8 @@ import * as Schema from "effect/Schema";
 
 import type { ThreadActionMenuId, ThreadForkMenuState } from "../components/threadActionMenu.logic";
 import { toastManager } from "../components/ui/toast";
+import { isGlobalAgentThread } from "../globalAgentRoute";
+import { useGlobalAgentStore } from "../globalAgentStore";
 import { newThreadId, randomUUID } from "../lib/utils";
 import { readLocalApi } from "../localApi";
 import {
@@ -110,8 +112,11 @@ export function useThreadForkAvailability(
   );
   const serverForks = useEnvironmentSupportsForkWorkspace(threadRef?.environmentId ?? null);
   const prepared = usePreparedConnection(threadRef?.environmentId ?? null);
+  const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   const viaHubProxy =
     Option.isSome(prepared) && prepared.value.target._tag === "HubProxyConnectionTarget";
+  // The global agent is one agent, not a thread to copy; its menus hide forking too.
+  if (shell !== null && isGlobalAgentThread(shell, globalAgentRef)) return null;
   return forkAvailabilityFor({ shell, project, serverForks, viaHubProxy, known });
 }
 

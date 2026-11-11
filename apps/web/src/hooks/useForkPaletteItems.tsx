@@ -9,7 +9,7 @@ import { useForkThread, useThreadForkAvailability } from "./useForkThread";
 
 const SEARCH_TERMS = ["fork", "copy", "duplicate", "branch off", "thread"];
 
-/** "Fork thread" and, where possible, "Fork thread into new worktree" for the open thread. */
+/** "Fork thread" and, where possible, "Fork thread in new worktree" for the open thread. */
 export function useForkPaletteItems(
   activeThread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | null,
 ): CommandPaletteActionItem[] {
@@ -39,7 +39,7 @@ export function useForkPaletteItems(
     {
       kind: "action",
       value: "action:fork-thread-worktree",
-      title: "Fork thread into new worktree",
+      title: "Fork thread in new worktree",
       searchTerms: [...SEARCH_TERMS, "worktree"],
       icon: <GitBranchIcon className={ITEM_ICON_CLASS} />,
       ...disabled,

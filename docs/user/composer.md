@@ -381,9 +381,10 @@ that response instead of the latest turn and offers the same choice.
   Ignored files such as `.env` stay behind, and edits made while the fork is being created may
   be missed. If GOAT cannot copy the uncommitted changes, it offers to fork without them.
 
-The new-worktree choice needs a Git project. It is not offered for a project without Git, a
-scratch session, or a cloud agent. Servers that have not been updated only offer the
-same-checkout fork.
+The new-worktree choice needs a Git project. A scratch session or a cloud agent cannot use it, and
+GOAT explains why if you pick it there. A server that has not been updated offers only the
+same-checkout fork, and through another GOAT server it shows **Fork thread** disabled until it is
+updated.
 
 Some providers cannot continue a conversation natively in another checkout. There the fork starts
 from a handoff of the conversation, as described in
