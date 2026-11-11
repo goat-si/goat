@@ -11,33 +11,15 @@ export const GOAT_BOT_NOTES_COPY =
 export const GOAT_BOT_NOTES_SHARED_COPY =
   "Every bot on this computer shares these notes with GOAT Bot.";
 
-/** The message that asks GOAT Bot to forget a note; it quotes the note exactly and names its line. */
-export const forgetNoteDraft = (note: ChannelBotNote) =>
-  goatBotForgetNoteMessage(note.text, note.id);
+/** The message that asks GOAT Bot to forget a note; it quotes the note exactly. */
+export const forgetNoteDraft = (note: ChannelBotNote) => goatBotForgetNoteMessage(note.text);
 
 /** The message that asks for new wording, or null when there is nothing new to ask for. */
 export function changeNoteDraft(note: ChannelBotNote, newText: string): string | null {
   const wording = newText.trim();
   return wording === "" || wording === note.text.trim()
     ? null
-    : goatBotChangeNoteMessage(note.text, wording, note.id);
-}
-
-/**
- * Indexes of current notes a request can name only by words another current note shares: a server
- * without note ids applies it to one of them, maybe another. Such notes are changed by hand.
- */
-export function goatBotNotesNamedByTextOnly(
-  notes: ReadonlyArray<ChannelBotNote>,
-): ReadonlySet<number> {
-  const current = notes.filter((note) => note.replacedBy === undefined);
-  const count = new Map<string, number>();
-  for (const note of current) count.set(note.text, (count.get(note.text) ?? 0) + 1);
-  return new Set(
-    current
-      .filter((note) => note.id === undefined && (count.get(note.text) ?? 0) > 1)
-      .map((note) => note.index),
-  );
+    : goatBotChangeNoteMessage(note.text, wording);
 }
 
 /** A moment's calendar day as YYYY-MM-DD in the given time zone (the device's when absent). */
