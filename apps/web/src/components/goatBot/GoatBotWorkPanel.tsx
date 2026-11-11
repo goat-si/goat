@@ -72,8 +72,16 @@ export function GoatBotWorkPanel({
     readonly taskId: ChannelTaskId;
     readonly title: string;
   } | null>(null);
-  // Back returns focus to the row the peek opened from.
-  const [returnTo, setReturnTo] = useState<ChannelTaskId | null>(null);
+  // Where focus lands once Home shows again: the row Back returns to, or the Home tab when the
+  // peek closed because its task left the list. It applies once, so later tab switches keep focus.
+  const [focusTarget, setFocusTarget] = useState<ChannelTaskId | "home" | null>(null);
+  const focusOnce = (element: HTMLElement | null) => {
+    if (element === null) return;
+    // Only focus that the closed peek dropped moves; someone typing elsewhere keeps theirs.
+    const active = document.activeElement;
+    if (active === null || active === document.body) element.focus();
+    setFocusTarget(null);
+  };
   // Back also returns Home to where it was scrolled.
   const homeScroll = useRef(0);
   const restoreHome = (element: HTMLElement | null) => {
@@ -100,7 +108,10 @@ export function GoatBotWorkPanel({
         );
   // A task the list no longer has, once it has loaded, closes its peek.
   const peekGone = peek !== null && loaded && !failed && peeked === undefined;
-  if (peekGone) setPeek(null);
+  if (peekGone) {
+    setPeek(null);
+    setFocusTarget("home");
+  }
   if (peek !== null && peekRows !== undefined && !peekGone) {
     return (
       <GoatBotWorkPeek
@@ -115,7 +126,7 @@ export function GoatBotWorkPanel({
         environmentId={environmentId}
         onRetry={onRetryInput}
         onBack={() => {
-          setReturnTo(peek.taskId);
+          setFocusTarget(peeked === undefined ? "home" : peek.taskId);
           setPeek(null);
         }}
       />
@@ -131,7 +142,12 @@ export function GoatBotWorkPanel({
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <TabsList aria-label={`${botName} work`} variant="plain" className="justify-center">
           {tabs.map((name) => (
-            <TabsTab key={name} value={name} variant="plain">
+            <TabsTab
+              key={name}
+              value={name}
+              variant="plain"
+              ref={name === "Home" && focusTarget === "home" ? focusOnce : undefined}
+            >
               {name}
             </TabsTab>
           ))}
@@ -194,7 +210,7 @@ export function GoatBotWorkPanel({
                             rows={rows}
                             remoteWork={remoteWork}
                             environmentId={environmentId}
-                            focusOnMount={row.task.taskId === returnTo}
+                            focusRef={row.task.taskId === focusTarget ? focusOnce : undefined}
                             onPeek={
                               peekRows === undefined
                                 ? undefined
@@ -247,9 +263,6 @@ export function GoatBotWorkPanel({
   );
 }
 
-/** A stable ref callback, so focus moves once when the element mounts. */
-const focusElement = (element: HTMLElement | null) => element?.focus();
-
 function HomeSection({
   title,
   children,
@@ -271,7 +284,7 @@ function TaskWorkRow({
   remoteWork,
   environmentId,
   onPeek,
-  focusOnMount = false,
+  focusRef,
 }: {
   row: Extract<BotThreadRow, { kind: "task" }>;
   rows: readonly BotThreadRow[];
@@ -279,7 +292,8 @@ function TaskWorkRow({
   environmentId: EnvironmentId;
   /** Opens the task's conversation in this panel; absent where it can only open in full. */
   onPeek?: (() => void) | undefined;
-  focusOnMount?: boolean;
+  /** Takes focus when Back returns to this row. */
+  focusRef?: ((element: HTMLElement | null) => void) | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const member = useGoatBotMember();
@@ -299,7 +313,7 @@ function TaskWorkRow({
       ) : (
         <button
           type="button"
-          ref={focusOnMount ? focusElement : undefined}
+          ref={focusRef}
           onClick={onPeek}
           className="block w-full rounded-md p-2 text-start hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >
