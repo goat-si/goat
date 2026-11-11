@@ -44,7 +44,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { MobileBotTaskList } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
-import { MobileBotRoutines } from "./MobileBotRoutines";
+import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 
 // Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
@@ -470,6 +470,14 @@ export function MobileBotWork(props: {
                     error={Boolean(routines.error)}
                     onRetry={routines.refresh}
                     rows={boundRoutines}
+                    onNewRoutine={
+                      props.onDraft
+                        ? () => {
+                            closeSheet();
+                            props.onDraft?.(GOAT_BOT_NEW_ROUTINE_DRAFT);
+                          }
+                        : undefined
+                    }
                   />
                 </>
               ) : (

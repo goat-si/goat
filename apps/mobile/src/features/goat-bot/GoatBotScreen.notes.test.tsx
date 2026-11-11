@@ -417,3 +417,32 @@ it("a failed restore keeps the deleted banner, its Restore button and the disabl
   expect(view.composerDisabled()).toBe("true");
   await view.unmount();
 });
+
+it("New routine closes the sheet and starts a routine request in the composer without sending", async () => {
+  setup();
+  const view = await render();
+  await press(view.container, "Open GOAT Bot home");
+  await press(view.container, "New routine");
+  expect(view.container.querySelector('[aria-label="Work sheet"]')).toBeNull();
+  expect(composer(view.container).value).toBe("Set up a routine: ");
+  expect(session.onSend).not.toHaveBeenCalled();
+  await view.unmount();
+});
+
+it("a drafted request keeps what the person already typed, and says why", async () => {
+  setup();
+  const { Alert } = await import("react-native");
+  vi.mocked(Alert.alert).mockClear();
+  const view = await render();
+  await act(async () => {
+    const field = composer(view.container);
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(field, "Half a thought");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await openMemory(view.container);
+  await press(view.container, "Ask to forget");
+  expect(composer(view.container).value).toBe("Half a thought");
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+  await view.unmount();
+});

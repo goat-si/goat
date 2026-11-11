@@ -11,7 +11,15 @@ import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contra
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
+import {
+  Alert,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import {
   KeyboardAvoidingView,
   useReanimatedKeyboardAnimation,
@@ -382,6 +390,17 @@ export function GoatBotScreen(props: {
       botEmoji,
     ],
   );
+  // A drafted request (New routine, Ask to change or forget) fills only an empty message box.
+  const draft = (request: string) => {
+    if (text.trim().length > 0 || attachments.length > 0) {
+      Alert.alert(
+        "Your message is still in the box",
+        "Send or clear it, then try again to start this request.",
+      );
+      return;
+    }
+    setText(request);
+  };
   const send = () => {
     if (session.onSend(text, attachments)) {
       unread.clear();
@@ -469,7 +488,7 @@ export function GoatBotScreen(props: {
           botName={title}
           botAvatar={botEmoji}
           main={props.main ?? null}
-          onDraft={session.canSend ? setText : undefined}
+          onDraft={session.canSend ? draft : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
           chatTasks={chatTasks}
           taskCardInfo={taskCard?.card ?? null}
