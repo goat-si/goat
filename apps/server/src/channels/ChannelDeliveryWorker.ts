@@ -11,7 +11,7 @@
  *
  * @module ChannelDeliveryWorker
  */
-import type { ChannelGatewayError } from "@goat/contracts";
+import { ChannelGatewayError, type ChannelOutboundMessage } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -20,6 +20,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Result from "effect/Result";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -32,6 +33,8 @@ import {
 
 /** Rows one pass may send before it yields to the rest of the loop. */
 const MAX_PER_PASS = 50;
+/** How long a pass waits for a GOAT or MCP write before it retries the row later. */
+const LOCAL_SEND_DEADLINE = Duration.seconds(30);
 /** A failed hand-over's release is retried this often, at most this many times, in batches. */
 const RELEASE_RETRY_INTERVAL = Duration.seconds(5);
 export const RELEASE_ATTEMPTS = 6;
@@ -333,12 +336,37 @@ const make = Effect.gen(function* () {
     return handled;
   });
 
+  /**
+   * A GOAT or MCP write, waited for until its deadline. One cut off is interrupted apart from the
+   * pass and retried like a write that did not happen: it is idempotent by its command id, so one
+   * that still commits makes the retry record nothing new.
+   */
+  const sendLocal = Effect.fn("ChannelDeliveryWorker.sendLocal")(function* (
+    message: ChannelOutboundMessage,
+  ) {
+    const write = yield* gateway.send(message).pipe(Effect.result, Effect.forkIn(scope));
+    const finished = yield* Fiber.join(write).pipe(Effect.timeoutOption(LOCAL_SEND_DEADLINE));
+    if (Option.isSome(finished)) return finished.value;
+    yield* Fiber.interrupt(write).pipe(Effect.forkIn(scope));
+    return Result.fail(
+      new ChannelGatewayError({
+        reason: "delivery_failed",
+        deliveryOutcome: "not_sent",
+        deliveryErrorCode: "timeout",
+      }),
+    );
+  });
+
   const send = Effect.fn("ChannelDeliveryWorker.send")(function* (
     delivery: ChannelLedger.ChannelStoredDelivery,
     owner: string,
   ) {
     if (!(yield* handOver(delivery, owner))) return;
-    const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
+    const kind = delivery.message.destination.kind;
+    const sent =
+      kind === "goat" || kind === "mcp"
+        ? yield* sendLocal(delivery.message)
+        : yield* gateway.send(delivery.message).pipe(Effect.result);
     const finishedAt = yield* DateTime.now;
     yield* ledger.recordDelivery({
       owner,
