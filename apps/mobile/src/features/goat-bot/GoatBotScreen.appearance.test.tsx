@@ -415,8 +415,15 @@ it("announces only whether the bot works, reads or waits, not every step it take
     expect(first).toEqual({ label: "GOAT Bot is working", holdsStep: false, showsStep: true });
     expect(second.label).toBe(first.label);
     expect((await live({ state: "reading", text: "Reading" })).label).toBe("GOAT Bot is reading");
+    // A wait is said as it is, so moving from one wait to another is heard.
     expect((await live({ state: "working", text: "Waiting for your answer" })).label).toBe(
-      "GOAT Bot is waiting for you",
+      "GOAT Bot: Waiting for your answer",
+    );
+    expect((await live({ state: "working", text: "Waiting on other work" })).label).toBe(
+      "GOAT Bot: Waiting on other work",
+    );
+    expect((await live({ state: "working", text: "Paused on a usage limit" })).label).toBe(
+      "GOAT Bot: Paused on a usage limit",
     );
   } finally {
     screenSession.activity = null;
