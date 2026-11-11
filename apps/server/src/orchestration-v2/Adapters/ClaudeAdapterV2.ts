@@ -4,6 +4,7 @@ import {
   resolveAutoCompactWindow,
 } from "./ClaudeCompactSettings.ts";
 import { claimClaudeQuery } from "./ClaudeQueryClaim.ts";
+import { makeClaudeMcpSessionGrants } from "./ClaudeMcpSessionGrants.ts";
 import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
@@ -4687,6 +4688,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const pendingRuntimeRequests = yield* Ref.make(
           new Map<string, PendingClaudeRuntimeRequest>(),
         );
+        const mcpSessionGrants = makeClaudeMcpSessionGrants();
         // Background local_bash tasks can trigger wake turns on the query stream with no active provider turn.
         const lastTurnRouteByNativeThread = yield* Ref.make(
           new Map<
@@ -9914,6 +9916,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             );
             return { action: "decline" } satisfies ElicitationResult;
           }
+          const granted = mcpSessionGrants.get(request);
+          if (granted !== undefined) return granted;
           // The CLI waits on this answer, so a turn held for its prompt echo
           // must show its output now, as canUseTool does.
           if (context.heldRootFrames.length > 0) {
@@ -10000,8 +10004,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               runtimeRequest: { ...artifacts.request, status: "cancelled", resolvedAt: now },
             });
           }
-          // Never null: the SDK reads null as answered out of band and leaves
-          // the server waiting. Every accept is one-time; no grant is offered.
+          if (resolved === "acceptForSession") {
+            mcpSessionGrants.remember(request, acceptance);
+            return acceptance;
+          }
+          // Never null: the SDK reads null as answered out of band and leaves the server waiting.
           return resolved === "accept"
             ? acceptance
             : ({
