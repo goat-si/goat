@@ -6,7 +6,8 @@
  * or may have (`unknown`, recorded as ambiguous and not repeated). Account and channel errors that
  * a retry cannot fix fail the row. Each row is claimed right before its send, so a restart finds at
  * most the one row that was really in flight. Rows go oldest first, and a task's later row waits for
- * its earlier ones, so a receipt goes out before its result.
+ * its earlier ones, so a receipt goes out before its result. A claimed row whose hand-over could not
+ * be recorded or released is put back by a periodic reconciliation once the database recovers.
  *
  * @module ChannelDeliveryWorker
  */
@@ -18,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -31,8 +33,15 @@ const MAX_PER_PASS = 50;
 const RELEASE_RETRY_INTERVAL = Duration.seconds(5);
 export const RELEASE_ATTEMPTS = 6;
 const RELEASE_BATCH = 20;
-/** Releases held for retry; beyond this a stuck row waits for restart recovery. */
+/** Releases held for retry; beyond this a stuck row waits for reconciliation. */
 const MAX_PENDING_RELEASES = 100;
+/**
+ * Once a release is given up, unsent rows are put back on this schedule until none is left, at most
+ * a batch per run. A row must also be this old: the claim that just committed it may not be in
+ * `inFlight` yet.
+ */
+const RECONCILE_INTERVAL = Duration.seconds(30);
+const RECONCILE_BATCH = 20;
 const NON_RETRYABLE = new Set([
   "not_in_channel",
   "channel_not_found",
@@ -88,6 +97,55 @@ const make = Effect.gen(function* () {
   // A row whose release failed stays delivering, which holds back only its own task's later rows.
   const pendingReleases = new Map<string, PendingRelease>();
   let releaseLoopRunning = false;
+  // Rows this worker claimed and has not settled; reconciliation never takes them back. Each one is
+  // a send this worker is running, so it is as bounded as those are.
+  const inFlight = new Set<ChannelLedger.ChannelStoredDelivery["deliveryId"]>();
+  // One slot: a request made during a run asks for one more run after it.
+  const reconcileRequests = yield* Queue.sliding<string>(1);
+
+  const abandon = Effect.fn("ChannelDeliveryWorker.abandon")(function* (entry: PendingRelease) {
+    yield* Effect.logWarning("channel delivery release abandoned until reconciliation", {
+      deliveryId: entry.deliveryId,
+      tries: entry.tries,
+    });
+    yield* Queue.offer(reconcileRequests, entry.owner);
+  });
+
+  /** Puts back unsent rows a given-up release left delivering, until none is left or ownership is. */
+  const reconcile = Effect.fn("ChannelDeliveryWorker.reconcile")(function* (owner: string) {
+    while (true) {
+      yield* Effect.sleep(RECONCILE_INTERVAL);
+      const now = yield* DateTime.now;
+      const result = yield* ledger
+        .releaseUnsentDeliveries({
+          owner,
+          now: DateTime.formatIso(now),
+          before: DateTime.formatIso(DateTime.subtractDuration(now, RECONCILE_INTERVAL)),
+          exclude: [...inFlight],
+          limit: RECONCILE_BATCH,
+        })
+        .pipe(Effect.result);
+      if (result._tag === "Failure") {
+        yield* Effect.logWarning("channel delivery reconciliation failed", {
+          error: result.failure,
+        });
+        // A new owner's recovery settles the rows.
+        if (result.failure.reason === "ownership_lost") return;
+        continue;
+      }
+      if (result.success.released > 0) yield* wake.wake;
+      if (!result.success.remaining) return;
+    }
+  });
+
+  yield* Queue.take(reconcileRequests).pipe(
+    Effect.flatMap(reconcile),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("channel delivery reconciliation stopped", { cause }),
+    ),
+    Effect.forever,
+    Effect.forkIn(scope),
+  );
 
   const release = (entry: PendingRelease) =>
     Effect.gen(function* () {
@@ -119,16 +177,10 @@ const make = Effect.gen(function* () {
     }
     yield* Effect.logWarning("channel delivery release failed", { error: result.failure });
     // Any failure other than persistence, or a persistent one past the bound, leaves the row
-    // delivering for restart recovery, as before.
-    if (result.failure.reason !== "persistence") return true;
-    if (entry.tries >= RELEASE_ATTEMPTS) {
-      yield* Effect.logWarning("channel delivery release abandoned until restart", {
-        deliveryId: entry.deliveryId,
-        tries: entry.tries,
-      });
-      return true;
-    }
-    return false;
+    // delivering for reconciliation.
+    if (result.failure.reason === "persistence" && entry.tries < RELEASE_ATTEMPTS) return false;
+    yield* abandon(entry);
+    return true;
   });
 
   const releaseLoop = Effect.gen(function* () {
@@ -154,10 +206,7 @@ const make = Effect.gen(function* () {
     entry: PendingRelease,
   ) {
     if (pendingReleases.size >= MAX_PENDING_RELEASES) {
-      yield* Effect.logWarning("channel delivery release abandoned until restart", {
-        deliveryId: entry.deliveryId,
-        tries: entry.tries,
-      });
+      yield* abandon(entry);
       return;
     }
     pendingReleases.set(entry.deliveryId, entry);
@@ -259,12 +308,14 @@ const make = Effect.gen(function* () {
         receiptsOnly: true,
       });
       if (row === undefined) break;
+      inFlight.add(row.deliveryId);
       let fiber: Fiber.Fiber<void, unknown> | undefined;
       fiber = yield* sendReceipt(row, owner).pipe(
         Effect.tapCause((cause) => Effect.logWarning("channel receipt send failed", { cause })),
         Effect.ignore,
         Effect.ensuring(
           Effect.sync(() => {
+            inFlight.delete(row.deliveryId);
             if (fiber !== undefined) receipts.delete(fiber);
           }),
         ),
@@ -274,6 +325,30 @@ const make = Effect.gen(function* () {
       handled += 1;
     }
     return handled;
+  });
+
+  const send = Effect.fn("ChannelDeliveryWorker.send")(function* (
+    delivery: ChannelLedger.ChannelStoredDelivery,
+    owner: string,
+  ) {
+    if (!(yield* handOver(delivery, owner))) return;
+    const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
+    const finishedAt = yield* DateTime.now;
+    yield* ledger.recordDelivery({
+      owner,
+      deliveryId: delivery.deliveryId,
+      attempt: delivery.attempts,
+      outcome:
+        sent._tag === "Success"
+          ? {
+              type: "delivered",
+              ...(sent.success.externalMessageId === undefined
+                ? {}
+                : { externalMessageId: sent.success.externalMessageId }),
+            }
+          : deliveryOutcomeFor(sent.failure, delivery.attempts, finishedAt),
+      now: DateTime.formatIso(finishedAt),
+    });
   });
 
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
@@ -292,27 +367,10 @@ const make = Effect.gen(function* () {
         if (claimed.setAside > 0) continue;
         break;
       }
-      if (!(yield* handOver(delivery, owner))) {
-        handled += 1;
-        continue;
-      }
-      const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
-      const finishedAt = yield* DateTime.now;
-      yield* ledger.recordDelivery({
-        owner,
-        deliveryId: delivery.deliveryId,
-        attempt: delivery.attempts,
-        outcome:
-          sent._tag === "Success"
-            ? {
-                type: "delivered",
-                ...(sent.success.externalMessageId === undefined
-                  ? {}
-                  : { externalMessageId: sent.success.externalMessageId }),
-              }
-            : deliveryOutcomeFor(sent.failure, delivery.attempts, finishedAt),
-        now: DateTime.formatIso(finishedAt),
-      });
+      inFlight.add(delivery.deliveryId);
+      yield* send(delivery, owner).pipe(
+        Effect.ensuring(Effect.sync(() => inFlight.delete(delivery.deliveryId))),
+      );
       handled += 1;
     }
     return handled;

@@ -9,6 +9,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
@@ -16,6 +17,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { bindingIdFor, deliveryIdFor } from "./channelIds.ts";
+import { unsentDeliveryQueries } from "./channelDeliveryLedger.ts";
 
 const owner = "deadline-owner";
 const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -112,6 +114,30 @@ const countingWake = (count: () => void) =>
   Layer.succeed(ChannelWake.ChannelWake)({ wake: Effect.sync(count), next: Effect.never });
 
 describe("absolute receipt delivery deadlines", () => {
+  it.effect("reconciliation reads open rows from the due index, without sorting history", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const queries = unsentDeliveryQueries(sql, {
+        before: "2026-01-01T00:00:00.000Z",
+        exclude: "[]",
+        limit: 20,
+      });
+      for (const query of [queries.selection, queries.remaining]) {
+        const plan = (yield* sql<{
+          readonly detail: string;
+        }>`EXPLAIN QUERY PLAN ${query}`).map((row) => row.detail);
+        assert.isTrue(
+          plan.some((detail) => detail.includes("USING INDEX channel_outbox_due_idx")),
+          plan.join("\n"),
+        );
+        assert.isFalse(
+          plan.some((detail) => detail.includes("TEMP B-TREE")),
+          plan.join("\n"),
+        );
+      }
+    }).pipe(Effect.provide(layer(() => Effect.die("must not send")))),
+  );
+
   it.effect("the hand-over refuses a receipt whose deadline elapsed after it was claimed", () =>
     Effect.gen(function* () {
       const ledger = yield* ChannelLedger.ChannelLedger;
@@ -130,6 +156,28 @@ describe("absolute receipt delivery deadlines", () => {
       );
       yield* ledger.expireReceipts({ owner, now: yield* nowIso });
       assert.strictEqual(yield* ledger.getDeliveryState(id), "failed");
+    }).pipe(Effect.provide(layer(() => Effect.die("must not send")))),
+  );
+
+  it.effect("the hand-over refuses an expired receipt whose row lost or changed its input id", () =>
+    Effect.gen(function* () {
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const sql = yield* SqlClient.SqlClient;
+      // No writer makes these shapes; the deadline follows the cause key regardless.
+      for (const [key, inputId] of [
+        ["expired-null-input", null],
+        ["expired-other-input", "input:someone-else"],
+      ] as const) {
+        const id = yield* receipt(key);
+        yield* sql`UPDATE channel_outbox SET input_id = ${inputId}, state = 'delivering',
+          attempts = 1 WHERE delivery_id = ${id}`;
+      }
+      yield* TestClock.setTime(60_000);
+      const now = yield* nowIso;
+      for (const key of ["expired-null-input", "expired-other-input"]) {
+        const deliveryId = deliveryIdFor("reply:input:" + key);
+        assert.isFalse(yield* ledger.markSending({ owner, deliveryId, attempt: 1, now }));
+      }
     }).pipe(Effect.provide(layer(() => Effect.die("must not send")))),
   );
 
