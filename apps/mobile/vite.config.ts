@@ -128,6 +128,7 @@ const devCompiledSources = [
   "/lib/useNotificationPermissionStatus.ts",
   "/features/connection/ConnectionsNewRouteScreen.tsx",
   "/features/goat-bot/GoatBotModelPill.tsx",
+  "/features/goat-bot/GoatBotScreen.tsx",
   "/features/goat-bot/MobileBotWork.tsx",
 ];
 const require = NodeModule.createRequire(import.meta.url);

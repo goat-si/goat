@@ -25,9 +25,14 @@ export function MobileBotMemory(props: {
   /** A member bot's sheet, which shows the same notes as the main bot's. */
   readonly member: boolean;
   readonly botName?: string;
-  /** Puts a message in the chat's composer; absent while the chat cannot send. */
   /** Fills the chat's message box; false when it was refused and nothing changed. */
   readonly onDraft?: ((text: string) => boolean) | undefined;
+  /**
+   * New wordings being written, by note; kept by the home so they outlive the sheet closing while
+   * the person deals with a message already in the box.
+   */
+  readonly wordings: Readonly<Record<string, string>>;
+  readonly onWordingChange: (note: string, wording: string | null) => void;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly refreshKey?: string | undefined;
 }) {
@@ -78,6 +83,8 @@ export function MobileBotMemory(props: {
           notes={notes.data.notes}
           truncated={notes.data.truncated}
           onDraft={onDraft}
+          wordings={props.wordings}
+          onWordingChange={props.onWordingChange}
           botName={botName}
         />
       )}
@@ -90,6 +97,8 @@ function MobileNoteList(props: {
   readonly notes: ReadonlyArray<ChannelBotNote>;
   readonly truncated: boolean;
   readonly onDraft: ((text: string) => boolean) | undefined;
+  readonly wordings: Readonly<Record<string, string>>;
+  readonly onWordingChange: (note: string, wording: string | null) => void;
   readonly botName: string;
 }) {
   const view = goatBotNotesView({ notes: props.notes, truncated: props.truncated });
@@ -112,15 +121,20 @@ function MobileNoteList(props: {
       ) : view.empty === "no_current" ? (
         <Text className="text-foreground-muted">No current notes.</Text>
       ) : (
-        view.current.map((note) => (
+        view.current.map((note) => {
           // An index is a line's place in this read only, so a new read starts every row over.
-          <MobileNoteRow
-            key={`${props.revision}:${note.index}`}
-            note={note}
-            source={goatBotNoteSourceLabel(note.source, { now })}
-            onDraft={props.onDraft}
-          />
-        ))
+          const key = JSON.stringify([props.revision, note.index]);
+          return (
+            <MobileNoteRow
+              key={key}
+              note={note}
+              source={goatBotNoteSourceLabel(note.source, { now })}
+              onDraft={props.onDraft}
+              wording={props.wordings[key] ?? null}
+              onWordingChange={(wording) => props.onWordingChange(key, wording)}
+            />
+          );
+        })
       )}
       {view.replaced.length > 0 ? (
         <Pressable
@@ -161,9 +175,11 @@ function MobileNoteRow(props: {
   readonly note: ChannelBotNote;
   readonly source: string | null;
   readonly onDraft: ((text: string) => boolean) | undefined;
+  readonly wording: string | null;
+  readonly onWordingChange: (wording: string | null) => void;
 }) {
-  const { note, onDraft } = props;
-  const [wording, setWording] = useState<string | null>(null);
+  const { note, onDraft, wording } = props;
+  const setWording = props.onWordingChange;
   const draft = wording === null ? null : changeNoteDraft(note, wording);
   const canAsk = onDraft !== undefined;
   return (

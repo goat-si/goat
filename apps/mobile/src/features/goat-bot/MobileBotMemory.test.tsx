@@ -1,4 +1,4 @@
-import { act, type ReactNode } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
@@ -90,20 +90,32 @@ function setup(options: { data?: unknown; cause?: unknown } = {}) {
   state.refresh.mockReset();
   state.requested.mockReset();
 }
+// The home keeps the wordings being written; this holds them the same way.
+function Memory(props: Props) {
+  const [wordings, setWordings] = useState<Readonly<Record<string, string>>>({});
+  return (
+    <MobileBotMemory
+      environmentId={environmentId}
+      connected
+      supported
+      member={false}
+      wordings={wordings}
+      onWordingChange={(note, wording) =>
+        setWordings((current) => {
+          const next = { ...current };
+          if (wording === null) delete next[note];
+          else next[note] = wording;
+          return next;
+        })
+      }
+      {...props}
+    />
+  );
+}
 async function render(props: Props = {}) {
   document.body.appendChild(container);
   if (!root) root = createRoot(container);
-  await act(async () =>
-    root?.render(
-      <MobileBotMemory
-        environmentId={environmentId}
-        connected
-        supported
-        member={false}
-        {...props}
-      />,
-    ),
-  );
+  await act(async () => root?.render(<Memory {...props} />));
 }
 const button = (label: string) =>
   [...container.querySelectorAll("button")].find((item) => item.textContent === label);

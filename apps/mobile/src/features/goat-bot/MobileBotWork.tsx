@@ -148,6 +148,20 @@ export function MobileBotWork(props: {
   const open = props.open ?? ownOpen;
   const setOpen = props.onOpenChange ?? setOwnOpen;
   const [tab, setTab] = useState<(typeof tabs)[number]>("Home");
+  // A note's new wording outlives the sheet, which closes while the person deals with a message
+  // already in the box; it goes on a successful fill or Cancel. Notes belong to the machine.
+  const [noteWordings, setNoteWordings] = useState<{
+    readonly environmentId: EnvironmentId | null;
+    readonly byNote: Readonly<Record<string, string>>;
+  }>({ environmentId, byNote: {} });
+  const wordings = noteWordings.environmentId === environmentId ? noteWordings.byNote : {};
+  const setWording = (note: string, wording: string | null) =>
+    setNoteWordings((current) => {
+      const byNote = { ...(current.environmentId === environmentId ? current.byNote : {}) };
+      if (wording === null) delete byNote[note];
+      else byNote[note] = wording;
+      return { environmentId, byNote };
+    });
   const peekEntry =
     peekTaskId === null
       ? null
@@ -416,6 +430,8 @@ export function MobileBotWork(props: {
                 : undefined
             }
             refreshKey={props.notesRefreshKey}
+            wordings={wordings}
+            onWordingChange={setWording}
           />
         ),
       },

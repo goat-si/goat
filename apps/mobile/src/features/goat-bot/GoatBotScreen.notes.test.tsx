@@ -29,7 +29,15 @@ const session = vi.hoisted(() => ({
 }));
 // The message box's native focus and caret, and a photo the picker is still reading.
 const box = vi.hoisted(() => ({
-  focus: vi.fn(),
+  // What the screen showed when focus arrived: the sheet, and the message box's text.
+  focus: vi.fn(() => {
+    box.atFocus = {
+      sheet: document.querySelector('[aria-label="Work sheet"]') !== null,
+      text: document.querySelector<HTMLTextAreaElement>('[aria-label="Message GOAT Bot"]')?.value,
+    };
+  }),
+  atFocus: null as null | { sheet: boolean; text: string | undefined },
+  platform: { OS: "ios" as "ios" | "android" },
   setSelection: vi.fn(),
   pick: null as null | ((value: { attachments: object[]; error?: string }) => void),
 }));
@@ -82,7 +90,8 @@ vi.mock("react-native", () => ({
   }) {
     const shown = useRef(visible);
     useEffect(() => {
-      if (shown.current && !visible) onDismiss?.();
+      // Only iOS reports a sheet's dismissal.
+      if (shown.current && !visible && box.platform.OS === "ios") onDismiss?.();
       shown.current = visible;
     }, [visible, onDismiss]);
     return visible ? <section aria-label="Work sheet">{children}</section> : null;
@@ -132,7 +141,7 @@ vi.mock("react-native", () => ({
       />
     );
   },
-  Platform: { OS: "ios" },
+  Platform: box.platform,
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
@@ -156,6 +165,7 @@ vi.mock("./GoatBotFace", () => ({
       </button>
     ) : null,
   GoatBotFaceAvatar: () => null,
+  GoatBotChipFace: () => null,
   GoatBotProgressFace: () => null,
 }));
 vi.mock("./GoatBotShimmerText", () => ({ GoatBotShimmerText: () => null }));
@@ -304,6 +314,8 @@ function setup() {
   session.attachments = false;
   box.focus.mockClear();
   box.setSelection.mockClear();
+  box.atFocus = null;
+  box.platform.OS = "ios";
   box.pick = null;
 }
 const buttonIn = (container: HTMLElement, label: string) =>
@@ -579,5 +591,43 @@ it("an accepted request focuses the message box once the sheet has gone, caret a
   expect(box.focus).toHaveBeenCalledTimes(1);
   const end = "Set up a routine: ".length;
   expect(box.setSelection).toHaveBeenCalledWith(end, end);
+  await view.unmount();
+});
+it("Android focuses the message box after the sheet has gone and the request is in it", async () => {
+  setup();
+  box.platform.OS = "android";
+  const view = await render();
+  // Android draws its own header chip, named for the bot.
+  await press(view.container, "GOAT Bot");
+  await press(view.container, "New routine");
+  expect(box.focus).toHaveBeenCalledTimes(1);
+  expect(box.atFocus).toEqual({ sheet: false, text: "Set up a routine: " });
+  const end = "Set up a routine: ".length;
+  expect(box.setSelection).toHaveBeenCalledWith(end, end);
+  await view.unmount();
+});
+
+it("a note's new wording waits while the person clears the box, through closing and reopening the sheet", async () => {
+  setup();
+  const view = await render();
+  await typeInto(composer(view.container), "Half a thought");
+  await openMemory(view.container);
+  await press(view.container, "Ask to change");
+  const wording = () =>
+    view.container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]');
+  await typeInto(wording()!, "Reply in English");
+  await press(view.container, "Fill message");
+  // Refused: the person closes the sheet, clears the box, and comes back.
+  await press(view.container, "Close");
+  await typeInto(composer(view.container), "");
+  await openMemory(view.container);
+  expect(wording()?.value).toBe("Reply in English");
+  await press(view.container, "Fill message");
+  expect(composer(view.container).value).toBe(
+    goatBotChangeNoteMessage(note.text, "Reply in English"),
+  );
+  // A successful fill lets the wording go.
+  await openMemory(view.container);
+  expect(wording()).toBeNull();
   await view.unmount();
 });

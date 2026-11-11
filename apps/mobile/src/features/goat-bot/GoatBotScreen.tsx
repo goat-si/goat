@@ -429,6 +429,10 @@ export function GoatBotScreen(props: {
     focusOnDismiss.current = null;
     if (caret !== null) focusInput(caret);
   };
+  // oxlint-disable-next-line goat/react-effect-budget -- Android has no sheet dismissal event: focus the box once the closed sheet and the drafted text have committed.
+  useEffect(() => {
+    if (Platform.OS === "android" && !homeOpen) sheetGone();
+  });
   // A drafted request (New routine, Ask to change or forget) fills only an empty message box; the
   // caller keeps its sheet and wording when the box is taken.
   const draft = (request: string) => {
@@ -497,11 +501,8 @@ export function GoatBotScreen(props: {
         <MobileBotWork
           taskId={taskId}
           open={homeOpen}
-          onOpenChange={(next) => {
-            setHomeOpen(next);
-            // iOS reports the sheet's dismissal; Android's modal is gone once it is hidden.
-            if (!next && Platform.OS === "android") sheetGone();
-          }}
+          onOpenChange={setHomeOpen}
+          // iOS reports the sheet's dismissal; Android is handled once the closed sheet commits.
           onDismissed={sheetGone}
           chipFace={
             Platform.OS === "android" ? (
