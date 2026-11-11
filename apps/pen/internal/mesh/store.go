@@ -3,6 +3,7 @@ package mesh
 import (
 	"errors"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -42,11 +43,18 @@ type Store struct {
 	mu    sync.Mutex
 	recs  map[string]*Record
 	selfN uint64
-	view  *View
+	// selfLast is the hash of this node's record selfN, which a share may have dropped.
+	selfLast string
+	view     *View
 	// self is this node's signPub; its own records never wait in the pool.
 	self string
 	// uncapped is set while reloading the node's own saved set.
 	uncapped bool
+	// shares switches to ADR-0026 (shares.go); bare holds hashes kept records name without a record.
+	shares bool
+	bare   map[string]bool
+	// version is the body version of this mesh's records, its found record's (0 until one is held).
+	version int
 
 	// pool holds records whose prev is incomplete, in memory only.
 	pool    map[string]pooled
@@ -79,16 +87,21 @@ type pooled struct {
 }
 
 type storeFile struct {
-	MeshID  string    `json:"meshId"`
-	Records []*Record `json:"records"`
-	Pool    []*Record `json:"pool"`
-	SelfN   uint64    `json:"selfN"`
+	MeshID   string    `json:"meshId"`
+	Records  []*Record `json:"records"`
+	Pool     []*Record `json:"pool"`
+	SelfN    uint64    `json:"selfN"`
+	SelfLast string    `json:"selfLast,omitempty"`
+	Shares   bool      `json:"shares,omitempty"`
+	// version is the store's mesh version at the snapshot, for checking the file's records.
+	version int
 }
 
 // NewStore is an empty set for meshID; st may be nil for an unpersisted set.
 func NewStore(st *state.Store, meshID string) *Store {
 	return &Store{st: st, MeshID: meshID, recs: map[string]*Record{}, pool: map[string]pooled{},
-		poolBy: map[string]int{}, reach: map[string]map[string]bool{}, onDisk: map[string]bool{}}
+		poolBy: map[string]int{}, reach: map[string]map[string]bool{}, onDisk: map[string]bool{},
+		bare: map[string]bool{}}
 }
 
 // SetSelf names this node's signing key (base64url), whose records are never pooled.
@@ -114,6 +127,7 @@ func LoadFile(st *state.Store, name string) (*Store, error) {
 		return nil, os.ErrNotExist
 	}
 	s := NewStore(st, f.MeshID)
+	s.shares = f.Shares
 	// The node's own saved set reloads whole: caps apply to records arriving from peers.
 	s.uncapped = true
 	_, err = s.merge(f.Records)
@@ -121,7 +135,7 @@ func LoadFile(st *state.Store, name string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.selfN = f.SelfN
+	s.selfN, s.selfLast = f.SelfN, f.SelfLast
 	s.view = nil
 	s.changes, s.saved = 0, 0
 	s.onDisk[name] = true
@@ -130,6 +144,11 @@ func LoadFile(st *state.Store, name string) (*Store, error) {
 
 // Found creates a new mesh with id as its only member and persists it when st is set.
 func Found(st *state.Store, id *ident.Identity, name string, at int64) (*Store, error) {
+	return FoundV(1, st, id, name, at)
+}
+
+// FoundV is Found for a mesh of body version v: 1, or EpochShared (ADR-0026).
+func FoundV(v int, st *state.Store, id *ident.Identity, name string, at int64) (*Store, error) {
 	nonce, err := randomNonce()
 	if err != nil {
 		return nil, err
@@ -138,7 +157,7 @@ func Found(st *state.Store, id *ident.Identity, name string, at int64) (*Store, 
 	if err != nil {
 		return nil, err
 	}
-	r, err := Sign(id, foundMesh, TypeFound, 1, nil, at, Fields{Card: card})
+	r, err := SignV(v, id, foundMesh, TypeFound, 1, nil, at, Fields{Card: card})
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +166,7 @@ func Found(st *state.Store, id *ident.Identity, name string, at int64) (*Store, 
 	if _, err := s.Merge([]*Record{r}); err != nil {
 		return nil, err
 	}
-	s.selfN = 1
+	s.selfN, s.selfLast = 1, r.Hash
 	return s, s.Save()
 }
 
@@ -169,7 +188,13 @@ func FromJoin(st *state.Store, meshID string, recs []*Record) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) belongs(r *Record) bool {
+func (s *Store) belongs(r *Record) bool { return s.belongsTo(r, s.version) }
+
+// belongsTo is belongs for a mesh of version (0 when not known yet); it reads no mutable field.
+func (s *Store) belongsTo(r *Record, version int) bool {
+	if version != 0 && r.B.V != version {
+		return false
+	}
 	if r.B.Type == TypeFound {
 		return MeshIDOf(r) == s.MeshID
 	}
@@ -200,6 +225,12 @@ func (s *Store) prevPresent(r *Record) bool {
 }
 
 func (s *Store) merge(recs []*Record) ([]*Record, error) {
+	if s.version == 0 {
+		s.learnVersion(recs)
+	}
+	if s.shares {
+		return s.mergeShared(recs), nil
+	}
 	var added []*Record
 	var full error
 	store := func(r *Record) {
@@ -404,7 +435,7 @@ func (s *Store) SaveFile(st *state.Store, name string) error {
 	gen, adopt, known := s.changes, s.adopt, s.onDisk[name]
 	// The pool is not persisted (contract "Records").
 	recs := s.all()
-	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, Pool: []*Record{}}
+	f := storeFile{MeshID: s.MeshID, SelfN: s.selfN, SelfLast: s.selfLast, Pool: []*Record{}, Shares: s.shares, version: s.version}
 	s.mu.Unlock()
 	if s.afterSnapshot != nil {
 		s.afterSnapshot()
@@ -453,13 +484,25 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 			have[r.Hash] = true
 		}
 		for _, r := range disk.Records {
-			if r != nil && !have[HashOf(r.Body)] && r.Verify() == nil && s.belongs(r) {
+			if r != nil && !have[HashOf(r.Body)] && r.Verify() == nil && s.belongsTo(r, f.version) {
 				recs = append(recs, r)
 			}
 		}
-		f.SelfN = max(f.SelfN, disk.SelfN)
+		if disk.SelfN > f.SelfN {
+			f.SelfN, f.SelfLast = disk.SelfN, disk.SelfLast
+		}
 	}
-	f.Records = CanonicalOrder(recs)
+	if f.Shares {
+		// Another process may have written records this store has not seen: keep the shares of both.
+		kept, _ := selectShares(recs)
+		recs = recs[:0]
+		for _, r := range kept {
+			recs = append(recs, r)
+		}
+		f.Records = canonicalOrder(recs, bareOf(kept))
+	} else {
+		f.Records = CanonicalOrder(recs)
+	}
 	return st.WriteJSON(name, f, 0o600)
 }
 
@@ -475,7 +518,7 @@ func (s *Store) all() []*Record {
 func (s *Store) Records() []*Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return CanonicalOrder(s.all())
+	return canonicalOrder(s.all(), s.bare)
 }
 
 // Has reports whether hash is stored.
@@ -497,7 +540,7 @@ func (s *Store) View() *View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.view == nil {
-		s.view = Compute(s.MeshID, s.all())
+		s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
 	}
 	return s.view
 }
@@ -611,7 +654,7 @@ func (s *Store) memberLocked(id *ident.Identity) bool {
 		return false
 	}
 	if s.view == nil {
-		s.view = Compute(s.MeshID, s.all())
+		s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
 	}
 	_, ok := s.view.Members[ident.B64.EncodeToString(id.SignPub)]
 	return ok
@@ -628,6 +671,10 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		// An admit for an account names at most 8 heads, so its body stays within 2048 bytes.
 		limit = maxAccountAdmitPrev
 	}
+	if s.shares {
+		// Dropped records leave many heads; naming 64 would pass the 2048-byte body limit.
+		limit = min(limit, maxSharedPrev)
+	}
 	by := ident.B64.EncodeToString(id.SignPub)
 	n, own := s.selfN, ""
 	var ownN uint64
@@ -640,7 +687,27 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		}
 	}
 	n = max(n, ownN) + 1
-	r, err := Sign(id, s.MeshID, typ, n, s.choosePrev(own, limit), at, f)
+	prev := s.choosePrev(own, limit)
+	if s.shares && by == s.self && s.selfN > ownN && s.selfLast != "" {
+		// A share dropped this node's latest record; it is still the one this record follows.
+		own = s.selfLast
+	}
+	if s.shares && own != "" && !slices.Contains(prev, own) {
+		// Under shares a record names its own previous one directly (ADR-0026 "Own chain").
+		prev = append([]string{own}, prev[:min(len(prev), limit-1)]...)
+	}
+	if s.shares {
+		// Every record names the found or admit that made its signer a member, so replay puts it after
+		// the admission even when records between them, its own included, were dropped (ADR-0026).
+		if s.view == nil {
+			s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
+		}
+		if h := s.view.admission[by]; h != "" && !slices.Contains(prev, h) {
+			prev = append(prev, h)
+			sort.Strings(prev)
+		}
+	}
+	r, err := SignV(max(s.version, 1), id, s.MeshID, typ, n, prev, at, f)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
@@ -656,6 +723,9 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		return nil, err
 	}
 	s.selfN = n
+	if by == s.self {
+		s.selfLast = r.Hash
+	}
 	s.view = nil
 	s.changes++
 	s.mu.Unlock()

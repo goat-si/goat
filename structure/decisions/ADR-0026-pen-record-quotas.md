@@ -43,21 +43,30 @@
 - **Introducer.** A key's introducer is the kept `admit` naming it whose signer is introduced at the
   shallowest depth; of several there, the one with the smallest raw hash (the founder introduces itself).
   An admit names its signer as the card's inviter, so a card cannot be replayed by another member. A key
-  without an introducer is not introduced. A record is admissible when its signer is introduced and, for
-  a `revoke`, each subject is too. The view still decides what a record does at its turn; this only
-  replaces the storage check "introduced in its past".
+  without an introducer is not introduced. A record is admissible when its signer is introduced; a
+  `revoke`'s subjects need not be, since it spends only its signer's lineage places. The view still
+  decides what a record does at its turn; this only replaces the storage check "introduced in its past".
+  A revoke ordered before its subject's admit still blocks it, as in the view of version 1; before the
+  admit is public only the joiner and its admitter know the key, and after it any member may revoke it.
 - **Depth.** The founder's depth is 0; a key's depth is its introducer's signer's depth plus 1. A key
   admitting itself, or admitted again deeper, keeps its shallowest introduction.
 - **Lineage.** The founder alone is lineage 0. A key the founder admits is in lineage
-  1 + (SHA-256 of its invite nonce) mod 15: the founder chose the nonce, and no other record changes it.
+  1 + (the first two bytes of SHA-256 of its invite nonce's text, big-endian) mod 15: the founder chose the nonce, and no other record changes it.
   Any other key is in the lineage of its introducer's signer. A record is charged to its signer's lineage.
 - **Own chain.** A record with `n > 1` names its signer's record `n - 1` directly in `prev`, or has no
-  effect. Its effect then depends on nothing another signer's records do.
+  effect. Its effect then depends on nothing another signer's records do. When no record `n - 1` is
+  held, naming a bare hash suffices; a node remembers its last record's hash for this. Nothing can tell a
+  dropped record's hash from an invented one, so a signer can skip its own counters this way, which gains
+  it nothing it could not sign with a proper chain. Every record also names the found or admit that made
+  its signer a member in the signing node's view, so replay orders it after that admission even when
+  records between them were dropped. A record names at most 8 heads besides: dropped records leave many,
+  and 64 would pass the 2048-byte body.
 - **Shares.** Per lineage: 160 records of other types, 16 `lock` records, 16 `admit` records signed by
   keys other than the founder, and 56 revoke places. The founder's own admits share 64 places, kept by
   the founder's counter `n` then raw hash, so a later admit never displaces an earlier one. A revoke place
   holds one revoke per (subject, compromised), the smallest of each, and a lineage keeps the 56 smallest of
-  those. Otherwise a share keeps its smallest records by raw hash, admits by (depth, raw hash). A full set
+  those. An `admit` this version cannot read introduces nobody and counts among its signer's records of
+  other types. Otherwise a share keeps its smallest records by raw hash, admits by (depth, raw hash). A full set
   is 16 x 248 + 64 + the found record = 4033 records, so it fits a 4096-hash `have`.
 - **Kept, bare and dropped.** A record outside its share is dropped; one whose signer has no admit yet
   waits in the bounded pool. A record's parents need not be present: a hash a kept record names without
