@@ -1,4 +1,4 @@
-import { NodeHttpServer, NodeServices } from "@effect/platform-node";
+import { NodeServices } from "@effect/platform-node";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,6 +8,7 @@ import { HttpClient, HttpRouter } from "effect/http";
 
 import { makeMockUpdateRouteLayer } from "./mock-update-server.ts";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const withMockUpdateServer = <A, E, R>(rootRealPath: string, effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
@@ -15,7 +16,7 @@ const withMockUpdateServer = <A, E, R>(rootRealPath: string, effect: Effect.Effe
       HttpRouter.serve(makeMockUpdateRouteLayer(rootRealPath), {
         disableListenLog: true,
         disableLogger: true,
-      }).pipe(Layer.provideMerge(NodeHttpServer.layerTest)),
+      }).pipe(Layer.provideMerge(layerTestLoopback)),
     ),
   );
 

@@ -4,7 +4,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServer } from "effect/http";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
   AuthOrchestrationOperateScope,
   AuthSessionId,
@@ -14,6 +13,7 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as SessionLifetime from "../auth/SessionSocketLifetime.testkit.ts";
 import * as DeviceService from "./DeviceService.ts";
 import * as DeviceHubProxy from "./DeviceHubProxy.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 it.effect("preserves binary input and admission frames through the real socket proxy", () =>
   Effect.gen(function* () {
@@ -38,7 +38,7 @@ it.effect("preserves binary input and admission frames through the real socket p
     });
     const services = yield* Layer.build(
       HttpRouter.serve(DeviceHubProxy.layer, { disableListenLog: true }).pipe(
-        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provideMerge(layerTestLoopback),
         Layer.provide(SessionLifetime.layerStable),
         Layer.provide(
           Layer.succeed(EnvironmentAuth.EnvironmentAuth, {

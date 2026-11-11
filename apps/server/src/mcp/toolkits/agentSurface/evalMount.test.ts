@@ -1,4 +1,3 @@
-import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import {
@@ -10,6 +9,7 @@ import * as Effect from "effect/Effect";
 
 import { type ListedTool, serveCatalogOverHttp } from "../../agentSurface.testkit.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const base: Pick<McpInvocationScope, "environmentId" | "capabilities" | "issuedAt"> = {
   environmentId: EnvironmentId.make("environment"),
@@ -63,7 +63,7 @@ const listedAs = (
       client: yield* http.listTools("client"),
       readOnly: yield* http.listTools("readOnly"),
     };
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest));
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback));
 
 it.effect("lists goat_eval up front only where agents get the opt-in core_eval listing", () =>
   Effect.gen(function* () {
@@ -111,5 +111,5 @@ it.effect("goat_eval plans a program over goat_call's paths without running it",
       status: "ok",
       value: { plan: { calls: [{ path: "thread.read", effect: "read" }] } },
     });
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );

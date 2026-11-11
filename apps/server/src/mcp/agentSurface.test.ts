@@ -51,7 +51,6 @@ import {
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import {
   type Outcome,
@@ -62,6 +61,7 @@ import {
   routeOutcome,
 } from "./agentSurfaceOutcome.testkit.ts";
 import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
@@ -617,7 +617,7 @@ describe("agent surface access", () => {
         }
       }
       expect(mismatches).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(registered, NodeHttpServer.layerTest))),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(registered, layerTestLoopback))),
   );
 
   it("documents every access exception", () => {
@@ -722,7 +722,7 @@ it.effect("lists canonical names and keeps legacy names callable, unlisted and d
     expect(byLegacy._meta?.[DEPRECATED_META_KEY]).toBe("goat_provider_list");
     expect(byListed._meta?.[DEPRECATED_META_KEY]).toBeUndefined();
     expect(byLegacy.content).toEqual(byListed.content);
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("goat_call names the replacement for a deprecated name or path", () =>
