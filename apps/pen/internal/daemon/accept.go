@@ -74,7 +74,7 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 	var client *clientAdmission
 	admit := func(kind byte, remote []byte, p session.Payload) ([]byte, error) {
 		if _, member := d.view().MemberByNoise(remote); kind == session.KindSession && !member {
-			a, err := d.admitClient(remote, p)
+			a, err := d.admitClient(remote, p, relayOf(c))
 			if err == nil {
 				client = &a
 			}
@@ -91,6 +91,10 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		return nil, err
 	}
 	sec, err := session.Respond(ctx, c, d.id, d.nodeID, admit)
+	if client != nil && client.slot != nil {
+		// Held from before message 2 until the session ends, whatever ends it.
+		defer d.svc.releasePhone(client.slot)
+	}
 	if slot != nil {
 		defer d.releaseAccount(slot)
 	}

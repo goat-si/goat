@@ -99,6 +99,9 @@ type serviceBook struct {
 	byName   map[string]*serviceReg
 	inflight int
 	logged   map[string]time.Time
+	// phones are the held phone slots (phoneslots.go); onPhones is the PhoneSlots test hook.
+	phones   phoneCounts
+	onPhones func(total int)
 }
 
 var errTooManyServices = fmt.Errorf("this node already holds %d service names", maxServices)

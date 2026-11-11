@@ -73,6 +73,8 @@ type Options struct {
 	ClientClosing func()
 	// ClientEnded, when set, runs when a client session's goroutine is done with it (tests).
 	ClientEnded func()
+	// PhoneSlots, when set, is told the node-wide count of held phone slots after every change, in order (tests).
+	PhoneSlots func(total int)
 }
 
 // Daemon is one running node.
@@ -265,6 +267,7 @@ func New(opt Options) (*Daemon, error) {
 		seen:     map[string]seenInfo{},
 		versions: versions, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
+	d.svc.onPhones = opt.PhoneSlots
 	switch opt.SSHUser {
 	case "":
 		d.sshUser = LoginUser()

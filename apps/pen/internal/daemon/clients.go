@@ -22,7 +22,8 @@ import (
 // clientAdmission is what message 1 of a session from a key that is not a member was admitted under: the registration
 // whose list named the key.
 type clientAdmission struct {
-	reg *serviceReg
+	reg  *serviceReg
+	slot *phoneSlot
 }
 
 // memberOrRevoked reports a key that is, or was, a member of v: such a key is never a client.
@@ -41,7 +42,7 @@ func memberOrRevoked(v *mesh.View, key string) bool {
 }
 
 // admitClient decides on a kind 0x01 service stream from a key that is not a member, before message 2.
-func (d *Daemon) admitClient(remote []byte, p session.Payload) (clientAdmission, error) {
+func (d *Daemon) admitClient(remote []byte, p session.Payload, relay string) (clientAdmission, error) {
 	key := ident.B64.EncodeToString(remote)
 	if p.Stream != "service" || !ValidServiceName(p.Name) || memberOrRevoked(d.view(), key) {
 		return clientAdmission{}, errNotAdmitted
@@ -55,7 +56,11 @@ func (d *Daemon) admitClient(remote []byte, p session.Payload) (clientAdmission,
 	if _, listed := reg.clients[key]; !listed {
 		return clientAdmission{}, errNotAdmitted
 	}
-	return clientAdmission{reg: reg}, nil
+	slot, ok := d.svc.reservePhoneLocked(relay, key)
+	if !ok {
+		return clientAdmission{}, errNotAdmitted
+	}
+	return clientAdmission{reg: reg, slot: slot}, nil
 }
 
 // listedAnywhere reports a key on any registration's list; such a key may not open an account session.
