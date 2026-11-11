@@ -36,7 +36,7 @@ export async function openBotLibraryFile(
 ): Promise<BotLibraryOpenResult> {
   const name = botArtifactName(relativePath);
   try {
-    // The open holds the server for its whole read, ahead of any waiting chat previews.
+    // The open interrupts a chat preview in flight and tries once more if it found the server busy.
     const result = await openBotFileRead(
       environmentId,
       () =>
@@ -55,6 +55,7 @@ export async function openBotLibraryFile(
           signal,
         ),
       signal,
+      (read) => read.status === "busy",
     );
     if (result === null || signal.aborted) return DONE;
     if (result.status !== "ok") {

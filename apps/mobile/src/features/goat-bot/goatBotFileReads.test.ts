@@ -19,13 +19,14 @@ const settle = async () => {
 
 function gate() {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
-  let started = false;
+  let starts = 0;
   return {
     run: () => {
-      started = true;
+      starts += 1;
       return promise;
     },
-    started: () => started,
+    started: () => starts > 0,
+    starts: () => starts,
     resolve,
     reject,
   };
@@ -72,7 +73,8 @@ it("starts no waiting preview while an opened file is still being read, even as 
   running.resolve("preview");
   await settle();
   for (const [index, chunk] of chunks.entries()) {
-    queuePreviewRead(env, room, gate().run);
+    // Two more arrive between chunks; with the interrupted one and `waiting`, four wait.
+    if (index < 2) queuePreviewRead(env, room, gate().run);
     await settle();
     expect(chunk.started()).toBe(true);
     expect(waiting.started()).toBe(false);
@@ -80,7 +82,10 @@ it("starts no waiting preview while an opened file is still being read, even as 
     await settle();
   }
   expect(await opened).toBe("012");
+  // The interrupted preview is read again first (its answer is already in), then the waiting one.
   await settle();
+  await settle();
+  expect(running.starts()).toBe(2);
   expect(waiting.started()).toBe(true);
 });
 
@@ -139,4 +144,74 @@ it("settles an aborted open without reading, and an open that fails lets the nex
   await expect(failing).rejects.toThrow("offline");
   await settle();
   expect(after.started()).toBe(true);
+});
+
+const busy = (read: string) => read === "busy";
+
+it("interrupts the preview in flight, waits for its chunk after a busy answer, tries once more, then reads that preview again first", async () => {
+  const env = environment();
+  const room = chat();
+  // Each read of the interrupted preview gets its own answer.
+  const attempts = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
+  let starts = 0;
+  const interrupted = {
+    run: () => attempts[starts++]!.promise,
+    starts: () => starts,
+    resolve: (value: string) => attempts[0]?.resolve(value),
+  };
+  const behind = gate();
+  const interruptedRead = queuePreviewRead(env, room, interrupted.run);
+  queuePreviewRead(env, room, behind.run);
+  const file = gate();
+  let tries = 0;
+  const opened = openBotFileRead(
+    env,
+    async () => {
+      tries += 1;
+      return tries === 1 ? "busy" : file.run();
+    },
+    undefined,
+    busy,
+  );
+  await settle();
+  expect(tries).toBe(1);
+  // The server answers the interrupted chunk; the open tries again and reads the file.
+  interrupted.resolve("stale chunk");
+  await settle();
+  expect(tries).toBe(2);
+  expect(interrupted.starts()).toBe(1);
+  file.resolve("file");
+  expect(await opened).toBe("file");
+  await settle();
+  // Read again ahead of the preview that waited behind it, and its card gets that answer.
+  expect(interrupted.starts()).toBe(2);
+  expect(behind.started()).toBe(false);
+  attempts[1]?.resolve("fresh chunk");
+  expect(await interruptedRead.result).toBe("fresh chunk");
+  await settle();
+  expect(behind.started()).toBe(true);
+});
+
+it("opens without waiting when the server was free, and an open aborted while it waits for the chunk tries no more", async () => {
+  const env = environment();
+  queuePreviewRead(env, chat(), gate().run);
+  expect(await openBotFileRead(env, async () => "file", undefined, busy)).toBe("file");
+  const hung = gate();
+  queuePreviewRead(env, chat(), hung.run);
+  await settle();
+  const controller = new AbortController();
+  let tries = 0;
+  const waiting = openBotFileRead(
+    env,
+    async () => {
+      tries += 1;
+      return "busy";
+    },
+    controller.signal,
+    busy,
+  );
+  await settle();
+  controller.abort();
+  expect(await waiting).toBeNull();
+  expect(tries).toBe(1);
 });

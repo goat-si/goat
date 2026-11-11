@@ -134,10 +134,19 @@ const files = vi.hoisted(() => ({
   listing: null as null | { artifacts: object[]; truncated: boolean },
   pending: false,
   reads: 0,
+  // Every read the server got and has not refused, in order. Like the server, it reads one file
+  // per connection at a time: a read arriving while another is unanswered is answered busy.
   previews: [] as Array<{
     relativePath: string;
+    answered: boolean;
+    /** Left on a connection that has since been replaced, so it no longer holds the server. */
+    dead: boolean;
     answer: (value: object) => void;
   }>,
+  /** Reads fail as on a lost connection. */
+  readsFail: false,
+  /** The real Library opener runs, reading through this server, instead of the stand-in. */
+  realOpen: false,
   opened: [] as string[],
   // An open waits here until the test lets it finish; disposed copies are named here.
   holdOpens: false,
@@ -183,16 +192,43 @@ vi.mock("@goat/client-runtime/state/runtime", async (original) => ({
     _registry: unknown,
     _command: unknown,
     args: { input: { relativePath: string } },
-  ) =>
-    new Promise((resolve) => {
-      files.previews.push({
-        relativePath: args.input.relativePath,
-        answer: (value) => resolve({ _tag: "Success", value }),
-      });
-    }),
+  ) => {
+    const relativePath = args.input.relativePath;
+    if (files.readsFail) return Promise.reject(new Error("The connection was lost."));
+    if (files.previews.some((entry) => !entry.answered && !entry.dead))
+      return Promise.resolve({ _tag: "Success", value: { status: "busy", relativePath } });
+    return new Promise((resolve) => {
+      const entry = {
+        relativePath,
+        answered: false,
+        dead: false,
+        answer: (value: object) => {
+          if (entry.answered) return;
+          entry.answered = true;
+          resolve({ _tag: "Success", value });
+        },
+      };
+      files.previews.push(entry);
+    });
+  },
 }));
-vi.mock("./openBotLibraryFile", () => ({
-  openBotLibraryFile: async (_environmentId: string, relativePath: string) => {
+vi.mock("../../lib/attachmentDownload", () => ({
+  writeGeneratedAttachmentFile: async (input: { attachment: { name: string } }) => ({
+    uri: "file:///cache/opened.png",
+    dispose: () => files.disposed.push(input.attachment.name),
+    share: async () => {},
+  }),
+  shareGeneratedAttachment: async () => true,
+}));
+vi.mock("./openBotLibraryFile", async (original) => {
+  const real = await original<typeof import("./openBotLibraryFile")>();
+  return {
+    openBotLibraryFile: (...args: Parameters<typeof real.openBotLibraryFile>) =>
+      files.realOpen ? real.openBotLibraryFile(...args) : standInOpen(args[1]),
+  };
+});
+async function standInOpen(relativePath: string) {
+  {
     files.opened.push(relativePath);
     if (files.holdOpens) await new Promise<void>((resolve) => files.finishOpen.push(resolve));
     return {
@@ -205,9 +241,9 @@ vi.mock("./openBotLibraryFile", () => ({
           share: async () => {},
         },
       },
-    };
-  },
-}));
+    } as const;
+  }
+}
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
 import { GoatBotFilesProvider } from "./GoatBotReplyFiles";
@@ -231,6 +267,8 @@ afterEach(async () => {
   files.holdOpens = false;
   files.finishOpen.length = 0;
   files.disposed.length = 0;
+  files.readsFail = false;
+  files.realOpen = false;
   screenSession.current = {};
 });
 
@@ -587,4 +625,86 @@ it("drops an open still reading when the chat changes, and closes a shown image"
   await settle();
   expect(dialogImage()).toBeNull();
   expect(files.disposed).toEqual(["chart.png", "chart.png"]);
+});
+
+const pngBytes = [
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 4,
+  0, 0, 0, 4, 8, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0x49, 0x44, 0x41, 0x54, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+const pngChunk = (relativePath: string) => ({
+  status: "chunk",
+  relativePath,
+  mimeType: "image/png",
+  size: pngBytes.length,
+  offset: 0,
+  bytesBase64: btoa(String.fromCharCode(...pngBytes)),
+  version: "v1",
+  done: true,
+});
+/** The server's next unanswered read, which must be for `path`. */
+async function answerNext(path: string, value: object) {
+  const entry = files.previews.find((read) => !read.answered && !read.dead);
+  expect(entry?.relativePath).toBe(path);
+  await act(async () => entry?.answer(value));
+  await settle();
+}
+const BUSY = "Another file is still opening";
+
+it("opens a card tapped while its own preview is still loading, with no error, and reads that preview again after", async () => {
+  files.realOpen = true;
+  files.listing = listed("chart.png");
+  await show([bot("b1", "Here: `chart.png`")]);
+  await act(async () => card("chart.png")?.click());
+  await settle();
+  // The server was still on the preview's chunk: the open waits for it, then tries once more.
+  await answerNext("chart.png", pngChunk("chart.png"));
+  expect(view.container.textContent).not.toContain(BUSY);
+  await answerNext("chart.png", pngChunk("chart.png"));
+  expect(view.container.textContent).not.toContain(BUSY);
+  expect(dialogImage()?.getAttribute("src")).toBe("file:///cache/opened.png");
+  // The interrupted preview is read again and fills its card.
+  await answerNext("chart.png", pngChunk("chart.png"));
+  expect(card("chart.png")?.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png/);
+});
+
+it("opens a card tapped while another card's preview is loading, then reads both previews", async () => {
+  files.realOpen = true;
+  files.listing = listed("report.md", "chart.png");
+  await show([bot("b1", "`report.md` and `chart.png`")]);
+  await act(async () => card("chart.png")?.click());
+  await settle();
+  await answerNext("report.md", chunk("report.md", "text/markdown", "Interrupted"));
+  await answerNext("chart.png", pngChunk("chart.png"));
+  expect(view.container.textContent).not.toContain(BUSY);
+  expect(dialogImage()?.getAttribute("src")).toBe("file:///cache/opened.png");
+  // The interrupted preview goes first, then the one that waited behind it.
+  await answerNext("report.md", chunk("report.md", "text/markdown", "Weekly words"));
+  await answerNext("chart.png", pngChunk("chart.png"));
+  expect(card("report.md")?.textContent).toContain("Weekly words");
+  expect(card("chart.png")?.querySelector("img")).not.toBeNull();
+});
+
+it("leaves an open with its own failure while a preview never answers, and a later open after the chat changes still opens", async () => {
+  files.realOpen = true;
+  files.listing = listed("chart.png");
+  const rows = [bot("b1", "Here: `chart.png`")];
+  await show(rows);
+  // The preview's answer never comes; the connection is lost.
+  files.readsFail = true;
+  await act(async () => card("chart.png")?.click());
+  await settle();
+  expect(card("chart.png")?.textContent).not.toContain("Opening");
+  expect(view.container.textContent).not.toContain(BUSY);
+  expect(dialogImage()).toBeNull();
+  // A new connection; the person moves to another chat and opens the file there.
+  files.readsFail = false;
+  for (const read of files.previews) read.dead = true;
+  await view.rerender(chat(rows, "thread-b"));
+  await settle();
+  await act(async () => card("chart.png")?.click());
+  await settle();
+  await answerNext("chart.png", pngChunk("chart.png"));
+  await answerNext("chart.png", pngChunk("chart.png"));
+  expect(view.container.textContent).not.toContain(BUSY);
+  expect(dialogImage()?.getAttribute("src")).toBe("file:///cache/opened.png");
 });
