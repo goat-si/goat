@@ -7,6 +7,9 @@ import { Menu } from "../../components/ui/Menu";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { GoatBotModelPillMenu } from "./goatBotModelPillMenu";
 
+// The pill sits between "+" and Send; its menu wrapper must give way so a long name truncates.
+const SHRINK = { flexShrink: 1, minWidth: 0 } as const;
+
 /** The composer's model pill, which opens the model menu in place of the old header item. */
 export function GoatBotModelPill(props: { readonly menu: GoatBotModelPillMenu }) {
   const { menu } = props;
@@ -29,7 +32,7 @@ export function GoatBotModelPill(props: { readonly menu: GoatBotModelPillMenu })
       className="min-h-[44px] shrink justify-center"
       style={menu.opens ? undefined : { opacity: 0.5 }}
     >
-      <View className="flex-row items-center gap-1 rounded-full border border-border px-3 py-1">
+      <View className="shrink flex-row items-center gap-1 rounded-full border border-border px-3 py-1">
         <Text numberOfLines={1} className="shrink text-foreground-muted" style={label}>
           {menu.label}
         </Text>
@@ -41,6 +44,7 @@ export function GoatBotModelPill(props: { readonly menu: GoatBotModelPillMenu })
   if (Platform.OS === "android") {
     return (
       <AndroidAnchoredMenu
+        style={SHRINK}
         title={menu.title}
         actions={actions}
         onPressAction={({ nativeEvent }) => menu.select(nativeEvent.event)}
@@ -51,6 +55,7 @@ export function GoatBotModelPill(props: { readonly menu: GoatBotModelPillMenu })
   }
   return (
     <Menu
+      style={SHRINK}
       title={menu.title}
       actions={actions}
       shouldOpenOnLongPress={false}

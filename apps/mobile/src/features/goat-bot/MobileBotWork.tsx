@@ -52,6 +52,8 @@ const tabs = ["Home", "Library"] as const;
 export function MobileBotWork(props: {
   readonly taskId?: ChannelTaskId;
   readonly taskCard?: ReactNode;
+  /** The bot's face for the header chip Android draws above the chat. */
+  readonly chipFace?: ReactNode;
   /** The home sheet's open state when the chat's header chip controls it. */
   readonly open?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
@@ -279,7 +281,10 @@ export function MobileBotWork(props: {
             onPress={() => setOpen(true)}
             className="min-h-[44px] justify-center"
           >
-            <View className="flex-row items-center gap-1.5 rounded-full bg-goat-bot-message px-3 py-1.5">
+            <View className="flex-row items-center gap-1.5 rounded-full bg-goat-bot-message py-1 pl-1 pr-3">
+              <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                {props.chipFace}
+              </View>
               <Text className="font-semibold text-foreground">{botName}</Text>
               <SymbolView name="chevron.down" size={11} tintColorClassName="accent-icon-muted" />
             </View>

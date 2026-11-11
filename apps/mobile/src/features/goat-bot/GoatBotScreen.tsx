@@ -37,7 +37,7 @@ import { botThreadDetail, openBotThreadAction } from "./goatBotThreadNavigation"
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
-import { GoatBotHeaderFace } from "./GoatBotFace";
+import { GoatBotChipFace, GoatBotHeaderFace } from "./GoatBotFace";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
@@ -404,7 +404,7 @@ export function GoatBotScreen(props: {
     : undefined;
   const hasDraft = text.trim().length > 0 || attachments.length > 0;
   const canSubmit = session.canSend && hasDraft;
-  const modelMenu = goatBotModelPillMenu(memberModelMenu, mainModelMenu);
+  const modelMenu = goatBotModelPillMenu(memberModelMenu, mainModelMenu, member !== null);
   const chatTasks = useMemo(
     () =>
       taskId === undefined && session.supportsTaskThreads
@@ -435,6 +435,22 @@ export function GoatBotScreen(props: {
           taskId={taskId}
           open={homeOpen}
           onOpenChange={setHomeOpen}
+          chipFace={
+            Platform.OS === "android" ? (
+              <GoatBotChipFace
+                activity={session.activity ?? null}
+                emoji={botEmoji}
+                {...(member
+                  ? {
+                      conversation: {
+                        environmentId: member.environmentId,
+                        threadId: member.sessionThreadId,
+                      },
+                    }
+                  : {})}
+              />
+            ) : null
+          }
           visible={props.visible}
           onOpenTask={onSelectTask}
           onOpenThread={onSelectThread}

@@ -287,6 +287,18 @@ function GoatBotHeaderTitle(props: {
   );
 }
 
+/** The bot's face as it is now, for the chat's header chip on Android, which draws its own. */
+export function GoatBotChipFace(props: {
+  readonly activity: GoatBotFaceInput["activity"];
+  /** A member bot's conversation; the main bot's when absent. */
+  readonly conversation?: Parameters<typeof useMobileGoatBotFace>[1];
+  /** The bot's profile avatar, or a member's initial. */
+  readonly emoji?: string | null | undefined;
+}) {
+  const face = useMobileGoatBotFace(props.activity, props.conversation);
+  return <GoatBotFaceAvatar state={face.state} size={24} emoji={props.emoji} />;
+}
+
 /** Puts the main bot's face in the native header title (iOS; Android hides this header). */
 export function GoatBotHeaderFace(props: {
   readonly activity: GoatBotFaceInput["activity"];

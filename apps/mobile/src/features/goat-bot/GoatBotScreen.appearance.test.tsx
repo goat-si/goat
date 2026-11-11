@@ -385,7 +385,15 @@ it("puts the bot's model in the composer, opening a member's menu even when it c
     items: [],
     select,
   };
-  const member = await render(<GoatBotScreen visible />);
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+    avatar: null,
+  } as unknown as import("@goat/contracts").BotProfile;
+  const member = await render(<GoatBotScreen visible member={scout} />);
   const memberPill = member.container.querySelector('[aria-label="Model"]');
   expect(memberPill?.textContent).toBe("claude-opus");
   expect(memberPill?.getAttribute("data-opens")).toBe("true");

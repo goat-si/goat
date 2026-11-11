@@ -21,12 +21,16 @@ export interface GoatBotModelPillMenu {
   readonly select: (id: string) => void;
 }
 
-/** The chat's model menu: a member's own, else the main bot's; null while neither is known. */
+/**
+ * The chat's model menu: a member chat's own, else the main bot's; null while it is not known. A
+ * member chat never falls back to the main bot's menu, whose choices would change the main bot.
+ */
 export function goatBotModelPillMenu(
   member: MobileGoatBotMemberModelMenu | null,
   main: MainMenu | null,
+  memberChat: boolean,
 ): GoatBotModelPillMenu | null {
-  if (member !== null) return { ...member, opens: true };
+  if (memberChat) return member === null ? null : { ...member, opens: true };
   if (main === null) return null;
   return {
     ...main,

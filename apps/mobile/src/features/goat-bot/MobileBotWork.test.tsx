@@ -8,8 +8,9 @@ import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 
+const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
 vi.mock("react-native", () => ({
-  Platform: { OS: "ios" },
+  Platform: nativePlatform,
   Switch: ({
     value,
     disabled,
@@ -230,6 +231,7 @@ async function render(
   taskCard?: ReactNode,
   turnsWaiting: readonly string[] = [],
   chatTasks: ReadonlyArray<GoatBotTaskCard> = [],
+  chipFace?: ReactNode,
 ) {
   if (!root) root = createRoot(container);
   await act(async () =>
@@ -240,6 +242,7 @@ async function render(
         taskCard={taskCard}
         turnsWaiting={turnsWaiting}
         chatTasks={chatTasks}
+        chipFace={chipFace}
         onOpenTask={() => {}}
         onOpenThread={state.openThread}
       />,
@@ -617,4 +620,19 @@ it("offers the Work sheet, and with it Open the chat, only on the chat screen", 
     [...container.querySelectorAll("button")].some((button) => button.textContent === "Work"),
   ).toBe(false);
   expect(container.textContent).not.toContain("waiting for your answer in the chat");
+});
+
+it("shows the bot's face in the chip Android draws above the chat", async () => {
+  reset();
+  nativePlatform.OS = "android";
+  try {
+    await render(undefined, undefined, [], [], <i data-chip-face="S" />);
+    const chip = [...container.querySelectorAll("button")].find(
+      (item) => item.getAttribute("aria-label") === "GOAT Bot",
+    );
+    expect(chip).toBeDefined();
+    expect(chip?.querySelector("[data-chip-face]")).toBeTruthy();
+  } finally {
+    nativePlatform.OS = "ios";
+  }
 });
