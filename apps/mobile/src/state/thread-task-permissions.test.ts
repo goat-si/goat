@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
   projection: null as OrchestrationV2ThreadProjection | null,
   pendingRequests: { approvals: [], userInputs: [] } as PendingThreadRequests,
   enqueue: vi.fn(async () => undefined),
+  sideChat: vi.fn(async (_input: { readonly text: string }) => false),
   clearDraft: vi.fn(),
   approve: vi.fn(),
   answer: vi.fn(),
@@ -73,7 +74,7 @@ vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
 vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: vi.fn() }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid" }));
 vi.mock("../features/threads/useSideChatCommand", () => ({
-  useSideChatCommand: () => async () => false,
+  useSideChatCommand: () => state.sideChat,
 }));
 vi.mock("./queued-run-edit", () => ({
   useQueuedRunEdit: () => null,
@@ -202,6 +203,7 @@ beforeEach(() => {
     userInputs: [],
   };
   vi.clearAllMocks();
+  state.sideChat.mockReset().mockResolvedValue(false);
   state.approve.mockResolvedValue(AsyncResult.success(undefined));
   state.answer.mockResolvedValue(AsyncResult.success(undefined));
   state.feedback.mockResolvedValue(AsyncResult.success({ feedbackId: "feedback" }));
@@ -244,6 +246,21 @@ describe("mobile task permissions", () => {
     });
     expect(state.enqueue).not.toHaveBeenCalled();
     expect(state.clearDraft).toHaveBeenCalledOnce();
+  });
+
+  it("opens a typed /side as a side chat during a pending approval and leaves the approval pending", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.draft = { ...state.draft, text: "/side what changed?" };
+    state.sideChat.mockResolvedValueOnce(true);
+    const beforeDispatch = vi.fn(async () => "responded" as const);
+    expect(await useThreadComposerState().onSendMessage(undefined, beforeDispatch)).toBeNull();
+    expect(state.sideChat).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "/side what changed?" }),
+    );
+    expect(beforeDispatch).not.toHaveBeenCalled();
+    expect(state.approve).not.toHaveBeenCalled();
+    expect(state.enqueue).not.toHaveBeenCalled();
+    expect(state.clearDraft).not.toHaveBeenCalled();
   });
 
   it("preserves a draft changed during an approval reply and never sends it to the parent", async () => {
