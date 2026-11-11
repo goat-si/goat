@@ -62,6 +62,34 @@ export const unsentDeliveryQueries = (
   };
 };
 
+/** The rows a claim takes, under the ordering rules of claimDueDeliveries. */
+export const dueDeliverySelection = (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly now: string;
+    readonly limit: number;
+    readonly receiptsOnly?: boolean | undefined;
+  },
+) => sql`SELECT due.delivery_id FROM channel_outbox due
+          WHERE due.state IN ('pending', 'delivering') AND due.state = 'pending'
+            AND due.next_attempt_at <= ${input.now}
+            AND (${input.receiptsOnly === undefined ? 1 : 0} = 1
+              OR (${input.receiptsOnly === true ? 1 : 0} = 1 AND due.cause_key = 'reply:' || due.input_id)
+              OR (${input.receiptsOnly === false ? 1 : 0} = 1 AND due.cause_key != 'reply:' || COALESCE(due.input_id, '')))
+            AND (due.cause_key = 'reply:' || due.input_id OR (
+              ((due.task_id IS NULL AND (due.input_id IS NULL OR EXISTS (
+                SELECT 1 FROM channel_inbox rejected WHERE rejected.input_id = due.input_id
+                  AND rejected.state = 'rejected'))) OR EXISTS (
+                SELECT 1 FROM channel_outbox receipt WHERE receipt.cause_key = 'reply:' ||
+                  COALESCE(due.input_id, (SELECT json_extract(t.task_json, '$.originInputId')
+                    FROM channel_tasks t WHERE t.task_id = due.task_id))
+                  AND receipt.state IN ('delivered', 'failed', 'ambiguous')))
+              AND NOT EXISTS (SELECT 1 FROM channel_outbox earlier
+                WHERE earlier.task_id = due.task_id AND earlier.destination_kind = due.destination_kind
+                  AND earlier.state IN ('pending', 'delivering') AND earlier.rowid < due.rowid)))
+          ORDER BY CASE WHEN due.cause_key = 'reply:' || due.input_id THEN 0 ELSE 1 END,
+            due.created_at, due.rowid LIMIT ${input.limit}`;
+
 /** The outbox operations: claiming due rows, recording how their sends went, and recovery. */
 export interface ChannelDeliveryLedgerOps extends UnsentDeliveryRelease {
   /**
@@ -195,26 +223,7 @@ export const deliveryLedger = (
                   readonly destination_kind: string;
                 }>`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
         send_started_at = NULL, updated_at = ${input.now}
-        WHERE delivery_id IN (
-          SELECT due.delivery_id FROM channel_outbox due
-          WHERE due.state IN ('pending', 'delivering') AND due.state = 'pending'
-            AND due.next_attempt_at <= ${input.now}
-            AND (${input.receiptsOnly === undefined ? 1 : 0} = 1
-              OR (${input.receiptsOnly === true ? 1 : 0} = 1 AND due.cause_key = 'reply:' || due.input_id)
-              OR (${input.receiptsOnly === false ? 1 : 0} = 1 AND due.cause_key != 'reply:' || COALESCE(due.input_id, '')))
-            AND (due.cause_key = 'reply:' || due.input_id OR (
-              ((due.task_id IS NULL AND (due.input_id IS NULL OR EXISTS (
-                SELECT 1 FROM channel_inbox rejected WHERE rejected.input_id = due.input_id
-                  AND rejected.state = 'rejected'))) OR EXISTS (
-                SELECT 1 FROM channel_outbox receipt WHERE receipt.cause_key = 'reply:' ||
-                  COALESCE(due.input_id, (SELECT json_extract(t.task_json, '$.originInputId')
-                    FROM channel_tasks t WHERE t.task_id = due.task_id))
-                  AND receipt.state IN ('delivered', 'failed', 'ambiguous')))
-              AND NOT EXISTS (SELECT 1 FROM channel_outbox earlier
-                WHERE earlier.task_id = due.task_id AND earlier.destination_kind = due.destination_kind
-                  AND earlier.state IN ('pending', 'delivering') AND earlier.rowid < due.rowid)))
-          ORDER BY CASE WHEN due.cause_key = 'reply:' || due.input_id THEN 0 ELSE 1 END,
-            due.created_at, due.rowid LIMIT ${limit})
+        WHERE delivery_id IN (${dueDeliverySelection(sql, { ...input, limit })})
         RETURNING rowid AS row_order, delivery_id, message_json, attempts, cause_key, input_id,
           task_id, kind, destination_kind`;
                 const claimed = yield* Effect.forEach(

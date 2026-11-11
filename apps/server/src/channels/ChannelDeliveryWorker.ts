@@ -24,15 +24,12 @@ import * as Queue from "effect/Queue";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelWake from "./ChannelWake.ts";
+import {
+  ANSWER_DECISION_ATTEMPTS,
+  ANSWER_DECISION_MAX_WAIT_SECONDS,
+  MAX_ATTEMPTS,
+} from "./channelDeliveryAttempts.ts";
 
-/** With exponential backoff capped at five minutes, ten attempts span about thirteen minutes. */
-const MAX_ATTEMPTS = 10;
-/**
- * An answer decision is a local write that nothing else corrects, so it keeps retrying on the
- * normal path for longer: more attempts, up to ten minutes apart, before it fails.
- */
-export const ANSWER_DECISION_ATTEMPTS = MAX_ATTEMPTS + 6;
-const ANSWER_DECISION_MAX_WAIT_SECONDS = 600;
 /** Rows one pass may send before it yields to the rest of the loop. */
 const MAX_PER_PASS = 50;
 /** A failed hand-over's release is retried this often, at most this many times, in batches. */

@@ -23,7 +23,7 @@ import { buildGoatBotTimeline } from "../../../../packages/client-runtime/src/go
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { ANSWER_DECISION_ATTEMPTS } from "./ChannelDeliveryWorker.ts";
+import { ANSWER_DECISION_ATTEMPTS } from "./channelDeliveryAttempts.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
