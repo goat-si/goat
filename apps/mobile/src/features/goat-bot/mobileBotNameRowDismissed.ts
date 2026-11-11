@@ -4,18 +4,28 @@ import { useSyncExternalStore } from "react";
 
 import { whenProtectedDataAvailable } from "../../lib/protectedData";
 
-// Bots whose name row the person dismissed on this device. A dismissal hides the row at once; if
-// storing it fails, nothing says so and the row comes back after a restart.
+// Bots whose name row the person dismissed on this device, newest last and at most 200. A
+// dismissal hides the row at once; if storing it fails, nothing says so and the row comes back
+// after a restart. One write runs at a time and always stores the latest list.
 const storageKey = "goat.bot-name-row-dismissed.v1";
+const MAX_KEPT = 200;
 
-let dismissed: ReadonlySet<string> | null = null;
+let dismissed: ReadonlyArray<string> | null = null;
 let loading: Promise<void> | null = null;
+let writing = false;
+let unwritten = false;
 const listeners = new Set<() => void>();
 const keyOf = (environmentId: EnvironmentId, botId: string) =>
   JSON.stringify([environmentId, botId]);
 
 function emit() {
   for (const listener of listeners) listener();
+}
+
+/** Adds keys as the newest, once each, and keeps the newest 200. */
+function withNewest(list: ReadonlyArray<string>, keys: ReadonlyArray<string>) {
+  const added = new Set(keys);
+  return [...list.filter((key) => !added.has(key)), ...keys].slice(-MAX_KEPT);
 }
 
 function load() {
@@ -30,8 +40,26 @@ function load() {
     } catch {
       // Unreadable storage reads as nothing dismissed.
     }
-    dismissed = new Set([...stored, ...(dismissed ?? [])]);
+    dismissed = withNewest(stored, dismissed ?? []);
     emit();
+  })();
+}
+
+function persist() {
+  unwritten = true;
+  if (writing) return;
+  writing = true;
+  void (async () => {
+    while (unwritten) {
+      unwritten = false;
+      try {
+        await whenProtectedDataAvailable();
+        await SecureStore.setItemAsync(storageKey, JSON.stringify(dismissed ?? []));
+      } catch {
+        // Hidden for this session; stated in the PR as a limit.
+      }
+    }
+    writing = false;
   })();
 }
 
@@ -51,20 +79,12 @@ export function useBotNameRowDismissed(
       ? null
       : environmentId === null || botId === null
         ? false
-        : dismissed.has(keyOf(environmentId, botId)),
+        : dismissed.includes(keyOf(environmentId, botId)),
   );
 }
 
 export function dismissBotNameRow(environmentId: EnvironmentId, botId: string): void {
-  dismissed = new Set([...(dismissed ?? []), keyOf(environmentId, botId)]);
+  dismissed = withNewest(dismissed ?? [], [keyOf(environmentId, botId)]);
   emit();
-  const next = JSON.stringify([...dismissed]);
-  void (async () => {
-    try {
-      await whenProtectedDataAvailable();
-      await SecureStore.setItemAsync(storageKey, next);
-    } catch {
-      // Hidden for this session; stated in the PR as a limit.
-    }
-  })();
+  persist();
 }

@@ -39,6 +39,29 @@ const state = vi.hoisted(() => ({
   },
   requests: 0,
   newBotRow: null as unknown,
+  // Where the person is: the navigation state, the app's state, the bot's environment, and the
+  // environments the app still has.
+  navState: { index: 0, routes: [{ key: "home", name: "Home" }] } as {
+    index: number;
+    routes: Array<{ key: string; name: string; params?: object }>;
+  },
+  appState: "active",
+  rosterError: null as string | null,
+  refEnvironment: null as string | null,
+  environments: null as null | string[],
+}));
+vi.mock("@react-navigation/native", () => ({
+  useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
+}));
+vi.mock("./mobileGoatBotRefEnvironment", () => ({
+  currentGoatBotRefEnvironment: () => state.refEnvironment,
+}));
+vi.mock("../../state/environments", () => ({
+  useEnvironments: () => ({
+    presentationById: new Map(
+      (state.environments ?? [state.roster.environmentId]).map((id) => [id, {}]),
+    ),
+  }),
 }));
 vi.mock("react-native", () => ({
   View: ({
@@ -55,6 +78,11 @@ vi.mock("react-native", () => ({
   Alert: { alert: state.alert },
   AccessibilityInfo: { announceForAccessibility: vi.fn() },
   Platform: { OS: "ios" },
+  AppState: {
+    get currentState() {
+      return state.appState;
+    },
+  },
 }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
@@ -67,19 +95,26 @@ vi.mock("./useMobileBotRoster", () => ({
     supportsMembers: true,
     environmentId: state.roster.environmentId,
     slackEnabled: false,
-    error: null,
     listedBots: state.roster.listedBots,
     refreshBots: state.roster.refreshBots,
+    retryBots: state.roster.refreshBots,
+    error: state.rosterError,
   }),
 }));
 // The list itself is the view's; this stand-in keeps what the panel gives it and draws its New bot row.
 vi.mock("./MobileBotRosterView", () => ({
   MobileBotRosterView: (props: {
     members?: Record<string, unknown>;
+    header?: React.ReactNode;
     newBotRow?: React.ReactNode;
   }) => {
     state.members = props.members ?? null;
-    return <>{props.newBotRow}</>;
+    return (
+      <>
+        {props.header}
+        {props.newBotRow}
+      </>
+    );
   },
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => state.manage }));
@@ -239,6 +274,11 @@ async function newBotRoster(options: { visible?: boolean; listed?: Array<object>
   state.roster.environmentId = `env-new-${environments}`;
   state.roster.listedBots = options.listed === undefined ? [] : options.listed;
   state.roster.refreshBots = vi.fn();
+  state.navState = { index: 0, routes: [{ key: "home", name: "Home" }] };
+  state.appState = "active";
+  state.refEnvironment = state.roster.environmentId;
+  state.environments = null;
+  state.rosterError = null;
   const answers: Array<(value: object | string) => void> = [];
   state.manage.create.mockReset();
   state.manage.create.mockImplementation(
@@ -278,8 +318,11 @@ it("creates a bot with one tap under the first free generated name, shows it cre
       stored("hid", "New bot 3", { hidden: true }),
     ],
   });
-  await view.tap();
-  await view.tap();
+  // Two taps in the same frame: the second finds the slot taken.
+  await act(async () => {
+    view.members().onNewBot();
+    view.members().onNewBot();
+  });
   expect(state.manage.create).toHaveBeenCalledOnce();
   expect(state.manage.create).toHaveBeenCalledWith(
     { name: "New bot 2", avatar: null, purpose: "" },
@@ -296,19 +339,82 @@ it("creates a bot with one tap under the first free generated name, shows it cre
   await view.unmount();
 });
 
-it("opens nothing when the roster is no longer on screen, and the created bot stands in until the list has it", async () => {
+it("opens nothing when the person has moved on by the time the create answers, and the bot is in the list", async () => {
+  const moves: Array<[string, () => void]> = [
+    // Split layout, the roster still on screen: another chat chosen in the detail pane.
+    [
+      "another chat in the detail pane",
+      () => {
+        state.navState = {
+          index: 0,
+          routes: [{ key: "home", name: "Home", params: { detail: "bot:scout" } }],
+        };
+      },
+    ],
+    // Phone: a route pushed over the roster, its transition still running.
+    [
+      "a route pushed",
+      () => {
+        state.navState = {
+          index: 1,
+          routes: [
+            { key: "home", name: "Home" },
+            { key: "thread-1", name: "Thread" },
+          ],
+        };
+      },
+    ],
+    [
+      "the app in the background",
+      () => {
+        state.appState = "background";
+      },
+    ],
+    [
+      "another bot environment",
+      () => {
+        state.refEnvironment = "env-other";
+      },
+    ],
+  ];
+  for (const [, move] of moves) {
+    const view = await newBotRoster();
+    await view.tap();
+    move();
+    await view.answer(stored("research", "New bot"));
+    expect(view.opened).not.toHaveBeenCalled();
+    await view.unmount();
+  }
+});
+
+it("frees New bot as soon as the create answers, keeps the created bot's row until the list has it or it is dismissed, and offers the list's retry", async () => {
   const view = await newBotRoster();
   await view.tap();
-  await view.draw(false);
+  await view.answer(stored("research", "New bot"));
+  // The list read failed: the created bot keeps its row, and New bot is free again.
+  expect(state.roster.refreshBots).toHaveBeenCalledOnce();
+  expect(view.members().canCreate).toBe(true);
+  expect(view.container.textContent).toContain("New bot");
+  await view.press("Dismiss");
+  expect(view.container.textContent).toBe("");
+  await view.unmount();
+  state.rosterError = "Couldn't read the bot list.";
+  const failed = await newBotRoster();
+  state.rosterError = "Couldn't read the bot list.";
+  await failed.draw();
+  await failed.press("Retry");
+  expect(state.roster.refreshBots).toHaveBeenCalledOnce();
+  await failed.unmount();
+});
+
+it("forgets a create when its environment leaves the app", async () => {
+  const view = await newBotRoster();
+  await view.tap();
+  state.environments = [];
+  await view.draw();
   await view.answer(stored("research", "New bot"));
   expect(view.opened).not.toHaveBeenCalled();
-  // One list read for the created bot; until it lands the created bot keeps its row here.
-  expect(state.roster.refreshBots).toHaveBeenCalledOnce();
-  expect(view.container.textContent).toContain("New bot");
-  state.roster.listedBots = [stored("research", "New bot")];
-  await view.draw(true);
   expect(view.container.textContent).toBe("");
-  expect(view.members().canCreate).toBe(true);
   await view.unmount();
 });
 

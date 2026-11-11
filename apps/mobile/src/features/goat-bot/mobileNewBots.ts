@@ -3,8 +3,9 @@ import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { uuidv4 } from "../../lib/uuid";
 import { generatedBotName } from "./mobileNewBotNames";
 
-// One-tap New bot. The create lives here, above the roster, so it outlives the list's mount: one
-// per environment, its request id and name kept for a retry, its bot kept until the list has it.
+// One-tap New bot. A create lives here, above the roster, so it outlives the list's mount: one
+// per environment while it runs or waits to be retried. A created bot frees the slot at once and
+// keeps a row until the list holds it or the person dismisses it.
 
 export type NewBotOperation =
   | { readonly phase: "creating"; readonly clientRequestId: string; readonly name: string }
@@ -13,117 +14,144 @@ export type NewBotOperation =
       readonly clientRequestId: string;
       readonly name: string;
       readonly failure: string;
-    }
-  | {
-      readonly phase: "created";
-      readonly clientRequestId: string;
-      readonly name: string;
-      readonly bot: BotProfile;
     };
 
 /** Sends the create; resolves to the bot, or to the message to show. */
 export type CreateNewBot = (name: string, clientRequestId: string) => Promise<BotProfile | string>;
 
-const operations = new Map<EnvironmentId, NewBotOperation>();
-const listeners = new Set<() => void>();
-let opener: {
-  readonly environmentId: EnvironmentId;
-  readonly open: (bot: BotProfile) => void;
-} | null = null;
+/**
+ * Opens the created bot's chat if the person is still where they tapped; it decides from what is
+ * true when the server answers.
+ */
+export type OpenIfStillHere = (bot: BotProfile) => void;
 
-function set(environmentId: EnvironmentId, next: NewBotOperation | null) {
-  if (next === null) operations.delete(environmentId);
-  else operations.set(environmentId, next);
+interface Slot {
+  readonly operation: NewBotOperation | null;
+  readonly created: ReadonlyArray<BotProfile>;
+}
+
+const EMPTY: Slot = { operation: null, created: [] };
+const slots = new Map<EnvironmentId, Slot>();
+const intents = new Map<EnvironmentId, OpenIfStillHere>();
+const listeners = new Set<() => void>();
+
+function set(environmentId: EnvironmentId, next: Slot) {
+  if (next.operation === null && next.created.length === 0) slots.delete(environmentId);
+  else slots.set(environmentId, next);
   for (const listener of listeners) listener();
 }
+const slotOf = (environmentId: EnvironmentId) => slots.get(environmentId) ?? EMPTY;
 
 export function subscribeNewBots(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
-export function newBotOperation(environmentId: EnvironmentId | null): NewBotOperation | null {
-  return environmentId === null ? null : (operations.get(environmentId) ?? null);
-}
-
-/**
- * The roster, while it is the visible screen for this environment, opens the new chat when the
- * create answers. Registered only then; nothing opens once it is hidden or shows another one.
- */
-export function registerNewBotOpener(
-  environmentId: EnvironmentId,
-  open: (bot: BotProfile) => void,
-): () => void {
-  const entry = { environmentId, open };
-  opener = entry;
-  return () => {
-    if (opener === entry) opener = null;
-  };
+export function newBotSlot(environmentId: EnvironmentId | null): Slot {
+  return environmentId === null ? EMPTY : slotOf(environmentId);
 }
 
 async function run(environmentId: EnvironmentId, create: CreateNewBot) {
-  const sent = operations.get(environmentId);
+  const sent = slotOf(environmentId).operation;
   if (sent?.phase !== "creating") return;
   const { clientRequestId, name } = sent;
   const result = await create(name, clientRequestId).catch((error: unknown) =>
     error instanceof Error ? error.message : "Couldn't create a bot. Try again.",
   );
-  // A dismissed or newer operation owns the slot now.
-  if (operations.get(environmentId) !== sent) return;
+  // A dismissed, forgotten or newer operation owns the slot now.
+  const slot = slotOf(environmentId);
+  if (slot.operation !== sent) return;
   if (typeof result === "string") {
-    set(environmentId, { phase: "failed", clientRequestId, name, failure: result });
+    set(environmentId, {
+      ...slot,
+      operation: { phase: "failed", clientRequestId, name, failure: result },
+    });
     return;
   }
+  const open = intents.get(environmentId);
+  intents.delete(environmentId);
   // A retry can return a bot already deleted elsewhere: nothing opens; the list shows it there.
   if (result.state === "deleted") {
-    set(environmentId, null);
+    set(environmentId, { ...slot, operation: null });
     return;
   }
-  set(environmentId, { phase: "created", clientRequestId, name, bot: result });
-  if (opener?.environmentId === environmentId) opener.open(result);
+  set(environmentId, {
+    operation: null,
+    created: [...slot.created.filter((bot) => bot.botId !== result.botId), result],
+  });
+  open?.(result);
 }
 
 /**
  * One tap: claims the environment's slot at once, so a second tap while one create runs does
- * nothing, and sends the create. False when one is already under way or waits to be dismissed.
+ * nothing, and sends the create. False when one is under way or waits to be retried.
  */
 export function startNewBot(
   environmentId: EnvironmentId,
   members: ReadonlyArray<Pick<BotProfile, "name">>,
   create: CreateNewBot,
+  open: OpenIfStillHere,
 ): boolean {
-  if (operations.has(environmentId)) return false;
+  const slot = slotOf(environmentId);
+  if (slot.operation !== null) return false;
+  intents.set(environmentId, open);
+  // Bots created a moment ago may not be in the list yet; their names are taken too.
   set(environmentId, {
-    phase: "creating",
-    clientRequestId: uuidv4(),
-    name: generatedBotName(members),
+    ...slot,
+    operation: {
+      phase: "creating",
+      clientRequestId: uuidv4(),
+      name: generatedBotName([...members, ...slot.created]),
+    },
   });
   void run(environmentId, create);
   return true;
 }
 
 /** Sends a failed create again with the same request id and name, so the server answers once. */
-export function retryNewBot(environmentId: EnvironmentId, create: CreateNewBot): void {
-  const failed = operations.get(environmentId);
+export function retryNewBot(
+  environmentId: EnvironmentId,
+  create: CreateNewBot,
+  open: OpenIfStillHere,
+): void {
+  const slot = slotOf(environmentId);
+  const failed = slot.operation;
   if (failed?.phase !== "failed") return;
+  intents.set(environmentId, open);
   set(environmentId, {
-    phase: "creating",
-    clientRequestId: failed.clientRequestId,
-    name: failed.name,
+    ...slot,
+    operation: { phase: "creating", clientRequestId: failed.clientRequestId, name: failed.name },
   });
   void run(environmentId, create);
 }
 
 /** Ends a failed create; a later tap is a new request. */
 export function dismissNewBot(environmentId: EnvironmentId): void {
-  if (operations.get(environmentId)?.phase === "failed") set(environmentId, null);
+  const slot = slotOf(environmentId);
+  if (slot.operation?.phase === "failed") set(environmentId, { ...slot, operation: null });
 }
 
-/** The roster's list now holds the created bot, in any group: its own row takes over. */
-export function settleListedNewBot(
+/** Removes a created bot's row before the list has it. */
+export function dismissCreatedBot(environmentId: EnvironmentId, botId: string): void {
+  const slot = slotOf(environmentId);
+  set(environmentId, { ...slot, created: slot.created.filter((bot) => bot.botId !== botId) });
+}
+
+/** The roster's list now holds these bots, in any group: their own rows take over. */
+export function settleListedNewBots(
   environmentId: EnvironmentId,
   listedIds: ReadonlySet<string>,
 ): void {
-  const created = operations.get(environmentId);
-  if (created?.phase === "created" && listedIds.has(created.bot.botId)) set(environmentId, null);
+  const slot = slotOf(environmentId);
+  const created = slot.created.filter((bot) => !listedIds.has(bot.botId));
+  if (created.length !== slot.created.length) set(environmentId, { ...slot, created });
+}
+
+/** Environments the app no longer has (removed, or signed out): their creates are forgotten. */
+export function forgetNewBots(keep: ReadonlySet<string>): void {
+  for (const environmentId of slots.keys()) {
+    if (keep.has(environmentId)) continue;
+    intents.delete(environmentId);
+    set(environmentId, EMPTY);
+  }
 }

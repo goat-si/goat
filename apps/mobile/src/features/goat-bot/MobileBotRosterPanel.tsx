@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelTaskId } from "@goat/contracts";
-import { Alert, Text, View } from "react-native";
+import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
+import { Alert, AppState, Pressable, Text, View } from "react-native";
+import { useEnvironments } from "../../state/environments";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { MobileBotRosterView } from "./MobileBotRosterView";
+import { currentGoatBotRefEnvironment } from "./mobileGoatBotRefEnvironment";
 import {
+  dismissCreatedBot,
   dismissNewBot,
-  newBotOperation,
-  registerNewBotOpener,
+  forgetNewBots,
+  newBotSlot,
   retryNewBot,
-  settleListedNewBot,
+  settleListedNewBots,
   startNewBot,
   subscribeNewBots,
   type CreateNewBot,
+  type OpenIfStillHere,
 } from "./mobileNewBots";
 import { MobileNewBotStatus } from "./MobileNewBotStatus";
 import { useMobileBotRoster } from "./useMobileBotRoster";
@@ -33,33 +38,44 @@ export function MobileBotRoster(props: {
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [editing, setEditing] = useState<BotProfile | null>(null);
   const environmentId = roster.environmentId;
-  const operation = useSyncExternalStore(subscribeNewBots, () => newBotOperation(environmentId));
+  const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
+  const operation = slot.operation;
   const create: CreateNewBot = (name, clientRequestId) =>
     manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
   const { onOpenBot } = props;
-  const visible = props.visible !== false;
-  // oxlint-disable-next-line goat/react-effect-budget -- A create answers after the tap; only a roster still on screen for that environment opens its chat.
+  const navigation = useNavigation();
+  // Where the person is, read at the tap and again when the create answers: the new chat opens only
+  // if nothing changed in between and the app is in front. One comparison; nothing watches.
+  const openIfStillHere = (): OpenIfStillHere => {
+    const tapped = whereNow(navigation);
+    return (bot) => {
+      if (AppState.currentState === "active" && whereNow(navigation) === tapped)
+        onOpenBot({ kind: "member", profile: bot });
+    };
+  };
+  const { presentationById } = useEnvironments();
+  const environmentKeys = [...presentationById.keys()].sort().join(" ");
+  // oxlint-disable-next-line goat/react-effect-budget -- A removed environment, or signing out, ends that environment's create and its rows.
   useEffect(() => {
-    if (!visible || environmentId === null) return;
-    return registerNewBotOpener(environmentId, (bot) =>
-      onOpenBot({ kind: "member", profile: bot }),
-    );
-  }, [visible, environmentId, onOpenBot]);
+    forgetNewBots(new Set(environmentKeys === "" ? [] : environmentKeys.split(" ")));
+  }, [environmentKeys]);
   const listed = roster.listedBots;
-  const createdId = operation?.phase === "created" ? operation.bot.botId : null;
   const refreshBots = roster.refreshBots;
-  const refreshedFor = useRef<string | null>(null);
-  // oxlint-disable-next-line goat/react-effect-budget -- The created bot's own row arrives with the next list read; until then its status row stands in.
+  const refreshedFor = useRef(new Set<string>());
+  const created = slot.created;
+  // oxlint-disable-next-line goat/react-effect-budget -- A created bot's own row arrives with the next list read; until then its row here stands in.
   useEffect(() => {
-    if (environmentId === null || createdId === null || listed === null) return;
+    if (environmentId === null || listed === null || created.length === 0) return;
     const ids = new Set(listed.map((bot) => bot.botId));
-    if (ids.has(createdId)) settleListedNewBot(environmentId, ids);
-    else if (refreshBots !== null && refreshedFor.current !== createdId) {
-      // One read per created bot; a list that still lacks it keeps the status row and its error.
-      refreshedFor.current = createdId;
-      refreshBots();
-    }
-  }, [environmentId, createdId, listed, refreshBots]);
+    settleListedNewBots(environmentId, ids);
+    // One list read per created bot; a read that fails or still lacks it leaves the row and the list's error.
+    const unlisted = created.filter(
+      (bot) => !ids.has(bot.botId) && !refreshedFor.current.has(bot.botId),
+    );
+    if (unlisted.length === 0 || refreshBots === null) return;
+    for (const bot of unlisted) refreshedFor.current.add(bot.botId);
+    refreshBots();
+  }, [environmentId, listed, created, refreshBots]);
   const askAbout = (entry: BotRosterEntry) => {
     const bot = entry.profile;
     if (bot === null) return;
@@ -95,7 +111,16 @@ export function MobileBotRoster(props: {
           <>
             {props.header}
             {roster.error ? (
-              <Text className="px-4 text-danger-foreground">{roster.error}</Text>
+              <View className="flex-row items-center gap-2 px-4">
+                <Text className="flex-1 text-danger-foreground">{roster.error}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={roster.retryBots}
+                  className="min-h-[44px] min-w-[44px] justify-center px-2"
+                >
+                  <Text className="font-goat-medium text-primary-text">Retry</Text>
+                </Pressable>
+              </View>
             ) : null}
           </>
         }
@@ -110,7 +135,7 @@ export function MobileBotRoster(props: {
                 canCreate: manage.canCreate && listed !== null && operation === null,
                 onNewBot: () => {
                   if (environmentId !== null && listed !== null)
-                    startNewBot(environmentId, listed, create);
+                    startNewBot(environmentId, listed, create, openIfStillHere());
                 },
                 onLongPressBot: askAbout,
                 canRestore: manage.canManage,
@@ -130,15 +155,14 @@ export function MobileBotRoster(props: {
         onUnknownBot={roster.refreshBots ?? undefined}
         visible={props.visible}
         newBotRow={
-          operation !== null && environmentId !== null ? (
+          environmentId !== null && (operation !== null || created.length > 0) ? (
             <MobileNewBotStatus
               operation={operation}
-              onRetry={() => retryNewBot(environmentId, create)}
+              created={created}
+              onRetry={() => retryNewBot(environmentId, create, openIfStillHere())}
               onDismiss={() => dismissNewBot(environmentId)}
-              onOpen={() =>
-                operation.phase === "created" &&
-                onOpenBot({ kind: "member", profile: operation.bot })
-              }
+              onOpen={(bot) => onOpenBot({ kind: "member", profile: bot })}
+              onDismissCreated={(bot) => dismissCreatedBot(environmentId, bot.botId)}
             />
           ) : null
         }
@@ -155,4 +179,26 @@ export function MobileBotRoster(props: {
       ) : null}
     </View>
   );
+}
+
+type Navigation = Omit<NavigationProp<ParamListBase>, "getParent"> & {
+  getParent: () => Navigation | undefined;
+};
+type Route = { readonly key: string; readonly params?: object; readonly state?: State };
+type State = { readonly index?: number; readonly routes: ReadonlyArray<Route> };
+
+/** The focused route at every level, with its params, and the chosen bot's environment. */
+function whereNow(navigation: ReturnType<typeof useNavigation>): string {
+  let root = navigation as unknown as Navigation;
+  for (let parent = root.getParent(); parent !== undefined; parent = parent.getParent())
+    root = parent;
+  const focused: Array<[string, object | null]> = [];
+  let state: State | undefined = root.getState() as State;
+  while (state !== undefined) {
+    const route: Route | undefined = state.routes[state.index ?? 0];
+    if (route === undefined) break;
+    focused.push([route.key, route.params ?? null]);
+    state = route.state;
+  }
+  return JSON.stringify([focused, currentGoatBotRefEnvironment()]);
 }
