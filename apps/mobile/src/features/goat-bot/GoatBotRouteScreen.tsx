@@ -1,8 +1,10 @@
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { ChannelTaskId } from "@goat/contracts";
 import { goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
+import { useThreadShell } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
@@ -10,6 +12,7 @@ import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotMember } from "./useMobileBotRoster";
 import { useMobileBotManage } from "./useMobileBotManage";
 import { GoatBotScreen } from "./GoatBotScreen";
+import { useGoatBotVisitSnapshot } from "./useGoatBotVisitSnapshot";
 
 export function GoatBotRouteScreen({
   route,
@@ -24,13 +27,25 @@ export function GoatBotRouteScreen({
   const threadId = botRef?.threadId;
   const taskId = route.params?.taskId;
   const unreadAt = preview?.unread ? preview.at : null;
+  const mainChat = !taskId && botId === undefined;
+  const shell = useThreadShell(
+    environmentId && threadId ? scopeThreadRef(environmentId, threadId) : null,
+  );
+  // Where the person had read up to when they opened the chat, taken before the visit moves it.
+  const readSnapshot = useGoatBotVisitSnapshot({
+    focused: focused && mainChat,
+    conversation: environmentId && threadId ? `${environmentId}:${threadId}` : null,
+    loaded: shell !== null && preview !== null,
+    lastVisitedAt: shell?.lastVisitedAt ?? null,
+    newestAt: preview?.at ?? null,
+  });
   const visit = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while the main conversation is visible.
   useEffect(() => {
-    if (focused && !taskId && botId === undefined && environmentId && threadId && unreadAt) {
+    if (focused && mainChat && environmentId && threadId && unreadAt && readSnapshot) {
       void visit({ environmentId, input: { threadId, visitedAt: unreadAt } });
     }
-  }, [focused, taskId, botId, environmentId, threadId, unreadAt, visit]);
+  }, [focused, mainChat, environmentId, threadId, unreadAt, readSnapshot, visit]);
   // A named member never falls back to the main bot's conversation.
   if (botId !== undefined && member === null)
     return (
@@ -51,6 +66,7 @@ export function GoatBotRouteScreen({
           : undefined
       }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}
+      readSnapshot={mainChat ? readSnapshot : null}
     />
   );
 }

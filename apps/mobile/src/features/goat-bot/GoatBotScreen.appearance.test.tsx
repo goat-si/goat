@@ -30,7 +30,10 @@ vi.mock("./MobileBotWork", () => ({
     return <section aria-label="Task header">{props.taskCard}</section>;
   },
 }));
-const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
+const list = vi.hoisted(() => ({
+  props: null as Record<string, unknown> | null,
+  scrollToIndex: vi.fn(),
+}));
 vi.mock("./GoatBotFace", () => ({
   GoatBotHeaderFace: (props: { title: string; onPress?: () => void }) =>
     props.onPress ? (
@@ -113,12 +116,14 @@ vi.mock("react-native", () => ({
     children,
     style,
     accessibilityLabel,
+    onPress,
   }: {
     children?: ReactNode;
     style?: unknown;
     accessibilityLabel?: string;
+    onPress?: () => void;
   }) => (
-    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel}>
+    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel} onClick={onPress}>
       {children}
     </button>
   ),
@@ -174,8 +179,10 @@ vi.mock("@legendapp/list/react-native", () => ({
     data?: GoatBotRow[];
     renderItem?: (item: { item: GoatBotRow }) => ReactNode;
     ListFooterComponent?: ReactNode;
+    ref?: { current: unknown };
   }) => {
     list.props = props;
+    if (props.ref) props.ref.current = { scrollToIndex: list.scrollToIndex };
     return (
       <>
         {props.data?.map((item) => (
@@ -264,6 +271,9 @@ async function render(element: ReactNode) {
   await act(async () => root.render(element));
   return {
     container,
+    rerender: async (next: ReactNode) => {
+      await act(async () => root.render(next));
+    },
     unmount: async () => {
       await act(async () => root.unmount());
       container.remove();
@@ -398,6 +408,66 @@ it("opens the bot's home from the header chip, which a task's own screen does no
   expect(taskView.container.querySelector('[aria-label="Chip GOAT Bot"]')).toBeNull();
   await taskView.unmount();
   screenSession.supportsTaskThreads = false;
+});
+
+it("marks what the bot said since the last read, and points up to it until the person catches up", async () => {
+  const reply = (id: string, createdAt: string): GoatBotRow => ({
+    ...bot,
+    id,
+    createdAt,
+    tone: "reply",
+    options: [],
+  });
+  const opened = [
+    reply("read", "2026-11-11T10:00:00Z"),
+    reply("new-1", "2026-11-11T10:05:00Z"),
+    reply("new-2", "2026-11-11T10:06:00Z"),
+  ];
+  screenSession.rows = opened;
+  const snapshot = {
+    key: "env:bot:1",
+    readUpTo: "2026-11-11T10:01:00Z",
+    newestAtOpen: "2026-11-11T10:06:00Z",
+  };
+  const ids = () => ((list.props?.data ?? []) as GoatBotRow[]).map((row) => row.id);
+  const pill = (container: HTMLElement) =>
+    container.querySelector<HTMLButtonElement>(
+      '[aria-label="2 new messages, scrolls to the first"]',
+    );
+  const view = await render(<GoatBotScreen visible readSnapshot={snapshot} />);
+  try {
+    // A reply that arrives while the person is in the chat is read as it comes.
+    screenSession.rows = [...opened, reply("live", "2026-11-11T10:20:00Z")];
+    await view.rerender(<GoatBotScreen visible readSnapshot={snapshot} />);
+    expect(ids()).toEqual(["read", "unread-divider", "new-1", "new-2", "live"]);
+    expect(pill(view.container)).toBeNull();
+    const viewable = list.props?.onViewableItemsChanged as (info: {
+      viewableItems: { index: number }[];
+    }) => void;
+    await act(async () => viewable({ viewableItems: [{ index: 3 }, { index: 4 }] }));
+    expect(pill(view.container)).not.toBeNull();
+    await act(async () => pill(view.container)?.click());
+    expect(list.scrollToIndex).toHaveBeenCalledWith(
+      expect.objectContaining({ index: 1, viewPosition: 0 }),
+    );
+    expect(pill(view.container)).toBeNull();
+    await typeInto(view.container, "Thanks");
+    await act(async () =>
+      view.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click(),
+    );
+    expect(ids()).not.toContain("unread-divider");
+  } finally {
+    await view.unmount();
+  }
+
+  // A task's own view keeps no read position.
+  screenSession.supportsTaskThreads = true;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const taskView = await render(<GoatBotScreen visible taskId={task} readSnapshot={snapshot} />);
+  expect(ids()).not.toContain("unread-divider");
+  await taskView.unmount();
+  screenSession.supportsTaskThreads = false;
+  screenSession.rows = [];
 });
 
 it("uses the light filled composer", async () => {

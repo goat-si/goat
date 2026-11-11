@@ -85,10 +85,18 @@ it("opens the report's foreign destination and preserves plain text when support
   expect(state.destination?.checkout).toBeUndefined();
   state.allowed = false;
   await act(async () => render());
-  expect(container.querySelector("button")).toBeNull();
+  expect(
+    [...container.querySelectorAll("button")].find(
+      (value) => value.textContent === "View memory details",
+    ),
+  ).toBeUndefined();
   expect(container.textContent).toContain(row.text);
   state.allowed = true;
   state.supported = false;
   await act(async () => render());
-  expect(container.querySelector("button")).toBeNull();
+  expect(
+    [...container.querySelectorAll("button")].find(
+      (value) => value.textContent === "View memory details",
+    ),
+  ).toBeUndefined();
 });
