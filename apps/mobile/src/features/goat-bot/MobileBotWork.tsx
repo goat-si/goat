@@ -26,6 +26,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import { useEffect, useState, type ReactNode } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Alert, FlatList, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
 import { uuidv4 } from "../../lib/uuid";
@@ -46,6 +47,11 @@ import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskL
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
+import {
+  MOBILE_CHECK_IN_DRAFT,
+  type MobileCheckInDraft,
+  type MobileCheckInDraftUpdate,
+} from "./mobileCheckInDraft";
 
 // Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
@@ -98,6 +104,8 @@ export function MobileBotWork(props: {
   readonly workRevision?: string | null | undefined;
 }) {
   const home = useMobileGoatBotHomeMode();
+  // The sheet reaches the bottom of the screen; its last entry clears the home indicator.
+  const bottomInset = useSafeAreaInsets().bottom + 24;
   const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
@@ -162,6 +170,17 @@ export function MobileBotWork(props: {
       else byNote[note] = wording;
       return { environmentId, byNote };
     });
+  // The check-in being set up, and its save, live here for this bot on this machine: its
+  // virtualized cell can unmount while the person scrolls or a save is still running.
+  // A save that finishes after the sheet moved to another bot settles that bot's draft only.
+  const checkInScope = JSON.stringify([environmentId, member?.threadId ?? home.botRef?.threadId]);
+  const [checkIns, setCheckIns] = useState<Readonly<Record<string, MobileCheckInDraft>>>({});
+  const checkInDraft = checkIns[checkInScope] ?? MOBILE_CHECK_IN_DRAFT;
+  const updateCheckIn: MobileCheckInDraftUpdate = (update) =>
+    setCheckIns((current) => ({
+      ...current,
+      [checkInScope]: update(current[checkInScope] ?? MOBILE_CHECK_IN_DRAFT),
+    }));
   const peekEntry =
     peekTaskId === null
       ? null
@@ -216,18 +235,21 @@ export function MobileBotWork(props: {
       : botRoutineRows(routines.data?.tasks ?? [], routineThreadId, now);
   const sectionLabel = (key: string, text: string, first = false): MobileBotHomeItem => ({
     key,
-    node: (
+    render: () => (
       <Text className={`${first ? "mt-2" : "mt-4"} text-xs font-medium text-foreground-muted`}>
         {text}
       </Text>
     ),
   });
-  const message = (key: string, node: ReactNode): MobileBotHomeItem => ({ key, node });
+  const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
+    key,
+    render: () => node,
+  });
   // Home is one list that mounts only what is near the screen; a bot with many tasks stays light.
   const homeItems: MobileBotHomeItem[] = [
     {
       key: "identity",
-      node: (
+      render: () => (
         <View>
           <View className="items-center gap-2 pt-2 pb-4">
             <GoatBotFaceAvatar
@@ -262,7 +284,7 @@ export function MobileBotWork(props: {
     {
       key: "tabs",
       // One row that scrolls sideways, so large text does not stack the tabs; it sticks to the top.
-      node: (
+      render: () => (
         <View className="bg-screen py-2">
           <ScrollView
             horizontal
@@ -294,7 +316,7 @@ export function MobileBotWork(props: {
   if (tab === "Home") {
     homeItems.push(sectionLabel("machines-label", "Machines", true), {
       key: "machines",
-      node: (
+      render: () => (
         <MobileBotComputer
           environmentId={environmentId}
           connected={selected?.connected === true}
@@ -377,11 +399,12 @@ export function MobileBotWork(props: {
     }
     homeItems.push(sectionLabel("routines-label", "Routines"), {
       key: "routines",
-      node: (
+      render: () => (
         <MobileBotRoutines
           environmentId={environmentId}
           connected={selected?.connected === true}
-          botThreadId={home.botRef?.threadId ?? null}
+          // The bot this home shows: a member's own conversation, not the main bot's.
+          botThreadId={routineThreadId}
           botName={botName}
           tasks={routines.data?.tasks ?? null}
           error={Boolean(routines.error)}
@@ -394,6 +417,8 @@ export function MobileBotWork(props: {
                 }
               : undefined
           }
+          checkInDraft={checkInDraft}
+          onCheckInDraftChange={updateCheckIn}
         />
       ),
     });
@@ -401,7 +426,7 @@ export function MobileBotWork(props: {
     homeItems.push(
       {
         key: "library",
-        node: (
+        render: () => (
           <MobileBotLibrary
             environmentId={environmentId}
             connected={selected?.connected === true}
@@ -413,7 +438,7 @@ export function MobileBotWork(props: {
       sectionLabel("notes-label", "Notes"),
       {
         key: "notes",
-        node: (
+        render: () => (
           <MobileBotMemory
             environmentId={environmentId}
             connected={selected?.connected === true}
@@ -577,9 +602,10 @@ export function MobileBotWork(props: {
             testID="goat-bot-home-scroll"
             data={homeItems}
             keyExtractor={(item) => item.key}
-            renderItem={({ item }) => <>{item.node}</>}
+            renderItem={({ item }) => <>{item.render()}</>}
             stickyHeaderIndices={[1]}
-            contentContainerClassName="gap-2 pb-8"
+            contentContainerClassName="gap-2"
+            contentContainerStyle={{ paddingBottom: bottomInset }}
             initialNumToRender={12}
             windowSize={7}
             automaticallyAdjustKeyboardInsets

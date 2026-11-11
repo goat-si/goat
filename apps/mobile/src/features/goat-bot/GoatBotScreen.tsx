@@ -7,6 +7,7 @@ import {
   goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
   type GoatBotAccent,
+  type GoatBotReplyRepository,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
@@ -190,10 +191,11 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </View>
     );
   }
-  const renderText = (text: string) =>
+  const renderText = (text: string, repository?: GoatBotReplyRepository | null) =>
     hasGoatBotMarkdown(text) ? (
       <GoatBotMarkdown
         text={text}
+        repository={repository}
         failed={row.tone === "failure"}
         environmentId={props.environmentId ?? null}
         onSelectThread={props.onSelectThread}
@@ -205,7 +207,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         style={bodyText}
         accessibilityLabel={row.tone === "failure" ? `Failed: ${text}` : undefined}
       >
-        <GoatBotLinkedText text={text} />
+        <GoatBotLinkedText text={text} repository={repository} />
       </Text>
     );
   const memory = row.memory ? <MemoryReportLink reference={row.memory} /> : null;
@@ -379,6 +381,8 @@ export function GoatBotScreen(props: {
   );
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
+  const focusDivider = unread.focusDivider;
+  const listExtraData = useMemo(() => ({ accent, focusDivider }), [accent, focusDivider]);
   const renderItem = useCallback(
     ({ item }: { item: GoatBotChatItem }) =>
       item.kind === "unread" ? (
@@ -615,8 +619,9 @@ export function GoatBotScreen(props: {
             unread.onViewable(viewableItems.map((entry) => entry.index))
           }
           renderItem={renderItem}
-          // Rows are memoized by key and data; a new accent must reach the pills already shown.
-          extraData={accent}
+          // Rows are memoized by key, data and this: a new accent must reach the pills already shown,
+          // and the "New" line must learn when to take VoiceOver focus.
+          extraData={listExtraData}
           initialScrollAtEnd
           maintainScrollAtEnd
           alignItemsAtEnd

@@ -13,6 +13,7 @@ import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
+import type { MobileCheckInDraft, MobileCheckInDraftUpdate } from "./mobileCheckInDraft";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
 /** What New routine puts in the message box: the person finishes the sentence. */
@@ -30,6 +31,9 @@ export function MobileBotRoutines(props: {
   readonly rows: ReadonlyArray<BotRoutineRow>;
   /** Starts a routine request in the chat's message box; absent while the chat cannot send. */
   readonly onNewRoutine?: (() => void) | undefined;
+  /** The check-in being set up, kept by the Home list across its cell unmounting. */
+  readonly checkInDraft: MobileCheckInDraft;
+  readonly onCheckInDraftChange: MobileCheckInDraftUpdate;
 }) {
   const { environmentId, botName } = props;
   // Asking the bot for a routine needs no list, so the entry point never waits on it.
@@ -50,6 +54,8 @@ export function MobileBotRoutines(props: {
           botThreadId={props.botThreadId}
           tasks={props.tasks}
           botName={botName}
+          draft={props.checkInDraft}
+          onDraftChange={props.onCheckInDraftChange}
         />
       ) : null}
       {!props.connected ? (
