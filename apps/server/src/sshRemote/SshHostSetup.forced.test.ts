@@ -52,8 +52,9 @@ it.effect("a forced update approval names the runtime process it may stop", () =
     expect(approval?.reason).toContain("PID 43406");
     expect(approval?.reason).toContain("Tue Nov 11 08:01:02 2026 UTC");
     expect(approval?.reason).toContain("port 3773");
-    // A stopped runtime that cannot hand over has nothing to roll back to; the person reads that first.
-    expect(approval?.reason).toContain("no rollback");
+    // The person reads first what happens if the new version does not start.
+    expect(approval?.reason).toContain("starts the stopped version again when it can");
+    expect(approval?.reason).toContain("no runtime runs on box until you update again");
     expect(approval?.args).toMatchObject({ step: "runtime_update", replace: replaceTarget });
     expect(f.updates).toEqual([]);
   }),

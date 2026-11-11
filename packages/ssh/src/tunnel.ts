@@ -811,7 +811,7 @@ ownership_unverified() {
 @@GOAT_LEGACY_IDENTITY@@
 @@GOAT_RUNNER_SETUP@@
 IDENTITY_NEXT="$STATE_DIR/identity.next.$$"
-trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$"; [ -z "\${FORCED_STOPPED_PID:-}" ] || forced_exit_note "$runner_exit"; exit "$runner_exit"' EXIT
+trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$"; exit "$runner_exit"' EXIT
 GOAT_ARCHIVE_MODE=@@GOAT_ARCHIVE_MODE@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
@@ -1011,6 +1011,7 @@ else
   fi
   publish_selected_runner
 fi
+[ -z "\${FORCED_STOPPED_PID:-}" ] || forced_supervise_start
 # A runtime older than this host's database exits before ready on every start. The marker
 # names that runtime, so later launches report it without starting it again, until another
 # runtime is selected or a newer server writes the database.

@@ -306,7 +306,14 @@ ${
   reportReplaceTarget
     ? `# The recorded runtime process, alive and this user's: a forced update names it to a person. Only
 # the status probe asks, and only for a runtime that is not the requested one.
+replace_trusted() {
+  [ -e "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -prune -user "$(id -u)" ! -perm -0020 ! -perm -0002 2>/dev/null)" ]
+}
 replace_target() {
+  # Records another user could change prove nothing about the process they name.
+  for replace_record in "$HOME/.goat/ssh-launch" "$state" "$state/pid" "$state/port"; do
+    replace_trusted "$replace_record" || return 0
+  done
   fact_slurp "$state/pid" || return 0; replace_pid="$FACT_TEXT"
   fact_slurp "$state/port" || return 0; replace_port="$FACT_TEXT"
   valid_positive "$replace_pid" && valid_port "$replace_port" && kill -0 "$replace_pid" 2>/dev/null || return 0
@@ -316,8 +323,9 @@ replace_target() {
   [ "$#" = 5 ] || return 0
   # Only a process GOAT can show it started: the start time it recorded at launch, or the exact
   # launch command it recorded (a Node entry may run behind a wrapper, so it ends the command).
-  if ! fact_file_is "$state/started" "$*"; then
+  if ! { replace_trusted "$state/started" && fact_file_is "$state/started" "$*"; }; then
     replace_start="$*"
+    replace_trusted "$state/managed" && replace_trusted "$state/identity" || return 0
     fact_file_is "$state/managed" managed && fact_slurp "$state/identity" && [ -n "$FACT_TEXT" ] || return 0
     replace_command="$(ps -o command= -p "$replace_pid" 2>/dev/null)" || return 0
     case "$FACT_TEXT" in

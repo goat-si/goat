@@ -121,12 +121,18 @@ export interface SshRuntimeSupervisorInput {
   readonly stateDir: string;
   /** Published runner for `targetVersion`, and a private copy of the one it replaced. */
   readonly runnerFile: string;
+  /** Empty with previousVersion: a forced stop left no earlier runtime that can be started again. */
   readonly previousRunnerFile: string;
   readonly targetVersion: string;
   readonly previousVersion: string;
   /** Launch identities recorded for the ownership checks, as the launch script writes them. */
   readonly identity: string;
   readonly previousIdentity: string;
+  /**
+   * The old server was stopped by a person's approved forced update, not drained. It predates
+   * instance ids, so starting it again is proven by its version and protocol answer alone.
+   */
+  readonly forced?: boolean | undefined;
   /**
    * On a Windows host, the release executables behind `runnerFile` and `previousRunnerFile`:
    * the runners are shell scripts there, and Windows starts the executable itself.
@@ -230,8 +236,10 @@ const superviseReplacement = async (
   if (!(await waitForExit(input.oldPid, input.exitTimeoutMs))) {
     // The drained server still owns the data, so it stays the recorded runtime and is never
     // signalled. The draining marker keeps launches from starting a second server beside it.
-    restoreRunner(input);
-    NodeFS.rmSync(input.previousRunnerFile, { force: true });
+    if (input.previousVersion) {
+      restoreRunner(input);
+      NodeFS.rmSync(input.previousRunnerFile, { force: true });
+    }
     writeLaunchRecords(input.stateDir, input.previousIdentity, input.oldPid, input.port);
     return {
       status: "old-alive",
@@ -263,6 +271,7 @@ const superviseReplacement = async (
     identity: string,
     accepts: (verdict: RuntimeProtocolVerdict) => boolean,
     extraEnv: Record<string, string> = {},
+    requireInstance = true,
   ) => {
     const args = [
       "serve",
@@ -320,8 +329,9 @@ const superviseReplacement = async (
         if (
           value.serverVersion === version &&
           accepts(value.verdict) &&
-          value.instanceId !== undefined &&
-          value.instanceId !== input.oldInstanceId
+          (requireInstance
+            ? value.instanceId !== undefined && value.instanceId !== input.oldInstanceId
+            : !processExists(input.oldPid))
         ) {
           writeLaunchRecords(input.stateDir, identity, pid, input.port);
           return pid;
@@ -350,7 +360,7 @@ const superviseReplacement = async (
   );
   if (started !== undefined) {
     NodeFS.rmSync(backup, { recursive: true, force: true });
-    NodeFS.rmSync(input.previousRunnerFile, { force: true });
+    if (input.previousRunnerFile) NodeFS.rmSync(input.previousRunnerFile, { force: true });
     return { status: "replaced", pid: started, version: input.targetVersion };
   }
   const restoreLock = tryAcquireServerOwnerLock(userdata, sshSupervisorOwner(replacementId));
@@ -365,6 +375,11 @@ const superviseReplacement = async (
   } finally {
     restoreLock.release();
   }
+  if (!input.previousVersion)
+    return {
+      status: "failed",
+      reason: `GOAT ${input.targetVersion} did not start, and no earlier runtime could be started again.`,
+    };
   restoreRunner(input);
   // The previous version served this host before the swap. After an incompatible replacement
   // it does not speak this build's protocol, so it must only prove it is that version, freshly
@@ -375,6 +390,8 @@ const superviseReplacement = async (
     input.previousVersion,
     input.previousIdentity,
     (verdict) => verdict !== "unknown",
+    {},
+    input.forced !== true,
   );
   if (restored === undefined)
     return {
@@ -393,11 +410,12 @@ export const supervise = Command.make("supervise", {
   baseDir: Flag.String("base-dir"),
   stateDir: Flag.String("state-dir"),
   runnerFile: Flag.String("runner"),
-  previousRunnerFile: Flag.String("previous-runner"),
+  previousRunnerFile: Flag.String("previous-runner").pipe(Flag.withDefault("")),
   targetVersion: Flag.String("target-version"),
-  previousVersion: Flag.String("previous-version"),
+  previousVersion: Flag.String("previous-version").pipe(Flag.withDefault("")),
   identity: Flag.String("identity"),
-  previousIdentity: Flag.String("previous-identity"),
+  previousIdentity: Flag.String("previous-identity").pipe(Flag.withDefault("")),
+  forced: Flag.Boolean("forced"),
   executable: Flag.String("executable").pipe(Flag.optional),
   previousExecutable: Flag.String("previous-executable").pipe(Flag.optional),
   exitTimeoutMs: Flag.Int("exit-timeout-ms").pipe(Flag.withDefault(60_000)),

@@ -458,6 +458,8 @@ forced_target_recorded() {
     fact_file_is "$PID_FILE" "$FORCE_PID" && fact_file_is "$PORT_FILE" "$FORCE_PORT"
 }
 select_forced_stop() {
+  # A runtime that answered its protocol can be started again if the new one does not start.
+  FORCED_LIVE_VERSION=; [ "$LIVE_STATUS" != live ] || FORCED_LIVE_VERSION="$LIVE_VERSION"
   FORCE_STOP=1; LIVE_STATUS=forced; LIVE_PID="$FORCE_PID"; LIVE_PORT="$FORCE_PORT"
   # The approved stop ends the instance an unconfirmed drain fenced; the stop removes that fence.
   LIVE_COMPATIBLE=0; NEEDS_OWNED_UPGRADE=0; DEFER_NO_DRAIN=0; DRAIN_UNCERTAIN=0
