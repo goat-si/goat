@@ -266,6 +266,11 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     await expect(t.fetch(streamed)).rejects.toThrow(TypeError);
     expect(pulled).toBeLessThanOrEqual(1);
     expect(t.pairs).toHaveLength(0);
+    // A method override does not make a POST Request's body go away silently.
+    await expect(
+      t.fetch(new Request(ORIGIN + "/echo", { method: "POST", body: "hello" }), { method: "GET" }),
+    ).rejects.toThrow(TypeError);
+    expect(t.pairs).toHaveLength(0);
     const pending = t.fetch(new Request(ORIGIN + "/echo", { method: "POST" }), { body: "hello" });
     const server = await t.stream(1);
     const sent = await request(server, 5);

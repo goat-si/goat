@@ -191,11 +191,14 @@ class PenFetcher {
     const cap = this.#options.bodyCap ?? HTTP1_LIMITS.body;
     // A Request's own body cannot be read with a bound on every platform (Hermes's fetch has no body stream), so a
     // Request that may carry one is refused before anything is read; the caller passes init.body instead.
+    // The Request's own method decides whether it may carry a body: a method override must not drop one silently.
+    const requestMethod = request?.method.toUpperCase();
+    const noInitBody = init?.body === undefined || init.body === null;
     if (
-      request !== undefined &&
-      (init?.body === undefined || init.body === null) &&
-      method !== "GET" &&
-      method !== "HEAD"
+      requestMethod !== undefined &&
+      noInitBody &&
+      requestMethod !== "GET" &&
+      requestMethod !== "HEAD"
     ) {
       throw new TypeError("a Pen fetch takes a request body only in init.body");
     }
