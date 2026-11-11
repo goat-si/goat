@@ -9,6 +9,7 @@ import { SecretInput } from "./SecretInput";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const validConfig = Schema.is(TextGeneratorConfig);
+const API_KIND_LABELS = { openaiCompatible: "OpenAI-compatible", anthropic: "Anthropic" } as const;
 
 export function TextGeneratorSettings(props: {
   readonly generators: Readonly<Record<string, TextGeneratorConfig>>;
@@ -148,11 +149,13 @@ export function TextGeneratorSettings(props: {
                 }}
               >
                 <SelectTrigger aria-label="API type">
-                  <SelectValue />
+                  <SelectValue>{API_KIND_LABELS[kind]}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
-                  <SelectItem value="openaiCompatible">OpenAI-compatible</SelectItem>
-                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                  <SelectItem value="openaiCompatible">
+                    {API_KIND_LABELS.openaiCompatible}
+                  </SelectItem>
+                  <SelectItem value="anthropic">{API_KIND_LABELS.anthropic}</SelectItem>
                 </SelectPopup>
               </Select>
               <Input
