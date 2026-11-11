@@ -62,12 +62,14 @@ import {
   type ThreadListV2SnoozePresetSettings,
 } from "./threadListV2";
 import {
+  buildAutoSettleMenuActions,
   CARD_MENU_ACTIONS,
   LEGACY_MENU_ACTIONS,
   MARK_UNREAD_MENU_ACTION,
   SLIM_MENU_ACTIONS,
   SNOOZED_MENU_ACTIONS,
 } from "./thread-list-v2-menu-actions";
+import { useThreadRowFork } from "./useForkThread";
 import { liftedThreadListV2Status, type LaunchLift } from "./threadListV2LaunchFold";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
@@ -489,6 +491,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly pinningSupported: boolean;
   readonly autoSettleOptOutSupported: boolean;
   readonly titleRegenerationSupported: boolean;
+  readonly forkWorkspaceSupported: boolean;
   readonly reorderSupported?: boolean;
   readonly onMoveThread?: (
     thread: EnvironmentThreadShell,
@@ -694,30 +697,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
   );
   const autoSettleMenuItems = useMemo<MenuAction[]>(
-    () =>
-      props.autoSettleOptOutSupported
-        ? [
-            {
-              id: "auto-settle",
-              title: "Auto-settle behavior",
-              image: "timer",
-              subactions: [
-                {
-                  id: "auto-settle:enabled",
-                  title: "Enabled",
-                  state: thread.autoSettleDisabledAt == null ? "on" : "off",
-                },
-                {
-                  id: "auto-settle:disabled",
-                  title: "Disabled",
-                  state: thread.autoSettleDisabledAt == null ? "off" : "on",
-                },
-              ],
-            } satisfies MenuAction,
-          ]
-        : [],
+    () => buildAutoSettleMenuActions(props.autoSettleOptOutSupported, thread.autoSettleDisabledAt),
     [props.autoSettleOptOutSupported, thread.autoSettleDisabledAt],
   );
+  const { menuActions: forkMenuActions, handleMenuEvent: handleForkMenuEvent } = useThreadRowFork({
+    ...props,
+    canOperateThread,
+  });
   const canTurnIntoProject = canTurnThreadIntoProject(thread);
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
@@ -829,6 +815,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         copyTextWithHaptic(thread.id, { target: "thread-id" });
       }
       if (nativeEvent.event === "delete") handleDelete();
+      if (handleForkMenuEvent(nativeEvent.event)) return;
       if (nativeEvent.event === "snooze:custom") {
         setCustomSnoozeOpen(true);
         return;
@@ -852,6 +839,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       onNewThreadOnBranch,
       onMarkThreadUnread,
       thread,
+      handleForkMenuEvent,
       handleArchive,
       handleDelete,
       handleRegenerateTitle,
@@ -1380,6 +1368,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                     },
                   ]
                 : []),
+              ...forkMenuActions,
               { id: "copy-thread", title: "Copy thread", image: "doc.on.doc" },
               { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
               ...(snoozedRow
