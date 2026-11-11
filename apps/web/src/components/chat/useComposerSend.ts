@@ -49,6 +49,7 @@ import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
+  isStandaloneForkCommand,
 } from "../../composer-logic";
 import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import { type ChatMessage } from "../../types";
@@ -56,6 +57,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { recordPromptOnSuccess, recordPromptSent } from "../GitHubStarPrompt";
 import { newMessageId, newThreadId } from "~/lib/utils";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { useComposerForkCommand } from "../../hooks/useForkThread";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import {
   beginBackgroundDraftSubmissionByRef,
@@ -388,6 +390,7 @@ export function useComposerSend(input: ComposerSendInput) {
   const setComposerDraftReviewComments = useComposerDraftStore((store) => store.setReviewComments);
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const forkCommand = useComposerForkCommand(input);
   const sendToMultipleModels = useMultipleModelSend({
     environmentId,
     routeThreadKey,
@@ -617,6 +620,19 @@ export function useComposerSend(input: ComposerSendInput) {
         setComposerDraftPrompt(composerDraftTarget, "");
         composerRef.current?.resetCursorState();
       }
+      return;
+    }
+    if (
+      forkCommand &&
+      !directAnnotation &&
+      !queuedRunEdit.isEditing &&
+      composerRef.current?.getSendContext()?.answeringPendingUserInput !== true &&
+      isStandaloneForkCommand(promptRef.current)
+    ) {
+      promptRef.current = "";
+      setComposerDraftPrompt(composerDraftTarget, "");
+      composerRef.current?.resetCursorState();
+      forkCommand.run();
       return;
     }
 
@@ -1788,5 +1804,5 @@ export function useComposerSend(input: ComposerSendInput) {
     }
   };
 
-  return { onSend, continueThreadOnSsh };
+  return { onSend, continueThreadOnSsh, forkCommand };
 }

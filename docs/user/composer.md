@@ -368,6 +368,31 @@ leaves files alone unless you ask it to change something. On web and desktop, th
 chat header shows the thread's status; use **Start a new side chat** to discard it, or
 **Open as a full thread** to continue it on its own.
 
+## Fork a thread
+
+A fork is a new thread that starts with a copy of this thread's conversation. The original
+thread is unchanged.
+
+Type `/fork` in the composer, or choose **Fork thread** from the thread's menu in the chat header
+or the sidebar. The command palette also has **Fork thread**. A response's fork button forks from
+that response instead of the latest turn and offers the same choice.
+
+- **Fork thread** uses the original checkout. When the thread already lives in a worktree, the
+  choice reads **Fork thread in same worktree**.
+- **Fork thread in new worktree** creates a GOAT-managed worktree on its own branch, started from
+  the original checkout's last commit, and brings the original's uncommitted changes along.
+  Ignored files such as `.env` stay behind, and edits made while the fork is being created may
+  be missed. If GOAT cannot copy the uncommitted changes, it offers to fork without them.
+
+The new-worktree choice needs a Git project. A scratch session or a cloud agent cannot use it, and
+GOAT explains why if you pick it there. A server that has not been updated offers only the
+same-checkout fork, and through another GOAT server it shows **Fork thread** disabled until it is
+updated.
+
+Some providers cannot continue a conversation natively in another checkout. There the fork starts
+from a handoff of the conversation, as described in
+[Context in portable handoffs](./portable-handoffs.md).
+
 ## Goals
 
 With Codex and Claude, send `/goal` followed by what "done" means, for example

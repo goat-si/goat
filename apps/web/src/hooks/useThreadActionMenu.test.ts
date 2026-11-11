@@ -120,6 +120,12 @@ vi.mock("./useCopyToClipboard", () => ({
 vi.mock("./useHandleNewThread", () => ({
   useNewThreadHandler: () => async () => recordEffect("draft"),
 }));
+// Fork availability reads environment state these tests do not set up; the menu builder tests cover it.
+vi.mock("./useForkThread", () => ({
+  forkMenuWorkspace: () => ({ type: "current" }),
+  readThreadForkMenuState: () => null,
+  useForkThread: () => async () => recordEffect("fork"),
+}));
 vi.mock("./useSettings", () => ({
   useClientSettings: (select: (settings: unknown) => unknown) =>
     select({

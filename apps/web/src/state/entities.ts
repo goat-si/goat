@@ -367,6 +367,22 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
   );
 }
 
+/** The environment serves orchestration.forkThread, so a fork can get its own worktree. */
+export function readEnvironmentSupportsForkWorkspace(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadForkWorkspace === true
+  );
+}
+
+export function useEnvironmentSupportsForkWorkspace(environmentId: EnvironmentId | null): boolean {
+  const configs = useServerConfigs();
+  return (
+    environmentId !== null &&
+    configs.get(environmentId)?.environment.capabilities.threadForkWorkspace === true
+  );
+}
+
 export function readEnvironmentSupportsPinning(environmentId: EnvironmentId): boolean {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities

@@ -23,6 +23,7 @@ import {
   formatAssistantCitationForComposer,
   isCollapsedCursorAdjacentToInlineToken,
   isPathSuggestionCurrent,
+  isStandaloneForkCommand,
   replaceTextRange,
 } from "./composer-logic";
 import { carryDisplacedCustomAnswerIntoPrompt } from "./pendingUserInput";
@@ -571,5 +572,14 @@ describe("extendReplacementRangeForTrailingSpace", () => {
     expect(extendReplacementRangeForTrailingSpace("@firest", 3, "@file ")).toBe(3);
     expect(extendReplacementRangeForTrailingSpace("@fi rest", 3, "@file")).toBe(3);
     expect(extendReplacementRangeForTrailingSpace("@fi", 3, "@file ")).toBe(3);
+  });
+});
+
+describe("isStandaloneForkCommand", () => {
+  it.each(["/fork", "  /FORK  ", "/fork\n"])("treats %j as the fork command", (text) => {
+    expect(isStandaloneForkCommand(text)).toBe(true);
+  });
+  it.each(["/fork now", "/forks", "please /fork", "/side"])("sends %j as text", (text) => {
+    expect(isStandaloneForkCommand(text)).toBe(false);
   });
 });
