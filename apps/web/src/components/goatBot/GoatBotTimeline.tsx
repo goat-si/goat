@@ -2,6 +2,7 @@ import {
   GOAT_BOT_READING_LIMIT_MS,
   goatBotActivity,
   goatBotFirstUnread,
+  goatBotPreviewText,
   goatBotStampParts,
   goatBotReceiptLabel,
   goatBotRejectionText,
@@ -9,7 +10,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { CircleAlertIcon, XIcon } from "~/components/solar";
+import { ArrowUpLeftIcon, CopyIcon, CircleAlertIcon, XIcon } from "~/components/solar";
 import {
   createContext,
   type UIEvent,
@@ -22,6 +23,9 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { goatBotSearch, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -30,7 +34,6 @@ import { observeResize } from "~/lib/observeResize";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
-import { Button } from "../ui/button";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import {
   GoatBotActivityLine,
@@ -68,6 +71,7 @@ export function GoatBotTimeline({
   onDiscard,
   onPick,
   onOpenHome,
+  onReply,
   taskDetails = false,
   taskThreads = false,
   retryEnvironmentId = null,
@@ -83,6 +87,7 @@ export function GoatBotTimeline({
   /** The environment whose history these rows show; links in bot text resolve there. */
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
+  readonly onReply?: ((text: string) => void) | undefined;
   readonly onRetry: (clientKey: string) => void;
   /** Opens the bot's home, where a routine an event line names lives. */
   readonly onOpenHome?: (() => void) | undefined;
@@ -90,6 +95,8 @@ export function GoatBotTimeline({
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
 }) {
+  const { copyToClipboard } = useCopyToClipboard();
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const member = useGoatBotMember();
   const botName = useGoatBotName();
@@ -301,13 +308,46 @@ export function GoatBotTimeline({
                     )}
                   >
                     <span className="sr-only">You</span>
+                    {row.quote
+                      ? (() => {
+                          const prefix = normalize(row.quote).slice(0, 60);
+                          const source =
+                            prefix &&
+                            rows.find(
+                              (candidate) =>
+                                candidate.kind === "bot" &&
+                                normalize(candidate.text).startsWith(prefix),
+                            );
+                          const style =
+                            "max-w-[min(80%,34rem)] truncate rounded-md border border-border px-2 py-1 text-xs text-muted-foreground";
+                          return source ? (
+                            <button
+                              type="button"
+                              className={style}
+                              onClick={() => {
+                                const element = Array.from(
+                                  listRef.current?.querySelectorAll<HTMLElement>(
+                                    "[data-bot-row]",
+                                  ) ?? [],
+                                ).find((node) => node.dataset.botRow === source.id);
+                                element?.scrollIntoView({ block: "center" });
+                                element?.focus({ preventScroll: true });
+                              }}
+                            >
+                              {goatBotPreviewText(row.quote)}
+                            </button>
+                          ) : (
+                            <span className={style}>{goatBotPreviewText(row.quote)}</span>
+                          );
+                        })()
+                      : null}
                     {row.attachments && row.attachments.length > 0 ? (
                       <GoatBotSentAttachments
                         attachments={row.attachments}
                         environmentId={environmentId}
                       />
                     ) : null}
-                    {row.text.trim().length > 0 || retryable ? (
+                    {(row.reply ?? row.text).trim().length > 0 || retryable ? (
                       <div className="flex w-full items-center justify-end gap-2">
                         {!failed ? (
                           <GoatBotMessageTime
@@ -327,9 +367,9 @@ export function GoatBotTimeline({
                             <span className="sr-only">Retry</span>
                           </button>
                         ) : null}
-                        {row.text.trim().length > 0 ? (
+                        {(row.reply ?? row.text).trim().length > 0 ? (
                           <div className="goat-person-pill w-fit max-w-[min(80%,34rem)]">
-                            {row.text}
+                            {row.reply ?? row.text}
                           </div>
                         ) : null}
                       </div>
@@ -401,6 +441,7 @@ export function GoatBotTimeline({
                 return (
                   <li
                     key={row.id}
+                    data-bot-row={row.id}
                     tabIndex={0}
                     aria-describedby={timeId}
                     className={cn(
@@ -416,18 +457,56 @@ export function GoatBotTimeline({
                         <span className="block truncate">{row.replyTo}</span>
                       </blockquote>
                     ) : null}
-                    {(row.choices ?? row.options).length > 0 ? (
-                      <div className="flex w-full min-w-0 items-end gap-2">
-                        <GoatBotQuestionCard row={row} body={body} onPick={onPick} />
-                        <GoatBotMessageTime
-                          id={timeId}
-                          createdAt={row.createdAt}
-                          time={time(row.createdAt)}
-                        />
+                    <div className="flex w-full items-end gap-1">
+                      {(row.choices ?? row.options).length > 0 ? (
+                        <div className="flex w-full min-w-0 items-end gap-2">
+                          <GoatBotQuestionCard row={row} body={body} onPick={onPick} />
+                          <GoatBotMessageTime
+                            id={timeId}
+                            createdAt={row.createdAt}
+                            time={time(row.createdAt)}
+                          />
+                        </div>
+                      ) : (
+                        card
+                      )}
+                      <div className="flex shrink-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 pointer-coarse:opacity-100">
+                        {onReply ? (
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  aria-label="Reply"
+                                  onClick={() => onReply(row.text)}
+                                />
+                              }
+                            >
+                              <ArrowUpLeftIcon className="size-4" />
+                            </TooltipTrigger>
+                            <TooltipPopup>Reply</TooltipPopup>
+                          </Tooltip>
+                        ) : null}
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label="Copy"
+                                onClick={() => copyToClipboard(row.text, undefined)}
+                              />
+                            }
+                          >
+                            <CopyIcon className="size-4" />
+                          </TooltipTrigger>
+                          <TooltipPopup>Copy</TooltipPopup>
+                        </Tooltip>
                       </div>
-                    ) : (
-                      card
-                    )}
+                    </div>
                   </li>
                 );
               }

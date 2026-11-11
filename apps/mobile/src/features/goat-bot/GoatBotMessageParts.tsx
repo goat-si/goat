@@ -8,8 +8,8 @@ import {
   type GoatBotGroupPosition,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { useEffect, type ReactNode } from "react";
+import { AccessibilityInfo, Platform, Pressable, Text, View } from "react-native";
 
 import { GoatWordmark } from "../../components/GoatWordmark";
 import { GoatBotProgressFace } from "./GoatBotFace";
@@ -207,11 +207,17 @@ export function GoatBotActivityLine(props: {
   const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
-  // Screen readers hear when the bot starts, reads or waits, not each step: the live part says
-  // only that, and the step is plain text beside it.
-  const status = `${props.botName} is ${
-    face === "reading" ? "reading" : face === "waiting" ? "waiting for you" : "working"
-  }`;
+  // Screen readers hear when the bot starts or reads, not each working step, and what it waits on:
+  // the live part says only that, and a working step is plain text beside it.
+  const status = waits
+    ? `${props.botName}: ${activity.text}`
+    : `${props.botName} is ${face === "reading" ? "reading" : "working"}`;
+  const waitStatus = waits ? status : null;
+  // oxlint-disable-next-line goat/react-effect-budget -- iOS has no live regions; VoiceOver hears each new wait from here.
+  useEffect(() => {
+    if (waitStatus !== null && Platform.OS === "ios")
+      AccessibilityInfo.announceForAccessibility(waitStatus);
+  }, [waitStatus]);
   return (
     <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
       <View accessible accessibilityLiveRegion="polite" accessibilityLabel={status}>

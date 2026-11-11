@@ -197,6 +197,8 @@ export class CodexSurvivors extends Context.Service<
     /** Threads whose queued starts must wait: an unsettled survivor or a stop fence. */
     readonly startBlockedThreads: Effect.Effect<ReadonlyArray<ThreadId>>;
     readonly setStartWake: (wake: Effect.Effect<void>) => Effect.Effect<void>;
+    /** Runs `effect` after every fence or binding change, beside the start wake; keep it cheap. */
+    readonly onFenceChange: (effect: Effect.Effect<void>) => Effect.Effect<void>;
     readonly release: (binding: CodexSurvivorBinding) => Effect.Effect<void>;
     readonly blockThread?: (threadId: ThreadId) => Effect.Effect<void>;
     readonly classifyRecord: (
@@ -277,8 +279,11 @@ export const layer = Layer.effect(
     const bindings = yield* Ref.make<ReadonlyArray<CodexSurvivorBinding>>([]);
     const blockedThreads = yield* Ref.make<ReadonlySet<ThreadId>>(new Set());
     let wakeStarts: Effect.Effect<void> = Effect.void;
-    const wake = Effect.suspend(() => wakeStarts);
-    return CodexSurvivors.of({
+    const fenceListeners: Array<Effect.Effect<void>> = [];
+    const wake = Effect.suspend(() =>
+      Effect.all([wakeStarts, ...fenceListeners], { discard: true }),
+    );
+    const service: CodexSurvivors["Service"] = CodexSurvivors.of({
       startBlockedThreads: Effect.gen(function* () {
         const current = yield* Ref.get(bindings);
         const fenced = yield* detached.stopFencedThreads;
@@ -287,6 +292,11 @@ export const layer = Layer.effect(
       setStartWake: Effect.fn("CodexSurvivors.setStartWake")((effect) =>
         Effect.sync(() => {
           wakeStarts = effect;
+        }),
+      ),
+      onFenceChange: Effect.fn("CodexSurvivors.onFenceChange")((effect) =>
+        Effect.sync(() => {
+          fenceListeners.push(effect);
         }),
       ),
       release: Effect.fn("CodexSurvivors.release")((binding) =>
@@ -466,13 +476,52 @@ export const layer = Layer.effect(
             survival,
           ) &&
           !(yield* Ref.get(bindings)).some((binding) => binding.threadId === threadId);
-        yield* detached.ensureAdmission(threadId, {
+        yield* admitPastStaleGoalBlocks({
+          detached,
+          readGoal: (record, nativeThreadId) =>
+            service.readExistingGoal?.(record, nativeThreadId) ?? Effect.succeed("goal" as const),
+          threadId,
           allowGoalControl: options?.allowGoalControl === true,
           stdio,
         });
       }),
     });
+    return service;
   }),
+);
+
+/**
+ * A goal block outlives the stop fence that clears with its turn until fence maintenance reads the
+ * goal, so the start guard can free a start that admission would then refuse. Before refusing on a
+ * goal block alone, admission reads the goal itself and drops a block whose goal Codex no longer
+ * runs; an active goal, or one it cannot read, still refuses.
+ */
+export const admitPastStaleGoalBlocks = Effect.fn("CodexSurvivors.admitPastStaleGoalBlocks")(
+  function* (input: {
+    readonly detached: Pick<
+      Detached.CodexDetachedAppServers["Service"],
+      "getStopObligations" | "getGoalBlocks" | "clearGoalBlock" | "ensureAdmission"
+    >;
+    readonly readGoal: (
+      record: CodexInstanceRecordKey,
+      nativeThreadId: string,
+    ) => Effect.Effect<"none" | "disabled" | "goal", CodexDetachedAppServerError>;
+    readonly threadId: ThreadId;
+    readonly allowGoalControl: boolean;
+    readonly stdio: boolean;
+  }) {
+    const { detached, threadId } = input;
+    if (!input.allowGoalControl && (yield* detached.getStopObligations(threadId)).length === 0)
+      for (const { record, block } of yield* detached.getGoalBlocks(threadId)) {
+        const goal = yield* input.readGoal(record, block.nativeThreadId).pipe(Effect.option);
+        if (Option.isSome(goal) && goal.value !== "goal")
+          yield* detached.clearGoalBlock(record, block).pipe(Effect.ignore);
+      }
+    yield* detached.ensureAdmission(threadId, {
+      allowGoalControl: input.allowGoalControl,
+      stdio: input.stdio,
+    });
+  },
 );
 
 /** Protection is recorded with each retention, so an interrupted pass leaves the two consistent. */

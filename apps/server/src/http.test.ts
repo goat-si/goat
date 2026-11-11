@@ -1,7 +1,5 @@
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
-import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import { NodeHttpPlatform, NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@goat/contracts";
 import {
@@ -54,6 +52,7 @@ import {
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 describe("MCP app asset responses", () => {
   it.effect(
     "transforms existing snapshots only with explicit render intent and fresh metadata",
@@ -223,12 +222,12 @@ const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (sta
     ServerHttp.layerStaticAndDevRoute,
     ServerHttp.layerHttpCompression,
   ).pipe(Layer.provideMerge(NodeHttpPlatform.layer));
-  // HttpRouter.serve prefers outer services; inject the test FileSystem between it and NodeHttpServer.layerTest.
+  // HttpRouter.serve prefers outer services; inject the test FileSystem between it and layerTestLoopback.
   const services = yield* Layer.build(
     HttpRouter.serve(layerApp, { disableListenLog: true }).pipe(
       Layer.provideMerge(ServerConfig.layer({ ...config, staticDir })),
       Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, fileSystem)),
-      Layer.provideMerge(NodeHttpServer.layerTest),
+      Layer.provideMerge(layerTestLoopback),
     ),
   );
   const client = Context.get(services, HttpClient.HttpClient);
@@ -1253,6 +1252,7 @@ it.effect("serves SSH activity to a real IPv4-mapped loopback peer", () =>
     );
     const services = yield* Layer.build(
       HttpRouter.serve(Layer.merge(layerApp, capturePeer), { disableListenLog: true }).pipe(
+        // The dual-stack listener is what produces an IPv4-mapped peer, so this one keeps it.
         Layer.provideMerge(NodeHttpServer.layerTest),
       ),
     );

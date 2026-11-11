@@ -801,6 +801,70 @@ func TestDownDuringAFirstTaskStartLeavesTheNodeDown(t *testing.T) {
 	}
 }
 
+func TestDownDuringServiceStartLeavesTheNodeDown(t *testing.T) {
+	for _, osName := range []string{"linux", "darwin"} {
+		t.Run(osName, func(t *testing.T) {
+			rs := relaytest.New()
+			defer rs.Close()
+			st, _ := windowsHome(t, func(string, []string) error { return nil })
+			serviceOS = osName
+			oldFound := serviceManagerFound
+			t.Cleanup(func() { serviceManagerFound = oldFound })
+			serviceManagerFound = func(string) bool { return true }
+			soloNode(t, st, rs.URL)
+			fakeTaskClock(t)
+			paused, resume := make(chan struct{}), make(chan struct{})
+			waiting, finished := make(chan struct{}), make(chan struct{})
+			oldWait := startLockWaits
+			t.Cleanup(func() { startLockWaits = oldWait })
+			startLockWaits = func() { close(waiting); <-finished }
+			var running atomic.Bool
+			run = func(_ string, args ...string) error {
+				cmd := strings.Join(args, " ")
+				if cmd == "--user daemon-reload" || strings.HasPrefix(cmd, "enable gui/") {
+					close(paused)
+					<-resume
+				}
+				if strings.HasPrefix(cmd, "--user enable --now") || strings.HasPrefix(cmd, "bootstrap ") {
+					if err := startDetached(st); err != nil {
+						return err
+					}
+					running.Store(true)
+				}
+				if cmd == "--user stop pen.service" || strings.HasPrefix(cmd, "bootout ") {
+					if running.Swap(false) {
+						return daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
+					}
+				}
+				return nil
+			}
+			t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+			up := make(chan int, 1)
+			go func() { up <- RunUp(nil, io.Discard, io.Discard) }()
+			<-paused
+			down := make(chan int, 1)
+			go func() { down <- RunDown(nil, io.Discard, io.Discard) }()
+			code := -1
+			select {
+			case <-waiting:
+			case code = <-down:
+			}
+			close(resume)
+			upCode := <-up
+			close(finished)
+			if code == -1 {
+				code = <-down
+			}
+			if upCode != 0 || code != 0 {
+				t.Fatalf("up exit %d, down exit %d", upCode, code)
+			}
+			if running.Load() {
+				t.Fatal("pen down reported success but the service runs after the overlapping start")
+			}
+		})
+	}
+}
+
 // A starting daemon that takes the control connection but never answers cannot keep the turn: the
 // readiness probe has a deadline, so the start fails within its bound and a pen down waiting for the
 // turn then runs. The probe's deadline is now (the request still goes out, and the listener has it
@@ -1093,6 +1157,39 @@ func TestAResumedLeaveDoesNotDeleteANodeJoinedMeanwhile(t *testing.T) {
 	}
 	if code == 0 || !strings.Contains(errOut.String(), "not leaving") || slices.ContainsFunc(*calls, func(c string) bool { return strings.Contains(c, "/Delete") }) {
 		t.Fatalf("pen leave: exit %d, %q, calls %q; want it to say the node is not leaving and keep the task", code, errOut.String(), *calls)
+	}
+}
+
+// A resumed pen leave that saw the left marker, while a pen join cleared it and made a new node before
+// the leave decided, keeps the service: the leave decides once, under the state lock.
+func TestAResumedLeaveKeepsTheServiceOfANodeJoinedBeforeItDecided(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st, calls := windowsHome(t, func(string, []string) error { return nil })
+	soloNode(t, st, rs.URL)
+	if err := st.WriteAtomic(daemon.LeftMarker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := leaveDecides
+	t.Cleanup(func() { leaveDecides = old })
+	leaveDecides = func() {
+		os.Remove(st.Path("identity.json"))
+		os.Remove(st.Path("mesh.json"))
+		id, _, err := st.EnsureIdentityClearing(daemon.LeftMarker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mesh.Found(st, id, "b", 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, errOut bytes.Buffer
+	code := RunLeave(nil, &out, &errOut)
+	if code == 0 || !strings.Contains(errOut.String(), "not leaving") || slices.ContainsFunc(*calls, func(c string) bool { return strings.Contains(c, "/Delete") }) {
+		t.Fatalf("pen leave: exit %d, %q %q, calls %q; want it to say the node is not leaving and keep the task", code, out.String(), errOut.String(), *calls)
+	}
+	if _, err := os.Stat(st.Path("identity.json")); err != nil {
+		t.Fatalf("pen leave deleted the node joined meanwhile: %v", err)
 	}
 }
 

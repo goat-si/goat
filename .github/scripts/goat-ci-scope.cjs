@@ -76,9 +76,10 @@ const WINDOWS_SUITES = [
 ];
 /** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
 const WINDOWS_TRIGGERS = [
+  "apps/desktop/native/computer-use-helper-windows/",
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
-  "patches/node-pty@1.2.0-beta.15.patch",
+  "patches/node-pty@",
 ];
 const WINDOWS_TASK = "test-windows";
 /** Every workspace package suite no other task owns, listed by packageSuites. */
@@ -549,14 +550,18 @@ function selectTasks(
  * The ci job matrix; test-server expands into its shards. Each entry carries the job title and its
  * runner pool, hosted, linux or windows. goat-ci.yml sends a trusted run's linux entries to the
  * lidge pool while LIDGE_RUNNERS is on, and every other entry to a hosted image.
+ * test-changed goes to a hosted runner when it selects relay tests, whose Floci fixtures need Docker.
  */
-function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
+function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }, changedTests) {
+  const changedNeedsDocker =
+    changedTests !== undefined &&
+    changedTests.vitest.some((file) => file.startsWith(TASK_ROOTS["test-relay"][0] + "/"));
   const include = [];
   for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
     const runner = WINDOWS_RUNNER_TASKS.has(task)
       ? "windows"
-      : HOSTED_TASKS.has(task)
+      : HOSTED_TASKS.has(task) || (task === CHANGED_TESTS_TASK && changedNeedsDocker)
         ? "hosted"
         : "linux";
     if (task === "test-server") {
@@ -883,7 +888,7 @@ async function main(env = process.env, fetchImpl = fetch) {
     ? JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, "utf8"))
     : {};
   const result = await planRun({ env, payload, root: process.cwd(), fetchImpl });
-  const matrix = matrixFor(result.tasks, result.server);
+  const matrix = matrixFor(result.tasks, result.server, result.changedTests);
   const lines = summaryLines(result);
   console.log(lines.join("\n"));
   if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");

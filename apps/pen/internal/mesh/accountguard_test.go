@@ -299,3 +299,49 @@ func TestAnInviteJoinToAStoreRetiredMeanwhileIsRefused(t *testing.T) {
 		t.Fatalf("the retired store holds %d records, want only the founding one", s.Len())
 	}
 }
+
+func TestInviteBurnSerializesWithRetire(t *testing.T) {
+	f, j := detID(1), detID(3)
+	b, found := newMesh(t, f)
+	s := NewStore(nil, b.meshID)
+	if _, err := s.Merge([]*Record{found}); err != nil {
+		t.Fatal(err)
+	}
+	iv, err := LoadInvites(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := iv.Create(time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release, retiring := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	s.burnGate = func() { close(entered); <-release }
+	s.retireReached = func() { close(retiring) }
+	srv, cli := pipe()
+	served := make(chan error, 1)
+	joined := make(chan error, 1)
+	go func() {
+		_, err := ServeJoin(context.Background(), srv, j.NoisePub, Admission{ID: f, Store: s, Invites: iv, InviteID: inv.ID, Now: time.Now})
+		served <- err
+	}()
+	go func() { _, _, err := Join(context.Background(), cli, j, "j"); joined <- err }()
+	<-entered
+	retired := make(chan struct{})
+	go func() { s.Retire(); close(retired) }()
+	<-retiring
+	close(release)
+	serveErr, joinErr := <-served, <-joined
+	<-retired
+	_, usable := iv.Lookup(inv.ID, time.Now())
+	signed := s.Len() == 2
+	if !usable != signed {
+		t.Fatalf("invite burned=%v signed=%v; serve=%v join=%v", !usable, signed, serveErr, joinErr)
+	}
+	if usable || !signed || serveErr != nil || joinErr != nil {
+		t.Fatalf("admission did not finish before retirement: burned=%v signed=%v serve=%v join=%v", !usable, signed, serveErr, joinErr)
+	}
+	if !s.retired.Load() {
+		t.Fatal("store was not retired")
+	}
+}

@@ -23,6 +23,7 @@ import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar, GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
 import {
+  useGoatBotAccentStyle,
   useGoatBotAvatar,
   useGoatBotMainName,
   useGoatBotMember,
@@ -37,6 +38,7 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
+  buildGoatBotQuote,
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
@@ -122,6 +124,7 @@ export function GoatBotChatView({
 }: GoatBotChatViewProps) {
   const [panelOpen, setPanelOpen] = useState(false);
   const member = useGoatBotMember();
+  const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
   const mainName = useGoatBotMainName();
@@ -146,13 +149,22 @@ export function GoatBotChatView({
     field.setSelectionRange(field.value.length, field.value.length);
     return field;
   };
+  const botIdentity = `${environmentId ?? ""}:${member?.sessionThreadId ?? bot?.threadId ?? ""}`;
+  const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
+  if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
+  const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
   const onDraft = canSend
     ? (text: string) => {
         if (narrow) {
           sheetClosedFor.current = "draft";
           setPanelOpen(false);
         }
-        composerRef.current?.replaceText(text);
+        if (composerRef.current?.offerDraft(text) === false) {
+          toastManager.add({
+            type: "info",
+            title: "Your message box already has a message. Send or clear it, then try again.",
+          });
+        }
       }
     : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
@@ -225,7 +237,7 @@ export function GoatBotChatView({
             ? null
             : statusLine(availability);
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
+    <div className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
@@ -333,6 +345,14 @@ export function GoatBotChatView({
               <GoatBotTimeline
                 rows={rows}
                 unreadSince={unreadSince}
+                onReply={
+                  canSend
+                    ? (text) => {
+                        setReplyState({ botIdentity, text });
+                        composerRef.current?.focus();
+                      }
+                    : undefined
+                }
                 environmentId={environmentId}
                 onOpenHome={bot ? () => setPanelOpen(true) : undefined}
                 taskThreads={supportsTaskThreads}
@@ -394,7 +414,16 @@ export function GoatBotChatView({
             modelPicker={
               member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />
             }
-            onSend={onSend}
+            replyTo={replyTo}
+            onClearReply={() => setReplyState(null)}
+            onSend={(text, attachments) => {
+              const result = onSend(
+                replyTo === null ? text : buildGoatBotQuote(replyTo, text),
+                attachments,
+              );
+              if (result !== false) setReplyState(null);
+              return result;
+            }}
           />
         </div>
       </div>

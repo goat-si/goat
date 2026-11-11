@@ -171,6 +171,7 @@ const runScenario = (
       list: Effect.succeed(mode.startsWith("startup-goal-") ? [] : [binding]),
       startBlockedThreads: Effect.succeed([]),
       setStartWake: () => Effect.void,
+      onFenceChange: () => Effect.void,
       release: () =>
         Effect.sync(() => {
           releases++;

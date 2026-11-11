@@ -5,6 +5,7 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import type { ThreadId } from "@goat/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
+import { isMacPlatform } from "@goat/shared/keybindings";
 import type * as Context from "effect/Context";
 import { expect, it, vi } from "vite-plus/test";
 import { commands, page, userEvent } from "vite-plus/test/browser";
@@ -276,9 +277,10 @@ it("app-switch-thread", async () => {
   await report("app-switch-thread", windows);
 });
 
-// Through the diff.toggle shortcut, the same handler as the header's diff button.
+// Through the diff.toggle shortcut (mod+d), the same handler as the header's diff button.
+const modD = isMacPlatform(navigator.platform) ? "{Meta>}d{/Meta}" : "{Control>}d{/Control}";
 const toggleDiff = (to: "open" | "close") => async () => {
-  await userEvent.keyboard("{Control>}d{/Control}");
+  await userEvent.keyboard(modD);
   const diff = page.getByRole("group", { name: "Diff layout" });
   if (to === "open") await expect.element(diff).toBeVisible();
   else await expect.element(diff).not.toBeInTheDocument();

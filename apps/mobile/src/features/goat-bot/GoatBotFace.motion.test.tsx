@@ -17,6 +17,7 @@ vi.mock("react-native", () => ({
     children?: ReactNode;
     accessibilityLabel?: string;
   }) => <span aria-label={accessibilityLabel}>{children}</span>,
+  Pressable: ({ children }: { children?: ReactNode }) => <button>{children}</button>,
   StyleSheet: { absoluteFill: {} },
   Easing: { linear: (value: number) => value },
   useAnimatedValue: () => ({ setValue: () => {}, interpolate: () => 0 }),
@@ -43,6 +44,7 @@ vi.mock("react-native-reanimated", () => {
 });
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 vi.mock("uniwind", () => ({ withUniwind: (component: unknown) => component }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../native/StackHeader", () => ({
   NativeStackScreenOptions: (props: {
     options: { title?: string; headerTitle?: () => ReactNode };

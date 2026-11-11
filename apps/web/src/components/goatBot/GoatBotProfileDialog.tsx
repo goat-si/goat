@@ -15,6 +15,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { GoatBotColorField } from "./GoatBotColorField";
 
 export type GoatBotProfileChanges = Partial<BotProfileValues>;
 
@@ -35,10 +36,13 @@ export function GoatBotProfileDialog(props: {
   readonly extraChanged?: boolean;
   /** The name being saved while a save runs, then null, so a list can show it at once. */
   readonly onPending?: ((name: string | null) => void) | undefined;
+  /** The target server stores a member's color; absent or false hides the swatches. */
+  readonly colorEditable?: boolean;
 }) {
   const [name, setName] = useState(props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
+  const [color, setColor] = useState<string | null>(props.initial.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const blankName = name.trim() === "";
@@ -55,7 +59,13 @@ export function GoatBotProfileDialog(props: {
       nameRef.current?.focus();
       return;
     }
-    const changes = botProfileChanges(props.mode, props.initial, { name, avatar, purpose });
+    const changes = botProfileChanges(props.mode, props.initial, {
+      name,
+      avatar,
+      purpose,
+      // Without the swatches the form never carries a color, so an old server gets no key.
+      ...(props.colorEditable === true ? { color } : {}),
+    });
     if (Object.keys(changes).length === 0 && props.extraChanged !== true) return props.onClose();
     setBusy(true);
     setError(null);
@@ -123,6 +133,9 @@ export function GoatBotProfileDialog(props: {
                 onChange={(event) => setAvatar(event.target.value)}
               />
             </label>
+            {props.colorEditable === true ? (
+              <GoatBotColorField value={color} onChange={setColor} disabled={busy} />
+            ) : null}
             {props.mode === "create" ? (
               // A new bot needs only a name and a look; what it is for can come later.
               <Collapsible>

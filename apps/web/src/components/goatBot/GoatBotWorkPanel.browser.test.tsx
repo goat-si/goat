@@ -381,6 +381,24 @@ it("a failed routine read offers a retry and keeps the routines it already knew"
   expect(mocks.refreshRoutines).toHaveBeenCalledOnce();
 });
 
+it("New routine stays offered while the routine list cannot be read", async () => {
+  setup([]);
+  mocks.routinesLoaded = false;
+  mocks.routinesError = "Connection lost";
+  const onDraft = vi.fn<(text: string) => void>();
+  await using screen = await render(
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      onDraft={onDraft}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
+  );
+  await expect.element(screen.getByText("Couldn't load routines.")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "New routine" }));
+  expect(onDraft).toHaveBeenCalledWith("Set up a routine: ");
+});
+
 it("a refused pause keeps the routine's stored state and shows why", async () => {
   setup([
     {

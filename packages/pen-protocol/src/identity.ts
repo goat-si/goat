@@ -1,21 +1,15 @@
-const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
+const BASE32_DIGITS = "abcdefghijklmnopqrstuvwxyz234567";
 
-/** RFC 4648 base32, lowercase, no padding. */
+/** RFC 4648 section 6 base32 in lowercase, without the "=" padding. */
 export function base32(bytes: Uint8Array): string {
-  let out = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      out += BASE32[(buffer >>> bits) & 31];
-    }
-    buffer &= (1 << bits) - 1;
-  }
-  if (bits > 0) out += BASE32[(buffer << (5 - bits)) & 31];
-  return out;
+  const digits = Array.from({ length: Math.ceil((bytes.length * 8) / 5) }, (_, digit) => {
+    const firstBit = digit * 5;
+    const at = firstBit >> 3;
+    // A digit spans at most two bytes; bytes past the end count as zero.
+    const pair = ((bytes[at] ?? 0) << 8) | (bytes[at + 1] ?? 0);
+    return BASE32_DIGITS.charAt((pair >> (11 - (firstBit & 7))) & 31);
+  });
+  return digits.join("");
 }
 
 export async function sha256(bytes: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {

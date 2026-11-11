@@ -26,17 +26,26 @@ func serviceMode(noService bool, st *state.Store) string {
 	}
 	switch serviceOS {
 	case "linux":
-		if exec.Command("systemctl", "--user", "show-environment").Run() == nil {
+		if serviceManagerFound("systemd") {
 			return "systemd"
 		}
 	case "darwin":
-		if _, err := exec.LookPath("launchctl"); err == nil {
+		if serviceManagerFound("launchd") {
 			return "launchd"
 		}
 	case "windows":
 		return "task" // schtasks.exe ships with every Windows 10 and 11
 	}
 	return "none"
+}
+
+// serviceManagerFound reports whether systemd --user or launchctl answers here (a variable for tests).
+var serviceManagerFound = func(mode string) bool {
+	if mode == "systemd" {
+		return exec.Command("systemctl", "--user", "show-environment").Run() == nil
+	}
+	_, err := exec.LookPath("launchctl")
+	return err == nil
 }
 
 func unitPath() string {

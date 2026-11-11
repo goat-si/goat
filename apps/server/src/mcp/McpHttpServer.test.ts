@@ -1,5 +1,4 @@
 import { snapshotResult } from "./toolkits/preview/snapshotTransport.testkit.ts";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -46,6 +45,7 @@ import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import { inertPullRequestServices } from "./toolkits/pullRequests/pullRequestServices.testkit.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -796,7 +796,7 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
       });
       expect(reusedSessionResponse.status).toBe(404);
     }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  ).pipe(Effect.provide(layerTestLoopback)),
 );
 
 it.effect("registers annotated tools and preserves authenticated request context", () =>
@@ -1121,7 +1121,7 @@ it.effect(
         );
         expect((yield* post("not-a-goat-token", toolCall)).status).toBe(401);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(Effect.provide(layerTestLoopback)),
 );
 
 it.effect("a refused body that never finishes stops being read at its deadline", () =>
@@ -1232,5 +1232,5 @@ it.effect("serves llms.txt whole without a credential and filtered with one", ()
       });
       expect(refused.status).toBe(401);
     }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  ).pipe(Effect.provide(layerTestLoopback)),
 );
