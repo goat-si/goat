@@ -84,6 +84,7 @@
     "@effect/graphql-generator": "catalog:",
     "@effect/vitest": "catalog:",
     "@goat/contracts": "workspace:*",
+    "@goat/pen-protocol": "workspace:*",
     "@goat/provider-testing": "workspace:*",
     "@goat/shared": "workspace:*",
     "@goat/source-control-testing": "workspace:*",

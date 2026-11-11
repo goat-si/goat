@@ -612,7 +612,6 @@ export const threadEntries = {
       interactionMode: "default or plan. Default: the caller's.",
       attachments:
         "Up to 8 pending uploads from goat_attachment_prepare_upload, sent with message.",
-      placement: "Set only by another GOAT that places fleet work here. Agents omit it.",
     },
     examples: [
       {

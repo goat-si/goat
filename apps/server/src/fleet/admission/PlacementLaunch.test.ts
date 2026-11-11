@@ -17,6 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import type { PenServiceCaller } from "@goat/pen-protocol/service";
 
 import { createPendingAttachmentId, resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
@@ -36,6 +37,12 @@ import * as PlacementLaunch from "./PlacementLaunch.ts";
 import * as Reservations from "./PlacementReservations.ts";
 
 const T0 = Date.UTC(2026, 10, 1);
+const member = (nodeId: string): PenServiceCaller => ({
+  nodeId,
+  signPub: "s".repeat(43),
+  noisePub: "n".repeat(43),
+  name: nodeId,
+});
 const isoAt = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
 const ISSUED = isoAt(T0);
 
@@ -263,12 +270,12 @@ describe("goat_thread_launch with placement on the target", () => {
         yield* TestClock.setTime(T0);
         const { calls, run } = yield* runner;
         const a = yield* PlacementLaunch.launchPlaced(
-          client({ pen: { nodeId: "node-a" } }),
+          client({ pen: member("node-a") }),
           params(),
           run,
         );
         const b = yield* PlacementLaunch.launchPlaced(
-          client({ pen: { nodeId: "node-b" } }),
+          client({ pen: member("node-b") }),
           params(),
           run,
         );
@@ -276,7 +283,7 @@ describe("goat_thread_launch with placement on the target", () => {
         assert.strictEqual((yield* Ref.get(calls)).length, 2);
         assert.strictEqual(PlacementLaunch.placerOf(client()), "local");
         assert.strictEqual(
-          PlacementLaunch.placerOf(client({ pen: { nodeId: "node-a" } })),
+          PlacementLaunch.placerOf(client({ pen: member("node-a") })),
           "pen:node-a",
         );
       }).pipe(Effect.provide(targetLayer())),

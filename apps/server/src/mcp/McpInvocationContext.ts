@@ -16,6 +16,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import type { PenServiceCaller } from "@goat/pen-protocol/service";
 import { formatThreadLink } from "@goat/shared/threadLinks";
 
 const ALL_MCP_CAPABILITIES = [
@@ -49,7 +50,7 @@ export interface McpClientCaller {
   /** The origin an outside client reached; its thread links open the web app there. */
   readonly webOrigin?: string | undefined;
   /** The mesh member this session is bound to, from the session's immutable Pen binding only. */
-  readonly pen?: { readonly nodeId: string } | undefined;
+  readonly pen?: PenServiceCaller | undefined;
 }
 
 /** Read-only clients map to the lowest mode because McpToolAccess blocks writes first. */
