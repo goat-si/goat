@@ -849,3 +849,65 @@ it("shows a task chip in the task header only when one exists", async () => {
   await empty.unmount();
   screenSession.supportsTaskThreads = false;
 });
+
+it("draws the person's messages and Send in a member bot's color, with text that reads on it", async () => {
+  const you: GoatBotRow = {
+    kind: "user",
+    id: "you",
+    text: "Check the disks",
+    createdAt: "2026-11-11T10:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    sendKey: null,
+    requestKey: null,
+    delivery: { state: "sent" },
+    showReceipt: false,
+  } as GoatBotRow;
+  const member = (color: string | undefined) =>
+    ({
+      botId: "scout",
+      name: "Scout",
+      role: "member",
+      environmentId: "env",
+      sessionThreadId: "scout-thread",
+      state: "active",
+      avatar: null,
+      ...(color === undefined ? {} : { color }),
+    }) as unknown as import("@goat/contracts").BotProfile;
+  const colors = async (bot: import("@goat/contracts").BotProfile | undefined) => {
+    screenSession.rows = [you];
+    const view = await render(<GoatBotScreen visible member={bot} />);
+    await typeInto(view.container, "More");
+    const text = [...view.container.querySelectorAll("span")].find(
+      (node) => node.textContent === "Check the disks",
+    );
+    const pill = [...view.container.querySelectorAll("div[data-style]")].find(
+      (node) =>
+        JSON.parse(node.getAttribute("data-style") ?? "null")?.borderRadius === 20 &&
+        node.contains(text ?? null),
+    );
+    const send = view.container.querySelector('[aria-label="Send message"]');
+    const result = {
+      pill: JSON.parse(pill?.getAttribute("data-style") ?? "null")?.backgroundColor,
+      text: JSON.parse(text?.getAttribute("data-style") ?? "null")?.color,
+      send: JSON.parse(send?.querySelector("div")?.getAttribute("data-style") ?? "null")
+        ?.backgroundColor,
+    };
+    await view.unmount();
+    screenSession.rows = [];
+    return result;
+  };
+  expect(await colors(member("#1d3a8a"))).toEqual({
+    pill: "#1D3A8A",
+    text: "#FFFFFF",
+    send: "#1D3A8A",
+  });
+  expect((await colors(member("#D9A21B"))).text).toBe("#000000");
+  // The main bot and a member without a color keep the theme's neutral.
+  expect(await colors(undefined)).toEqual({ pill: undefined, text: undefined, send: undefined });
+  expect(await colors(member(undefined))).toEqual({
+    pill: undefined,
+    text: undefined,
+    send: undefined,
+  });
+});
