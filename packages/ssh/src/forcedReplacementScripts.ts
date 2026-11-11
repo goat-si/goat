@@ -34,12 +34,16 @@ forced_ticks_of() {
 # The start time of the runtime this launch started, the evidence a later forced stop asks for. It
 # is written to a new file and renamed into place, so a planted link is replaced, never followed.
 forced_record_start() {
-  rm -f "$STATE_DIR/started"
+  rm -f "$STATE_DIR/started" "$STATE_DIR/started.ticks"
   forced_started_now="$(forced_start_of "$1")" || forced_started_now=
   [ -n "$forced_started_now" ] || return 0
-  forced_started_next="$(mktemp "$STATE_DIR/started.XXXXXX" 2>/dev/null)" || return 0
-  if printf '%s\\n' "$forced_started_now" >"$forced_started_next"; then mv -f "$forced_started_next" "$STATE_DIR/started"
-  else rm -f "$forced_started_next"; fi
+  forced_record_file started "$forced_started_now" && forced_record_file started.ticks "$(forced_ticks_of "$1")" ||
+    rm -f "$STATE_DIR/started" "$STATE_DIR/started.ticks"
+}
+forced_record_file() {
+  forced_record_next="$(mktemp "$STATE_DIR/$1.XXXXXX" 2>/dev/null)" || return 1
+  if printf '%s\\n' "$2" >"$forced_record_next"; then mv -f "$forced_record_next" "$STATE_DIR/$1"
+  else rm -f "$forced_record_next"; return 1; fi
 }
 # A record counts as evidence only while it is this user's, no other user can change it, and it is
 # not a link.
@@ -68,17 +72,23 @@ forced_stop_runtime() {
   forced_start="$(forced_start_of "$FORCE_PID")"
   [ -n "$forced_start" ] && [ "$forced_start" = "$FORCE_START" ] || forced_refused "its start time differs from the approved one"
   server_owns_listener "$FORCE_PID" "$FORCE_PORT" || forced_refused "it does not listen on port $FORCE_PORT"
-  # The process must be the runtime GOAT started: the start time recorded at its launch, or the exact
-  # launch command GOAT recorded. Without either, a person checks it and stops it by hand.
+  # The process must be the runtime GOAT started: the start time (and, on Linux, the start tick)
+  # recorded at its launch and the exact launch command GOAT recorded must both match. Without
+  # that record, as for a runtime started before GOAT kept it, a person checks it and stops it.
   for forced_record in "$DEFAULT_SERVER_HOME/ssh-launch" "$STATE_DIR" "$PID_FILE" "$PORT_FILE"; do
     forced_trusted "$forced_record" || forced_refused "$forced_record can be changed by another user"
   done
   forced_identity_verified=0
   if forced_trusted "$MANAGED_FILE" && forced_trusted "$STATE_DIR/identity" &&
      verify_owned_identity_now "$FORCE_PID" "$FORCE_PORT"; then forced_identity_verified=1; fi
-  FACT_TEXT=; ! forced_trusted "$STATE_DIR/started" || fact_slurp "$STATE_DIR/started" || FACT_TEXT=
-  if [ "$FACT_TEXT" != "$FORCE_START" ] && [ "$forced_identity_verified" != 1 ]; then
-    printf 'GOAT did not stop PID %s on the remote host: it cannot show this is the runtime it started (no start time was recorded for it and its command line is not the launch GOAT recorded). Check it on the host and stop it yourself (kill %s), then update again.\\n' "$FORCE_PID" "$FORCE_PID" >&2; exit 1
+  forced_recorded_start=; forced_recorded_ticks=
+  if forced_trusted "$STATE_DIR/started" && forced_trusted "$STATE_DIR/started.ticks"; then
+    fact_slurp "$STATE_DIR/started" && forced_recorded_start="$FACT_TEXT"
+    fact_slurp "$STATE_DIR/started.ticks" && forced_recorded_ticks="$FACT_TEXT"
+  fi
+  if [ "$forced_identity_verified" != 1 ] || [ "$forced_recorded_start" != "$FORCE_START" ] ||
+     [ "$forced_recorded_ticks" != "$(forced_ticks_of "$FORCE_PID")" ]; then
+    printf 'GOAT did not stop PID %s on the remote host: it cannot show this is the runtime it started (the start time recorded at its launch and its launch command must both match, and runtimes started before GOAT kept that record have none). Check it on the host and stop it yourself (kill %s), then update again.\\n' "$FORCE_PID" "$FORCE_PID" >&2; exit 1
   fi
   forced_root_ticks="$(forced_ticks_of "$FORCE_PID")"
   forced_parent_holds() {
@@ -128,25 +138,14 @@ GOAT_FORCED_RECORDS
      [ -f "$FORCED_PREVIOUS_RUNNER" ] && fact_slurp "$STATE_DIR/identity"; then
     FORCED_PREVIOUS_IDENTITY="$FACT_TEXT"; FORCED_PREVIOUS_VERSION="$FORCED_LIVE_VERSION"
   fi
+  # From publication on, a dropped SSH session must not end this script before the stop either
+  # happened, with the detached supervisor taking over the start, or was undone.
+  trap '' HUP PIPE
   # The new runner is published before the first signal, so a failed publication stops nothing.
   publish_selected_runner
   FORCED_PUBLISHED=1
-  # From the first signal on, a dropped SSH session must not end this script before the records
-  # of the stopped runtime are gone and the detached supervisor has taken over the start.
-  trap '' HUP PIPE
   printf 'Stopping GOAT PID %s (started %s, port %s) for an approved forced update.\\n' "$FORCE_PID" "$FORCE_START" "$FORCE_PORT" >>"$LOG_FILE" 2>/dev/null || :
-  # Only while the runtime still holds its identity and each child is still its parent's child.
-  forced_signal_children() {
-    printf '%s' "$forced_children" | while read -r forced_child forced_parent forced_child_ticks forced_child_start; do
-      [ -n "$forced_child" ] || continue
-      forced_parent_holds || break
-      if forced_signal_same TERM "$forced_child" "$forced_parent" "$forced_child_start" "$forced_child_ticks"; then
-        printf '%s\\n' "$forced_child"
-      fi
-    done || :
-  }
   if ! forced_parent_holds; then forced_refused "it changed before the signal"; fi
-  forced_signalled="$(forced_signal_children)" || forced_signalled=
   if ! forced_signal_same TERM "$FORCE_PID" "" "$FORCE_START" "$forced_root_ticks" && server_alive "$FORCE_PID"; then
     forced_refused "it changed before the signal"
   fi
@@ -163,24 +162,17 @@ GOAT_FORCED_RECORDS
       printf 'GOAT PID %s on the remote host did not exit after SIGKILL; the update stopped. See %s.\\n' "$FORCE_PID" "$LOG_FILE" >&2; exit 1
     fi
   fi
-  forced_waited=0
-  while [ -n "$forced_signalled" ] && [ "$forced_waited" -lt 5 ]; do
-    forced_left=
-    for forced_child in $forced_signalled; do if server_alive "$forced_child"; then forced_left="$forced_left $forced_child"; fi; done
-    [ -n "$forced_left" ] || break
-    sleep 1; forced_waited=$((forced_waited + 1))
-  done
-  # Once the runtime is gone, nothing proves a leftover is still the child it was: it is named in
-  # the log and left running for a person to check.
-  for forced_child in $forced_signalled; do
-    if server_alive "$forced_child"; then
-      printf 'GOAT left child process %s of the stopped runtime running: it did not exit after SIGTERM, and once its runtime is gone GOAT cannot prove the PID still names that child. Check it on the host.\\n' "$forced_child" >>"$LOG_FILE" 2>/dev/null || :
-    fi
-  done
+  # A shell cannot signal a child by anything firmer than its PID, which it may have given up by
+  # then, so children are never signalled. A recorded child still running is named for a person.
+  printf '%s' "$forced_children" | while read -r forced_child forced_parent forced_child_ticks forced_child_start; do
+    [ -n "$forced_child" ] && server_alive "$forced_child" || continue
+    [ "$(forced_start_of "$forced_child")" = "$forced_child_start" ] && [ "$(forced_ticks_of "$forced_child")" = "$forced_child_ticks" ] || continue
+    printf 'GOAT did not signal child process %s of the stopped runtime, which still runs: a shell cannot prove the PID still names that child. Check it on the host.\\n' "$forced_child" >>"$LOG_FILE" 2>/dev/null || :
+  done || :
   if [ -f "$DEFAULT_RUNTIME_FILE" ] && sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p' "$DEFAULT_RUNTIME_FILE" 2>/dev/null | grep -qx "$FORCE_PID"; then
     rm -f "$DEFAULT_RUNTIME_FILE"
   fi
-  rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity" "$STATE_DIR/draining" "$STATE_DIR/started"
+  rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity" "$STATE_DIR/draining" "$STATE_DIR/started" "$STATE_DIR/started.ticks"
   printf 'Stopped GOAT PID %s for the approved forced update.\\n' "$FORCE_PID" >>"$LOG_FILE" 2>/dev/null || :
   FORCE_STOP=0; LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0
 }
@@ -208,7 +200,7 @@ forced_supervise_start() {
       REMOTE_PID="$forced_new_pid"; REMOTE_PORT="$FORCE_PORT"; REMOTE_MANAGED=managed; REFRESH_DECISION=replaced
       forced_record_start "$REMOTE_PID" ;;
     stuck)
-      printf 'GOAT %s started as PID %s on the remote host did not become ready and did not exit after SIGKILL; it was left running and the stopped runtime was not started again. Check it on the host. See %s.\\n' "$TARGET_VERSION" "$forced_new_pid" "$LOG_FILE" >&2; exit 1 ;;
+      printf 'GOAT %s, started as PID %s on the remote host, did not become ready and did not exit after SIGKILL; it was left running and nothing more was started. Check it on the host. See %s.\\n' "$forced_new_version" "$forced_new_pid" "$LOG_FILE" >&2; exit 1 ;;
     rolled-back)
       printf 'GOAT %s did not start on the remote host after the approved forced stop of PID %s; GOAT %s was started again. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$forced_new_version" "$LOG_FILE" >&2; exit 1 ;;
     *)

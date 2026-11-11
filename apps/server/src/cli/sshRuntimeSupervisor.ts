@@ -150,7 +150,13 @@ export type SshRuntimeSupervisorResult =
   | { readonly status: "replaced" | "rolled-back"; readonly pid: number; readonly version: string }
   | { readonly status: "old-alive" | "failed"; readonly reason: string }
   /** A server it started failed and did not exit after SIGKILL; it was left running. */
-  | { readonly status: "stuck"; readonly pid: number; readonly reason: string };
+  | {
+      readonly status: "stuck";
+      readonly pid: number;
+      /** The version that process was started as: the target, or the previous one on rollback. */
+      readonly version: string;
+      readonly reason: string;
+    };
 
 /**
  * Starts a program outside the SSH session's job object, which Windows OpenSSH terminates with
@@ -235,6 +241,7 @@ export const superviseSshRuntimeReplacement = async (
 const stuck = (pid: number, version: string): SshRuntimeSupervisorResult => ({
   status: "stuck",
   pid,
+  version,
   reason: `GOAT ${version} (pid ${pid}) did not become ready and did not exit after SIGKILL; it was left running and nothing was restored.`,
 });
 

@@ -321,19 +321,23 @@ replace_target() {
   [ "$#" = 1 ] && [ "$1" = "$(id -u)" ] || return 0
   set -- $(LC_ALL=C TZ=UTC ps -o lstart= -p "$replace_pid" 2>/dev/null)
   [ "$#" = 5 ] || return 0
-  # Only a process GOAT can show it started: the start time it recorded at launch, or the exact
-  # launch command it recorded (a Node entry may run behind a wrapper, so it ends the command).
-  if ! { replace_trusted "$state/started" && fact_file_is "$state/started" "$*"; }; then
-    replace_start="$*"
-    replace_trusted "$state/managed" && replace_trusted "$state/identity" || return 0
-    fact_file_is "$state/managed" managed && fact_slurp "$state/identity" && [ -n "$FACT_TEXT" ] || return 0
-    replace_command="$(ps -o command= -p "$replace_pid" 2>/dev/null)" || return 0
-    case "$FACT_TEXT" in
-      "$HOME/.goat/runtime/goat/versions/"*) [ "$replace_command" = "$FACT_TEXT" ] || return 0 ;;
-      *) case "$replace_command" in *" $FACT_TEXT") ;; *) return 0 ;; esac ;;
-    esac
-    set -- $replace_start
-  fi
+  # Only a process GOAT can show it started: the start time (and, on Linux, the start tick) it
+  # recorded at launch and the exact launch command it recorded must both match (a Node entry may
+  # run behind a wrapper, so it ends the command).
+  replace_start="$*"
+  replace_trusted "$state/started" && fact_file_is "$state/started" "$replace_start" || return 0
+  if [ -r "/proc/$replace_pid/stat" ]; then
+    replace_ticks="$(sed 's/^.*) //' "/proc/$replace_pid/stat" 2>/dev/null | awk '{ print $20 }')"
+  else replace_ticks=-; fi
+  replace_trusted "$state/started.ticks" && fact_file_is "$state/started.ticks" "$replace_ticks" || return 0
+  replace_trusted "$state/managed" && replace_trusted "$state/identity" || return 0
+  fact_file_is "$state/managed" managed && fact_slurp "$state/identity" && [ -n "$FACT_TEXT" ] || return 0
+  replace_command="$(ps -o command= -p "$replace_pid" 2>/dev/null)" || return 0
+  case "$FACT_TEXT" in
+    "$HOME/.goat/runtime/goat/versions/"*) [ "$replace_command" = "$FACT_TEXT" ] || return 0 ;;
+    *) case "$replace_command" in *" $FACT_TEXT") ;; *) return 0 ;; esac ;;
+  esac
+  set -- $replace_start
   case "$*" in
     *[!A-Za-z0-9:\\ ]*) ;;
     *) live_fields="$live_fields$(printf ',"replaceTarget":{"pid":%s,"port":%s,"startedAt":"%s"}' "$replace_pid" "$replace_port" "$*")" ;;

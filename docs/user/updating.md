@@ -119,9 +119,12 @@ stop an idle runtime GOAT owns, use **Forget host**; remote projects and files s
 
 When the running runtime is too old to hand over or cannot be verified, the
 approval in the requesting thread names its process ID, start time and port.
-Approving it lets GOAT stop that process and its child processes and start the
-new runtime. If a different process is running by then, GOAT stops nothing and
-asks again.
+Approving it lets GOAT stop that process and start the new runtime; if the new
+version does not start, GOAT starts the stopped one again when it can. GOAT does
+not signal its child processes: any still running are named in the host's GOAT
+log. If a different process is running by then, GOAT stops nothing and asks
+again. A runtime started before GOAT recorded launch times cannot be stopped this
+way: stop it on the host, then update again.
 
 ## Desktop app updates
 
