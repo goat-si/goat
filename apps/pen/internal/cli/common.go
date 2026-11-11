@@ -37,6 +37,9 @@ func fail(stderr io.Writer, err error) int {
 // schtasks, systemctl or launchctl. probeTimeout is a variable for tests.
 var probeTimeout = 2 * time.Second
 
+// leaveTimeout is how long pen leave waits for the daemon's leave (a variable for tests).
+var leaveTimeout = opTimeout
+
 const (
 	opTimeout      = time.Minute
 	commandTimeout = 15 * time.Second

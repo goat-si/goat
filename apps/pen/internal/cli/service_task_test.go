@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"encoding/xml"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -801,43 +803,51 @@ func TestDownDuringAFirstTaskStartLeavesTheNodeDown(t *testing.T) {
 
 // A starting daemon that takes the control connection but never answers cannot keep the turn: the
 // readiness probe has a deadline, so the start fails within its bound and a pen down waiting for the
-// turn then runs. The probe deadline is set to now and the waits run on the test clock.
+// turn then runs. The probe's deadline is now (the request still goes out, and the listener has it
+// before pen down starts), pen down's wait for the turn holds until the start has returned, and the
+// waits run on the test clock.
 func TestAStartWhoseDaemonNeverAnswersReleasesTheTurn(t *testing.T) {
-	var st *state.Store
-	holding := make(chan struct{})
-	var once sync.Once
-	st, _ = windowsHome(t, func(verb string, _ []string) error {
-		if verb == "/Run" {
-			once.Do(func() { close(holding) })
-		}
-		return nil
-	})
+	st, _ := windowsHome(t, func(string, []string) error { return nil })
 	l, err := net.Listen("unix", daemon.SocketPath(st))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
+	asked := make(chan struct{})
+	var once sync.Once
 	go func() {
 		for {
 			c, err := l.Accept()
 			if err != nil {
 				return
 			}
-			go func() { io.Copy(io.Discard, c); c.Close() }() // reads requests, never answers
+			go func() {
+				// Takes the request and never answers.
+				if _, err := bufio.NewReader(c).ReadBytes('\n'); err == nil {
+					once.Do(func() { close(asked) })
+				}
+				io.Copy(io.Discard, c)
+				c.Close()
+			}()
 		}
 	}()
 	fakeTaskClock(t)
 	oldProbe := probeTimeout
 	t.Cleanup(func() { probeTimeout = oldProbe })
 	probeTimeout = 0
+	startFinished := make(chan struct{})
+	old := startLockWaits
+	t.Cleanup(func() { startLockWaits = old })
+	startLockWaits = func() { <-startFinished }
 	startErr := make(chan error, 1)
 	go func() { startErr <- startTask(st) }()
-	<-holding
+	<-asked // the start holds the turn and waits on a daemon that never answers
 	downCode := make(chan int, 1)
 	go func() { downCode <- RunDown(nil, io.Discard, io.Discard) }()
 	if err := <-startErr; err == nil {
 		t.Fatal("a start whose daemon never answers succeeded")
 	}
+	close(startFinished)
 	if code := <-downCode; code != 0 {
 		t.Fatalf("pen down exit %d after the start gave up", code)
 	}
@@ -858,5 +868,128 @@ func TestDownGivesUpOnATurnThatIsNeverReleasedAndNamesItsHolder(t *testing.T) {
 	var errOut bytes.Buffer
 	if code := RunDown(nil, io.Discard, &errOut); code == 0 || !strings.Contains(errOut.String(), fmt.Sprintf("pen up (pid %d)", os.Getpid())) {
 		t.Fatalf("pen down exit %d: %q, want a failure naming the holder", code, errOut.String())
+	}
+}
+
+// A leave that outlives pen leave's wait (here held at the daemon's state lock) is not a failed leave:
+// the daemon finishes it, pen leave says it is still in progress, and the next pen leave, finding the
+// node gone, removes the service and succeeds, for the Windows task and for systemd.
+func TestALeaveThatOutlivesItsClientIsFinishedByTheNextLeave(t *testing.T) {
+	for _, svc := range []string{"task", "systemd"} {
+		t.Run(svc, func(t *testing.T) {
+			rs := relaytest.New()
+			defer rs.Close()
+			var st *state.Store
+			var removed func() bool
+			if svc == "task" {
+				var calls *[]string
+				st, calls = windowsHome(t, func(string, []string) error { return nil })
+				removed = func() bool {
+					return slices.ContainsFunc(*calls, func(c string) bool { return strings.Contains(c, "/Delete") })
+				}
+			} else {
+				home, calls := fakeSystemd(t)
+				t.Setenv("PEN_TEST_MAIN", "1")
+				t.Setenv("PEN_HOSTKEYS", "none")
+				t.Setenv("PEN_SSH_DIR", filepath.Join(home, "ssh"))
+				var err error
+				if st, err = openState(); err != nil {
+					t.Fatal(err)
+				}
+				removed = func() bool {
+					_, err := os.Stat(unitPath())
+					return errors.Is(err, os.ErrNotExist) && slices.ContainsFunc(*calls, func(c serviceCall) bool { return strings.Contains(c.cmd, "disable --now") })
+				}
+			}
+			soloNode(t, st, rs.URL)
+			if err := startDetached(st); err != nil {
+				t.Fatal(err)
+			}
+			var s daemon.Status
+			if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+			old := leaveTimeout
+			t.Cleanup(func() { leaveTimeout = old })
+			leaveTimeout = 0
+			unlock, err := st.Lock() // the daemon's leave waits here, after its revoke is signed
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			code := RunLeave(nil, &out, &errOut)
+			unlock()
+			if code == 0 || !strings.Contains(errOut.String(), "still in progress") || removed() {
+				t.Fatalf("first pen leave: exit %d, %q, service removed %v; want an unfinished leave that keeps the service", code, errOut.String(), removed())
+			}
+			if !waitExit(s.PID, downWait) {
+				t.Fatal("the daemon did not finish its leave and stop")
+			}
+			if _, err := os.Stat(st.Path(daemon.LeftMarker)); err != nil {
+				t.Fatalf("the daemon did not leave: %v", err)
+			}
+			out.Reset()
+			errOut.Reset()
+			if code := RunLeave(nil, &out, &errOut); code != 0 || !removed() {
+				t.Fatalf("second pen leave: exit %d (%q %q), service removed %v; want it to finish the cleanup", code, out.String(), errOut.String(), removed())
+			}
+		})
+	}
+}
+
+// pen up on Windows takes the task turn before it touches the down record or answers from a running
+// daemon: while a pen down holds the turn, pen up waits for it, then starts the node again (it runs last).
+func TestUpWaitsForAPenDownThatHoldsTheTurn(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	var st *state.Store
+	st, _ = windowsHome(t, func(verb string, _ []string) error {
+		if verb == "/Run" {
+			return startDetached(st)
+		}
+		return nil
+	})
+	soloNode(t, st, rs.URL)
+	if err := startDetached(st); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+	fakeTaskClock(t)
+	release, err := taskTurn(st, "pen down")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waiting, downDone := make(chan struct{}), make(chan struct{})
+	old := startLockWaits
+	t.Cleanup(func() { startLockWaits = old })
+	startLockWaits = func() { close(waiting); <-downDone }
+	upCode := make(chan int, 1)
+	go func() { upCode <- RunUp(nil, io.Discard, io.Discard) }()
+	select {
+	case <-waiting:
+	case code := <-upCode:
+		_, err := os.Stat(st.Path(downMarker))
+		release()
+		t.Fatalf("pen up returned %d while pen down held the turn (down record: %v)", code, err)
+	}
+	// As pen down: stop the node inside the turn, then hand the turn over.
+	if err := stopTaskInTurn(st); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	close(downDone)
+	if code := <-upCode; code != 0 {
+		t.Fatalf("pen up exit %d", code)
+	}
+	var s daemon.Status
+	if daemon.Call(st, daemon.Request{Op: "status"}, &s) != nil {
+		t.Fatal("pen up ran last but the node does not run")
+	}
+	if _, err := os.Stat(st.Path(downMarker)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pen up ran last but the down record stays: %v", err)
 	}
 }

@@ -184,6 +184,20 @@ the same daemon operation as the CLI.
   `pen down` 1.5 min, a `pen leave` 3 min; a command that waits longer than 3 min 10 s for the turn fails and
   names the command holding it (`start.holder`). The same control-socket and command bounds apply to `pen up`,
   `pen down` and `pen leave` on macOS and Linux (`systemctl` and `launchctl` runs).
+  - What a bound cut short means: a status answer slower than 2 s from a busy but healthy daemon makes `pen up`
+    try a start (on Windows it registers the task again and runs it, which the running supervisor ignores, and
+    reports that the daemon did not start) or makes `pen down` report that the daemon did not stop; repeating
+    the command is safe. A `schtasks`, `systemctl` or `launchctl` run cut off at 15 s may or may not have taken
+    effect; the next command does not trust it: `pen up` registers the task (or rewrites the unit) and starts it
+    again and waits for the daemon to answer, `pen down` decides by whether the supervisor and daemon locks are
+    free, and `pen leave` looks for the task with `schtasks /Query` (or the unit file) before it removes it.
+  - `pen leave` waits 1 min for the daemon's leave. The daemon finishes a leave it has begun even when its client
+    stopped waiting (the revoke may already be signed and pushed), and refuses a second leave meanwhile; so a
+    `pen leave` that runs out says the leave is still in progress and keeps the service, and a later `pen leave`
+    that finds the node gone (the `left` marker, or no identity) and no daemon removes the task or unit and
+    succeeds. This holds on macOS and Linux too.
+  - With `PEN_HOME` set there is no task and no turn (Pen runs detached), so a `pen down` that overlaps a
+    `pen up` can find nothing to stop while the start completes; run `pen down` again.
 - **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
   while a reader has `mesh.json` or `config.json` open, replacing it fails with `ERROR_ACCESS_DENIED`. Saves retry
   that error (and a sharing violation) for up to 2 s while they hold the state lock, the rule of Go's

@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -71,6 +72,9 @@ type Daemon struct {
 	st     *state.Store
 	id     *ident.Identity
 	nodeID string
+
+	// leaving is set while a leave runs: a second one is refused instead of running beside it.
+	leaving atomic.Bool
 
 	cfgMu sync.Mutex
 	// cfgSave and versionsSave hold one save of config.json or versions.json from snapshot to file.

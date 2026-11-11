@@ -42,6 +42,15 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if *spawnDaemon {
 		return spawnDetached(st, stdout, stderr)
 	}
+	if !*foreground && !*supervise && taskTurnApplies() {
+		// Before ending a pen down or answering from a running daemon: a pen down holding the turn
+		// finishes first, and the task start below runs in this turn.
+		release, err := taskTurn(st, "pen up")
+		if err != nil {
+			return fail(stderr, err)
+		}
+		defer release()
+	}
 	// refused ends a start pen up cannot make: the service exits 0, since its manager restarts
 	// only a failure and nothing changes between restarts; everyone else sees the failure. The
 	// Windows task's supervisor is a service start too.

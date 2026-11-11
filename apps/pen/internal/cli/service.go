@@ -181,7 +181,7 @@ func startService(mode string, st *state.Store) error {
 			return err
 		}
 	case "task":
-		if err := startTask(st); err != nil {
+		if err := startTaskInTurn(st); err != nil { // pen up holds the task turn
 			return err
 		}
 	}

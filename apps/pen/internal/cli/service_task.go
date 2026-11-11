@@ -92,6 +92,16 @@ func utf16File(s string) []byte {
 
 // startTask registers (or replaces) the logon task and starts it now.
 func startTask(st *state.Store) error {
+	release, err := taskTurn(st, "pen up")
+	if err != nil {
+		return err
+	}
+	defer release()
+	return startTaskInTurn(st)
+}
+
+// startTaskInTurn is startTask for a caller that holds the task turn (pen up).
+func startTaskInTurn(st *state.Store) error {
 	account, err := currentAccount()
 	if err != nil {
 		return err
@@ -101,11 +111,6 @@ func startTask(st *state.Store) error {
 		return err
 	}
 	name := taskName(account)
-	release, err := taskTurn(st, "pen up")
-	if err != nil {
-		return err
-	}
-	defer release()
 	path := st.Path(".pen-task.xml")
 	def, err := renderTask(exe, account)
 	if err != nil {
@@ -209,8 +214,12 @@ func taskTurn(st *state.Store, who string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	st.WriteAtomic(turnHolder, []byte(fmt.Sprintf("%s (pid %d)\n", who, os.Getpid())), 0o600) // only names the holder in that message
-	return release, nil
+	// Only names the holder in the message above; removed at release, so a failed write names nobody.
+	st.WriteAtomic(turnHolder, []byte(fmt.Sprintf("%s (pid %d)\n", who, os.Getpid())), 0o600)
+	return func() {
+		os.Remove(st.Path(turnHolder))
+		release()
+	}, nil
 }
 
 // turnWait bounds the wait for the task turn: longer than any holder keeps it.

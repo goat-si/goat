@@ -185,8 +185,14 @@ func (d *Daemon) do(ctx context.Context, req Request) (any, error) {
 		}
 		return map[string]any{"results": res}, nil
 	case "leave":
+		// A leave runs to its end even when its client stops waiting (pen leave says it is still in
+		// progress, and a later pen leave finishes the cleanup), so a second one only says so.
+		if !d.leaving.CompareAndSwap(false, true) {
+			return nil, errors.New("this node is already leaving its mesh; run pen leave again once that has finished")
+		}
 		res, err := d.leave(ctx)
 		if err != nil {
+			d.leaving.Store(false)
 			return nil, err
 		}
 		return map[string]any{"results": res}, nil
@@ -511,19 +517,27 @@ func Call(st *state.Store, req Request, v any) error {
 	return cl.Next(v)
 }
 
-// CallWithin is Call that gives up after d: a daemon that takes the connection but never answers
-// cannot hold the caller.
+// CallWithin is Call that waits at most d for the answer once the request is sent (and dialTimeout
+// to connect): a daemon that takes the connection but never answers cannot hold the caller. The
+// request itself always goes out, so the daemon may still act on it after the caller gave up.
 func CallWithin(st *state.Store, req Request, v any, d time.Duration) error {
-	cl, err := Dial(st)
+	c, err := (&net.Dialer{Timeout: dialTimeout}).Dial("unix", SocketPath(st))
 	if err != nil {
-		return err
+		return ErrNotRunning
 	}
+	cl := &Client{c: c, dec: json.NewDecoder(c)}
 	defer cl.Close()
-	if err := cl.SetDeadline(time.Now().Add(d)); err != nil {
+	if err := c.SetWriteDeadline(time.Now().Add(dialTimeout)); err != nil {
 		return err
 	}
 	if err := cl.Send(req); err != nil {
 		return err
 	}
+	if err := c.SetDeadline(time.Now().Add(d)); err != nil {
+		return err
+	}
 	return cl.Next(v)
 }
+
+// dialTimeout bounds connecting to the control socket and writing a request to it.
+const dialTimeout = 2 * time.Second
