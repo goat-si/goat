@@ -17,6 +17,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
+import { personMessageClaim } from "./channelPersonMessage.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -102,6 +103,7 @@ const make = Effect.gen(function* () {
               kind: "inbound",
               inputId: stored.snapshot.inputId,
               clientMessageId: stored.message.externalMessageId,
+              ...personMessageClaim(stored.message),
               ...(stored.message.intent === "message" && stored.message.taskId !== undefined
                 ? { taskId: stored.message.taskId }
                 : {}),

@@ -49,6 +49,7 @@ import type * as DocumentText from "../provider/DocumentText.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import type { ChannelConnectionOwner, ChannelIngressContext } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
+import { personMessageClaim } from "./channelPersonMessage.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -443,7 +444,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (input.replyAddress.kind !== "goat") return result;
       const target =
-        input.intent === "message" && input.taskId !== undefined
+        input.intent !== "report" && input.taskId !== undefined
           ? yield* ledger.getTask(input.taskId).pipe(Effect.mapError(ledgerFailure))
           : undefined;
       const validatedTaskId =
@@ -469,6 +470,7 @@ const make = Effect.gen(function* () {
               kind: "inbound",
               inputId: result.inputId,
               clientMessageId: input.externalMessageId,
+              ...personMessageClaim(input),
               ...(validatedTaskId === undefined ? {} : { taskId: validatedTaskId }),
             },
           },

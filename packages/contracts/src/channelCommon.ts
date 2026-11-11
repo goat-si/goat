@@ -129,6 +129,10 @@ export const ChannelMessageMeta = Schema.Struct({
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   /** The question this message asks; its buttons stay only while the task still has it open. */
   questionId: Schema.optional(ChannelQuestionId),
+  /** Set when that question is the task's own (not an approval or a coding thread's question). */
+  questionKind: Schema.optional(Schema.Literal("task")),
+  /** On a person's message: the task question they sent it to answer, from its card. */
+  answersQuestionId: Schema.optional(ChannelQuestionId),
 });
 export type ChannelMessageMeta = typeof ChannelMessageMeta.Type;
 

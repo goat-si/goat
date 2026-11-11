@@ -110,6 +110,7 @@ import {
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
+import { personMessageClaim } from "./channelPersonMessage.ts";
 import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import {
@@ -928,6 +929,10 @@ const make = Effect.gen(function* () {
                   kind: "inbound",
                   inputId,
                   clientMessageId: message.externalMessageId,
+                  ...(message.intent !== "report" && message.taskId !== undefined
+                    ? { taskId: message.taskId }
+                    : {}),
+                  ...personMessageClaim(message),
                   readAt: stored.snapshot.readAt ?? readAt,
                 },
               },
@@ -1499,6 +1504,7 @@ const make = Effect.gen(function* () {
               payload: {
                 questionId: action.questionId,
                 answer: action.answer,
+                inputId,
                 sender: senderOf(answerer, message.connectionId),
               },
             },
@@ -1686,6 +1692,7 @@ const make = Effect.gen(function* () {
         options: "options" in base ? base.options : undefined,
         questionId: "questionId" in base ? base.questionId : undefined,
         interim: "interim" in base,
+        questionKind: "questionKind" in base ? base.questionKind : undefined,
       });
       const deliveries =
         goatOutcome && bot !== undefined
