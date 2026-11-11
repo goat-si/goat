@@ -110,6 +110,10 @@ const runningCount = Effect.gen(function* () {
   return counts.running + counts.queued;
 });
 
+/** The ids an answer names; the launch's own result rides only on the call that ran or joined it. */
+const ids = (answer: Admission.PlacementAnswer) =>
+  answer._tag === "Started" ? [answer.threadId, answer.runId] : answer._tag;
+
 const place = (k: Reservations.PlacementKey, launcher: Launcher, digest = "digest-1") =>
   Effect.flatMap(Admission.PlacementAdmission, (service) =>
     service.place({ key: k, digest, launch: launcher.launch }),
@@ -149,7 +153,7 @@ describe("placement admission on the target", () => {
       );
       assert.strictEqual(yield* Ref.get(launcher.calls), 1);
       assert.isTrue(answers.every((answer) => answer._tag === "Started"));
-      assert.strictEqual(new Set(answers.map((answer) => JSON.stringify(answer))).size, 1);
+      assert.strictEqual(new Set(answers.map((answer) => JSON.stringify(ids(answer)))).size, 1);
     }).pipe(Effect.provide(admission())),
   );
 
@@ -162,7 +166,8 @@ describe("placement admission on the target", () => {
         const first = yield* place(key("counted"), launcher);
         assert.strictEqual(first._tag, "Started");
         const retry = yield* place(key("counted"), launcher);
-        assert.deepStrictEqual(retry, first);
+        assert.deepStrictEqual(ids(retry), ids(first));
+        assert.isUndefined(retry._tag === "Started" ? retry.launched : "not started");
         assert.isTrue(retry._tag === "Started" && retry.runId.length > 0);
         assert.deepStrictEqual(yield* place(key("counted"), launcher, "digest-2"), {
           _tag: "Conflicting",

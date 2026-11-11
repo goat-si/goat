@@ -31,12 +31,14 @@ export const issuedAtMillis = (issuedAt: string): number | undefined => {
   return Number.isFinite(millis) ? millis : undefined;
 };
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /** The launch's command id, and with it the thread id, follow from the key alone. */
 export const placementCommandId = (key: PlacementKey): CommandId =>
   CommandId.make(
     "placement:" +
       NodeCrypto.createHash("sha256")
-        .update(JSON.stringify([key.placer, key.ownerKey, key.attempt, key.issuedAt]))
+        .update(encodeJson([key.placer, key.ownerKey, key.attempt, key.issuedAt]))
         .digest("hex"),
   );
 

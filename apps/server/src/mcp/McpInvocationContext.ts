@@ -48,6 +48,8 @@ export interface McpClientCaller {
   readonly approvals?: boolean;
   /** The origin an outside client reached; its thread links open the web app there. */
   readonly webOrigin?: string | undefined;
+  /** The mesh member this session is bound to, from the session's immutable Pen binding only. */
+  readonly pen?: { readonly nodeId: string } | undefined;
 }
 
 /** Read-only clients map to the lowest mode because McpToolAccess blocks writes first. */

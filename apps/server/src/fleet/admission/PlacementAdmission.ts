@@ -45,7 +45,13 @@ export const PRUNE_EVERY = Duration.hours(24);
 
 /** What the target can say about one placement; only its reservation row decides it. */
 export type PlacementAnswer =
-  | { readonly _tag: "Started"; readonly threadId: string; readonly runId: string }
+  | {
+      readonly _tag: "Started";
+      readonly threadId: string;
+      readonly runId: string;
+      /** What the launch returned, when this call or one it joined ran it. */
+      readonly launched?: unknown;
+    }
   | { readonly _tag: "NotStarted"; readonly threadId: string | null; readonly reason: string }
   | { readonly _tag: "Refused"; readonly refusal: AdmitRefusal }
   | { readonly _tag: "Conflicting" }
@@ -87,7 +93,7 @@ const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const epoch = NodeCrypto.randomUUID();
   const lock = yield* Semaphore.make(1);
-  const owners = new Map<string, Deferred.Deferred<void>>();
+  const owners = new Map<string, Deferred.Deferred<Option.Option<unknown>>>();
 
   const now = Clock.currentTimeMillis;
 
@@ -167,7 +173,7 @@ const make = Effect.gen(function* () {
     function* <E>(
       commandId: CommandId,
       launch: Effect.Effect<unknown, E>,
-      _done: Deferred.Deferred<void>,
+      _done: Deferred.Deferred<Option.Option<unknown>>,
     ) {
       const running = yield* launch.pipe(
         Effect.provideService(CommitGuard, guardFor(commandId)),
@@ -187,9 +193,8 @@ const make = Effect.gen(function* () {
         Effect.forever,
         Effect.forkChild,
       );
-      const exit = yield* Fiber.await(running);
-      yield* Fiber.interrupt(renewing);
-      return exit;
+      // The launch's own exit; an interrupted launch interrupts this owner too.
+      return yield* Fiber.join(running).pipe(Effect.ensuring(Fiber.interrupt(renewing)));
     },
     (effect, commandId, _launch, done) =>
       effect.pipe(
@@ -212,7 +217,14 @@ const make = Effect.gen(function* () {
                   owners.delete(commandId);
                 }),
               ),
-              Effect.andThen(Deferred.succeed(done, undefined)),
+              Effect.andThen(
+                Deferred.succeed(
+                  done,
+                  exit._tag === "Success" && exit.value._tag === "Success"
+                    ? Option.some(exit.value.value)
+                    : Option.none(),
+                ),
+              ),
             ),
         ),
       ),
@@ -265,7 +277,7 @@ const make = Effect.gen(function* () {
                 return { answer: yield* readAnswer(commandId) };
               }
               case "Admitted": {
-                const done = yield* Deferred.make<void>();
+                const done = yield* Deferred.make<Option.Option<unknown>>();
                 owners.set(commandId, done);
                 // Admission is uninterruptible; the launch it hands off must stay interruptible.
                 yield* own(commandId, input.launch(commandId), done).pipe(
@@ -285,9 +297,11 @@ const make = Effect.gen(function* () {
       );
       if ("answer" in step) return step.answer;
       const finished = yield* Deferred.await(step.wait).pipe(Effect.timeoutOption(yield* JoinWait));
-      return Option.isNone(finished)
-        ? ({ _tag: "Pending" } as const)
-        : yield* readAnswer(commandId);
+      if (Option.isNone(finished)) return { _tag: "Pending" } as const;
+      const answer = yield* readAnswer(commandId);
+      return answer._tag === "Started" && Option.isSome(finished.value)
+        ? { ...answer, launched: finished.value.value }
+        : answer;
     },
     Effect.catchTags({
       PlacementStoreError: (error) =>
