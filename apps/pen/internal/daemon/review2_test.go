@@ -2,10 +2,14 @@ package daemon
 
 import (
 	"context"
+	"net"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
@@ -25,14 +29,19 @@ func hookedFounder(t *testing.T, ctx context.Context, rs *relaytest.Server, set 
 
 // gate is a test hook that stops its caller while armed.
 type hookGate struct {
+	once    sync.Once
 	armed   atomic.Bool
 	reached chan struct{}
 	release chan struct{}
 }
 
+// newHookGate makes a gate. A test defers open, so a failed assertion never strands the daemon shutdown: defers run
+// before the cleanup that stops the daemon.
 func newHookGate() *hookGate {
 	return &hookGate{reached: make(chan struct{}, 4), release: make(chan struct{})}
 }
+
+func (g *hookGate) open() { g.once.Do(func() { close(g.release) }) }
 
 func (g *hookGate) hook() {
 	if g.armed.CompareAndSwap(true, false) {
@@ -47,6 +56,7 @@ func TestAReplacementClosesTheOldSessionsWhileTheOldHolderCannotBeWrittenTo(t *t
 	rs := relaytest.New()
 	defer rs.Close()
 	g := newHookGate()
+	defer g.open()
 	a := hookedFounder(t, ctx, rs, func(o *Options) { o.HolderWriting = g.hook })
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
@@ -68,7 +78,7 @@ func TestAReplacementClosesTheOldSessionsWhileTheOldHolderCannotBeWrittenTo(t *t
 	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("the old registration's client session closed %d, want 4401 while its holder notice is blocked", code)
 	}
-	close(g.release)
+	g.open()
 }
 
 func TestTheEndOfAReplacedRegistrationWaitsForItsMemberDeliveriesToClose(t *testing.T) {
@@ -77,9 +87,12 @@ func TestTheEndOfAReplacedRegistrationWaitsForItsMemberDeliveriesToClose(t *test
 	rs := relaytest.New()
 	defer rs.Close()
 	g := newHookGate()
+	defer g.open()
 	ended := make(chan string, 8)
+	joins := make(chan string, 8)
 	a := hookedFounder(t, ctx, rs, func(o *Options) {
 		o.RegistrationEnding = g.hook
+		o.RegistrationJoining = func(id string) { joins <- id }
 		o.ServiceEnded = func(id string) { ended <- id }
 	})
 	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
@@ -104,11 +117,18 @@ func TestTheEndOfAReplacedRegistrationWaitsForItsMemberDeliveriesToClose(t *test
 	if _, ok := old.next(t); ok {
 		t.Fatal("old holder stayed open")
 	}
-	ended <- "released"
-	close(g.release)
-	if e := <-ended; e != "released" {
-		t.Fatalf("the old registration ended (%s) before its member delivery was closed", e)
+	// Both the replacement and the old holder's own cleanup have entered the teardown: the cleanup now waits on it.
+	for n := 0; n < 2; {
+		if <-joins == old.reply["id"] {
+			n++
+		}
 	}
+	select {
+	case e := <-ended:
+		t.Fatalf("the old registration ended (%s) while its teardown was still held", e)
+	default:
+	}
+	g.open()
 	if e := <-ended; e != old.reply["id"] {
 		t.Fatalf("ended %q, want %v", e, old.reply["id"])
 	}
@@ -143,3 +163,41 @@ func TestAListDropFinishesClosingTheSessionAndItsDeliveryBeforeItsAnswer(t *test
 }
 
 func relayCode(err error) uint16 { return relay.CodeOf(err) }
+
+func TestAReplacementClosesTheOldSessionsBeforeTheNewHolderIsAnswered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	g := newHookGate()
+	defer g.open()
+	a := hookedFounder(t, ctx, rs, func(o *Options) { o.Registering = g.hook })
+	key := newKey(t)
+	prog := newProgram(t, "goat", key)
+	prog.serve()
+	old := register(t, a, "goat", prog.port(), key)
+	p := phone(t)
+	old.setList(t, 1, p)
+	sec, err := dialAs(ctx, rs, p, a, goatService())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := echo(ctx, sec, "x"); err != nil {
+		t.Fatal(err)
+	}
+	g.armed.Store(true)
+	c, err := net.Dial("unix", SocketPath(a.st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte(`{"op":"service.register","name":"goat","port":` + strconv.Itoa(prog.port()) +
+		`,"key":"` + ident.B64.EncodeToString(key) + `"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	<-g.reached // the new registration is current and its holder has not been answered
+	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
+		t.Fatalf("the old client session closed %d, want 4401 before the new holder is answered", code)
+	}
+	g.open()
+}

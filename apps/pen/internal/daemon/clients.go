@@ -211,6 +211,9 @@ func (d *Daemon) selectLocked(match func(*live) bool) (mine []*live, waits []cha
 // It runs once, whoever calls it first (the registration's own end or its replacement); every caller returns only
 // once it finished. reg must have ended.
 func (d *Daemon) endRegistration(reg *serviceReg) {
+	if d.opt.RegistrationJoining != nil {
+		d.opt.RegistrationJoining(reg.id)
+	}
 	reg.endOnce.Do(func() {
 		if d.opt.RegistrationEnding != nil {
 			d.opt.RegistrationEnding()

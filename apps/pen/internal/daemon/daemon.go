@@ -77,6 +77,10 @@ type Options struct {
 	ClientClosed func()
 	// RegistrationEnding, when set, runs as a registration's single teardown starts (tests).
 	RegistrationEnding func()
+	// RegistrationJoining, when set, is told the id each time a caller enters a registration's teardown (tests).
+	RegistrationJoining func(id string)
+	// Registering, when set, runs after a registration became current and before its holder is answered (tests).
+	Registering func()
 	// HolderWriting, when set, runs as a holder queue's writer holds write ownership, before it writes (tests).
 	HolderWriting func()
 	// ClientEnded, when set, runs when the goroutine that accepted a confirmed client or pairing session is done with

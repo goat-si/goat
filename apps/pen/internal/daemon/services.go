@@ -470,13 +470,19 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 		fail(err)
 		return
 	}
+	if old != nil {
+		// The old registration's sessions and deliveries start closing before anything is written to either holder,
+		// so no holder write delays them.
+		d.spawn(func() { d.endRegistration(old) })
+	}
+	if d.opt.Registering != nil {
+		d.opt.Registering()
+	}
 	reply(map[string]any{"t": "registered", "id": reg.id, "name": reg.name, "port": reg.port})
 	d.spawn(reg.out.run)
 	reg.wmu.Unlock()
 	if old != nil {
-		// The old registration's sessions and deliveries close at once, and its holder is told beside that: neither
-		// waits for the other, nor for queued lines.
-		d.spawn(func() { d.endRegistration(old) })
+		// The old holder is told beside its teardown, without waiting for its queued lines.
 		old.wmu.Lock()
 		old.wmu.Unlock()
 		d.spawn(func() { old.out.failWith([]byte(`{"t":"replaced","id":"` + old.id + `"}` + "\n")) })
