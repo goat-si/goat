@@ -83,10 +83,12 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	fs := newFlags("pipe", stderr)
 	home := fs.String("home", "", "state directory instead of PEN_HOME (ssh on Windows runs ProxyCommand without a shell)")
-	pos, err := parse(fs, args)
-	if err != nil {
+	// Flags come before the node only: ssh puts the host name into what follows, and a name that
+	// arrives as several arguments (Win32-OpenSSH quotes nothing) must not be read as flags.
+	if err := fs.Parse(args); err != nil {
 		return 255
 	}
+	pos := fs.Args()
 	if len(pos) != 2 {
 		return die(errors.New("usage: pen pipe <node> <port>"))
 	}

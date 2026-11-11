@@ -40,6 +40,13 @@ func quoteArg(s string) string {
 	return b.String()
 }
 
+// The pen-* block's Host pattern and its ProxyCommand's node argument. No shell reads the command
+// here, and pen pipe reads no flag after the node, so a typed name needs no quoting.
+const (
+	fallbackHost = "pen-*"
+	fallbackNode = "%n"
+)
+
 // connectionReuse: Win32-OpenSSH has no ControlMaster.
 const connectionReuse = false
 
