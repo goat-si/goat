@@ -292,4 +292,12 @@ describe("which approvals the decision feed announces", () => {
     expect(approvalHandoffShownBy(threads, ThreadId.make("root"), "approval")).toBeNull();
     expect([...feedOwnedApprovalThreads(threads, true)]).toEqual(["child"]);
   });
+  it("owns a parent that waits on a question while its child waits on an approval handoff", () => {
+    const question = { id: RuntimeRequestId.make("q"), kind: "user_input" as const, createdAt };
+    const owned = feedOwnedApprovalThreads(
+      [shell("parent", question), shell("child", handoff("child-a"), "parent")],
+      true,
+    );
+    expect([...owned].sort()).toEqual(["child", "parent"]);
+  });
 });

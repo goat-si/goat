@@ -154,8 +154,9 @@ export function feedOwnedApprovalThreads(
   }
   for (const id of viaHandoff) {
     const own = byId.get(id)?.pendingRuntimeRequest;
-    // A provider approval anywhere below keeps the shell notification it raises.
-    if (!viaProvider.has(id) && (own === null || own?.handoff !== undefined)) owned.add(id);
+    // A provider approval here or below keeps the shell notification it raises.
+    const ownProviderApproval = own?.handoff === undefined && isPendingApprovalRequest(own);
+    if (!viaProvider.has(id) && !ownProviderApproval) owned.add(id);
   }
   return owned;
 }
