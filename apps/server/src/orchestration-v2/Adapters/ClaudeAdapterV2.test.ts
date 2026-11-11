@@ -14122,6 +14122,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             uuid: "00000000-0000-4000-8000-000000001005",
             state: "start",
             secondState: "queued",
+            startedAt: DateTime.toEpochMillis(memberStartedAt),
           }),
         );
         // The coordinator's turn item is emitted after its members are
@@ -14150,6 +14151,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             uuid: "00000000-0000-4000-8000-000000001017",
             state: "start",
             secondState: "queued",
+            startedAt: DateTime.toEpochMillis(memberStartedAt),
             label: "alpha:review",
             prompt: "Review the change",
             model: "claude-sonnet-4-6",
