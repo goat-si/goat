@@ -2,6 +2,7 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunAttemptId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { subagentResultForRun } from "@goat/provider-core/server/subagentProjection";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -123,5 +124,71 @@ it.effect("preserves a background command and its start time across roster snaps
       last?.providerThread.pendingBackgroundTasks?.map((task) => task.taskId),
       ["task-2"],
     );
+  }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
+it.effect("records the model reported by Claude init on the completed delegated turn", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeWakeHarnessWithOptions();
+    yield* harness.runtime.startTurn(
+      makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: yield* DateTime.now,
+        attemptId: RunAttemptId.make("actual-model"),
+        text: "Do the task",
+        attachments: [],
+      }),
+    );
+    yield* Queue.offer(
+      harness.sdkMessages,
+      frame({
+        type: "system",
+        subtype: "init",
+        model: "claude-opus-4-5-20251101",
+        uuid: "init",
+        session_id: "native-thread-claude-wake",
+      }),
+    );
+    yield* Queue.offer(
+      harness.sdkMessages,
+      frame({
+        type: "result",
+        subtype: "success",
+        duration_ms: 10,
+        duration_api_ms: 10,
+        is_error: false,
+        num_turns: 1,
+        result: "Done",
+        stop_reason: "end_turn",
+        total_cost_usd: 0,
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        modelUsage: {},
+        permission_denials: [],
+        uuid: "result",
+        session_id: "native-thread-claude-wake",
+        terminal_reason: "completed",
+      }),
+    );
+    yield* Queue.take(harness.terminalReceipts);
+    yield* harness.awaitEventsRecorded;
+    const turn = harness.events.filter((event) => event.type === "provider_turn.updated").at(-1);
+    assert.equal(Reflect.get(turn?.providerTurn ?? {}, "model"), "claude-opus-4-5");
+    if (turn === undefined) throw new Error("No provider turn");
+    const result = subagentResultForRun(
+      { messages: [], turnItems: [], providerTurns: [turn.providerTurn] },
+      {
+        id: "run",
+        status: "completed",
+        activeAttemptId: RunAttemptId.make("actual-model"),
+        modelSelection: { model: "claude-sonnet-4-6" },
+      } as never,
+    );
+    assert.include(result.text, "provider reported running claude-opus-4-5");
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );

@@ -66,3 +66,29 @@ export function claudeBackgroundDetails(
     ? { command, startedAt: DateTime.formatIso(launch.startedAt) }
     : {};
 }
+
+export function parseClaudeBackgroundTaskEntry(
+  entry: unknown,
+  monitorTasks: ReadonlyMap<string, unknown>,
+): OrchestrationV2PendingBackgroundTask | null {
+  if (entry === null || typeof entry !== "object") {
+    return null;
+  }
+  const taskId = Reflect.get(entry, "task_id");
+  if (typeof taskId !== "string" || taskId.length === 0) {
+    return null;
+  }
+  const rawTaskType = Reflect.get(entry, "task_type");
+  const taskType = typeof rawTaskType === "string" ? rawTaskType : null;
+  if (!isClaudeOpaqueBackgroundTaskType(taskType)) {
+    return null;
+  }
+  const description = Reflect.get(entry, "description");
+  return claudePendingBackgroundTask({
+    taskId,
+    taskType,
+    startedByMonitor: monitorTasks.has(taskId),
+    description: typeof description === "string" ? description : undefined,
+    parentTaskId: Reflect.get(entry, "parent_task_id"),
+  });
+}

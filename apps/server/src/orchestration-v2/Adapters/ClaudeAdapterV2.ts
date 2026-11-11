@@ -2,6 +2,7 @@ import {
   claudePendingBackgroundTask,
   isClaudeOpaqueBackgroundTaskType,
   mergeClaudeBackgroundTasks,
+  parseClaudeBackgroundTaskEntry,
   claudeBackgroundDetails,
 } from "./ClaudeBackgroundTasks.ts";
 import {
@@ -213,6 +214,7 @@ import {
   type ClaudeModelCatalog,
   getClaudeCatalogModelCapabilities,
   resolveClaudeModelSlug,
+  resolveClaudeReportedModelSlug,
   scopeClaudeModelCatalog,
 } from "../../provider/ClaudeModelCatalog.ts";
 import {
@@ -2892,32 +2894,6 @@ function claudePendingBackgroundTasksFromRoster(
   );
 }
 
-function parseClaudeBackgroundTaskEntry(
-  entry: unknown,
-  monitorTasks: ReadonlyMap<string, unknown>,
-): OrchestrationV2PendingBackgroundTask | null {
-  if (entry === null || typeof entry !== "object") {
-    return null;
-  }
-  const taskId = Reflect.get(entry, "task_id");
-  if (typeof taskId !== "string" || taskId.length === 0) {
-    return null;
-  }
-  const rawTaskType = Reflect.get(entry, "task_type");
-  const taskType = typeof rawTaskType === "string" ? rawTaskType : null;
-  if (!isClaudeOpaqueBackgroundTaskType(taskType)) {
-    return null;
-  }
-  const description = Reflect.get(entry, "description");
-  return claudePendingBackgroundTask({
-    taskId,
-    taskType,
-    startedByMonitor: monitorTasks.has(taskId),
-    description: typeof description === "string" ? description : undefined,
-    parentTaskId: Reflect.get(entry, "parent_task_id"),
-  });
-}
-
 function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
   return (
     firstStringInputField(input, ["file_path", "notebook_path", "path", "filename", "fileName"]) ??
@@ -3836,6 +3812,7 @@ interface ActiveClaudeTurnContext {
   // Steers end segments whose usage is excluded from the final result; bill them too, oldest first.
   readonly steeredSegmentUsage: Array<SDKResultMessage["usage"]>;
   readonly rootModels: Set<string>;
+  executedModel: string | undefined;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
@@ -3893,6 +3870,7 @@ interface ClaudeLiveQueryContext {
   // The CLI may fall back from the requested mode on its first init frame.
   openedPermissionMode: PermissionMode;
   receivedInit: boolean;
+  reportedModel: string | undefined;
   permissionMode: PermissionMode;
   stopping: boolean;
   readonly subagentsFromEarlierProcesses: ReadonlySet<ActiveClaudeSubagent>;
@@ -4908,6 +4886,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               status: "running",
               startedAt: context.startedAt,
               completedAt: null,
+              ...(context.executedModel === undefined ? {} : { model: context.executedModel }),
               tokenUsage,
             },
           });
@@ -5421,6 +5400,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           status: input.status,
           startedAt: input.context.startedAt,
           completedAt: input.completedAt,
+          ...(input.context.executedModel === undefined
+            ? {}
+            : { model: input.context.executedModel }),
         });
 
         const buildToolCallArtifacts = (input: {
@@ -8430,6 +8412,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ) {
                 context.rootModels.add(message.message.model);
               }
+              if (message.message.model && message.message.model !== "<synthetic>") {
+                context.executedModel = resolveClaudeReportedModelSlug(
+                  modelCatalog,
+                  message.message.model,
+                );
+              }
               // Subagent uuids exist only in the sidechain transcript, so resume and fork cannot target them.
               context.nativeMessageCursor = message.uuid;
               context.latestAssistantRateLimit =
@@ -9469,6 +9457,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const context = yield* Ref.get(activeTurn);
           const liveQuery = yield* Ref.get(queryContext);
           if (
+            liveQuery?.query === input.query &&
+            message.type === "system" &&
+            message.subtype === "init" &&
+            typeof message.model === "string" &&
+            message.model.trim() &&
+            message.model !== "<synthetic>"
+          ) {
+            liveQuery.reportedModel = resolveClaudeReportedModelSlug(
+              modelCatalog,
+              message.model.trim(),
+            );
+            if (context !== null) {
+              context.executedModel = liveQuery.reportedModel;
+              liveQuery.reportedModel = undefined;
+            }
+          }
+          if (
             context?.promptUuid === null &&
             liveQuery?.query === input.query &&
             isClaudeRootTurnFrame(message)
@@ -10200,6 +10205,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               ),
             );
+            if (live.selection.apiModelId !== compiledSelection.apiModelId)
+              live.reportedModel = undefined;
             live.selection = compiledSelection;
           }
           if (
@@ -10396,6 +10403,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             promptEchoMode: "unknown",
             openedPermissionMode: queryOptions.permissionMode,
             receivedInit: false,
+            reportedModel: undefined,
             permissionMode: queryOptions.permissionMode,
             stopping: false,
             handedOffSubagents: new Set(),
@@ -10627,6 +10635,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               compactionFailure: null,
               steeredSegmentUsage: [],
               rootModels: new Set(),
+              executedModel: querySession.reportedModel,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),
@@ -10638,6 +10647,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               heldRootFrames: [],
             };
             const attachTurn = Effect.gen(function* () {
+              querySession.reportedModel = undefined;
               yield* Ref.set(activeTurn, context);
               const attached = yield* claimClaudeQuery(queryContext, querySession, context);
               if (!attached) {

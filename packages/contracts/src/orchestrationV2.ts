@@ -1196,6 +1196,8 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   ...Restart.SurvivingRestartFields,
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
+  /** Model reported by the provider for this turn, when available. */
+  model: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
 

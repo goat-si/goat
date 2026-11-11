@@ -72,6 +72,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
+import { latestProviderTurnForAttempt } from "@goat/contracts";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
@@ -1597,6 +1598,7 @@ const make = Effect.gen(function* () {
           "contextTransfers",
           "subagents",
           "providerThreads",
+          "providerTurns",
           "runtimeRequests",
           "nodes",
         ],
@@ -1728,7 +1730,16 @@ const make = Effect.gen(function* () {
       : null;
     const resultContextTransferId = resultTransfer?.id ?? null;
     const latestTerminalResultContextTransferId = resultTransferForRun(terminalRun)?.id ?? null;
-    const modelSelection = childRun?.modelSelection ??
+    const executionRun =
+      task.result === null
+        ? (taskResultRun ?? childRun)
+        : (childControls.runs.find((run) => run.id === resultTransfer?.sourcePoint.runId) ??
+          childRun);
+    const executedModel = latestProviderTurnForAttempt(
+      childControls.providerTurns ?? [],
+      executionRun?.activeAttemptId,
+    )?.model;
+    const modelSelection = executionRun?.modelSelection ??
       childControls.thread.modelSelection ?? {
         instanceId: task.providerInstanceId,
         model: task.model,
@@ -1745,6 +1756,7 @@ const make = Effect.gen(function* () {
       hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),
       providerInstanceId: modelSelection.instanceId,
       model: modelSelection.model,
+      ...(executedModel === undefined ? {} : { executedModel }),
 
       ...(task.role === undefined ? {} : { role: task.role }),
       ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
