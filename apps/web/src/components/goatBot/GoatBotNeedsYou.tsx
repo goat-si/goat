@@ -1,6 +1,9 @@
 import {
+  CHANNEL_OPEN_ASKS_DEFAULT_LIMIT,
+  CHANNEL_OPEN_ASKS_MAX_LIMIT,
   MAIN_BOT_ID,
   type BotProfile,
+  type ChannelListOpenAsksResult,
   type ChannelOpenAsk,
   type EnvironmentId,
 } from "@goat/contracts";
@@ -33,10 +36,22 @@ export function GoatBotNeedsYou({
   const permitted = useAtomValue(channelEnvironment.listOpenAsksPermission(environmentId));
   const supported =
     permitted && environment?.serverConfig?.environment.capabilities.goatBotOpenAsks === true;
+  // Older servers return the newest asks only, whatever the read asks for.
+  const pages = environment?.serverConfig?.environment.capabilities.goatBotOpenAsksLimit === true;
   const changes = useGoatBotTaskChanges(environmentId);
+  const [limit, setLimit] = useState(CHANNEL_OPEN_ASKS_DEFAULT_LIMIT);
   const query = useEnvironmentQuery(
-    supported ? channelEnvironment.listOpenAsks({ environmentId, input: {} }) : null,
+    supported
+      ? channelEnvironment.listOpenAsks({
+          environmentId,
+          input: limit === CHANNEL_OPEN_ASKS_DEFAULT_LIMIT ? {} : { limit },
+        })
+      : null,
   );
+  // A longer read keeps the shorter list on screen until it arrives.
+  const [kept, setKept] = useState<ChannelListOpenAsksResult | null>(null);
+  if (query.data !== null && query.data !== kept) setKept(query.data);
+  const data = query.data ?? kept;
   const [expanded, setExpanded] = useState(false);
   const navigate = useNavigate();
   const lastAsk = useRef<string | null>(null);
@@ -45,9 +60,20 @@ export function GoatBotNeedsYou({
   useEffect(() => {
     if (supported && changes) refresh();
   }, [supported, changes, refresh]);
-  const asks = query.data?.asks;
+  const asks = data?.asks;
+  const listed = asks?.length ?? 0;
+  const unlisted = pages && data !== null && listed < data.total;
+  // Asked for more than arrived: the longer read is on its way, or failed and offers Try again.
+  const reading = unlisted && listed < limit;
+  const canShowMore = unlisted && !reading && limit < CHANNEL_OPEN_ASKS_MAX_LIMIT;
+  const showMore = () =>
+    setLimit((current) =>
+      Math.min(current + CHANNEL_OPEN_ASKS_DEFAULT_LIMIT, CHANNEL_OPEN_ASKS_MAX_LIMIT),
+    );
   const openAsk = (ask: ChannelOpenAsk) => {
     lastAsk.current = askKey(ask);
+    // Reaching the last listed ask reads the next ones, so the next-ask command can go on.
+    if (canShowMore && asks?.at(-1) === ask) showMore();
     void navigate({
       to: "/bot",
       search: {
@@ -59,6 +85,10 @@ export function GoatBotNeedsYou({
   const openNext = useStableCallback(() => {
     if (!asks?.length) return false;
     const previous = asks.findIndex((ask) => askKey(ask) === lastAsk.current);
+    if (previous === asks.length - 1 && (canShowMore || reading)) {
+      if (canShowMore) showMore();
+      return;
+    }
     const ask = asks[(previous + 1) % asks.length];
     if (!ask) return false;
     openAsk(ask);
@@ -81,7 +111,7 @@ export function GoatBotNeedsYou({
     };
   }, [supported, openNext]);
   if (!supported || !visible) return null;
-  if (query.data === null) {
+  if (data === null) {
     if (query.error === null) return null;
     return (
       <div className="px-3 py-2 text-sm">
@@ -92,11 +122,11 @@ export function GoatBotNeedsYou({
       </div>
     );
   }
-  if (query.data.total === 0 && !query.data.truncated && query.error === null) return null;
+  if (data.total === 0 && !data.truncated && query.error === null) return null;
   const name = (ask: ChannelOpenAsk) =>
     bots.find((bot) => bot.botId === ask.botId)?.name ??
     (ask.botId === MAIN_BOT_ID ? "GOAT Bot" : "Bot");
-  const newest = query.data.asks[0];
+  const newest = data.asks[0];
   return (
     <div className="px-2 py-1 text-sm">
       <button
@@ -109,8 +139,8 @@ export function GoatBotNeedsYou({
         }}
       >
         <span className="shrink-0 font-semibold">
-          Needs you · {query.data.total}
-          {query.data.truncated ? "+" : ""}
+          Needs you · {data.total}
+          {data.truncated ? "+" : ""}
         </span>
         {!expanded && newest && (
           <span className="min-w-0 truncate text-xs text-sidebar-muted-foreground">
@@ -120,7 +150,7 @@ export function GoatBotNeedsYou({
       </button>
       {expanded && (
         <div>
-          {query.data.asks.map((ask) => (
+          {data.asks.map((ask) => (
             <button
               key={askKey(ask)}
               type="button"
@@ -133,9 +163,17 @@ export function GoatBotNeedsYou({
               </span>
             </button>
           ))}
-          {query.data.asks.length < query.data.total && (
+          {data.asks.length < data.total && (
             <p className="px-2 py-1 text-xs text-sidebar-muted-foreground">
-              Showing the newest {query.data.asks.length} of {query.data.total}.
+              Showing the newest {data.asks.length} of {data.total}.
+              {canShowMore && (
+                <>
+                  {" "}
+                  <button type="button" className="underline" onClick={showMore}>
+                    Show more
+                  </button>
+                </>
+              )}
             </p>
           )}
         </div>

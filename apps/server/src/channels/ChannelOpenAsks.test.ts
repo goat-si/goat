@@ -240,6 +240,11 @@ describe("open asks across bots", () => {
         result.asks.map((ask) => ask.text),
         "Old question",
       );
+      // A person who asks for more reaches the rest, oldest last.
+      const more = yield* members.openAsks(owner, 100);
+      assert.strictEqual(more.asks.length, 52);
+      assert.strictEqual(more.total, 52);
+      assert.strictEqual(more.asks.at(-1)?.text, "Old question");
     }).pipe(Effect.provide(harness.layer));
   });
   it.effect("keeps the newest ask when 200 tasks updated later hold older ones", () => {

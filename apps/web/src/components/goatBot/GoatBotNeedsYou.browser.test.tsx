@@ -5,7 +5,9 @@ import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   supported: true,
+  pages: true,
   permitted: true,
+  subscription: 1,
   revision: 0,
   data: null as unknown,
   error: null as string | null,
@@ -18,7 +20,12 @@ vi.mock("@effect/atom-react", async (original) => {
   return {
     ...(await original<typeof import("@effect/atom-react")>()),
     useAtomValue: (atom: unknown) =>
-      atom === "permission" ? state.permitted : AsyncResult.success({ revision: state.revision }),
+      atom === "permission"
+        ? state.permitted
+        : AsyncResult.success({
+            subscription: state.subscription,
+            value: { revision: state.revision },
+          }),
   };
 });
 vi.mock("@tanstack/react-router", async (original) => ({
@@ -31,6 +38,7 @@ vi.mock("~/state/environments", () => ({
       environment: {
         capabilities: {
           goatBotOpenAsks: state.supported,
+          goatBotOpenAsksLimit: state.pages,
           goatBotTaskChanges: true,
         },
       },
@@ -82,7 +90,9 @@ const bots = [
 ] as unknown as React.ComponentProps<typeof GoatBotNeedsYou>["bots"];
 function setup(data: unknown, error: string | null = null) {
   state.supported = true;
+  state.pages = true;
   state.permitted = true;
+  state.subscription = 1;
   state.revision = 0;
   state.data = data;
   state.error = error;
@@ -149,6 +159,15 @@ it("rereads when the shared task revision changes", async () => {
   expect(state.refresh).toHaveBeenCalledTimes(1);
 });
 
+it("rereads when a new subscription starts at the same revision, as after a reconnect", async () => {
+  setup({ asks, total: 2, truncated: false });
+  await using screen = await render(view());
+  state.refresh.mockClear();
+  state.subscription = 2;
+  await screen.rerender(view());
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+});
+
 it("cycles through asks with the registered command", async () => {
   setup({ asks, total: 2, truncated: false });
   await using _screen = await render(view());
@@ -194,4 +213,58 @@ it("says when the list shows fewer asks than wait", async () => {
   await using screen = await render(view());
   await userEvent.click(screen.getByRole("button", { name: /Needs you · 60/ }));
   await expect.element(screen.getByText("Showing the newest 2 of 60.")).toBeVisible();
+});
+
+/** Asks newest first, as the server sends them: one task each, all from the main bot. */
+const many = (count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    botId: BotId.make("main"),
+    taskId: ChannelTaskId.make("task-" + index),
+    kind: "question",
+    text: "Ask " + index,
+    askedAt: new Date(Date.UTC(2026, 10, 11) - index * 60_000).toISOString(),
+  }));
+
+it("shows more asks when more wait than the list holds", async () => {
+  setup({ asks: many(50), total: 60, truncated: false });
+  await using screen = await render(view());
+  expect(state.requested).toHaveBeenLastCalledWith({ environmentId, input: {} });
+  await userEvent.click(screen.getByRole("button", { name: /Needs you · 60/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await vi.waitFor(() =>
+    expect(state.requested).toHaveBeenLastCalledWith({ environmentId, input: { limit: 100 } }),
+  );
+  // The longer list arrives; everything that waits is listed, so nothing more is offered.
+  state.data = { asks: many(60), total: 60, truncated: false };
+  await screen.rerender(view());
+  await expect.element(screen.getByText("Ask 59")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  await expect.element(screen.getByText(/Showing the newest/)).not.toBeInTheDocument();
+});
+
+it("goes on past the listed asks with the next-ask command instead of starting over", async () => {
+  setup({ asks: many(50), total: 60, truncated: false });
+  await using screen = await render(view());
+  for (let step = 0; step < 50; step++) dispatchMenuAction("goatBot.nextAsk");
+  expect(state.navigate.mock.calls.at(-1)?.[0].search).toEqual({ task: "task-49" });
+  // Reaching the last listed ask reads the next ones.
+  await vi.waitFor(() =>
+    expect(state.requested).toHaveBeenLastCalledWith({ environmentId, input: { limit: 100 } }),
+  );
+  state.data = { asks: many(60), total: 60, truncated: false };
+  await screen.rerender(view());
+  dispatchMenuAction("goatBot.nextAsk");
+  expect(state.navigate.mock.calls.at(-1)?.[0].search).toEqual({ task: "task-50" });
+});
+
+it("keeps one page on a server that cannot list more", async () => {
+  setup({ asks: many(50), total: 60, truncated: false });
+  state.pages = false;
+  await using screen = await render(view());
+  await userEvent.click(screen.getByRole("button", { name: /Needs you · 60/ }));
+  await expect.element(screen.getByText("Showing the newest 50 of 60.")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  for (let step = 0; step < 51; step++) dispatchMenuAction("goatBot.nextAsk");
+  expect(state.navigate.mock.calls.at(-1)?.[0].search).toEqual({ task: "task-0" });
+  expect(state.requested).not.toHaveBeenCalledWith({ environmentId, input: { limit: 100 } });
 });

@@ -4,6 +4,7 @@ import {
   type ChannelIngestInput,
   type ChannelListBotThreadsInput,
   type ChannelQuestionId,
+  type ChannelSubscribeTaskChangesInput,
   type ChannelTaskId,
   type ChatAttachment,
   type EnvironmentId,
@@ -17,10 +18,12 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { botRowListedUntil, botRowRetiresAt } from "../goatBot/taskVisibility.ts";
 import { sameBotColor } from "../goatBot/botColor.ts";
 import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
+import { subscribeOrUnavailable } from "../rpc/client.ts";
 import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
 } from "./runtime.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
@@ -274,11 +277,13 @@ export function createChannelEnvironmentAtoms<R, E>(
     /**
      * "Read again" for the owner's channel tasks, one stream per environment however many views
      * use it. It closes soon after the last one unmounts: the server allows few per connection.
+     * A session without the stream says so, and the next session asks again.
      */
-    taskChanges: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    taskChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:channel:task-changes",
-      tag: CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
       idleTtlMs: TASK_CHANGES_IDLE_TTL_MS,
+      subscribe: (input: ChannelSubscribeTaskChangesInput) =>
+        subscribeOrUnavailable(CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges, input),
     }),
     taskChangesPermission: createCommandPermissions(
       runtime,
