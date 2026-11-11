@@ -9,6 +9,11 @@ const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFo
 
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+vi.mock("./GoatBotReplyFiles", () => ({
+  GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
+  GoatBotReplyFiles: () => null,
+}));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));

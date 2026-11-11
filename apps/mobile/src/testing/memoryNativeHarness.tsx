@@ -112,6 +112,8 @@ vi.mock("react-native", async () => {
         return { remove: () => bridge.active.delete(listener) };
       },
     },
+    Image: (props: { source?: { uri?: string }; accessibilityLabel?: string }) =>
+      createElement("img", { src: props.source?.uri, alt: props.accessibilityLabel ?? "" }),
     Modal: (props: { visible: boolean; children?: ReactNode }) =>
       props.visible ? createElement("div", { role: "dialog" }, props.children) : null,
     Text,
