@@ -322,7 +322,8 @@ fs.mkdirSync(path.dirname(runtimeFile), {recursive: true}); fs.writeFileSync(run
 if (drainCapable) fs.writeFileSync(tokenFile, "fixture-token-" + process.pid + "\\n", {mode: 0o600});
 fs.appendFileSync(path.join(test, "pids"), process.pid + "\\n");
 if (${JSON.stringify(signals.spawnChild ?? false)}) {
-  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
+  // On SIGTERM the child records which process was its parent at that moment.
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => { require('node:fs').writeFileSync(process.argv[1], String(process.ppid)); process.exit(0); }); setInterval(() => {}, 1 << 30)", path.join(test, "child-term-ppid")], { stdio: "ignore" });
   fs.appendFileSync(path.join(test, "pids"), child.pid + "\\n");
   fs.writeFileSync(path.join(test, "child-pid"), String(child.pid));
 }
