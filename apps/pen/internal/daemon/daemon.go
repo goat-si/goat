@@ -92,6 +92,12 @@ type Options struct {
 	ClientEnded func()
 	// ClientRegistering, when set, runs as a confirmed client or pairing session's check takes d.mu (tests).
 	ClientRegistering func()
+	// ClientConfirmed, when set, runs after a client or pairing handshake confirmed, before its session is
+	// registered (tests).
+	ClientConfirmed func()
+	// ClientsWaiting, when set, is told how many handshakes of dropped keys an applied list waits for, before it
+	// waits (tests).
+	ClientsWaiting func(handshakes int)
 	// PhoneSlots, when set, is told the node-wide count of held phone slots after every change, in order (tests).
 	PhoneSlots func(total int)
 }

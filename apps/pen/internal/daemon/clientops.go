@@ -260,6 +260,9 @@ func (d *Daemon) opClients(reg *serviceReg, b []byte, extra map[string]any) (*ho
 	}
 	// The answer is written only after every session of a dropped key and its delivery are closed.
 	d.closeAndWait(mine, waits)
+	if d.opt.ClientsWaiting != nil {
+		d.opt.ClientsWaiting(len(handshakes))
+	}
 	closeHandshakes(unconfirmed, handshakes)
 	e.fill(jsonLine(map[string]any{"t": "clients", "gen": gen}))
 	return e, true
@@ -288,7 +291,8 @@ func (d *Daemon) notClientKeyLocked(list map[string]string) string {
 }
 
 // setClients replaces reg's list when gen rises, reserving the answer's place in the holder's order. It also returns
-// the unconfirmed client handshakes of keys the list dropped, to close, and the done signals to wait for.
+// the unconfirmed client handshakes of keys the list dropped, to close, and the done signals of every client handshake
+// of a dropped key to wait for: one that confirmed but has no session yet is refused by its own check, after the swap.
 func (b *serviceBook) setClients(reg *serviceReg, gen uint64, list map[string]string) (*holderEntry, bool, string, []relay.Conn, []chan struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -305,7 +309,7 @@ func (b *serviceBook) setClients(reg *serviceReg, gen uint64, list map[string]st
 	reg.gen, reg.clients = gen, list
 	unconfirmed, done := reg.handshakesLocked(func(hs *handshake) bool {
 		_, kept := list[hs.key]
-		return !hs.pairing && !hs.confirmed && !kept
+		return !hs.pairing && !kept
 	})
 	return e, true, "", unconfirmed, done
 }

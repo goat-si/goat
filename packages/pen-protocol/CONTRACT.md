@@ -561,8 +561,9 @@ for N. A delivery that cannot commit fails. A committed delivery belongs to its 
 registration ends.
 
 If any step fails (the dial, a deadline, the cap, a malformed line, a wrong A, or a delivery that cannot commit),
-the node closes the socket and sends CLOSE 4404 to the caller. From v1.3, a list that drops a client's key, or the
-end of a registration, closes the client or pairing session 4401 unless it is already closing: a session whose
+the node closes the socket and sends CLOSE 4404 to the caller. From v1.3, a list that drops a client's key closes
+that key's client sessions 4401, and the end of a registration closes its client and pairing sessions 4401, unless
+the session is already closing: a session whose
 delivery failed keeps 4404, and one the transport closed (4400 decryption failure, 4408 queue overflow) or the peer
 closed keeps that close. The node sends at most one CLOSE per session. Before the list answer, and before the
 registration's end completes, every such session is closed and every connection delivered for it to the program is
@@ -679,8 +680,9 @@ node close the connection, which ends the registration.
 **Lifetime.** The list, the invite and the last applied G live only in memory. They start empty with each
 registration and end with it: when its connection closes, when the node stops, or when a newer registration of the
 name replaces it. When a registration ends, the node closes every client and pairing session admitted under it with
-4401, handshakes it answered whose key confirmation has not arrived included, along with the connections it delivered
-to the program ("Registration"), and returns their phone slots before the end completes.
+4401 (unless it is already closing, "Local delivery"), handshakes it answered that are not sessions yet included,
+along with the connections it delivered to the program ("Registration"), and returns their phone slots before the end
+completes.
 
 ### Admission of client keys
 
@@ -688,7 +690,8 @@ to the program ("Registration"), and returns their phone slots before the end co
   registration currently holding N lists the key, and only if a phone slot is free ("Phone slots"). Anything else
   closes 4401 unanswered: `tcp`, `mesh`, another name, a key on no list, a full slot.
 - Membership is checked first: a key that is a member, or a revoked member, of the node's current view is never a
-  client. Admission, the check after confirmation and the commit refuse it (4401), and lists naming it are refused.
+  client. Admission, the check after confirmation and the commit refuse it as a client (4401); a current member is
+  admitted on the member path instead. Lists naming it are refused.
   When the node applies a view change that makes a listed key a member or a revoked member, it closes that key's
   client sessions 4401, as it closes a revoked member's sessions; until that change is applied the key may already be
   admitted as a member, which is the mesh's grant (only a member can admit a key).
@@ -701,8 +704,9 @@ to the program ("Registration"), and returns their phone slots before the end co
   a client session of that registration and delivers it as in "Local delivery", with that section's cap (4429) and
   failure code (4404). A client delivery commits only if, at the commit, the registration is still current and still
   lists the key. The identity line is written after the commit, in its client form ("Identity line forms").
-- When a list drops a key, the node closes that key's client sessions 4401 (handshakes it answered whose key
-  confirmation has not arrived included), and the connections it delivered for them, before it answers the list. From that answer on, no session of that key reaches the program unless a later
+- When a list drops a key, the node closes that key's client sessions 4401 (handshakes it answered that are not
+  sessions yet included, confirmed or not), and the connections it delivered for them, and returns their phone slots,
+  before it answers the list. From that answer on, no session of that key reaches the program unless a later
   list names it again.
 - A client session is not a member session. A change of the mesh view closes it only as the bullet above says; no
   other view change does. It never marks a member

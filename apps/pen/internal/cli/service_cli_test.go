@@ -533,7 +533,7 @@ func TestServiceRegisterRefusesToForwardAnOpLineOver4096Bytes(t *testing.T) {
 }
 
 func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "pen")
+	dir, err := os.MkdirTemp(tmpRoot(), "pen")
 	if err != nil {
 		t.Fatal(err)
 	}

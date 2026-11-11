@@ -107,6 +107,9 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		defer d.svc.leaveHandshake(client.reg, client.hs)
 		if err == nil {
 			d.svc.confirmHandshake(client.hs)
+			if d.opt.ClientConfirmed != nil {
+				d.opt.ClientConfirmed()
+			}
 		}
 	}
 	if err != nil && client != nil && client.slot != nil {
