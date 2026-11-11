@@ -93,7 +93,7 @@ function replayIKpsk2(input: {
     const nonce = Buffer.alloc(12);
     nonce.writeBigUInt64LE(n, 4);
     const cipher = NodeCrypto.createCipheriv("chacha20-poly1305", k, nonce, { authTagLength: 16 });
-    cipher.setAAD(h);
+    cipher.setAAD(h, { plaintextLength: plain.length });
     const sealed = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
     n += 1n;
     mixHash(sealed);
