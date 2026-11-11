@@ -4,11 +4,42 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { currentUnsupportedNodeMessage } from "./lib/node-runtime.ts";
+import { currentUnsupportedNodeMessage, readPinnedNodeVersion } from "./lib/node-runtime.ts";
 
 const ENV_FILES = [".env", NodePath.join("infra", "relay", ".env")];
 
 const worktree = NodePath.dirname(import.meta.dirname);
+
+/** Set for the setup this one starts under the pinned Node, so it never starts a third. */
+const PINNED_NODE_RERUN = "GOAT_SETUP_PINNED_NODE";
+
+/**
+ * Ways to run setup again under the pinned Node when PATH's Node is another release.
+ * `vp env` exists only in the global vp, so a machine without it gets Node from npm.
+ */
+export function pinnedNodeRunners(input: {
+  readonly pinned: string;
+  readonly vp: boolean;
+  readonly npx: boolean;
+}): {
+  readonly command: string;
+  readonly tool: string;
+}[] {
+  const setup = "node scripts/setup-worktree.ts";
+  return [
+    ...(input.vp
+      ? [{ command: `vp env exec --node ${input.pinned} -- ${setup}`, tool: "vp" }]
+      : []),
+    ...(input.npx
+      ? [
+          {
+            command: `npx --yes --package=node@${input.pinned} -- ${setup}`,
+            tool: `npx node@${input.pinned}`,
+          },
+        ]
+      : []),
+  ];
+}
 
 export function worktreeInstallCandidates(tools: {
   readonly vp: boolean;
@@ -38,6 +69,19 @@ function toolOnPath(name: string): boolean {
     stdio: "ignore",
   });
   return result.status === 0;
+}
+
+/** Signals the group a detached child leads, so everything it started gets the signal. */
+function signalProcessGroup(child: NodeChildProcess.ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group is already gone; fall through to the child itself.
+    }
+  }
+  child.kill(signal);
 }
 
 function isDirectRun(): boolean {
@@ -79,7 +123,11 @@ async function main(): Promise<void> {
   });
   process.on("exit", (code) => {
     if (code === 0) NodeFS.writeFileSync(doneMarker, "");
-    else NodeFS.writeFileSync(failedMarker, `Setup exited with code ${code}.\n${failureDetail}\n`);
+    else {
+      // A cancelled rerun may have finished first; only one end marker may remain.
+      NodeFS.rmSync(doneMarker, { force: true });
+      NodeFS.writeFileSync(failedMarker, `Setup exited with code ${code}.\n${failureDetail}\n`);
+    }
     NodeFS.rmSync(runningMarker, { force: true });
   });
   // A cancelled setup must still leave a marker, or agents would wait forever.
@@ -88,18 +136,75 @@ async function main(): Promise<void> {
   // open, so no marker appears while the installer can still write node_modules.
   let cancelSignal: NodeJS.Signals | undefined;
   let activeInstall: NodeChildProcess.ChildProcess | undefined;
+  let activeRerun: NodeChildProcess.ChildProcess | undefined;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(signal, () => {
       cancelSignal = signal;
-      if (activeInstall) activeInstall.kill(signal);
+      if (activeRerun) signalProcessGroup(activeRerun, signal);
+      else if (activeInstall) activeInstall.kill(signal);
       else process.exit(1);
     });
   }
 
   const unsupportedNode = currentUnsupportedNodeMessage("node scripts/setup-worktree.ts");
   if (unsupportedNode) {
-    failureDetail = unsupportedNode;
-    process.stderr.write(`${unsupportedNode}\n`);
+    // A machine that only has another Node, such as a fresh cloud VM, still sets up:
+    // the same script runs once more under the pinned release and owns the markers.
+    const pinned = readPinnedNodeVersion();
+    const runners =
+      // Windows has no process group to cancel a rerun through, so it keeps refusing.
+      // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before `vp i`, with no Effect runtime.
+      process.env[PINNED_NODE_RERUN] === "1" || process.platform === "win32"
+        ? []
+        : pinnedNodeRunners({ pinned, vp: toolOnPath("vp"), npx: toolOnPath("npx") });
+    const tried: string[] = [];
+    for (const runner of runners) {
+      process.stderr.write(
+        `Worktree setup: Node.js ${process.versions.node} is not the pinned ${pinned}; running setup under it with ${runner.tool}.\n`,
+      );
+      const rerun = NodeChildProcess.spawn(runner.command, {
+        cwd: worktree,
+        shell: true,
+        // Its own group, so a cancel reaches the runner and the setup under it, not only the shell.
+        detached: true,
+        // Piped, so `close` waits for every process the runner started, as the install below does.
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, [PINNED_NODE_RERUN]: "1" },
+      });
+      activeRerun = rerun;
+      let rerunOutput = "";
+      for (const [source, target] of [
+        [rerun.stdout, process.stdout],
+        [rerun.stderr, process.stderr],
+      ] as const) {
+        source.setEncoding("utf8");
+        source.on("data", (chunk: string) => {
+          target.write(chunk);
+          rerunOutput = (rerunOutput + chunk).slice(-8_000);
+        });
+      }
+      const status = await new Promise<number | null>((resolve) => rerun.on("close", resolve));
+      activeRerun = undefined;
+      // The rerun leaves setup-done or setup-failed; neither means the runner never started it.
+      if (status === 0 && !cancelSignal && NodeFS.existsSync(doneMarker)) process.exit(0);
+      const rerunFailure = NodeFS.existsSync(failedMarker)
+        ? NodeFS.readFileSync(failedMarker, "utf8").split("\n").slice(1).join("\n").trimEnd()
+        : undefined;
+      if (cancelSignal || rerunFailure !== undefined) {
+        failureDetail = cancelSignal ? `Cancelled by ${cancelSignal}.` : (rerunFailure ?? "");
+        process.exit(status || 1);
+      }
+      // Agents wait on this marker; the runner's own exit must not look like no setup.
+      NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+      tried.push(
+        `${runner.tool}: ${rerunOutput.trimEnd().split("\n").slice(-10).join("\n") || "no output"}`,
+      );
+    }
+    failureDetail =
+      tried.length === 0
+        ? unsupportedNode
+        : `${unsupportedNode}\nSetup could not start itself under Node.js ${pinned}. Tried:\n${tried.join("\n")}`;
+    process.stderr.write(`${failureDetail}\n`);
     process.exit(1);
   }
 
