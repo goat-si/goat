@@ -459,11 +459,15 @@ export function GoatBotScreen(props: {
   );
   // Something else hands a question to the message box, which then answers it until sent.
   const inputRef = useRef<TextInputInstance>(null);
-  const answering = useGoatBotAnswering(visibleRows);
+  const answering = useGoatBotAnswering(
+    visibleRows,
+    JSON.stringify([member?.botId ?? null, taskId ?? null]),
+  );
   const startAnswering = answering.start;
   const onSomethingElse = useCallback(
     (target: GoatBotAnswerTarget | null) => {
-      if (target !== null) startAnswering(target);
+      // The row used decides: its question, or none for a question no task asked.
+      startAnswering(target);
       inputRef.current?.focus();
     },
     [startAnswering],
@@ -544,14 +548,18 @@ export function GoatBotScreen(props: {
       return false;
     }
     setText(request);
+    // A drafted request is its own message, never an answer to a question.
+    answering.stop();
     if (homeOpen) focusOnDismiss.current = request.length;
     else focusInput(request.length);
     return true;
   };
+  const answerBlockedByFiles = answering.target !== null && (attachments.length > 0 || intake > 0);
   const send = () => {
-    // An answer to a question goes to its task as words alone; files stay in the box.
+    // An answer to a question goes to its task as words alone.
     const target = answering.target;
     if (target !== null) {
+      if (answerBlockedByFiles) return;
       if (onAnswer(text.trim(), target.taskId, target.questionId)) {
         answering.stop();
         setText("");
@@ -580,7 +588,8 @@ export function GoatBotScreen(props: {
     : undefined;
   const hasDraft = text.trim().length > 0 || attachments.length > 0;
   const canSubmit =
-    session.canSend && (answering.target === null ? hasDraft : text.trim().length > 0);
+    session.canSend &&
+    (answering.target === null ? hasDraft : text.trim().length > 0 && !answerBlockedByFiles);
   const modelMenu = goatBotModelPillMenu(memberModelMenu, mainModelMenu, member !== null);
   const chatTasks = useMemo(
     () =>
@@ -805,7 +814,11 @@ export function GoatBotScreen(props: {
           onRemove={removeAttachment}
         />
         {answering.target !== null ? (
-          <GoatBotAnsweringChip target={answering.target} onStop={answering.stop} />
+          <GoatBotAnsweringChip
+            target={answering.target}
+            blockedByFiles={answerBlockedByFiles}
+            onStop={answering.stop}
+          />
         ) : null}
         {/* Two rows on a phone: the field, then attach, model and send under the thumb. */}
         <TextInput
