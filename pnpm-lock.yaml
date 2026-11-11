@@ -201,6 +201,9 @@ catalogs:
     '@effect/sql-sqlite-do':
       specifier: 4.0.5
       version: 4.0.5
+    '@noble/ciphers':
+      specifier: 1.3.0
+      version: 1.3.0
     '@noble/curves':
       specifier: 1.9.1
       version: 1.9.1
@@ -1713,6 +1716,16 @@ importers:
         version: 1.4.0(@astrojs/compiler-rs@0.5.1)(@tsc-rs/typescript@0.8.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(@volar/typescript@2.4.28(@tsc-rs/typescript@0.8.0))(bufferutil@4.1.0)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.0(@noble/hashes@1.8.0))(playwright@1.60.0)(terser@5.48.0)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
 
   packages/pen-protocol:
+    dependencies:
+      '@noble/ciphers':
+        specifier: 'catalog:'
+        version: 1.3.0
+      '@noble/curves':
+        specifier: 'catalog:'
+        version: 1.9.1
+      '@noble/hashes':
+        specifier: 'catalog:'
+        version: 1.8.0
     devDependencies:
       '@types/node':
         specifier: 24.12.4
@@ -5447,6 +5460,10 @@ packages:
     peerDependenciesMeta:
       hono:
         optional: true
+
+  '@noble/ciphers@1.3.0':
+    resolution: {integrity: sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==}
+    engines: {node: ^14.21.3 || >=16}
 
   '@noble/curves@1.9.1':
     resolution: {integrity: sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA==}
@@ -16402,6 +16419,8 @@ snapshots:
   '@neon/functions@0.11.0(hono@4.13.7)':
     optionalDependencies:
       hono: 4.13.7
+
+  '@noble/ciphers@1.3.0': {}
 
   '@noble/curves@1.9.1':
     dependencies:

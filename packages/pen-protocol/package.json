@@ -7,12 +7,24 @@
     "./identity": "./src/identity.ts",
     "./login": "./src/login.ts",
     "./service": "./src/service.ts",
-    "./ready": "./src/ready.ts"
+    "./ready": "./src/ready.ts",
+    "./client/errors": "./src/client/errors.ts",
+    "./client/runtime": "./src/client/runtime.ts",
+    "./client/bytes": "./src/client/bytes.ts",
+    "./client/crypto": "./src/client/crypto.ts",
+    "./client/noise": "./src/client/noise.ts"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",
     "typecheck": "tsc --noEmit",
-    "vectors": "node scripts/vectors.ts"
+    "vectors": "node scripts/vectors.ts",
+    "bench:noise": "node scripts/bench-noise.ts",
+    "hermes-check": "node scripts/hermes-check.ts"
+  },
+  "dependencies": {
+    "@noble/ciphers": "catalog:",
+    "@noble/curves": "catalog:",
+    "@noble/hashes": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
