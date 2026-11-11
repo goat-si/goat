@@ -4,7 +4,7 @@ import type { useNavigate } from "@tanstack/react-router";
 
 import { BotIcon } from "~/components/solar";
 import { channelEnvironment } from "~/state/channels";
-import { useEnvironment } from "~/state/environments";
+import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "../CommandPalette.logic";
 import { useGoatBotEnabled } from "./useGoatBotSession";
@@ -15,14 +15,12 @@ type BotNavigate = ReturnType<typeof useNavigate>;
 export function useGoatBotPaletteBots(): ReadonlyArray<BotProfile> {
   const { environment } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
-  const presentation = useEnvironment(environmentId);
-  const capabilities = presentation?.serverConfig?.environment.capabilities;
+  const configs = useServerConfigs();
+  const supported =
+    environmentId !== null &&
+    configs.get(environmentId)?.environment.capabilities.goatBotProfiles === true;
   const profiles = useEnvironmentQuery(
-    presentation?.connection.phase === "connected" &&
-      environmentId !== null &&
-      capabilities?.goatBotProfiles === true
-      ? channelEnvironment.listBots({ environmentId, input: {} })
-      : null,
+    supported ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
   );
   return (profiles.data?.bots ?? []).filter((bot) => bot.state !== "deleted");
 }
