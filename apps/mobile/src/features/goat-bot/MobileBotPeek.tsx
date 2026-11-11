@@ -15,8 +15,6 @@ import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 const PEEK_MESSAGES = 20;
-/** About eight lines of a message; the thread holds the rest. */
-const PEEK_CARD_MAX_HEIGHT = 200;
 
 /**
  * A task seen from the bot's home without leaving it: its state, the latest words of its work
@@ -172,8 +170,8 @@ function MobileBotPeekMessages(props: {
             item.type === "assistant_message" ? (
               <View
                 key={item.id}
-                className="self-start overflow-hidden rounded-2xl bg-goat-bot-message px-3 py-2"
-                style={{ maxWidth: "88%", maxHeight: PEEK_CARD_MAX_HEIGHT }}
+                className="self-start rounded-2xl bg-goat-bot-message px-3 py-2"
+                style={{ maxWidth: "88%" }}
               >
                 <GoatBotMarkdown
                   text={item.text}

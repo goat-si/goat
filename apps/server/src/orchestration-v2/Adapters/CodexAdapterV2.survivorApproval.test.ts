@@ -30,6 +30,7 @@ const makeService = (order: string[]) =>
     list: Effect.succeed([binding]),
     startBlockedThreads: Effect.succeed([]),
     setStartWake: () => Effect.void,
+    onFenceChange: () => Effect.void,
     release: () => Effect.void,
     classifyRecord: () => Effect.succeed({ type: "unverifiable" }),
     classifyExisting: () => Effect.succeed("survivor" as const),

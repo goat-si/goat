@@ -17,6 +17,7 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { nativeTurnOwnedByRun } from "../../provider/CodexHeldTurnStop.ts";
@@ -148,6 +149,27 @@ export const make = Effect.gen(function* () {
    * so no run can start waiting between the two unseen.
    */
   const start = Effect.gen(function* () {
+    const scope = yield* Scope.Scope;
+    // A fence can change on its own, as when one of two held turns ends; changes in a burst
+    // share one pass, and the writer never waits for it.
+    let changed = false;
+    let following = false;
+    const catchUp: Effect.Effect<void> = Effect.suspend(() => {
+      if (!changed) {
+        following = false;
+        return Effect.void;
+      }
+      changed = false;
+      return reconcileHeld.pipe(Effect.andThen(catchUp));
+    });
+    yield* survivors.onFenceChange(
+      Effect.suspend(() => {
+        changed = true;
+        if (following) return Effect.void;
+        following = true;
+        return catchUp.pipe(Effect.forkIn(scope), Effect.asVoid);
+      }),
+    );
     const cursor = yield* sink.latestSequence();
     const created = yield* Deferred.make<void>();
     const updated = yield* Deferred.make<void>();

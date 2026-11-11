@@ -1,6 +1,6 @@
-import { goatBotName } from "@goat/client-runtime/goatBot";
+import { goatBotAccent, goatBotName } from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
-import { createContext, useContext } from "react";
+import { createContext, useContext, type CSSProperties } from "react";
 
 /** The member bot whose chat, task pane or work panel is open; null for the main bot. */
 export const GoatBotMemberContext = createContext<BotProfile | null>(null);
@@ -29,6 +29,20 @@ export function useGoatBotAvatar(): string | null {
   const member = useContext(GoatBotMemberContext);
   const main = useContext(GoatBotMainProfileContext);
   return (member ?? main)?.avatar ?? null;
+}
+
+/**
+ * The open member's accent as custom properties on the chat root, so its person pill and Send
+ * read it. Null for the main bot and a member without a color: they keep the theme's neutral.
+ */
+export function useGoatBotAccentStyle(): CSSProperties | undefined {
+  const accent = goatBotAccent(useContext(GoatBotMemberContext));
+  return accent === null
+    ? undefined
+    : ({
+        "--goat-bot-accent": accent.background,
+        "--goat-bot-accent-foreground": accent.foreground,
+      } as CSSProperties);
 }
 
 /** The /bot search that keeps a task link on the bot it belongs to. */
