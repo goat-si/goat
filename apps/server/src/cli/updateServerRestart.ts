@@ -4,12 +4,14 @@ import {
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RuntimeDrainResult,
 } from "@goat/contracts";
+import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import {
@@ -27,6 +29,11 @@ export type HandStartedRestart =
   | { readonly _tag: "stopped"; readonly reason: string };
 
 const unavailable = (reason: string): HandStartedRestart => ({ _tag: "unavailable", reason });
+
+const RelaunchDescriptor = Schema.Struct({
+  instanceId: Schema.optionalKey(Schema.String),
+  capabilities: Schema.Struct({ runtimeRelaunch: Schema.optionalKey(Schema.Boolean) }),
+});
 
 /**
  * Asks a server started by hand to drain and start itself again on targetVersion. Running turns
@@ -53,6 +60,20 @@ export const restartHandStartedServer = Effect.fn("cli.update.restart_hand_start
         Effect.orElseSucceed(() => ""),
       );
     if (token === "") return unavailable("Could not read this server's runtime control token.");
+    // A server that predates relaunch ignores the request key and would just stop.
+    const descriptor = yield* http
+      .execute(HttpClientRequest.get(`http://127.0.0.1:${server.port}${GOAT_ENVIRONMENT_PATH}`))
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(RelaunchDescriptor)),
+        Effect.option,
+      );
+    if (
+      Option.isNone(descriptor) ||
+      descriptor.value.instanceId !== server.instanceId ||
+      descriptor.value.capabilities.runtimeRelaunch !== true
+    )
+      return unavailable("This server's version cannot restart itself.");
     const request = HttpClientRequest.post(
       `http://127.0.0.1:${server.port}${GOAT_RUNTIME_DRAIN_PATH}`,
     ).pipe(

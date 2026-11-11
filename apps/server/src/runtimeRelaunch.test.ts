@@ -38,7 +38,11 @@ const prepare = (input: {
         started.push(command);
       }),
     ).pipe(
-      Effect.provideService(ServerConfig.ServerConfig, { ...config, mode: input.mode ?? "web" }),
+      Effect.provideService(ServerConfig.ServerConfig, {
+        ...config,
+        mode: input.mode ?? "web",
+        port: 3773,
+      }),
       Effect.provideService(HostProcess.Platform, platform),
       Effect.provideService(HostProcess.Environment, input.env ?? { GOAT_OTLP_HEADERS: "a=b%20c" }),
       Effect.provideService(HostProcess.WorkingDirectory, "C:\\work"),
@@ -68,6 +72,26 @@ it.layer(NodeServices.layer)("RuntimeRelaunch", (it) => {
             env: { GOAT_OTLP_HEADERS: "a=b%20c" },
           },
         ]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "keeps an automatically chosen port, since the successor picks before the old server exits",
+    () =>
+      Effect.gen(function* () {
+        const automatic = yield* prepare({
+          argv: ["C:\\goat\\goat.exe", "C:\\goat\\goat.exe", "serve"],
+        });
+        assert.deepEqual(automatic.started[0]?.args, ["serve", "--port", "3773"]);
+        const fromEnv = yield* prepare({
+          argv: ["C:\\goat\\goat.exe", "C:\\goat\\goat.exe", "serve"],
+          env: { GOAT_PORT: "3773" },
+        });
+        assert.deepEqual(fromEnv.started[0]?.args, ["serve"]);
+        const inline = yield* prepare({
+          argv: ["C:\\goat\\goat.exe", "C:\\goat\\goat.exe", "serve", "--port=3773"],
+        });
+        assert.deepEqual(inline.started[0]?.args, ["serve", "--port=3773"]);
       }).pipe(Effect.scoped),
   );
 

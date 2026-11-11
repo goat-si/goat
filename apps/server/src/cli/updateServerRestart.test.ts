@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { GOAT_RUNTIME_CONTROL_HEADER, GOAT_RUNTIME_DRAIN_PATH } from "@goat/contracts";
+import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -22,6 +23,7 @@ const server: PersistedServerRuntimeState = {
 const run = (
   answer: (body: unknown) => unknown,
   successor?: Partial<PersistedServerRuntimeState>,
+  descriptor: unknown = { instanceId: "old-start", capabilities: { runtimeRelaunch: true } },
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -32,6 +34,10 @@ const run = (
     const requests: Array<{ url: string; token: string | undefined; body: unknown }> = [];
     const http = HttpClient.make((request) =>
       Effect.gen(function* () {
+        if (request.method === "GET") {
+          assert.equal(request.url, `http://127.0.0.1:3773${GOAT_ENVIRONMENT_PATH}`);
+          return HttpClientResponse.fromWeb(request, Response.json(descriptor));
+        }
         const body = JSON.parse(
           new TextDecoder().decode((request.body as { body: Uint8Array }).body),
         );
@@ -93,5 +99,24 @@ it.layer(NodeServices.layer)("goat update restarts a server started by hand", (i
         reason: "The desktop app manages this server.",
       });
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "never asks a server that predates self-restart to drain, since it would only stop",
+    () =>
+      Effect.gen(function* () {
+        for (const descriptor of [
+          { instanceId: "old-start", capabilities: { drainRestart: true } },
+          { instanceId: "another-start", capabilities: { runtimeRelaunch: true } },
+        ]) {
+          const { result, requests } = yield* run(
+            () => ({ status: "drained", instanceId: "old-start", forced: false }),
+            undefined,
+            descriptor,
+          );
+          assert.equal(result._tag, "unavailable");
+          assert.deepEqual(requests, []);
+        }
+      }).pipe(Effect.scoped),
   );
 });

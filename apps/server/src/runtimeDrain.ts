@@ -5,6 +5,7 @@ import {
   type RuntimeDrainRequest,
   type RuntimeDrainResult,
 } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -47,11 +48,28 @@ export class RuntimeShutdown extends Context.Service<
   RuntimeShutdown,
   { readonly shutdown: Effect.Effect<void> }
 >()("goat/runtimeDrain/RuntimeShutdown") {}
-export const layerShutdown = Layer.succeed(RuntimeShutdown, {
-  shutdown: Effect.sync(() => {
-    process.kill(process.pid, "SIGTERM");
-  }),
-});
+
+/**
+ * Windows terminates a process that signals itself, skipping every finalizer, so there the
+ * server runs its own SIGTERM listeners: runMain's interrupt then shuts it down normally.
+ */
+export const shutdownSelf = (
+  platform: NodeJS.Platform,
+  host: {
+    readonly pid: number;
+    readonly kill: (pid: number, signal: "SIGTERM") => unknown;
+    readonly emit: (event: "SIGTERM", signal: "SIGTERM") => unknown;
+  },
+) =>
+  Effect.sync(() => {
+    if (platform === "win32") host.emit("SIGTERM", "SIGTERM");
+    else host.kill(host.pid, "SIGTERM");
+  });
+
+export const layerShutdown = Layer.effect(
+  RuntimeShutdown,
+  Effect.map(HostProcess.Platform, (platform) => ({ shutdown: shutdownSelf(platform, process) })),
+);
 
 export class RuntimeDrain extends Context.Service<
   RuntimeDrain,
@@ -160,6 +178,17 @@ const make = Effect.gen(function* () {
             return { status: "instance-changed" as const, instanceId, forced: false };
           const join = (drain: ActiveDrain) =>
             Effect.gen(function* () {
+              // A drain without a successor, or for another version, must not end this server.
+              if (
+                input.relaunch === true &&
+                (drain.relaunch === undefined || drain.targetVersion !== input.targetVersion)
+              )
+                return {
+                  status: "relaunch-unavailable" as const,
+                  instanceId,
+                  forced: false,
+                  reason: "Another update is already stopping this server.",
+                };
               if (drain.status === "draining" && input.force === true && !drain.forced) {
                 drain.forced = true;
                 yield* publish(drain, "draining");

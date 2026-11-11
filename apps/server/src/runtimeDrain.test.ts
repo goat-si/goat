@@ -144,6 +144,43 @@ it.effect("a successor that cannot start leaves the server serving", () =>
   }).pipe(Effect.scoped),
 );
 
+it.effect("a relaunch request never joins a drain that has no successor to start", () =>
+  Effect.gen(function* () {
+    const relaunch = relaunchWith({ _tag: "ready", start: Effect.void });
+    const { context, checked } = yield* setup("busy", undefined, undefined, undefined, relaunch);
+    yield* Effect.gen(function* () {
+      const drain = yield* RuntimeDrain.RuntimeDrain;
+      const plain = yield* drain.request(input).pipe(Effect.forkScoped);
+      yield* Deferred.await(checked);
+      const joined = yield* drain.request({ ...input, relaunch: true, force: true });
+      assert.equal(joined.status, "relaunch-unavailable");
+      yield* TestClock.adjust(Duration.seconds(1));
+      // The plain drain kept its own terms: unforced, so its deadline cancels it.
+      assert.equal((yield* Fiber.join(plain)).status, "cancelled");
+    }).pipe(Effect.provide(context));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a Windows server stops through its own signal listeners, so its finalizers run", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const host = {
+      pid: 42,
+      kill: (pid: number, signal: string) => {
+        calls.push(`kill ${pid} ${signal}`);
+        return true;
+      },
+      emit: (event: string) => {
+        calls.push(`emit ${event}`);
+        return true;
+      },
+    };
+    yield* RuntimeDrain.shutdownSelf("win32", host);
+    yield* RuntimeDrain.shutdownSelf("linux", host);
+    assert.deepEqual(calls, ["emit SIGTERM", "kill 42 SIGTERM"]);
+  }),
+);
+
 it.effect("idle drain rejects new dispatches and invokes delayed shutdown", () =>
   Effect.gen(function* () {
     const { context, checked, stopped } = yield* setup("idle");

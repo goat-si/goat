@@ -49,6 +49,9 @@ const readsBootstrapFd = (args: ReadonlyArray<string>, env: NodeJS.ProcessEnv) =
   env.GOAT_BOOTSTRAP_FD !== undefined ||
   args.some((arg) => arg === "--bootstrap-fd" || arg.startsWith("--bootstrap-fd="));
 
+const namesPort = (args: ReadonlyArray<string>, env: NodeJS.ProcessEnv) =>
+  env.GOAT_PORT !== undefined || args.some((arg) => arg === "--port" || arg.startsWith("--port="));
+
 export const make = Effect.fn("RuntimeRelaunch.make")(function* (
   spawn: (command: RelaunchCommand) => Effect.Effect<void, RuntimeRelaunchError>,
 ) {
@@ -76,9 +79,17 @@ export const make = Effect.fn("RuntimeRelaunch.make")(function* (
     if (!installed)
       return unavailable(`GOAT ${targetVersion} is not installed in this server's home.`);
     const runtime = pinnedRuntimeCommand(paths);
+    // The successor resolves its config before the old server releases the port, so an
+    // automatic choice would land on another port.
+    const successorArgs = namesPort(args, env) ? args : [...args, "--port", String(config.port)];
     return {
       _tag: "ready",
-      start: spawn({ command: runtime.command, args: [...runtime.args, ...args], cwd, env }),
+      start: spawn({
+        command: runtime.command,
+        args: [...runtime.args, ...successorArgs],
+        cwd,
+        env,
+      }),
     } satisfies RelaunchDecision;
   });
   return RuntimeRelaunch.of({ prepare });
