@@ -1,5 +1,6 @@
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { EnvironmentId } from "@goat/contracts";
+import { useMemo } from "react";
 import { View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -11,6 +12,7 @@ import { environmentThreadShells } from "../../state/threads";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { goatBotMarkdownLinkTarget } from "./goatBotMarkdownLinks";
+import { goatBotChangeRequestMarkdown } from "./goatBotChangeRequestText";
 
 /**
  * Bot text that holds Markdown, rendered by the chat's native renderer in the transcript's type and
@@ -27,6 +29,8 @@ export function GoatBotMarkdown(props: {
   const theme = useUniwindTheme();
   const danger = theme["--color-danger-foreground"];
   const color = props.failed ? danger : theme["--color-foreground"];
+  // Pull request links read as short references, as on web.
+  const text = useMemo(() => goatBotChangeRequestMarkdown(props.text), [props.text]);
   const openLink = (href: string) => {
     const target = goatBotMarkdownLinkTarget(
       href,
@@ -44,7 +48,7 @@ export function GoatBotMarkdown(props: {
   };
   const markdown = (
     <SelectableMarkdownText
-      markdown={props.text}
+      markdown={text}
       preserveSoftBreaks
       textStyle={{
         ...styles.nativeTextStyle,

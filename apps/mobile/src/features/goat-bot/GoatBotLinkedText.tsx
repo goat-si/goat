@@ -3,13 +3,15 @@ import { useMemo } from "react";
 import { Text } from "react-native";
 
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { goatBotChangeRequestParts } from "./goatBotChangeRequestText";
 
 /**
  * Bot text with its web addresses tappable. Rendered inside a parent Text so links wrap with the
  * words around them and keep the bubble's colour, underlined.
  */
 export function GoatBotLinkedText({ text }: { readonly text: string }) {
-  const parts = useMemo(() => splitGoatBotTextLinks(text), [text]);
+  // Pull request addresses read as short references, as on web.
+  const parts = useMemo(() => goatBotChangeRequestParts(splitGoatBotTextLinks(text)), [text]);
   return parts.map((part, index) =>
     part.kind === "text" ? (
       part.text
