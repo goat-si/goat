@@ -25,6 +25,9 @@ export function MobileBotRoutines(props: {
   readonly error: boolean;
   readonly onRetry: () => void;
   readonly rows: ReadonlyArray<BotRoutineRow>;
+  /** A routine the home opened on; its row reports where it sits so the list can scroll to it. */
+  readonly focusRoutineId?: string | null | undefined;
+  readonly onFocusedRowLayout?: ((y: number) => void) | undefined;
 }) {
   const { environmentId, botName } = props;
   return (
@@ -53,7 +56,16 @@ export function MobileBotRoutines(props: {
         <Text className="text-foreground-muted">Loading routines…</Text>
       ) : props.rows.length && environmentId ? (
         props.rows.map((routine) => (
-          <MobileRoutineRow key={routine.id} environmentId={environmentId} row={routine} />
+          <MobileRoutineRow
+            key={routine.id}
+            environmentId={environmentId}
+            row={routine}
+            onLayout={
+              routine.id === props.focusRoutineId && props.onFocusedRowLayout
+                ? (y) => props.onFocusedRowLayout?.(y)
+                : undefined
+            }
+          />
         ))
       ) : (
         <MobileBotPanelEmpty
@@ -68,6 +80,7 @@ export function MobileBotRoutines(props: {
 function MobileRoutineRow(props: {
   readonly environmentId: EnvironmentId;
   readonly row: BotRoutineRow;
+  readonly onLayout?: ((y: number) => void) | undefined;
 }) {
   const { environmentId, row } = props;
   const canOperate = useAtomValue(
@@ -114,7 +127,12 @@ function MobileRoutineRow(props: {
     }
   };
   return (
-    <View className="gap-1 border-b border-border py-2">
+    <View
+      className="gap-1 border-b border-border py-2"
+      onLayout={
+        props.onLayout ? (event) => props.onLayout?.(event.nativeEvent.layout.y) : undefined
+      }
+    >
       <View className="flex-row items-center gap-3">
         <Pressable
           accessibilityRole="button"

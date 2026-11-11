@@ -19,12 +19,12 @@ import {
 import type {
   BotId,
   BotProfile,
-  ChannelTaskId,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { useEffect, useState, type ReactNode } from "react";
+import { ChannelTaskId } from "@goat/contracts";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, FlatList, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
 import { uuidv4 } from "../../lib/uuid";
@@ -45,6 +45,10 @@ import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskL
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { MobileBotRoutines } from "./MobileBotRoutines";
+import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
+
+/** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
+const STICKY_TABS_CLEARANCE = 56;
 
 // Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
@@ -90,6 +94,8 @@ export function MobileBotWork(props: {
   readonly notesRefreshKey?: string | undefined;
   /** Changes with every task record in the bot's conversation, including tasks past the list. */
   readonly workRevision?: string | null | undefined;
+  /** What the home opens on, from an event line; seq changes on every request. */
+  readonly focus?: (MobileBotHomeFocus & { readonly seq: number }) | null | undefined;
 }) {
   const home = useMobileGoatBotHomeMode();
   const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
@@ -142,6 +148,16 @@ export function MobileBotWork(props: {
   const open = props.open ?? ownOpen;
   const setOpen = props.onOpenChange ?? setOwnOpen;
   const [tab, setTab] = useState<(typeof tabs)[number]>("Home");
+  // An event line opens the home on Home with its task peeked or its routine scrolled to.
+  const [focusSeq, setFocusSeq] = useState(0);
+  const [routineFocus, setRoutineFocus] = useState<string | null>(null);
+  const listRef = useRef<FlatList<MobileBotHomeItem>>(null);
+  if (open && props.focus && props.focus.seq !== focusSeq) {
+    setFocusSeq(props.focus.seq);
+    setTab("Home");
+    setPeekTaskId(props.focus.kind === "task" ? ChannelTaskId.make(props.focus.id) : null);
+    setRoutineFocus(props.focus.kind === "routine" ? props.focus.id : null);
+  }
   const peekEntry =
     peekTaskId === null
       ? null
@@ -350,7 +366,9 @@ export function MobileBotWork(props: {
         );
       }
     }
-    homeItems.push(sectionLabel("routines-label", "Routines"), {
+    // The routines entry follows its section label, at the next two places in the list.
+    const routinesIndex = homeItems.length + 1;
+    const routinesItem: MobileBotHomeItem = {
       key: "routines",
       node: (
         <MobileBotRoutines
@@ -362,9 +380,19 @@ export function MobileBotWork(props: {
           error={Boolean(routines.error)}
           onRetry={routines.refresh}
           rows={boundRoutines}
+          focusRoutineId={routineFocus}
+          onFocusedRowLayout={(y) => {
+            setRoutineFocus(null);
+            listRef.current?.scrollToIndex({
+              index: routinesIndex,
+              viewPosition: 0,
+              viewOffset: STICKY_TABS_CLEARANCE - y,
+            });
+          }}
         />
       ),
-    });
+    };
+    homeItems.push(sectionLabel("routines-label", "Routines"), routinesItem);
   } else {
     homeItems.push(
       {
@@ -538,10 +566,15 @@ export function MobileBotWork(props: {
               above it, and a tap on a button lands while the keyboard is up. */}
           {/* A peek covers Home without unmounting it, so Back returns to the same place. */}
           <FlatList
+            ref={listRef}
             testID="goat-bot-home-scroll"
             data={homeItems}
             keyExtractor={(item) => item.key}
             renderItem={({ item }) => <>{item.node}</>}
+            // A routine row far down Home may not be measured yet; land near it instead.
+            onScrollToIndexFailed={(info) =>
+              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index })
+            }
             stickyHeaderIndices={[1]}
             contentContainerClassName="gap-2 pb-8"
             initialNumToRender={12}

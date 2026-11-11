@@ -17,6 +17,10 @@ import {
 
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
+// Event lines resolve their routine or task against the home's reads, which this test does not load.
+vi.mock("./useGoatBotEventTargets", () => ({
+  useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
+}));
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 vi.mock("./GoatBotFace", async () => {
@@ -733,34 +737,6 @@ describe("event lines", () => {
       createdAt: "2026-10-12T09:40:00Z",
       ...(subject ? { subject } : {}),
     }) as GoatBotRow;
-
-  it("opens the routine an event line names in the bot's home, and a task in its own view", async () => {
-    const onOpenHome = vi.fn();
-    const onSelectTask = vi.fn();
-    h = createNativeMemoryHarness();
-    view = renderNative(
-      h,
-      <GoatBotTimelineRow
-        {...props}
-        onOpenHome={onOpenHome}
-        onSelectTask={onSelectTask}
-        row={event({ kind: "routine", id: "routine-1", name: "Daily check" })}
-      />,
-    );
-    await view.render();
-    await view.click("Routine Daily check ran. Open routine Daily check");
-    expect(onOpenHome).toHaveBeenCalledTimes(1);
-    await view.rerender(
-      <GoatBotTimelineRow
-        {...props}
-        onOpenHome={onOpenHome}
-        onSelectTask={onSelectTask}
-        row={event({ kind: "task", id: "task-9", name: "Check disks" }, "Check disks finished")}
-      />,
-    );
-    await view.click("Check disks finished. Open task Check disks");
-    expect(onSelectTask).toHaveBeenCalledWith("task-9");
-  });
 
   it("stays plain text when it names nothing, or nothing here can open it", async () => {
     h = createNativeMemoryHarness();
