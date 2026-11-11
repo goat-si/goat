@@ -117,11 +117,9 @@ func TestTheEndOfAReplacedRegistrationWaitsForItsMemberDeliveriesToClose(t *test
 	if _, ok := old.next(t); ok {
 		t.Fatal("old holder stayed open")
 	}
-	// Both the replacement and the old holder's own cleanup have entered the teardown: the cleanup now waits on it.
-	for n := 0; n < 2; {
-		if <-joins == old.reply["id"] {
-			n++
-		}
+	// The other caller (the old holder's own cleanup, or the replacement if the cleanup took the teardown) is at its
+	// wait for the held teardown: the old registration cannot have ended.
+	for <-joins != old.reply["id"] {
 	}
 	select {
 	case e := <-ended:

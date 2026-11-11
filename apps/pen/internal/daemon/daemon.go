@@ -77,7 +77,8 @@ type Options struct {
 	ClientClosed func()
 	// RegistrationEnding, when set, runs as a registration's single teardown starts (tests).
 	RegistrationEnding func()
-	// RegistrationJoining, when set, is told the id each time a caller enters a registration's teardown (tests).
+	// RegistrationJoining, when set, is told the id when a caller finds a registration's teardown already running,
+	// just before it waits for it (tests).
 	RegistrationJoining func(id string)
 	// Registering, when set, runs after a registration became current and before its holder is answered (tests).
 	Registering func()

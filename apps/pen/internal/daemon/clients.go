@@ -208,33 +208,38 @@ func (d *Daemon) selectLocked(match func(*live) bool) (mine []*live, waits []cha
 
 // endRegistration closes the client and pairing sessions admitted under reg with 4401 and the connections delivered
 // to it, and returns once all of them are closed.
-// It runs once, whoever calls it first (the registration's own end or its replacement); every caller returns only
-// once it finished. reg must have ended.
+// It runs once, by whoever calls it first (the registration's own end or its replacement); every other caller waits
+// for it, so every caller returns only once it finished. reg must have ended.
 func (d *Daemon) endRegistration(reg *serviceReg) {
-	if d.opt.RegistrationJoining != nil {
-		d.opt.RegistrationJoining(reg.id)
-	}
-	reg.endOnce.Do(func() {
-		if d.opt.RegistrationEnding != nil {
-			d.opt.RegistrationEnding()
-		}
-		d.svc.mu.Lock()
-		conns := reg.endConns
+	d.svc.mu.Lock()
+	first := !reg.endStarted
+	reg.endStarted = true
+	conns := reg.endConns
+	if first {
 		reg.endConns = nil
-		d.svc.mu.Unlock()
-		d.mu.Lock()
-		mine, waits := d.selectLocked(func(l *live) bool { return l.reg == reg })
-		d.mu.Unlock()
-		for _, l := range mine {
-			d.closeOwned(l, wire.CodeNotAdmitted)
+	}
+	d.svc.mu.Unlock()
+	if !first {
+		if d.opt.RegistrationJoining != nil {
+			d.opt.RegistrationJoining(reg.id)
 		}
-		closeAll(conns)
-		for _, w := range waits {
-			<-w
-		}
-		close(reg.endDone)
-	})
-	<-reg.endDone
+		<-reg.endDone
+		return
+	}
+	if d.opt.RegistrationEnding != nil {
+		d.opt.RegistrationEnding()
+	}
+	d.mu.Lock()
+	mine, waits := d.selectLocked(func(l *live) bool { return l.reg == reg })
+	d.mu.Unlock()
+	for _, l := range mine {
+		d.closeOwned(l, wire.CodeNotAdmitted)
+	}
+	closeAll(conns)
+	for _, w := range waits {
+		<-w
+	}
+	close(reg.endDone)
 }
 
 // liveLink is a client session as a stream link: its closes go through the session's single owner.

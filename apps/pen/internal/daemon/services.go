@@ -87,9 +87,10 @@ type serviceReg struct {
 	ended    bool
 	conns    map[net.Conn]struct{}
 	endConns []net.Conn
-	// endOnce runs the teardown once, whoever ends the registration first; endDone closes when it finished.
-	endOnce sync.Once
-	endDone chan struct{}
+	// endStarted (guarded by serviceBook.mu) marks that the teardown has an owner, whoever ended the registration
+	// first; endDone closes when it finished.
+	endStarted bool
+	endDone    chan struct{}
 	// gen, clients and invite are the v1.3 ops' state, guarded by serviceBook.mu: the last list generation applied,
 	// the listed client keys (noisePub to client id) and the live service invite. out carries answers and events.
 	gen     uint64
