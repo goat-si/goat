@@ -125,7 +125,7 @@ function view(threadId = "bot") {
 }
 
 async function openLibraryFile(screen: Awaited<ReturnType<typeof render>>) {
-  await userEvent.click(screen.getByRole("button", { name: "Toggle GOAT Bot work panel" }));
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
   // The narrow layout puts the panel in a sheet outside the rendered container.
   await userEvent.click(page.getByRole("tab", { name: "Library" }));
   await userEvent.click(page.getByRole("button", { name: /summary\.md/ }));
