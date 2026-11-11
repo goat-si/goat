@@ -16,6 +16,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -50,6 +51,8 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
    * began before one of these is older and is not kept; borrowed lists never outrank each other.
    */
   let listings = 0;
+  /** notifications/tools/list_changed sent so far, so one already on its way is not repeated. */
+  let announcements = 0;
   const answers = new Map<string, unknown>();
   /** The provider holds a tool list this module gave it, which the next child must confirm. */
   let served = false;
@@ -57,9 +60,12 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
   const cancels = new Map<string, Deferred.Deferred<void>>();
   const reply = (id: JsonRpcId, result: unknown) =>
     options.output(JSON.stringify({ jsonrpc: "2.0", id, result }));
-  const listChanged = Effect.suspend(() =>
-    options.output(JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })),
-  );
+  const listChanged = Effect.suspend(() => {
+    announcements++;
+    return options.output(
+      JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }),
+    );
+  });
 
   /** Sends each request to a fresh child in turn and returns its answer to the last one. */
   const ask = Effect.fn("ComputerUseLeaseProxy.askHandshakeChild")(function* (
@@ -188,19 +194,30 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
       if (method !== "ping" && !answers.has(method)) return undefined;
       // Served from the start, so a recheck running before this reply is written still runs.
       if (method === "tools/list") served = true;
-      return Effect.suspend(() => {
+      let given: string | undefined;
+      let announcedAt = 0;
+      // The end check and the write are one step, so an end cannot land between them (#1678).
+      const write = Effect.suspend(() => {
         if (Deferred.isDoneUnsafe(options.ended)) return whenEnded(id, method);
-        const seen = listings;
-        // A newer list can land while this reply is being written, after its list_changed went
-        // out: say so again, so the provider lists once more instead of keeping this one.
-        return reply(id, method === "ping" ? {} : answers.get(method)).pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              method === "tools/list" && listings !== seen ? listChanged : Effect.void,
-            ),
+        const result = method === "ping" ? {} : answers.get(method);
+        given = JSON.stringify(result);
+        announcedAt = announcements;
+        return reply(id, result);
+      }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
+      // A different list that landed as this reply was written, and that no list_changed has
+      // announced since, is announced so the provider lists again instead of keeping this one.
+      return write.pipe(
+        Effect.andThen(
+          Effect.suspend(() =>
+            method === "tools/list" &&
+            given !== undefined &&
+            announcements === announcedAt &&
+            JSON.stringify(answers.get(method)) !== given
+              ? listChanged
+              : Effect.void,
           ),
-        );
-      });
+        ),
+      );
     },
     pending: (key: string) => cancels.has(key),
     /** Asks one child for its own tool list, apart from the provider's handshake. */

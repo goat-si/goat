@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 
 import { type Envelope, parse } from "./ComputerUseLeaseProtocol.ts";
@@ -226,5 +228,121 @@ describe("handshake answers while computer use is paused (#1622)", () => {
         result: { tools: [{ name: "new" }] },
       });
     }),
+  );
+
+  it.effect(
+    "an identical list landing while a cached answer is written is not announced (#1678)",
+    () =>
+      Effect.gen(function* () {
+        const s = yield* setup();
+        const listed = (id: number, name: string) =>
+          parse(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [{ name }] } })) ??
+          assert.fail("a listing parses");
+        s.answerer.remember("tools/list", listed(2, "old"));
+        // The same list lands again as the cached reply goes out: nothing changed for the provider.
+        s.afterSend((message) => {
+          if (message.id === 3) s.answerer.remember("tools/list", listed(4, "old"));
+        });
+        yield* s.answerer.answerCached(3, "tools/list") ?? Effect.void;
+        assert.deepEqual(s.sent, [{ jsonrpc: "2.0", id: 3, result: { tools: [{ name: "old" }] } }]);
+      }),
+  );
+
+  it.effect(
+    "a newer list a recheck already announced is not announced again by a cached answer (#1678)",
+    () => {
+      let boundary = false;
+      class BoundaryScheduler extends Scheduler.MixedScheduler {
+        override shouldYield(fiber: Parameters<Scheduler.MixedScheduler["shouldYield"]>[0]) {
+          if (boundary) {
+            boundary = false;
+            return true;
+          }
+          return super.shouldYield(fiber);
+        }
+      }
+      return Effect.gen(function* () {
+        const s = yield* setup();
+        const listed = (id: string | number, name: string) =>
+          parse(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [{ name }] } })) ??
+          assert.fail("a listing parses");
+        s.answerer.remember("tools/list", listed(2, "old"));
+        const answer = s.answerer.answerCached(3, "tools/list");
+        const asked = yield* Deferred.make<string>();
+        const rechecking = yield* s.answerer
+          .recheck((line) =>
+            Deferred.succeed(asked, String(JSON.parse(line).id)).pipe(Effect.asVoid),
+          )
+          .pipe(Effect.forkChild);
+        const recheckId = yield* Deferred.await(asked);
+        // The recheck's newer list lands as the cached reply goes out, and the recheck announces
+        // it before this answer is done.
+        s.afterSend((message) => {
+          if (message.id !== 3) return;
+          Deferred.doneUnsafe(
+            s.ownAnswers.get(recheckId) ?? assert.fail("the recheck awaits its answer"),
+            Exit.succeed(listed(recheckId, "new")),
+          );
+          boundary = true;
+        });
+        yield* answer ?? Effect.void;
+        yield* Fiber.join(rechecking);
+        const announcements = s.sent.filter(
+          (message) => message.method === "notifications/tools/list_changed",
+        );
+        assert.equal(announcements.length, 1);
+        assert.deepEqual(s.sent[0], {
+          jsonrpc: "2.0",
+          id: 3,
+          result: { tools: [{ name: "old" }] },
+        });
+      }).pipe(Effect.provideService(Scheduler.Scheduler, new BoundaryScheduler()));
+    },
+  );
+
+  it.effect(
+    "a terminal end that lands after the ended check cannot slip in before the cached tools/list is written (#1678)",
+    () => {
+      let boundary = false;
+      let armed = true;
+      let ended: Deferred.Deferred<string>;
+      class BoundaryScheduler extends Scheduler.MixedScheduler {
+        override shouldYield(fiber: Parameters<Scheduler.MixedScheduler["shouldYield"]>[0]) {
+          if (boundary) {
+            boundary = false;
+            queueMicrotask(() => Deferred.doneUnsafe(ended, Exit.succeed("unauthorized")));
+            return true;
+          }
+          return super.shouldYield(fiber);
+        }
+      }
+      return Effect.gen(function* () {
+        const s = yield* setup();
+        ended = s.ended;
+        // The list is read as the reply is stringified, right after the ended check.
+        s.answerer.remember("tools/list", {
+          id: 2,
+          result: {
+            get tools() {
+              if (armed) {
+                armed = false;
+                boundary = true;
+              }
+              return [];
+            },
+          },
+        } as unknown as Envelope);
+        const written: Array<boolean> = [];
+        s.afterSend((message) => {
+          if (message.id === 3 && message.result !== undefined) {
+            written.push(Deferred.isDoneUnsafe(ended));
+          }
+        });
+        yield* s.answerer.answerCached(3, "tools/list") ?? Effect.void;
+        // The list was read, so the yield fell between the ended check and the write.
+        assert.isFalse(armed);
+        assert.deepEqual(written, [false]);
+      }).pipe(Effect.provideService(Scheduler.Scheduler, new BoundaryScheduler()));
+    },
   );
 });
