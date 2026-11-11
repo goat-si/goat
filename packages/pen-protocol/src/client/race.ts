@@ -2,7 +2,7 @@
 // daemon/race.go openSessionVia) and the ping race for kinds 0x03 and 0x04 (Go relay/socket.go Racer.Dial).
 import type { KeyPair } from "./crypto.ts";
 import { PenError, reportListenerError } from "./errors.ts";
-import { type Kind, type SessionKeys, startInitiator } from "./noise.ts";
+import { Kind, type SessionKeys, startInitiator } from "./noise.ts";
 import {
   dialRelay,
   type PendingDial,
@@ -36,8 +36,6 @@ export interface SessionOptions {
   readonly factory: RelaySocketFactory;
   readonly clock: Clock;
   readonly random: Random;
-  /** "handshake" (default) races message 1 on every relay; "ping" races a text ping first. */
-  readonly mode?: "handshake" | "ping";
 }
 
 export interface OpenedSession {
@@ -219,11 +217,26 @@ async function handshake(link: RelayLink, options: SessionOptions): Promise<Hand
   }
 }
 
-/** Opens a session to nodeId over its relays, by the race the kind calls for. */
+/**
+ * The race CONTRACT "Several relays" gives a session: kind 0x01 and service-pair race message 1 on every relay; a join
+ * names a single-use invite and kind 0x04 reserves an account slot at message 1, so they ping first and send it once.
+ */
+export function raceFor(
+  kind: Kind,
+  payload: Readonly<Record<string, unknown>>,
+): "handshake" | "ping" {
+  if (kind === Kind.Session) return "handshake";
+  if (kind === Kind.Join && payload["stream"] === "service-pair") return SERVICE_PAIR_RACE;
+  return "ping";
+}
+
+/** Opens a session to nodeId over its relays, by the race its kind and stream call for. */
 export function openSession(options: SessionOptions): Promise<OpenedSession> {
   if (options.relays.length === 0)
     return Promise.reject(new PenError("no-relays", "no relays to dial"));
-  return options.mode === "ping" ? pingRace(options, options.relays) : handshakeRace(options);
+  return raceFor(options.kind, options.payload) === "ping"
+    ? pingRace(options, options.relays)
+    : handshakeRace(options);
 }
 
 function pickError(

@@ -4,7 +4,7 @@ import { fromHex } from "./bytes.ts";
 import { generateX25519, type KeyPair, x25519PublicKey } from "./crypto.ts";
 import { Kind } from "./noise.ts";
 import { pairingCode, pairingSas, servicePairPayload } from "./pairing.ts";
-import { openSession, SERVICE_PAIR_RACE, type SessionOptions } from "./race.ts";
+import { openSession, type SessionOptions } from "./race.ts";
 import { fakeFactory, type FakeSocket } from "./testing/fakeRelay.ts";
 import { ManualClock } from "./testing/manualClock.ts";
 import { respond } from "./testing/noiseResponder.ts";
@@ -68,13 +68,56 @@ const flushOpen = async (...sockets: Array<FakeSocket>) => {
 };
 
 describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
+  it.each([
+    [
+      "kind 0x01 (service)",
+      { kind: Kind.Session, payload: { v: 1, stream: "service", name: "goat" } },
+      "message 1",
+    ],
+    [
+      "kind 0x03 service-pair",
+      {
+        kind: Kind.Join,
+        psk: new Uint8Array(32),
+        payload: servicePairPayload("goat", "0Fh_z1uKAGoODu_-"),
+      },
+      "message 1",
+    ],
+    [
+      "kind 0x03 join",
+      {
+        kind: Kind.Join,
+        psk: new Uint8Array(32),
+        payload: { v: 1, stream: "join", invite: "x", name: "p" },
+      },
+      "ping",
+    ],
+    ["kind 0x04 (account)", { kind: Kind.Account, payload: { v: 1, stream: "account" } }, "ping"],
+  ] as const)(
+    "%s gets the race CONTRACT Several relays gives it: its first send on each of two relays",
+    async (_name, overrides, first) => {
+      const t = setup(overrides);
+      const a = t.fake.socketFor(A);
+      const b = t.fake.socketFor(B);
+      await flushOpen(a, b);
+      for (const socket of [a, b]) {
+        if (first === "ping") {
+          expect(socket.textSent()).toEqual(["ping"]);
+          expect(socket.binarySent()).toEqual([]);
+        } else {
+          expect(socket.textSent()).toEqual([]);
+          expect(socket.binarySent()[0]?.[0]).toBe(overrides.kind);
+        }
+      }
+    },
+  );
+
   it("service-pair (kind 0x03) races the handshake as CONTRACT v1.3 says: message 1 on every relay, and only the confirmed winner's h gives the code", async () => {
     const psk = new Uint8Array(32).fill(7);
     const t = setup({
       kind: Kind.Join,
       psk,
       payload: servicePairPayload("goat", "0Fh_z1uKAGoODu_-"),
-      mode: SERVICE_PAIR_RACE,
     });
     const a = t.fake.socketFor(A);
     const b = t.fake.socketFor(B);
@@ -199,7 +242,6 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
 
   it("ping race: a relay whose ping cannot be sent counts as failed; the other relay wins, or the race ends at once", async () => {
     const pingOptions = {
-      mode: "ping" as const,
       kind: Kind.Join,
       psk: fromHex(vector.ikpsk2.psk),
       payload: { v: 1, stream: "join", invite: "x", name: "p" },
@@ -472,7 +514,6 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
 describe("ping race (CONTRACT Several relays, kinds 0x03 and 0x04)", () => {
   const psk = fromHex(vector.ikpsk2.psk);
   const pingOptions = {
-    mode: "ping" as const,
     kind: Kind.Join,
     psk,
     payload: { v: 1, stream: "join", invite: "x", name: "p" },
