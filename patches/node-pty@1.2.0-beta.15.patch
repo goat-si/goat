@@ -16,33 +16,27 @@ index 66da02a..b777523 100644
              switch (message) {
                  case 1 /* ConoutWorkerMessage.READY */:
 diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
-index 90ffd8f..b4d700b 100644
+index 90ffd8f..dc2afc2 100644
 --- a/lib/windowsPtyAgent.js
 +++ b/lib/windowsPtyAgent.js
 @@ -37,6 +37,9 @@ var WindowsPtyAgent = /** @class */ (function () {
          var _this = this;
          this._useConptyDll = _useConptyDll;
          this._innerPid = 0;
-+        // ConPTY owns a process only once connect() succeeds. A native kill before
-+        // that corrupts the Windows heap, so the pty remembers whether it connected.
-+        this._connected = false;
++        // After a failed connect() the native kill corrupts the Windows heap (#2785),
++        // so a pty whose connect threw skips it.
++        this._connectFailed = false;
          this._onError = new eventEmitter2_1.EventEmitter2();
          if (!conptyNative) {
              conptyNative = (0, utils_1.loadNativeModule)('conpty').module;
-@@ -133,6 +136,7 @@ var WindowsPtyAgent = /** @class */ (function () {
-         try {
-             var connect = conptyNative.connect(pty, commandLine, cwd, env, this._useConptyDll, function (c) { return _this._$onProcessExit(c); });
-             this._innerPid = connect.pid;
-+            this._connected = true;
-         }
-         catch (err) {
-             // connect() runs from the conout worker's onReady callback, so a throw
-@@ -141,7 +145,7 @@ var WindowsPtyAgent = /** @class */ (function () {
+@@ -140,8 +143,9 @@ var WindowsPtyAgent = /** @class */ (function () {
+             // uncaughtException with no way for the consumer to observe it.
              var code = (_a = /error code: (\d+)/.exec(err.message)) === null || _a === void 0 ? void 0 : _a[1];
              this._exitCode = code ? parseInt(code, 10) : -1;
++            this._connectFailed = true;
              try {
 -                this._ptyNative.kill(this._pty, this._useConptyDll);
-+                this._killConnectedPty();
++                this._killNativePty();
              }
              catch ( /* already gone */_c) { /* already gone */ }
              this._conoutSocketWorker.dispose();
@@ -51,7 +45,7 @@ index 90ffd8f..b4d700b 100644
          this._exitCode = -1;
          try {
 -            this._ptyNative.kill(this._pty, this._useConptyDll);
-+            this._killConnectedPty();
++            this._killNativePty();
          }
          catch ( /* already gone */_a) { /* already gone */ }
          this._conoutSocketWorker.dispose();
@@ -59,8 +53,8 @@ index 90ffd8f..b4d700b 100644
      WindowsPtyAgent.prototype.clear = function () {
          this._ptyNative.clear(this._pty, this._useConptyDll);
      };
-+    WindowsPtyAgent.prototype._killConnectedPty = function () {
-+        if (!this._connected) {
++    WindowsPtyAgent.prototype._killNativePty = function () {
++        if (this._connectFailed) {
 +            return;
 +        }
 +        this._ptyNative.kill(this._pty, this._useConptyDll);
@@ -73,14 +67,14 @@ index 90ffd8f..b4d700b 100644
                  });
              });
 -            this._ptyNative.kill(this._pty, this._useConptyDll);
-+            this._killConnectedPty();
++            this._killNativePty();
              this._conoutSocketWorker.dispose();
          }
          else {
              // Close the input write handle to signal the end of session.
              this._inSocket.destroy();
 -            this._ptyNative.kill(this._pty, this._useConptyDll);
-+            this._killConnectedPty();
++            this._killNativePty();
              this._outSocket.on('data', function () {
                  _this._conoutSocketWorker.dispose();
              });

@@ -10,7 +10,7 @@ type Connect = (...args: ReadonlyArray<unknown>) => { pid: number };
 interface AgentState {
   _useConptyDll: boolean;
   _innerPid: number;
-  _connected: boolean;
+  _connectFailed: boolean;
   _pty: number;
   _exitCode?: number;
   _pendingPtyInfo?: { pty: number; commandLine: string; cwd: string; env: ReadonlyArray<string> };
@@ -61,7 +61,7 @@ function agent(useConptyDll = false): {
   const state: AgentState = {
     _useConptyDll: useConptyDll,
     _innerPid: 0,
-    _connected: false,
+    _connectFailed: false,
     _pty: 1,
     _pendingPtyInfo: { pty: 1, commandLine: "claude.cmd", cwd: ".", env: [] },
     _ptyNative: { kill: nativeKill },
@@ -74,11 +74,15 @@ function agent(useConptyDll = false): {
 }
 
 describe("node-pty native kill on a Windows pty", () => {
-  // regression: #2785 the native kill on a pty that never connected corrupted the Windows heap
-  it("a failed ConPTY connect tears down without the native kill", () => {
+  const failConnect = () => {
     connect = () => {
       throw new Error("Cannot create process, error code: 2");
     };
+  };
+
+  // regression: #2785 the native kill after a failed ConPTY connect corrupted the Windows heap
+  it("a failed ConPTY connect tears down without the native kill", () => {
+    failConnect();
     const { agent: failed, nativeKill } = agent();
     failed._completePtyConnection();
     expect(nativeKill).not.toHaveBeenCalled();
@@ -87,20 +91,30 @@ describe("node-pty native kill on a Windows pty", () => {
     expect(failed._conoutSocketWorker.dispose).toHaveBeenCalledOnce();
   });
 
-  it("a connection timeout before ConPTY connected skips the native kill", () => {
+  it("kill() after a failed connect still skips the native kill on both kill paths", () => {
+    for (const useConptyDll of [false, true]) {
+      failConnect();
+      const { agent: failed, nativeKill } = agent(useConptyDll);
+      failed._completePtyConnection();
+      failed.kill();
+      expect(nativeKill).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a connection timeout releases the native pty it never connected", () => {
     const { agent: waiting, nativeKill } = agent();
     waiting._failPtyConnection(new Error("Timed out waiting for ConPTY output worker"));
-    expect(nativeKill).not.toHaveBeenCalled();
+    expect(nativeKill).toHaveBeenCalledWith(1, false);
     expect(waiting._onError.fire).toHaveBeenCalledOnce();
   });
 
-  it("kill() before the deferred connect skips the native kill and the connect never runs", () => {
+  it("kill() before the deferred connect releases the native pty and the connect never runs", () => {
     const connectSpy = vi.fn<Connect>(() => ({ pid: 0 }));
     connect = connectSpy;
     const { agent: pending, nativeKill } = agent();
     pending.kill();
     pending._completePtyConnection();
-    expect(nativeKill).not.toHaveBeenCalled();
+    expect(nativeKill).toHaveBeenCalledWith(1, false);
     expect(connectSpy).not.toHaveBeenCalled();
     expect(pending._conoutSocketWorker.dispose).toHaveBeenCalledOnce();
   });
@@ -109,15 +123,14 @@ describe("node-pty native kill on a Windows pty", () => {
     connect = () => ({ pid: 0 });
     const { agent: running, nativeKill } = agent();
     running._completePtyConnection();
-    expect(running._connected).toBe(true);
     running.kill();
     expect(nativeKill).toHaveBeenCalledWith(1, false);
   });
 
-  it("the conpty.dll kill path skips the native kill before connect and kills after it", () => {
+  it("the conpty.dll kill path releases the native pty before and after connect", () => {
     const { agent: pending, nativeKill: pendingKill } = agent(true);
     pending.kill();
-    expect(pendingKill).not.toHaveBeenCalled();
+    expect(pendingKill).toHaveBeenCalledWith(1, true);
     connect = () => ({ pid: 0 });
     const { agent: running, nativeKill: runningKill } = agent(true);
     running._completePtyConnection();
