@@ -3,7 +3,7 @@ import { HubDeviceMcpResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { PINNED, scope, setup } from "./HubMembership.testkit.ts";
+import { PINNED, scope, setup, threadScope } from "./HubMembership.testkit.ts";
 
 const OLD = "lnk_0123456789abcdef";
 const decodeResult = Schema.decodeUnknownSync(HubDeviceMcpResult);
@@ -55,10 +55,12 @@ it.effect("a target linked while the approval waited is refused before the sourc
     const hub = yield* setup(asking);
     const asked = yield* hub.membership.move(scope, move);
     yield* hub.approve(asked.decisionId!);
-    const linked = yield* setup({ ...asking, linked: ["mini", "pen-mini"] });
-    const refused = yield* linked.membership.move(scope, move);
+    hub.linkAlias("pen-mini");
+    const refused = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
     expect(refused.message).toContain("already linked");
-    expect(linked.calls.some((call) => call.includes("revoke"))).toBe(false);
+    expect(hub.calls.some((call) => call.includes("revoke") || call.includes("disconnect"))).toBe(
+      false,
+    );
   }),
 );
 
@@ -77,6 +79,7 @@ it.effect(
         ...move,
         decisionId: asked.decisionId!,
         fromLinkId: OLD,
+        fromTunnelPort: 42255,
       });
       expect(moved.state).toBe("child");
       expect(hub.calls.filter((call) => call.startsWith("home link revoke"))).toHaveLength(1);
@@ -126,6 +129,7 @@ it.effect("an old tunnel that remains, or cannot be listed, stops the move befor
         ...move,
         decisionId: asked.decisionId!,
         fromLinkId: OLD,
+        fromTunnelPort: 42255,
       });
       expect(again.state).toBe("failed");
       expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
@@ -140,5 +144,55 @@ it.effect("an owner moves a Child with GOAT's pinned key without asking", () =>
     const moved = yield* hub.membership.move(scope, move);
     expect(moved.state).toBe("child");
     expect((yield* hub.inboxItems).items).toEqual([]);
+  }),
+);
+
+it.effect(
+  "a continuation counts the old tunnel by its port too, so one that outlived its alias stops the move",
+  () =>
+    Effect.gen(function* () {
+      // OpenCodex runs the old link's tunnel on port 42255; this process names another alias.
+      const processes = "/usr/bin/ssh -N -R 127.0.0.1:42255:127.0.0.1:10100 -- mini-old-name";
+      const hub = yield* setup({ ...asking, processes });
+      const asked = yield* hub.membership.move(scope, move);
+      expect(asked.fromTunnelPort).toBe(42255);
+      yield* hub.approve(asked.decisionId!);
+      const first = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+      expect(first.state).toBe("failed");
+      const again = yield* hub.membership.move(scope, {
+        ...move,
+        decisionId: asked.decisionId!,
+        fromLinkId: OLD,
+        fromTunnelPort: 42255,
+      });
+      expect(again.state).toBe("failed");
+      expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
+    }),
+);
+
+it.effect("an error after the old alias left says the old route is gone and how to continue", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ ...asking, addThrows: true });
+    const asked = yield* hub.membership.move(scope, move);
+    yield* hub.approve(asked.decisionId!);
+    const failed = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+    expect(failed.state).toBe("failed");
+    expect(failed.fromLinkId).toBe(OLD);
+    expect(failed.message).toContain("already left this Home");
+    expect(failed.message).toContain("fromLinkId " + OLD);
+  }),
+);
+
+it.effect("a thread's move continues through its handoff", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup(asking);
+    const asked = yield* hub.membership.move(threadScope, move);
+    expect(asked).toMatchObject({ kind: "needs_human", next: { call: "goat_hub_device_move" } });
+    yield* hub.answer(asked.decisionId!);
+    const moved = yield* hub.membership.move(threadScope, {
+      ...move,
+      decisionId: asked.decisionId!,
+    });
+    expect(moved.state).toBe("child");
   }),
 );

@@ -24,6 +24,7 @@ export const hubDeviceResult = (
     readonly handoff?: HandoffSummary;
     readonly transport?: HubDeviceTransport;
     readonly fromLinkId?: string;
+    readonly fromTunnelPort?: number;
   } = {},
 ): HubDeviceMcpResult => {
   const { handoff, ...rest } = extra;

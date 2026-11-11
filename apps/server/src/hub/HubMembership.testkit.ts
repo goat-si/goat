@@ -35,7 +35,13 @@ import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import * as HubMembership from "./HubMembership.ts";
-import { type DeviceAnswer, HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
+import {
+  countLinkTunnels,
+  type DeviceAnswer,
+  HubOcx,
+  HubOcxError,
+  type OcxOutput,
+} from "./HubOcx.ts";
 import * as HubParity from "./HubParity.ts";
 
 /** The hub's OpenCodex, parity and inbox as doubles around a real HubMembership. */
@@ -89,6 +95,10 @@ export interface Fixture {
   readonly identities?: Record<string, string | undefined>;
   /** This Home's ssh tunnels cannot be listed. */
   readonly tunnelsUnreadable?: boolean;
+  /** This Home's process listing; when set, tunnels are counted by the real matcher. */
+  readonly processes?: string;
+  /** Home's ocx link add cannot be run at all (an unknown outcome). */
+  readonly addThrows?: boolean;
   readonly deviceDown?: ReadonlyArray<string>;
   readonly deviceExit?: Readonly<Record<string, number>>;
   readonly health?: { readonly service: string; readonly role?: string };
@@ -147,6 +157,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     if (command === "probe")
       return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
     if (command === "add") {
+      if (fixture.addThrows === true)
+        return Effect.fail(
+          new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+        );
       if (fixture.addExit) return Effect.succeed({ stdout: "", ...fixture.addExit });
       if (fixture.addFails)
         return Effect.succeed({ code: 1, stdout: "", phase: "child_relay_failed" });
@@ -329,6 +343,8 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
               Effect.sync(() => {
                 calls.push(`tunnels ${alias} ${port}`);
                 if (fixture.tunnelsUnreadable === true) return undefined;
+                if (fixture.processes !== undefined)
+                  return countLinkTunnels(fixture.processes, alias, port);
                 return (alias !== undefined && links.has(alias)) || fixture.strayTunnel ? 1 : 0;
               }),
             identify: (alias) =>
@@ -411,6 +427,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     }>`SELECT alias, link_id, adding_since FROM hub_provisioned_links ORDER BY alias`,
     offer: (fingerprint: string) => {
       offered = fingerprint;
+    },
+    /** Another actor links an alias on the Home. */
+    linkAlias: (alias: string) => {
+      links.set(alias, "lnk_aaaaaaaaaaaaaaaa");
     },
     /** Someone removes a link on the Home by hand. */
     unlink: (alias: string) => {

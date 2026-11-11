@@ -30,6 +30,8 @@ export const HubDeviceMoveInput = Schema.Struct({
   toAlias: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   decisionId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
   fromLinkId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  /** With fromLinkId: the old link's tunnel port from the same earlier result. */
+  fromTunnelPort: Schema.optional(Schema.Int),
 });
 export type HubDeviceMoveInput = typeof HubDeviceMoveInput.Type;
 
@@ -75,6 +77,8 @@ export const HubDeviceOperationResult = Schema.Struct({
   decisionId: Schema.optional(Schema.String),
   /** A move's old link id: pass it back as fromLinkId once the old alias's link is gone. */
   fromLinkId: Schema.optional(Schema.String),
+  /** A move's old tunnel port, passed back as fromTunnelPort with fromLinkId. */
+  fromTunnelPort: Schema.optional(Schema.Int),
 });
 export type HubDeviceOperationResult = typeof HubDeviceOperationResult.Type;
 

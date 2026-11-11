@@ -18,10 +18,12 @@ import type { LinkStatus } from "./hubOcxJson.ts";
 const moveBinding = (
   from: string,
   fromLinkId: string,
+  fromTunnelPort: number | undefined,
   to: string,
   fingerprint: string,
   environment: string,
-) => `goat-hub-binding: move ${from} ${fromLinkId} ${to} ${fingerprint} ${environment}`;
+) =>
+  `goat-hub-binding: move ${from} ${fromLinkId}:${fromTunnelPort ?? "-"} ${to} ${fingerprint} ${environment}`;
 
 type Offer =
   | { readonly ok: true; readonly fingerprint: string; readonly keyType: string }
@@ -118,8 +120,12 @@ export const makeMove = (deps: MoveDeps) =>
     const done = (
       state: "child" | "ready" | "degraded" | "needs_human" | "failed",
       message: string,
-      extra: { readonly fromLinkId?: string } = {},
+      extra: { readonly fromLinkId?: string; readonly fromTunnelPort?: number } = {},
     ) => result("move", to, state, message, steps, { transport: "remote-link", ...extra });
+    // What a failure after this point must tell the caller: the bound link, and whether it left.
+    let bound: { readonly fromLinkId?: string; readonly fromTunnelPort?: number } = {};
+    let left = false;
+    let later = "";
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* deps.readHomeLinks();
       if (status === undefined) return deps.homeUnavailable(to, forbidden, steps);
@@ -146,7 +152,12 @@ export const makeMove = (deps: MoveDeps) =>
           "failed",
           `The link of ${from} is already gone; pass fromLinkId from the earlier result to continue.`,
         );
-      const continuing = { fromLinkId };
+      const fromTunnelPort = record === undefined ? input.fromTunnelPort : record.tunnelPort;
+      const continuing = {
+        fromLinkId,
+        ...(fromTunnelPort === undefined ? {} : { fromTunnelPort }),
+      };
+      bound = continuing;
       const preflight = joinPreflight(
         to,
         yield* deps.ocx.devicePlatform(to),
@@ -175,7 +186,14 @@ export const makeMove = (deps: MoveDeps) =>
         outcome: "ok",
         detail: `${offered.keyType} ${offered.fingerprint}`,
       });
-      const binding = moveBinding(from, fromLinkId, to, offered.fingerprint, fromEnvironment);
+      const binding = moveBinding(
+        from,
+        fromLinkId,
+        fromTunnelPort,
+        to,
+        offered.fingerprint,
+        fromEnvironment,
+      );
       if (input.decisionId !== undefined) yield* deps.approved(caller, input.decisionId, binding);
       else {
         const pin = yield* deps.ocx.pinnedFingerprint(to, offered.keyType);
@@ -195,18 +213,19 @@ export const makeMove = (deps: MoveDeps) =>
           return result("move", to, "needs_human", reason, steps, {
             ...requested,
             transport: "remote-link",
-            fromLinkId,
+            ...continuing,
           });
         }
       }
       yield* deps.audit(caller, to, "started", input.decisionId);
-      const later =
+      later =
         input.decisionId === undefined
           ? `Join ${to} with goat_hub_device_join.`
-          : `Call goat_hub_device_move again with this decisionId and fromLinkId ${fromLinkId}.`;
+          : `Call goat_hub_device_move again with this decisionId, fromLinkId ${fromLinkId}${fromTunnelPort === undefined ? "" : ` and fromTunnelPort ${fromTunnelPort}`}.`;
       if (record !== undefined) {
         const failure = yield* deps.leaveDevice(from, record.id, fromCaller.connection, steps);
         const clean = failure === undefined && (yield* deps.revokeOnHome(from, record, steps));
+        left = steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
         if (!clean) {
           yield* deps.audit(caller, to, "failed", input.decisionId);
           return done(
@@ -219,7 +238,9 @@ export const makeMove = (deps: MoveDeps) =>
         }
       } else {
         // The old link went earlier; its Home tunnel must be gone before the new link is added.
-        const tunnels = yield* deps.ocx.homeTunnels(from, undefined);
+        left = true;
+        // By alias and by the bound port: a tunnel can outlive the alias its process names.
+        const tunnels = yield* deps.ocx.homeTunnels(from, fromTunnelPort);
         const gone = tunnels === 0;
         steps.push({
           step: "link_removed",
@@ -248,11 +269,20 @@ export const makeMove = (deps: MoveDeps) =>
         steps,
       );
       return linked.state === "failed"
-        ? { ...linked, fromLinkId, message: `${linked.message} ${later}` }
+        ? { ...linked, ...continuing, message: `${linked.message} ${later}` }
         : linked;
     }).pipe(
       Effect.catchTags({
-        HubOcxError: (error) => Effect.succeed(done("failed", error.message)),
+        HubOcxError: (error) =>
+          Effect.succeed(
+            done(
+              "failed",
+              left
+                ? `${error.message} ${from} already left this Home, so it no longer routes through it. ${later}`
+                : error.message,
+              bound,
+            ),
+          ),
       }),
     );
   });
