@@ -732,7 +732,7 @@ it.effect("a tools/list that returns an RPC error fails with that error", () =>
     const http = yield* serveCatalogOverHttp(callers, "full");
     const listed = yield* Effect.exit(http.listTools("thread", () => "{"));
     expect(Exit.isFailure(listed) && Cause.pretty(listed.cause)).toMatch(/tools\/list failed: /);
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("goat_call names the replacement for a deprecated name or path", () =>
