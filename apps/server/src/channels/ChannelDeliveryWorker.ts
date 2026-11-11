@@ -74,6 +74,21 @@ const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const receipts = new Set<Fiber.Fiber<void, unknown>>();
 
+  // A restart before this point sends the row again; after it, the person may have seen it.
+  const handOver = Effect.fn("ChannelDeliveryWorker.handOver")(function* (
+    delivery: ChannelLedger.ChannelStoredDelivery,
+    owner: string,
+  ) {
+    const kind = delivery.message.destination.kind;
+    if (kind === "goat" || kind === "mcp") return;
+    yield* ledger.markSending({
+      owner,
+      deliveryId: delivery.deliveryId,
+      attempt: delivery.attempts,
+      now: DateTime.formatIso(yield* DateTime.now),
+    });
+  });
+
   const sendReceipt = Effect.fn("ChannelDeliveryWorker.sendReceipt")(function* (
     delivery: ChannelLedger.ChannelStoredDelivery,
     owner: string,
@@ -94,6 +109,7 @@ const make = Effect.gen(function* () {
       Effect.ignore,
       Effect.forkIn(scope),
     );
+    yield* handOver(delivery, owner);
     const send = yield* gateway.send(delivery.message).pipe(Effect.forkIn(scope));
     const result = yield* Fiber.join(send).pipe(
       Effect.result,
@@ -152,13 +168,20 @@ const make = Effect.gen(function* () {
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
     let handled = yield* deliverReceipts(owner);
     while (handled < MAX_PER_PASS) {
-      const [delivery] = yield* ledger.claimDueDeliveries({
+      const claimed = yield* ledger.claimDue({
         owner,
         now: DateTime.formatIso(yield* DateTime.now),
         limit: 1,
         receiptsOnly: false,
       });
-      if (delivery === undefined) break;
+      const [delivery] = claimed.deliveries;
+      // Interim messages set aside count as work done, so a long backlog is worked off in batches.
+      handled += claimed.setAside;
+      if (delivery === undefined) {
+        if (claimed.setAside > 0) continue;
+        break;
+      }
+      yield* handOver(delivery, owner);
       const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
       const finishedAt = yield* DateTime.now;
       yield* ledger.recordDelivery({

@@ -171,6 +171,8 @@ describe("undelivered replies", () => {
         receiptsOnly: true,
       });
       assert.strictEqual(claimed[0]?.deliveryId, deliveryId);
+      // Handed to Slack before the restart or the deadline.
+      yield* ledger.markSending({ owner: runtime.ownerToken, deliveryId, attempt: 1, now });
       yield* ledger.settleInterruptedDeliveries({ owner: runtime.ownerToken, now });
       assert.strictEqual(yield* ledger.getDeliveryState(deliveryId), "ambiguous");
       yield* runtime.drain;
@@ -228,6 +230,8 @@ describe("undelivered replies", () => {
         receiptsOnly: true,
       });
       assert.strictEqual(claimed[0]?.deliveryId, deliveryId);
+      // Handed to Slack before the restart or the deadline.
+      yield* ledger.markSending({ owner: runtime.ownerToken, deliveryId, attempt: 1, now });
       yield* TestClock.setTime(started + 61_000);
       const later = DateTime.formatIso(yield* DateTime.now);
       yield* ledger.expireReceipts({ owner: runtime.ownerToken, now: later });

@@ -1,7 +1,6 @@
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
 import { deliveryLedger } from "./channelDeliveryLedger.ts";
-import { copyUndeliveredReplies, type UndeliveredSourceRow } from "./channelUndeliveredReplies.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -465,6 +464,19 @@ export class ChannelLedger extends Context.Service<
       readonly limit: number;
       readonly receiptsOnly?: boolean | undefined;
     }) => Effect.Effect<ReadonlyArray<ChannelStoredDelivery>, ChannelLedgerError>;
+    /**
+     * claimDueDeliveries, also saying how many interim messages it set aside as already heard.
+     * It sets aside a bounded number per call, so a long backlog takes several calls.
+     */
+    readonly claimDue: (input: {
+      readonly owner: string;
+      readonly now: string;
+      readonly limit: number;
+      readonly receiptsOnly?: boolean | undefined;
+    }) => Effect.Effect<
+      { readonly deliveries: ReadonlyArray<ChannelStoredDelivery>; readonly setAside: number },
+      ChannelLedgerError
+    >;
     readonly recordDelivery: (input: {
       readonly owner: string;
       readonly deliveryId: ChannelDeliveryId;
@@ -476,7 +488,17 @@ export class ChannelLedger extends Context.Service<
       readonly owner: string;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
-    /** After a restart: GOAT bot and MCP deliveries retry, external ones in flight become ambiguous. */
+    /** Records that an external delivery is being handed to its transport now. */
+    readonly markSending: (input: {
+      readonly owner: string;
+      readonly deliveryId: ChannelDeliveryId;
+      readonly attempt: number;
+      readonly now: string;
+    }) => Effect.Effect<void, ChannelLedgerError>;
+    /**
+     * After a restart: GOAT bot and MCP deliveries and external ones never handed to their
+     * transport retry; external ones handed over become ambiguous.
+     */
     readonly settleInterruptedDeliveries: (input: {
       readonly owner: string;
       readonly now: string;
@@ -1655,31 +1677,6 @@ const make = Effect.gen(function* () {
         onSome: (channel) => channel.wake,
       }),
     ),
-
-    settleInterruptedDeliveries: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            // Local destinations record idempotently, so an interrupted one is simply sent again.
-            yield* sql`
-              UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind IN ('goat', 'mcp')
-            `;
-            const interrupted = yield* sql<UndeliveredSourceRow>`
-              UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
-                updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
-              RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
-                last_error_code
-            `;
-            yield* copyUndeliveredReplies(sql, interrupted, "ambiguous", input.now);
-          }),
-        )
-        .pipe(
-          Effect.tap(() => receiptGate.changed),
-          Effect.mapError(toLedgerError("settleInterruptedDeliveries")),
-        ),
 
     getDeliveryState: (deliveryId) =>
       sql<{ readonly state: string }>`

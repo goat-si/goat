@@ -434,12 +434,12 @@ describe("ChannelLedger outbox", () => {
       yield* ledger.enqueueDeliveries([delivery("slack-receipt", slackDestination)], NOW);
       const claimed = yield* ledger.claimDueDeliveries({ owner: "a", now: NOW, limit: 10 });
       assert.strictEqual(claimed.length, 2);
+      const slackId = deliveryIdFor("slack-receipt");
+      yield* ledger.markSending({ owner: "a", deliveryId: slackId, attempt: 1, now: NOW });
       yield* ledger.settleInterruptedDeliveries({ owner: "a", now: NOW });
-      // An external send may have happened, so it is not repeated; the bot record is idempotent.
-      assert.strictEqual(
-        yield* ledger.getDeliveryState(deliveryIdFor("slack-receipt")),
-        "ambiguous",
-      );
+      // Slack was handed the row, so it may have been sent and is not repeated; the bot record is
+      // idempotent.
+      assert.strictEqual(yield* ledger.getDeliveryState(slackId), "ambiguous");
       assert.strictEqual(yield* ledger.getDeliveryState(deliveryIdFor("goat-receipt")), "pending");
       const retried = yield* ledger.claimDueDeliveries({ owner: "a", now: NOW, limit: 10 });
       assert.deepStrictEqual(

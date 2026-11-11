@@ -32,6 +32,8 @@ export const replyDelivery = (input: {
   readonly mentionActorId?: string | undefined;
   readonly options?: ReadonlyArray<string> | undefined;
   readonly questionId?: ChannelQuestionId | undefined;
+  /** Progress before the answer; see ChannelOutboundMessage.interim. */
+  readonly interim?: boolean | undefined;
 }): ChannelLedger.ChannelOutboxInsert => {
   const deliveryId = deliveryIdFor(input.causeKey);
   const options = input.options === undefined || input.options.length === 0 ? [] : input.options;
@@ -65,6 +67,7 @@ export const replyDelivery = (input: {
       ...(input.mentionActorId === undefined ? {} : { mentionActorId: input.mentionActorId }),
       ...(keepOptions ? { options } : {}),
       ...(input.questionId === undefined ? {} : { questionId: input.questionId }),
+      ...(input.interim === true ? { interim: true as const } : {}),
     },
   };
 };

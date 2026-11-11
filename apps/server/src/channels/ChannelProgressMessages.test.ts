@@ -1,12 +1,14 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput } from "@goat/contracts";
 import { ProviderInstanceId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
@@ -222,7 +224,7 @@ describe("one message before the answer, whatever the order", () => {
           readonly destination_kind: string;
         }>`
           SELECT message_json, destination_kind FROM channel_outbox WHERE cause_key = ${ackKey}`;
-        const row = (id: string, kind: string, text: string) => ({
+        const row = (id: string, kind: string, text: string, interim?: true) => ({
           delivery_id: id,
           cause_key: "test:" + id,
           input_id: null,
@@ -235,6 +237,7 @@ describe("one message before the answer, whatever the order", () => {
             kind,
             text,
             taskId: task.taskId,
+            ...(interim === undefined ? {} : { interim }),
           }),
           state: "pending",
           attempts: 0,
@@ -244,7 +247,7 @@ describe("one message before the answer, whatever the order", () => {
         });
         const before = harness.slackSent.length;
         // Where the work runs, or that it moved to another machine, is an interim message too.
-        yield* sql`INSERT INTO channel_outbox ${sql.insert(row("moved", "receipt", "Moved to mac-studio."))}`;
+        yield* sql`INSERT INTO channel_outbox ${sql.insert(row("moved", "receipt", "Moved to mac-studio.", true))}`;
         yield* sql`INSERT INTO channel_outbox ${sql.insert(row("asked", "question", "Delete the old images?"))}`;
         yield* runtime.drain;
         assert.deepStrictEqual(sentSince(before), ["Delete the old images?"]);
@@ -254,4 +257,172 @@ describe("one message before the answer, whatever the order", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+});
+
+describe("what still reaches the person after the one message before the answer", () => {
+  it.effect(
+    "an approval result, a refused note change and a stall warning are delivered after the acknowledgement",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { runtime, task, sql, sentSince, ackKey } = yield* startSlackTurn(harness, "Ev41");
+        const [ack] = yield* sql<{
+          readonly message_json: string;
+          readonly destination_kind: string;
+          readonly state: string;
+        }>`SELECT message_json, destination_kind, state FROM channel_outbox WHERE cause_key = ${ackKey}`;
+        assert.strictEqual(ack?.state, "delivered");
+        const row = (causeKey: string, text: string) => ({
+          delivery_id: causeKey,
+          cause_key: causeKey,
+          input_id: null,
+          task_id: task.taskId,
+          kind: "receipt",
+          destination_kind: ack!.destination_kind,
+          message_json: JSON.stringify({
+            ...JSON.parse(ack!.message_json),
+            deliveryId: causeKey,
+            kind: "receipt",
+            text,
+            taskId: task.taskId,
+          }),
+          state: "pending",
+          attempts: 0,
+          next_attempt_at: "1970-01-01T00:00:00.000Z",
+          created_at: "1970-01-01T00:00:00.000Z",
+          updated_at: "1970-01-01T00:00:00.000Z",
+        });
+        const before = harness.slackSent.length;
+        const notices = [
+          ["late-approval:" + task.taskId + ":r1", "Approved in the coding thread. It continues."],
+          ["note-request:in-1:forget:not_found", "I couldn't find that note, so nothing changed."],
+          ["stall:" + task.taskId + ":run-1:t0", "It has made no progress for 20 minutes."],
+        ] as const;
+        for (const [causeKey, text] of notices)
+          yield* sql`INSERT INTO channel_outbox ${sql.insert(row(causeKey, text))}`;
+        yield* runtime.drain;
+        assert.deepStrictEqual(
+          sentSince(before),
+          notices.map(([, text]) => text),
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "a restart between claiming a milestone and sending it still leaves exactly one progress message",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { runtime, task, sql, progress, sentSince, ackKey } = yield* startSlackTurn(
+          harness,
+          "Ev42",
+        );
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        // Nobody heard the acknowledgement, so the first milestone is the one message.
+        yield* sql`UPDATE channel_outbox SET state = 'failed' WHERE cause_key = ${ackKey}`;
+        const [ack] = yield* sql<{
+          readonly message_json: string;
+          readonly destination_kind: string;
+        }>`
+          SELECT message_json, destination_kind FROM channel_outbox WHERE cause_key = ${ackKey}`;
+        yield* runtime.drain;
+        const before = harness.slackSent.length;
+        yield* sql`INSERT INTO channel_outbox ${sql.insert({
+          delivery_id: "restart-1",
+          cause_key: "narration:restart-1:origin",
+          input_id: null,
+          task_id: task.taskId,
+          kind: "receipt",
+          destination_kind: ack!.destination_kind,
+          message_json: JSON.stringify({
+            ...JSON.parse(ack!.message_json),
+            deliveryId: "restart-1",
+            kind: "receipt",
+            text: "Listing the largest folders now.",
+            taskId: task.taskId,
+            interim: true,
+          }),
+          state: "pending",
+          attempts: 0,
+          next_attempt_at: "1970-01-01T00:00:00.000Z",
+          created_at: "1970-01-01T00:00:00.000Z",
+          updated_at: "1970-01-01T00:00:00.000Z",
+        })}`;
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const claimed = yield* ledger.claimDueDeliveries({
+          owner: runtime.ownerToken,
+          now,
+          limit: 1,
+          receiptsOnly: false,
+        });
+        assert.deepStrictEqual(
+          claimed.map((delivery) => delivery.deliveryId),
+          ["restart-1"],
+        );
+        // The server stops before handing the row to Slack.
+        yield* ledger.settleInterruptedDeliveries({ owner: runtime.ownerToken, now });
+        yield* progress("restart-2", "Docker looks like the culprit; checking images.");
+        yield* runtime.drain;
+        assert.deepStrictEqual(sentSince(before), ["Listing the largest folders now."]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a long backlog of milestones is set aside in bounded batches", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { runtime, task, sql, sentSince, ackKey } = yield* startSlackTurn(harness, "Ev43");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const [ack] = yield* sql<{
+        readonly message_json: string;
+        readonly destination_kind: string;
+      }>`
+        SELECT message_json, destination_kind FROM channel_outbox WHERE cause_key = ${ackKey}`;
+      const backlog = 300;
+      for (let index = 0; index < backlog; index++) {
+        const id = "backlog-" + String(index).padStart(3, "0");
+        yield* sql`INSERT INTO channel_outbox ${sql.insert({
+          delivery_id: id,
+          cause_key: "narration:" + id + ":origin",
+          input_id: null,
+          task_id: task.taskId,
+          kind: "receipt",
+          destination_kind: ack!.destination_kind,
+          message_json: JSON.stringify({
+            ...JSON.parse(ack!.message_json),
+            deliveryId: id,
+            kind: "receipt",
+            text: "Step " + index,
+            taskId: task.taskId,
+            interim: true,
+          }),
+          state: "pending",
+          attempts: 0,
+          next_attempt_at: "1970-01-01T00:00:00.000Z",
+          created_at: "1970-01-01T00:00:00.000Z",
+          updated_at: "1970-01-01T00:00:00.000Z",
+        })}`;
+      }
+      const before = harness.slackSent.length;
+      const setAside = () =>
+        sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM channel_outbox
+          WHERE delivery_id LIKE 'backlog-%' AND state = 'superseded'`.pipe(
+          Effect.map((rows) => rows[0]?.count ?? 0),
+        );
+      const claimed = yield* ledger.claimDueDeliveries({
+        owner: runtime.ownerToken,
+        now: DateTime.formatIso(yield* DateTime.now),
+        limit: 1,
+        receiptsOnly: false,
+      });
+      assert.deepStrictEqual(claimed, []);
+      const firstBatch = yield* setAside();
+      assert.isAbove(firstBatch, 0);
+      assert.isAtMost(firstBatch, 100);
+      yield* runtime.drain;
+      assert.strictEqual(yield* setAside(), backlog);
+      assert.deepStrictEqual(sentSince(before), []);
+    }).pipe(Effect.provide(harness.layer));
+  });
 });

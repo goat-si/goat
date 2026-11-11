@@ -6,25 +6,41 @@ import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelLedger } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
-import { copyUndeliveredReply, type UndeliveredSourceRow } from "./channelUndeliveredReplies.ts";
+import {
+  copyUndeliveredReplies,
+  copyUndeliveredReply,
+  type UndeliveredSourceRow,
+} from "./channelUndeliveredReplies.ts";
 import { interimAlreadyHeard, isInterimMessage } from "./channelInterimMessages.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
 const mapError = (detail: string) => (cause: unknown) =>
   isLedgerError(cause) ? cause : new ChannelLedgerError({ reason: "persistence", detail, cause });
+/** Interim messages one claim may set aside before it commits and lets the worker come back. */
+const SET_ASIDE_PER_CLAIM = 50;
 
 export const deliveryLedger = (
   sql: SqlClient.SqlClient,
   fence: (owner: string | undefined) => Effect.Effect<void, SqlError | ChannelLedgerError>,
   changed: Effect.Effect<void>,
   expired: Effect.Effect<void>,
-): Pick<ChannelLedger["Service"], "claimDueDeliveries" | "recordDelivery" | "expireReceipts"> => {
+): Pick<
+  ChannelLedger["Service"],
+  | "claimDueDeliveries"
+  | "claimDue"
+  | "recordDelivery"
+  | "expireReceipts"
+  | "markSending"
+  | "settleInterruptedDeliveries"
+> => {
   const expireRows = Effect.fn("channelDeliveryLedger.expireRows")(function* (now: string) {
+    // Only a send that reached a transport may have been seen; one never handed over failed.
     const rows = yield* sql<
       UndeliveredSourceRow & { readonly state: string }
     >`UPDATE channel_outbox SET
-    state = CASE WHEN state = 'delivering' THEN 'ambiguous' ELSE 'failed' END,
+    state = CASE WHEN state = 'delivering' AND (send_started_at IS NOT NULL
+      OR destination_kind IN ('goat', 'mcp')) THEN 'ambiguous' ELSE 'failed' END,
     last_error_code = 'receipt_deadline', updated_at = ${now}
     WHERE state IN ('pending', 'delivering') AND EXISTS (
       SELECT 1 FROM channel_inbox i WHERE channel_outbox.cause_key = 'reply:' || i.input_id
@@ -67,7 +83,7 @@ export const deliveryLedger = (
           )
           .pipe(Effect.mapError(mapError("expireReceipts"))),
       ),
-    claimDueDeliveries: (input) =>
+    claimDue: (input) =>
       expiring((expire) =>
         sql
           .withTransaction(
@@ -88,7 +104,7 @@ export const deliveryLedger = (
                   readonly kind: string;
                   readonly destination_kind: string;
                 }>`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
-        updated_at = ${input.now}
+        send_started_at = NULL, updated_at = ${input.now}
         WHERE delivery_id IN (
           SELECT due.delivery_id FROM channel_outbox due
           WHERE due.state IN ('pending', 'delivering') AND due.state = 'pending'
@@ -119,7 +135,11 @@ export const deliveryLedger = (
                   }),
                   (row) =>
                     Effect.gen(function* () {
-                      if (isInterimMessage(row) && (yield* interimAlreadyHeard(sql, row))) {
+                      const message = decodeOutbound(row.message_json);
+                      if (
+                        isInterimMessage(row, message) &&
+                        (yield* interimAlreadyHeard(sql, row))
+                      ) {
                         yield* sql`UPDATE channel_outbox SET state = 'superseded',
                         updated_at = ${input.now} WHERE delivery_id = ${row.delivery_id}`;
                         return null;
@@ -132,7 +152,7 @@ export const deliveryLedger = (
                         : [];
                       return {
                         deliveryId: row.delivery_id,
-                        message: decodeOutbound(row.message_json),
+                        message,
                         attempts: row.attempts,
                         ...(inbox[0] === undefined
                           ? {}
@@ -143,21 +163,63 @@ export const deliveryLedger = (
                 return claimed;
               });
               // A superseded interim message frees the task's next row, so claim again until a
-              // round supersedes nothing; each round moves rows out of pending, so this ends.
+              // round supersedes nothing, setting at most a bounded number aside per transaction;
+              // the worker counts them and comes back for the rest.
               const deliveries: Array<
                 NonNullable<Effect.Success<ReturnType<typeof claimRound>>[number]>
               > = [];
-              while (deliveries.length < input.limit) {
+              let setAside = 0;
+              while (deliveries.length < input.limit && setAside < SET_ASIDE_PER_CLAIM) {
                 const round = yield* claimRound(input.limit - deliveries.length);
                 const sent = round.filter((delivery) => delivery !== null);
                 deliveries.push(...sent);
+                setAside += round.length - sent.length;
                 if (sent.length === round.length) break;
               }
-              return deliveries;
+              return { deliveries, setAside };
             }),
           )
           .pipe(Effect.mapError(mapError("claimDueDeliveries"))),
       ),
+    claimDueDeliveries: (input) =>
+      operations.claimDue(input).pipe(Effect.map((claimed) => claimed.deliveries)),
+    markSending: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* fence(input.owner);
+            yield* sql`UPDATE channel_outbox SET send_started_at = ${input.now}
+              WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
+                AND attempts = ${input.attempt}`;
+          }),
+        )
+        .pipe(Effect.mapError(mapError("markSending"))),
+    settleInterruptedDeliveries: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* fence(input.owner);
+            // Local destinations record idempotently, and an external row never handed to its
+            // transport was not sent, so both simply go again.
+            yield* sql`
+              UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
+              WHERE state = 'delivering'
+                AND (destination_kind IN ('goat', 'mcp') OR send_started_at IS NULL)
+            `;
+            const interrupted = yield* sql<UndeliveredSourceRow>`
+              UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
+                updated_at = ${input.now}
+              WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
+              RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
+                last_error_code
+            `;
+            yield* copyUndeliveredReplies(sql, interrupted, "ambiguous", input.now);
+          }),
+        )
+        .pipe(
+          Effect.tap(() => changed),
+          Effect.mapError(mapError("settleInterruptedDeliveries")),
+        ),
     recordDelivery: (input) =>
       expiring((expire) =>
         sql
@@ -188,12 +250,20 @@ export const deliveryLedger = (
       ),
   };
   return {
+    markSending: Effect.fn("ChannelLedger.markSending")(operations.markSending),
+    settleInterruptedDeliveries: Effect.fn("ChannelLedger.settleInterruptedDeliveries")(
+      operations.settleInterruptedDeliveries,
+    ),
     expireReceipts: Effect.fn("ChannelLedger.expireReceipts")(
       operations.expireReceipts,
       Effect.tap(() => changed),
     ),
     claimDueDeliveries: Effect.fn("ChannelLedger.claimDueDeliveries")(
       operations.claimDueDeliveries,
+      Effect.tap(() => changed),
+    ),
+    claimDue: Effect.fn("ChannelLedger.claimDue")(
+      operations.claimDue,
       Effect.tap(() => changed),
     ),
     recordDelivery: Effect.fn("ChannelLedger.recordDelivery")(
