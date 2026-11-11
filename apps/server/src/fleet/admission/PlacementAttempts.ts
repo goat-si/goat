@@ -76,7 +76,14 @@ export interface PlacementAttemptsShape {
     readonly ownerKey: string;
     readonly attempt: number;
   }) => Effect.Effect<void, PlacementAttemptsError>;
-  readonly pendingCleanups: Effect.Effect<ReadonlyArray<Attempt>, PlacementAttemptsError>;
+  /** Idle threads left on one host, oldest first, at most `limit`. */
+  readonly pendingCleanups: (
+    host: string,
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<Attempt>, PlacementAttemptsError>;
+  readonly hostsWithCleanups: (
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<string>, PlacementAttemptsError>;
   /** What the "Launch outcome unknown" Inbox item lists. */
   readonly listUnknown: Effect.Effect<ReadonlyArray<Attempt>, PlacementAttemptsError>;
   /** "Run again, it may duplicate": records the person and time; false when no longer unknown. */
@@ -213,11 +220,24 @@ const make = Effect.gen(function* () {
         WHERE owner_key = ${input.ownerKey} AND attempt = ${input.attempt}
       `.pipe(failed("clearCleanup"));
     }),
-    pendingCleanups:
-      sql<Row>`SELECT * FROM placement_attempts WHERE cleanup_thread_id IS NOT NULL`.pipe(
-        Effect.map((rows) => rows.map(fromRow)),
-        failed("pendingCleanups"),
-      ),
+    pendingCleanups: Effect.fn("PlacementAttempts.pendingCleanups")(function* (
+      host: string,
+      limit: number,
+    ) {
+      const rows = yield* sql<Row>`
+        SELECT * FROM placement_attempts
+        WHERE cleanup_thread_id IS NOT NULL AND target_host = ${host}
+        ORDER BY created_at LIMIT ${limit}
+      `.pipe(failed("pendingCleanups"));
+      return rows.map(fromRow);
+    }),
+    hostsWithCleanups: Effect.fn("PlacementAttempts.hostsWithCleanups")(function* (limit: number) {
+      const rows = yield* sql<{ readonly target_host: string }>`
+        SELECT DISTINCT target_host FROM placement_attempts
+        WHERE cleanup_thread_id IS NOT NULL LIMIT ${limit}
+      `.pipe(failed("hostsWithCleanups"));
+      return rows.map((row) => row.target_host);
+    }),
     listUnknown: sql<Row>`
       SELECT * FROM placement_attempts WHERE state = 'unknown' AND rerun_by IS NULL ORDER BY created_at
     `.pipe(

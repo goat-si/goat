@@ -2,10 +2,12 @@ import { type CommandId, ThreadId } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a synchronous digest of a frozen payload.
 import * as NodeCrypto from "node:crypto";
@@ -17,7 +19,7 @@ import * as ThreadLifecycle from "../../orchestration-v2/ThreadLifecycleService.
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import { type PlacementAnswer, PlacementAdmission } from "./PlacementAdmission.ts";
 import { type Attempt, PlacementAttempts, PlacementAttemptsError } from "./PlacementAttempts.ts";
-import type { PlacementArgument } from "./PlacementKey.ts";
+import { PlacementAdmissionEnabled, type PlacementArgument } from "./PlacementKey.ts";
 
 /** What a placer may conclude about one attempt (design §11). */
 export type PlacedOutcome =
@@ -91,6 +93,8 @@ export class PlacementPlacer extends Context.Service<PlacementPlacer, PlacementP
 ) {}
 
 const LOCAL_TARGET = "local";
+const CLEANUP_BATCH = 20;
+const MAINTENANCE_EVERY = Duration.minutes(10);
 
 const make = Effect.gen(function* () {
   const attempts = yield* PlacementAttempts;
@@ -131,7 +135,7 @@ const make = Effect.gen(function* () {
     host: string,
     authorize: Effect.Effect<RuntimeMode, E, R>,
   ) {
-    const pending = (yield* attempts.pendingCleanups).filter((row) => row.targetHost === host);
+    const pending = yield* attempts.pendingCleanups(host, CLEANUP_BATCH);
     for (const row of pending) {
       const threadId = row.cleanupThreadId;
       if (threadId === null) continue;
@@ -376,6 +380,19 @@ const make = Effect.gen(function* () {
         : yield* sendRemote(latest, input.authorize);
     },
   );
+
+  // Independent of new placements: archive what fenced attempts left, and drop settled history
+  // past 30 days. Unknown attempts and the attempt counters are kept, so no key is ever reused.
+  if (yield* PlacementAdmissionEnabled)
+    yield* Effect.gen(function* () {
+      for (const host of yield* attempts.hostsWithCleanups(CLEANUP_BATCH))
+        yield* cleanUp(host, Effect.succeed<RuntimeMode>("approval-required")).pipe(Effect.ignore);
+      yield* attempts.prune(yield* Clock.currentTimeMillis);
+    }).pipe(
+      Effect.catch((error) => Effect.logWarning("placement maintenance failed", { error })),
+      Effect.repeat(Schedule.spaced(MAINTENANCE_EVERY)),
+      Effect.forkIn(yield* Effect.scope),
+    );
 
   return PlacementPlacer.of({
     recover,

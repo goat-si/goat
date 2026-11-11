@@ -8,7 +8,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { ChatAttachmentId, type ChatAttachment } from "@goat/contracts";
+import { ChatAttachmentId, type ChatAttachment, type ChatFileAttachment } from "@goat/contracts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
@@ -315,9 +315,8 @@ describe("placing on another GOAT", () => {
         fake.archiveFails = true;
         fake.answers.push(refused("placement_not_started", { threadId: "idle" }));
         yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
-        const pending = yield* Effect.flatMap(
-          Attempts.PlacementAttempts,
-          (attempts) => attempts.pendingCleanups,
+        const pending = yield* Effect.flatMap(Attempts.PlacementAttempts, (attempts) =>
+          attempts.pendingCleanups("box-a", 10),
         ).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
         assert.deepStrictEqual(
           pending.map((row) => row.cleanupThreadId),
@@ -384,7 +383,7 @@ describe("attachments of a placed launch", () => {
             placer.placeRemote({
               ownerKey,
               host: "box-a",
-              launch: { ...launch(), attachments: [attachment] },
+              launch: { ...launch(), attachments: [attachment as ChatFileAttachment] },
               authorize: Effect.succeed("full-access" as const),
             }),
           );
@@ -394,7 +393,7 @@ describe("attachments of a placed launch", () => {
         );
         NodeFS.writeFileSync(path, "other");
         const changed = yield* withAttachment().pipe(Effect.provide(placerOn(file, fake)));
-        expect([changed._tag, changed.message]).toEqual([
+        expect([changed._tag, changed._tag === "Started" ? null : changed.message]).toEqual([
           "Unknown",
           "An attachment of this placement is gone or changed here, so nothing was sent.",
         ]);
