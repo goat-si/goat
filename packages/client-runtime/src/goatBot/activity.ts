@@ -25,7 +25,15 @@ export interface GoatBotActivity {
   readonly fullText?: string;
   /** Set when the work waits on the person (an answer, approval, sign-in) or a usage limit. */
   readonly attention?: "waiting" | "paused";
+  /**
+   * What the step waits on, whatever its words: the person, other work, or a usage limit. A wait
+   * reworded as more is known ("Waiting for you", then "Waiting for your answer") keeps its kind.
+   * Absent for a working step, including a task update that reads like a wait.
+   */
+  readonly wait?: GoatBotWaitKind;
 }
+
+export type GoatBotWaitKind = "you" | "other_work" | "usage_limit";
 
 /** The task the working indicator follows and its newest update in the conversation. */
 export interface GoatBotActivityTask {
@@ -147,11 +155,20 @@ export function goatBotActivity(input: {
     "Working";
   const flat = text.replace(/\s+/gu, " ").trim();
   const state = needed?.state ?? (needed === null && run.request !== null ? "waiting" : undefined);
+  const wait: GoatBotWaitKind | undefined =
+    state === "paused"
+      ? "usage_limit"
+      : state === "waiting"
+        ? "you"
+        : update === null && summary === null && run.status === "waiting"
+          ? "other_work"
+          : undefined;
   return {
     state: "working",
     text: clip(flat),
     ...(flat.length > ACTIVITY_TEXT_LIMIT ? { fullText: flat } : {}),
     ...(state === undefined ? {} : { attention: state }),
+    ...(wait === undefined ? {} : { wait }),
   };
 }
 

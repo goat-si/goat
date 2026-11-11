@@ -7,15 +7,35 @@ import "~/index.css";
 
 const server = vi.hoisted(() => ({
   inputs: [] as Array<Record<string, unknown>>,
+  updates: [] as Array<Record<string, unknown>>,
   failFirst: true,
+  capabilities: {} as Record<string, boolean>,
 }));
 const created = vi.hoisted(() => ({ bot: null as unknown }));
 
-vi.mock("~/state/channels", () => ({ channelEnvironment: { createBot: {} } }));
+/** Resets what the mocks read, so each test starts from its own server. */
+function setup(capabilities: Record<string, boolean> = {}) {
+  server.inputs = [];
+  server.updates = [];
+  server.failFirst = true;
+  server.capabilities = capabilities;
+}
+
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: { createBot: "createBot", updateBot: "updateBot" },
+}));
+vi.mock("~/state/environments", () => ({
+  useEnvironment: () => ({ serverConfig: { environment: { capabilities: server.capabilities } } }),
+}));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand:
-    () =>
+    (command: string) =>
     async ({ input }: { input: Record<string, unknown> }) => {
+      if (command === "updateBot") {
+        server.updates.push(input);
+        const { botId: _botId, ...changes } = input;
+        return { _tag: "Success", value: { bot: { ...(created.bot as object), ...changes } } };
+      }
       server.inputs.push(input);
       if (server.failFirst && server.inputs.length === 1)
         return { _tag: "Failure", cause: new Error("Connection lost") };
@@ -48,8 +68,8 @@ vi.mock("../chat/ProviderModelPicker", () => ({
 import { GoatBotNewBotDialog } from "./GoatBotNewBotDialog";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
-it("creates a bot with its model and keeps one request id when a save is retried", async () => {
-  created.bot = decodeProfile({
+const research = () =>
+  decodeProfile({
     botId: "research",
     role: "member",
     name: "Research",
@@ -62,6 +82,10 @@ it("creates a bot with its model and keeps one request id when a save is retried
     createdAt: "2026-11-07T00:00:00.000Z",
     updatedAt: "2026-11-07T00:00:00.000Z",
   });
+
+it("creates a bot with its model and keeps one request id when a save is retried", async () => {
+  setup();
+  created.bot = research();
   const onCreated = vi.fn();
   const pending: Array<string | null> = [];
   await using _screen = await render(
@@ -96,4 +120,35 @@ it("creates a bot with its model and keeps one request id when a save is retried
     defaultModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-small" },
   });
   expect(server.inputs[1]?.clientRequestId).toBe(server.inputs[0]?.clientRequestId);
+  // Nothing changed between the tries, so the bot the server kept needs no change.
+  expect(server.updates).toEqual([]);
+});
+
+it("sends edits made after a failed try as a change, when the server kept the first create", async () => {
+  setup({ goatBotMemberModelEdit: true });
+  // The server stored the first try; a retry with its request id returns that bot as it was.
+  created.bot = research();
+  const onCreated = vi.fn();
+  await using _screen = await render(
+    <GoatBotNewBotDialog
+      environmentId={EnvironmentId.make("env-1")}
+      canSubmit
+      onCreated={onCreated}
+      onClose={() => undefined}
+    />,
+    { router: false }, // The dialog uses no links or navigation.
+  );
+  await userEvent.fill(page.getByRole("textbox", { name: "Name" }), "Research");
+  await userEvent.fill(page.getByRole("textbox", { name: "Avatar" }), "🔎");
+  await userEvent.click(page.getByRole("button", { name: "More" }));
+  await userEvent.fill(page.getByRole("textbox", { name: "Purpose" }), "Find sources");
+  await userEvent.click(page.getByRole("button", { name: "New bot model: gpt-main" }));
+  await userEvent.click(page.getByRole("button", { name: "Create" }));
+  await expect.element(page.getByRole("alert")).toHaveTextContent("Connection lost");
+  await userEvent.fill(page.getByRole("textbox", { name: "Name" }), "Research desk");
+  await userEvent.click(page.getByRole("button", { name: "Create" }));
+  await vi.waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+  expect(server.inputs[1]?.clientRequestId).toBe(server.inputs[0]?.clientRequestId);
+  expect(server.updates).toEqual([{ botId: "research", name: "Research desk" }]);
+  expect(onCreated.mock.calls[0]?.[0]).toMatchObject({ botId: "research", name: "Research desk" });
 });

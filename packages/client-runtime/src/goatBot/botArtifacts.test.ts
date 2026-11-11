@@ -295,6 +295,20 @@ describe("goatBotArtifactDays", () => {
       },
     ]);
   });
+
+  it("keeps the same date in two years apart, keyed by the local calendar date", () => {
+    const now = local(11, 12).getTime();
+    // Nov 2 fell on a Monday in both years, so a label without the year reads the same.
+    // @effect-diagnostics-next-line globalDate:off - days follow the device's local calendar.
+    const earlier = new Date(2020, 10, 2, 8).toISOString();
+    const days = goatBotArtifactDays([file("this.md", at(2, 8)), file("then.md", earlier)], now);
+    expect(days.map((day) => [day.key, day.files.map((entry) => entry.relativePath)])).toEqual([
+      ["2026-11-02", ["this.md"]],
+      ["2020-11-02", ["then.md"]],
+    ]);
+    expect(days[1]?.label).toContain("2020");
+    expect(days[0]?.label).not.toContain("2026");
+  });
 });
 
 describe("botArtifactViewKind", () => {
