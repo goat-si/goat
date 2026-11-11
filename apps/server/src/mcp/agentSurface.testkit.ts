@@ -378,7 +378,7 @@ const listingResult = (message: RpcMessage) =>
 /**
  * Registrations served over /mcp the way agents reach it: each caller sends its own bearer token
  * and the auth middleware provides that caller's scope. Needs an HTTP server and client, such as
- * NodeHttpServer.layerTest, and a scope that keeps the server up.
+ * layerTestLoopback, and a scope that keeps the server up.
  */
 /** Registrations served over /mcp the way agents reach it; see serveCatalogOverHttp. */
 export interface ListedTool {

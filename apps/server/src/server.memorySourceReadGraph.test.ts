@@ -2,7 +2,6 @@ import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -55,6 +54,7 @@ import * as McpHttp from "./mcp/McpHttpServer.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as Sessions from "./mcp/McpSessionRegistry.ts";
 import { McpServer } from "effect/ai";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const id = (n: number) =>
   M.MemoryOperationId.make(`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
@@ -132,7 +132,7 @@ const environment = (home: string) =>
           Layer.mergeAll(
             Sync.layer,
             Worker.layer,
-            Sessions.layer.pipe(Layer.provide(NodeHttpServer.layerTest)),
+            Sessions.layer.pipe(Layer.provide(layerTestLoopback)),
           ),
         ),
         Layer.provide(Maintenance.layer),
@@ -218,7 +218,7 @@ const environment = (home: string) =>
       );
       const served = yield* Layer.buildWithMemoMap(
         HttpRouter.serve(route, { disableLogger: true, disableListenLog: true }).pipe(
-          Layer.provideMerge(NodeHttpServer.layerTest),
+          Layer.provideMerge(layerTestLoopback),
           Layer.provide(Layer.succeedContext(context)),
         ),
         memo,
