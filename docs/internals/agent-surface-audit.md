@@ -190,14 +190,14 @@ Only 46% of input parameters carry a description. 107 tools describe none of the
 
 75 of 300 tools show a worked call, in their description or as examples `goat_describe` serves (67 tools). 166 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
-| Tool                     | Characters | Declared at                                             |
-| ------------------------ | ---------- | ------------------------------------------------------- |
-| `goat_call`              | 1688       | packages/contracts/src/agentSurface/surfaceEntries.ts   |
-| `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts     |
-| `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts      |
-| `goat_describe`          | 396        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
-| `goat_eval`              | 392        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
-| `goat_worktree_handoff`  | 390        | packages/contracts/src/agentSurface/entries/worktree.ts |
+| Tool                     | Characters | Declared at                                           |
+| ------------------------ | ---------- | ----------------------------------------------------- |
+| `goat_call`              | 1688       | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts   |
+| `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts    |
+| `goat_describe`          | 396        | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `goat_hub_device_move`   | 393        | packages/contracts/src/agentSurface/entries/hub.ts    |
+| `goat_eval`              | 392        | packages/contracts/src/agentSurface/surfaceEntries.ts |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 

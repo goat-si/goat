@@ -93,7 +93,12 @@ it.effect("once the source is gone, only the approved old link id continues the 
     yield* hub.approve(asked.decisionId!);
     yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
     const tampered = yield* hub.membership
-      .move(scope, { ...move, decisionId: asked.decisionId!, fromLinkId: "lnk_ffffffffffffffff" })
+      .move(scope, {
+        ...move,
+        decisionId: asked.decisionId!,
+        fromLinkId: "lnk_ffffffffffffffff",
+        fromTunnelPort: 42255,
+      })
       .pipe(Effect.flip);
     expect(tampered.message).toContain("does not approve");
     expect(hub.calls.filter((call) => call.startsWith("home link add"))).toHaveLength(1);
@@ -194,5 +199,46 @@ it.effect("a thread's move continues through its handoff", () =>
       decisionId: asked.decisionId!,
     });
     expect(moved.state).toBe("child");
+  }),
+);
+
+it.effect("a link record without a tunnel port is refused before the old alias is touched", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ ...asking, noTunnelPort: true });
+    const refused = yield* hub.membership.move(scope, move);
+    expect(refused.state).toBe("failed");
+    expect(refused.message).toContain("tunnel port");
+    expect((yield* hub.inboxItems).items).toEqual([]);
+    expect(hub.calls.some((call) => call.includes("revoke") || call.includes("disconnect"))).toBe(
+      false,
+    );
+  }),
+);
+
+it.effect(
+  "an error right after the revoke says the old alias already left and how to continue",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ ...asking, statusFailsAfterRevoke: true });
+      const asked = yield* hub.membership.move(scope, move);
+      yield* hub.approve(asked.decisionId!);
+      const failed = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
+      expect(failed.state).toBe("failed");
+      expect(failed.message).toContain("already left this Home");
+      expect(failed.message).toContain("fromTunnelPort 42255");
+    }),
+);
+
+it.effect("a stop after the old link is gone still says so and how to continue", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ ...asking, linked: [], direct: false });
+    const stopped = yield* hub.membership.move(scope, {
+      ...move,
+      decisionId: "decision:earlier",
+      fromLinkId: OLD,
+      fromTunnelPort: 42255,
+    });
+    expect(stopped.state).toBe("failed");
+    expect(stopped.message).toContain("already left this Home");
   }),
 );

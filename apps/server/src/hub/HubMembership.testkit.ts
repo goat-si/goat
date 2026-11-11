@@ -99,6 +99,10 @@ export interface Fixture {
   readonly processes?: string;
   /** Home's ocx link add cannot be run at all (an unknown outcome). */
   readonly addThrows?: boolean;
+  /** OpenCodex reports Home links without their tunnel port. */
+  readonly noTunnelPort?: boolean;
+  /** Home's ocx cannot be run once a revoke has landed. */
+  readonly statusFailsAfterRevoke?: boolean;
   readonly deviceDown?: ReadonlyArray<string>;
   readonly deviceExit?: Readonly<Record<string, number>>;
   readonly health?: { readonly service: string; readonly role?: string };
@@ -136,10 +140,15 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   const verdicts = [...(fixture.verdicts ?? [])];
   let offered = fixture.offered ?? PINNED;
   let failuresLeft = fixture.addFailures ?? 0;
+  let revoked = false;
   const json = (value: unknown): OcxOutput => ({ code: 0, stdout: JSON.stringify(value) });
   const home = (args: ReadonlyArray<string>): Effect.Effect<OcxOutput, HubOcxError> => {
     calls.push(`home ${args.join(" ")}`);
     const [group, command, alias] = args;
+    if (revoked && fixture.statusFailsAfterRevoke === true)
+      return Effect.fail(
+        new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+      );
     if (group === "link" && command === "status") {
       if (fixture.linkStatus !== undefined)
         return Effect.succeed({
@@ -150,7 +159,11 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       return Effect.succeed(
         json({
           role: "home",
-          links: [...links].map(([name, id]) => ({ id, alias: name, tunnelPort: 42255 })),
+          links: [...links].map(([name, id]) => ({
+            id,
+            alias: name,
+            ...(fixture.noTunnelPort === true ? {} : { tunnelPort: 42255 }),
+          })),
         }),
       );
     }
@@ -174,6 +187,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     if (command === "revoke") {
       if (fixture.revokeFails) return Effect.succeed({ code: 1, stdout: "" });
       for (const [name, id] of links) if (id === args[3]) links.delete(name);
+      revoked = true;
       return Effect.succeed(json({ linkId: args[3] }));
     }
     return Effect.succeed(json({ linkId: args[3] }));

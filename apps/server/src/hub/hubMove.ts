@@ -125,7 +125,19 @@ export const makeMove = (deps: MoveDeps) =>
     // What a failure after this point must tell the caller: the bound link, and whether it left.
     let bound: { readonly fromLinkId?: string; readonly fromTunnelPort?: number } = {};
     let left = false;
+    let sourceGone = false;
     let later = "";
+    // A stop once the old alias has left must say so: its route through this Home is gone.
+    const stop = (message: string) =>
+      done(
+        "failed",
+        sourceGone ||
+          left ||
+          steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok")
+          ? `${message} ${from} already left this Home, so it no longer routes through it. ${later}`
+          : message,
+        bound,
+      );
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* deps.readHomeLinks();
       if (status === undefined) return deps.homeUnavailable(to, forbidden, steps);
@@ -152,12 +164,23 @@ export const makeMove = (deps: MoveDeps) =>
           "failed",
           `The link of ${from} is already gone; pass fromLinkId from the earlier result to continue.`,
         );
+      // Without the old tunnel's port, a tunnel that outlived its alias could not be found later.
+      if (record !== undefined && record.tunnelPort === undefined)
+        return done(
+          "failed",
+          `OpenCodex did not report the tunnel port of the link of ${from}, so GOAT could not prove its tunnel is gone after leaving. Remove ${from} and join ${to} instead.`,
+        );
+      sourceGone = record === undefined;
       const fromTunnelPort = record === undefined ? input.fromTunnelPort : record.tunnelPort;
       const continuing = {
         fromLinkId,
         ...(fromTunnelPort === undefined ? {} : { fromTunnelPort }),
       };
       bound = continuing;
+      later =
+        input.decisionId === undefined
+          ? `Join ${to} with goat_hub_device_join.`
+          : `Call goat_hub_device_move again with this decisionId, fromLinkId ${fromLinkId}${fromTunnelPort === undefined ? "" : ` and fromTunnelPort ${fromTunnelPort}`}.`;
       const preflight = joinPreflight(
         to,
         yield* deps.ocx.devicePlatform(to),
@@ -169,17 +192,15 @@ export const makeMove = (deps: MoveDeps) =>
         outcome: preflight.ok ? "ok" : "failed",
         detail: preflight.detail,
       });
-      if (!preflight.ok) return done("failed", preflight.detail, continuing);
+      if (!preflight.ok) return stop(preflight.detail);
       if (!(yield* deps.ocx.directAlias(to)))
-        return done(
-          "failed",
+        return stop(
           `${to} does not resolve to a direct SSH host. Use a direct alias, such as a Tailscale alias or a pen-<name> alias from pen ssh-config.`,
-          continuing,
         );
       const offered = yield* deps.probe(to);
       if (!offered.ok) {
         steps.push({ step: "probe", outcome: "failed", detail: deps.phaseMessage(offered) });
-        return done("failed", deps.phaseMessage(offered), continuing);
+        return stop(deps.phaseMessage(offered));
       }
       steps.push({
         step: "probe",
@@ -218,10 +239,6 @@ export const makeMove = (deps: MoveDeps) =>
         }
       }
       yield* deps.audit(caller, to, "started", input.decisionId);
-      later =
-        input.decisionId === undefined
-          ? `Join ${to} with goat_hub_device_join.`
-          : `Call goat_hub_device_move again with this decisionId, fromLinkId ${fromLinkId}${fromTunnelPort === undefined ? "" : ` and fromTunnelPort ${fromTunnelPort}`}.`;
       if (record !== undefined) {
         const failure = yield* deps.leaveDevice(from, record.id, fromCaller.connection, steps);
         const clean = failure === undefined && (yield* deps.revokeOnHome(from, record, steps));
@@ -273,16 +290,7 @@ export const makeMove = (deps: MoveDeps) =>
         : linked;
     }).pipe(
       Effect.catchTags({
-        HubOcxError: (error) =>
-          Effect.succeed(
-            done(
-              "failed",
-              left
-                ? `${error.message} ${from} already left this Home, so it no longer routes through it. ${later}`
-                : error.message,
-              bound,
-            ),
-          ),
+        HubOcxError: (error) => Effect.succeed(stop(error.message)),
       }),
     );
   });
