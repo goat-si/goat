@@ -57,7 +57,7 @@ it("says a new bot needs a name only once the person leaves the field or saves",
   await expect.element(name).toBeVisible();
   await expect.element(missing).not.toBeInTheDocument();
   await expect.element(name).not.toHaveAttribute("aria-invalid", "true");
-  await userEvent.click(page.getByRole("button", { name: "Save" }));
+  await userEvent.click(page.getByRole("button", { name: "Create" }));
   await expect.element(missing).toBeVisible();
   await expect.element(name).toHaveAttribute("aria-invalid", "true");
   await expect.element(name).toHaveFocus();
