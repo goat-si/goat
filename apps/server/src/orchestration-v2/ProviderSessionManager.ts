@@ -272,16 +272,16 @@ export interface ProviderSessionManagerV2Shape {
     readonly detail?: string;
     readonly revokeMcpCredential?: boolean;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  /**
-   * Releases the session unless, at the moment of removal, a turn other than run `runOrdinal`'s
-   * on `ownProviderThreadIds` is busy on it. Checked atomically with turn starts. Succeeds with
-   * whether it was released.
-   */
   /** Ends a turn start's catalog-restart reservation once that start attempt has exited. */
   readonly settleTurnStart: (input: {
     readonly threadId: ThreadId;
     readonly runId: RunId;
   }) => Effect.Effect<void>;
+  /**
+   * Releases the session unless, at the moment of removal, a turn other than run `runOrdinal`'s
+   * on `ownProviderThreadIds` is busy on it. Checked atomically with turn starts. Succeeds with
+   * whether it was released.
+   */
   readonly releaseUnlessBusy: (input: {
     readonly providerSessionId: ProviderSessionId;
     readonly ownProviderThreadIds: ReadonlyArray<ProviderThreadId>;
