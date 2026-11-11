@@ -337,15 +337,79 @@ describe("files a reply names", () => {
   it("finds Library files named in inline code, in order and once, by path or full path", () => {
     const text =
       "Saved `chart.png` and `/Users/me/.goat/userdata/goat-bot/artifacts/reports/summary.md`; see `chart.png` again. `summary.md` alone is ambiguous and `missing.csv` is not there.";
-    expect(goatBotReplyFiles(text, files).map((file) => file.relativePath)).toEqual([
+    expect(
+      goatBotReplyFiles(text, files, "/Users/me/.goat/userdata/goat-bot/artifacts").map(
+        (file) => file.relativePath,
+      ),
+    ).toEqual(["chart.png", "reports/summary.md"]);
+  });
+
+  const root = "/srv/goat/userdata/goat-bot/artifacts";
+  const named = (code: string, listingRoot: string | undefined = root) =>
+    goatBotReplyFiles(`Saved \`${code}\`.`, files, listingRoot).map((file) => file.relativePath);
+
+  it("a full path names a file only inside this server's artifacts folder", () => {
+    expect(named(`${root}/reports/summary.md`)).toEqual(["reports/summary.md"]);
+    expect(named(`${root}//reports/./summary.md`)).toEqual(["reports/summary.md"]);
+    expect(named("/other/artifacts/reports/summary.md")).toEqual([]);
+    expect(named(`/elsewhere${root}/reports/summary.md`)).toEqual([]);
+  });
+
+  it("a full path with a '..' segment names nothing, since a link in the folder can lead outside it", () => {
+    expect(named(`${root}/../../elsewhere/artifacts/reports/summary.md`)).toEqual([]);
+    expect(named(`${root}/reports/../../artifacts2/chart.png`)).toEqual([]);
+    // artifacts/link may point outside the folder, so link/../chart.png need not be artifacts/chart.png.
+    expect(named(`${root}/link/../chart.png`)).toEqual([]);
+    expect(named(`${root}/reports/../chart.png`)).toEqual([]);
+  });
+
+  it("a relative path names a file only when it is exactly a listed path", () => {
+    expect(named("reports/summary.md")).toEqual(["reports/summary.md"]);
+    expect(named("./reports/summary.md")).toEqual([]);
+    expect(named("other/../reports/summary.md")).toEqual([]);
+  });
+
+  it("an older server's listing without its folder gives full paths no card", () => {
+    const text = `Saved \`${root}/reports/summary.md\` and \`chart.png\`.`;
+    expect(goatBotReplyFiles(text, files, undefined).map((file) => file.relativePath)).toEqual([
       "chart.png",
-      "reports/summary.md",
     ]);
   });
 
-  it("reads the Library only for inline code that looks like a file name", () => {
-    expect(goatBotReplyMayNameFile("Run `vp test` and check `foo()`.")).toBe(false);
+  it("a Windows server's folder matches with either separator", () => {
+    const windowsRoot = "C:\\Users\\me\\.goat\\userdata\\goat-bot\\artifacts";
+    expect(named(`${windowsRoot}\\reports\\summary.md`, windowsRoot)).toEqual([
+      "reports/summary.md",
+    ]);
+    expect(named("C:/Users/me/.goat/userdata/goat-bot/artifacts/chart.png", windowsRoot)).toEqual([
+      "chart.png",
+    ]);
+    expect(named("D:\\other\\artifacts\\chart.png", windowsRoot)).toEqual([]);
+  });
+
+  it("a Windows server's folder matches without regard to case, and a POSIX one exactly", () => {
+    const windowsRoot = "C:\\Users\\me\\.goat\\userdata\\goat-bot\\artifacts";
+    expect(named("c:/users/ME/.goat/userdata/goat-bot/artifacts/chart.png", windowsRoot)).toEqual([
+      "chart.png",
+    ]);
+    expect(
+      named("\\\\server\\share\\Artifacts\\chart.png", "\\\\Server\\Share\\artifacts"),
+    ).toEqual(["chart.png"]);
+    expect(named(`${root.toUpperCase()}/chart.png`)).toEqual([]);
+  });
+
+  it("reads the Library for any inline code the listing could hold, names without an extension too", () => {
+    expect(goatBotReplyMayNameFile("Saved `README`.")).toBe(true);
+    expect(goatBotReplyMayNameFile("Saved `docs/Makefile`.")).toBe(true);
+    expect(goatBotReplyMayNameFile(`Saved \`${root}/LICENSE\`.`)).toBe(true);
     expect(goatBotReplyMayNameFile("Saved `reports/summary.md`.")).toBe(true);
+  });
+
+  it("skips the Library for inline code no listed file can match", () => {
+    // The listing leaves out hidden names, colons, backslashes and folders.
+    expect(goatBotReplyMayNameFile("Check `.env` and `.cache/x.txt`.")).toBe(false);
+    expect(goatBotReplyMayNameFile("Run `a:b` in `src/` or `..`.")).toBe(false);
+    expect(goatBotReplyMayNameFile("Open `reports\\summary.md`.")).toBe(false);
     expect(goatBotReplyMayNameFile("No code here: summary.md")).toBe(false);
   });
 });

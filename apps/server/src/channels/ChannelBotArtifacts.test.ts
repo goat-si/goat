@@ -120,9 +120,9 @@ describe("ChannelBotArtifacts list", () => {
       Effect.gen(function* () {
         const { root, outside } = yield* folders;
         NodeFS.rmSync(root, { recursive: true });
-        assert.deepStrictEqual(yield* list, { artifacts: [], truncated: false });
+        assert.deepStrictEqual(yield* list, { root, artifacts: [], truncated: false });
         NodeFS.symlinkSync(outside, root);
-        assert.deepStrictEqual(yield* list, { artifacts: [], truncated: false });
+        assert.deepStrictEqual(yield* list, { root, artifacts: [], truncated: false });
         assert.strictEqual(yield* reason(read("secret.txt")), "not_found");
       }).pipe(Effect.provide(artifactsLayer())),
   );
@@ -415,21 +415,26 @@ describe("ChannelBotArtifacts over a connection's handlers", () => {
       Layer.mock(ChannelBotNotesReader.ChannelBotNotesReader)({}),
     ).pipe(Layer.provideMerge(artifactsLayer(options)));
 
-  it.effect("serves both methods from the handlers a connection gets", () =>
-    Effect.gen(function* () {
-      const { at } = yield* folders;
-      write(at("a.txt"), "hi", 1_700_000_000);
-      const handlers = yield* channelBotWorkRpcHandlers(owner);
-      const listed = yield* handlers[CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]({});
-      assert.deepStrictEqual(
-        listed.artifacts.map((artifact) => artifact.relativePath),
-        ["a.txt"],
-      );
-      const result = yield* handlers[CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]({
-        relativePath: "a.txt",
-      });
-      assert.strictEqual(result.status === "chunk" ? result.bytesBase64 : result.status, "aGk=");
-    }).pipe(Effect.provide(handlersLayer())),
+  it.effect(
+    "serves both methods from the handlers a connection gets, the listing with its folder",
+    () =>
+      Effect.gen(function* () {
+        const { path, root, at } = yield* folders;
+        write(at("a.txt"), "hi", 1_700_000_000);
+        const handlers = yield* channelBotWorkRpcHandlers(owner);
+        const listed = yield* handlers[CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]({});
+        assert.deepStrictEqual(
+          listed.artifacts.map((artifact) => artifact.relativePath),
+          ["a.txt"],
+        );
+        // The folder the worker brief names, so a client can match a full path against it.
+        assert.strictEqual(listed.root, root);
+        assert.isTrue(path.isAbsolute(root));
+        const result = yield* handlers[CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]({
+          relativePath: "a.txt",
+        });
+        assert.strictEqual(result.status === "chunk" ? result.bytesBase64 : result.status, "aGk=");
+      }).pipe(Effect.provide(handlersLayer())),
   );
 
   it.effect("answers busy to a second read on the same connection while one runs", () => {

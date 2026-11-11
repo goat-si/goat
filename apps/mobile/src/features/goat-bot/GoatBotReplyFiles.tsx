@@ -42,6 +42,8 @@ interface GoatBotFiles {
   /** The chat these cards belong to; a read for another chat never lands. */
   readonly chatKey: string;
   readonly artifacts: ReadonlyArray<ChannelBotArtifact> | null;
+  /** The listing's artifacts folder; without it a full path names no file. */
+  readonly root: string | undefined;
   readonly generation: number;
   readonly open: (file: ChannelBotArtifact) => void;
   readonly opening: string | null;
@@ -181,6 +183,7 @@ export function GoatBotFilesProvider(props: {
   const answer = listing.data;
   const failure = listing.error;
   const artifacts = readable && failure === null ? (answer?.artifacts ?? null) : null;
+  const root = readable && failure === null ? answer?.root : undefined;
   const generation = answer === null ? 0 : listingGeneration(answer);
   const { open, opening, messages, viewer } = opener;
   const value = useMemo(
@@ -191,12 +194,13 @@ export function GoatBotFilesProvider(props: {
             environmentId,
             chatKey,
             artifacts,
+            root,
             generation,
             open: (file: ChannelBotArtifact) => void open(file),
             opening,
             messages,
           },
-    [environmentId, chatKey, artifacts, generation, open, opening, messages],
+    [environmentId, chatKey, artifacts, root, generation, open, opening, messages],
   );
   return (
     <GoatBotFilesContext value={value}>
@@ -210,9 +214,10 @@ export function GoatBotFilesProvider(props: {
 export const GoatBotReplyFiles = memo(function GoatBotReplyFiles(props: { readonly text: string }) {
   const files = use(GoatBotFilesContext);
   const artifacts = files?.artifacts ?? null;
+  const root = files?.root;
   const named = useMemo(
-    () => (artifacts === null ? [] : goatBotReplyFiles(props.text, artifacts)),
-    [artifacts, props.text],
+    () => (artifacts === null ? [] : goatBotReplyFiles(props.text, artifacts, root)),
+    [artifacts, root, props.text],
   );
   if (files === null || named.length === 0) return null;
   return (

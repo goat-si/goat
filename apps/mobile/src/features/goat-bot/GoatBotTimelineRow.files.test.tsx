@@ -131,7 +131,7 @@ vi.mock("../files/FileMarkdownPreview", () => ({
 const files = vi.hoisted(() => ({
   supported: true,
   connected: true,
-  listing: null as null | { artifacts: object[]; truncated: boolean },
+  listing: null as null | { artifacts: object[]; truncated: boolean; root?: string },
   pending: false,
   reads: 0,
   // Every read the server got and has not refused, in order. Like the server, it reads one file
@@ -406,7 +406,10 @@ it("shows no card for a file the listing lacks, plain inline code, an older serv
 });
 
 it("matches names with spaces and full artifact paths, and shows the card under a question too", async () => {
-  files.listing = listed("quarterly report.md", "notes/README");
+  files.listing = {
+    ...listed("quarterly report.md", "notes/README"),
+    root: "/home/me/.goat/artifacts",
+  };
   await show([
     bot("b1", "See `/home/me/.goat/artifacts/quarterly report.md`."),
     bot("b2", "Which one? `notes/README`", ["Keep", "Drop"]),
