@@ -262,3 +262,66 @@ exec "$HOME/.test/identity-bin/ps" "$@"
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement process table",
+  () => {
+    const tableDouble = (
+      f: Pick<Fixture, "fs" | "test" | "home" | "setRemotePath">,
+      body: string,
+    ) =>
+      Effect.gen(function* () {
+        const bin = `${f.test}/table-bin`;
+        yield* f.fs.makeDirectory(bin);
+        yield* f.fs.writeFileString(
+          `${bin}/ps`,
+          `#!/bin/sh
+if [ "$*" = "-A -o pid= -o ppid= -o uid= -o lstart=" ]; then ${body}; fi
+exec "$HOME/.test/identity-bin/ps" "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/ps`, 0o700);
+        f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+      });
+
+    it.live("an unreadable process table stops the update before any signal", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        yield* tableDouble(f, "exit 1");
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.isTrue(isAlive(f.pid));
+        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a table whose runtime row is another process signals nothing, children included", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        const bystander = yield* f.realSpawner.spawn(
+          ChildProcess.make(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"]),
+        );
+        const bystanderPid = Number(bystander.pid);
+        const bystanderStart = yield* startOf(f, bystanderPid);
+        // The table read sees the approved PID reused by a newer process with a child.
+        yield* tableDouble(
+          f,
+          `echo "${f.pid} 1 $(id -u) Thu Jan 1 00:00:00 2099"; echo "${bystanderPid} ${f.pid} $(id -u) ${bystanderStart}"; exit 0`,
+        );
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.isTrue(isAlive(f.pid));
+        assert.isTrue(isAlive(bystanderPid));
+        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);

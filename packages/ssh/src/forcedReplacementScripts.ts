@@ -46,12 +46,18 @@ export const REMOTE_FORCED_STOP_SCRIPT = `if [ "$FORCE_STOP" = 1 ]; then
       [ "$(forced_start_of "$2")" = "$3" ] && kill "-$1" "$2" 2>/dev/null
   }
   # One process table read binds each descendant to its owner and start time, so a PID that is
-  # reused afterwards never matches its record.
-  forced_records="$(LC_ALL=C TZ=UTC ps -A -o pid= -o ppid= -o uid= -o lstart= 2>/dev/null | awk -v root="$FORCE_PID" -v me="$(id -u)" '
+  # reused afterwards never matches its record. The table's own row for the runtime must still be
+  # the approved process, or the children it lists belong to another one.
+  forced_table="$(LC_ALL=C TZ=UTC ps -A -o pid= -o ppid= -o uid= -o lstart= 2>/dev/null)" || forced_refused "its process table could not be read"
+  forced_root="$(printf '%s\\n' "$forced_table" | awk -v root="$FORCE_PID" '$1 == root { start = $4; for (i = 5; i <= NF; i++) start = start " " $i; print $3 " " start }')"
+  [ "$forced_root" = "$(id -u) $FORCE_START" ] || forced_refused "the process table shows another process under its PID"
+  forced_records="$(printf '%s\\n' "$forced_table" | awk -v root="$FORCE_PID" -v me="$(id -u)" '
     { parent[$1] = $2; owner[$1] = $3; start = $4; for (i = 5; i <= NF; i++) start = start " " $i; started[$1] = start }
     END { for (pid in parent) { if (owner[pid] != me) continue; up = parent[pid]; for (depth = 0; depth < 32 && up != ""; depth++) { if (up == root) { print pid " " started[pid]; break } up = parent[up] } } }')" || forced_records=
   printf 'Stopping GOAT PID %s (started %s, port %s) for an approved forced update.\\n' "$FORCE_PID" "$FORCE_START" "$FORCE_PORT" >>"$LOG_FILE" 2>/dev/null || :
-  forced_signal_same TERM "$FORCE_PID" "$FORCE_START" || :
+  if ! forced_signal_same TERM "$FORCE_PID" "$FORCE_START" && server_alive "$FORCE_PID"; then
+    forced_refused "it changed before the signal"
+  fi
   forced_waited=0
   while server_alive "$FORCE_PID" && [ "$forced_waited" -lt "$DRAIN_GRACE_SECONDS" ]; do
     sleep 1; forced_waited=$((forced_waited + 1))
