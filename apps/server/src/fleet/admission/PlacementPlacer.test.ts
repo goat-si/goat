@@ -1,0 +1,348 @@
+// @effect-diagnostics nodeBuiltinImport:off - each test gets a scratch database folder.
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
+import * as Attempts from "./PlacementAttempts.ts";
+import * as Placer from "./PlacementPlacer.ts";
+import { RETAIN_MS } from "./PlacementReservations.ts";
+
+const T0 = Date.UTC(2026, 10, 1);
+const freshFile = () =>
+  NodePath.join(
+    NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "placement-placer-")),
+    "state.sqlite",
+  );
+const database = (file: string) =>
+  Layer.orDie(SqlitePersistence.layerFromPath(file).pipe(Layer.provide(NodeServices.layer)));
+
+type Answer =
+  | { readonly ok: true; readonly threadId: string; readonly runId: string | null }
+  | { readonly ok: false; readonly error: SshRemoteDispatch.SshRemoteDispatchError };
+
+interface Remote {
+  readonly sent: Array<{
+    readonly host: string;
+    readonly placement: unknown;
+    readonly title: string;
+  }>;
+  readonly archived: Array<string>;
+  answers: Array<Answer>;
+  archiveFails: boolean;
+}
+
+const remote = (): Remote => ({ sent: [], archived: [], answers: [], archiveFails: false });
+
+const dispatchFor = (fake: Remote) =>
+  Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+    launchThread: (input) =>
+      Effect.suspend(() => {
+        fake.sent.push({ host: input.host ?? "", placement: input.placement, title: input.title });
+        const answer = fake.answers.shift() ?? { ok: true as const, threadId: "t", runId: "r" };
+        return answer.ok
+          ? Effect.succeed({ threadId: answer.threadId, runId: answer.runId } as never)
+          : Effect.fail(answer.error);
+      }),
+    callHostTool: (call) =>
+      Effect.suspend(() => {
+        if (fake.archiveFails)
+          return Effect.fail(
+            new SshRemoteDispatch.SshRemoteDispatchError({
+              reason: "host_unavailable",
+              message: "down",
+            }),
+          );
+        fake.archived.push(String((call.arguments as { threadId: string }).threadId));
+        return Effect.succeed({});
+      }),
+  });
+
+const placerOn = (file: string, fake: Remote) =>
+  Placer.layer.pipe(
+    Layer.provideMerge(Attempts.layer),
+    Layer.provide(dispatchFor(fake)),
+    Layer.provideMerge(database(file)),
+  );
+
+const launch = (title = "Work") => ({
+  cwd: "/repo",
+  workspace: { type: "cwd" as const },
+  title,
+  message: "do it",
+  runtimeMode: "full-access" as const,
+  callerRuntimeMode: "full-access" as const,
+});
+
+const placeOn = (host: string, title?: string, ownerKey = "goal:g:a1") =>
+  Effect.flatMap(Placer.PlacementPlacer, (placer) =>
+    placer.placeRemote({
+      ownerKey,
+      host,
+      launch: launch(title),
+      authorize: Effect.succeed("full-access" as const),
+    }),
+  );
+
+const lost = () =>
+  ({
+    ok: false,
+    error: new SshRemoteDispatch.SshRemoteDispatchError({
+      reason: "ssh_failed",
+      message: "connection dropped after the request was sent",
+      launchMayHaveStarted: true,
+    }),
+  }) as const;
+const refused = (
+  classification: string,
+  extra: { threadId?: string; mayHaveStarted?: boolean } = {},
+) =>
+  ({
+    ok: false,
+    error: new SshRemoteDispatchError({
+      reason: "remote_refused",
+      message: classification,
+      remoteClassification: classification,
+      launchMayHaveStarted: extra.mayHaveStarted ?? false,
+      ...(extra.threadId === undefined ? {} : { remoteThreadId: extra.threadId }),
+    }),
+  }) as const;
+const SshRemoteDispatchError = SshRemoteDispatch.SshRemoteDispatchError;
+
+describe("the placer's attempt history", () => {
+  it.effect("one current attempt per owner, even when two recoveries race", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Attempts.PlacementAttempts;
+      const results = yield* Effect.all(
+        Array.from({ length: 5 }, () =>
+          attempts.resolve({ ownerKey: "o", targetHost: "a", payloadJson: "{}", now: T0 }),
+        ),
+        { concurrency: "unbounded" },
+      );
+      assert.strictEqual(results.filter((result) => result._tag === "Created").length, 1);
+      assert.isTrue(results.every((result) => result.attempt.attempt === 0));
+      const elsewhere = yield* attempts.resolve({
+        ownerKey: "o",
+        targetHost: "b",
+        payloadJson: "{}",
+        now: T0,
+      });
+      assert.strictEqual(elsewhere._tag, "PinnedElsewhere");
+    }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+
+  it.effect(
+    "a started attempt allocates nothing new, as after a crash between recording it and settling the claim",
+    () =>
+      Effect.gen(function* () {
+        const attempts = yield* Attempts.PlacementAttempts;
+        yield* attempts.resolve({ ownerKey: "o", targetHost: "a", payloadJson: "{}", now: T0 });
+        yield* attempts.recordStarted({ ownerKey: "o", attempt: 0, threadId: "t", runId: "r" });
+        const again = yield* attempts.resolve({
+          ownerKey: "o",
+          targetHost: "b",
+          payloadJson: "{}",
+          now: T0,
+        });
+        assert.deepStrictEqual([again._tag, again.attempt.attempt], ["Started", 0]);
+      }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+
+  it.effect(
+    "after not started, a rerun or a prune, the next key gets a new attempt number whatever the clock reads",
+    () =>
+      Effect.gen(function* () {
+        const attempts = yield* Attempts.PlacementAttempts;
+        yield* attempts.resolve({ ownerKey: "o", targetHost: "a", payloadJson: "{}", now: T0 });
+        yield* attempts.recordNotStarted({ ownerKey: "o", attempt: 0, threadId: null });
+        // Clock rolled back: the attempt number still moves on.
+        const second = yield* attempts.resolve({
+          ownerKey: "o",
+          targetHost: "b",
+          payloadJson: "{}",
+          now: T0 - 1000,
+        });
+        assert.deepStrictEqual([second._tag, second.attempt.attempt], ["Created", 1]);
+        assert.isTrue(
+          yield* attempts.chooseRunAgain({
+            ownerKey: "o",
+            attempt: 1,
+            decidedBy: "person",
+            now: T0,
+          }),
+        );
+        assert.isFalse(
+          yield* attempts.chooseRunAgain({
+            ownerKey: "o",
+            attempt: 1,
+            decidedBy: "person",
+            now: T0,
+          }),
+        );
+        const third = yield* attempts.resolve({
+          ownerKey: "o",
+          targetHost: "c",
+          payloadJson: "{}",
+          now: T0,
+        });
+        assert.deepStrictEqual([third._tag, third.attempt.attempt], ["Created", 2]);
+        // The old attempt stays unknown with the person's choice; a late success is still recorded on it.
+        assert.isTrue(
+          yield* attempts.recordStarted({
+            ownerKey: "o",
+            attempt: 1,
+            threadId: "late",
+            runId: "r",
+          }),
+        );
+        assert.strictEqual((yield* attempts.latest("o"))?.attempt, 2);
+        assert.strictEqual((yield* attempts.latest("o"))?.state, "unknown");
+        yield* attempts.recordNotStarted({ ownerKey: "o", attempt: 2, threadId: null });
+        assert.strictEqual(yield* attempts.prune(T0 + RETAIN_MS + 1), 3);
+        const fourth = yield* attempts.resolve({
+          ownerKey: "o",
+          targetHost: "a",
+          payloadJson: "{}",
+          now: T0,
+        });
+        assert.strictEqual(fourth.attempt.attempt, 3);
+      }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+
+  it.effect("the unknown list holds only undecided unknown attempts", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Attempts.PlacementAttempts;
+      yield* attempts.resolve({ ownerKey: "x", targetHost: "a", payloadJson: "{}", now: T0 });
+      yield* attempts.resolve({ ownerKey: "y", targetHost: "a", payloadJson: "{}", now: T0 });
+      yield* attempts.chooseRunAgain({ ownerKey: "y", attempt: 0, decidedBy: "person", now: T0 });
+      assert.deepStrictEqual(
+        (yield* attempts.listUnknown).map((row) => row.ownerKey),
+        ["x"],
+      );
+    }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+});
+
+describe("placing on another GOAT", () => {
+  it.effect(
+    "a lost reply stays unknown across a restart and a target change; the same key and payload go back to the same target and a late success is that attempt's outcome",
+    () => {
+      const file = freshFile();
+      const fake = remote();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        fake.answers.push(lost());
+        const first = yield* placeOn("box-a", "Work").pipe(Effect.provide(placerOn(file, fake)));
+        assert.strictEqual(first._tag, "Unknown");
+        // Restart: a new placer on the same database.
+        const moved = yield* placeOn("box-b", "Work").pipe(Effect.provide(placerOn(file, fake)));
+        assert.strictEqual(moved._tag, "Unknown");
+        assert.deepStrictEqual(
+          fake.sent.map((sent) => sent.host),
+          ["box-a"],
+        );
+        // The caller would now build another title; the frozen payload is resent.
+        fake.answers.push({ ok: true, threadId: "thread-1", runId: "run-1" });
+        const retried = yield* placeOn("box-a", "Changed title").pipe(
+          Effect.provide(placerOn(file, fake)),
+        );
+        assert.deepStrictEqual(
+          retried._tag === "Started"
+            ? [retried.threadId, retried.runId, retried.attempt.attempt]
+            : retried._tag,
+          ["thread-1", "run-1", 0],
+        );
+        assert.deepStrictEqual(
+          fake.sent.map((sent) => sent.title),
+          ["Work", "Work"],
+        );
+        assert.deepStrictEqual(fake.sent[0]?.placement, fake.sent[1]?.placement);
+      });
+    },
+  );
+
+  it.effect(
+    "only the target's not started frees a new key; full, cordoned or expired keep the attempt",
+    () => {
+      const file = freshFile();
+      const fake = remote();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        fake.answers.push(
+          refused("placement_full"),
+          refused("placement_cordoned"),
+          refused("placement_expired", { mayHaveStarted: true }),
+        );
+        for (let index = 0; index < 3; index += 1) {
+          const outcome = yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
+          assert.strictEqual(outcome._tag, "Unknown");
+          assert.strictEqual(outcome.attempt.attempt, 0);
+        }
+        fake.answers.push(refused("placement_not_started", { threadId: "idle-thread" }));
+        const fenced = yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
+        assert.strictEqual(fenced._tag, "NotStarted");
+        assert.deepStrictEqual(fake.archived, ["idle-thread"]);
+        const next = yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake)));
+        assert.deepStrictEqual([next._tag, next.attempt.attempt], ["Started", 1]);
+        assert.notDeepEqual(fake.sent.at(-1)?.placement, fake.sent[0]?.placement);
+      });
+    },
+  );
+
+  it.effect(
+    "an archive that fails is recorded and retried on the next placement to that host",
+    () => {
+      const file = freshFile();
+      const fake = remote();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        fake.archiveFails = true;
+        fake.answers.push(refused("placement_not_started", { threadId: "idle" }));
+        yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
+        const pending = yield* Effect.flatMap(
+          Attempts.PlacementAttempts,
+          (attempts) => attempts.pendingCleanups,
+        ).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
+        assert.deepStrictEqual(
+          pending.map((row) => row.cleanupThreadId),
+          ["idle"],
+        );
+        fake.archiveFails = false;
+        yield* placeOn("box-a", "Work", "goal:g:a2").pipe(Effect.provide(placerOn(file, fake)));
+        assert.deepStrictEqual(fake.archived, ["idle"]);
+      });
+    },
+  );
+
+  it.effect("Run again makes a new key only after a person's choice is recorded", () => {
+    const file = freshFile();
+    const fake = remote();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(T0);
+      fake.answers.push(lost());
+      yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
+      const still = yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake)));
+      assert.strictEqual(still._tag, "Unknown");
+      yield* Effect.flatMap(Attempts.PlacementAttempts, (attempts) =>
+        attempts.chooseRunAgain({
+          ownerKey: "goal:g:a1",
+          attempt: 0,
+          decidedBy: "person:jun",
+          now: T0,
+        }),
+      ).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
+      const rerun = yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake)));
+      assert.deepStrictEqual([rerun._tag, rerun.attempt.attempt], ["Started", 1]);
+      assert.deepStrictEqual(
+        fake.sent.map((sent) => sent.host),
+        ["box-a", "box-b"],
+      );
+    });
+  });
+});
