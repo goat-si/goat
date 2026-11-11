@@ -15,7 +15,6 @@ import {
   EnvironmentId,
   isCloudMachineAlias,
   ProjectId,
-  ThreadId,
   OrchestratorMcpCapabilitiesResult,
   type ProjectScript,
   type DesktopSshEnvironmentTarget,
@@ -94,6 +93,7 @@ import {
   type RemoteWorktree,
 } from "./remoteBrowse.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import * as PlacedLaunch from "./placedLaunch.ts";
 
 /**
  * Lets an agent in this environment reach another machine over SSH: list the
@@ -180,6 +180,7 @@ export type SshLaunchInput = SshDispatchDestination & {
    * message. Forwarded only to a remote whose goat_thread_launch declares it.
    */
   readonly standingInstructions?: boolean | undefined;
+  readonly placement?: PlacedLaunch.PlacementArgument | undefined;
 };
 
 export interface SshLaunchResult {
@@ -367,10 +368,6 @@ const decodeRemoteIdentity = Schema.decodeUnknownEffect(
 const decodeRemoteCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
 
 const decodeRemoteProject = Schema.decodeUnknownEffect(Schema.Struct({ id: ProjectId }));
-const decodeRemoteThread = Schema.decodeUnknownEffect(
-  Schema.Struct({ threadId: ThreadId, runId: Schema.optional(Schema.NullOr(Schema.String)) }),
-);
-
 const BROWSE_TIMEOUT_MS = 20_000;
 const ATTACHMENT_PREPARE_TIMEOUT_MS = 20_000;
 const ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
@@ -1429,6 +1426,7 @@ const make = Effect.gen(function* () {
         });
       if (capabilities === null && input.memoryGrantCeiling !== undefined)
         return yield* memoryRefusal("Remote task memory admission could not be verified.");
+      yield* PlacedLaunch.refuseUndeclared(input.placement, capabilities, target.alias);
       if (
         memoryGrantCeiling !== "none" &&
         capabilities?.declared.has("memoryGrantCeiling") !== true
@@ -1556,6 +1554,7 @@ const make = Effect.gen(function* () {
             ...(forwardReport ? { report: input.report } : {}),
             ...(forwardStandingOptOut ? { standingInstructions: false } : {}),
             ...(forwardWatchOptOut ? { notifyOnCompletion: false } : {}),
+            ...PlacedLaunch.launchArguments(input.placement),
           },
         });
       const rawLaunched = yield* launch(forwardLaunchedBy, admission.memoryArguments).pipe(
@@ -1575,16 +1574,10 @@ const make = Effect.gen(function* () {
             : Effect.fail(error),
         ),
       );
-      const launched = yield* decodeRemoteThread(rawLaunched).pipe(
-        Effect.mapError(
-          () =>
-            new SshRemoteDispatchError({
-              reason: "remote_refused",
-              launchMayHaveStarted: true,
-              message:
-                "The remote launch returned no thread acknowledgement; inspect its threads before retrying.",
-            }),
-        ),
+      const launched = yield* PlacedLaunch.decodeLaunched(
+        rawLaunched,
+        input.placement,
+        target.alias,
       );
       const launchedReport = (rawLaunched as { readonly report?: unknown } | null)?.report as
         | { readonly correlationId?: string }

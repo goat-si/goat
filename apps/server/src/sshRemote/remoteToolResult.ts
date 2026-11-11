@@ -10,7 +10,14 @@ export function readRemoteToolResult(
   raw: unknown,
 ):
   | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly message: string; readonly code?: string } {
+  | {
+      readonly ok: false;
+      readonly message: string;
+      readonly code?: string;
+      readonly classification?: string;
+      readonly mayHaveStarted?: boolean;
+      readonly threadId?: string;
+    } {
   const result = (typeof raw === "object" && raw !== null ? raw : {}) as CallToolResult;
   const text = result.content?.find((item) => item.type === "text")?.text;
   let payload: unknown = result.structuredContent;
@@ -24,13 +31,26 @@ export function readRemoteToolResult(
   if (result.isError === true) {
     const fields =
       typeof payload === "object" && payload !== null
-        ? (payload as { readonly message?: unknown; readonly code?: unknown })
+        ? (payload as {
+            readonly message?: unknown;
+            readonly code?: unknown;
+            readonly classification?: unknown;
+            readonly mayHaveStarted?: unknown;
+            readonly threadId?: unknown;
+          })
         : {};
     const message = "message" in fields ? String(fields.message) : (text ?? "no details");
     return {
       ok: false,
       message: `The remote ${tool} refused: ${message}`,
       ...(typeof fields.code === "string" ? { code: fields.code } : {}),
+      ...(typeof fields.classification === "string"
+        ? { classification: fields.classification }
+        : {}),
+      ...(typeof fields.mayHaveStarted === "boolean"
+        ? { mayHaveStarted: fields.mayHaveStarted }
+        : {}),
+      ...(typeof fields.threadId === "string" ? { threadId: fields.threadId } : {}),
     };
   }
   return { ok: true, value: payload };
