@@ -89,15 +89,25 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 }
 
 // FinishLeave deletes, under the state lock, what a leave that wrote the left marker could not: the
-// node's keys, its mesh and its invites. pen leave runs it when it finds the marker and no daemon.
+// node's keys, its mesh and its invites. pen leave runs it when it finds the marker and no daemon. It
+// looks at the marker again under the lock and deletes nothing without it (ErrNotLeaving): pen up,
+// pen join and pen login clear the marker and make a new identity in one hold of the same lock.
 func FinishLeave(st *state.Store) error {
 	unlock, err := st.Lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if _, err := os.Stat(st.Path(LeftMarker)); errors.Is(err, os.ErrNotExist) {
+		return ErrNotLeaving
+	} else if err != nil {
+		return err
+	}
 	return removeNodeFiles(st)
 }
+
+// ErrNotLeaving means the left marker is gone: a node was started again here, and nothing is deleted.
+var ErrNotLeaving = errors.New("this node is not leaving its mesh")
 
 // removeNodeFiles deletes the node's files; the caller holds the state lock. An error names the file:
 // the leave is done in the mesh, but this machine still holds it.

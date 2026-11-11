@@ -198,7 +198,10 @@ the same daemon operation as the CLI.
     marker before it deletes `identity.json`, `mesh.json` and `offers.json`; a delete that fails (a reader
     holding the file on Windows) is reported by name and the service is kept. A later `pen leave` that finds the
     marker and no daemon deletes what is left (`FinishLeave`, under the state lock, the code the daemon uses)
-    and removes the task or unit only once those files are gone. A `pen leave` that finds no Pen identity and no
+    and removes the task or unit only once those files are gone. `FinishLeave` looks at the marker again under
+    the lock and deletes nothing without it; `pen up`, `pen join` and `pen login` clear the marker and make the
+    new identity in one hold of that lock (`EnsureIdentityClearing`), so a resumed leave cannot delete a node
+    started meanwhile (it says the node is not leaving). It refuses while a daemon holds `daemon.lock`. A `pen leave` that finds no Pen identity and no
     marker removes only the task or unit, no state files, and says "no Pen identity in <folder>", so a folder
     that is missing or not mounted is not taken for a node that left. This holds on macOS and Linux too.
   - A command that has to wait for the turn says so at once, naming the holder from `start.holder`.

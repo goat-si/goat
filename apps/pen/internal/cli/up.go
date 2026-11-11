@@ -73,13 +73,17 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
 			return refused(errors.New("this node left its mesh; run pen up or pen join to start again"))
 		}
-	} else if err := clearLeft(st); err != nil {
-		return fail(stderr, err)
 	} else if err := os.Remove(st.Path(downMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		// A person starting Pen ends a pen down, also when Pen then runs without the service.
 		return fail(stderr, err)
 	}
-	id, _, err := st.EnsureIdentity()
+	// A person's pen up starts the node again: the left marker goes in the same state-lock hold that
+	// makes the identity, so a resumed pen leave (FinishLeave) cannot delete the new node's files.
+	leftMarker := daemon.LeftMarker
+	if *foreground || *supervise {
+		leftMarker = "" // a service start refuses on the marker above and never clears it
+	}
+	id, _, err := st.EnsureIdentityClearing(leftMarker)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -139,14 +143,6 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 // before --service run plain --foreground and must not restart a refused start either.
 func startedByService() bool {
 	return os.Getenv("SYSTEMD_EXEC_PID") == strconv.Itoa(os.Getpid()) || os.Getenv("XPC_SERVICE_NAME") == launchdLabel
-}
-
-// clearLeft removes the leave marker: pen up and pen join, run by a person, start the node again.
-func clearLeft(st *state.Store) error {
-	if err := os.Remove(st.Path(daemon.LeftMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
 }
 
 func printStatus(w io.Writer, s daemon.Status) {

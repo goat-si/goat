@@ -1054,3 +1054,68 @@ func TestAResumedLeaveDeletesWhatTheLeaveCouldNot(t *testing.T) {
 		t.Fatalf("pen leave succeeded but identity.json stays: %v", err)
 	}
 }
+
+// A resumed pen leave that saw the left marker, then paused while a pen join on the same machine made a
+// new identity and mesh, must not delete them: the deletion checks the marker under the state lock, and
+// pen leave says this node is not leaving.
+func TestAResumedLeaveDoesNotDeleteANodeJoinedMeanwhile(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st, calls := windowsHome(t, func(string, []string) error { return nil })
+	soloNode(t, st, rs.URL)
+	if err := st.WriteAtomic(daemon.LeftMarker, nil, 0o600); err != nil { // a leave that stopped part way
+		t.Fatal(err)
+	}
+	var joined []byte
+	old := leaveResumes
+	t.Cleanup(func() { leaveResumes = old })
+	leaveResumes = func() {
+		// What pen join does up to its saved identity and mesh: a new node in this folder.
+		os.Remove(st.Path("identity.json"))
+		os.Remove(st.Path("mesh.json"))
+		id, _, err := st.EnsureIdentityClearing(daemon.LeftMarker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mesh.Found(st, id, "b", 2); err != nil {
+			t.Fatal(err)
+		}
+		joined, _ = os.ReadFile(st.Path("identity.json"))
+	}
+	var out, errOut bytes.Buffer
+	code := RunLeave(nil, &out, &errOut)
+	now, _ := os.ReadFile(st.Path("identity.json"))
+	if len(joined) == 0 || !bytes.Equal(now, joined) {
+		t.Fatalf("pen leave (exit %d, %q %q) deleted the identity of the node joined meanwhile", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(st.Path("mesh.json")); err != nil {
+		t.Fatalf("pen leave deleted the mesh joined meanwhile: %v", err)
+	}
+	if code == 0 || !strings.Contains(errOut.String(), "not leaving") || slices.ContainsFunc(*calls, func(c string) bool { return strings.Contains(c, "/Delete") }) {
+		t.Fatalf("pen leave: exit %d, %q, calls %q; want it to say the node is not leaving and keep the task", code, errOut.String(), *calls)
+	}
+}
+
+// A daemon that holds daemon.lock but does not answer on the control socket does its own leave: a
+// resumed pen leave refuses to delete anything under it.
+func TestAResumedLeaveRefusesWhileADaemonHoldsItsLock(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st, _ := windowsHome(t, func(string, []string) error { return nil })
+	soloNode(t, st, rs.URL)
+	if err := st.WriteAtomic(daemon.LeftMarker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := state.TryLock(st.Path("daemon.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var out, errOut bytes.Buffer
+	if code := RunLeave(nil, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "daemon.lock") {
+		t.Fatalf("pen leave: exit %d, %q %q; want a refusal naming daemon.lock", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(st.Path("identity.json")); err != nil {
+		t.Fatalf("pen leave deleted files under a running daemon: %v", err)
+	}
+}

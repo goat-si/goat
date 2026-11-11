@@ -36,8 +36,22 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 			// A leave that finished in the daemon after its pen leave stopped waiting, or one that could
 			// not delete every file: delete what is left first, and only then the service. With no
 			// identity and no left marker nothing of a node is here: only the task or unit goes.
+			// A daemon that holds daemon.lock but does not answer still runs here; it does its own leave.
+			if release, err := state.TryLock(st.Path("daemon.lock")); errors.Is(err, state.ErrLocked) {
+				fmt.Fprintf(stderr, "pen: a pen daemon still runs here (it holds %s) but does not answer; the %s service is kept. Run pen down, then pen leave again.\n", st.Path("daemon.lock"), mode)
+				return 1
+			} else if err == nil {
+				release()
+			}
 			if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
-				if err := daemon.FinishLeave(st); err != nil {
+				if leaveResumes != nil {
+					leaveResumes()
+				}
+				switch err := daemon.FinishLeave(st); {
+				case errors.Is(err, daemon.ErrNotLeaving):
+					fmt.Fprintf(stderr, "pen: this node is not leaving its mesh, so there is nothing to finish (pen up, pen join or pen login started a node here meanwhile); the %s service is kept\n", mode)
+					return 1
+				case err != nil:
 					fmt.Fprintf(stderr, "pen: %v; the %s service is kept\n", err, mode)
 					return 1
 				}
@@ -81,6 +95,9 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+// leaveResumes runs when a resumed pen leave is about to finish the deletion (a seam for tests).
+var leaveResumes func()
 
 // leftOrEmpty reports why no running node is left in st: it left (the left marker, though files may
 // remain for FinishLeave), or no Pen identity is in the folder at all (never made, or the folder is not

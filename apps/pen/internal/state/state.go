@@ -161,11 +161,24 @@ func (s *Store) LoadIdentity() (*ident.Identity, error) {
 
 // EnsureIdentity loads the identity or creates one. created reports a new identity.
 func (s *Store) EnsureIdentity() (id *ident.Identity, created bool, err error) {
+	return s.EnsureIdentityClearing("")
+}
+
+// EnsureIdentityClearing is EnsureIdentity that first removes the file marker (unless ""), in the same
+// hold of the state lock: pen up, pen join and pen login start a node again by clearing the left marker
+// and making its identity in one step, so a pen leave that deletes a node's files only while the
+// marker is present (FinishLeave, under the same lock) cannot delete the new node's.
+func (s *Store) EnsureIdentityClearing(marker string) (id *ident.Identity, created bool, err error) {
 	unlock, err := s.Lock()
 	if err != nil {
 		return nil, false, err
 	}
 	defer unlock()
+	if marker != "" {
+		if err := os.Remove(s.Path(marker)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, false, err
+		}
+	}
 	id, err = s.LoadIdentity()
 	if err == nil {
 		return id, false, nil

@@ -530,7 +530,15 @@ func CallWithin(st *state.Store, req Request, v any, d time.Duration) error {
 	if err := c.SetWriteDeadline(time.Now().Add(sendTimeout)); err != nil {
 		return err
 	}
-	if err := cl.Send(req); err != nil {
+	// The daemon acts only on a whole request line, ending in its newline. A write that failed before
+	// the last byte left it no such line (ErrNotSent: nothing changed); one that failed after it may
+	// have delivered the line, so it counts as sent and the answer is awaited as usual.
+	line, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	if n, err := c.Write(line); err != nil && n < len(line) {
 		return fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
 	if err := c.SetDeadline(time.Now().Add(d)); err != nil {
