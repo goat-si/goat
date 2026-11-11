@@ -106,7 +106,10 @@ export function GoatBotProfileDialog(props: {
                 maxLength={NAME_MAX}
                 disabled={busy}
                 aria-invalid={nameMissing}
-                onBlur={() => setNameChecked(true)}
+                // Leaving a name the person never typed in, say to open More, is not a mistake yet.
+                onBlur={() => {
+                  if (name !== props.initial.name) setNameChecked(true);
+                }}
                 onChange={(event) => setName(event.target.value)}
               />
             </label>
