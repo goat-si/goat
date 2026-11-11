@@ -151,7 +151,7 @@ it("keeps its own read position for a server that does not track visits", async 
   await view.unmount();
 });
 it("records a member chat's visit against the member's own conversation while it is seen", async () => {
-  Object.assign(route, { focused: true, foreground: true, threadId: "main-thread" });
+  Object.assign(route, { focused: true, foreground: true, active: true, threadId: "main-thread" });
   route.visit.mockClear();
   route.member = { botId: "scout", environmentId: "env", sessionThreadId: "scout-thread" };
   route.shell = { lastVisitedAt: at(1) };
@@ -164,6 +164,18 @@ it("records a member chat's visit against the member's own conversation while it
   expect(route.visit).toHaveBeenCalledTimes(1);
   expect(route.visit).toHaveBeenCalledWith(
     expect.objectContaining({ input: { threadId: "scout-thread", visitedAt: at(5) } }),
+  );
+  // Control Center opens (inactive, still in the foreground) and Scout replies: not read.
+  route.visit.mockClear();
+  route.active = false;
+  route.memberPreview = { unread: true, at: at(6) };
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).not.toHaveBeenCalled();
+  // Back: the reply is read now.
+  route.active = true;
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).toHaveBeenCalledWith(
+    expect.objectContaining({ input: { threadId: "scout-thread", visitedAt: at(6) } }),
   );
   // Not seen in the background, and nothing more to mark once read.
   route.visit.mockClear();
