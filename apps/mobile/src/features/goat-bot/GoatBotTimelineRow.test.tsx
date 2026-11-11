@@ -348,7 +348,12 @@ describe("the progress line under the last message", () => {
       h,
       <GoatBotActivityLine
         botName="GOAT Bot"
-        activity={{ state: "working", text: "Waiting for your answer" }}
+        activity={{
+          state: "working",
+          text: "Waiting for your answer",
+          attention: "waiting",
+          wait: "you",
+        }}
         inView
       />,
     );

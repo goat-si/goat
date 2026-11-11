@@ -71,7 +71,7 @@ export function MobileBotLibrary(props: {
         <Text className="text-foreground-muted">Showing the newest files only.</Text>
       ) : null}
       {goatBotArtifactDays(files.data.artifacts, nowMs).map((day) => (
-        <View key={day.label} className="gap-1 pt-2">
+        <View key={day.key} className="gap-1 pt-2">
           <Text accessibilityRole="header" className="text-xs font-medium text-foreground-muted">
             {day.label}
           </Text>
