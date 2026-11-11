@@ -1,18 +1,14 @@
 /**
- * Who may resolve a step that needs a person (docs/internals/agent-surface.md, Human steps):
- * a runtime approval may be resolved by a person's client session or by an outside MCP client
- * a person minted with orchestration:operate and orchestration:approve; every other human step
- * only by a person's client session; a thread credential resolves none, whatever its scopes.
- * Resolvers are built from authenticated server context, never from tool input.
- *
+ * Who may resolve a step that needs a person (docs/internals/agent-surface.md, Human steps). A
+ * stored session is classified by the principal kind written at issue; one without it is no person.
  * @module HumanStepAuthority
  */
-import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import { MCP_CLIENT_SUBJECT } from "../auth/mcpClientSubject.ts";
+import type { SessionPrincipalKind } from "@goat/contracts";
 
 export type HumanStepResolver =
   | { readonly kind: "person" }
   | { readonly kind: "outside_client"; readonly approvals: boolean }
+  | { readonly kind: "proxied_person" }
   | { readonly kind: "thread" };
 
 export type HumanStep = "runtime_approval" | "person_only";
@@ -25,13 +21,18 @@ export const mcpResolver = (scope: McpInvocationScope): HumanStepResolver =>
     ? { kind: "thread" }
     : { kind: "outside_client", approvals: scope.client?.approvals === true };
 
-/**
- * A stored client session. MCP client sessions are refused outside /mcp, so this only guards a
- * caller that passes one in; every other subject, desktop-bootstrap included, is a person's client.
- */
-export const sessionResolver = (session: { readonly subject: string }): HumanStepResolver =>
-  session.subject === MCP_CLIENT_SUBJECT ? { kind: "outside_client", approvals: false } : PERSON;
+/** A stored client session, by the principal kind written at issue (mesh link design §5). */
+export const sessionResolver = (session: {
+  readonly principalKind?: SessionPrincipalKind | undefined;
+}): HumanStepResolver =>
+  session.principalKind === "person"
+    ? PERSON
+    : session.principalKind === "proxied_person"
+      ? { kind: "proxied_person" }
+      : { kind: "outside_client", approvals: false };
 
 export const canResolveHumanStep = (resolver: HumanStepResolver, step: HumanStep) =>
   resolver.kind === "person" ||
-  (step === "runtime_approval" && resolver.kind === "outside_client" && resolver.approvals);
+  (step === "runtime_approval" &&
+    (resolver.kind === "proxied_person" ||
+      (resolver.kind === "outside_client" && resolver.approvals)));

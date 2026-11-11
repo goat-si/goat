@@ -28,6 +28,7 @@ import {
   type AuthWebSocketTicketUse,
   type ChildSetupPurpose,
   type RuntimeMode,
+  type SessionPrincipalKind,
 } from "@goat/contracts";
 import { encodeOAuthScope } from "@goat/shared/oauthScope";
 import * as Context from "effect/Context";
@@ -48,6 +49,8 @@ import { reauthorizeSession } from "./McpClientAuthority.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { type ConnectionContext, connectionOf } from "./connectionContext.ts";
+import type { AuthSessionPenBinding } from "../persistence/AuthSessions.ts";
 import { REUSABLE_DEV_SESSION_EXPIRES_AT, resolveReusableDevAuth } from "./ReusableDevAuth.ts";
 import { legacyScopedSessionCookieName } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
@@ -107,6 +110,8 @@ export interface AuthenticatedSession {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt?: DateTime.DateTime;
+  readonly principalKind: SessionPrincipalKind;
+  readonly penBinding?: AuthSessionPenBinding;
 }
 
 export * from "./environmentAuthErrors.ts";
@@ -147,6 +152,7 @@ export class EnvironmentAuth extends Context.Service<
     readonly completeCloudWithdrawal: () => Effect.Effect<void, ServerAuthInternalError>;
     readonly createBrowserSession: (
       credential: string,
+      connection: ConnectionContext | undefined,
       requestMetadata: AuthClientMetadata,
       previousSessionToken?: string,
     ) => Effect.Effect<
@@ -160,6 +166,7 @@ export class EnvironmentAuth extends Context.Service<
     >;
     readonly exchangeBootstrapCredentialForAccessToken: (
       credential: string,
+      connection: ConnectionContext | undefined,
       requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
       requestMetadata: AuthClientMetadata,
       input?: {
@@ -232,7 +239,9 @@ export class EnvironmentAuth extends Context.Service<
       use: AuthWebSocketTicketUse,
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
     readonly issueWebSocketTicket: (
-      session: Pick<AuthenticatedSession, "sessionId" | "proofKeyThumbprint">,
+      session: Pick<AuthenticatedSession, "sessionId" | "proofKeyThumbprint" | "penBinding"> & {
+        readonly principalKind?: SessionPrincipalKind;
+      },
       input?: { readonly use?: AuthWebSocketTicketUse },
     ) => Effect.Effect<AuthWebSocketTicketResult, ServerAuthInternalError>;
     readonly issueStartupPairingUrl: (
@@ -258,6 +267,7 @@ export class EnvironmentAuth extends Context.Service<
     /** Spends a code covering all granted scopes. Rejects desktop grants and leaves refused proof-bound codes unspent. */
     readonly consumeMcpApprovalCode: (
       code: string,
+      connection: ConnectionContext | undefined,
       access: AuthMcpClientAccess,
       memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">,
       workspaceTerminalScopes?: ReadonlyArray<AuthMcpWorkspaceTerminalScope>,
@@ -423,11 +433,12 @@ export const make = Effect.gen(function* () {
 
   const authenticateToken = (
     token: string,
+    connection: ConnectionContext | undefined,
   ): Effect.Effect<
     AuthenticatedSession,
     ServerAuthInvalidCredentialError | ServerAuthInternalError
   > =>
-    sessions.verify(token).pipe(
+    sessions.verify(token, connection).pipe(
       Effect.tapError((cause) =>
         SessionStore.isSessionCredentialInvalidError(cause)
           ? Effect.logWarning("Rejected authenticated session credential.").pipe(
@@ -487,7 +498,7 @@ export const make = Effect.gen(function* () {
         }),
       );
     }
-    return authenticateToken(credential.token).pipe(
+    return authenticateToken(credential.token, connectionOf(request)).pipe(
       Effect.flatMap((session) => {
         if (session.proofKeyThumbprint) {
           if (!dpopToken || dpopToken !== credential.token) {
@@ -550,9 +561,9 @@ export const make = Effect.gen(function* () {
 
   const createBrowserSession: EnvironmentAuth["Service"]["createBrowserSession"] = Effect.fn(
     "EnvironmentAuth.createBrowserSession",
-  )(function* (credential, requestMetadata, previousSessionToken) {
+  )(function* (credential, connection, requestMetadata, previousSessionToken) {
     if (devAuth?.matches(credential)) {
-      return yield* sessions.verify(credential).pipe(
+      return yield* sessions.verify(credential, connection).pipe(
         mapSessionVerificationErrors,
         Effect.flatMap((session) =>
           DateTime.now.pipe(
@@ -578,7 +589,7 @@ export const make = Effect.gen(function* () {
     const previousSession =
       previousSessionToken === undefined
         ? undefined
-        : yield* sessions.verify(previousSessionToken).pipe(
+        : yield* sessions.verify(previousSessionToken, connection).pipe(
             Effect.catchIf(SessionStore.isSessionCredentialInvalidError, () => Effect.void),
             Effect.mapError((cause) => new ServerAuthSessionCredentialValidationError({ cause })),
           );
@@ -623,6 +634,7 @@ export const make = Effect.gen(function* () {
   };
   const resolveBootstrapGrant = (
     credential: string,
+    connection: ConnectionContext | undefined,
     input?: {
       readonly proofKeyThumbprint?: string;
       readonly requestedScopes?: ReadonlyArray<AuthEnvironmentScope>;
@@ -642,7 +654,7 @@ export const make = Effect.gen(function* () {
         Effect.flatMap(admit),
       );
     }
-    return sessions.verify(credential).pipe(
+    return sessions.verify(credential, connection).pipe(
       mapSessionVerificationErrors,
       Effect.filterOrFail(
         (session) =>
@@ -662,8 +674,8 @@ export const make = Effect.gen(function* () {
   };
 
   const exchangeBootstrapCredentialForAccessToken: EnvironmentAuth["Service"]["exchangeBootstrapCredentialForAccessToken"] =
-    (credential, requestedScopes, requestMetadata, input) => {
-      return resolveBootstrapGrant(credential, {
+    (credential, connection, requestedScopes, requestMetadata, input) => {
+      return resolveBootstrapGrant(credential, connection, {
         ...input,
         ...(requestedScopes !== undefined ? { requestedScopes } : {}),
       }).pipe(
@@ -814,7 +826,7 @@ export const make = Effect.gen(function* () {
       if (!devAuth) {
         return fallback.pipe(Effect.withSpan("EnvironmentAuth.issueStartupPairingCredential"));
       }
-      return sessions.verify(devAuth.credential).pipe(
+      return sessions.verifyStartupDevCredential().pipe(
         Effect.map(
           (session) =>
             ({
@@ -880,24 +892,30 @@ export const make = Effect.gen(function* () {
     session,
     input,
   ) =>
-    sessions
-      .issueWebSocketToken(session.sessionId, {
-        ...(input?.use ? { audience: input.use } : {}),
-        ...(input?.use === "rpc" && session.proofKeyThumbprint
-          ? { proofKeyThumbprint: session.proofKeyThumbprint }
-          : {}),
-      })
-      .pipe(
-        Effect.mapError((cause) => new ServerAuthWebSocketTokenIssueError({ cause })),
-        Effect.map(
-          (issued) =>
-            ({
-              ticket: Redacted.make(issued.token),
-              expiresAt: DateTime.toUtc(issued.expiresAt),
-            }) satisfies AuthWebSocketTicketResult,
-        ),
-        Effect.withSpan("EnvironmentAuth.issueWebSocketTicket"),
-      );
+    // Pen-bound sessions never need tickets: upstream sockets carry a bearer header.
+    session.penBinding !== undefined
+      ? Effect.fail(new ServerAuthWebSocketTokenIssueError({ cause: "Pen-bound session" }))
+      : sessions
+          .issueWebSocketToken(session.sessionId, {
+            ...(session.principalKind === undefined
+              ? {}
+              : { principalKind: session.principalKind }),
+            ...(input?.use ? { audience: input.use } : {}),
+            ...(input?.use === "rpc" && session.proofKeyThumbprint
+              ? { proofKeyThumbprint: session.proofKeyThumbprint }
+              : {}),
+          })
+          .pipe(
+            Effect.mapError((cause) => new ServerAuthWebSocketTokenIssueError({ cause })),
+            Effect.map(
+              (issued) =>
+                ({
+                  ticket: Redacted.make(issued.token),
+                  expiresAt: DateTime.toUtc(issued.expiresAt),
+                }) satisfies AuthWebSocketTicketResult,
+            ),
+            Effect.withSpan("EnvironmentAuth.issueWebSocketTicket"),
+          );
 
   const authenticateHttpRequest: EnvironmentAuth["Service"]["authenticateHttpRequest"] = (
     request,
@@ -913,12 +931,14 @@ export const make = Effect.gen(function* () {
         ).pipe(Effect.orDie);
         const websocketTicket = query.wsTicket && Redacted.value(query.wsTicket);
         if (websocketTicket && websocketTicket.trim().length > 0) {
-          const session = yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
-            mapSessionVerificationErrors,
-            Effect.tap((session) => withdrawal.guard(session.subject)),
-            Effect.flatMap(rejectMcpClientAudience),
-            Effect.flatMap(admit),
-          );
+          const session = yield* sessions
+            .verifyWebSocketToken(websocketTicket, connectionOf(request))
+            .pipe(
+              mapSessionVerificationErrors,
+              Effect.tap((session) => withdrawal.guard(session.subject)),
+              Effect.flatMap(rejectMcpClientAudience),
+              Effect.flatMap(admit),
+            );
           yield* ConnectHubCredentials.admitSocketUse(session, use);
           if (session.proofKeyThumbprint) {
             // WebSocket clients cannot set headers, so the proof travels in the query.
@@ -950,7 +970,7 @@ export const make = Effect.gen(function* () {
   const authenticateMcpClient: EnvironmentAuth["Service"]["authenticateMcpClient"] = (request) => {
     const token = parseBearerToken(request);
     if (token === null) return Effect.fail(new ServerAuthMissingCredentialError({}));
-    return sessions.verify(token).pipe(
+    return sessions.verify(token, connectionOf(request)).pipe(
       mapSessionVerificationErrors,
       Effect.flatMap((session) =>
         session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
@@ -1016,11 +1036,12 @@ export const make = Effect.gen(function* () {
   };
   const consumeMcpApprovalCode: EnvironmentAuth["Service"]["consumeMcpApprovalCode"] = (
     code,
+    connection,
     access,
     memoryScopes,
     workspaceTerminalScopes,
   ) =>
-    resolveBootstrapGrant(code.trim(), {
+    resolveBootstrapGrant(code.trim(), connection, {
       requiredScopes: mcpClientScopes(access, memoryScopes, workspaceTerminalScopes),
     }).pipe(
       Effect.catchTags({

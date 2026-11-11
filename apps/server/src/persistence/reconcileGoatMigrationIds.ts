@@ -66,6 +66,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ScheduledBotRoutines",
   "RemoteDispatchDeleteIntent",
   "ChannelInterimMessages",
+  "AuthSessionPenBinding",
 ]);
 
 type MigrationEntry<E> = readonly [

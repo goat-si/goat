@@ -3634,7 +3634,7 @@ export const layer = Layer.unwrap(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
             Effect.provide(
               Layer.merge(
-                RpcAuthorization.layer(session.scopes, (method, payload) => {
+                HubRpcSocket.rpcAuthorization(session, sessions, (method, payload) => {
                   // Anonymous feature and variant signal for the connecting surface.
                   const usage = featureUsage(method, payload);
                   return usage === undefined

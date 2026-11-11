@@ -156,7 +156,25 @@ export class WebSocketSessionRevokedError extends Schema.TaggedError<WebSocketSe
   }
 }
 
+export class SessionBindingRefusedError extends Schema.TaggedError<SessionBindingRefusedError>()(
+  "SessionBindingRefusedError",
+  {
+    sessionId: Schema.String,
+    reason: Schema.Literals([
+      "no_connection",
+      "wrong_listener",
+      "connection_closed",
+      "peer_mismatch",
+    ]),
+  },
+) {
+  override get message(): string {
+    return "Session is not valid on this connection.";
+  }
+}
+
 export const SessionCredentialInvalidError = Schema.Union([
+  SessionBindingRefusedError,
   MalformedSessionTokenError,
   InvalidSessionTokenSignatureError,
   InvalidSessionTokenPayloadError,
