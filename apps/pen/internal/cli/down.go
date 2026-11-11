@@ -21,15 +21,16 @@ func RunDown(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if taskTurnApplies() {
-		// Before looking for a task or a daemon: a pen up holding the turn may be registering the task.
-		// The down record stays even when nothing runs, so a start that is already deciding sees it.
+		// A pen up holding the turn may still be registering the service.
 		release, err := taskTurn(st, "pen down", stderr)
 		if err != nil {
 			return fail(stderr, err)
 		}
 		defer release()
-		if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
-			return fail(stderr, err)
+		if serviceOS == "windows" {
+			if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
+				return fail(stderr, err)
+			}
 		}
 	}
 	if mode := installedService(st); mode != "none" {
