@@ -28,7 +28,9 @@ import {
 } from "@goat/contracts/agentSurface/resolve";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { listedDescription } from "@goat/contracts/agentSurface/signature";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
@@ -722,6 +724,14 @@ it.effect("lists canonical names and keeps legacy names callable, unlisted and d
     expect(byLegacy._meta?.[DEPRECATED_META_KEY]).toBe("goat_provider_list");
     expect(byListed._meta?.[DEPRECATED_META_KEY]).toBeUndefined();
     expect(byLegacy.content).toEqual(byListed.content);
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("a tools/list that returns an RPC error fails with that error", () =>
+  Effect.gen(function* () {
+    const http = yield* serveCatalogOverHttp(callers, "full");
+    const listed = yield* Effect.exit(http.listTools("thread", () => "{"));
+    expect(Exit.isFailure(listed) && Cause.pretty(listed.cause)).toMatch(/tools\/list failed: /);
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
