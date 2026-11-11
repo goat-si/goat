@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { PINNED, scope, setup } from "./HubMembership.testkit.ts";
+import { PINNED, scope, setup, verdict } from "./HubMembership.testkit.ts";
 
 it.effect("a refused link add reports OpenCodex's own message", () =>
   Effect.gen(function* () {
@@ -76,5 +76,56 @@ it.effect("a restart that timed out is not a refusal, so the link stays", () =>
     const result = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
     expect(result.state).toBe("needs_human");
     expect(hub.calls.some((call) => call.includes("link revoke"))).toBe(false);
+  }),
+);
+
+const LINK = "lnk_fedcba9876543210";
+
+it.effect("join runs a guarded sync over the new link before verifying", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    const added = hub.calls.findIndex((call) => call.startsWith("home link add"));
+    const synced = hub.calls.indexOf(`sync mac-studio ${LINK}`);
+    expect(added).toBeGreaterThanOrEqual(0);
+    expect(synced).toBeGreaterThan(added);
+    expect(synced).toBeLessThan(hub.calls.indexOf("verify mac-studio"));
+    expect(result.steps.find(({ step }) => step === "sync")?.outcome).toBe("ok");
+  }),
+);
+
+it.effect("a busy device defers the join's sync, and the repair ladder does not sync either", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, running: 1, verdicts: [verdict(["P6"]), verdict()] });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(hub.calls.filter((call) => call.includes("sync"))).toEqual([]);
+    expect(
+      result.steps.filter(({ step }) => step === "sync").map(({ outcome }) => outcome),
+    ).toEqual(["deferred", "deferred"]);
+  }),
+);
+
+it.effect("a connection that moved during the join's sync is reported, never as synced", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, syncExit: 91 });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    const sync = result.steps.find(({ step }) => step === "sync");
+    expect(sync?.outcome).toBe("failed");
+    expect(sync?.detail).toContain("changed");
+  }),
+);
+
+it.effect("a join whose parity is unproven says which checks are unproven", () =>
+  Effect.gen(function* () {
+    const unproven = {
+      verdict: "unproven" as const,
+      checkedAt: 0,
+      failingCheckIds: [],
+      checks: [{ id: "P7" as const, status: "unproven" as const, reason: "fixture" }],
+    };
+    const hub = yield* setup({ pin: PINNED, verdicts: [unproven] });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" });
+    expect(result.state).toBe("child");
+    expect(result.message).toContain("Unproven: P7.");
   }),
 );

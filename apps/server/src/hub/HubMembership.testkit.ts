@@ -102,6 +102,8 @@ export interface Fixture {
   readonly deviceMessage?: Readonly<Record<string, string>>;
   /** Whether the device's GOAT found its OpenCodex executable and listener in agreement. */
   readonly deviceHealthy?: boolean;
+  /** Exit of the guarded `ocx sync` over a link; one of SYNC_EXIT when the guard refused. */
+  readonly syncExit?: number;
   /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
   readonly releases?: OpenCodexReleaseCatalog;
   /** Home `ocx link status` fails; "forbidden" is OpenCodex's 403 in Hub mode (opencodex#8184). */
@@ -291,7 +293,11 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
               }),
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
             ensureDeviceRuntime: () => Effect.die("unused"),
-            syncDevice: () => Effect.die("unused"),
+            syncDevice: (alias, options) =>
+              Effect.sync(() => {
+                calls.push(`sync ${alias} ${options.linkId}`);
+                return { code: fixture.syncExit ?? 0, stdout: "" };
+              }),
             directAlias: () =>
               fixture.directFailure === undefined
                 ? Effect.succeed(fixture.direct ?? true)

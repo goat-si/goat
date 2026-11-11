@@ -19,7 +19,7 @@ import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { localOpenCodexRoutes } from "./localRoutes.ts";
+import { builtInCodexWiring, localOpenCodexRoutes } from "./localRoutes.ts";
 import { parityVerdict } from "./parity.ts";
 
 const INTERVAL_MS = 30 * 60 * 1000;
@@ -49,12 +49,13 @@ const make = Effect.gen(function* () {
     if (!snapshot.parityEvidence) return snapshot;
     const configured = yield* settings.getSettings.pipe(Effect.option);
     if (configured._tag === "None") return snapshot;
-    const wiring = localOpenCodexRoutes({
-      instances: configured.value.providerInstances,
-      providers: yield* providers.getProviders,
-      environment,
-      port: snapshot.runtime.port,
-    }).map(({ status, reason }) => ({ status, reason }));
+    const instances = configured.value.providerInstances;
+    const listed = yield* providers.getProviders;
+    const port = snapshot.runtime.port;
+    const wiring = [
+      ...localOpenCodexRoutes({ instances, providers: listed, environment, port }),
+      ...builtInCodexWiring({ instances, providers: listed, port }),
+    ].map(({ status, reason }) => ({ status, reason }));
     return { ...snapshot, parityEvidence: { ...snapshot.parityEvidence, wiring } };
   }).pipe(Effect.withSpan("HubParity.readLocal"));
 

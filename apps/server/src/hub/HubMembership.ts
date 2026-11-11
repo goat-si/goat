@@ -34,12 +34,14 @@ import {
   type OcxOutput,
 } from "./HubOcx.ts";
 import { makeLeaveSteps } from "./hubLeave.ts";
+import { makeLinkSync } from "./hubSync.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
   deviceExit,
   hubDeviceResult as result,
   linkStatusUnreadable,
   phaseMessage,
+  withUnproven,
 } from "./hubDeviceResult.ts";
 import { joinPreflight } from "./hubJoinPreflight.ts";
 import { failing, finalState, LADDER } from "./hubLadder.ts";
@@ -203,6 +205,7 @@ const make = Effect.gen(function* () {
   });
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
   const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
+  const syncOverLink = makeLinkSync(ocx);
 
   const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
     const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
@@ -225,13 +228,17 @@ const make = Effect.gen(function* () {
     linkId: string | undefined,
     initial: HubParityResult,
     steps: HubDeviceStep[],
+    // A join that deferred its own sync on a busy device does not sync here either.
+    skipSync = false,
   ) {
     let current = initial;
     for (const rung of LADDER) {
       if (!failing(current)) break;
       if (!rung.checks.some((id) => current.failingCheckIds.includes(id))) continue;
       let ran: Pick<HubDeviceStep, "outcome" | "detail">;
-      if (rung.step === "reconnect") {
+      if (rung.step === "sync" && skipSync) {
+        ran = { outcome: "deferred", detail: "Sync waits until the device is idle." };
+      } else if (rung.step === "reconnect") {
         if (linkId === undefined) continue;
         ran = yield* ocx
           .home(["link", "reconnect", "--link-id", linkId, "--json"], HOME_TIMEOUT_MS)
@@ -311,6 +318,8 @@ const make = Effect.gen(function* () {
       });
     }
     steps.push({ step: "link_add", outcome: "ok", detail: linkId });
+    const synced = yield* syncOverLink(alias, linkId, scope);
+    steps.push(synced);
     const verified = yield* ladder(
       scope,
       caller,
@@ -318,6 +327,7 @@ const make = Effect.gen(function* () {
       linkId,
       yield* parity.verify(alias, scope),
       steps,
+      synced.outcome === "deferred",
     );
     const state = finalState(verified);
     yield* audit(caller, `hub.${action}`, alias, state, decisionId);
@@ -326,7 +336,7 @@ const make = Effect.gen(function* () {
       alias,
       state,
       state === "child"
-        ? `${alias} is linked to this Home.`
+        ? withUnproven(`${alias} is linked to this Home.`, verified)
         : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
       steps,
       { parity: verified, transport: "remote-link" },
@@ -485,7 +495,7 @@ const make = Effect.gen(function* () {
       alias,
       state,
       state === "child"
-        ? `${alias} is a Hub client of this hub.`
+        ? withUnproven(`${alias} is a Hub client of this hub.`, verified)
         : `${alias} is connected, but ${verified.failingCheckIds.join(", ")} still fail.`,
       steps,
       { parity: verified, transport },
@@ -526,7 +536,10 @@ const make = Effect.gen(function* () {
           "join",
           alias,
           finalState(verified),
-          `${alias} is already linked; nothing was changed. Use ${goatCallText("hub.device_repair")} if checks fail.`,
+          withUnproven(
+            `${alias} is already linked; nothing was changed. Use ${goatCallText("hub.device_repair")} if checks fail.`,
+            verified,
+          ),
           steps,
           { parity: verified, transport: "remote-link" },
         );
@@ -802,7 +815,7 @@ const make = Effect.gen(function* () {
           "repair",
           alias,
           "child",
-          "No parity check fails; nothing to repair.",
+          withUnproven("No parity check fails; nothing to repair.", initial),
           steps,
           {
             parity: initial,
@@ -811,9 +824,16 @@ const make = Effect.gen(function* () {
       const repaired = yield* ladder(scope, caller, alias, record?.id, initial, steps);
       if (!failing(repaired)) {
         yield* audit(caller, "hub.repair", alias, "child", undefined);
-        return result("repair", alias, "child", `${alias} is repaired.`, steps, {
-          parity: repaired,
-        });
+        return result(
+          "repair",
+          alias,
+          "child",
+          withUnproven(`${alias} is repaired.`, repaired),
+          steps,
+          {
+            parity: repaired,
+          },
+        );
       }
       const exhausted = `Steps 1-3 left ${repaired.failingCheckIds.join(", ")} failing.`;
       if (record === undefined || steps.some(({ outcome }) => outcome === "deferred")) {

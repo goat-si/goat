@@ -293,3 +293,31 @@ it.effect(
       );
     }),
 );
+
+it.effect("a built-in Codex instance without a settings entry counts as wiring evidence", () =>
+  Effect.gen(function* () {
+    const providerInstances = yield* decodeProviderInstances({
+      claude: {
+        driver: "claudeAgent",
+        environment: [{ name: "ANTHROPIC_BASE_URL", value: "http://127.0.0.1:10100" }],
+      },
+    });
+    const provider = yield* decodeProvider({
+      instanceId: "codex",
+      driver: "codex",
+      enabled: true,
+      installed: true,
+      version: "fixture",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-10-21T00:00:00.000Z",
+      models: [],
+      codexRoute: { modelRoute: "default", effectiveBaseUrl: "https://api.openai.com/v1" },
+    });
+    const { parity } = yield* setup({ providerInstances, providers: [provider] });
+    expect((yield* parity.readLocal).parityEvidence?.wiring?.map(({ status }) => status)).toEqual([
+      "ok",
+      "failed",
+    ]);
+  }),
+);

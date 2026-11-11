@@ -75,6 +75,12 @@ export const deviceExit = (
 ) =>
   `ocx ${command} exited ${output.code}${output.message === undefined ? "." : `: ${output.message}`}`;
 
+/** A success message that names the checks parity could not prove, so it never hides them. */
+export const withUnproven = (message: string, parity: HubParityResult) => {
+  const ids = parity.checks.filter(({ status }) => status === "unproven").map(({ id }) => id);
+  return ids.length === 0 ? message : `${message} Unproven: ${ids.join(", ")}.`;
+};
+
 export const linkStatusUnreadable = (forbidden: boolean) =>
   forbidden
     ? "This machine's OpenCodex answered ocx link status with a link-management 403. OpenCodex does this in Hub mode when the public listener is not loopback (lidge-jun/opencodex#8184); on such a Hub, join devices with transport hub-client."
