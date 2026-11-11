@@ -148,7 +148,13 @@ change reaches it at the next sync (within 10 minutes).</li>
 fix the folder’s permissions; the member retries on its own every minute and at each sync, and takes no change
 until it can save.</li>
 <li>“its mesh is full (4508)”: the mesh holds 3840 records, the most Pen keeps for new members, names, locks and
-sign-in changes (removals still fit up to 4096). Start over in a new mesh, below.</li>
+sign-in changes (removals still fit up to 4096). This happens only in meshes founded before the current Pen;
+start over in a new mesh, below. A mesh founded by the current Pen gives each group of machines (the founder,
+and each machine the founder invites with the machines it admits; up to 15 groups) its own room, so one
+machine cannot fill it for the others, and any machine outside that group can still remove it.</li>
+<li>“it runs an older Pen than this mesh needs (4509)”: the member holds records of this mesh but runs a Pen from
+before meshes shared their room out. Update Pen on that machine; machines of a mesh founded by the current Pen
+all need the current Pen, and an older one cannot join it.</li>
 </ul>
 <h3 id="start-over-in-a-new-mesh">Start over in a new mesh</h3>
 <p>Use this when a mesh is full, or to split from a mesh you no longer trust. Each machine keeps its keys and name;
@@ -158,7 +164,8 @@ member.</p>
 <li>On every machine: <code>pen down</code>, then delete these files from the state folder (<code>~/.pen</code>, or <code>PEN_HOME</code>):
 <code>mesh.json</code>, <code>offers.json</code>, <code>pending.json</code>, <code>forgets.json</code>, <code>versions.json</code>, <code>joined.json</code> and <code>login.json</code>.
 (<code>pen up</code> on a machine that still has <code>mesh.json</code> starts its old mesh again; it does not found a new one.)</li>
-<li>On the first machine: <code>pen up</code>. It founds a new mesh with this machine as its only member.</li>
+<li>On the first machine: <code>pen up</code>. It founds a new mesh with this machine as its only member. Update Pen on every
+machine first: a new mesh needs the current Pen on all of them.</li>
 <li>On each other machine: <code>pen join &lt;token&gt;</code> with a token from <code>pen invite</code> on a machine already in the new mesh.
 Joining replaces the machine’s relay list with the inviting machine’s. A machine that used other relays on
 purpose puts them back with <code>pen relay add &lt;url&gt;</code> (and <code>pen relay rm &lt;url&gt;</code> for one it does not want); <code>pen relay ls</code> then lists them with their uplink state.</li>
