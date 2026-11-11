@@ -118,7 +118,7 @@ jobs:
       fail-fast: false
       # Tasks: check, typecheck, test, test-packages, test-ssh, test-desktop, test-contracts, test-client-runtime,
       # test-mobile, test-shared, test-ingest, test-memory-growth, test-windows,
-      # smoke-linux-computer-use, build, and test-server in
+      # smoke-linux-computer-use, test-pen, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
       # one to four for the related files goat-scope picked. A quick run has check, typecheck,
       # test-changed, and related server shards when its server tests outgrow one job. Each entry
@@ -377,6 +377,44 @@ jobs:
           sudo apt-get install -y -qq xvfb xcompmgr xdotool at-spi2-core dbus gir1.2-gtk-3.0 python3-gi
           node scripts/build-computer-use-helper-linux.ts --out "$RUNNER_TEMP/goat-computer-use"
           node scripts/computer-use-linux-smoke.ts --helper "$RUNNER_TEMP/goat-computer-use/goat-computer-use" --evidence "$RUNNER_TEMP/goat-computer-use-evidence"
+
+      # Pen: the Go node (apps/pen) and its protocol, relay and login packages. The Go module has no
+      # package.json, so goat-scope selects this task by path (PEN_PATHS). Each suite is its own step
+      # so a failure names it. The workflow guard allows no setup-go action: the hosted image's go
+      # switches to the toolchain apps/pen/go.mod names (GOTOOLCHAIN=auto), and gofmt comes from it.
+      - name: Pen Go format, vet and tests
+        if: matrix.task == 'test-pen'
+        run: |
+          command -v go || { echo "::error::go is not on PATH"; exit 1; }
+          go -C apps/pen version
+          gofmt="$(go -C apps/pen env GOROOT)/bin/gofmt"
+          unformatted="$("$gofmt" -l apps/pen)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt -l apps/pen lists files that are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+          go -C apps/pen vet ./...
+          go -C apps/pen test -race -count=1 ./...
+
+      - name: Pen install check
+        if: matrix.task == 'test-pen'
+        run: apps/pen/scripts/installcheck.sh
+
+      - name: Pen three-node mesh
+        if: matrix.task == 'test-pen'
+        run: apps/pen/scripts/threenode.sh
+
+      - name: Pen sign-in mesh
+        if: matrix.task == 'test-pen'
+        run: apps/pen/scripts/loginnode.sh
+
+      - name: Pen protocol, relay and login Workers
+        if: matrix.task == 'test-pen'
+        run: |
+          vp run --filter @goat/pen-protocol test
+          vp run --filter @goat/pen-relay test
+          vp run --filter @goat/pen-login test
 
       - name: Test server
         if: matrix.task == 'test-server' && !matrix.related

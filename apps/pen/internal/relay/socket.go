@@ -1,0 +1,346 @@
+package relay
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
+)
+
+// PingInterval is the keepalive period for uplink and client sockets.
+const PingInterval = 30 * time.Second
+
+// TLSConfig, when set, replaces the system TLS settings for relay sockets (tests with a private CA).
+var TLSConfig *tls.Config
+
+func dialWS(ctx context.Context, wsURL string) (*websocket.Conn, error) {
+	opts := &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled}
+	if TLSConfig != nil {
+		opts.HTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: TLSConfig}}
+	}
+	c, _, err := websocket.Dial(ctx, wsURL, opts)
+	if err != nil {
+		return nil, err
+	}
+	c.SetReadLimit(wire.MaxMessage + 64)
+	return c, nil
+}
+
+// acker counts received relay bytes on arrival and acks every AckEvery bytes.
+type acker struct {
+	total, last uint64
+}
+
+func (a *acker) add(n int) (string, bool) {
+	a.total += uint64(n)
+	if a.total-a.last >= wire.AckEvery {
+		a.last = a.total
+		return wire.FormatAck(a.total), true
+	}
+	return "", false
+}
+
+func pinger(ctx context.Context, c *websocket.Conn, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := c.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// statusCode maps a websocket read error to a close code (1006 when the socket dropped).
+func statusCode(err error) uint16 {
+	if s := websocket.CloseStatus(err); s != -1 {
+		return uint16(s)
+	}
+	return 1006
+}
+
+// DialRaceTimeout bounds a whole race, whatever the caller's context allows.
+const DialRaceTimeout = 15 * time.Second
+
+// Trace receives one stage of a race: what happened, on which relay, and how long after the race
+// started. Events: ws (socket connected), pong, answer (message 2 verified), bad answer (message 2
+// did not verify), closed <code>, failed, winner, confirmed, loser closed.
+type Trace func(event, relayURL string, since time.Duration)
+
+type traceKey struct{}
+
+// WithTrace returns ctx carrying t for the races run under it.
+func WithTrace(ctx context.Context, t Trace) context.Context {
+	return context.WithValue(ctx, traceKey{}, t)
+}
+
+// TraceOf returns the trace ctx carries, or nil.
+func TraceOf(ctx context.Context) Trace {
+	t, _ := ctx.Value(traceKey{}).(Trace)
+	return t
+}
+
+// Tracer stamps events with the time since it was made; a nil Trace makes it a no-op.
+func Tracer(t Trace) func(event, relayURL string) {
+	start := time.Now()
+	return func(event, relayURL string) {
+		if t != nil {
+			t(event, relayURL, time.Since(start))
+		}
+	}
+}
+
+// ClosedEvent names how a relay socket ended for a trace.
+func ClosedEvent(err error) string {
+	if code := CodeOf(err); code != 0 {
+		return fmt.Sprintf("closed %d", code)
+	}
+	return "failed"
+}
+
+// DialEvent names a dial that did not connect: "cancelled" when the race had already ended
+// (another relay won or the caller gave up), "failed" otherwise.
+func DialEvent(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return "cancelled"
+	}
+	return "failed"
+}
+
+// Racer holds one dialer's race options; the zero value uses the defaults.
+type Racer struct {
+	// Timeout bounds a whole race (DialRaceTimeout when zero).
+	Timeout time.Duration
+	// Settled, when set, is called once every socket of a race is resolved, with the relays whose
+	// sockets connected and were closed with 1000.
+	Settled func(closed []string)
+	// Trace, when set, sees each stage of the race; when nil the context's trace (WithTrace) does.
+	Trace Trace
+}
+
+var errLost = errors.New("relay: another relay answered first")
+
+// DialRace races relays with the default options.
+func DialRace(ctx context.Context, relays []string, nodeID string) (Conn, string, error) {
+	return Racer{}.Dial(ctx, relays, nodeID)
+}
+
+// Dial opens one client socket per relay in parallel, sends ping on each and keeps the first
+// that answers pong; every other socket that connects is closed with 1000 before any other byte.
+// A relay where the node is offline closes 4404 before any pong, so it never wins. Losers finish
+// their dial (an aborted handshake would reach the node as 1006) within the race's timeout.
+func (rc Racer) Dial(ctx context.Context, relays []string, nodeID string) (Conn, string, error) {
+	if len(relays) == 0 {
+		return nil, "", errors.New("relay: no relays")
+	}
+	settled := rc.Settled
+	timeout := rc.Timeout
+	if timeout <= 0 {
+		timeout = DialRaceTimeout
+	}
+	trace := rc.Trace
+	if trace == nil {
+		trace = TraceOf(ctx)
+	}
+	emit := Tracer(trace)
+	type result struct {
+		c   *clientConn
+		url string
+		err error
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	decided := make(chan struct{})
+	results := make(chan result, len(relays))
+	for _, u := range relays {
+		go func() {
+			c, err := Dial(rctx, u, nodeID)
+			if err != nil {
+				emit(DialEvent(rctx), u)
+				results <- result{url: u, err: err}
+				return
+			}
+			emit("ws", u)
+			cc := c.(*clientConn)
+			if err := cc.ws.Write(rctx, websocket.MessageText, []byte("ping")); err != nil {
+				// A relay with no uplink for the node may close 4404 before the ping goes out;
+				// report that close, as Send does.
+				err := cc.closedWith()
+				emit(ClosedEvent(err), u)
+				results <- result{c: cc, url: u, err: err}
+				return
+			}
+			select {
+			case <-cc.pong:
+				emit("pong", u)
+				results <- result{c: cc, url: u}
+			case <-cc.done:
+				err := cc.in.terminal()
+				if err == nil {
+					err = &CloseError{Code: 1006}
+				}
+				emit(ClosedEvent(err), u)
+				results <- result{url: u, err: err}
+			case <-decided:
+				results <- result{c: cc, url: u, err: errLost}
+			case <-rctx.Done():
+				results <- result{c: cc, url: u, err: rctx.Err()}
+			}
+		}()
+	}
+	finish := func(left int, closed []string) {
+		for range left {
+			if r := <-results; r.c != nil {
+				r.c.Close(wire.CodeNormal)
+				emit("loser closed", r.url)
+				closed = append(closed, r.url)
+			}
+		}
+		cancel()
+		if settled != nil {
+			settled(closed)
+		}
+	}
+	var errs []error
+	var closed []string
+	for i := range relays {
+		r := <-results
+		if r.err == nil {
+			emit("winner", r.url)
+			close(decided)
+			go finish(len(relays)-i-1, closed)
+			return r.c, r.url, nil
+		}
+		if r.c != nil {
+			r.c.Close(wire.CodeNormal)
+			closed = append(closed, r.url)
+		}
+		errs = append(errs, r.err)
+	}
+	finish(0, closed)
+	for _, err := range errs {
+		if CodeOf(err) == wire.CodeOffline {
+			return nil, "", err
+		}
+	}
+	return nil, "", errs[len(errs)-1]
+}
+
+// Dial opens a client socket to nodeID through the relay.
+func Dial(ctx context.Context, relayURL, nodeID string) (Conn, error) {
+	u, err := wire.WebSocketURL(relayURL, "/v1/client/"+nodeID)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := dialWS(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	lctx, cancel := context.WithCancel(context.Background())
+	c := &clientConn{ws: ws, in: newInbox(), ctx: lctx, cancel: cancel, done: make(chan struct{}), pong: make(chan struct{})}
+	go c.readLoop()
+	go pinger(lctx, ws, PingInterval)
+	return c, nil
+}
+
+type clientConn struct {
+	ws     *websocket.Conn
+	in     *inbox
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	// pong closes on the first pong text (DialRace).
+	pong     chan struct{}
+	pongOnce sync.Once
+
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *clientConn) readLoop() {
+	defer close(c.done)
+	defer c.cancel()
+	var ack acker
+	for {
+		typ, p, err := c.ws.Read(c.ctx)
+		if err != nil {
+			c.in.fail(&CloseError{Code: statusCode(err)})
+			return
+		}
+		if typ != websocket.MessageBinary {
+			if string(p) == "pong" {
+				c.pongOnce.Do(func() { close(c.pong) })
+			}
+			continue
+		}
+		if s, ok := ack.add(len(p)); ok {
+			if err := c.ws.Write(c.ctx, websocket.MessageText, []byte(s)); err != nil {
+				c.in.fail(&CloseError{Code: 1006})
+				return
+			}
+		}
+		if !c.in.push(p) {
+			go c.Close(wire.CodeTimeout)
+			c.in.drop(&CloseError{Code: wire.CodeTimeout})
+			return
+		}
+	}
+}
+
+func (c *clientConn) Send(p []byte) error {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ErrClosed
+	}
+	if err := c.ws.Write(c.ctx, websocket.MessageBinary, p); err != nil {
+		return c.closedWith()
+	}
+	return nil
+}
+
+// closedWith is the close a failed write ran into: the code the socket's reader received (4404
+// from a relay with no uplink for this node, for example), or 1006 when none arrives within 1 s.
+func (c *clientConn) closedWith() error {
+	select {
+	case <-c.done:
+	case <-time.After(time.Second):
+	}
+	if ce, ok := c.in.terminal().(*CloseError); ok {
+		return ce
+	}
+	return &CloseError{Code: 1006}
+}
+
+func (c *clientConn) Recv(ctx context.Context) ([]byte, error) { return c.in.recv(ctx) }
+
+func (c *clientConn) SetQueueLimit(n int) { c.in.setLimit(n) }
+
+// Close sends a close frame with code and waits (bounded) for the socket to finish.
+func (c *clientConn) Close(code uint16) error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	c.mu.Unlock()
+	c.in.drop(ErrClosed)
+	err := c.ws.Close(websocket.StatusCode(code), "")
+	c.cancel()
+	<-c.done
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return nil
+}

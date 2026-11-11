@@ -1,0 +1,265 @@
+package cli
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
+	"github.com/goat-si/goat/apps/pen/internal/state"
+)
+
+const readyTimeout = 20 * time.Second
+
+// RunUp creates the identity and mesh if needed and starts the daemon.
+func RunUp(args []string, stdout, stderr io.Writer) int {
+	fs := newFlags("up", stderr)
+	var relayURLs multiFlag
+	fs.Var(&relayURLs, "relay", "relay URL (https://...); repeat for several relays")
+	name := fs.String("name", "", "this node's name")
+	foreground := fs.Bool("foreground", false, "run the daemon in this process")
+	service := fs.Bool("service", false, "internal: for the systemd and launchd service; a start it refuses exits 0, so the caller cannot tell it failed")
+	noService := fs.Bool("no-service", false, "never install a systemd or launchd service")
+	spawnDaemon := fs.Bool("spawn-daemon", false, "internal: start the daemon detached, print its pid and exit")
+	if _, err := parse(fs, args); err != nil {
+		return 2
+	}
+	st, err := openState()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if *spawnDaemon {
+		return spawnDetached(st, stdout, stderr)
+	}
+	// refused ends a start pen up cannot make: the service exits 0, since its manager restarts
+	// only a failure and nothing changes between restarts; everyone else sees the failure.
+	asService := *service || startedByService()
+	refused := func(err error) int {
+		if *foreground && asService {
+			fmt.Fprintln(stderr, "pen:", err)
+			return 0
+		}
+		return fail(stderr, err)
+	}
+	if *foreground {
+		// A service manager restarting the daemon after pen leave must not mint a new node.
+		if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
+			return refused(errors.New("this node left its mesh; run pen up or pen join to start again"))
+		}
+	} else if err := clearLeft(st); err != nil {
+		return fail(stderr, err)
+	}
+	id, _, err := st.EnsureIdentity()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	cfg, err := startConfig(st, relayURLs, *name)
+	if errors.Is(err, errNoRelay) {
+		return refused(errors.New("no relay configured; run pen up --relay https://<relay>"))
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if err := daemon.CheckConfig(cfg); err != nil {
+		return refused(err)
+	}
+	if _, err := mesh.Load(st); errors.Is(err, os.ErrNotExist) {
+		if _, err := mesh.Found(st, id, cfg.Name, time.Now().UnixMilli()); err != nil {
+			return fail(stderr, err)
+		}
+	} else if err != nil {
+		return fail(stderr, err)
+	}
+
+	if *foreground {
+		return runForeground(st, stderr)
+	}
+	var s daemon.Status
+	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err == nil {
+		if s.Name != cfg.Name {
+			daemon.Call(st, daemon.Request{Op: "name", Name: cfg.Name}, &s)
+		}
+		if s.Uplink == "replaced" || !sameRelays(s.Relays, cfg.RelayList()) {
+			daemon.Call(st, daemon.Request{Op: "reconnect"}, &s)
+		}
+		printStatus(stdout, s)
+		return 0
+	}
+	mode := serviceMode(*noService, st)
+	if mode == "none" {
+		err = startDetached(st)
+	} else {
+		err = startService(mode, st)
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+		return fail(stderr, err)
+	}
+	printStatus(stdout, s)
+	return 0
+}
+
+// startedByService reports whether systemd (248 and later set SYSTEMD_EXEC_PID to the pid they
+// started) or launchd (XPC_SERVICE_NAME is the job's label) started this process: units written
+// before --service run plain --foreground and must not restart a refused start either.
+func startedByService() bool {
+	return os.Getenv("SYSTEMD_EXEC_PID") == strconv.Itoa(os.Getpid()) || os.Getenv("XPC_SERVICE_NAME") == launchdLabel
+}
+
+// clearLeft removes the leave marker: pen up and pen join, run by a person, start the node again.
+func clearLeft(st *state.Store) error {
+	if err := os.Remove(st.Path(daemon.LeftMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func printStatus(w io.Writer, s daemon.Status) {
+	fmt.Fprintf(w, "node         %s (%s)\n", s.NodeID, s.Name)
+	fmt.Fprintf(w, "fingerprint  %s\n", s.Fingerprint)
+	for _, r := range s.Relays {
+		fmt.Fprintf(w, "relay        %s (uplink %s)\n", r.URL, r.Uplink)
+	}
+	fmt.Fprintf(w, "mesh         %s, %d member(s)\n", s.MeshID, s.Members)
+}
+
+func runForeground(st *state.Store, stderr io.Writer) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	opt := daemonOptions(st)
+	if fd := os.Getenv("PEN_READY_FD"); fd != "" {
+		n, _ := strconv.Atoi(fd)
+		ready := os.NewFile(uintptr(n), "ready")
+		opt.Ready = func() {
+			if ready != nil {
+				ready.WriteString("ready\n")
+				ready.Close()
+			}
+		}
+	}
+	d, err := daemon.New(opt)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return fail(stderr, err)
+	}
+	return 0
+}
+
+// startDetached starts the daemon through "pen up --spawn-daemon", which exits once the daemon runs, so the
+// daemon is owned by init from the start and a kill of this command's process tree does not reach it.
+// The ready pipe on fd 3 passes through to the daemon.
+func startDetached(st *state.Store) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	logf, err := os.OpenFile(st.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+	r, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	cmd := exec.Command(exe, "up", "--spawn-daemon")
+	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
+	cmd.ExtraFiles = []*os.File{w}
+	cmd.Stderr = logf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	out, err := cmd.Output()
+	w.Close()
+	if err != nil {
+		return fmt.Errorf("could not start the daemon (%v); see %s", err, st.Path("daemon.log"))
+	}
+	pid := strings.TrimSpace(string(out))
+	line := make(chan string, 1)
+	go func() {
+		s, _ := bufio.NewReader(r).ReadString('\n')
+		line <- s
+	}()
+	select {
+	case s := <-line:
+		if s != "ready\n" {
+			return fmt.Errorf("the daemon (pid %s) exited during start; see %s", pid, st.Path("daemon.log"))
+		}
+	case <-time.After(readyTimeout):
+		return fmt.Errorf("the daemon (pid %s) did not report ready within %v; see %s", pid, readyTimeout, st.Path("daemon.log"))
+	}
+	return nil
+}
+
+// spawnDetached is "pen up --spawn-daemon": it starts "pen up --foreground" in its own session with the
+// inherited ready pipe, prints the daemon's pid and returns without waiting for it.
+func spawnDetached(st *state.Store, stdout, stderr io.Writer) int {
+	exe, err := os.Executable()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	logf, err := os.OpenFile(st.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	defer logf.Close()
+	cmd := exec.Command(exe, "up", "--foreground")
+	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
+	cmd.ExtraFiles = []*os.File{os.NewFile(3, "ready")}
+	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fail(stderr, err)
+	}
+	fmt.Fprintln(stdout, cmd.Process.Pid)
+	if err := cmd.Process.Release(); err != nil {
+		return fail(stderr, err)
+	}
+	return 0
+}
+
+// waitControl waits for a service-started daemon to answer on its control socket.
+func waitControl(st *state.Store) error {
+	deadline := time.Now().Add(readyTimeout)
+	for {
+		var s daemon.Status
+		if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the pen service did not answer within %v", readyTimeout)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// multiFlag collects a repeatable string flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+func sameRelays(states []daemon.RelayState, want []string) bool {
+	if len(states) != len(want) {
+		return false
+	}
+	for i, r := range states {
+		if r.URL != want[i] {
+			return false
+		}
+	}
+	return true
+}
