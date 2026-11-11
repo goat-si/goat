@@ -109,8 +109,16 @@ export class SecureSession {
 
   #onLinkClose(code: number): void {
     this.#closedCode = code;
-    if (this.#draining) return;
+    if (this.#closeWaits()) return;
     for (const fn of this.#onClose.splice(0)) notify(fn, code);
+  }
+
+  /**
+   * Close notices wait while records are held for a receiver (none attached yet, or a drain under way), so nobody
+   * hears of a close before records that arrived first. The closed promise settles at once regardless.
+   */
+  #closeWaits(): boolean {
+    return this.#draining || (this.#onRecord === undefined && this.#held.length > 0);
   }
 
   /** Takes the session's records, held ones first. */
@@ -138,8 +146,7 @@ export class SecureSession {
   }
 
   onClose(handler: (code: number) => void): void {
-    // During a held drain even a known close waits: the observer hears of it after the earlier records.
-    if (this.#closedCode !== undefined && !this.#draining) notify(handler, this.#closedCode);
+    if (this.#closedCode !== undefined && !this.#closeWaits()) notify(handler, this.#closedCode);
     else this.#onClose.push(handler);
   }
 

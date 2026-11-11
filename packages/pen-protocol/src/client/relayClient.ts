@@ -72,6 +72,8 @@ export interface PendingDial {
   abandon(): void;
 }
 
+// The phone dials only wss on port 443 (design 9.3: the compiled relay list), so no port is accepted for wss; ws with a
+// port is for loopback test relays only.
 const RELAY_ORIGIN =
   /^(?:wss:\/\/[a-z0-9.-]+|ws:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]{1,5})?)$/;
 

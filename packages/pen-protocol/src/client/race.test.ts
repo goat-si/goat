@@ -342,6 +342,24 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
     expect(seen).toEqual(["data:1", "data:2", "close:1000"]);
   });
 
+  it("a peer close while records wait for a receiver is told after them, to observers added before or after it", async () => {
+    const t = setup({ relays: [A] });
+    const a = t.fake.socketFor(A);
+    await flushOpen(a);
+    const reply = answer(a);
+    const { session } = await t.result;
+    const seen: Array<string> = [];
+    a.receive(reply.send.seal(Uint8Array.of(1)));
+    a.receive(reply.send.seal(Uint8Array.of(2)));
+    session.onClose((code) => seen.push("early:" + code));
+    a.remoteClose(1000);
+    session.onClose((code) => seen.push("late:" + code));
+    expect(seen).toEqual([]);
+    expect(await session.closed).toBe(1000);
+    session.onRecord((plaintext) => seen.push("data:" + plaintext[0]));
+    expect(seen).toEqual(["data:1", "data:2", "early:1000", "late:1000"]);
+  });
+
   it("a close observer added after the close that throws is reported, not thrown to the caller", async () => {
     const reported: Array<unknown> = [];
     vi.stubGlobal("reportError", (error: unknown) => reported.push(error));
