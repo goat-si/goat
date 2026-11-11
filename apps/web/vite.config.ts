@@ -28,6 +28,9 @@ import { warmBundledDevPlugin } from "./vite/warmBundledDev";
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
+// patches/playwright-core@1.60.0.patch raises Playwright's Request and Route dispatcher limits only for Vitest browser runs (#2971).
+if (process.env.VITEST) process.env.GOAT_TEST_PLAYWRIGHT_REQUEST_BUCKETS = "1";
+
 // Signal single-origin dev explicitly; loadRepoEnv can restore deleted URL keys from .env.
 const isSingleOriginDev = process.env.GOAT_SINGLE_ORIGIN_DEV === "1";
 
