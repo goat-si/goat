@@ -893,6 +893,7 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   else verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || repair_owned_identity || ownership_unverified; fi
   UPGRADE_START="$(server_start "$UPGRADE_PID")" || ownership_unverified
   [ -n "$UPGRADE_START" ] || ownership_unverified
+  forced_drain_allowed
   if [ "$RECONCILING_DRAIN" != 1 ] && [ "$REPLACEMENT_REASON" != incompatible ] && [ "$DRAIN_FORCE" != 1 ]; then
     # An optional refresh drains only an idle server, so its retries never hold up new turns.
     activity="$(read_refresh_activity)"

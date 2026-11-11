@@ -95,4 +95,12 @@ export const REMOTE_FORCED_STOP_SCRIPT = `forced_stop_runtime() {
   FORCE_STOP=0; LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0
 }
 if [ "$FORCE_STOP" = 1 ]; then forced_stop_runtime; fi
+# A confirmed drain that names an approved process goes only to that process: a runtime started in
+# its place after the approval was never shown to the person.
+forced_drain_allowed() {
+  valid_positive "$FORCE_PID" || return 0
+  [ "$UPGRADE_PID" = "$FORCE_PID" ] && [ "$UPGRADE_PORT" = "$FORCE_PORT" ] &&
+    [ "$(printf '%s\\n' "$UPGRADE_START" | awk '{ $1 = $1; print }')" = "$FORCE_START" ] && return 0
+  printf 'GOAT did not update the remote runtime: PID %s, the runtime you approved stopping, is no longer the one running there (PID %s is). It was left running. Ask again.\\n' "$FORCE_PID" "$UPGRADE_PID" >&2; exit 1
+}
 `;

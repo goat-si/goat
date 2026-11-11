@@ -451,3 +451,35 @@ exec "$HOME/.test/identity-bin/ps" "$@"
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement binds the drain to the approved process",
+  () => {
+    it.live("a runtime other than the approved one is not drained by the approval", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: OLDER,
+          drain: true,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+        });
+        // The approved process exited and this drain-capable runtime took its place and port.
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: { pid: f.pid, port: f.port, startedAt: "Thu Jan 1 00:00:00 1970" },
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.isTrue(isAlive(f.pid));
+        assert.isFalse(
+          (yield* events(f)).some((entry) =>
+            ["drain", "drain-request", "stop"].includes(entry.type),
+          ),
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
