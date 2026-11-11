@@ -166,7 +166,19 @@ the same daemon operation as the CLI.
   sign-in on purpose: a sign-in cannot be told apart from a supervisor that was starting during `pen down`. The task uses the user's
   interactive token, which needs no admin rights and means Pen runs only while that user is signed in; S4U or a
   stored password would need "Log on as a batch job", which standard users lack. schtasks accepts its XML only in
-  UTF-16.
+  UTF-16, and expands `%VAR%` in the task's command with no escape, so `pen up` refuses a `pen.exe` path holding
+  `%`, as the systemd unit refuses `$`.
+- **A refused start ends the supervisor.** `pen up --supervise` follows the `--service` rule: when the stored
+  configuration cannot start (a relay list pen no longer accepts, or the node left), it exits 0 and writes the reason
+  to `daemon.log` and `start-refused`; it runs the daemon as `pen up --foreground --service`, so a daemon that
+  refuses its start ends the loop instead of being restarted. `pen up` removes `start-refused` before
+  `schtasks /Run` and fails at once with the reason it finds there.
+- **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
+  while a reader has `mesh.json` or `config.json` open, replacing it fails with `ERROR_ACCESS_DENIED`. Saves retry
+  that error (and a sharing violation) for up to 2 s while they hold the state lock, the rule of Go's
+  `cmd/internal/robustio`; past that the save fails and the file keeps its old content whole. A stale writer cannot
+  win meanwhile: every write of those files reads the current file under the state lock (`LockFileEx`, which a
+  second handle in the same process also waits for) and decides from it.
 - **Win32-OpenSSH starts ProxyCommand without a shell.** The command is quoted for CreateProcess, the state
   directory travels as `pen pipe --home`, and the config has no ControlMaster, which that ssh lacks.
 - **An sshd session's job ends its processes.** A `--no-service` daemon started over SSH tries to leave the job

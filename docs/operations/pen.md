@@ -65,8 +65,9 @@ Deploy: in `infra/pen-relay`, `pnpm run deploy` after a `build.sh`; it is the on
 plain `wrangler deploy` publishes `public/` unchecked. `public/dl/` is gitignored, so a fresh checkout has no
 release to publish until `build.sh` runs (and copies of older releases are added, see above). The deploy first runs
 `scripts/check-public.ts`, which refuses a `public/install.sh` whose relays are loopback or plain http (a local test
-build), or whose version lacks one of the four archives in `dl/<version>/` or has one that does not match
-`SHA256SUMS`. Then `node scripts/smoke.ts https://pen-relay.pos090001.workers.dev`: it checks `/healthz`, that the upgrade
+build), or whose version lacks one of the six archives in `dl/<version>/` or has one that does not match
+`SHA256SUMS`, and a missing `public/install.ps1` or one whose relays or version differ from `install.sh`'s. Then
+`node scripts/smoke.ts https://pen-relay.pos090001.workers.dev`: it checks `/healthz`, that the upgrade
 offers no compression, moves 1 MiB each way between a fresh node and a client, and prints close latency. Check one
 served build with `curl -fsS .../dl/<version>/SHA256SUMS` against the local file.
 
