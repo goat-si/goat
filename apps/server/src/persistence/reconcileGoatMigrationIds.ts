@@ -68,6 +68,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ChannelInterimMessages",
   "ChannelNewestAsk",
   "PlacementAdmission",
+  "ChannelOutboxDueTime",
 ]);
 
 type MigrationEntry<E> = readonly [
