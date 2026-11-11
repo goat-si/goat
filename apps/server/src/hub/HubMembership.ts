@@ -436,7 +436,7 @@ const make = Effect.gen(function* () {
         "join",
         alias,
         finalState(verified),
-        `${alias} is already a Hub client; nothing was changed.`,
+        withUnproven(`${alias} is already a Hub client; nothing was changed.`, verified),
         steps,
         { parity: verified, transport },
       );

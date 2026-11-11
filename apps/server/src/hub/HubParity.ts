@@ -64,7 +64,7 @@ const make = Effect.gen(function* () {
     scope: McpInvocationScope,
   ) {
     const home = yield* readLocal;
-    const remote = yield* hosts
+    const read = hosts
       .readOnHost(
         scope,
         {
@@ -92,15 +92,21 @@ const make = Effect.gen(function* () {
           return Effect.succeed(undefined);
         }),
       );
-    const entry = remote?.hosts.find(({ host }) => host === null);
+    // A fresh sample from the device itself, never a stale last-known one.
+    const fresh = (remote: typeof GoatHostStatusResult.Type | undefined) => {
+      const entry = remote?.hosts.find(({ host }) => host === null);
+      return entry?.reachability === "ok" && !entry.lastKnown
+        ? entry.metrics?.opencodex
+        : undefined;
+    };
+    // A loaded host or a cold Pen route can miss one read (G9, G14); a second read decides.
+    const device = fresh(yield* read) ?? fresh(yield* read);
     const checkedAt = yield* Clock.currentTimeMillis;
     const result = parityVerdict({
       deviceAlias,
       checkedAt,
       home,
-      ...(entry?.reachability === "ok" && !entry.lastKnown && entry.metrics?.opencodex
-        ? { device: entry.metrics.opencodex }
-        : {}),
+      ...(device === undefined ? {} : { device }),
     });
     yield* Ref.update(known, (current) => new Map(current).set(deviceAlias, result));
     return result;
