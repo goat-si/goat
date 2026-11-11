@@ -118,6 +118,18 @@ export const decodeJsonReply = <S extends Schema.Top>(
   );
 };
 
+export const generatedThreadTitle = (raw: string) => {
+  const title = sanitizeThreadTitle(raw);
+  return title.toLowerCase() === "title"
+    ? Effect.fail(
+        new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: 'The model returned the placeholder title "title".',
+        }),
+      )
+    : Effect.succeed(title);
+};
+
 export interface FromRunnerOptions {
   readonly memoryRunner?: MemoryRunner;
   /**
@@ -310,7 +322,7 @@ export function fromRunner(
       }),
     });
     return {
-      title: sanitizeThreadTitle(generated.title),
+      title: yield* generatedThreadTitle(generated.title),
       ...(generated.needsRefinement ? { needsRefinement: true } : {}),
     };
   });
