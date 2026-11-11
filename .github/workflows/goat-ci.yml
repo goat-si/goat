@@ -431,6 +431,25 @@ jobs:
           vp run --filter @goat/pen-relay test
           vp run --filter @goat/pen-login test
 
+      # The Pen TypeScript client's WebSocket against the Autobahn fuzzingserver (client mode). test-pen
+      # runs on a hosted image (goat-ci-scope.cjs HOSTED_TASKS), which has Docker; the image is pinned by
+      # digest. The script prints the report summary and fails on any failing, missing or unexpected case.
+      - name: Pen client WebSocket conformance (Autobahn)
+        if: matrix.task == 'test-pen'
+        run: |
+          reports="$RUNNER_TEMP/autobahn-reports"
+          mkdir -p "$reports"
+          docker run -d --name autobahn --network host \
+            -v "$PWD/packages/pen-protocol/scripts/autobahn:/config:ro" -v "$reports:/reports" \
+            crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074 \
+            wstest -m fuzzingserver -s /config/fuzzingserver.json
+          for _ in $(seq 1 60); do (exec 3<>/dev/tcp/127.0.0.1/9001) 2>/dev/null && break; sleep 1; done
+          status=0
+          node packages/pen-protocol/scripts/autobahn.ts ws://127.0.0.1:9001 "$reports" || status=$?
+          if [ "$status" -ne 0 ]; then docker logs autobahn | tail -50; fi
+          docker rm -f autobahn >/dev/null
+          exit "$status"
+
       - name: Test server
         if: matrix.task == 'test-server' && !matrix.related
         run: vp run --filter goat test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}

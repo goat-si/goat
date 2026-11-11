@@ -1,0 +1,861 @@
+{
+  "description": "Inbound frames for the RFC 6455 client decoder (design 10.2). input chunks are hex, {fill, count} for long runs, or {repeatHex, count}. Messages are capped at 16 MiB and 1,024 fragments. context.eof means the stream ends after the input.",
+  "cases": [
+    {
+      "id": "W03",
+      "name": "masked text frame",
+      "context": {},
+      "input": [
+        {
+          "hex": "818201020304696b"
+        }
+      ],
+      "expect": {
+        "error": "ws/W03",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W04a",
+      "name": "RSV1 set",
+      "context": {},
+      "input": [
+        {
+          "hex": "c1026869"
+        }
+      ],
+      "expect": {
+        "error": "ws/W04",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W04b",
+      "name": "RSV2 set",
+      "context": {},
+      "input": [
+        {
+          "hex": "a1026869"
+        }
+      ],
+      "expect": {
+        "error": "ws/W04",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W04c",
+      "name": "RSV3 set",
+      "context": {},
+      "input": [
+        {
+          "hex": "91026869"
+        }
+      ],
+      "expect": {
+        "error": "ws/W04",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W05a",
+      "name": "opcode 3",
+      "context": {},
+      "input": [
+        {
+          "hex": "8300"
+        }
+      ],
+      "expect": {
+        "error": "ws/W05",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W05a",
+      "name": "opcode 7",
+      "context": {},
+      "input": [
+        {
+          "hex": "8700"
+        }
+      ],
+      "expect": {
+        "error": "ws/W05",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W05b",
+      "name": "opcode 11",
+      "context": {},
+      "input": [
+        {
+          "hex": "8b00"
+        }
+      ],
+      "expect": {
+        "error": "ws/W05",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W05b",
+      "name": "opcode 15",
+      "context": {},
+      "input": [
+        {
+          "hex": "8f00"
+        }
+      ],
+      "expect": {
+        "error": "ws/W05",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W06a",
+      "name": "16-bit length form for 5 bytes",
+      "context": {},
+      "input": [
+        {
+          "hex": "827e00050102030405"
+        }
+      ],
+      "expect": {
+        "error": "ws/W06",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W06b",
+      "name": "64-bit length form for 5 bytes",
+      "context": {},
+      "input": [
+        {
+          "hex": "827f00000000000000050102030405"
+        }
+      ],
+      "expect": {
+        "error": "ws/W06",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W06b",
+      "name": "64-bit length form for 65,535 bytes",
+      "context": {},
+      "input": [
+        {
+          "hex": "827f000000000000ffff"
+        }
+      ],
+      "expect": {
+        "error": "ws/W06",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W07",
+      "name": "64-bit length with the high bit set",
+      "context": {},
+      "input": [
+        {
+          "hex": "827f8000000000000000"
+        }
+      ],
+      "expect": {
+        "error": "ws/W07",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W08a",
+      "name": "ping with a 125-byte payload",
+      "context": {},
+      "input": [
+        {
+          "hex": "897d0707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "ping",
+            "payloadHex": "0707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W08b",
+      "name": "ping with a 126-byte payload",
+      "context": {},
+      "input": [
+        {
+          "hex": "897e007e070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
+        }
+      ],
+      "expect": {
+        "error": "ws/W08",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W09",
+      "name": "ping without FIN",
+      "context": {},
+      "input": [
+        {
+          "hex": "090101"
+        }
+      ],
+      "expect": {
+        "error": "ws/W09",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W10",
+      "name": "a ping between two fragments",
+      "context": {},
+      "input": [
+        {
+          "hex": "01026865"
+        },
+        {
+          "hex": "890109"
+        },
+        {
+          "hex": "80036c6c6f"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "ping",
+            "payloadHex": "09"
+          },
+          {
+            "type": "message",
+            "text": "hello"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W11",
+      "name": "continuation with no message",
+      "context": {},
+      "input": [
+        {
+          "hex": "800101"
+        }
+      ],
+      "expect": {
+        "error": "ws/W11",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W12",
+      "name": "a text frame inside a fragmented message",
+      "context": {},
+      "input": [
+        {
+          "hex": "010161"
+        },
+        {
+          "hex": "810162"
+        }
+      ],
+      "expect": {
+        "error": "ws/W12",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W13a",
+      "name": "1,024 fragments",
+      "context": {},
+      "input": [
+        {
+          "hex": "020101"
+        },
+        {
+          "repeatHex": "000101",
+          "count": 1022
+        },
+        {
+          "hex": "800101"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "message",
+            "binaryLength": 1024
+          }
+        ]
+      }
+    },
+    {
+      "id": "W13b",
+      "name": "1,025 fragments",
+      "context": {},
+      "input": [
+        {
+          "hex": "020101"
+        },
+        {
+          "repeatHex": "000101",
+          "count": 1023
+        },
+        {
+          "hex": "800101"
+        }
+      ],
+      "expect": {
+        "error": "ws/W13",
+        "closeCode": 1009
+      }
+    },
+    {
+      "id": "W14a",
+      "name": "a 16 MiB message",
+      "context": {},
+      "input": [
+        {
+          "hex": "827f0000000001000000"
+        },
+        {
+          "fill": "00",
+          "count": 16777216
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "message",
+            "binaryLength": 16777216
+          }
+        ]
+      }
+    },
+    {
+      "id": "W14b",
+      "name": "a frame declaring 16 MiB + 1",
+      "context": {},
+      "input": [
+        {
+          "hex": "827f0000000001000001"
+        }
+      ],
+      "expect": {
+        "error": "ws/W14",
+        "closeCode": 1009
+      }
+    },
+    {
+      "id": "W14c",
+      "name": "fragments adding up past 16 MiB",
+      "context": {},
+      "input": [
+        {
+          "hex": "027f0000000000800000"
+        },
+        {
+          "fill": "00",
+          "count": 8388608
+        },
+        {
+          "hex": "807f0000000000800001"
+        }
+      ],
+      "expect": {
+        "error": "ws/W14",
+        "closeCode": 1009
+      }
+    },
+    {
+      "id": "W15a",
+      "name": "a code point split across fragments",
+      "context": {},
+      "input": [
+        {
+          "hex": "0101e2"
+        },
+        {
+          "hex": "800282ac"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "message",
+            "text": "€"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W15b",
+      "name": "overlong encoding",
+      "context": {},
+      "input": [
+        {
+          "hex": "8102c0af"
+        }
+      ],
+      "expect": {
+        "error": "ws/W15",
+        "closeCode": 1007
+      }
+    },
+    {
+      "id": "W15c",
+      "name": "a UTF-16 surrogate",
+      "context": {},
+      "input": [
+        {
+          "hex": "8103eda080"
+        }
+      ],
+      "expect": {
+        "error": "ws/W15",
+        "closeCode": 1007
+      }
+    },
+    {
+      "id": "W15d",
+      "name": "above U+10FFFF",
+      "context": {},
+      "input": [
+        {
+          "hex": "8104f4908080"
+        }
+      ],
+      "expect": {
+        "error": "ws/W15",
+        "closeCode": 1007
+      }
+    },
+    {
+      "id": "W15e",
+      "name": "truncated at the final fragment",
+      "context": {},
+      "input": [
+        {
+          "hex": "010161"
+        },
+        {
+          "hex": "8002e282"
+        }
+      ],
+      "expect": {
+        "error": "ws/W15",
+        "closeCode": 1007
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1000",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503e8627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1000,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1001",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503e9627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1001,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1002",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503ea627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1002,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1003",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503eb627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1003,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1007",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503ef627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1007,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1008",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503f0627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1008,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1009",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503f1627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1009,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1010",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503f2627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1010,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 1011",
+      "context": {},
+      "input": [
+        {
+          "hex": "880503f3627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1011,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 3000",
+      "context": {},
+      "input": [
+        {
+          "hex": "88050bb8627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 3000,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16a",
+      "name": "close code 4999",
+      "context": {},
+      "input": [
+        {
+          "hex": "88051387627965"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 4999,
+            "reason": "bye"
+          }
+        ]
+      }
+    },
+    {
+      "id": "W16b",
+      "name": "close code 999",
+      "context": {},
+      "input": [
+        {
+          "hex": "880203e7"
+        }
+      ],
+      "expect": {
+        "error": "ws/W16",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W16b",
+      "name": "close code 1004",
+      "context": {},
+      "input": [
+        {
+          "hex": "880203ec"
+        }
+      ],
+      "expect": {
+        "error": "ws/W16",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W16b",
+      "name": "close code 1005",
+      "context": {},
+      "input": [
+        {
+          "hex": "880203ed"
+        }
+      ],
+      "expect": {
+        "error": "ws/W16",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W16b",
+      "name": "close code 1006",
+      "context": {},
+      "input": [
+        {
+          "hex": "880203ee"
+        }
+      ],
+      "expect": {
+        "error": "ws/W16",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W16b",
+      "name": "close code 1012",
+      "context": {},
+      "input": [
+        {
+          "hex": "880203f4"
+        }
+      ],
+      "expect": {
+        "error": "ws/W16",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W16b",
+      "name": "close code 2999",
+      "context": {},
+      "input": [
+        {
+          "hex": "88020bb7"
+        }
+      ],
+      "expect": {
+        "error": "ws/W16",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W16b",
+      "name": "close code 5000",
+      "context": {},
+      "input": [
+        {
+          "hex": "88021388"
+        }
+      ],
+      "expect": {
+        "error": "ws/W16",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W17",
+      "name": "a one-byte close payload",
+      "context": {},
+      "input": [
+        {
+          "hex": "880103"
+        }
+      ],
+      "expect": {
+        "error": "ws/W17",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W18",
+      "name": "a close reason that is not UTF-8",
+      "context": {},
+      "input": [
+        {
+          "hex": "880303e8ff"
+        }
+      ],
+      "expect": {
+        "error": "ws/W18",
+        "closeCode": 1007
+      }
+    },
+    {
+      "id": "W19",
+      "name": "a frame after the close",
+      "context": {},
+      "input": [
+        {
+          "hex": "880203e8"
+        },
+        {
+          "hex": "810178"
+        }
+      ],
+      "expect": {
+        "error": "ws/W19",
+        "closeCode": 1002
+      }
+    },
+    {
+      "id": "W21",
+      "name": "an unsolicited pong is ignored",
+      "context": {},
+      "input": [
+        {
+          "hex": "8a020102"
+        }
+      ],
+      "expect": {
+        "ok": []
+      }
+    },
+    {
+      "id": "W25",
+      "name": "EOF inside a frame",
+      "context": {
+        "eof": true
+      },
+      "input": [
+        {
+          "hex": "81056865"
+        }
+      ],
+      "expect": {
+        "error": "ws/W25",
+        "closeCode": 1006
+      }
+    },
+    {
+      "id": "W26",
+      "name": "an empty close payload",
+      "context": {},
+      "input": [
+        {
+          "hex": "8800"
+        }
+      ],
+      "expect": {
+        "ok": [
+          {
+            "type": "close",
+            "code": 1005,
+            "reason": ""
+          }
+        ]
+      }
+    }
+  ]
+}

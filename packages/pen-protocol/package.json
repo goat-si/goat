@@ -17,7 +17,11 @@
     "./client/pairing-flow": "./src/client/pairingFlow.ts",
     "./client/relay-client": "./src/client/relayClient.ts",
     "./client/race": "./src/client/race.ts",
-    "./client/stream": "./src/client/stream.ts"
+    "./client/stream": "./src/client/stream.ts",
+    "./client/http1": "./src/client/http1.ts",
+    "./client/websocket": "./src/client/websocket.ts",
+    "./client/pen-fetch": "./src/client/penFetch.ts",
+    "./client/pen-websocket": "./src/client/penWebSocket.ts"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",

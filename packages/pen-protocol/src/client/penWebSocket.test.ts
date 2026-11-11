@@ -1,0 +1,251 @@
+import { describe, expect, it } from "vite-plus/test";
+import { fromHex, toHex } from "./bytes.ts";
+import { websocketAccept } from "./http1.ts";
+import {
+  makePenWebSocketConstructor,
+  PEN_WEBSOCKET_LIMITS,
+  type PenWebSocketLike,
+} from "./penWebSocket.ts";
+import { ManualClock } from "./testing/manualClock.ts";
+import { memoryStreamPair } from "./testing/memoryStream.ts";
+
+const ORIGIN = "http://goat.pen";
+const latin1 = (bytes: Uint8Array) => String.fromCharCode(...bytes);
+
+/** Unmasks client frames written to the server side, returning [opcode, payload] pairs. */
+function clientFrames(
+  bytes: Uint8Array,
+): Array<{ fin: boolean; opcode: number; masked: boolean; mask: string; payload: Uint8Array }> {
+  const out = [];
+  let at = 0;
+  while (at < bytes.length) {
+    const b0 = bytes[at] ?? 0;
+    const b1 = bytes[at + 1] ?? 0;
+    let length = b1 & 0x7f;
+    let p = at + 2;
+    if (length === 126) {
+      length = ((bytes[p] ?? 0) << 8) | (bytes[p + 1] ?? 0);
+      p += 2;
+    } else if (length === 127) {
+      length = 0;
+      for (let i = 0; i < 8; i++) length = length * 256 + (bytes[p + i] ?? 0);
+      p += 8;
+    }
+    const mask = bytes.subarray(p, p + 4);
+    p += 4;
+    const payload = bytes.slice(p, p + length).map((b, i) => b ^ (mask[i & 3] ?? 0));
+    out.push({
+      fin: (b0 & 0x80) !== 0,
+      opcode: b0 & 0x0f,
+      masked: (b1 & 0x80) !== 0,
+      mask: toHex(mask),
+      payload,
+    });
+    at = p + length;
+  }
+  return out;
+}
+
+async function connected(options: { protocol?: string; random?: (n: number) => Uint8Array } = {}) {
+  const clock = new ManualClock();
+  const pair = memoryStreamPair();
+  let seed = 1;
+  const random = options.random ?? ((n: number) => new Uint8Array(n).fill(seed++ & 255));
+  const construct = makePenWebSocketConstructor({
+    origin: ORIGIN,
+    openStream: async () => pair.client,
+    clock,
+    random,
+  });
+  const socket = construct("ws://goat.pen/ws?x=1", options.protocol);
+  const events: Array<{ type: string; data?: unknown; code?: number }> = [];
+  for (const type of ["open", "message", "error", "close"] as const) {
+    socket.addEventListener(type, (event) => events.push({ type, ...event } as never));
+  }
+  const server = pair.server;
+  await server.whenWritten(1);
+  while (!latin1(server.written()).includes("\r\n\r\n"))
+    await server.whenWritten(server.written().length + 1);
+  const request = latin1(server.written());
+  const headLength = request.indexOf("\r\n\r\n") + 4;
+  const key = /Sec-WebSocket-Key: ([^\r]+)/.exec(request)?.[1] ?? "";
+  const opened = new Promise<void>((resolve) =>
+    socket.addEventListener("open", () => resolve(), { once: true }),
+  );
+  const accept = (extra = "", firstFrame = "") =>
+    server.write(
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
+        websocketAccept(key) +
+        "\r\n" +
+        extra +
+        "\r\n" +
+        firstFrame,
+    );
+  const framesSent = () => clientFrames(server.written().subarray(headLength));
+  const whenFrames = async (n: number) => {
+    while (framesSent().length < n) await server.whenWritten(server.written().length + 1);
+  };
+  const whenEvent = (type: string, n = 1) =>
+    new Promise<void>((resolve) => {
+      const check = () =>
+        events.filter((e) => e.type === type).length >= n
+          ? resolve()
+          : socket.addEventListener(type as never, check, { once: true });
+      check();
+    });
+  return {
+    clock,
+    socket,
+    server,
+    request,
+    key,
+    accept,
+    opened,
+    framesSent,
+    whenFrames,
+    events,
+    whenEvent,
+  };
+}
+
+describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side)", () => {
+  it("W27a, W27b, W27c: the handshake asks for version 13 with a 16-byte key and offers no extension", async () => {
+    const c = await connected();
+    expect(c.request.startsWith("GET /ws?x=1 HTTP/1.1\r\nHost: goat.pen\r\n")).toBe(true);
+    expect(c.request).toContain("Sec-WebSocket-Version: 13\r\n");
+    expect(fromBase64(c.key)).toHaveLength(16);
+    expect(c.request).not.toMatch(/Sec-WebSocket-Extensions/i);
+    expect(c.request).not.toMatch(/Sec-WebSocket-Protocol/i);
+  });
+
+  it("W27d: the handshake names the one requested subprotocol and accepts it back", async () => {
+    const c = await connected({ protocol: "goat" });
+    expect(c.request).toContain("Sec-WebSocket-Protocol: goat\r\n");
+    c.accept("Sec-WebSocket-Protocol: goat\r\n");
+    await c.opened;
+    expect(c.socket.readyState).toBe(1);
+  });
+
+  it("W01, W02a: every outbound frame is masked with a fresh mask", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.socket.send("one");
+    c.socket.send(Uint8Array.of(1, 2, 3));
+    await c.whenFrames(2);
+    const [first, second] = c.framesSent();
+    expect(first).toMatchObject({ opcode: 1, masked: true, fin: true });
+    expect(new TextDecoder().decode(first?.payload)).toBe("one");
+    expect(second).toMatchObject({ opcode: 2, masked: true });
+    expect(first?.mask).not.toBe(second?.mask);
+  });
+
+  it("W02b: a CSPRNG failure while sending sends nothing", async () => {
+    let fail = false;
+    let seed = 1;
+    const c = await connected({
+      random: (n) => {
+        if (fail) throw new Error("no entropy");
+        return new Uint8Array(n).fill(seed++);
+      },
+    });
+    c.accept();
+    await c.opened;
+    const before = c.server.written().length;
+    fail = true;
+    expect(() => c.socket.send("x")).toThrow(
+      expect.objectContaining({ code: "random-unavailable" }),
+    );
+    expect(c.server.written().length).toBe(before);
+  });
+
+  it("W24: a 101 and the first frame in one chunk deliver the open and then the message", async () => {
+    const c = await connected();
+    c.accept("", "\x81\x02hi");
+    await c.whenEvent("message");
+    expect(c.events.map((e) => e.type)).toEqual(["open", "message"]);
+    expect(c.events[1]?.data).toBe("hi");
+  });
+
+  it("W20: a ping is answered with a pong carrying the same payload", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.server.write("\x89\x03abc");
+    await c.whenFrames(1);
+    expect(c.framesSent()[0]).toMatchObject({ opcode: 10 });
+    expect(latin1(c.framesSent()[0]?.payload ?? new Uint8Array())).toBe("abc");
+  });
+
+  it("W22, W23: one message is handed out before the next chunk is read", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.server.write("\x82\x01\x01\x82\x01\x02");
+    await c.whenEvent("message", 2);
+    expect(
+      c.events.filter((e) => e.type === "message").map((e) => [...(e.data as Uint8Array)]),
+    ).toEqual([[1], [2]]);
+  });
+
+  it("a close from the server is echoed and reported with its code", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.server.write("\x88\x02\x0f\xa0");
+    await c.whenEvent("close");
+    expect(c.events.at(-1)).toMatchObject({ type: "close", code: 4000 });
+    await c.whenFrames(1);
+    expect(c.framesSent()[0]).toMatchObject({ opcode: 8 });
+    expect(toHex(c.framesSent()[0]?.payload ?? new Uint8Array())).toBe("0fa0");
+  });
+
+  it("a malformed server frame fails the socket with the rule's close code", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    c.server.write("\xc1\x00");
+    await c.whenEvent("close");
+    expect(c.events.at(-1)).toMatchObject({ type: "close", code: 1002 });
+  });
+
+  it("a refused upgrade (an extension in the 101) never opens and reports 1006", async () => {
+    const c = await connected();
+    c.accept("Sec-WebSocket-Extensions: permessage-deflate\r\n");
+    await c.whenEvent("close");
+    expect(c.events.map((e) => e.type)).toEqual(["error", "close"]);
+    expect(c.socket.readyState).toBe(3);
+  });
+
+  it("send before open throws as React Native's WebSocket does; an options object is refused", async () => {
+    const c = await connected();
+    expect(() => c.socket.send("x")).toThrow("INVALID_STATE_ERR");
+    const construct = makePenWebSocketConstructor({
+      origin: ORIGIN,
+      openStream: async () => memoryStreamPair().client,
+      clock: new ManualClock(),
+      random: (n) => new Uint8Array(n),
+    });
+    expect(() => construct("ws://goat.pen/ws", { headers: {} })).toThrow(TypeError);
+    expect(() => construct("ws://other.pen/ws")).toThrow(
+      expect.objectContaining({ code: "http1/H47" }),
+    );
+  });
+
+  it("an outbound buffer past 1,024 frames fails the socket and sends close 1008 when it can", async () => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    const sockets: Array<PenWebSocketLike> = [c.socket];
+    for (let i = 0; i <= PEN_WEBSOCKET_LIMITS.outboundFrames + 1 && c.socket.readyState === 1; i++)
+      sockets[0]?.send("x");
+    await c.whenEvent("close");
+    expect(c.events.at(-1)).toMatchObject({ type: "close", code: 1006 });
+  });
+});
+
+function fromBase64(text: string): Uint8Array {
+  return fromHex(
+    [...atob(text)].map((ch) => ch.charCodeAt(0).toString(16).padStart(2, "0")).join(""),
+  );
+}

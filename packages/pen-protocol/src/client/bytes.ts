@@ -37,6 +37,12 @@ export function fromHex(hex: string): Uint8Array {
 
 const B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+/** Standard base64 with padding (RFC 4648 section 4), for the WebSocket key and accept values. */
+export function toBase64(bytes: Uint8Array): string {
+  const text = toBase64Url(bytes).replace(/-/g, "+").replace(/_/g, "/");
+  return text + "=".repeat((4 - (text.length % 4)) % 4);
+}
+
 /** base64url without padding (RFC 4648 section 5). */
 export function toBase64Url(bytes: Uint8Array): string {
   let out = "";

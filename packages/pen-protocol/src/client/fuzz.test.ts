@@ -1,0 +1,190 @@
+import { describe, expect, it } from "vite-plus/test";
+import httpCases from "../../vectors/http1-malformed.json" with { type: "json" };
+import wsCases from "../../vectors/websocket-malformed.json" with { type: "json" };
+import { fromHex } from "./bytes.ts";
+import { PenError } from "./errors.ts";
+import { ResponseParser } from "./http1.ts";
+import { seededRandom } from "./testing/seededRandom.ts";
+import { FrameDecoder } from "./websocket.ts";
+
+type Rand = ReturnType<typeof seededRandom>;
+const MAX_SEED = 4096;
+
+/** Corpus inputs that are small enough to mutate (long fills are left to the corpus test). */
+function seeds(
+  cases: ReadonlyArray<{ input: ReadonlyArray<Record<string, unknown>> }>,
+): Array<Uint8Array> {
+  return cases
+    .filter((c) => c.input.every((chunk) => typeof chunk.hex === "string"))
+    .map((c) => fromHex(c.input.map((chunk) => chunk.hex as string).join("")))
+    .filter((bytes) => bytes.length <= MAX_SEED);
+}
+
+function mutate(rand: Rand, input: Uint8Array, pool: ReadonlyArray<Uint8Array>): Uint8Array {
+  const bytes = [...input];
+  for (let n = 1 + rand.int(4); n > 0; n--) {
+    const at = rand.int(bytes.length + 1);
+    switch (rand.int(6)) {
+      case 0:
+        if (bytes.length > 0)
+          bytes[at % bytes.length] = (bytes[at % bytes.length] ?? 0) ^ (1 << rand.int(8));
+        break;
+      case 1:
+        bytes.splice(at, 0, ...rand.bytes(1 + rand.int(8)));
+        break;
+      case 2:
+        bytes.splice(at, 1 + rand.int(8));
+        break;
+      case 3: {
+        const other = pool[rand.int(pool.length)] ?? new Uint8Array();
+        const from = rand.int(other.length + 1);
+        bytes.splice(at, rand.int(16), ...other.subarray(from, from + rand.int(64)));
+        break;
+      }
+      case 4:
+        // Length-field edits: digits in HTTP heads, length bytes in frames.
+        bytes.splice(
+          at,
+          0,
+          ...[0x30 + rand.int(10), 0x7e, 0x7f, 0xff][rand.int(4)]!.toString().split("").map(Number),
+        );
+        break;
+      default:
+        bytes.splice(at, 0, ...[13, 10, 13, 10].slice(rand.int(4)));
+    }
+  }
+  return Uint8Array.from(bytes.map((b) => b & 255));
+}
+
+/** Splits at random points, feeding pieces and the EOF, recording events or the first PenError. */
+function run<T>(
+  make: () => { push(b: Uint8Array): Array<T>; finish(): Array<T> },
+  input: Uint8Array,
+  cuts: ReadonlyArray<number>,
+  eof: boolean,
+) {
+  const target = make();
+  const events: Array<T> = [];
+  let last = 0;
+  try {
+    for (const cut of [...cuts, input.length]) {
+      events.push(...target.push(input.subarray(last, cut)));
+      last = cut;
+    }
+    if (eof) events.push(...target.finish());
+    return {
+      events: JSON.stringify(mergeBodies(events), (_k, v) =>
+        v instanceof Uint8Array ? [...v] : v,
+      ),
+    };
+  } catch (error) {
+    // Only PenError may escape a parser, and after it the parser accepts nothing more.
+    expect(error).toBeInstanceOf(PenError);
+    expect(() => target.push(Uint8Array.of(0))).toThrow(error as PenError);
+    return { error: (error as PenError).code };
+  }
+}
+
+/** Body events follow how the input was chunked; joining runs of them leaves what a split must not change. */
+function mergeBodies<T>(events: ReadonlyArray<T>): Array<T> {
+  const out: Array<T> = [];
+  for (const event of events) {
+    const previous = out.at(-1) as { type?: string; bytes?: Uint8Array } | undefined;
+    const current = event as { type?: string; bytes?: Uint8Array };
+    if (previous?.type === "body" && current.type === "body" && previous.bytes && current.bytes) {
+      const joined = new Uint8Array(previous.bytes.length + current.bytes.length);
+      joined.set(previous.bytes);
+      joined.set(current.bytes, previous.bytes.length);
+      out[out.length - 1] = { type: "body", bytes: joined } as T;
+    } else {
+      out.push(event);
+    }
+  }
+  return out;
+}
+
+function property<T>(
+  name: string,
+  seed: number,
+  pool: Array<Uint8Array>,
+  make: (rand: Rand) => () => { push(b: Uint8Array): Array<T>; finish(): Array<T> },
+) {
+  it(name, () => {
+    const rand = seededRandom(seed);
+    for (let i = 0; i < 2000; i++) {
+      const input = mutate(rand, pool[rand.int(pool.length)] ?? new Uint8Array(), pool);
+      const eof = rand.int(3) === 0;
+      const factory = make(rand);
+      const whole = run(factory, input, [], eof);
+      const cuts = Array.from({ length: rand.int(6) }, () => rand.int(input.length + 1)).sort(
+        (a, b) => a - b,
+      );
+      expect(run(factory, input, cuts, eof), "iteration " + i).toEqual(whole);
+    }
+  });
+}
+
+describe("fixed-seed fuzzing (design 10.2 exit criterion)", () => {
+  const httpPool = seeds(httpCases.cases as never);
+  const wsPool = seeds(wsCases.cases as never);
+
+  property(
+    "HTTP/1.1 parser: only PenError escapes, any split equals the whole input, errors are final",
+    0xf022_0001,
+    httpPool,
+    (rand) => {
+      const method = rand.int(5) === 0 ? "HEAD" : "GET";
+      const upgrade = rand.int(3) === 0 ? { key: "dGhlIHNhbXBsZSBub25jZQ==" } : undefined;
+      return () =>
+        new ResponseParser({
+          method,
+          ...(upgrade === undefined ? {} : { upgrade }),
+          bodyCap: 64 * 1024,
+        });
+    },
+  );
+
+  property(
+    "WebSocket decoder: only PenError escapes, any split equals the whole input, errors are final",
+    0xf022_0002,
+    wsPool,
+    () => () => new FrameDecoder(),
+  );
+
+  it("request, response, next request: a parser per exchange sees the same bytes split any way", () => {
+    const rand = seededRandom(0xf022_0003);
+    const responses = seeds(
+      httpCases.cases.filter(
+        (c) => "ok" in c.expect && (c.context as { upgrade?: unknown }).upgrade === undefined,
+      ) as never,
+    );
+    for (let i = 0; i < 500; i++) {
+      const a = responses[rand.int(responses.length)] ?? new Uint8Array();
+      const b = responses[rand.int(responses.length)] ?? new Uint8Array();
+      const both = new Uint8Array(a.length + b.length);
+      both.set(a);
+      both.set(b, a.length);
+      const first = new ResponseParser({ method: "GET", bodyCap: 64 * 1024 });
+      let outcome: string;
+      try {
+        first.push(both);
+        outcome = "leftover:" + first.leftover().length;
+      } catch (error) {
+        expect(error).toBeInstanceOf(PenError);
+        outcome = "error";
+      }
+      const cut = rand.int(both.length + 1);
+      const split = new ResponseParser({ method: "GET", bodyCap: 64 * 1024 });
+      let splitOutcome: string;
+      try {
+        split.push(both.subarray(0, cut));
+        split.push(both.subarray(cut));
+        splitOutcome = "leftover:" + split.leftover().length;
+      } catch (error) {
+        expect(error).toBeInstanceOf(PenError);
+        splitOutcome = "error";
+      }
+      expect(splitOutcome).toBe(outcome);
+    }
+  });
+});
