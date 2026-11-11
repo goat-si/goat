@@ -250,6 +250,7 @@ const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   not_home: "GOAT Bot runs on another machine in this cluster.",
   bot_busy: "This bot still has work in progress.",
   bot_limit: "This owner already has the most bots allowed.",
+  stream_unavailable: "Task changes are not streaming here; read again when you return.",
 } as const;
 
 export const ChannelGatewayErrorReason = Schema.Literals(

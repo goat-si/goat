@@ -11,6 +11,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
+  CHANNEL_GATEWAY_WS_METHODS,
   WsMemoryRpcGroup,
   supportsMemoryProtocol,
   MemoryRpcError,
@@ -102,7 +103,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.terminalAttach
   | typeof WS_METHODS.terminalObserve
   | typeof WS_METHODS.decisionSubscribe
-  | typeof SLACK_CHANNEL_WS_METHODS.subscribeStatus;
+  | typeof SLACK_CHANNEL_WS_METHODS.subscribeStatus
+  | typeof CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.chatGptHandoffSubscribe

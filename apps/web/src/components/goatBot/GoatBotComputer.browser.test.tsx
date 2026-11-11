@@ -9,9 +9,35 @@ const state = vi.hoisted(() => ({
   failure: null as unknown,
   refresh: vi.fn(),
   requested: vi.fn(),
+  revision: 0 as number | null | "failed",
+  supportsChanges: false,
+  permitted: true,
+}));
+vi.mock("@effect/atom-react", async (original) => {
+  const { AsyncResult } = await import("effect/reactivity");
+  const Cause = await import("effect/Cause");
+  return {
+    ...(await original<typeof import("@effect/atom-react")>()),
+    // null: the stream has not answered yet; "failed": the server refused or ended it.
+    useAtomValue: (atom: unknown) =>
+      atom === "permission"
+        ? state.permitted
+        : state.revision === null
+          ? AsyncResult.initial(true)
+          : state.revision === "failed"
+            ? AsyncResult.failure(Cause.die("refused"))
+            : AsyncResult.success({ revision: state.revision }),
+  };
+});
+vi.mock("~/state/environments", () => ({
+  useEnvironment: () => ({
+    serverConfig: { environment: { capabilities: { goatBotTaskChanges: state.supportsChanges } } },
+  }),
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
+    taskChanges: () => "changes",
+    taskChangesPermission: () => "permission",
     listTasks: (target: unknown) => {
       state.requested(target);
       return "tasks";
@@ -41,6 +67,8 @@ const task = (taskId: string, title: string, worker?: { host?: string }) => ({
   ...(worker === undefined ? {} : { worker }),
 });
 function setup(data: unknown, failure: unknown = null) {
+  state.revision = 0;
+  state.supportsChanges = false;
   state.data = data;
   state.failure = failure;
   state.refresh.mockReset();
@@ -79,6 +107,7 @@ it("says when more work runs than the list shows", async () => {
 
 it("a failure can be tried again", async () => {
   setup(null, new Error("socket"));
+  state.supportsChanges = true;
   await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
   await expect.element(screen.getByText("Couldn't load GOAT Bot's machines.")).toBeVisible();
   state.refresh.mockClear();
@@ -110,4 +139,52 @@ it("a member's tab lists only that bot's work", async () => {
     environmentId,
     input: expect.objectContaining({ botId: "research" }),
   });
+});
+
+it("rereads on task revisions without remounting the retry button", async () => {
+  setup(null, new Error("socket"));
+  state.supportsChanges = true;
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  const button = screen.getByRole("button", { name: "Try again" });
+  await userEvent.click(button);
+  state.refresh.mockClear();
+  state.revision = 1;
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  await expect.element(button).toHaveFocus();
+});
+
+it("rereads on window focus when task subscriptions are unavailable", async () => {
+  setup({ tasks: [] });
+  await using _screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  state.refresh.mockClear();
+  window.dispatchEvent(new Event("focus"));
+  await vi.waitFor(() => expect(state.refresh).toHaveBeenCalledTimes(1));
+});
+
+it("reads again once when the change stream starts tracking, then once per later revision", async () => {
+  setup({ tasks: [] });
+  state.supportsChanges = true;
+  state.revision = null;
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  // Revision 0 is the server's acknowledgement: a change between the first read and it shows now.
+  state.revision = 0;
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(2);
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(2);
+  state.revision = 1;
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.refresh).toHaveBeenCalledTimes(3);
+});
+
+it("reads again on window focus once the server refuses or ends the change stream", async () => {
+  setup({ tasks: [] });
+  state.supportsChanges = true;
+  state.revision = "failed";
+  await using _screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  state.refresh.mockClear();
+  window.dispatchEvent(new Event("focus"));
+  await vi.waitFor(() => expect(state.refresh).toHaveBeenCalledTimes(1));
 });

@@ -45,6 +45,11 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { botProfileKey } from "./channelBotLedger.ts";
 import { memberBotLaunchIdsFor, memberBotStepCommandIdFor } from "./channelIds.ts";
 import { listOpenAsks } from "./channelOpenAsks.ts";
+import {
+  MAX_TASK_CHANGE_STREAMS_PER_CONNECTION,
+  makeStreamLimit,
+  streamUnavailable,
+} from "./channelTaskChanges.ts";
 
 export type MemberBot = BotProfile;
 type Owner = Pick<ChannelConnectionOwner, "ownerId">;
@@ -83,7 +88,7 @@ export class ChannelBotMembers extends Context.Service<
       owner: Owner,
     ) => Effect.Effect<ChannelListOpenAsksResult, ChannelGatewayError>;
     /** Revisions of this owner's tasks and bots; a new one means read the open asks again. */
-    readonly taskChanges: (owner: Owner) => Stream.Stream<number>;
+    readonly taskChanges: (owner: Owner) => Stream.Stream<number, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotMembers") {}
 
@@ -465,20 +470,29 @@ const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(ChannelBotMembers, make);
 
-export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => ({
-  [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () => service.openAsks(owner),
-  [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>
-    service.taskChanges(owner).pipe(Stream.map((revision) => ({ revision }))),
-  [CHANNEL_GATEWAY_WS_METHODS.listBots]: (input: ChannelListBotsInput) =>
-    service.list(input, owner).pipe(Effect.map((bots) => ({ bots }))),
-  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
-    service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
-    service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
-    service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>
-    service.remove(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: (input: ChannelRestoreBotInput) =>
-    service.restore(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-});
+/** Built once per connection, so the change stream limit counts this connection's streams. */
+export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => {
+  const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
+  return {
+    [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () => service.openAsks(owner),
+    [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>
+      connectionStreams(
+        service.taskChanges(owner).pipe(Stream.map((revision) => ({ revision }))),
+      ).pipe(
+        // The stream never ends while the connection lives; if it does, the client stops waiting on it.
+        Stream.concat(Stream.fail(streamUnavailable())),
+      ),
+    [CHANNEL_GATEWAY_WS_METHODS.listBots]: (input: ChannelListBotsInput) =>
+      service.list(input, owner).pipe(Effect.map((bots) => ({ bots }))),
+    [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
+      service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
+      service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
+      service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>
+      service.remove(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: (input: ChannelRestoreBotInput) =>
+      service.restore(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+  };
+};
