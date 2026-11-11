@@ -41,17 +41,16 @@ import {
   revealSettingsSearchTarget,
   searchableSetting,
 } from "./settingsSearch";
+import { makeFontDefaultFamiliesCache } from "./fontDefaultFamiliesCache";
 
-let fontDefaultFamilies: { readonly sans: string; readonly code: string } | undefined;
+let fontDefaultFamilies: ReturnType<typeof makeFontDefaultFamiliesCache> | undefined;
 
 function resolveFontDefaultFamilies() {
-  if (fontDefaultFamilies !== undefined) return fontDefaultFamilies;
-  const families = {
+  fontDefaultFamilies ??= makeFontDefaultFamiliesCache(document.fonts, window);
+  return fontDefaultFamilies.get(() => ({
     sans: resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK) ?? "System default",
     code: resolveDefaultFamilyLabel(DEFAULT_CODE_FONT_STACK) ?? "System monospace",
-  };
-  if (document.fonts.status === "loaded") fontDefaultFamilies = families;
-  return families;
+  }));
 }
 
 function useFontDefaultFamilies() {
