@@ -132,6 +132,8 @@ export const ChannelOutboundMessage = Schema.Struct({
   inReplyToInputId: Schema.optional(ChannelInputId),
   taskId: Schema.optional(ChannelTaskId),
   taskVersion: Schema.optional(PositiveInt),
+  /** The attempt of the task this message speaks for; servers before it omit it. */
+  taskGeneration: Schema.optional(PositiveInt),
   chip: Schema.optional(ChannelTaskChip),
   /** The original requester to tag, such as a Slack user id. */
   mentionActorId: Schema.optional(TrimmedNonEmptyString),

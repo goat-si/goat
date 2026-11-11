@@ -49,9 +49,13 @@ export interface GoatBotTaskCard {
   readonly continuationLabel?: string | null;
   /** "Attempt 2" after a person retried the task. */
   readonly attemptLabel?: string | null;
+  /** The task's attempt this card shows; 1 when the chip names none. */
+  readonly generation?: number;
   /** Failed or stopped work on this machine, which a person may run again. */
   readonly retryable?: boolean;
   readonly summary: string | null;
+  /** The work has ended: done, failed or cancelled. */
+  readonly ended?: boolean;
   /** Something waiting on a person, such as "2 questions · 1 approval". */
   readonly attentionLabel: string | null;
   readonly evidenceLabels?: ReadonlyArray<string>;
@@ -82,6 +86,8 @@ export interface GoatBotMessagePresentation {
   readonly clientKey?: string | null;
   /** The work a bot message is about, such as the task its acknowledgement started. */
   readonly taskId?: string | null;
+  /** The attempt of that task the message speaks for; null when the server did not say. */
+  readonly taskGeneration?: number | null;
   /** Answers a bot question offers. */
   readonly options?: ReadonlyArray<string>;
   /** The question those answers belong to. */
@@ -206,7 +212,15 @@ export function goatBotConversationPreview(input: {
   readonly lastVisitedAt: string | null | undefined;
   readonly active: boolean;
 }): GoatBotConversationPreview | null {
-  const last = input.rows.findLast((row) => row.kind !== "day" && row.kind !== "event");
+  // A card keeps its first place when a later revision updates it, so the newest by time wins.
+  type Shown = Exclude<GoatBotRow, { readonly kind: "day" | "event" }>;
+  const changedAt = (row: Shown) =>
+    Date.parse(row.kind === "task" ? row.card.updatedAt : row.createdAt);
+  let last: Shown | undefined;
+  for (const row of input.rows) {
+    if (row.kind === "day" || row.kind === "event") continue;
+    if (last === undefined || changedAt(row) >= changedAt(last)) last = row;
+  }
   if (!last) return null;
   // A pick shown inside its question is still the person's message, newest when nothing came after.
   const lastAt = last.kind === "task" ? last.card.updatedAt : last.createdAt;
@@ -365,6 +379,49 @@ export function buildGoatBotTimeline(input: {
     const newest = newestCards.get(card.key);
     if (newest === undefined || card.revision > newest.revision) newestCards.set(card.key, card);
   }
+  const isOutcome = (presentation: GoatBotMessagePresentation | null) =>
+    presentation?.tone === "result" || presentation?.tone === "failure";
+  const mainChat = input.conversationOnly === true && input.taskId == null;
+  // A retry reuses the task id and its single card, so a message matches the card's attempt by
+  // the generation both carry. A message without one cannot be matched and leaves the card shown.
+  const toldGenerations = new Map<string, Set<number>>();
+  for (const { item } of input.visibleTurnItems) {
+    if (item.type !== "assistant_message") continue;
+    const presentation = input.readers.message(item);
+    if (presentation?.taskId == null || presentation.taskGeneration == null) continue;
+    if (!isOutcome(presentation)) continue;
+    const told = toldGenerations.get(presentation.taskId) ?? new Set<number>();
+    told.add(presentation.taskGeneration);
+    toldGenerations.set(presentation.taskId, told);
+  }
+  const endedCard = (taskId: string) => {
+    const newest = newestCards.get(taskId);
+    return newest?.ended === true ? newest : undefined;
+  };
+  /**
+   * A task's outcome shows once per view. The main chat tells it as a message where the work list
+   * opens the task, and keeps the card where it does not, or where no message told how the
+   * card's attempt ended.
+   */
+  const cardInMainChat = (key: string) => {
+    if (!listedTasks.has(key)) return true;
+    const ended = endedCard(key);
+    return ended !== undefined && toldGenerations.get(key)?.has(ended.generation ?? 1) !== true;
+  };
+  /**
+   * An ended card with a summary tells the outcome of the attempt it ended, where it shows; a
+   * running card's summary is progress, and another attempt's message is its own history.
+   */
+  const cardTellsOutcome = (presentation: GoatBotMessagePresentation | null) => {
+    const taskId = presentation?.taskId;
+    if (taskId == null || presentation?.taskGeneration == null) return false;
+    const ended = endedCard(taskId);
+    return (
+      ended?.summary != null &&
+      (ended.generation ?? 1) === presentation.taskGeneration &&
+      (input.taskId === taskId || (mainChat && cardInMainChat(taskId)))
+    );
+  };
   const questionState = (taskId: string | null | undefined) => {
     if (taskId == null) return undefined;
     const card = newestCards.get(taskId);
@@ -456,6 +513,7 @@ export function buildGoatBotTimeline(input: {
           (presentation?.replyToKey != null && mainInputs.has(presentation.replyToKey)));
       if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer && !toldInChat)
         continue;
+      if (isOutcome(presentation) && cardTellsOutcome(presentation)) continue;
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
@@ -509,8 +567,7 @@ export function buildGoatBotTimeline(input: {
       const card = input.readers.taskCard(item);
       if (card === null) continue;
       if (input.taskId != null && card.key !== input.taskId) continue;
-      if (input.conversationOnly === true && input.taskId == null && listedTasks.has(card.key))
-        continue;
+      if (mainChat && !cardInMainChat(card.key)) continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
         cardIndexByKey.set(card.key, committed.length);

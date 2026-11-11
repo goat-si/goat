@@ -460,6 +460,59 @@ describe("GOAT Bot worker slots", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("names the attempt a told ending speaks for, even when a retry came first", () => {
+    const { harness } = queueHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      yield* gateway.ingest(goatInput("do: job a", "attempt-1"), rpcContext);
+      yield* runtime.drain;
+      const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+      harness.world.setStatus(task!.worker!.threadId, 1, "failed", "Broke.");
+      yield* reports.reconcile(runtime.ownerToken);
+      const ending = (yield* ledger.listPendingNarrations(10)).find(
+        (pending) => pending.event.type === "task.failed",
+      );
+      assert.isDefined(ending);
+      const deliverDue = Effect.gen(function* () {
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const due = yield* ledger.claimDueDeliveries({
+          owner: runtime.ownerToken,
+          now,
+          limit: 100,
+        });
+        for (const delivery of due) {
+          yield* ledger.recordDelivery({
+            owner: runtime.ownerToken,
+            deliveryId: delivery.deliveryId,
+            outcome: { type: "delivered" },
+            now,
+          });
+        }
+        return due;
+      });
+      yield* deliverDue;
+      // The person retries before the failure was told.
+      yield* commitTransition(ledger, (yield* ledger.getTask(task!.taskId))!, {
+        type: "task.retry.requested",
+        payload: { generation: 2 },
+      });
+      yield* reception.narrate(ending!, runtime.ownerToken);
+      // The worker sends a task's messages in order, one round after another.
+      const sent = [...(yield* deliverDue), ...(yield* deliverDue), ...(yield* deliverDue)];
+      const told = sent.find(
+        (delivery) =>
+          delivery.deliveryId === deliveryIdFor("narration:" + ending!.event.eventId + ":origin"),
+      );
+      assert.strictEqual(told?.message.kind, "failure");
+      assert.strictEqual(told?.message.taskGeneration, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("keeps retrying a refused stop while the worker's cloud task still runs", () => {
     const { harness } = queueHarness();
     return Effect.gen(function* () {
