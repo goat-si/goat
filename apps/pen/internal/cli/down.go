@@ -20,6 +20,18 @@ func RunDown(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
+	if taskTurnApplies() {
+		// Before looking for a task or a daemon: a pen up holding the turn may be registering the task.
+		// The down record stays even when nothing runs, so a start that is already deciding sees it.
+		release, err := taskTurn(st, "pen down")
+		if err != nil {
+			return fail(stderr, err)
+		}
+		defer release()
+		if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
+			return fail(stderr, err)
+		}
+	}
 	if mode := installedService(st); mode != "none" {
 		if err := stopService(mode, st); err != nil {
 			return fail(stderr, err)
@@ -34,10 +46,13 @@ func RunDown(args []string, stdout, stderr io.Writer) int {
 	}
 	defer cl.Close()
 	var s daemon.Status
-	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+	if err := daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout); err != nil {
 		return fail(stderr, err)
 	}
 	var ok map[string]bool
+	if err := cl.SetDeadline(time.Now().Add(probeTimeout)); err != nil {
+		return fail(stderr, err)
+	}
 	if err := cl.Send(daemon.Request{Op: "stop"}); err != nil {
 		return fail(stderr, err)
 	}

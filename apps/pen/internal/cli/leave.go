@@ -16,9 +16,17 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
+	if taskTurnApplies() {
+		// As pen down: take the turn before looking for the task, so a start in flight finishes first.
+		release, err := taskTurn(st, "pen leave")
+		if err != nil {
+			return fail(stderr, err)
+		}
+		defer release()
+	}
 	mode := installedService(st)
 	var res struct{ Results []daemon.PushResult }
-	if err := daemon.Call(st, daemon.Request{Op: "leave"}, &res); err != nil {
+	if err := daemon.CallWithin(st, daemon.Request{Op: "leave"}, &res, opTimeout); err != nil {
 		if mode != "none" {
 			fmt.Fprintf(stderr, "pen: leave failed, the %s service is kept: %v\n", mode, err)
 			return 1

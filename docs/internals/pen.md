@@ -175,9 +175,15 @@ the same daemon operation as the CLI.
   id to `start-request` and runs the task; the supervisor reads that id before its checks and passes it to its
   daemon, the refusal starts with it, and `pen up` fails at once only with a refusal carrying its own id, so a late
   refusal of an earlier start is not taken for this one. `pen up`, `pen down` and `pen leave` take turns on
-  `start.lock` (not the state lock, which the starting daemon needs): two `pen up` at once each see the refusal of
-  their own start, and a `pen down` during a start runs after the start is decided, so whichever finishes last
-  decides whether Pen runs. A stop waits at most for the start's readiness wait (20 s).
+  `start.lock` (not the state lock, which the starting daemon needs); `pen down` and `pen leave` take it before
+  they look for a task or a daemon, and `pen down` writes the `down` record even when nothing runs. Two `pen up`
+  at once each see the refusal of their own start, and a `pen down` during a start runs after the start is
+  decided, so whichever finishes last decides whether Pen runs. Everything done while holding the turn is
+  bounded: a status or stop request on the control socket 2 s, each `schtasks` run 15 s (then that process is
+  ended), the readiness wait 20 s, the leave request 1 min. A start holds the turn at most about 1 min, a
+  `pen down` 1.5 min, a `pen leave` 3 min; a command that waits longer than 3 min 10 s for the turn fails and
+  names the command holding it (`start.holder`). The same control-socket and command bounds apply to `pen up`,
+  `pen down` and `pen leave` on macOS and Linux (`systemctl` and `launchctl` runs).
 - **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
   while a reader has `mesh.json` or `config.json` open, replacing it fails with `ERROR_ACCESS_DENIED`. Saves retry
   that error (and a sharing violation) for up to 2 s while they hold the state lock, the rule of Go's

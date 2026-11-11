@@ -466,6 +466,9 @@ func (cl *Client) Next(v any) error {
 // Close hangs up.
 func (cl *Client) Close() error { return cl.c.Close() }
 
+// SetDeadline bounds the requests and replies still to come on this connection.
+func (cl *Client) SetDeadline(t time.Time) error { return cl.c.SetDeadline(t) }
+
 // WatchRevoked follows the daemon's view and closes the returned channel once nodeID is revoked.
 // Without a running daemon it returns a nil channel (which never fires); stop ends the watch.
 func WatchRevoked(st *state.Store, nodeID string) (revoked <-chan struct{}, stop func()) {
@@ -502,6 +505,23 @@ func Call(st *state.Store, req Request, v any) error {
 		return err
 	}
 	defer cl.Close()
+	if err := cl.Send(req); err != nil {
+		return err
+	}
+	return cl.Next(v)
+}
+
+// CallWithin is Call that gives up after d: a daemon that takes the connection but never answers
+// cannot hold the caller.
+func CallWithin(st *state.Store, req Request, v any, d time.Duration) error {
+	cl, err := Dial(st)
+	if err != nil {
+		return err
+	}
+	defer cl.Close()
+	if err := cl.SetDeadline(time.Now().Add(d)); err != nil {
+		return err
+	}
 	if err := cl.Send(req); err != nil {
 		return err
 	}

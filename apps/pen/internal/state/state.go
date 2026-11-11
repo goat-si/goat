@@ -121,9 +121,6 @@ func (s *Store) Lock() (func(), error) {
 // The lock lasts until the release or the process ends.
 func TryLock(path string) (func(), error) { return lockPath(path, false) }
 
-// LockWait takes an exclusive lock on path, waiting for another holder to release it.
-func LockWait(path string) (func(), error) { return lockPath(path, true) }
-
 func lockPath(path string, wait bool) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

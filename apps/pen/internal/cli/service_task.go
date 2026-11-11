@@ -101,7 +101,7 @@ func startTask(st *state.Store) error {
 		return err
 	}
 	name := taskName(account)
-	release, err := taskTurn(st)
+	release, err := taskTurn(st, "pen up")
 	if err != nil {
 		return err
 	}
@@ -172,21 +172,56 @@ var startLockWaits func()
 // startLock is the task turn (taskTurn).
 const startLock = "start.lock"
 
+// taskTurnApplies reports whether pen up, pen down and pen leave take the task turn: on Windows, for the
+// default state folder, the only one that gets a task.
+func taskTurnApplies() bool { return serviceOS == "windows" && os.Getenv("PEN_HOME") == "" }
+
 // taskTurn takes start.lock: pen up holds it from registering the task until its start is decided, and
-// pen down and pen leave from the down record until the daemon and supervisor are gone (and the task is
-// deleted). Whichever runs last decides whether Pen runs, and none reports a state another undoes: a
-// supervisor reads one start request, and a stop cannot slip between a start's registration and its
-// removal of the down record. It is its own lock: the state lock must stay free for the daemon being
-// started. A stop waits at most for the start being decided (readyTimeout and one retry wait).
-func taskTurn(st *state.Store) (func(), error) {
-	release, err := state.TryLock(st.Path(startLock))
+// pen down and pen leave from before they look for a task or a daemon until the daemon and supervisor
+// are gone (and the task is deleted). Whichever runs last decides whether Pen runs, and none reports a
+// state another undoes: a supervisor reads one start request, and a stop cannot slip between a start's
+// registration and its removal of the down record. It is its own lock: the state lock must stay free
+// for the daemon being started.
+//
+// Every step taken while holding it is bounded (probeTimeout, commandTimeout, readyTimeout, downWait,
+// opTimeout), so a start holds it at most about 1 min, a pen down 1.5 min and a pen leave 3 min. A
+// command that waits longer than turnWait for it fails and names the holder.
+func taskTurn(st *state.Store, who string) (func(), error) {
+	path := st.Path(startLock)
+	release, err := state.TryLock(path)
 	if errors.Is(err, state.ErrLocked) {
 		if startLockWaits != nil {
 			startLockWaits()
 		}
-		release, err = state.LockWait(st.Path(startLock))
+		deadline := taskNow().Add(turnWait)
+		for errors.Is(err, state.ErrLocked) && taskNow().Before(deadline) {
+			taskSleep(100 * time.Millisecond)
+			release, err = state.TryLock(path)
+		}
+		if errors.Is(err, state.ErrLocked) {
+			holder := strings.TrimSpace(readFile(st.Path(turnHolder)))
+			if holder == "" {
+				holder = "another pen command"
+			}
+			return nil, fmt.Errorf("%s waited %v for %s, which holds %s; try again once it has finished", who, turnWait, holder, path)
+		}
 	}
-	return release, err
+	if err != nil {
+		return nil, err
+	}
+	st.WriteAtomic(turnHolder, []byte(fmt.Sprintf("%s (pid %d)\n", who, os.Getpid())), 0o600) // only names the holder in that message
+	return release, nil
+}
+
+// turnWait bounds the wait for the task turn: longer than any holder keeps it.
+var turnWait = 3*time.Minute + 10*time.Second
+
+// turnHolder names the command holding the task turn.
+const turnHolder = "start.holder"
+
+func readFile(p string) string {
+	b, _ := os.ReadFile(p)
+	return string(b)
 }
 
 // startRequestOf is the start the supervisor was run for: the id pen up wrote last ("" for none).
@@ -201,7 +236,7 @@ func started(st *state.Store, d time.Duration, req string) (up bool, refusal str
 	deadline := taskNow().Add(d)
 	for {
 		var s daemon.Status
-		if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
+		if daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout) == nil {
 			return true, ""
 		}
 		if b, err := os.ReadFile(st.Path(refusedRecord)); err == nil {
@@ -230,7 +265,7 @@ var supervisorWait = downWait
 // supervisor has ended; schtasks /End is the fallback for one that does not. A daemon a supervisor
 // started just before it saw the record is stopped last. The task stays registered.
 func stopTask(st *state.Store) error {
-	release, err := taskTurn(st)
+	release, err := taskTurn(st, "pen down")
 	if err != nil {
 		return err
 	}
@@ -267,9 +302,9 @@ func stopTaskInTurn(st *state.Store) error {
 // daemon holds while it runs, must come free.
 func stopDaemon(st *state.Store) bool {
 	var s daemon.Status
-	if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
+	if daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout) == nil {
 		// A daemon that is already shutting down (pen leave) may close the socket before it answers.
-		daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
+		daemon.CallWithin(st, daemon.Request{Op: "stop"}, &map[string]bool{}, probeTimeout)
 		waitExit(s.PID, downWait)
 	}
 	return lockFree(st.Path("daemon.lock"), downWait)
@@ -297,11 +332,16 @@ func lockFree(path string, d time.Duration) bool {
 }
 
 func removeTask(st *state.Store) error {
-	release, err := taskTurn(st)
+	release, err := taskTurn(st, "pen leave")
 	if err != nil {
 		return err
 	}
 	defer release()
+	return removeTaskInTurn(st)
+}
+
+// removeTaskInTurn is removeTask for a caller that holds the task turn.
+func removeTaskInTurn(st *state.Store) error {
 	if err := stopTaskInTurn(st); err != nil {
 		return err
 	}

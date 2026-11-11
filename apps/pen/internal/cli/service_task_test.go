@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -80,8 +82,11 @@ func windowsHome(t *testing.T, on func(verb string, args []string) error) (*stat
 	serviceOS, TaskXML = "windows", string(tmpl)
 	currentAccount = func() (string, error) { return testAccount, nil }
 	calls := &[]string{}
+	var callsMu sync.Mutex
 	run = func(name string, args ...string) error {
+		callsMu.Lock()
 		*calls = append(*calls, name+" "+strings.Join(args, " "))
+		callsMu.Unlock()
 		if name != "schtasks" {
 			t.Fatalf("ran %s %v", name, args)
 		}
@@ -503,9 +508,10 @@ func fakeTaskClock(t *testing.T) {
 	t.Helper()
 	oldNow, oldSleep := taskNow, taskSleep
 	t.Cleanup(func() { taskNow, taskSleep = oldNow, oldSleep })
+	var mu sync.Mutex
 	clock := time.Unix(0, 0)
-	taskNow = func() time.Time { return clock }
-	taskSleep = func(d time.Duration) { clock = clock.Add(d) }
+	taskNow = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	taskSleep = func(d time.Duration) { mu.Lock(); clock = clock.Add(d); mu.Unlock() }
 }
 
 // A refusal an earlier start recorded late (its supervisor checked the configuration before this pen up
@@ -625,8 +631,8 @@ func TestDownAndLeaveDuringATaskStartEndWithTheNodeDown(t *testing.T) {
 			defer rs.Close()
 			var st *state.Store
 			paused, resume := make(chan struct{}), make(chan struct{})
-			var deleted []bool // whether the start had finished when /Delete ran
-			var startDone atomic.Bool
+			var deleted []bool // whether the start had run the task when /Delete ran
+			var startDone, startRan atomic.Bool
 			st, _ = windowsHome(t, func(verb string, _ []string) error {
 				switch verb {
 				case "/Create":
@@ -636,9 +642,11 @@ func TestDownAndLeaveDuringATaskStartEndWithTheNodeDown(t *testing.T) {
 						<-resume
 					}
 				case "/Run":
+					// Inside the start's turn: a delete that comes after the start sees this.
+					startRan.Store(true)
 					return startDetached(st)
 				case "/Delete":
-					deleted = append(deleted, startDone.Load())
+					deleted = append(deleted, startRan.Load())
 				}
 				return nil
 			})
@@ -656,10 +664,11 @@ func TestDownAndLeaveDuringATaskStartEndWithTheNodeDown(t *testing.T) {
 			}
 			fakeTaskClock(t)
 			t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
-			waiting := make(chan struct{})
+			// The stop's wait for the turn runs on the test clock; it resumes once the paused start is done.
+			waiting, startFinished := make(chan struct{}), make(chan struct{})
 			old := startLockWaits
 			t.Cleanup(func() { startLockWaits = old })
-			startLockWaits = func() { close(waiting) }
+			startLockWaits = func() { close(waiting); <-startFinished }
 			pausedNow := paused
 			startErr := make(chan error, 1)
 			go func() {
@@ -689,6 +698,7 @@ func TestDownAndLeaveDuringATaskStartEndWithTheNodeDown(t *testing.T) {
 			if err := <-startErr; err != nil {
 				t.Fatalf("pen up: %v", err)
 			}
+			close(startFinished)
 			if !stoppedFirst {
 				if err := <-stopErr; err != nil {
 					t.Fatalf("pen %s: %v", op, err)
@@ -702,8 +712,151 @@ func TestDownAndLeaveDuringATaskStartEndWithTheNodeDown(t *testing.T) {
 				t.Fatalf("pen %s reported success but the daemon runs (stopped first: %v)", op, stoppedFirst)
 			}
 			if op == "leave" && (len(deleted) != 1 || !deleted[0]) {
-				t.Fatalf("pen leave deleted the task %v (true: after the start was decided)", deleted)
+				t.Fatalf("pen leave deleted the task %v (true: after the start ran the task)", deleted)
 			}
 		})
+	}
+}
+
+// soloNode gives st a one-member mesh on relay url, as pen up founds it.
+func soloNode(t *testing.T, st *state.Store, url string) {
+	t.Helper()
+	cfg := state.Config{Name: "a"}
+	cfg.SetRelays([]string{url})
+	if err := st.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := st.EnsureIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mesh.Found(st, id, "a", 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The first pen up on a machine registers the task inside its turn. A pen down that looked for a task or
+// a daemon before taking the turn would find neither, report success, and then see the start bring the
+// node up; pen down takes the turn first, so it stops what the start started and leaves the down record.
+func TestDownDuringAFirstTaskStartLeavesTheNodeDown(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	var st *state.Store
+	var created atomic.Bool
+	paused, resume := make(chan struct{}), make(chan struct{})
+	st, _ = windowsHome(t, func(verb string, _ []string) error {
+		switch verb {
+		case "/Query":
+			if !created.Load() {
+				return errors.New("not registered")
+			}
+		case "/Create":
+			if !created.Load() {
+				close(paused)
+				<-resume
+			}
+			created.Store(true)
+		case "/Run":
+			return startDetached(st)
+		}
+		return nil
+	})
+	soloNode(t, st, rs.URL)
+	fakeTaskClock(t)
+	t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+	// pen down's wait for the turn runs on the test clock; it resumes once the paused start is done.
+	waiting, startFinished := make(chan struct{}), make(chan struct{})
+	old := startLockWaits
+	t.Cleanup(func() { startLockWaits = old })
+	startLockWaits = func() { close(waiting); <-startFinished }
+	startErr := make(chan error, 1)
+	go func() { startErr <- startTask(st) }()
+	<-paused
+	downCode := make(chan int, 1)
+	go func() { downCode <- RunDown(nil, io.Discard, io.Discard) }()
+	code := -1
+	select {
+	case <-waiting: // pen down waits for the start's turn
+	case code = <-downCode:
+	}
+	close(resume)
+	if err := <-startErr; err != nil {
+		t.Fatalf("pen up: %v", err)
+	}
+	close(startFinished)
+	if code == -1 {
+		code = <-downCode
+	}
+	if code != 0 {
+		t.Fatalf("pen down exit %d", code)
+	}
+	var s daemon.Status
+	if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
+		t.Fatal("pen down reported success, but the node runs after the start it overlapped")
+	}
+	if _, err := os.Stat(st.Path(downMarker)); err != nil {
+		t.Fatalf("no down record after pen down: %v", err)
+	}
+}
+
+// A starting daemon that takes the control connection but never answers cannot keep the turn: the
+// readiness probe has a deadline, so the start fails within its bound and a pen down waiting for the
+// turn then runs. The probe deadline is set to now and the waits run on the test clock.
+func TestAStartWhoseDaemonNeverAnswersReleasesTheTurn(t *testing.T) {
+	var st *state.Store
+	holding := make(chan struct{})
+	var once sync.Once
+	st, _ = windowsHome(t, func(verb string, _ []string) error {
+		if verb == "/Run" {
+			once.Do(func() { close(holding) })
+		}
+		return nil
+	})
+	l, err := net.Listen("unix", daemon.SocketPath(st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { io.Copy(io.Discard, c); c.Close() }() // reads requests, never answers
+		}
+	}()
+	fakeTaskClock(t)
+	oldProbe := probeTimeout
+	t.Cleanup(func() { probeTimeout = oldProbe })
+	probeTimeout = 0
+	startErr := make(chan error, 1)
+	go func() { startErr <- startTask(st) }()
+	<-holding
+	downCode := make(chan int, 1)
+	go func() { downCode <- RunDown(nil, io.Discard, io.Discard) }()
+	if err := <-startErr; err == nil {
+		t.Fatal("a start whose daemon never answers succeeded")
+	}
+	if code := <-downCode; code != 0 {
+		t.Fatalf("pen down exit %d after the start gave up", code)
+	}
+	if _, err := os.Stat(st.Path(downMarker)); err != nil {
+		t.Fatalf("no down record after pen down: %v", err)
+	}
+}
+
+// pen down does not wait for the task turn without end: past turnWait it fails and names the holder.
+func TestDownGivesUpOnATurnThatIsNeverReleasedAndNamesItsHolder(t *testing.T) {
+	st, _ := windowsHome(t, func(string, []string) error { return nil })
+	fakeTaskClock(t)
+	release, err := taskTurn(st, "pen up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var errOut bytes.Buffer
+	if code := RunDown(nil, io.Discard, &errOut); code == 0 || !strings.Contains(errOut.String(), fmt.Sprintf("pen up (pid %d)", os.Getpid())) {
+		t.Fatalf("pen down exit %d: %q, want a failure naming the holder", code, errOut.String())
 	}
 }

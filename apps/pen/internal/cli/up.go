@@ -99,12 +99,12 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		return runForeground(st, stderr)
 	}
 	var s daemon.Status
-	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err == nil {
+	if err := daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout); err == nil {
 		if s.Name != cfg.Name {
-			daemon.Call(st, daemon.Request{Op: "name", Name: cfg.Name}, &s)
+			daemon.CallWithin(st, daemon.Request{Op: "name", Name: cfg.Name}, &s, opTimeout)
 		}
 		if s.Uplink == "replaced" || !sameRelays(s.Relays, cfg.RelayList()) {
-			daemon.Call(st, daemon.Request{Op: "reconnect"}, &s)
+			daemon.CallWithin(st, daemon.Request{Op: "reconnect"}, &s, opTimeout)
 		}
 		printStatus(stdout, s)
 		return 0
@@ -118,7 +118,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+	if err := daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout); err != nil {
 		return fail(stderr, err)
 	}
 	printStatus(stdout, s)
@@ -265,7 +265,7 @@ func waitControl(st *state.Store) error {
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		var s daemon.Status
-		if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err == nil {
+		if err := daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout); err == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {

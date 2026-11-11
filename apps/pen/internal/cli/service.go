@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/goat-si/goat/apps/pen/internal/state"
@@ -128,8 +130,16 @@ func writeFile(path, content string) error {
 // serviceOS and run are variables so tests can drive the service paths without a service manager.
 var serviceOS = runtime.GOOS
 
+// run runs a service manager command, ended (by its own process) after commandTimeout.
 var run = func(name string, args ...string) error {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s %s: no answer within %v", name, strings.Join(args, " "), commandTimeout)
+	}
 	if err != nil {
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -185,7 +195,7 @@ func stopService(mode string, st *state.Store) error {
 	case "launchd":
 		return run("launchctl", "bootout", guiDomain()+"/"+launchdLabel)
 	case "task":
-		return stopTask(st)
+		return stopTaskInTurn(st) // pen down holds the task turn
 	}
 	return nil
 }
@@ -206,7 +216,7 @@ func removeService(mode string, st *state.Store) error {
 			return err
 		}
 	case "task":
-		return removeTask(st)
+		return removeTaskInTurn(st) // pen leave holds the task turn
 	}
 	return nil
 }
