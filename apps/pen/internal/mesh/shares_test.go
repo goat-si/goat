@@ -323,23 +323,9 @@ func TestASharedSaveOfTwoProcessesKeepsOnlyTheShareOfTheirUnion(t *testing.T) {
 	}
 }
 
-// A revoke of a key nobody has introduced yet does not stop that key's later admission: under shared
-// rules a revoke takes effect only on subjects introduced in its own past, as the old storage rule had it.
-func TestARevokeOfAKeyNotYetAdmittedDoesNotBlockItsAdmission(t *testing.T) {
-	f, o, x := detID(1), detID(2), detID(3)
-	b, found := newMesh(t, f)
-	ao := b.admit(f, o, found)
-	b.sign(o, TypeRevoke, []*Record{ao}, Fields{Subjects: []string{pub(x)}})
-	b.admit(f, x, ao)
-	s := sharedStore(b)
-	mergeEach(t, s, b.recs)
-	if !isMember(s.View(), x) {
-		t.Fatal("a member's revoke signed before the key was admitted kept the founder from admitting it")
-	}
-}
-
-// An honest revoke a node signs takes effect even when the records between it and its subject's admit
-// were dropped from a full share: the revoke names the subject's admit in its prev.
+// An honest member that joined before a filler can still sign a revoke that takes effect: dropped filler
+// records leave many heads, so a shared mesh names at most 8 to stay within 2048 bytes, and a first record
+// names its signer's admit, so replay puts it after the admission despite the missing records.
 func TestARevokeSignedOverDroppedRecordsStillReachesItsSubject(t *testing.T) {
 	f, h, o := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, f)
@@ -360,12 +346,9 @@ func TestARevokeSignedOverDroppedRecordsStillReachesItsSubject(t *testing.T) {
 	if len(s.Bare()) == 0 {
 		t.Fatal("setup: no filler record was dropped")
 	}
-	rev, err := s.Append(o, TypeRevoke, 9999, Fields{Subjects: []string{pub(h)}})
+	_, err := s.Append(o, TypeRevoke, 9999, Fields{Subjects: []string{pub(h)}})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !slices.Contains(rev.B.Prev, ah.Hash) {
-		t.Errorf("the revoke does not name its subject's admit in prev")
 	}
 	if _, ok := s.View().Revoked[pub(h)]; !ok {
 		t.Fatal("an honest revoke signed over dropped filler records had no effect")

@@ -160,20 +160,14 @@ type chainKey struct {
 func Compute(meshID string, recs []*Record) *View { return compute(meshID, recs, nil, false) }
 
 // compute is Compute where a prev in bare counts as present and holds nothing, and with direct a
-// record's own previous one counts only when named in its prev, and a revoke reaches only subjects
-// introduced in its own past (ADR-0026).
+// record's own previous one counts only when named in its prev (ADR-0026).
 func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *View {
 	order := canonicalOrder(recs, bare)
 	v := &View{MeshID: meshID, Members: map[string]Member{}, Revoked: map[string]Member{}, Effective: map[string]bool{}}
 	pos := make(map[string]int, len(order))
-	// cards[k] are the positions of the found and admit records that name k.
-	cards := map[string][]int{}
 	for i, r := range order {
 		pos[r.Hash] = i
 		v.Order = append(v.Order, r.Hash)
-		if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && r.B.Card != nil {
-			cards[r.B.Card.C.SignPub] = append(cards[r.B.Card.C.SignPub], i)
-		}
 	}
 	// anc[i] is the set of strict ancestors of order[i], as a bitset over positions.
 	words := (len(order) + 63) / 64
@@ -194,16 +188,6 @@ func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *
 		anc[i] = a
 		k := chainKey{r.B.By, r.B.N}
 		byChain[k] = append(byChain[k], i)
-	}
-	// Under shares the store keeps a revoke whatever its subjects, so the view, not storage, applies
-	// the old rule that a revoke's subject is introduced in its past: no revoke reaches a later admit.
-	introducedBefore := func(k string, i int) bool {
-		for _, j := range cards[k] {
-			if anc[i][j/64]&(1<<(j%64)) != 0 {
-				return true
-			}
-		}
-		return false
 	}
 	claimed := map[chainKey]bool{}
 	usedNonces := map[string]bool{}
@@ -292,9 +276,6 @@ func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *
 			admitted[b.By] = append(admitted[b.By], c.SignPub)
 		case TypeRevoke:
 			for _, s := range b.Subjects {
-				if direct && !introducedBefore(s, i) {
-					continue
-				}
 				if b.Compromised != nil && *b.Compromised {
 					queue := []string{s}
 					seen := map[string]bool{s: true}

@@ -189,20 +189,20 @@ func byHashOf(recs []*Record) map[string]*Record {
 	return m
 }
 
-// withSubjectCards adds to prev, for each revoke subject, the smallest kept found or admit naming it,
-// so the subject is introduced in the revoke's past even when records between them were dropped.
-func (s *Store) withSubjectCards(prev, subjects []string) []string {
-	out := slices.Clone(prev)
-	for _, k := range subjects {
-		var best *Record
-		for _, r := range s.recs {
-			if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && r.B.Card != nil && r.B.Card.C.SignPub == k &&
-				(best == nil || bytes.Compare(r.Sum[:], best.Sum[:]) < 0) {
-				best = r
-			}
+// withOwnCards adds to prev the kept found and admit records naming key, the smallest few. Every admit
+// naming a key carries a card that key signed for its inviter, so none of them is another member's decoy.
+func (s *Store) withOwnCards(prev []string, key string) []string {
+	var cards []*Record
+	for _, r := range s.recs {
+		if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && r.B.Card != nil && r.B.Card.C.SignPub == key {
+			cards = append(cards, r)
 		}
-		if best != nil && !slices.Contains(out, best.Hash) {
-			out = append(out, best.Hash)
+	}
+	sortByHash(cards)
+	out := slices.Clone(prev)
+	for _, r := range cards[:min(len(cards), maxOwnCards)] {
+		if !slices.Contains(out, r.Hash) {
+			out = append(out, r.Hash)
 		}
 	}
 	sort.Strings(out)
