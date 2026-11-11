@@ -53,11 +53,11 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
 	Invoke-WebRequest -UseBasicParsing -Uri "$PenRelay/dl/$Version/$file" -OutFile (Join-Path $tmp $file)
 	Invoke-WebRequest -UseBasicParsing -Uri "$PenRelay/dl/$Version/SHA256SUMS" -OutFile (Join-Path $tmp 'SHA256SUMS')
-	$want = ''
-	foreach ($line in Get-Content (Join-Path $tmp 'SHA256SUMS')) {
-		$f = $line -split '\s+'
-		if ($f.Count -ge 2 -and $f[1].TrimStart('*') -eq $file) { $want = $f[0] }
-	}
+	# The one line ending in " <archive>", compared as text, as install.sh and check-public.ts read it.
+	$suffix = " $file"
+	$lines = @([IO.File]::ReadAllText((Join-Path $tmp 'SHA256SUMS')).Split([char]10) |
+		Where-Object { $_.Length -gt $suffix.Length -and $_.EndsWith($suffix, [StringComparison]::Ordinal) })
+	$want = if ($lines.Count -eq 1) { $lines[0].Substring(0, $lines[0].IndexOf(' ')) } else { '' }
 	$got = (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $file)).Hash
 	if (-not $want -or $want -ne $got) { Fail "checksum mismatch for $file" }
 
