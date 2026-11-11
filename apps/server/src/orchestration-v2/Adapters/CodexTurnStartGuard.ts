@@ -55,12 +55,36 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
   // Goal turns no run owned that GOAT paused and stopped; Codex may keep running them.
   const orphans = new Set<string>();
 
+  // Codex can report a thread busy without naming its turn, as on a connection that only learned
+  // the thread's status from thread/resume while an earlier one still runs the turn
+  const listedRunningTurn = (threadId: string) =>
+    deps.client
+      .request("thread/turns/list", {
+        threadId,
+        itemsView: "summary",
+        sortDirection: "desc",
+        limit: 10,
+      })
+      .pipe(
+        Effect.map((page) => page.data.find((turn) => turn.status === "inProgress")?.id),
+        Effect.timeoutOption("5 seconds"),
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+
   // A turn a tracked root owns, or one a start of ours still waits for, is that run's: the start
   // service stops one a run GOAT ended left behind, and Codex's answer to turn/start is checked
   // against its owner. Any other running turn is judged on its own, tracked roots or not.
   const classify = Effect.fnUntraced(function* (threadId: string) {
     if (!deps.statuses.working(threadId, deps.abandoned)) return undefined;
-    const running = deps.statuses.runningTurn(threadId);
+    let running = deps.statuses.runningTurn(threadId);
+    if (running === undefined && !deps.statuses.startPending(threadId)) {
+      const listed = yield* listedRunningTurn(threadId);
+      // Codex can report the turn, or a run can take it, while the list is in flight: judge it
+      // against the state after the answer.
+      if (!deps.statuses.working(threadId, deps.abandoned)) return undefined;
+      running = deps.statuses.runningTurn(threadId) ?? listed;
+    }
     const roots = Array.from((yield* deps.activeTurns).values()).filter(
       (context) =>
         context.subagent === null && context.providerThread.nativeThreadRef?.nativeId === threadId,
