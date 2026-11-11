@@ -328,7 +328,8 @@ it.effect("restart settlement to ambiguous wakes a waiting write without reservi
       now: "1970-01-01T00:00:00.000Z",
       staleBefore: "1969-01-01T00:00:00.000Z",
     });
-    yield* sql`UPDATE channel_outbox SET destination_kind = 'slack'`;
+    // Handed to Slack before the restart, so it may have been sent: recovery settles it ambiguous.
+    yield* sql`UPDATE channel_outbox SET destination_kind = 'slack', send_started_at = '1970-01-01'`;
     const pending = yield* gate
       .require(sessionScope().thread!)
       .pipe(Effect.result, Effect.forkChild);
@@ -341,6 +342,37 @@ it.effect("restart settlement to ambiguous wakes a waiting write without reservi
     expect((yield* Fiber.join(pending))._tag).toBe("Success");
     expect(yield* sql`SELECT * FROM mcp_request_reservations`).toHaveLength(0);
   }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "a receipt the restart caught before it reached Slack is sent again, and the write waits for it",
+  () =>
+    Effect.gen(function* () {
+      yield* Fixture.seed;
+      const sql = yield* SqlClient.SqlClient;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const gate = yield* ChannelSessionReceiptGate.ChannelSessionReceiptGate;
+      yield* ledger.claimOwnership({
+        token: "restart-owner",
+        now: "1970-01-01T00:00:00.000Z",
+        staleBefore: "1969-01-01T00:00:00.000Z",
+      });
+      yield* sql`UPDATE channel_outbox SET destination_kind = 'slack'`;
+      const pending = yield* gate
+        .require(sessionScope().thread!)
+        .pipe(Effect.result, Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      yield* ledger.settleInterruptedDeliveries({
+        owner: "restart-owner",
+        now: "1970-01-01T00:00:01.000Z",
+      });
+      expect(yield* ledger.getDeliveryState(ChannelDeliveryId.make("receipt-delivery"))).toBe(
+        "pending",
+      );
+      expect(pending.pollUnsafe()).toBeUndefined();
+      yield* Fixture.settle;
+      expect((yield* Fiber.join(pending))._tag).toBe("Success");
+    }).pipe(Effect.provide(testLayer)),
 );
 
 it.effect(

@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   MessageId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2TurnItem,
@@ -11,9 +12,6 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({ items: [] as unknown[] }));
-vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "thread-bot" } }),
-}));
 vi.mock("../../state/entities", () => ({
   useThreadShell: () => ({ lastVisitedAt: "2026-10-12T11:00:00.000Z" }),
 }));
@@ -71,7 +69,12 @@ async function previewOf(items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>)
   state.items = [...items];
   let preview: ReturnType<typeof useMobileBotPreview> = null;
   function Probe(props: { readonly onRead: (value: typeof preview) => void }) {
-    props.onRead(useMobileBotPreview());
+    props.onRead(
+      useMobileBotPreview({
+        environmentId: EnvironmentId.make("env"),
+        threadId: ThreadId.make("thread-bot"),
+      }),
+    );
     return null;
   }
   const root = createRoot(document.createElement("div"));

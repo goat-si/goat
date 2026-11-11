@@ -1,4 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import {
   buildGoatBotTimeline,
   goatBotConversationPreview,
@@ -6,10 +7,11 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { useThreadShell } from "../../state/entities";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
-import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
-export function useMobileBotPreview() {
-  const { botRef } = useMobileGoatBotHomeMode();
+/** A bot conversation's newest message and whether it is unread; null reads nothing. */
+export function useMobileBotPreview(
+  botRef: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
+) {
   const ref = botRef ? scopeThreadRef(botRef.environmentId, botRef.threadId) : null;
   const shell = useThreadShell(ref);
   const items = useThreadVisibleTurnItems({

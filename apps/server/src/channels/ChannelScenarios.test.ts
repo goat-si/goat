@@ -1149,16 +1149,17 @@ describe("duplicates and restarts (scenario 2)", () => {
           );
           yield* reception.receive(slack.inputId, first.ownerToken);
           yield* reception.receive(goat.inputId, first.ownerToken);
-          const claimed = yield* ledger.claimDueDeliveries({
+          yield* ledger.claimDueDeliveries({
             owner: first.ownerToken,
             now,
             limit: 50,
           });
-          assert.strictEqual(claimed.length, 2);
           const slackDelivery = deliveryIdFor("reply:" + slack.inputId);
           const goatDelivery = deliveryIdFor("reply:" + goat.inputId);
           assert.strictEqual(yield* ledger.getDeliveryState(slackDelivery), "delivering");
           assert.strictEqual(yield* ledger.getDeliveryState(goatDelivery), "delivering");
+          const handedOver = { owner: first.ownerToken, attempt: 1, now };
+          yield* ledger.markSending({ ...handedOver, deliveryId: slackDelivery });
           const second = yield* makeRuntime;
           assert.notStrictEqual(second.ownerToken, first.ownerToken);
           yield* TestClock.adjust(Duration.seconds(31));

@@ -33,27 +33,35 @@ export function GoatBotAttachButton(props: {
   readonly maxUploadBytes: number | null;
   readonly getLifetime: () => AbortSignal | undefined;
   readonly onPicked: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
+  /** A pick has started (1) or finished, picked, failed or cancelled (-1). */
+  readonly onIntake?: ((change: 1 | -1) => void) | undefined;
 }) {
   const pick = async (kind: "media" | "files") => {
     const signal = props.getLifetime();
     if (!signal || signal.aborted) return;
-    await pickAttachments(kind, props.existingCount, props.maxUploadBytes ?? undefined).then(
-      ({ picked, error }) => {
-        if (signal.aborted) {
-          releaseGoatBotAttachments(picked);
-          return;
-        }
-        if (picked.length > 0) props.onPicked(picked);
-        if (error) Dialog.alert("Could not attach file", error);
-      },
-      (cause: unknown) => {
-        if (signal.aborted) return;
-        Dialog.alert(
-          "Could not attach file",
-          cause instanceof Error ? cause.message : "Try again.",
-        );
-      },
-    );
+    // Until the picker returns, a photo may still be read or converted: the box is not empty.
+    props.onIntake?.(1);
+    await pickAttachments(kind, props.existingCount, props.maxUploadBytes ?? undefined)
+      .then(
+        ({ picked, error }) => {
+          if (signal.aborted) {
+            releaseGoatBotAttachments(picked);
+            return;
+          }
+          if (picked.length > 0) props.onPicked(picked);
+          if (error) Dialog.alert("Could not attach file", error);
+        },
+        (cause: unknown) => {
+          if (signal.aborted) return;
+          Dialog.alert(
+            "Could not attach file",
+            cause instanceof Error ? cause.message : "Try again.",
+          );
+        },
+      )
+      .finally(() => {
+        if (!signal.aborted) props.onIntake?.(-1);
+      });
   };
   return (
     <ComposerAttachmentButton

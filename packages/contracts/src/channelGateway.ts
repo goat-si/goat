@@ -140,6 +140,11 @@ export const ChannelOutboundMessage = Schema.Struct({
   /** Answers a question offers; transports without buttons list them in the text. */
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   questionId: Schema.optional(ChannelQuestionId),
+  /**
+   * Progress before the answer, such as a milestone or where the work runs. Channels that keep
+   * every message send only one such message; anything else always goes.
+   */
+  interim: Schema.optional(Schema.Literal(true)),
 });
 export type ChannelOutboundMessage = typeof ChannelOutboundMessage.Type;
 
