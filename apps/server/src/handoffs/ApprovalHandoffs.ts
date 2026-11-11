@@ -140,18 +140,24 @@ const make = Effect.gen(function* () {
 
   const markUsed: ApprovalHandoffs["Service"]["markUsed"] = Effect.fn("ApprovalHandoffs.markUsed")(
     function* (input) {
-      yield* (input.once === true ? consumeApproval : markApprovalUsed)(
-        input.handoffId,
-        input.action,
-      ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-      // The change already happened; a wake left queued only repeats the same "call again".
-      yield* withdrawApprovalWake(threads, {
-        threadId: input.threadId,
-        handoffId: TurnItemId.make(input.handoffId),
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("approval wake was not withdrawn", { cause }),
-        ),
+      // Taking turns with the wake reactor: a wake sent before this use is still queued behind
+      // the asking turn and is withdrawn here; one checked after it is never sent.
+      yield* handoffs.serializeApprovalWake(
+        Effect.gen(function* () {
+          yield* (input.once === true ? consumeApproval : markApprovalUsed)(
+            input.handoffId,
+            input.action,
+          ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          // A failed withdrawal is retried by the wake reactor's reconcile.
+          yield* withdrawApprovalWake(threads, {
+            threadId: input.threadId,
+            handoffId: TurnItemId.make(input.handoffId),
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("approval wake was not withdrawn", { cause }),
+            ),
+          );
+        }),
       );
     },
   );

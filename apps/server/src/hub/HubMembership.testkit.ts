@@ -200,6 +200,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     },
     matchesArgs: (handoff, args) =>
       Effect.succeed(handoffs.get(handoff.handoffId)?.args === JSON.stringify(args)),
+    serializeApprovalWake: (effect) => effect,
   });
   const run: OrchestrationV2ThreadProjection = {
     ...idleThreadProjection(liveThreadShell(asking)),

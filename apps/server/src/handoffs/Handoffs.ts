@@ -111,6 +111,10 @@ export class Handoffs extends Context.Service<
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** The asking thread withdraws its own open approval, which frees it to ask for another. */
     readonly withdraw: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
+    /** Recording an approval's use and sending its "approved" wake take turns (U3). */
+    readonly serializeApprovalWake: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
     /** Every thread's open handoffs on one path, with what they would continue with. */
     readonly pendingContinuations: (path: string) => Effect.Effect<
       ReadonlyArray<{
@@ -270,6 +274,7 @@ const make = Effect.gen(function* () {
     .getOrCreateRandom("handoff-encryption-key", 32)
     .pipe(Effect.mapError(unavailable));
   const lock = yield* Semaphore.make(1);
+  const wakeGate = yield* Semaphore.make(1);
   const loadPrivate = (id: string) =>
     Effect.gen(function* () {
       const stored = yield* store.get(storeName(id)).pipe(Effect.mapError(unavailable));
@@ -939,6 +944,7 @@ const make = Effect.gen(function* () {
     removeComputerUseAllowedApp: standing.removeAllowedApp,
     read,
     withdraw: ends.withdraw,
+    serializeApprovalWake: wakeGate.withPermits(1),
     cancelPending: ends.cancelPending,
     pendingContinuations: makePendingContinuations(sql, loadPrivate),
     endBrowserClaim: makeBrowserClaimEnd({ read, transition, lock }),

@@ -20,7 +20,8 @@ import {
   isHubDeviceHandoffPath,
   type OrchestrationV2DomainEvent,
   RunId,
-  type ThreadId,
+  ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
 import * as AutomationHold from "../automationHold.ts";
 import * as Context from "effect/Context";
@@ -299,17 +300,15 @@ const make = Effect.gen(function* () {
       const used = approvalUsed(handoff.handoffId).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
       );
-      if (handoff.state === "completed" && continuedByAgent(handoff.target.path)) {
-        if (yield* used) {
-          retries.delete(wake.messageId);
-          return;
-        }
-        yield* dispatchWake(threadId, wake);
-        // A use that landed during the dispatch found no queued wake to withdraw; do it here.
-        if (yield* used)
-          yield* withdrawApprovalWake(threads, { threadId, handoffId: handoff.handoffId });
-        return;
-      }
+      if (handoff.state === "completed" && continuedByAgent(handoff.target.path))
+        // Takes turns with recording a use (ApprovalHandoffs.markUsed): a used approval sends
+        // nothing, and a later use withdraws the wake this queues.
+        return yield* handoffs.serializeApprovalWake(
+          Effect.gen(function* () {
+            if (yield* used) retries.delete(wake.messageId);
+            else yield* dispatchWake(threadId, wake);
+          }),
+        );
       if (
         handoff.state !== "completed" ||
         !Handoffs.isProviderContinuationPath(handoff.target.path)
@@ -369,6 +368,22 @@ const make = Effect.gen(function* () {
       if (wake !== undefined) offered.add(wake.messageId);
       yield* deliver(handoff.value, since.value);
     }
+    // A used approval whose wake is still waiting to start: withdraw it, also after a failed try.
+    const stale = yield* sql<{ readonly thread_id: string; readonly approval_id: string }>`
+      SELECT message.thread_id, consumption.approval_id
+      FROM approval_consumptions AS consumption
+      JOIN orchestration_v2_projection_messages AS message
+        ON message.message_id = 'message:handoff-wake:' || consumption.approval_id || ':completed'
+      WHERE consumption.consumed_at >= ${windowStart}`;
+    for (const row of stale)
+      yield* withdrawApprovalWake(threads, {
+        threadId: ThreadId.make(row.thread_id),
+        handoffId: TurnItemId.make(row.approval_id),
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("approval wake withdrawal failed", { cause }),
+        ),
+      );
     // A wake the tail started after this read began keeps its retry state.
     yield* forgetRetries(offered, DateTime.toEpochMillis(startedAt));
     // Out of the reconcile window, a stopped turn's handoff is never read again.
