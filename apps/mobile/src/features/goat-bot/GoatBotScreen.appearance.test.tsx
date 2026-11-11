@@ -640,3 +640,43 @@ it("redraws messages already shown when the member's color changes, and keeps at
     screenSession.rows = [];
   }
 });
+
+it("fills a picked answer's badge with a member bot's color, with a letter that reads on it", async () => {
+  const answered: GoatBotRow = {
+    ...bot,
+    id: "asked",
+    text: "Which project?",
+    tone: "question",
+    options: [],
+    choices: ["server", "web"],
+    answer: "web",
+    answerIndex: 1,
+  };
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    role: "member",
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+    avatar: null,
+    color: "#1d3a8a",
+  } as unknown as import("@goat/contracts").BotProfile;
+  screenSession.rows = [answered];
+  const view = await render(<GoatBotScreen visible member={scout} />);
+  try {
+    const letter = [...view.container.querySelectorAll("span")].find(
+      (node) => node.textContent === "B",
+    );
+    const badge = letter?.parentElement;
+    expect(JSON.parse(badge?.getAttribute("data-style") ?? "null")).toMatchObject({
+      backgroundColor: "#1D3A8A",
+    });
+    expect(JSON.parse(letter?.getAttribute("data-style") ?? "null")).toMatchObject({
+      color: "#FFFFFF",
+    });
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
