@@ -24,10 +24,9 @@ export interface RelaySocketEvent {
 }
 
 /**
- * The socket a factory returns. A factory must never offer a WebSocket extension, never follow a redirect, verify TLS
- * and the host name, transmit any close code 1000-4999 it is given (1003 and 1009 included), and keep
- * bufferedAmount equal to the bytes accepted by send() and not yet written to the network. React Native's global
- * WebSocket does not keep bufferedAmount, so it is not a valid factory (design finding F1; S9).
+ * A factory's socket: no extension offered, no redirect, TLS and host verified, any close code 1000-4999 sent, and
+ * bufferedAmount kept (React Native's global WebSocket keeps none, so it is no factory: F1, S9). An event it
+ * dispatches synchronously from send() or close() waits, in arrival order, until the link's current step returns.
  */
 export interface RelaySocketLike {
   binaryType: string;
@@ -119,6 +118,9 @@ class Link implements RelayLink {
   #draining = false;
   #closeDeferred = false;
   #attached = false;
+  /** Socket events that came while the link was inside a socket call or another event, in arrival order. */
+  #queued: Array<() => void> = [];
+  #depth = 0;
   /** The observer last told of the close: none is told twice, even when attach() and #finish() both reach it. */
   #toldClose: ((code: number) => void) | undefined;
   #closeCode = 1006;
@@ -151,17 +153,55 @@ class Link implements RelayLink {
     });
     // A dial nobody awaits must not surface as an unhandled rejection.
     this.opened.catch(() => undefined);
-    socket.addEventListener("open", () => this.#onOpen());
-    socket.addEventListener("message", (event) => this.#onMessage(event.data));
+    socket.addEventListener("open", () => this.#event(() => this.#onOpen()));
+    socket.addEventListener("message", (event) => this.#event(() => this.#onMessage(event.data)));
     socket.addEventListener("close", (event) =>
-      this.#finish(typeof event.code === "number" ? event.code : 1006, false),
+      this.#event(() => this.#finish(typeof event.code === "number" ? event.code : 1006, false)),
     );
     // A refused or broken connection reports an error (Node's ws throws an error event nobody listens to): the link
     // ends 1006 at once and closes the socket, and the close event that may follow changes nothing.
-    socket.addEventListener("error", () => {
-      if (this.#state === "closed") return;
-      this.#finish(1006, false, () => this.#closeSocket(undefined));
-    });
+    socket.addEventListener("error", () =>
+      this.#event(() => {
+        if (this.#state === "closed") return;
+        this.#finish(1006, false, () => this.#closeSocket(undefined));
+      }),
+    );
+  }
+
+  /** Handles a socket event now, or after the current step when one is under way (a synchronous socket). */
+  #event(handle: () => void): void {
+    if (this.#depth === 0) {
+      this.#step(handle);
+      return;
+    }
+    if (this.#queued.length >= RELAY_LIMITS.heldMessages) {
+      this.#queued = [];
+      this.close(4408);
+      return;
+    }
+    this.#queued.push(handle);
+  }
+
+  /** Runs one step with socket events held back, then handles those that came meanwhile, one step each. */
+  #step(run: () => void): void {
+    this.#depth += 1;
+    try {
+      run();
+    } finally {
+      this.#depth -= 1;
+      if (this.#depth === 0) {
+        for (let next = this.#queued.shift(); next !== undefined; next = this.#queued.shift()) {
+          this.#depth += 1;
+          try {
+            next();
+          } catch (error) {
+            reportListenerError(error);
+          } finally {
+            this.#depth -= 1;
+          }
+        }
+      }
+    }
   }
 
   #onOpen(): void {
@@ -244,6 +284,10 @@ class Link implements RelayLink {
     // one's close notice.
     if (this.#attached) throw new PenError("relay-attached", "a relay link takes one receiver");
     this.#attached = true;
+    this.#step(() => this.#takeHeld(receiver, onClose));
+  }
+
+  #takeHeld(receiver: (message: Uint8Array) => void, onClose?: (code: number) => void): void {
     this.#onClose = onClose;
     const closedBefore = this.#state === "closed";
     const requests = this.#closeRequests;
@@ -286,7 +330,7 @@ class Link implements RelayLink {
       throw new PenError("message-too-large", "a relay message is at most 1 MiB");
     }
     try {
-      this.socket.send(message);
+      this.#step(() => this.socket.send(message));
     } catch (error) {
       this.#abort();
       throw error;
@@ -301,7 +345,7 @@ class Link implements RelayLink {
   #sendText(text: string): void {
     if (this.#state !== "open") return;
     try {
-      this.socket.send(text);
+      this.#step(() => this.socket.send(text));
     } catch (error) {
       this.#abort();
       throw error;
@@ -387,12 +431,14 @@ class Link implements RelayLink {
 
   /** Closes the socket; a socket that throws doing so is dropped. */
   #closeSocket(code: number | undefined): void {
-    try {
-      if (code === undefined) this.socket.close();
-      else this.socket.close(code);
-    } catch {
-      // A socket that cannot even close is dropped; the link finishes either way.
-    }
+    this.#step(() => {
+      try {
+        if (code === undefined) this.socket.close();
+        else this.socket.close(code);
+      } catch {
+        // A socket that cannot even close is dropped; the link finishes either way.
+      }
+    });
   }
 
   abandon(): void {

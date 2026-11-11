@@ -161,6 +161,24 @@ describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
     expect(c.received()).toEqual([record(2, u32le(10))]);
   });
 
+  it("DATA the node sends in answer to a CREDIT, while that CREDIT's send is on the stack, fits the new window", async () => {
+    const c = await connected();
+    for (let sent = 0; sent < STREAM_LIMITS.window; sent += 32 * KiB)
+      c.send(data(new Uint8Array(32 * KiB)));
+    const send = c.socket.send.bind(c.socket);
+    let answered = false;
+    c.socket.send = (bytes) => {
+      send(bytes);
+      if (!answered && typeof bytes !== "string") {
+        answered = true;
+        c.send(data(Uint8Array.of(9)));
+      }
+    };
+    expect((await c.stream.read())?.length).toBe(64 * KiB);
+    expect(c.socket.closedWith).toBeUndefined();
+    expect(c.stream.stats().uncredited).toBe(STREAM_LIMITS.window - 64 * KiB + 1);
+  });
+
   it("a CREDIT the socket refuses is not counted as sent, and the stream ends with the link", async () => {
     const c = await connected();
     c.send(data(new Uint8Array(48 * KiB)));

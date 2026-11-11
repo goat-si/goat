@@ -159,16 +159,20 @@ class Stream implements PenStream {
 
   #sendCredit(): void {
     const amount = this.#consumed;
+    // Counted as sent before the send: DATA the node sends in answer may arrive before send() returns. A send that
+    // fails is not counted, and closes the stream (4400 if its session is still open).
+    this.#consumed = 0;
+    this.#uncredited -= amount;
     try {
       this.session.send(Uint8Array.of(TYPE_CREDIT, ...u32le(amount)));
     } catch {
-      // Not sent, so not counted. A refused send has ended the link; a session that cannot seal or send at all is
-      // closed 4400, since a sealed record that never left breaks the peer's nonce sequence.
+      // A refused send has ended the link; a session that cannot seal or send at all is closed 4400, since a sealed
+      // record that never left breaks the peer's nonce sequence.
+      this.#consumed += amount;
+      this.#uncredited += amount;
       if (this.#closeCode === undefined) this.close(4400);
       return;
     }
-    this.#consumed = 0;
-    this.#uncredited -= amount;
   }
 
   async read(): Promise<Uint8Array | null> {

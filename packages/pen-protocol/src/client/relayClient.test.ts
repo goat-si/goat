@@ -53,6 +53,25 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(socket.textSent().map((text) => parseAck(text))).toEqual([70 * KiB, 135 * KiB]);
   });
 
+  it.each(["attached", "held"] as const)(
+    "a message the socket dispatches from inside the ack's send() keeps its place (%s)",
+    async (when) => {
+      const { socket, link } = await opened();
+      const seen: Array<number> = [];
+      if (when === "attached") link.attach((message) => seen.push(message[0] ?? -1));
+      const send = socket.send.bind(socket);
+      socket.send = (data) => {
+        send(data);
+        if (typeof data === "string" && data.startsWith("a:")) socket.receive(Uint8Array.of(2));
+      };
+      const first = new Uint8Array(RELAY_LIMITS.ackEvery);
+      first[0] = 1;
+      socket.receive(first);
+      if (when === "held") link.attach((message) => seen.push(message[0] ?? -1));
+      expect(seen).toEqual([1, 2]);
+    },
+  );
+
   it("a link closed before attach still hands over what came first, but a close asked for during that drain stops it", async () => {
     const { socket, link } = await opened();
     socket.receive(Uint8Array.of(1));
