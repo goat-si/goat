@@ -50,7 +50,12 @@ it("recognizes only missing corepack pnpm launchers", () => {
   assert.isFalse(isCorepackLauncherMissing("ERR_PNPM_OUTDATED_LOCKFILE"));
 });
 
-function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0, npxRunsNode = false) {
+function setupFixture(
+  pinned: string,
+  pnpmOutput: string,
+  trailingLines = 0,
+  npx: "installer" | "runs-node" | "hangs" = "installer",
+) {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-setup-contract-"));
   const scripts = NodePath.join(root, "scripts");
   const bin = NodePath.join(root, "bin");
@@ -72,11 +77,14 @@ function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0, npx
   const windows = HostProcess.Platform.defaultValue() === "win32";
   // Stands in for `npx --package=node@<pin> -- node <script>`: the pin becomes this Node.
   const nodeRunner = `if [ "$3" = "--" ] && [ "$4" = "node" ]; then printf '%s' "$SETUP_TEST_PIN" > package.json; exec "$SETUP_TEST_NODE" "$5"; fi\n`;
+  // A runner whose own child outlives it unless the whole group is signalled.
+  const hangingRunner = `( trap 'printf "%s\\n" grandchild-signalled >> "$SETUP_TEST_LOG"; exit 0' TERM; while :; do sleep 1; done ) &\nprintf 'ready %s\\n' "$!"\nwait\n`;
+  const npxBody = npx === "runs-node" ? nodeRunner : npx === "hangs" ? hangingRunner : "";
   for (const name of ["pnpm", "npx"] as const) {
     const noise = "x".repeat(60);
     const contents = windows
       ? `@echo off\r\necho ${name}>>"%SETUP_TEST_LOG%"\r\n${name === "pnpm" ? `echo ${pnpmOutput} 1>&2\r\nfor /L %%i in (1,1,${trailingLines}) do echo ${noise} 1>&2\r\nexit /b 1` : "exit /b 0"}\r\n`
-      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `printf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit 1` : `${npxRunsNode ? nodeRunner : ""}exit 0`}\n`;
+      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `printf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit 1` : `${npxBody}exit 0`}\n`;
     NodeFS.writeFileSync(NodePath.join(bin, `${name}${windows ? ".cmd" : ""}`), contents, {
       mode: 0o755,
     });
@@ -97,6 +105,7 @@ function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0, npx
     root,
     log,
     env,
+    script: NodePath.join(scripts, "setup-worktree.ts"),
     run: () =>
       NodeChildProcess.spawnSync(process.execPath, [NodePath.join(scripts, "setup-worktree.ts")], {
         cwd: root,
@@ -129,7 +138,7 @@ describe("worktree setup contract", () => {
       assert.include(failed, "GOAT development uses Node.js");
       assert.include(
         failed,
-        `could not start itself under Node.js ${major + 1}.0.0 (tried npx node@`,
+        `could not start itself under Node.js ${major + 1}.0.0. Tried:\nnpx node@${major + 1}.0.0: no output`,
       );
       // npx was asked for the pinned Node and did not start setup; pnpm, the installer, never ran.
       assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["npx"]);
@@ -147,7 +156,7 @@ describe("worktree setup contract", () => {
         `${major + 1}.0.0`,
         "Error: Cannot find module '/x/.cache/node/corepack/v1/pnpm/12.14.0/bin/pnpm.cjs'",
         0,
-        true,
+        "runs-node",
       );
       try {
         const result = fixture.run();
@@ -162,6 +171,56 @@ describe("worktree setup contract", () => {
           "npx",
         ]);
       } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a cancel reaches everything the pinned-Node rerun started, and leaves only setup-failed",
+    async () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(`${major + 1}.0.0`, "unexpected install", 0, "hangs");
+      let grandchild: number | undefined;
+      try {
+        const setup = NodeChildProcess.spawn(process.execPath, [fixture.script], {
+          cwd: fixture.root,
+          env: fixture.env,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        setup.stdout.setEncoding("utf8");
+        const exited = new Promise<number | null>((resolve) => setup.on("exit", resolve));
+        let seen = "";
+        await new Promise<void>((resolve) => {
+          setup.stdout.on("data", (chunk: string) => {
+            seen += chunk;
+            const ready = /ready (\d+)/.exec(seen);
+            if (ready === null || grandchild !== undefined) return;
+            grandchild = Number(ready[1]);
+            resolve();
+          });
+        });
+        setup.kill("SIGTERM");
+        assert.notEqual(await exited, 0);
+        const state = NodePath.join(fixture.root, ".goat");
+        assert.include(
+          NodeFS.readFileSync(NodePath.join(state, "setup-failed"), "utf8"),
+          "Cancelled by SIGTERM.",
+        );
+        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-running")));
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
+          "npx",
+          "grandchild-signalled",
+        ]);
+      } finally {
+        if (grandchild !== undefined) {
+          try {
+            process.kill(grandchild, "SIGKILL");
+          } catch {
+            // Already gone, which is what the test expects.
+          }
+        }
         fixture.cleanup();
       }
     },

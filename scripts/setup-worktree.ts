@@ -71,6 +71,20 @@ function toolOnPath(name: string): boolean {
   return result.status === 0;
 }
 
+/** Signals the group a detached child leads; Windows has no groups, so only the child. */
+function signalProcessGroup(child: NodeChildProcess.ChildProcess, signal: NodeJS.Signals): void {
+  // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before `vp i`, with no Effect runtime.
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group is already gone; fall through to the child itself.
+    }
+  }
+  child.kill(signal);
+}
+
 function isDirectRun(): boolean {
   const entry = process.argv[1];
   if (entry === undefined) return false;
@@ -110,7 +124,11 @@ async function main(): Promise<void> {
   });
   process.on("exit", (code) => {
     if (code === 0) NodeFS.writeFileSync(doneMarker, "");
-    else NodeFS.writeFileSync(failedMarker, `Setup exited with code ${code}.\n${failureDetail}\n`);
+    else {
+      // A cancelled rerun may have finished first; only one end marker may remain.
+      NodeFS.rmSync(doneMarker, { force: true });
+      NodeFS.writeFileSync(failedMarker, `Setup exited with code ${code}.\n${failureDetail}\n`);
+    }
     NodeFS.rmSync(runningMarker, { force: true });
   });
   // A cancelled setup must still leave a marker, or agents would wait forever.
@@ -119,10 +137,12 @@ async function main(): Promise<void> {
   // open, so no marker appears while the installer can still write node_modules.
   let cancelSignal: NodeJS.Signals | undefined;
   let activeInstall: NodeChildProcess.ChildProcess | undefined;
+  let activeRerun: NodeChildProcess.ChildProcess | undefined;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(signal, () => {
       cancelSignal = signal;
-      if (activeInstall) activeInstall.kill(signal);
+      if (activeRerun) signalProcessGroup(activeRerun, signal);
+      else if (activeInstall) activeInstall.kill(signal);
       else process.exit(1);
     });
   }
@@ -144,14 +164,28 @@ async function main(): Promise<void> {
       const rerun = NodeChildProcess.spawn(runner.command, {
         cwd: worktree,
         shell: true,
-        stdio: ["ignore", "inherit", "inherit"],
+        // Its own group, so a cancel reaches the runner and the setup under it, not only the shell.
+        detached: true,
+        // Piped, so `close` waits for every process the runner started, as the install below does.
+        stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, [PINNED_NODE_RERUN]: "1" },
       });
-      activeInstall = rerun;
+      activeRerun = rerun;
+      let rerunOutput = "";
+      for (const [source, target] of [
+        [rerun.stdout, process.stdout],
+        [rerun.stderr, process.stderr],
+      ] as const) {
+        source.setEncoding("utf8");
+        source.on("data", (chunk: string) => {
+          target.write(chunk);
+          rerunOutput = (rerunOutput + chunk).slice(-8_000);
+        });
+      }
       const status = await new Promise<number | null>((resolve) => rerun.on("close", resolve));
-      activeInstall = undefined;
+      activeRerun = undefined;
       // The rerun leaves setup-done or setup-failed; neither means the runner never started it.
-      if (status === 0 && NodeFS.existsSync(doneMarker)) process.exit(0);
+      if (status === 0 && !cancelSignal && NodeFS.existsSync(doneMarker)) process.exit(0);
       const rerunFailure = NodeFS.existsSync(failedMarker)
         ? NodeFS.readFileSync(failedMarker, "utf8").split("\n").slice(1).join("\n").trimEnd()
         : undefined;
@@ -161,12 +195,14 @@ async function main(): Promise<void> {
       }
       // Agents wait on this marker; the runner's own exit must not look like no setup.
       NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
-      tried.push(runner.tool);
+      tried.push(
+        `${runner.tool}: ${rerunOutput.trimEnd().split("\n").slice(-10).join("\n") || "no output"}`,
+      );
     }
     failureDetail =
       tried.length === 0
         ? unsupportedNode
-        : `${unsupportedNode}\nSetup could not start itself under Node.js ${pinned} (tried ${tried.join(", ")}).`;
+        : `${unsupportedNode}\nSetup could not start itself under Node.js ${pinned}. Tried:\n${tried.join("\n")}`;
     process.stderr.write(`${failureDetail}\n`);
     process.exit(1);
   }
