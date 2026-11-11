@@ -16,6 +16,7 @@ import "~/index.css";
 const state = vi.hoisted(() => ({
   narrow: false,
   threads: [] as ReadonlyArray<unknown>,
+  toasts: [] as string[],
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
   refresh: vi.fn(),
 }));
@@ -33,6 +34,10 @@ vi.mock("./GoatBotAvatar", () => ({
 vi.mock("./GoatBotTimeline", async (original) => ({
   ...(await original<typeof import("./GoatBotTimeline")>()),
   GoatBotTimeline: () => null,
+}));
+vi.mock("../ui/toast", async (original) => ({
+  ...(await original<typeof import("../ui/toast")>()),
+  toastManager: { add: (toast: { title: string }) => state.toasts.push(toast.title) },
 }));
 vi.mock("~/hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
@@ -96,6 +101,7 @@ const environmentId = EnvironmentId.make("local");
 function setup(narrow = false) {
   state.narrow = narrow;
   state.threads = [];
+  state.toasts = [];
   state.notes = [note];
   state.refresh.mockReset();
   const onSend = vi.fn<(text: string) => void>();
@@ -210,16 +216,18 @@ it("Ask to forget puts the quoted note in the composer and sends nothing", async
   expect(onSend).not.toHaveBeenCalled();
 });
 
-it("Ask to change puts the quoted change in the composer and keeps a staged file", async () => {
-  const { view, onSend } = setup();
-  await using screen = await render(view());
-  const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+const stageFile = async (screen: Awaited<ReturnType<typeof render>>) => {
   const input = screen.container.querySelector<HTMLInputElement>("input[type=file]")!;
   const transfer = new DataTransfer();
-  transfer.items.add(file);
+  transfer.items.add(new File(["hello"], "notes.txt", { type: "text/plain" }));
   input.files = transfer.files;
   input.dispatchEvent(new Event("change", { bubbles: true }));
   await expect.element(screen.getByText("notes.txt")).toBeVisible();
+};
+
+it("Ask to change fills the composer with the quoted change", async () => {
+  const { view, onSend } = setup();
+  await using screen = await render(view());
   await openMemory(screen);
   await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
   const field = screen.getByRole("textbox", { name: "New wording" });
@@ -229,7 +237,29 @@ it("Ask to change puts the quoted change in the composer and keeps a staged file
   await expect
     .element(composer(screen))
     .toHaveValue(goatBotChangeNoteMessage(note.text, "Reply in English"));
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+it("a draft action never replaces the person's typed message or rides on their staged files", async () => {
+  const { view, onSend } = setup();
+  await using screen = await render(view());
+  const field = composer(screen);
+  await userEvent.type(field, "My own question");
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await userEvent.click(screen.getByRole("button", { name: "New routine" }));
+  await expect.element(field).toHaveValue("My own question");
+  await expect.element(field).toHaveFocus();
+  expect(state.toasts).toEqual([
+    "Your message box already has a message. Send or clear it, then try again.",
+  ]);
+  await userEvent.clear(field);
+  await stageFile(screen);
+  await userEvent.click(page.getByRole("tab", { name: "Library" }));
+  await userEvent.click(screen.getByRole("button", { name: "Ask to forget" }));
+  // The staged file stays, and nothing is drafted to travel with it.
+  await expect.element(field).toHaveValue("");
   await expect.element(screen.getByText("notes.txt")).toBeVisible();
+  expect(state.toasts).toHaveLength(2);
   expect(onSend).not.toHaveBeenCalled();
 });
 

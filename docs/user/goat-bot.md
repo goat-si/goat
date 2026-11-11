@@ -65,7 +65,10 @@ bot's tasks, and a task opens in its own view.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
   hours you choose: the bot looks over its tasks and writes only when something needs you. A
-  routine whose last run failed shows **Run now**.
+  routine whose last run failed shows **Run now**. **New routine** starts a routine request in the
+  message box for you to finish and send.
+- **New routine**, **Ask to change** and **Ask to forget** fill only an empty message box. If it
+  already holds your text or files, they stay as they are: send or clear them first.
 - A task that failed or that you stopped shows **Retry** in its task view; each
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not

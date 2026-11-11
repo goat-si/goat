@@ -41,22 +41,30 @@ export function GoatBotRoutines(props: {
     props.error === null ? null : (
       <GoatBotPanelFailure message="Couldn't load routines." onRetry={props.onRetry} />
     );
+  const onDraft = props.onDraft;
+  // Asking the bot for a routine works without the list, so the entry point never waits on it.
+  const newRoutine =
+    onDraft === undefined ? null : (
+      <Button variant="outline" size="sm" onClick={() => onDraft(NEW_ROUTINE_DRAFT)}>
+        New routine
+      </Button>
+    );
   if (props.tasks === null)
-    return failure ?? <p className="text-muted-foreground">Loading routines…</p>;
+    return (
+      <div className="space-y-3">
+        {failure ?? <p className="text-muted-foreground">Loading routines…</p>}
+        {newRoutine === null ? null : <div className="flex flex-wrap gap-2">{newRoutine}</div>}
+      </div>
+    );
   const rows = botRoutineRows(props.tasks, props.threadId, Date.parse(`${nowMinute}:00.000Z`));
   const offerCheckIn =
     failure === null && findCheckInRoutine(props.tasks, props.threadId) === undefined;
-  const onDraft = props.onDraft;
   return (
     <div className="space-y-3">
       {failure}
       {/* The check-in form opens in this row and takes all of it. */}
       <div className="flex flex-wrap gap-2 [&>form]:basis-full">
-        {onDraft === undefined ? null : (
-          <Button variant="outline" size="sm" onClick={() => onDraft(NEW_ROUTINE_DRAFT)}>
-            New routine
-          </Button>
-        )}
+        {newRoutine}
         {offerCheckIn ? (
           <CheckInOffer environmentId={props.environmentId} threadId={props.threadId} />
         ) : null}
