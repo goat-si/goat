@@ -902,14 +902,16 @@ const make = Effect.gen(function* () {
             } as const;
           const settled =
             claim.threadId === null ? null : { threadId: ThreadId.make(claim.threadId) };
-          // A placed move is answered by its attempt record, never by a title on the target.
-          const attempt =
+          // A placed move is answered by its attempt record, never by a title on the target; a
+          // missing record of an allocated attempt answers nothing.
+          const lookup =
             settled === null && Option.isSome(placer)
               ? yield* placer.value
-                  .latestAttempt("reschedule:" + clientRequestId)
+                  .lookup("reschedule:" + clientRequestId)
                   .pipe(Effect.orElseSucceed(() => undefined))
               : null;
-          if (attempt === undefined || (attempt !== null && attempt.state === "unknown"))
+          const attempt = lookup?._tag === "Found" ? lookup.attempt : null;
+          if (lookup === undefined || lookup?._tag === "Gap" || attempt?.state === "unknown")
             return {
               _tag: "Unknown",
               host: claim.targetHost,

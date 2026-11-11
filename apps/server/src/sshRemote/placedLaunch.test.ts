@@ -3,14 +3,14 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ChatAttachmentId } from "@goat/contracts";
+import { ChatAttachmentId, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "@goat/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { attachmentBody } from "./placedLaunch.ts";
+import { attachmentBody, readAttachmentExactly } from "./placedLaunch.ts";
 import { launchAgainst } from "./SshRemoteDispatch.lineage.testkit.ts";
 import type { SshRemoteDispatchError } from "./dispatchFailure.ts";
 
@@ -132,5 +132,39 @@ it.effect(
       const changed = yield* attachmentBody(fileSystem, path, attachment, frozen).pipe(Effect.flip);
       assert.strictEqual(changed.reason, "invalid_request");
       assert.isFalse(changed.launchMayHaveStarted);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a placed attachment is read only at its declared size within the attachment limit: a longer file or an oversized declaration reads nothing",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = NodePath.join(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "placed-read-")),
+        "a.txt",
+      );
+      const attachment = {
+        type: "file" as const,
+        id: ChatAttachmentId.make("pending-a"),
+        name: "a.txt",
+        mimeType: "text/plain",
+        sizeBytes: 5,
+      };
+      NodeFS.writeFileSync(path, "first");
+      const exact = yield* readAttachmentExactly(fileSystem, path, attachment);
+      assert.strictEqual(new TextDecoder().decode(exact ?? new Uint8Array()), "first");
+      // The file grew after it was checked: the read stops one byte past the declared size.
+      NodeFS.writeFileSync(path, "first and much more");
+      assert.isNull(yield* readAttachmentExactly(fileSystem, path, attachment));
+      assert.isNull(
+        yield* readAttachmentExactly(fileSystem, path, {
+          ...attachment,
+          type: "image" as const,
+          mimeType: "image/png",
+          sizeBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES + 1,
+        }),
+      );
+      assert.isNull(yield* readAttachmentExactly(fileSystem, path + ".gone", attachment));
     }).pipe(Effect.provide(NodeServices.layer)),
 );

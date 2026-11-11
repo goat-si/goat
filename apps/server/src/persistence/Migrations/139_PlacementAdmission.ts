@@ -42,7 +42,7 @@ export default Effect.gen(function* () {
     rerun_by TEXT,
     rerun_at INTEGER,
     cleanup_thread_id TEXT,
-    cleanup_tried_at INTEGER,
+    cleanup_turn INTEGER,
     last_answer TEXT,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (owner_key, attempt)
@@ -51,6 +51,9 @@ export default Effect.gen(function* () {
     WHERE state = 'unknown' AND rerun_by IS NULL`;
   yield* sql`CREATE TABLE placement_attempt_counters (
     owner_key TEXT PRIMARY KEY,
-    next_attempt INTEGER NOT NULL
+    next_attempt INTEGER NOT NULL,
+    gap_attempt INTEGER,
+    gap_rerun_by TEXT,
+    gap_rerun_at INTEGER
   )`;
 });

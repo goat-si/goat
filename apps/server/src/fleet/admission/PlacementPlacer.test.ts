@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -181,7 +182,7 @@ describe("the placer's attempt history", () => {
   );
 
   it.effect(
-    "after not started or a rerun the next key gets a new attempt number whatever the clock reads, and after a prune none is made",
+    "after not started or a rerun the next key gets a new attempt number whatever the clock reads, also after settled history is pruned",
     () =>
       Effect.gen(function* () {
         const attempts = yield* Attempts.PlacementAttempts;
@@ -233,18 +234,129 @@ describe("the placer's attempt history", () => {
             runId: "r",
           }),
         );
-        assert.strictEqual((yield* attempts.latest("o"))?.attempt, 2);
-        assert.strictEqual((yield* attempts.latest("o"))?.state, "unknown");
+        const latest = yield* attempts.lookup("o");
+        assert.deepStrictEqual(
+          latest._tag === "Found" ? [latest.attempt.attempt, latest.attempt.state] : latest,
+          [2, "unknown"],
+        );
         yield* attempts.recordNotStarted({ ownerKey: "o", attempt: 2, threadId: null });
-        assert.strictEqual(yield* attempts.prune(T0 + RETAIN_MS + 1), 3);
+        // Settled history goes after 30 days, except the latest attempt, which still answers.
+        assert.strictEqual(yield* attempts.prune(T0 + RETAIN_MS + 1), 2);
         const fourth = yield* attempts.resolve({
           ownerKey: "o",
           targetHost: "a",
           payloadJson: "{}",
           now: T0,
         });
-        // With its whole history pruned, an owner that ever sent gets no new key on its own.
-        assert.strictEqual(fourth._tag, "Pruned");
+        assert.deepStrictEqual(
+          [fourth._tag, "attempt" in fourth ? fourth.attempt?.attempt : null],
+          ["Created", 3],
+        );
+      }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+
+  it.effect(
+    "a prune past a clock jump keeps the latest attempt's outcome, so an older decided attempt cannot free another key",
+    () =>
+      Effect.gen(function* () {
+        const attempts = yield* Attempts.PlacementAttempts;
+        yield* attempts.resolve({ ownerKey: "o", targetHost: "a", payloadJson: "{}", now: T0 });
+        yield* attempts.chooseRunAgain({ ownerKey: "o", attempt: 0, decidedBy: "p", now: T0 });
+        yield* attempts.resolve({ ownerKey: "o", targetHost: "b", payloadJson: "{}", now: T0 });
+        // Attempt 1 started, and the claim was not settled before the clock jumped forward.
+        yield* attempts.recordStarted({ ownerKey: "o", attempt: 1, threadId: "t1", runId: "r" });
+        yield* attempts.prune(T0 + RETAIN_MS + 1);
+        const again = yield* attempts.resolve({
+          ownerKey: "o",
+          targetHost: "c",
+          payloadJson: "{}",
+          now: T0 + RETAIN_MS + 1,
+        });
+        assert.deepStrictEqual(
+          [again._tag, "attempt" in again ? again.attempt?.attempt : null],
+          ["Started", 1],
+        );
+      }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+
+  it.effect(
+    "a missing latest attempt stays unknown whatever older rows say, until a person's recorded choice frees exactly one successor",
+    () =>
+      Effect.gen(function* () {
+        const attempts = yield* Attempts.PlacementAttempts;
+        const sql = yield* SqlClient.SqlClient;
+        yield* attempts.resolve({ ownerKey: "o", targetHost: "a", payloadJson: "{}", now: T0 });
+        yield* attempts.chooseRunAgain({ ownerKey: "o", attempt: 0, decidedBy: "p", now: T0 });
+        yield* attempts.resolve({ ownerKey: "o", targetHost: "b", payloadJson: "{}", now: T0 });
+        yield* attempts.recordStarted({ ownerKey: "o", attempt: 1, threadId: "t1", runId: "r" });
+        yield* sql`DELETE FROM placement_attempts WHERE owner_key = 'o' AND attempt = 1`;
+        const resolve = attempts.resolve({
+          ownerKey: "o",
+          targetHost: "c",
+          payloadJson: "{}",
+          now: T0,
+        });
+        assert.strictEqual((yield* resolve)._tag, "Pruned");
+        assert.deepStrictEqual(yield* attempts.lookup("o"), {
+          _tag: "Gap",
+          attempt: 1,
+          rerunBy: null,
+        });
+        assert.deepStrictEqual(yield* attempts.listPruned, [{ ownerKey: "o", attempt: 1 }]);
+        // A decision for an attempt that is not the missing one changes nothing.
+        assert.isFalse(
+          yield* attempts.chooseRunAgain({ ownerKey: "o", attempt: 0, decidedBy: "q", now: T0 }),
+        );
+        assert.strictEqual((yield* resolve)._tag, "Pruned");
+        assert.isTrue(
+          yield* attempts.chooseRunAgain({ ownerKey: "o", attempt: 1, decidedBy: "q", now: T0 }),
+        );
+        assert.isFalse(
+          yield* attempts.chooseRunAgain({ ownerKey: "o", attempt: 1, decidedBy: "q", now: T0 }),
+        );
+        assert.deepStrictEqual(yield* attempts.listPruned, []);
+        const successors = yield* Effect.all([resolve, resolve], { concurrency: "unbounded" });
+        assert.deepStrictEqual(successors.map((result) => result._tag).sort(), [
+          "Created",
+          "Resend",
+        ]);
+        assert.isTrue(
+          successors.every((result) => ("attempt" in result ? result.attempt.attempt : null) === 2),
+        );
+      }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+
+  it.effect(
+    "cleanup visits every host in turn: a host just tried goes behind the rest even with rows left untried",
+    () =>
+      Effect.gen(function* () {
+        const attempts = yield* Attempts.PlacementAttempts;
+        const hosts = Array.from(
+          { length: 21 },
+          (_, index) => "h" + String(index).padStart(2, "0"),
+        );
+        for (const host of hosts)
+          for (const n of [0, 1]) {
+            const owner = host + ":" + n;
+            yield* attempts.resolve({
+              ownerKey: owner,
+              targetHost: host,
+              payloadJson: "{}",
+              now: T0,
+            });
+            yield* attempts.recordNotStarted({ ownerKey: owner, attempt: 0, threadId: "idle" });
+          }
+        const first = yield* attempts.hostsWithCleanups(20);
+        assert.strictEqual(first.length, 20);
+        // Each visited host fails one archive and still has an untried row.
+        for (const host of first) {
+          const [row] = yield* attempts.pendingCleanups(host, 1);
+          if (row !== undefined)
+            yield* attempts.markCleanupTried({ ownerKey: row.ownerKey, attempt: row.attempt });
+        }
+        const missed = hosts.filter((host) => !first.includes(host));
+        const second = yield* attempts.hostsWithCleanups(20);
+        assert.deepStrictEqual(second.slice(0, missed.length), missed);
       }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
   );
 
@@ -451,7 +563,7 @@ describe("attachments of a placed launch", () => {
 
 describe("history and cleanup limits", () => {
   it.effect(
-    "once an owner's settled history is pruned, it gets no new key: the outcome reads unknown",
+    "past retention an unsettled started attempt still answers from its kept row, and with that row gone the outcome reads unknown",
     () => {
       const file = freshFile();
       const fake = remote();
@@ -462,20 +574,30 @@ describe("history and cleanup limits", () => {
           "Started",
         );
         // The claim never settled (a crash), and the clock moved past retention before recovery.
+        const store = Layer.provideMerge(Attempts.layer, database(file));
         const pruned = yield* Effect.flatMap(Attempts.PlacementAttempts, (attempts) =>
           attempts.prune(T0 + RETAIN_MS + 1),
-        ).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
-        expect(pruned).toBe(1);
+        ).pipe(Effect.provide(store));
+        expect(pruned).toBe(0);
         const again = yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake)));
-        expect(again._tag).toBe("Unknown");
-        const recovered = yield* Effect.flatMap(Placer.PlacementPlacer, (placer) =>
+        expect(again._tag === "Started" ? again.threadId : again._tag).toBe("thread-1");
+        const recover = Effect.flatMap(Placer.PlacementPlacer, (placer) =>
           placer.recover({
             ownerKey: "goal:g:a1",
             authorize: Effect.succeed("full-access" as const),
             local: () => Effect.void,
           }),
         ).pipe(Effect.provide(placerOn(file, fake)));
-        expect(recovered._tag).toBe("Unknown");
+        expect((yield* recover)._tag).toBe("Started");
+        // However the row went, a missing latest attempt answers nothing and frees nothing.
+        yield* Effect.flatMap(
+          SqlClient.SqlClient,
+          (sql) => sql`DELETE FROM placement_attempts`,
+        ).pipe(Effect.provide(store));
+        expect((yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake))))._tag).toBe(
+          "Unknown",
+        );
+        expect((yield* recover)._tag).toBe("Unknown");
         expect(fake.sent).toHaveLength(1);
       });
     },

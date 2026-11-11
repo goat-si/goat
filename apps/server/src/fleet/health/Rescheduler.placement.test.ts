@@ -180,3 +180,37 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "with placement, a move whose attempt history is gone reads unknown, never a thread found by its title",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = newWorld();
+        world.reachable.B = true;
+        const filename = yield* databaseFile;
+        yield* placed(
+          world,
+          filename,
+          Effect.gen(function* () {
+            yield* loseA(world);
+            world.loseNextLaunchResponse = true;
+            expect((yield* reschedule({ targetHost: "B" }))._tag).toBe("Unconfirmed");
+            // B now lists a thread with the move's title; the attempt that would identify it is gone.
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`DELETE FROM placement_attempts`;
+            const move = yield* Effect.flatMap(Rescheduler.Rescheduler, (service) =>
+              service.findMove({
+                clientRequestId: request().clientRequestId,
+                owner: request().owner,
+              }),
+            );
+            expect(move._tag).toBe("Unknown");
+            expect(world.calls.some((call) => call.tool === "goat_thread_list")).toBe(false);
+            expect((yield* reschedule({ targetHost: "B" }))._tag).not.toBe("Rescheduled");
+            expect(world.launches.length).toBe(1);
+          }),
+        );
+      }),
+    ),
+);

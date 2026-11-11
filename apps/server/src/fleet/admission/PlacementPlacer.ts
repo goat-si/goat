@@ -17,8 +17,14 @@ import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ThreadLifecycle from "../../orchestration-v2/ThreadLifecycleService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
+import { readAttachmentExactly } from "../../sshRemote/placedLaunch.ts";
 import { type PlacementAnswer, PlacementAdmission } from "./PlacementAdmission.ts";
-import { type Attempt, PlacementAttempts, PlacementAttemptsError } from "./PlacementAttempts.ts";
+import {
+  type Attempt,
+  type Lookup,
+  PlacementAttempts,
+  PlacementAttemptsError,
+} from "./PlacementAttempts.ts";
 import { PlacementAdmissionEnabled, type PlacementArgument } from "./PlacementKey.ts";
 
 /** What a placer may conclude about one attempt (design §11). */
@@ -58,7 +64,7 @@ export type RecoveredOutcome =
   /** No attempt was ever recorded, so nothing was sent. */
   | { readonly _tag: "NotSent" }
   /** A person chose "Run again, it may duplicate"; the next attempt may start. */
-  | { readonly _tag: "RerunChosen"; readonly attempt: Attempt };
+  | { readonly _tag: "RerunChosen"; readonly attempt: number };
 
 export interface PlacementPlacerShape {
   /** Resends the owner's unknown attempt to its own target, or reads its settled outcome. */
@@ -67,9 +73,8 @@ export interface PlacementPlacerShape {
     readonly authorize: Effect.Effect<RuntimeMode, E, R>;
     readonly local: (commandId: CommandId, payload: P) => Effect.Effect<unknown, E2>;
   }) => Effect.Effect<RecoveredOutcome, PlacementAttemptsError | E, R>;
-  readonly latestAttempt: (
-    ownerKey: string,
-  ) => Effect.Effect<Attempt | null, PlacementAttemptsError>;
+  /** The owner's latest allocated attempt, or the gap where its row should be. */
+  readonly lookup: (ownerKey: string) => Effect.Effect<Lookup, PlacementAttemptsError>;
   /** Whether this owner has ever sent a placed attempt; without one nothing was sent. */
   readonly hasAttempt: (ownerKey: string) => Effect.Effect<boolean, PlacementAttemptsError>;
   /** One attempt on another GOAT over SSH dispatch; a retry resends the frozen payload. */
@@ -117,18 +122,8 @@ const make = Effect.gen(function* () {
         attachmentsDir: config.value.attachmentsDir,
         attachmentId: attachment.id,
       });
-      // Size first: only a file of the declared, schema-bounded size is read into memory.
-      const info =
-        path === null
-          ? null
-          : yield* fileSystem.value.stat(path).pipe(Effect.orElseSucceed(() => null));
       const bytes =
-        path === null ||
-        info === null ||
-        info.type !== "File" ||
-        Number(info.size) !== attachment.sizeBytes
-          ? null
-          : yield* fileSystem.value.readFile(path).pipe(Effect.orElseSucceed(() => null));
+        path === null ? null : yield* readAttachmentExactly(fileSystem.value, path, attachment);
       if (bytes === null) return null;
       digests.push({
         id: attachment.id,
@@ -183,7 +178,6 @@ const make = Effect.gen(function* () {
         yield* attempts.markCleanupTried({
           ownerKey: row.ownerKey,
           attempt: row.attempt,
-          now: yield* Clock.currentTimeMillis,
         });
         yield* Effect.logWarning("placement cleanup will retry", {
           host,
@@ -396,11 +390,13 @@ const make = Effect.gen(function* () {
   /** What a lookup of an earlier launch learns: only the attempt's own key may answer it. */
   const recover: PlacementPlacerShape["recover"] = Effect.fn("PlacementPlacer.recover")(
     function* (input) {
-      const latest = yield* attempts.latest(input.ownerKey);
-      if (latest === null)
-        return (yield* attempts.everAllocated(input.ownerKey))
+      const found = yield* attempts.lookup(input.ownerKey);
+      if (found._tag === "None") return { _tag: "NotSent" } as const;
+      if (found._tag === "Gap")
+        return found.rerunBy === null
           ? pruned
-          : ({ _tag: "NotSent" } as const);
+          : ({ _tag: "RerunChosen", attempt: found.attempt } as const);
+      const latest = found.attempt;
       if (latest.state === "started") return started(latest);
       if (latest.state === "not_started")
         return {
@@ -408,7 +404,7 @@ const make = Effect.gen(function* () {
           attempt: latest,
           message: latest.lastAnswer ?? "not started",
         } as const;
-      if (latest.rerunBy !== null) return { _tag: "RerunChosen", attempt: latest } as const;
+      if (latest.rerunBy !== null) return { _tag: "RerunChosen", attempt: latest.attempt } as const;
       return latest.targetHost === LOCAL_TARGET
         ? yield* sendLocal(latest, input.local)
         : yield* sendRemote(latest, input.authorize);
@@ -416,7 +412,7 @@ const make = Effect.gen(function* () {
   );
 
   // Independent of new placements: archive what fenced attempts left, and drop settled history
-  // past 30 days. Unknown attempts and the attempt counters are kept, so no key is ever reused.
+  // past 30 days. Unknown attempts, each owner's latest attempt and the counters are kept.
   if (yield* PlacementAdmissionEnabled)
     yield* Effect.gen(function* () {
       for (const host of yield* attempts.hostsWithCleanups(CLEANUP_BATCH))
@@ -430,7 +426,7 @@ const make = Effect.gen(function* () {
 
   return PlacementPlacer.of({
     recover,
-    latestAttempt: attempts.latest,
+    lookup: attempts.lookup,
     hasAttempt: attempts.everAllocated,
     placeRemote,
     placeLocal,

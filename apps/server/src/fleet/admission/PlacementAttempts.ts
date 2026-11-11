@@ -45,8 +45,17 @@ export type Resolved =
   | { readonly _tag: "Started"; readonly attempt: Attempt }
   /** Unknown on another target: nothing may go anywhere else. */
   | { readonly _tag: "PinnedElsewhere"; readonly attempt: Attempt }
-  /** Attempts were sent but their history is pruned: the outcome is unknown, nothing new starts. */
+  /** The latest allocated attempt's row is gone: its outcome is unknown, nothing new starts. */
   | { readonly _tag: "Pruned" };
+
+/**
+ * The owner's latest allocated attempt, read against the never-pruned counter: a missing row for
+ * that number is a gap, whatever older rows remain.
+ */
+export type Lookup =
+  | { readonly _tag: "None" }
+  | { readonly _tag: "Found"; readonly attempt: Attempt }
+  | { readonly _tag: "Gap"; readonly attempt: number; readonly rerunBy: string | null };
 
 export interface PlacementAttemptsShape {
   readonly resolve: (input: {
@@ -55,14 +64,13 @@ export interface PlacementAttemptsShape {
     readonly payloadJson: string;
     readonly now: number;
   }) => Effect.Effect<Resolved, PlacementAttemptsError>;
-  readonly latest: (ownerKey: string) => Effect.Effect<Attempt | null, PlacementAttemptsError>;
+  readonly lookup: (ownerKey: string) => Effect.Effect<Lookup, PlacementAttemptsError>;
   /** Whether any attempt was ever allocated for this owner; the counter outlives pruned history. */
   readonly everAllocated: (ownerKey: string) => Effect.Effect<boolean, PlacementAttemptsError>;
-  /** A failed archive goes behind the others, so a permanently failing one cannot starve them. */
+  /** A failed archive takes the next turn number and goes behind the rest, its host with it. */
   readonly markCleanupTried: (input: {
     readonly ownerKey: string;
     readonly attempt: number;
-    readonly now: number;
   }) => Effect.Effect<void, PlacementAttemptsError>;
   /** Also records a late success of an attempt a person already chose to run again. */
   readonly recordStarted: (input: {
@@ -86,17 +94,26 @@ export interface PlacementAttemptsShape {
     readonly ownerKey: string;
     readonly attempt: number;
   }) => Effect.Effect<void, PlacementAttemptsError>;
-  /** Idle threads left on one host, oldest first, at most `limit`. */
+  /** Idle threads left on one host, least recently tried first, at most `limit`. */
   readonly pendingCleanups: (
     host: string,
     limit: number,
   ) => Effect.Effect<ReadonlyArray<Attempt>, PlacementAttemptsError>;
+  /** Hosts with idle threads left, least recently tried first. */
   readonly hostsWithCleanups: (
     limit: number,
   ) => Effect.Effect<ReadonlyArray<string>, PlacementAttemptsError>;
   /** What the "Launch outcome unknown" Inbox item lists. */
   readonly listUnknown: Effect.Effect<ReadonlyArray<Attempt>, PlacementAttemptsError>;
-  /** "Run again, it may duplicate": records the person and time; false when no longer unknown. */
+  /** Owners whose latest attempt's row is gone and no person has decided; also for that Inbox item. */
+  readonly listPruned: Effect.Effect<
+    ReadonlyArray<{ readonly ownerKey: string; readonly attempt: number }>,
+    PlacementAttemptsError
+  >;
+  /**
+   * "Run again, it may duplicate": records the person and time on the unknown attempt, or on the
+   * owner's counter when that attempt is the missing latest one; false when neither applies.
+   */
   readonly chooseRunAgain: (input: {
     readonly ownerKey: string;
     readonly attempt: number;
@@ -122,7 +139,7 @@ interface Row {
   readonly rerun_by: string | null;
   readonly rerun_at: number | null;
   readonly cleanup_thread_id: string | null;
-  readonly cleanup_tried_at: number | null;
+  readonly cleanup_turn: number | null;
   readonly last_answer: string | null;
   readonly created_at: number;
 }
@@ -150,16 +167,33 @@ const make = Effect.gen(function* () {
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(Effect.mapError((cause) => new PlacementAttemptsError({ operation, cause })));
 
-  const latestRow = (ownerKey: string) =>
-    sql<Row>`
-      SELECT * FROM placement_attempts WHERE owner_key = ${ownerKey}
-      ORDER BY attempt DESC LIMIT 1
-    `.pipe(Effect.map((rows) => (rows[0] === undefined ? null : fromRow(rows[0]))));
-
   const counterOf = (ownerKey: string) =>
     sql<{ readonly next_attempt: number }>`
       SELECT next_attempt FROM placement_attempt_counters WHERE owner_key = ${ownerKey}
     `.pipe(Effect.map((rows) => rows[0]?.next_attempt ?? null));
+
+  const lookupIn = Effect.fn("PlacementAttempts.lookupIn")(function* (ownerKey: string) {
+    const [counter] = yield* sql<{
+      readonly next_attempt: number;
+      readonly gap_attempt: number | null;
+      readonly gap_rerun_by: string | null;
+    }>`
+      SELECT next_attempt, gap_attempt, gap_rerun_by FROM placement_attempt_counters
+      WHERE owner_key = ${ownerKey}
+    `;
+    // The counter is written in the same transaction as every attempt row.
+    if (counter === undefined) return { _tag: "None" } satisfies Lookup;
+    const allocated = counter.next_attempt - 1;
+    const [row] = yield* sql<Row>`
+      SELECT * FROM placement_attempts WHERE owner_key = ${ownerKey} AND attempt = ${allocated}
+    `;
+    if (row !== undefined) return { _tag: "Found", attempt: fromRow(row) } satisfies Lookup;
+    return {
+      _tag: "Gap",
+      attempt: allocated,
+      rerunBy: counter.gap_attempt === allocated ? counter.gap_rerun_by : null,
+    } satisfies Lookup;
+  });
 
   const resolve = Effect.fn("PlacementAttempts.resolve")(function* (
     input: Parameters<PlacementAttemptsShape["resolve"]>[0],
@@ -167,17 +201,16 @@ const make = Effect.gen(function* () {
     return yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const latest = yield* latestRow(input.ownerKey);
-          if (latest === null && (yield* counterOf(input.ownerKey)) !== null)
-            return { _tag: "Pruned" } as const;
-          if (latest !== null && latest.state === "started")
-            return { _tag: "Started", attempt: latest } as const;
-          if (latest !== null && latest.state === "unknown" && latest.rerunBy === null)
+          const found = yield* lookupIn(input.ownerKey);
+          if (found._tag === "Gap" && found.rerunBy === null) return { _tag: "Pruned" } as const;
+          const latest = found._tag === "Found" ? found.attempt : null;
+          if (latest?.state === "started") return { _tag: "Started", attempt: latest } as const;
+          if (latest?.state === "unknown" && latest.rerunBy === null)
             return latest.targetHost === input.targetHost
               ? ({ _tag: "Resend", attempt: latest } as const)
               : ({ _tag: "PinnedElsewhere", attempt: latest } as const);
-          // A new key only after a fenced "not started" or a person's choice; the counter is never
-          // pruned, so no key repeats whatever history was deleted or the clock does.
+          // A new key only after a fenced "not started" or a person's choice on the latest attempt;
+          // the counter is never pruned, so no key repeats whatever the clock does.
           const [counter] = yield* sql<{ readonly next_attempt: number }>`
             INSERT INTO placement_attempt_counters (owner_key, next_attempt) VALUES (${input.ownerKey}, 1)
             ON CONFLICT (owner_key) DO UPDATE SET next_attempt = next_attempt + 1
@@ -206,15 +239,17 @@ const make = Effect.gen(function* () {
 
   return PlacementAttempts.of({
     resolve,
-    latest: Effect.fn("PlacementAttempts.latest")(function* (ownerKey: string) {
-      return yield* latestRow(ownerKey).pipe(failed("latest"));
+    lookup: Effect.fn("PlacementAttempts.lookup")(function* (ownerKey: string) {
+      return yield* sql.withTransaction(lookupIn(ownerKey)).pipe(failed("lookup"));
     }),
     everAllocated: Effect.fn("PlacementAttempts.everAllocated")(function* (ownerKey: string) {
       return (yield* counterOf(ownerKey).pipe(failed("everAllocated"))) !== null;
     }),
     markCleanupTried: Effect.fn("PlacementAttempts.markCleanupTried")(function* (input) {
+      // A turn number, never the clock: a clock change cannot reorder who goes next.
       yield* sql`
-        UPDATE placement_attempts SET cleanup_tried_at = ${input.now}
+        UPDATE placement_attempts
+        SET cleanup_turn = (SELECT COALESCE(MAX(cleanup_turn), 0) + 1 FROM placement_attempts)
         WHERE owner_key = ${input.ownerKey} AND attempt = ${input.attempt}
       `.pipe(failed("markCleanupTried"));
     }),
@@ -254,7 +289,7 @@ const make = Effect.gen(function* () {
       const rows = yield* sql<Row>`
         SELECT * FROM placement_attempts
         WHERE cleanup_thread_id IS NOT NULL AND target_host = ${host}
-        ORDER BY COALESCE(cleanup_tried_at, 0), created_at LIMIT ${limit}
+        ORDER BY COALESCE(cleanup_turn, 0), created_at, owner_key LIMIT ${limit}
       `.pipe(failed("pendingCleanups"));
       return rows.map(fromRow);
     }),
@@ -262,7 +297,7 @@ const make = Effect.gen(function* () {
       const rows = yield* sql<{ readonly target_host: string }>`
         SELECT target_host FROM placement_attempts
         WHERE cleanup_thread_id IS NOT NULL
-        GROUP BY target_host ORDER BY MIN(COALESCE(cleanup_tried_at, 0)) LIMIT ${limit}
+        GROUP BY target_host ORDER BY MAX(COALESCE(cleanup_turn, 0)), target_host LIMIT ${limit}
       `.pipe(failed("hostsWithCleanups"));
       return rows.map((row) => row.target_host);
     }),
@@ -272,23 +307,71 @@ const make = Effect.gen(function* () {
       Effect.map((rows) => rows.map(fromRow)),
       failed("listUnknown"),
     ),
+    listPruned: sql<{ readonly owner_key: string; readonly attempt: number }>`
+      SELECT c.owner_key, c.next_attempt - 1 AS attempt FROM placement_attempt_counters c
+      WHERE NOT EXISTS (
+          SELECT 1 FROM placement_attempts a
+          WHERE a.owner_key = c.owner_key AND a.attempt = c.next_attempt - 1
+        )
+        AND (c.gap_attempt IS NULL OR c.gap_attempt <> c.next_attempt - 1)
+      ORDER BY c.owner_key
+    `.pipe(
+      Effect.map((rows) => rows.map((row) => ({ ownerKey: row.owner_key, attempt: row.attempt }))),
+      failed("listPruned"),
+    ),
     chooseRunAgain: Effect.fn("PlacementAttempts.chooseRunAgain")(function* (input) {
-      const rows = yield* sql`
-        UPDATE placement_attempts SET rerun_by = ${input.decidedBy}, rerun_at = ${input.now}
-        WHERE owner_key = ${input.ownerKey} AND attempt = ${input.attempt}
-          AND state = 'unknown' AND rerun_by IS NULL
-        RETURNING attempt
-      `.pipe(failed("chooseRunAgain"));
-      return changed(rows);
+      return yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const onRow = yield* sql`
+              UPDATE placement_attempts SET rerun_by = ${input.decidedBy}, rerun_at = ${input.now}
+              WHERE owner_key = ${input.ownerKey} AND attempt = ${input.attempt}
+                AND state = 'unknown' AND rerun_by IS NULL
+              RETURNING attempt
+            `;
+            if (changed(onRow)) return true;
+            const onGap = yield* sql`
+              UPDATE placement_attempt_counters
+              SET gap_attempt = ${input.attempt}, gap_rerun_by = ${input.decidedBy},
+                gap_rerun_at = ${input.now}
+              WHERE owner_key = ${input.ownerKey} AND next_attempt - 1 = ${input.attempt}
+                AND (gap_attempt IS NULL OR gap_attempt <> ${input.attempt})
+                AND NOT EXISTS (
+                  SELECT 1 FROM placement_attempts
+                  WHERE owner_key = ${input.ownerKey} AND attempt = ${input.attempt}
+                )
+              RETURNING owner_key
+            `;
+            return changed(onGap);
+          }),
+        )
+        .pipe(failed("chooseRunAgain"));
     }),
     prune: Effect.fn("PlacementAttempts.prune")(function* (now: number) {
-      const rows = yield* sql`
-        DELETE FROM placement_attempts
-        WHERE state IN ('started', 'not_started') AND cleanup_thread_id IS NULL
-          AND issued_at < ${now - RETAIN_MS}
-        RETURNING attempt
-      `.pipe(failed("prune"));
-      return rows.length;
+      const cutoff = now - RETAIN_MS;
+      return yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            // The latest attempt keeps its row, so its outcome still answers; only its payload goes.
+            const deleted = yield* sql`
+              DELETE FROM placement_attempts
+              WHERE state IN ('started', 'not_started') AND cleanup_thread_id IS NULL
+                AND issued_at < ${cutoff}
+                AND attempt < (
+                  SELECT c.next_attempt - 1 FROM placement_attempt_counters c
+                  WHERE c.owner_key = placement_attempts.owner_key
+                )
+              RETURNING attempt
+            `;
+            yield* sql`
+              UPDATE placement_attempts SET payload_json = ''
+              WHERE state IN ('started', 'not_started') AND cleanup_thread_id IS NULL
+                AND issued_at < ${cutoff} AND payload_json <> ''
+            `;
+            return deleted.length;
+          }),
+        )
+        .pipe(failed("prune"));
     }),
   });
 });
