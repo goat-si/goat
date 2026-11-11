@@ -55,10 +55,7 @@ func TestAnUnreadableHostKeyFileIsReportedAndTheReadableKeysArePublished(t *test
 // filepath.Glob drops the error of a folder it cannot list, so a key folder this account cannot read
 // would look like a machine without sshd; a missing folder is one.
 func TestAKeyFolderThatCannotBeListedIsReportedAndAMissingOneIsNot(t *testing.T) {
-	notDir := filepath.Join(t.TempDir(), "ssh")
-	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	notDir := unlistableDir(t)
 	glob := filepath.Join(notDir, "ssh_host_*_key.pub")
 	// The folder needs its own fix: opening up the .pub files does not make the folder listable.
 	if keys, problem := ReadHostKeys(glob); len(keys) != 0 || !strings.Contains(problem, notDir) ||
