@@ -57,7 +57,6 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ActivityIcon,
-  BotIcon,
   BrainIcon,
   CloudDownloadIcon,
   BellIcon,
@@ -101,6 +100,7 @@ import {
 import type { LegendListRef } from "@legendapp/list/react";
 import { notesRpc } from "../rpc/notes/atoms";
 import { notesPaletteItems } from "../notes/notesPaletteItems";
+import { goatBotPaletteItems, useGoatBotPaletteBots } from "./goatBot/goatBotPaletteItems";
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -547,6 +547,7 @@ function OpenCommandPaletteDialog(props: {
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canCreateNote = useAtomValue(notesRpc.write.permissionAtom(primaryEnvironmentId));
+  const goatBots = useGoatBotPaletteBots();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1689,16 +1690,8 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  actionItems.push({
-    kind: "action",
-    value: "action:goat-bot",
-    searchTerms: ["goat bot", "bot", "assistant", "helper"],
-    title: "Open GOAT Bot",
-    icon: <BotIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({ to: "/bot" });
-    },
-  });
+  const goatBotItems = goatBotPaletteItems(goatBots, navigate);
+  actionItems.push(...goatBotItems.actions);
 
   actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 
@@ -1869,6 +1862,7 @@ function OpenCommandPaletteDialog(props: {
         }
       : {}),
     projectSearchItems: projectSearchItems,
+    botSearchItems: goatBotItems.search,
     settingsSearchItems,
     threadSearchItems:
       isLinkedThreadSearch && linkedThreadSearch?.linkedThreads

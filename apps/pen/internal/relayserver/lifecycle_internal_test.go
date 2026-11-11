@@ -72,7 +72,7 @@ func newLive(t *testing.T, l Limits) *live {
 	lv := &live{s: s, done: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1), t: t, authed: map[string]chan struct{}{}}
 	s.Hooks.OnSocketDone = func(string, string) { lv.done <- struct{}{} }
 	s.Hooks.OnUplink = func(nodeID string) { lv.authedCh(nodeID) <- struct{}{} }
-	s.Hooks.FailWrite = func(nodeID, role string, sid uint32) error {
+	s.Hooks.failWrite = func(nodeID, role string, sid uint32) error {
 		lv.mu.Lock()
 		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID
 		lv.mu.Unlock()
@@ -205,7 +205,7 @@ func TestCountersReturnToZeroAfterAnySequenceOfSocketLifecycles(t *testing.T) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			l := DefaultLimits()
 			// Only how fast stalled random sockets end; no assertion depends on it (the prelude drives
-			// the write-failure path through Hooks.FailWrite).
+			// the write-failure path through the write-failure hook).
 			l.WriteTimeout = 200 * time.Millisecond
 			lv := newLive(t, l)
 			lv.s.Hooks.OnEnd = func(role string, code uint16) { count(fmt.Sprintf("%s %d", role, code)) }

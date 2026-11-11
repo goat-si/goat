@@ -157,7 +157,12 @@ export function GoatBotChatView({
           sheetClosedFor.current = "draft";
           setPanelOpen(false);
         }
-        composerRef.current?.replaceText(text);
+        if (composerRef.current?.offerDraft(text) === false) {
+          toastManager.add({
+            type: "info",
+            title: "Your message box already has a message. Send or clear it, then try again.",
+          });
+        }
       }
     : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
