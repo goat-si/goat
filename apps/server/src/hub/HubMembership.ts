@@ -23,7 +23,7 @@ import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import { makeHubConsent } from "./HubConsent.ts";
-import { Added, Connection, decodeJson, Health, LinkStatus, Probe } from "./hubOcxJson.ts";
+import { Added, Connection, decodeJson, LinkStatus, Probe } from "./hubOcxJson.ts";
 import * as HubParity from "./HubParity.ts";
 import {
   childConnectionAdmission,
@@ -33,6 +33,7 @@ import {
   SAFE_ALIAS,
   type OcxOutput,
 } from "./HubOcx.ts";
+import { makeLeaveSteps } from "./hubLeave.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
   deviceExit,
@@ -201,6 +202,7 @@ const make = Effect.gen(function* () {
     };
   });
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
+  const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
 
   const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
     const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
@@ -329,89 +331,6 @@ const make = Effect.gen(function* () {
       steps,
       { parity: verified, transport: "remote-link" },
     );
-  });
-
-  /**
-   * Device side first. The Home's own revoke runs a remote `ocx disconnect` whose failure
-   * restarts the tunnel (OCX-9), so the Home is touched only after the device is standalone.
-   */
-  const leaveDevice = Effect.fn("HubMembership.leaveDevice")(function* (
-    alias: string,
-    member: string,
-    admission: HubChildConnectionAdmission,
-    steps: HubDeviceStep[],
-  ) {
-    // The device's GOAT runs both under its idle fence, bound to the membership seen here.
-    let reported: OcxOutput["deviceRole"];
-    for (const kind of ["disconnect", "restart"] as const) {
-      const operation = { kind, expectedLinkId: member };
-      const ran = yield* ocx.connection(alias, operation, DEVICE_TIMEOUT_MS, admission).pipe(
-        Effect.map((output: OcxOutput) => {
-          reported = output.deviceRole;
-          return output.code === 0
-            ? { outcome: "ok" as const }
-            : { outcome: "failed" as const, detail: deviceExit(kind, output) };
-        }),
-        Effect.catch((error) => Effect.succeed(unreachable(error))),
-      );
-      steps.push({ step: kind, ...ran });
-      if (ran.outcome !== "ok") return ran.detail;
-    }
-    // A native Windows device has no shell for /healthz; its own GOAT already read the role.
-    if (reported === "standalone") {
-      steps.push({ step: "health", outcome: "ok", detail: "Device answers as standalone." });
-      return undefined;
-    }
-    const body = yield* ocx.deviceHealth(alias);
-    const health = body === undefined ? undefined : decodeJson(Health, body);
-    // A standalone or Home runtime omits role; anything else still describes the link.
-    const standalone =
-      health?.service === "opencodex" &&
-      (health.role === undefined || health.role === "standalone");
-    const detail = standalone
-      ? "Device answers as standalone."
-      : health === undefined
-        ? reported === undefined
-          ? "Device /healthz did not answer after the restart."
-          : `Device reports role ${reported} after the restart.`
-        : `Device /healthz still reports role ${health.role}.`;
-    steps.push({ step: "health", outcome: standalone ? "ok" : "failed", detail });
-    return standalone ? undefined : detail;
-  });
-
-  /** Forced revoke skips the remote cleanup the device step already did; then prove it is gone. */
-  const revokeOnHome = Effect.fn("HubMembership.revokeOnHome")(function* (
-    alias: string,
-    record: { readonly id: string; readonly tunnelPort?: number | undefined },
-    steps: HubDeviceStep[],
-  ) {
-    const revoked = yield* ocx.home(
-      ["link", "revoke", "--link-id", record.id, "--force", "--yes", "--json"],
-      HOME_TIMEOUT_MS,
-    );
-    if (revoked.code !== 0 && revoked.phase !== "link_not_found") {
-      steps.push({ step: "revoke", outcome: "failed", detail: phaseMessage(revoked) });
-      return false;
-    }
-    steps.push({ step: "revoke", outcome: "ok", detail: record.id });
-    const status = yield* homeLinks();
-    const recorded =
-      status === undefined ||
-      status.links.some((entry) => entry.id === record.id || entry.alias === alias);
-    const tunnels = yield* ocx.homeTunnels(alias, record.tunnelPort);
-    const gone = !recorded && tunnels === 0;
-    steps.push({
-      step: "link_removed",
-      outcome: gone ? "ok" : "failed",
-      detail: gone
-        ? "No link record or ssh -R tunnel remains."
-        : recorded
-          ? "ocx link status still lists the link, or could not be read."
-          : tunnels === undefined
-            ? "This Home's ssh tunnels could not be listed."
-            : `${tunnels} ssh -R tunnel for the link is still running.`,
-    });
-    return gone;
   });
 
   const homeUnavailable = (

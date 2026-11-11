@@ -75,3 +75,17 @@ it.effect("a refused home ocx command carries OpenCodex's own message; hub invit
     expect(invite.message).toBeUndefined();
   }),
 );
+it.effect("a ps listing over 256 KiB still counts this Home's link tunnels", () =>
+  Effect.gen(function* () {
+    const busy = Array.from(
+      { length: 3_000 },
+      (_, index) =>
+        `/Applications/Some Electron.app/Contents/Frameworks/Helper --type=renderer --field-trial-handle=${"x".repeat(80)} --seed=${index}`,
+    );
+    const tunnel = "/usr/bin/ssh -N -R 127.0.0.1:42255:127.0.0.1:10100 -- lidge";
+    const listing = [...busy, tunnel].join("\n");
+    expect(Buffer.byteLength(listing)).toBeGreaterThan(256 * 1024);
+    const ocx = yield* hubOcx(() => output(listing, "", 0));
+    expect(yield* ocx.homeTunnels("lidge", 42255)).toBe(1);
+  }),
+);

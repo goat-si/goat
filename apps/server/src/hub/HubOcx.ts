@@ -44,6 +44,8 @@ import {
 } from "./penSshRoute.ts";
 
 const MAX_BYTES = 256 * 1024;
+// A busy Home's full process listing passes 256 KiB; this bounds that one transient read.
+const PS_MAX_BYTES = 16 * 1024 * 1024;
 // Pen writes one Host block per member: a name and login user of at most 32 bytes each, about
 // 130 fixed bytes and three local paths. A mesh holds at most 4096 records, so at most 4096
 // members; 1 KiB a block leaves the paths about 800 bytes, so 4 MiB covers any mesh.
@@ -352,6 +354,7 @@ const make = Effect.gen(function* () {
     args: ReadonlyArray<string>,
     timeoutMs: number,
     workingDirectory: string | null = cwd,
+    maxOutputBytes = MAX_BYTES,
   ) =>
     runner.run({
       command,
@@ -359,7 +362,7 @@ const make = Effect.gen(function* () {
       env: environment,
       cwd: workingDirectory ?? undefined,
       timeout: timeoutMs,
-      maxOutputBytes: MAX_BYTES,
+      maxOutputBytes,
       timeoutBehavior: "timedOutResult",
     });
 
@@ -796,7 +799,7 @@ const make = Effect.gen(function* () {
     ),
     homeTunnels: Effect.fn("HubOcx.homeTunnels")(
       function* (alias, tunnelPort) {
-        const output = yield* run("ps", ["-axww", "-o", "command="], 10_000);
+        const output = yield* run("ps", ["-axww", "-o", "command="], 10_000, cwd, PS_MAX_BYTES);
         return output.code === 0 && !output.stdoutTruncated
           ? countLinkTunnels(output.stdout, alias, tunnelPort)
           : undefined;

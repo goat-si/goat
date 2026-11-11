@@ -32,3 +32,49 @@ it.effect("a refused Child restart names OpenCodex's reason in the leave step", 
     );
   }),
 );
+
+it.effect("a leave whose restart is refused but whose device answers standalone ends ready", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      linked: ["mini"],
+      deviceExit: { restart: 1 },
+      reportedRole: "standalone",
+      deviceHealthy: true,
+    });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("ready");
+    expect(hub.calls).toContain(
+      "home link revoke --link-id lnk_0123456789abcdef --force --yes --json",
+    );
+  }),
+);
+
+it.effect("a refused restart without proof of standalone never revokes the link", () =>
+  Effect.gen(function* () {
+    const unproven = [
+      { reportedRole: "client" as const, deviceHealthy: true },
+      { reportedRole: "standalone" as const, deviceHealthy: false },
+      { deviceHealthy: true },
+    ];
+    for (const evidence of unproven) {
+      const hub = yield* setup({ linked: ["mini"], deviceExit: { restart: 1 }, ...evidence });
+      const result = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
+      expect(result.state).toBe("needs_human");
+      expect(hub.calls.some((call) => call.includes("link revoke"))).toBe(false);
+    }
+  }),
+);
+
+it.effect("a restart that timed out is not a refusal, so the link stays", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      linked: ["mini"],
+      deviceExit: { restart: 124 },
+      reportedRole: "standalone",
+      deviceHealthy: true,
+    });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("needs_human");
+    expect(hub.calls.some((call) => call.includes("link revoke"))).toBe(false);
+  }),
+);
