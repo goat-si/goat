@@ -66,6 +66,8 @@ interface Fixture {
   readonly endTurn: Deferred.Deferred<void>;
   /** Work the process holds outside turns, such as an active goal: what it knows, and what Codex confirms. */
   readonly liveWork: { held: boolean; confirm: Effect.Effect<boolean> };
+  /** Codex's model catalog on disk; each process knows the catalog as it was when it started. */
+  readonly catalog: Array<string>;
 }
 
 const makeFixture = Effect.gen(function* () {
@@ -77,6 +79,7 @@ const makeFixture = Effect.gen(function* () {
     turnStarted: yield* Deferred.make<void>(),
     endTurn: yield* Deferred.make<void>(),
     liveWork: { held: false, confirm: Effect.void.pipe(Effect.as(false)) },
+    catalog: [modelSelection.model],
   };
   fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
   return fixture;
@@ -98,6 +101,7 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
       yield* Ref.update(fixture.opens, (count) => count + 1);
       yield* Effect.addFinalizer(() => Queue.offer(fixture.closed, undefined));
       const now = yield* DateTime.now;
+      const known = new Set(fixture.catalog);
       return {
         instanceId,
         driver,
@@ -118,6 +122,8 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
         backgroundTasksEndWithProcess: true,
         holdsLiveWork: ({ pastPinCeiling }) =>
           pastPinCeiling ? fixture.liveWork.confirm : Effect.succeed(fixture.liveWork.held),
+        predatesModel: (model) =>
+          Effect.succeed(fixture.catalog.includes(model) && !known.has(model)),
         ensureThread: () => unused("ensureThread"),
         resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
         // The turn runs until the test ends it; ending it fails the start, which settles it.
@@ -268,8 +274,13 @@ const sharedSession = Effect.gen(function* () {
   const providerSessionId: ProviderSessionId = idAllocator.derive.providerSession({
     providerInstanceId: instanceId,
   });
-  const open = (threadId: ThreadId) =>
-    manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+  const open = (threadId: ThreadId, model = modelSelection.model) =>
+    manager.open({
+      threadId,
+      providerSessionId,
+      modelSelection: { instanceId, model },
+      runtimePolicy,
+    });
   const runTurn = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const runtime = yield* open(threadId);
@@ -453,6 +464,63 @@ it.effect("restoring the settings does not wait for Codex to confirm a goal", ()
       yield* open(threadB);
       assert.isTrue(yield* manager.isLive(providerSessionId));
       assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+const addedModel = "combo/deepseek-flash-pool";
+
+it.effect("a turn on a model added after Codex started opens a fresh process when it is idle", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { manager, open, providerSessionId } = yield* sharedSession;
+      yield* open(threadA);
+      fixture.catalog.push(addedModel);
+      yield* open(threadB, addedModel);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+      assert.strictEqual(yield* Queue.size(fixture.closed), 1);
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect(
+  "while work runs, a model the process predates is refused by name and nothing is stopped",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      yield* Effect.gen(function* () {
+        const { open, runTurn } = yield* sharedSession;
+        const turn = yield* runTurn(threadA).pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(fixture.turnStarted);
+        fixture.catalog.push(addedModel);
+
+        const refused = yield* open(threadB, addedModel).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(refused));
+        assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
+        // Other turns on models the process knows still start; nothing drains for the new one.
+        yield* open(threadB);
+        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+
+        yield* Deferred.succeed(fixture.endTurn, undefined);
+        yield* Fiber.join(turn);
+        yield* open(threadB, addedModel);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+        assert.strictEqual(yield* Queue.size(fixture.closed), 1);
+      }).pipe(Effect.provide(layer(fixture)));
+    }),
+);
+
+it.effect("a model no fresh process would know never restarts or refuses", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open } = yield* sharedSession;
+      yield* open(threadA);
+      yield* open(threadB, "custom/not-in-the-catalog");
+      assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+      assert.strictEqual(yield* Queue.size(fixture.closed), 0);
     }).pipe(Effect.provide(layer(fixture)));
   }),
 );

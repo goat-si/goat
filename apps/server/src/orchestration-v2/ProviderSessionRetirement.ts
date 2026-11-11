@@ -14,16 +14,18 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 export const RETIRE_PROBE_MS = 5_000;
 export const RETIRED_DETAIL = "The provider's settings changed; its process restarts with them.";
 
-/** A turn cannot start on a process that still runs work under the previous settings. */
+/** A turn cannot start on a process that still runs work under the previous settings or catalog. */
 export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRestartRequiredError>()(
   "ProviderRestartRequiredError",
-  { runningTurns: Schema.Number },
+  { runningTurns: Schema.Number, model: Schema.optional(Schema.String) },
 ) {
   override get message(): string {
     const work =
       this.runningTurns === 0
         ? "an active goal, a subagent or a pending approval"
         : `${this.runningTurns} running turn${this.runningTurns === 1 ? "" : "s"}`;
+    if (this.model !== undefined)
+      return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes (${work}), sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
     return `This provider's settings changed. GOAT restarts it with the new settings once the work still running on its current process finishes (${work}). Stop that work to restart now, then try again.`;
   }
 }
@@ -58,16 +60,27 @@ export interface RetirableSession {
   readonly busyTurns: ReadonlySet<string>;
   readonly runtime: Pick<
     ProviderAdapter.ProviderAdapterV2SessionRuntime,
-    "instanceId" | "providerSessionId" | "holdsLiveWork"
+    "instanceId" | "providerSessionId" | "holdsLiveWork" | "predatesModel"
   >;
 }
 
-export type Retirement = "current" | "released" | "retiring";
+/** `outdated`: the process predates the requested model and still runs work; nothing is marked. */
+export type Retirement = "current" | "released" | "retiring" | "outdated";
+
+/** A retiring session still takes turns from threads with a turn running on it; an outdated one refuses this turn. */
+export const refuses = (retired: Retirement, threadHasRunningTurn: boolean) =>
+  retired === "outdated" || (retired === "retiring" && !threadHasRunningTurn);
+
+export const restartRequired = (retired: Retirement, runningTurns: number, model: string) =>
+  new ProviderRestartRequiredError({
+    runningTurns,
+    ...(retired === "outdated" ? { model } : {}),
+  });
 
 /**
- * Retires sessions opened under provider settings that have since changed: a session with nothing
- * running is released, one still running work is marked so it stops within a probe after the work
- * ends, and turns that would add work to it are refused by the caller.
+ * Settings changed: an idle session is released; a busy one is marked to stop within a probe after
+ * its work ends, and the caller refuses turns that would add work. A process that predates the
+ * requested model is released when idle; otherwise only that turn is refused.
  */
 export const make = <
   Entry extends RetirableSession,
@@ -115,16 +128,33 @@ export const make = <
    */
   const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
     providerSessionId: ProviderSessionId,
+    model?: string,
   ) {
     const key = String(providerSessionId);
     // Turn starts and ends replace the entry, so every decision reads it again after a yield.
     const read = Ref.get(input.sessions).pipe(Effect.map((current) => current.get(key)));
+    const releaseIdle = Effect.fnUntraced(function* (busy: "retiring" | "outdated") {
+      const latest = yield* read;
+      if (latest === undefined) return "released" as Retirement;
+      if (latest.busyTurns.size > 0) return busy;
+      const held =
+        latest.runtime.holdsLiveWork !== undefined &&
+        (yield* latest.runtime
+          .holdsLiveWork({ pastPinCeiling: false })
+          .pipe(unlessInterrupted(true)));
+      if (held) return busy;
+      yield* input.release(providerSessionId).pipe(logged(providerSessionId));
+      return (yield* read) === undefined ? "released" : busy;
+    });
     const opened = yield* read;
     if (opened === undefined) return "released" as Retirement;
-    if (opened.sessionConfigKey === undefined) return "current";
-    const current = yield* input.adapters.get(opened.runtime.instanceId).pipe(Effect.option);
+    const current =
+      opened.sessionConfigKey === undefined
+        ? undefined
+        : yield* input.adapters.get(opened.runtime.instanceId).pipe(Effect.option);
     const stale =
-      Option.isNone(current) || current.value.sessionConfigKey !== opened.sessionConfigKey;
+      current !== undefined &&
+      (Option.isNone(current) || current.value.sessionConfigKey !== opened.sessionConfigKey);
     const marked = yield* read;
     if (marked === undefined) return "released";
     if (stale !== marked.retiring) {
@@ -132,18 +162,12 @@ export const make = <
       // Clearing goes back to the normal idle wait; setting starts the probe.
       yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
     }
-    if (!stale) return "current";
-    const latest = yield* read;
-    if (latest === undefined) return "released";
-    if (latest.busyTurns.size > 0) return "retiring";
-    const held =
-      latest.runtime.holdsLiveWork !== undefined &&
-      (yield* latest.runtime
-        .holdsLiveWork({ pastPinCeiling: false })
-        .pipe(unlessInterrupted(true)));
-    if (held) return "retiring";
-    yield* input.release(providerSessionId).pipe(logged(providerSessionId));
-    return (yield* read) === undefined ? "released" : "retiring";
+    if (stale) return yield* releaseIdle("retiring");
+    const predates =
+      model !== undefined &&
+      marked.runtime.predatesModel !== undefined &&
+      (yield* marked.runtime.predatesModel(model).pipe(unlessInterrupted(false)));
+    return predates ? yield* releaseIdle("outdated") : "current";
   });
 
   /** Rechecks every live session whenever provider instances change. */

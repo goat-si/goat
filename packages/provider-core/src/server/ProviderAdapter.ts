@@ -638,6 +638,8 @@ export interface ProviderAdapterV2SessionRuntime {
    * Past the ceiling the runtime confirms cached state with the provider first.
    */
   readonly holdsLiveWork?: (input: { readonly pastPinCeiling: boolean }) => Effect.Effect<boolean>;
+  /** True when the process started before `model` was added to the provider's catalog, so it cannot run it as offered. */
+  readonly predatesModel?: (model: string) => Effect.Effect<boolean>;
   /** Set when a reopen of this session must wait until its scope has closed, process included. */
   readonly reopenAfterClose?: true;
   /** Root-subscription probe; replacement checks opt in to subagents owned by the live process. */

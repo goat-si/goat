@@ -2615,17 +2615,16 @@ export const layerWithOptions = (
                 );
                 let settled = yield* settle;
                 if (Option.getOrUndefined(settled) !== undefined) {
-                  const retired = yield* retirement.retireIfStale(input.providerSessionId);
+                  const { model } = input.modelSelection;
+                  const retired = yield* retirement.retireIfStale(input.providerSessionId, model);
                   const latest = (yield* Ref.get(sessions)).get(key);
                   // The idle probe may release a retiring session before this read.
                   if (retired === "released" || latest === undefined) settled = yield* settle;
-                  else if (retired === "retiring" && !latest.busyTurnByThread.has(input.threadId))
+                  else if (Retirement.refuses(retired, latest.busyTurnByThread.has(input.threadId)))
                     return yield* new ProviderSessionOpenError({
                       instanceId: input.modelSelection.instanceId,
                       providerSessionId: input.providerSessionId,
-                      cause: new Retirement.ProviderRestartRequiredError({
-                        runningTurns: latest.busyTurns.size,
-                      }),
+                      cause: Retirement.restartRequired(retired, latest.busyTurns.size, model),
                     });
                 }
                 if (Option.isNone(settled))
