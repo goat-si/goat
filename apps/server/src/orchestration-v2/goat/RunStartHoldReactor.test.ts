@@ -246,6 +246,33 @@ it.layer(layerTest)("RunStartHoldReactor", (it) => {
     ),
   );
 
+  it.effect("shell reports a start hold and clears it when the fence disappears", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const held = yield* heldThread("shell");
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        yield* Ref.set(held.stopFenced, ["goal-turn"]);
+        const reactor = yield* held.startReactor;
+        yield* held.send("waiting");
+        yield* held.runReaches((run) => run.startHold !== undefined);
+        assert.strictEqual(
+          (yield* projections.getThreadShell(held.threadId))?.latestRunStartHeld,
+          true,
+        );
+        const projection = yield* projections.getThreadProjection(held.threadId);
+        assert.strictEqual(
+          ProjectionStore.threadShellFromProjection(projection!).latestRunStartHeld,
+          true,
+        );
+        yield* Ref.set(held.stopFenced, []);
+        yield* reactor.reconcileThread(held.threadId);
+        assert.isNotTrue((yield* projections.getThreadShell(held.threadId))?.latestRunStartHeld);
+        const released = yield* projections.getThreadProjection(held.threadId);
+        assert.isNotTrue(ProjectionStore.threadShellFromProjection(released!).latestRunStartHeld);
+      }),
+    ),
+  );
+
   it.effect(
     "a fence that clears on its own re-points the hold to the turn still holding the run",
     () =>
