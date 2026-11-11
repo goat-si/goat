@@ -8,7 +8,7 @@ import {
 import * as Base64 from "effect/encoding/Base64";
 import * as Result from "effect/Result";
 
-import { goatBotDayLabel } from "./labels.ts";
+import { goatBotDayLabel, goatBotLocalDate } from "./labels.ts";
 
 export type BotArtifactRead =
   | {
@@ -141,19 +141,31 @@ export function botArtifactViewKind(
   return "download";
 }
 
-/** Newest-first Library files under one heading per local calendar day, order kept. */
+/**
+ * Newest-first Library files under one heading per local calendar day, order kept. `key` is that
+ * day as YYYY-MM-DD and unique; a date from another year shows its year in the label.
+ */
 export function goatBotArtifactDays<File extends { readonly modifiedAt: string }>(
   files: ReadonlyArray<File>,
   nowMs: number,
-): ReadonlyArray<{ readonly label: string; readonly files: ReadonlyArray<File> }> {
-  const days: Array<{ label: string; files: File[] }> = [];
+): ReadonlyArray<{
+  readonly key: string;
+  readonly label: string;
+  readonly files: ReadonlyArray<File>;
+}> {
+  const days = new Map<string, { key: string; label: string; files: File[] }>();
   for (const file of files) {
-    const label = goatBotDayLabel(file.modifiedAt, nowMs);
-    const last = days.at(-1);
-    if (last?.label === label) last.files.push(file);
-    else days.push({ label, files: [file] });
+    const key = goatBotLocalDate(file.modifiedAt);
+    const day = days.get(key);
+    if (day !== undefined) day.files.push(file);
+    else
+      days.set(key, {
+        key,
+        label: goatBotDayLabel(file.modifiedAt, nowMs, { yearWhenOther: true }),
+        files: [file],
+      });
   }
-  return days;
+  return [...days.values()];
 }
 
 export function botArtifactSizeLabel(bytes: number): string {
