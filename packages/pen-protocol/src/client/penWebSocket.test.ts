@@ -238,6 +238,55 @@ describe("Pen WebSocket adapter (design 10.2 WebSocket rules on the adapter side
     expect(c.server.closeCode()).toBe(4408);
   });
 
+  it.each([
+    ["one read", ["\x81\x01A\xc1\x00"]],
+    ["split after the first frame", ["\x81\x01A", "\xc1\x00"]],
+  ])(
+    "a good frame before a malformed one is delivered the same way in %s",
+    async (_name, chunks) => {
+      const c = await connected();
+      c.accept();
+      await c.opened;
+      for (const chunk of chunks) c.server.write(chunk);
+      await c.whenEvent("close");
+      expect(c.events.map((e) => e.type)).toEqual(["open", "message", "error", "close"]);
+      expect(c.events[1]?.data).toBe("A");
+      expect(c.events.at(-1)).toMatchObject({ code: 1002 });
+    },
+  );
+
+  it.each([
+    ["an invalid code", () => [1005, ""] as const],
+    ["a reason over 123 bytes", () => [1000, "x".repeat(124)] as const],
+  ])("close() with %s throws and leaves the socket open", async (_name, args) => {
+    const c = await connected();
+    c.accept();
+    await c.opened;
+    const [code, reason] = args();
+    expect(() => c.socket.close(code, reason)).toThrow();
+    expect(c.socket.readyState).toBe(1);
+    c.socket.close(1000);
+    expect(c.socket.readyState).toBe(2);
+  });
+
+  it("close() when the CSPRNG fails throws and leaves the socket open", async () => {
+    let fail = false;
+    let seed = 1;
+    const c = await connected({
+      random: (n) => {
+        if (fail) throw new Error("no entropy");
+        return new Uint8Array(n).fill(seed++);
+      },
+    });
+    c.accept();
+    await c.opened;
+    fail = true;
+    expect(() => c.socket.close(1000)).toThrow(
+      expect.objectContaining({ code: "random-unavailable" }),
+    );
+    expect(c.socket.readyState).toBe(1);
+  });
+
   it("a malformed server frame fails the socket with the rule's close code", async () => {
     const c = await connected();
     c.accept();

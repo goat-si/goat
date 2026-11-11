@@ -55,4 +55,14 @@ describe("WebSocket message assembly (design 10.2: inbound held up to one messag
     expect(events).toHaveLength(1);
     expect(decoder.peakCapacity()).toBeLessThanOrEqual(2 * 1024 * 1024);
   });
+
+  it("next() decodes one message at a time; later frames stay undecoded input until asked for", () => {
+    const decoder = new FrameDecoder();
+    decoder.feed(Uint8Array.of(0x81, 1, 0x41, 0x81, 1, 0x42, 0x81, 1, 0x43));
+    expect(decoder.next()).toEqual({ type: "message", data: "A" });
+    expect(decoder.unread()).toBe(6);
+    expect(decoder.next()).toEqual({ type: "message", data: "B" });
+    expect(decoder.next()).toEqual({ type: "message", data: "C" });
+    expect(decoder.next()).toBeNull();
+  });
 });

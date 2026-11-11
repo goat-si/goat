@@ -184,6 +184,33 @@ function pickError(
   return errors.at(-1)?.error ?? new PenError("dial-failed", "no relay connected");
 }
 
+/**
+ * The dial deadline outlives the race's decision: dials still connecting when it fires are abandoned, whatever the
+ * race already decided (Go keeps the dial context until the losers drain). It stops once every dial has settled.
+ */
+function dialDeadline(
+  options: SessionOptions,
+  dials: ReadonlyArray<{ readonly dial: PendingDial }>,
+  onExpire: () => void = () => undefined,
+): void {
+  let unsettled = dials.length;
+  const timer = options.clock.setTimer(RACE_LIMITS.dialMs, () => {
+    for (const { dial } of dials) dial.abandon();
+    onExpire();
+  });
+  for (const { dial } of dials) {
+    void dial.opened
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => {
+        unsettled -= 1;
+        if (unsettled === 0) timer.cancel();
+      });
+  }
+}
+
 function dialAll(
   options: SessionOptions,
   relays: ReadonlyArray<string>,
@@ -206,12 +233,9 @@ function handshakeRace(options: SessionOptions): Promise<OpenedSession> {
     const errors: Array<{ error: unknown; handshake: boolean }> = [];
     const live = new Set<RelayLink>();
     const dials = dialAll(options, options.relays);
-    const dialTimer = options.clock.setTimer(RACE_LIMITS.dialMs, () => {
-      for (const { dial } of dials) dial.abandon();
-    });
+    dialDeadline(options, dials);
     const decide = (keep: RelayLink | undefined) => {
       decided = true;
-      dialTimer.cancel();
       for (const link of live) if (link !== keep) link.close(1000);
     };
     const settle = (error: unknown, handshakeError: boolean) => {
@@ -289,10 +313,9 @@ async function pingRace(
     const errors: Array<{ error: unknown; handshake: boolean }> = [];
     const live = new Set<RelayLink>();
     const dials = dialAll(options, relays);
-    const raceTimer = options.clock.setTimer(RACE_LIMITS.dialMs, () => {
+    dialDeadline(options, dials, () => {
       if (decided) return;
       decided = true;
-      for (const { dial } of dials) dial.abandon();
       for (const link of live) link.close(1000);
       reject(new PenError("dial-timeout", "no relay answered within 15 s"));
     });
@@ -301,7 +324,6 @@ async function pingRace(
       remaining -= 1;
       if (remaining === 0 && !decided) {
         decided = true;
-        raceTimer.cancel();
         reject(pickError(errors));
       }
     };
@@ -313,7 +335,15 @@ async function pingRace(
             return;
           }
           live.add(link);
-          link.ping();
+          try {
+            link.ping();
+          } catch (error) {
+            // A relay whose ping cannot be sent has failed; the race goes on without it.
+            live.delete(link);
+            link.close(1000);
+            fail(error);
+            return;
+          }
           const closedEarly = link.closed.then((code) => {
             throw new PenError("relay-closed", "closed " + code, { closeCode: code });
           });
@@ -324,7 +354,6 @@ async function pingRace(
                 return;
               }
               decided = true;
-              raceTimer.cancel();
               for (const other of live) if (other !== link) other.close(1000);
               resolve({ relay, link });
             },

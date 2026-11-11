@@ -106,7 +106,9 @@ export type PairingView =
   | { readonly tag: "pending-unresolved" }
   | { readonly tag: "discarded" }
   /** The outcome belonged to an attempt the person discarded or replaced; nothing changed. */
-  | { readonly tag: "superseded" };
+  | { readonly tag: "superseded" }
+  /** A replacement is waiting for the new key's first session; until then the original key is kept (§6.2). */
+  | { readonly tag: "replacement-pending" };
 
 export interface PairingDeps {
   readonly store: PairingStore;
@@ -195,12 +197,12 @@ function promoteAttempt(
 }
 
 /** Removes the attempt's pending key after its own refusal or failure; another attempt's key is left alone. */
-async function dropPending(deps: PairingDeps, nodeId: string, publicKey: string): Promise<void> {
-  await update(deps, nodeId, (record) =>
+async function dropPending(deps: PairingDeps, nodeId: string, publicKey: string): Promise<boolean> {
+  return update(deps, nodeId, (record) =>
     isAttempt(record, publicKey)
-      ? { next: withoutPending(record), result: undefined }
-      : { result: undefined },
-  ).catch(() => undefined);
+      ? { next: withoutPending(record), result: true }
+      : { result: false },
+  ).catch(() => false);
 }
 
 /** Replaces the attempt's pending entry; false when the attempt is no longer the pending one. */
@@ -265,6 +267,10 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
       if (record.current !== undefined && record.current.deviceId === null) {
         return { result: { tag: "stop", view: { tag: "connect-once" } } };
       }
+      // The original key stays until the new key has had a session; a second replacement would lose it.
+      if (record.previous !== undefined) {
+        return { result: { tag: "stop", view: { tag: "replacement-pending" } } };
+      }
       const replacesDeviceId = record.current?.deviceId ?? undefined;
       const pending: PendingPairing = {
         key: storeKey(key),
@@ -322,7 +328,7 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
   }
   if (answer.status === 409) {
     channel.close();
-    await dropPending(deps, qr.nodeId, attempt);
+    if (!(await dropPending(deps, qr.nodeId, attempt))) return finish(deps, { tag: "superseded" });
     return finish(deps, { tag: "refused", reason: answer.reason });
   }
   if (answer.status !== 202) {
@@ -352,7 +358,7 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
       result = await channel.poll();
     } catch {
       channel.close();
-      return checking(deps, qr.nodeId);
+      return checking(deps, qr.nodeId, attempt);
     }
     if (result.status === 204) continue;
     channel.close();
@@ -363,10 +369,11 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
       return finish(deps, { tag: "paired", deviceId: result.deviceId });
     }
     if (result.status === 409) {
-      await dropPending(deps, qr.nodeId, attempt);
+      if (!(await dropPending(deps, qr.nodeId, attempt)))
+        return finish(deps, { tag: "superseded" });
       return finish(deps, { tag: "refused", reason: result.reason });
     }
-    return checking(deps, qr.nodeId);
+    return checking(deps, qr.nodeId, attempt);
   }
 }
 
@@ -375,11 +382,23 @@ function sleep(clock: Clock, ms: number): Promise<void> {
 }
 
 /** Design 5.6: after a 202 with no authenticated outcome, probe the pending key every 30 s for 10 minutes. */
-async function checking(deps: PairingDeps, nodeId: string): Promise<PairingView> {
+async function checking(
+  deps: PairingDeps,
+  nodeId: string,
+  expected?: string,
+): Promise<PairingView> {
   const record = await deps.store.load(nodeId);
   const pending = record?.pending;
-  if (pending === undefined)
-    return finish(deps, { tag: "not-paired", reason: "no pairing in progress" });
+  // Checking runs only for its own attempt, and only after that attempt's 202 was recorded.
+  const own =
+    pending !== undefined &&
+    pending.stage === "post-202" &&
+    (expected === undefined || pending.key.publicKey === expected);
+  if (!own) {
+    return expected === undefined
+      ? finish(deps, { tag: "not-paired", reason: "no pairing in progress" })
+      : finish(deps, { tag: "superseded" });
+  }
   const attempt = pending.key.publicKey;
   const key = loadKey(pending.key);
   const start = deps.clock.now();

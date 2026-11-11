@@ -366,8 +366,9 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     };
     await t.deps.store.save(NODE, { pending: newer });
     t.replies.polls[0]?.resolve({ status: 409, reason: "mismatch" });
-    expect(await done).toEqual({ tag: "refused", reason: "mismatch" });
+    expect(await done).toEqual({ tag: "superseded" });
     expect(t.stored()).toEqual({ pending: newer });
+    expect(t.views.some((view) => view.tag === "refused")).toBe(false);
   });
 
   it("a late 200 for an attempt that was replaced promotes nothing", async () => {
@@ -388,6 +389,42 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     t.replies.polls[0]?.resolve({ status: 200, deviceId: "d", environmentId: "e", label: "Mac" });
     expect(await done).toEqual({ tag: "superseded" });
     expect(t.stored()).toEqual({ pending: newer });
+  });
+
+  it("a late poll failure for a replaced attempt neither probes nor shows Checking for the newer attempt", async () => {
+    const t = setup();
+    const done = runPairing(t.deps, qr);
+    await t.when("dial");
+    t.race.resolve(t.channel);
+    await t.when("request");
+    t.replies.request.resolve({ status: 202 });
+    await t.when("poll");
+    const newer = {
+      key: { privateKey: "n", publicKey: "newer" },
+      stage: "pre-202" as const,
+      server: { nodeId: NODE, noisePub: "x", relays: [] },
+      startedAt: 1,
+    };
+    await t.deps.store.save(NODE, { pending: newer });
+    t.replies.polls[0]?.reject(new Error("stream closed"));
+    expect(await done).toEqual({ tag: "superseded" });
+    expect(t.probes).toHaveLength(0);
+    expect(t.views.some((view) => view.tag === "checking")).toBe(false);
+    expect(t.stored()).toEqual({ pending: newer });
+  });
+
+  it("while a replacement waits for the new key's first session, another replacement is refused and the original key kept", async () => {
+    const pairing = (id: string, publicKey: string) => ({
+      key: { privateKey: "k-" + publicKey, publicKey },
+      deviceId: id,
+      server: { nodeId: NODE, noisePub: "x", relays: [] },
+    });
+    const t = setup({
+      record: { current: pairing("new-device", "new"), previous: pairing("original", "orig") },
+    });
+    expect(await runPairing(t.deps, qr)).toEqual({ tag: "replacement-pending" });
+    expect(t.opened()).toBe(0);
+    expect(t.stored()?.previous?.deviceId).toBe("original");
   });
 
   it("a replacement whose old device id is unknown stops before dialling; Forget removes current and previous", async () => {

@@ -349,8 +349,17 @@ class PenFetcher {
           await onBody(event.bytes);
         } else if (head !== undefined) {
           deadline.disarm();
-          // Reuse only after a length- or chunk-delimited response with nothing after it (H40, H41, H42).
-          const reusable = event.delimiter !== "close" && parser.leftover().length === 0;
+          // Reuse only after a length- or chunk-delimited response with nothing after it and no request to close
+          // (H40, H41, H42). HEAD, 204 and 304 carry no delimiter, so they end the stream too.
+          const closeAsked = head.headers.some(
+            ([name, value]) =>
+              name === "connection" &&
+              value.split(",").some((token) => token.trim().toLowerCase() === "close"),
+          );
+          const reusable =
+            (event.delimiter === "length" || event.delimiter === "chunked") &&
+            parser.leftover().length === 0 &&
+            !closeAsked;
           if (reusable) slot.idle();
           else this.#discard(1000);
           return head;

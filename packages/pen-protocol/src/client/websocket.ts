@@ -119,16 +119,53 @@ export class FrameDecoder {
     return this.#message.peakCapacity;
   }
 
-  push(bytes: Uint8Array): Array<FrameEvent> {
+  // Input fed but not yet decoded: decoding stops after each event, so a caller handles one message at a time.
+  #input: Uint8Array = new Uint8Array(0);
+  #at = 0;
+
+  /** Adds bytes to decode; they are decoded only as next() asks. */
+  feed(bytes: Uint8Array): void {
+    if (this.#error !== undefined) throw this.#error;
+    const rest = this.#input.subarray(this.#at);
+    if (rest.length === 0) {
+      this.#input = bytes;
+    } else {
+      const joined = new Uint8Array(rest.length + bytes.length);
+      joined.set(rest);
+      joined.set(bytes, rest.length);
+      this.#input = joined;
+    }
+    this.#at = 0;
+  }
+
+  /** Bytes fed and not yet decoded. */
+  unread(): number {
+    return this.#input.length - this.#at;
+  }
+
+  /**
+   * The next event, or null when the fed bytes hold no further complete event. Events already returned stay
+   * delivered when a later frame is malformed, whatever the input's split; any failure is final.
+   */
+  next(): FrameEvent | null {
     if (this.#error !== undefined) throw this.#error;
     try {
-      return this.#push(bytes);
+      const events: Array<FrameEvent> = [];
+      this.#at = this.#decode(this.#input, this.#at, events);
+      return events[0] ?? null;
     } catch (error) {
-      // Any failure is final, and only PenError leaves the decoder.
       this.#error =
         error instanceof PenError ? error : fail("internal", 1011, "the decoder failed");
       throw this.#error;
     }
+  }
+
+  /** Feeds bytes and decodes every event they complete (for callers that hold no more than the input). */
+  push(bytes: Uint8Array): Array<FrameEvent> {
+    this.feed(bytes);
+    const events: Array<FrameEvent> = [];
+    for (let event = this.next(); event !== null; event = this.next()) events.push(event);
+    return events;
   }
 
   /** The stream ended: inside a frame or a fragmented message that is an abnormal close (1006). */
@@ -141,12 +178,12 @@ export class FrameDecoder {
     return [];
   }
 
-  #push(bytes: Uint8Array): Array<FrameEvent> {
-    const events: Array<FrameEvent> = [];
-    let at = 0;
-    while (at < bytes.length) {
+  /** Decodes from \`at\` until one event is complete or the bytes run out; returns the new position. */
+  #decode(bytes: Uint8Array, start: number, events: Array<FrameEvent>): number {
+    let at = start;
+    while (at < bytes.length && events.length === 0) {
       // After a close frame the rest is discarded (RFC 6455 section 5.5.1): the close is the last event.
-      if (this.#closed) return events;
+      if (this.#closed) return bytes.length;
       const byte = bytes[at] ?? 0;
       switch (this.#stage) {
         case "b0":
@@ -174,7 +211,8 @@ export class FrameDecoder {
         }
       }
     }
-    return events;
+    if (this.#closed) return bytes.length;
+    return at;
   }
 
   #firstByte(byte: number): void {

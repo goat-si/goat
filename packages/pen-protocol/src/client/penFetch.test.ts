@@ -138,6 +138,30 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     expect(t.pairs).toHaveLength(1);
   });
 
+  it.each([
+    ["a 204", "HTTP/1.1 204 No Content\r\n\r\n", "GET"],
+    ["a 304", "HTTP/1.1 304 Not Modified\r\n\r\n", "GET"],
+    ["a HEAD response", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n", "HEAD"],
+    [
+      "Connection: close",
+      "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 1\r\n\r\na",
+      "GET",
+    ],
+  ])("H40: the stream is not reused after %s", async (_name, response, method) => {
+    const t = setup();
+    const first = t.fetch(ORIGIN + "/a", { method });
+    const server = await t.stream(1);
+    await request(server);
+    server.write(response);
+    await first;
+    expect(server.closeCode()).toBe(1000);
+    const second = t.fetch(ORIGIN + "/b");
+    const next = await t.stream(2);
+    await request(next);
+    next.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    await second;
+  });
+
   it("H41: a close-delimited response is read to the end and the next request opens a new stream", async () => {
     const t = setup();
     const first = t.fetch(ORIGIN + "/a");
@@ -211,7 +235,7 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     await request(server);
     controller.abort();
     await expect(queued).rejects.toMatchObject({ name: "AbortError" });
-    server.write("HTTP/1.1 204 No Content\r\n\r\n");
+    server.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     await first;
     const third = t.fetch(ORIGIN + "/c");
     await written(server, "GET /c ");
@@ -378,7 +402,7 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     const sent = await request(server);
     expect(sent.startsWith("GET /a ")).toBe(true);
     expect(sent).not.toContain("GET /b");
-    server.write("HTTP/1.1 204 No Content\r\n\r\n");
+    server.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     await first;
     await written(server, "GET /b ");
     server.write("HTTP/1.1 204 No Content\r\n\r\n");

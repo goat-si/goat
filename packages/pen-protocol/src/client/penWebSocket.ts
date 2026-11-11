@@ -182,34 +182,46 @@ class PenWebSocket implements PenWebSocketLike {
   }
 
   /** Reads one chunk at a time and hands each message out before the next read: the stream's credit is the backpressure. */
+  /**
+   * Decodes and handles one event at a time, reading the next chunk only when the fed bytes hold no further event:
+   * at most one decoded message is held, and the stream's credit is the backpressure.
+   */
   async #readLoop(stream: PenStream, first: Uint8Array): Promise<void> {
     const decoder = new FrameDecoder();
-    let chunk: Uint8Array | null = first;
+    decoder.feed(first);
     for (;;) {
-      const events: Array<FrameEvent> = chunk === null ? decoder.finish() : decoder.push(chunk);
-      for (const event of events) {
-        if (event.type === "message") {
-          const data = typeof event.data === "string" ? event.data : event.data;
-          this.#dispatch("message", { type: "message", data });
-        } else if (event.type === "ping") {
-          if (this.readyState === OPEN)
-            this.#enqueue(encodeFrame(Opcode.Pong, event.payload, this.#options.random));
-        } else {
-          if (!this.#closeSent) {
-            this.#closeSent = true;
-            const echo = event.code === 1005 ? new Uint8Array(0) : closePayload(event.code);
-            this.#enqueue(encodeFrame(Opcode.Close, echo, this.#options.random));
-          }
-          this.#finish(event.code, event.reason);
-          return;
-        }
+      for (let event = decoder.next(); event !== null; event = decoder.next()) {
+        if (this.#handle(event)) return;
       }
       if (this.#finished) return;
-      // The stream ended with no close frame: an abnormal closure (RFC 6455 section 7.1.5).
-      if (chunk === null)
+      const chunk = await stream.read();
+      if (chunk === null) {
+        decoder.finish();
+        // The stream ended with no close frame: an abnormal closure (RFC 6455 section 7.1.5).
         throw new PenError("ws/W25", "the stream ended without a close frame", { closeCode: 1006 });
-      chunk = await stream.read();
+      }
+      decoder.feed(chunk);
     }
+  }
+
+  /** Handles one decoded event; true once the socket has finished. */
+  #handle(event: FrameEvent): boolean {
+    if (event.type === "message") {
+      this.#dispatch("message", { type: "message", data: event.data });
+      return this.#finished;
+    }
+    if (event.type === "ping") {
+      if (this.readyState === OPEN)
+        this.#enqueue(encodeFrame(Opcode.Pong, event.payload, this.#options.random));
+      return this.#finished;
+    }
+    if (!this.#closeSent) {
+      this.#closeSent = true;
+      const echo = event.code === 1005 ? new Uint8Array(0) : closePayload(event.code);
+      this.#enqueue(encodeFrame(Opcode.Close, echo, this.#options.random));
+    }
+    this.#finish(event.code, event.reason);
+    return true;
   }
 
   send(data: string | Uint8Array): void {
@@ -276,9 +288,15 @@ class PenWebSocket implements PenWebSocketLike {
       this.#finish(1006, "closed before open");
       return;
     }
+    // Everything that can fail runs before the state changes: the WebSocket API allows 1000 and 3000-4999, a
+    // reason of at most 123 bytes, and the mask needs the CSPRNG. A refused close leaves the socket open.
+    if (code !== 1000 && (code < 3000 || code > 4999)) {
+      throw new PenError("ws/close-code", "close codes are 1000 or 3000 to 4999");
+    }
+    const frame = encodeFrame(Opcode.Close, closePayload(code, reason), this.#options.random);
     this.readyState = CLOSING;
     this.#closeSent = true;
-    this.#enqueue(encodeFrame(Opcode.Close, closePayload(code, reason), this.#options.random));
+    this.#enqueue(frame);
     this.#closeTimer = this.#options.clock.setTimer(PEN_WEBSOCKET_LIMITS.closeMs, () =>
       this.#finish(1006, "no close frame", true),
     );

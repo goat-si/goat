@@ -141,6 +141,59 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
     expect((await t.result).relay).toBe(A);
   });
 
+  it.each(["winner", "refusal"] as const)(
+    "after a %s, a dial that never opens is still abandoned at the 15 s dial deadline",
+    async (outcome) => {
+      const t = setup();
+      const a = t.fake.socketFor(A);
+      const b = t.fake.socketFor(B);
+      await flushOpen(a);
+      if (outcome === "winner") {
+        answer(a);
+        await t.result;
+      } else {
+        a.remoteClose(4401);
+        await expect(t.result).rejects.toMatchObject({ closeCode: 4401 });
+      }
+      expect(b.closedWith).toBeUndefined();
+      t.clock.advance(15_000);
+      expect(b.closedWith).not.toBeUndefined();
+    },
+  );
+
+  it("ping race: a relay whose ping cannot be sent counts as failed; the other relay wins, or the race ends at once", async () => {
+    const pingOptions = {
+      mode: "ping" as const,
+      kind: Kind.Join,
+      psk: fromHex(vector.ikpsk2.psk),
+      payload: { v: 1, stream: "join", invite: "x", name: "p" },
+    };
+    const breakPing = (socket: FakeSocket) => {
+      const send = socket.send.bind(socket);
+      socket.send = (data) => {
+        if (data === "ping") throw new Error("socket gone");
+        send(data);
+      };
+    };
+    const only = setup({ ...pingOptions, relays: [A] });
+    const lone = only.fake.socketFor(A);
+    breakPing(lone);
+    lone.open();
+    await expect(only.result).rejects.toThrow("socket gone");
+    expect(lone.closedWith).not.toBeUndefined();
+
+    const two = setup(pingOptions);
+    const a = two.fake.socketFor(A);
+    const b = two.fake.socketFor(B);
+    breakPing(a);
+    a.open();
+    b.open();
+    await b.whenSent(1);
+    b.receive("pong");
+    await b.whenSent(2);
+    expect(a.closedWith).not.toBeUndefined();
+  });
+
   it("a handshake with no message 2 within 10 s closes 4408", async () => {
     const t = setup({ relays: [A] });
     await flushOpen(t.fake.socketFor(A));
