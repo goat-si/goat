@@ -224,16 +224,18 @@ func (d *Daemon) closeOwned(l *live, code uint16) {
 	}
 	l.sec.Close(code)
 	l.gate.Unlock()
-	d.mu.Lock()
-	delete(d.sessions, l.k)
-	d.mu.Unlock()
 	if l.slot != nil {
 		d.svc.releasePhone(l.slot)
 	}
 	if d.opt.ClientClosed != nil {
 		d.opt.ClientClosed()
 	}
+	// The entry leaves d.sessions and closed is signalled in one step: a selector holding d.mu either finds the
+	// session and waits on closed, or finds it gone after everything above finished.
+	d.mu.Lock()
+	delete(d.sessions, l.k)
 	close(l.closed)
+	d.mu.Unlock()
 }
 
 // closeLive closes l with code unless another owner already is (then that owner's code stands).

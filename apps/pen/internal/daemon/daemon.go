@@ -82,6 +82,9 @@ type Options struct {
 	RegistrationJoining func(id string)
 	// Registering, when set, runs after a registration became current and before its holder is answered (tests).
 	Registering func()
+	// HandshakeContext, when set, derives each incoming handshake's context; a test ends it to drive the handshake
+	// deadline's path without waiting 10 s (tests).
+	HandshakeContext func(context.Context) context.Context
 	// HolderWriting, when set, runs as a holder queue's writer holds write ownership, before it writes (tests).
 	HolderWriting func()
 	// ClientEnded, when set, runs when the goroutine that accepted a confirmed client or pairing session is done with

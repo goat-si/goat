@@ -16,6 +16,7 @@ import (
 // heldCloses starts a node whose client close owners stop at ClientClosing while hold is set; held receives a value
 // each time one stops there.
 type heldCloses struct {
+	once    sync.Once
 	hold    atomic.Bool
 	held    chan struct{}
 	release chan struct{}
@@ -42,8 +43,12 @@ func heldNode(t *testing.T, ctx context.Context, rs *relaytest.Server, ended cha
 		}
 		o.ClientEnded = func() { h.ended <- struct{}{} }
 	})
+	// Registered after the daemon's own cleanup, so it runs first: a failed assertion never strands the shutdown.
+	t.Cleanup(h.open)
 	return n, h
 }
+
+func (h *heldCloses) open() { h.once.Do(func() { close(h.release) }) }
 
 func TestADeliveryThatFailsWhileAListDropIsClosingItKeepsTheDropsCode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,7 +80,7 @@ func TestADeliveryThatFailsWhileAListDropIsClosingItKeepsTheDropsCode(t *testing
 	<-prog.raw   // the delivery failed its proof while the teardown held the close
 	<-held.ended // and its session's goroutine has finished every close it would make
 	held.hold.Store(false)
-	close(held.release)
+	held.open()
 	if m := <-answered; m["t"] != "clients" {
 		t.Fatalf("list answered %v", m)
 	}
@@ -128,7 +133,7 @@ func TestReplacingARegistrationWhileItsListDropIsClosingTellsTheOldHolderAtOnceA
 	}
 	ended <- "released"
 	held.hold.Store(false)
-	close(held.release)
+	held.open()
 	if e := <-ended; e != "released" {
 		t.Fatalf("the old registration ended (%s) before its held close finished", e)
 	}

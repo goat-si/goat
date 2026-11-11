@@ -97,7 +97,11 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		slot, err = d.reserveAccount(c)
 		return nil, err
 	}
-	sec, err := session.Respond(ctx, c, d.id, d.nodeID, admit)
+	hctx := ctx
+	if d.opt.HandshakeContext != nil {
+		hctx = d.opt.HandshakeContext(ctx)
+	}
+	sec, err := session.Respond(hctx, c, d.id, d.nodeID, admit)
 	if client != nil {
 		// Tracked on its registration until this goroutine is done with it (registered first, so it runs last).
 		defer d.svc.leaveHandshake(client.reg, client.hs)

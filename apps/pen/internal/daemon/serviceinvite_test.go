@@ -172,13 +172,8 @@ func TestAPairingHandshakeCannotBurnAnInviteThatWasReplacedCancelledOrExpired(t 
 	f := newPairFixture(t)
 	burnRefused := func(why string, p *session.Pending) {
 		t.Helper()
-		sec, err := p.Confirm()
-		if err != nil {
-			return
-		}
-		if code := closedWith(f.ctx, sec); code != wire.CodeNotAdmitted {
-			t.Fatalf("%s: closed %d, want 4401", why, code)
-		}
+		t.Log(why)
+		refusedAtConfirmation(t, f.ctx, p)
 	}
 	psk := f.invite(t, "AAAAAAAAAAAAAAAA")
 	p, err := f.pair(t, phone(t), psk, servicePair("AAAAAAAAAAAAAAAA"))

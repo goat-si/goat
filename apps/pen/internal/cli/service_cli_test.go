@@ -531,3 +531,41 @@ func TestServiceRegisterRefusesToForwardAnOpLineOver4096Bytes(t *testing.T) {
 		t.Fatalf("stdout %q: the long line was forwarded", out.String())
 	}
 }
+
+func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "pen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	st, err := state.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A node that registers and then, like a v1.2 node, ignores the ops and ends the registration at the half-close.
+	ln, err := net.Listen("unix", daemon.SocketPath(st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		r.ReadBytes('\n')
+		c.Write([]byte(`{"t":"registered","id":"r","name":"goat","port":1}` + "\n"))
+		io.Copy(io.Discard, r)
+	}()
+	t.Setenv("PEN_HOME", dir)
+	key := make([]byte, 32)
+	rand.Read(key)
+	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n")
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), "before answering 1") {
+		t.Fatalf("exit %d, stderr %q; want 1 and the unanswered op named", rc, errOut.String())
+	}
+}

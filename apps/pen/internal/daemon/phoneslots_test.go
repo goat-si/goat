@@ -132,11 +132,7 @@ func TestAPhoneSlotIsReturnedHoweverItsSessionEnds(t *testing.T) {
 	}
 	s.total(t, 1)
 	s.h.setList(t, 2) // dropped after message 2: refused at the check after confirmation
-	if sec, err := p.Confirm(); err == nil {
-		if code := closedWith(s.ctx, sec); code != wire.CodeNotAdmitted {
-			t.Fatalf("refused after confirmation with %d, want 4401", code)
-		}
-	}
+	refusedAtConfirmation(t, s.ctx, p)
 	s.total(t, 0)
 
 	s.h.setList(t, 3, k)

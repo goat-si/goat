@@ -139,7 +139,7 @@ func TestAPhoneSlotStaysCountedUntilTheOwnerOfItsCloseFinishes(t *testing.T) {
 	total := a.d.svc.phones.total
 	a.d.svc.mu.Unlock()
 	held.hold.Store(false)
-	close(held.release)
+	held.open()
 	if total != 1 {
 		t.Fatalf("%d phone slots held while the session's close is still pending; want 1", total)
 	}

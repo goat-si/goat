@@ -79,8 +79,12 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 		return die(fmt.Errorf("unexpected answer %q", reg.T))
 	}
 	fmt.Fprintf(stdout, "pen-service v1 registered %s %s\n", name, reg.ID)
-	var released atomic.Bool
-	ended := make(chan int, 2)
+	// The node answers every op once, in order; events (invite-burned, invite-exhausted) are not answers. Counting
+	// both sides lets the end of stdin succeed only once every forwarded op was answered.
+	var released, noHalfClose atomic.Bool
+	var forwarded, answered atomic.Int64
+	allAnswered := func() bool { return answered.Load() == forwarded.Load() }
+	ended := make(chan int, 3)
 	go func() {
 		for {
 			op, err := readCappedLine(stdin, serviceOpCap)
@@ -88,7 +92,11 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 				// Released: the node answers what it was sent, then ends the registration and closes.
 				released.Store(true)
 				if cl.CloseWrite() != nil {
-					ended <- serviceReleased
+					// Without a half-close the node cannot end the registration for us: stop at the last answer.
+					noHalfClose.Store(true)
+					if allAnswered() {
+						ended <- serviceReleased
+					}
 				}
 				return
 			}
@@ -97,6 +105,7 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 				ended <- serviceFailed
 				return
 			}
+			forwarded.Add(1)
 			if _, err := cl.Write(op); err != nil {
 				return
 			}
@@ -107,8 +116,14 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 		for {
 			b, err := readCappedLine(node, serviceAnswerCap)
 			if err != nil {
-				if released.Load() {
+				if released.Load() && allAnswered() {
 					ended <- serviceReleased
+					return
+				}
+				if released.Load() {
+					fmt.Fprintf(stderr, "pen service: the pen daemon closed the registration of %s before answering %d forwarded op(s)\n",
+						name, forwarded.Load()-answered.Load())
+					ended <- serviceDaemonGone
 					return
 				}
 				fmt.Fprintf(stderr, "pen service: the pen daemon closed the registration of %s\n", name)
@@ -125,6 +140,14 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 				return
 			}
 			stdout.Write(b)
+			switch notice.T {
+			case "clients", "refused", "invite", "invite-cancelled":
+				answered.Add(1)
+				if released.Load() && noHalfClose.Load() && allAnswered() {
+					ended <- serviceReleased
+					return
+				}
+			}
 		}
 	}()
 	return <-ended
