@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - each test gets a scratch database folder.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

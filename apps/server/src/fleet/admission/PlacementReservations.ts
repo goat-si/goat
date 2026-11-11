@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import type * as SqlError from "effect/sql/SqlError";
 
 /** The target's record of placed launches (design §11): one row per key, conditional writes only. */
 
@@ -144,14 +145,13 @@ const fromRow = (row: Row): Reservation => ({
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const isStoreError = Schema.is(PlacementStoreError);
   const failed =
     (operation: string) =>
-    <A, R>(effect: Effect.Effect<A, unknown, R>) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.mapError((cause) =>
-          cause instanceof PlacementStoreError
-            ? cause
-            : new PlacementStoreError({ operation, cause }),
+          isStoreError(cause) ? cause : new PlacementStoreError({ operation, cause }),
         ),
       );
 
@@ -178,8 +178,8 @@ const make = Effect.gen(function* () {
 
   const updated = (rows: ReadonlyArray<unknown>) => rows.length > 0;
 
-  const admit: PlacementReservationsShape["admit"] = (input) =>
-    sql
+  const admit = Effect.fn("PlacementReservations.admit")(function* (input: AdmitInput) {
+    return yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const existing = yield* rowByKey(input.key);
@@ -224,87 +224,132 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(failed("admit"));
+  });
+
+  const conditional = (
+    operation: string,
+    statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>,
+  ) => statement.pipe(Effect.map(updated), failed(operation));
+
+  const lookup = Effect.fn("PlacementReservations.lookup")(function* (key: PlacementKey) {
+    return yield* sql
+      .withTransaction(Effect.all({ row: rowByKey(key), watermark: watermark("lookup") }))
+      .pipe(failed("lookup"));
+  });
+  const get = Effect.fn("PlacementReservations.get")(function* (commandId: string) {
+    const rows =
+      yield* sql<Row>`SELECT * FROM placement_reservations WHERE command_id = ${commandId}`.pipe(
+        failed("get"),
+      );
+    return rows[0] === undefined ? null : fromRow(rows[0]);
+  });
+  const bindThread = Effect.fn("PlacementReservations.bindThread")(function* (
+    input: Owned & { readonly threadId: string },
+  ) {
+    return yield* conditional(
+      "bindThread",
+      sql`
+        UPDATE placement_reservations SET thread_id = ${input.threadId}
+        WHERE command_id = ${input.commandId} AND state = 'pending' AND owner_epoch = ${input.epoch}
+        RETURNING command_id
+      `,
+    );
+  });
+  const markCounted = Effect.fn("PlacementReservations.markCounted")(function* (
+    input: Owned & { readonly threadId: string; readonly runId: string },
+  ) {
+    return yield* conditional(
+      "markCounted",
+      sql`
+        UPDATE placement_reservations
+        SET state = 'counted', thread_id = ${input.threadId}, run_id = ${input.runId}
+        WHERE command_id = ${input.commandId} AND state = 'pending' AND owner_epoch = ${input.epoch}
+        RETURNING command_id
+      `,
+    );
+  });
+  const renew = Effect.fn("PlacementReservations.renew")(function* (
+    input: Owned & { readonly now: number },
+  ) {
+    return yield* conditional(
+      "renew",
+      sql`
+        UPDATE placement_reservations SET lease_until = ${input.now + LEASE_MS}
+        WHERE command_id = ${input.commandId} AND state = 'pending' AND owner_epoch = ${input.epoch}
+        RETURNING command_id
+      `,
+    );
+  });
+  const finalize = Effect.fn("PlacementReservations.finalize")(function* (
+    input: Owned & { readonly reason: string },
+  ) {
+    return yield* conditional(
+      "finalize",
+      sql`
+        UPDATE placement_reservations SET state = 'fenced', reason = ${input.reason}
+        WHERE command_id = ${input.commandId} AND state = 'pending' AND owner_epoch = ${input.epoch}
+        RETURNING command_id
+      `,
+    );
+  });
+  const sweep = Effect.fn("PlacementReservations.sweep")(function* (now: number) {
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const lapsed = yield* sql`
+            UPDATE placement_reservations SET state = 'fenced', reason = 'lease lapsed'
+            WHERE state = 'pending' AND lease_until < ${now}
+            RETURNING command_id
+          `;
+          const capped = yield* sql`
+            UPDATE placement_reservations
+            SET state = 'fenced', reason = 'launch took longer than 60 minutes'
+            WHERE state = 'pending' AND admitted_at < ${now - PENDING_CAP_MS}
+            RETURNING command_id
+          `;
+          return lapsed.length + capped.length;
+        }),
+      )
+      .pipe(failed("sweep"));
+  });
+  const fenceStale = Effect.fn("PlacementReservations.fenceStale")(function* (epoch: string) {
+    const rows = yield* sql`
+      UPDATE placement_reservations SET state = 'fenced', reason = 'restarted'
+      WHERE state = 'pending' AND owner_epoch <> ${epoch}
+      RETURNING command_id
+    `.pipe(failed("fenceStale"));
+    return rows.length;
+  });
+  const prune = Effect.fn("PlacementReservations.prune")(function* (now: number) {
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const current = yield* watermark("prune");
+          const deleted = yield* sql<{ readonly issued_at: number }>`
+            DELETE FROM placement_reservations
+            WHERE state IN ('counted', 'fenced') AND issued_at < ${now - RETAIN_MS}
+            RETURNING issued_at
+          `;
+          const next = deleted.reduce((max, row) => Math.max(max, row.issued_at), current);
+          if (next !== current)
+            yield* sql`UPDATE placement_watermark SET issued_at = ${next} WHERE id = 1`;
+          return { deleted: deleted.length, watermark: next };
+        }),
+      )
+      .pipe(failed("prune"));
+  });
 
   return PlacementReservations.of({
     admit,
-    lookup: (key) =>
-      sql
-        .withTransaction(Effect.all({ row: rowByKey(key), watermark: watermark("lookup") }))
-        .pipe(failed("lookup")),
-    get: (commandId) =>
-      sql<Row>`SELECT * FROM placement_reservations WHERE command_id = ${commandId}`.pipe(
-        Effect.map((rows) => (rows[0] === undefined ? null : fromRow(rows[0]))),
-        failed("get"),
-      ),
-    bindThread: ({ commandId, epoch, threadId }) =>
-      sql`
-        UPDATE placement_reservations SET thread_id = ${threadId}
-        WHERE command_id = ${commandId} AND state = 'pending' AND owner_epoch = ${epoch}
-        RETURNING command_id
-      `.pipe(Effect.map(updated), failed("bindThread")),
-    markCounted: ({ commandId, epoch, threadId, runId }) =>
-      sql`
-        UPDATE placement_reservations SET state = 'counted', thread_id = ${threadId}, run_id = ${runId}
-        WHERE command_id = ${commandId} AND state = 'pending' AND owner_epoch = ${epoch}
-        RETURNING command_id
-      `.pipe(Effect.map(updated), failed("markCounted")),
-    renew: ({ commandId, epoch, now }) =>
-      sql`
-        UPDATE placement_reservations SET lease_until = ${now + LEASE_MS}
-        WHERE command_id = ${commandId} AND state = 'pending' AND owner_epoch = ${epoch}
-        RETURNING command_id
-      `.pipe(Effect.map(updated), failed("renew")),
-    finalize: ({ commandId, epoch, reason }) =>
-      sql`
-        UPDATE placement_reservations SET state = 'fenced', reason = ${reason}
-        WHERE command_id = ${commandId} AND state = 'pending' AND owner_epoch = ${epoch}
-        RETURNING command_id
-      `.pipe(Effect.map(updated), failed("finalize")),
-    sweep: (now) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const lapsed = yield* sql`
-              UPDATE placement_reservations SET state = 'fenced', reason = 'lease lapsed'
-              WHERE state = 'pending' AND lease_until < ${now}
-              RETURNING command_id
-            `;
-            const capped = yield* sql`
-              UPDATE placement_reservations
-              SET state = 'fenced', reason = 'launch took longer than 60 minutes'
-              WHERE state = 'pending' AND admitted_at < ${now - PENDING_CAP_MS}
-              RETURNING command_id
-            `;
-            return lapsed.length + capped.length;
-          }),
-        )
-        .pipe(failed("sweep")),
-    fenceStale: (epoch) =>
-      sql`
-        UPDATE placement_reservations SET state = 'fenced', reason = 'restarted'
-        WHERE state = 'pending' AND owner_epoch <> ${epoch}
-        RETURNING command_id
-      `.pipe(
-        Effect.map((rows) => rows.length),
-        failed("fenceStale"),
-      ),
-    prune: (now) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const current = yield* watermark("prune");
-            const deleted = yield* sql<{ readonly issued_at: number }>`
-              DELETE FROM placement_reservations
-              WHERE state IN ('counted', 'fenced') AND issued_at < ${now - RETAIN_MS}
-              RETURNING issued_at
-            `;
-            const next = deleted.reduce((max, row) => Math.max(max, row.issued_at), current);
-            if (next !== current)
-              yield* sql`UPDATE placement_watermark SET issued_at = ${next} WHERE id = 1`;
-            return { deleted: deleted.length, watermark: next };
-          }),
-        )
-        .pipe(failed("prune")),
+    lookup,
+    get,
+    bindThread,
+    markCounted,
+    renew,
+    finalize,
+    sweep,
+    fenceStale,
+    prune,
   });
 });
 

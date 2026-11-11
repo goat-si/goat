@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - each test gets a scratch database folder.
 import { assert, it } from "@effect/vitest";
 import { CommandId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -26,12 +27,14 @@ const harnessLayer = (database?: "file") =>
       runSetup: () => Effect.never,
       ...(database === "file"
         ? {
-            databaseLayer: SqlitePersistence.layerFromPath(
-              NodePath.join(
-                NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "commit-guard-")),
-                "state.sqlite",
-              ),
-            ).pipe(Layer.provide(NodeServices.layer)),
+            databaseLayer: Layer.orDie(
+              SqlitePersistence.layerFromPath(
+                NodePath.join(
+                  NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "commit-guard-")),
+                  "state.sqlite",
+                ),
+              ).pipe(Layer.provide(NodeServices.layer)),
+            ),
           }
         : {}),
     }).layer,
