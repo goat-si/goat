@@ -10,7 +10,12 @@ import {
   type GoatBotReplyRepository,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import {
+  type BotProfile,
+  ChannelTaskId,
+  type EnvironmentId,
+  type GoatBotEventSubject,
+} from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -76,6 +81,7 @@ import {
   useGoatBotUnread,
 } from "./GoatBotUnreadMarker";
 import type { GoatBotVisitSnapshot } from "./useGoatBotVisitSnapshot";
+import { type MobileBotHomeFocus, useGoatBotEventTargets } from "./useGoatBotEventTargets";
 import { goatBotChatRows } from "./goatBotChatRows";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
@@ -112,6 +118,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
+  /** Where an event line's routine or task opens; undefined leaves the line plain. */
+  readonly onOpenEvent?: ((subject: GoatBotEventSubject) => (() => void) | undefined) | undefined;
   /** The environment whose bot history is shown; thread links in bot text open there. */
   readonly environmentId?: EnvironmentId | null;
   /** Who the conversation belongs to; its name heads each run of bot messages. */
@@ -129,10 +137,30 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={goatBotTime} />;
   }
   if (row.kind === "event") {
+    const subject = row.subject;
+    const at = subject === undefined ? -1 : row.text.indexOf(subject.name);
+    const open = subject === undefined || at < 0 ? undefined : props.onOpenEvent?.(subject);
+    if (subject === undefined || open === undefined) {
+      return (
+        <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
+          {row.text}
+        </Text>
+      );
+    }
+    // The whole line is the target, so a thumb need not find the name in small type.
     return (
-      <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
-        {row.text}
-      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${row.text}. Open ${subject.kind} ${subject.name}`}
+        onPress={open}
+        className="min-h-[44px] justify-center"
+      >
+        <Text className="text-center text-xs text-foreground-muted">
+          {row.text.slice(0, at)}
+          <Text className="text-foreground underline">{subject.name}</Text>
+          {row.text.slice(at + subject.name.length)}
+        </Text>
+      </Pressable>
     );
   }
   const marginTop = goatBotRowGap(row.groupPosition);
@@ -326,6 +354,24 @@ export function GoatBotScreen(props: {
   const [text, setText] = useState("");
   const [homeOpen, setHomeOpen] = useState(false);
   const openHome = useCallback(() => setHomeOpen(true), []);
+  // An event line opens the home on its routine or listed task, or a task that left the list on its
+  // own screen; a routine that is gone leaves the line plain.
+  const events = useGoatBotEventTargets(member);
+  const landEvent = events.land;
+  const [homeFocus, setHomeFocus] = useState<(MobileBotHomeFocus & { seq: number }) | null>(null);
+  const onOpenEvent = useCallback(
+    (subject: GoatBotEventSubject) => {
+      if (taskId || (subject.kind === "task" && !session.supportsTaskThreads)) return undefined;
+      const landing = landEvent(subject);
+      if (landing === null) return undefined;
+      if (landing === "task-screen") return () => onSelectTask(ChannelTaskId.make(subject.id));
+      return () => {
+        setHomeFocus((current) => ({ ...landing, seq: (current?.seq ?? 0) + 1 }));
+        setHomeOpen(true);
+      };
+    },
+    [taskId, session.supportsTaskThreads, landEvent, onSelectTask],
+  );
   const memberModelMenu = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const mainModelMenu = useMobileGoatBotModelMenu();
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
@@ -381,8 +427,12 @@ export function GoatBotScreen(props: {
   );
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
+  const eventsKey = events.key;
   const focusDivider = unread.focusDivider;
-  const listExtraData = useMemo(() => ({ accent, focusDivider }), [accent, focusDivider]);
+  const listExtraData = useMemo(
+    () => ({ accent, eventsKey, focusDivider }),
+    [accent, eventsKey, focusDivider],
+  );
   const renderItem = useCallback(
     ({ item }: { item: GoatBotChatItem }) =>
       item.kind === "unread" ? (
@@ -396,6 +446,7 @@ export function GoatBotScreen(props: {
           onDiscard={session.onDiscardInput}
           onSelectThread={onSelectThread}
           onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
+          onOpenEvent={onOpenEvent}
           environmentId={session.historyEnvironmentId}
           botName={title}
           botEmoji={botEmoji}
@@ -412,6 +463,7 @@ export function GoatBotScreen(props: {
       onSelectThread,
       onSelectTask,
       taskId,
+      onOpenEvent,
       session.supportsTaskThreads,
       session.historyEnvironmentId,
       title,
@@ -506,6 +558,7 @@ export function GoatBotScreen(props: {
           taskId={taskId}
           open={homeOpen}
           onOpenChange={setHomeOpen}
+          focus={homeFocus}
           // iOS reports the sheet's dismissal; Android is handled once the closed sheet commits.
           onDismissed={sheetGone}
           chipFace={
@@ -620,7 +673,8 @@ export function GoatBotScreen(props: {
           }
           renderItem={renderItem}
           // Rows are memoized by key, data and this: a new accent must reach the pills already shown,
-          // and the "New" line must learn when to take VoiceOver focus.
+          // the "New" line must learn when to take VoiceOver focus, and an event line where its
+          // routine or task now opens.
           extraData={listExtraData}
           initialScrollAtEnd
           maintainScrollAtEnd
