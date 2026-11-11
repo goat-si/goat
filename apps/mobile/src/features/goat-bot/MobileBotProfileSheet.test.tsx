@@ -2,6 +2,7 @@ import React, { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("react-native", () => ({
   Modal: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -32,13 +33,20 @@ vi.mock("react-native", () => ({
     onPress,
     disabled,
     accessibilityLabel,
+    accessibilityState,
   }: {
     children?: ReactNode;
     onPress?: () => void;
     disabled?: boolean;
     accessibilityLabel?: string;
+    accessibilityState?: { expanded?: boolean };
   }) => (
-    <button onClick={onPress} disabled={disabled} aria-label={accessibilityLabel}>
+    <button
+      onClick={onPress}
+      disabled={disabled}
+      aria-label={accessibilityLabel}
+      aria-expanded={accessibilityState?.expanded}
+    >
       {children}
     </button>
   ),
@@ -59,6 +67,7 @@ async function mount(
   onSubmit: (changes: object) => Promise<string | null>,
   canSubmit = true,
   mode: "edit" | "create" = "edit",
+  children?: ReactNode,
 ) {
   const onClose = vi.fn();
   container = document.createElement("div");
@@ -72,7 +81,9 @@ async function mount(
         canSubmit={canSubmit}
         onSubmit={onSubmit}
         onClose={onClose}
-      />,
+      >
+        {children}
+      </MobileBotProfileSheet>,
     ),
   );
   return { onClose };
@@ -80,6 +91,7 @@ async function mount(
 const field = (label: string) =>
   container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
 const save = () => container.querySelector<HTMLButtonElement>('button[aria-label="Save"]')!;
+const create = () => container.querySelector<HTMLButtonElement>('button[aria-label="Create"]')!;
 async function type(label: string, value: string) {
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -107,18 +119,35 @@ it("saves only the changed fields and closes, and a blank name is pointed out on
   expect(onClose).toHaveBeenCalled();
 });
 
-it("opens a new bot without an error and points out the missing name only when Save is pressed", async () => {
+it("opens a new bot without an error and points out the missing name only when Create is pressed", async () => {
   const onSubmit = vi.fn(async (_changes: object) => null);
   const { onClose } = await mount(onSubmit, true, "create");
   expect(container.textContent).not.toContain("The bot needs a name.");
-  await act(async () => save().click());
+  // Leaving the untouched name, say to open More, is not a mistake yet.
+  await act(async () => field("Name").dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(container.textContent).not.toContain("The bot needs a name.");
+  await act(async () => create().click());
   expect(container.textContent).toContain("The bot needs a name.");
   expect(onSubmit).not.toHaveBeenCalled();
   expect(onClose).not.toHaveBeenCalled();
   await type("Name", "Scout");
   expect(container.textContent).not.toContain("The bot needs a name.");
-  await act(async () => save().click());
+  await act(async () => create().click());
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: null, purpose: "" });
+});
+
+it("asks a new bot only for a name and a look; its purpose and model wait under More", async () => {
+  await mount(async () => null, true, "create", <p>model picker</p>);
+  expect(field("Name")).not.toBeNull();
+  expect(field("Avatar")).not.toBeNull();
+  expect(field("Purpose")).toBeNull();
+  expect(container.textContent).not.toContain("model picker");
+  const more = container.querySelector<HTMLButtonElement>('button[aria-label="More"]')!;
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => more.click());
+  expect(more.getAttribute("aria-expanded")).toBe("true");
+  expect(field("Purpose")).not.toBeNull();
+  expect(container.textContent).toContain("model picker");
 });
 
 it("keeps the sheet open with the reason when the save is refused", async () => {
