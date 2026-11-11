@@ -35,6 +35,7 @@ import {
 } from "./HubOcx.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
+  deviceExit,
   hubDeviceResult as result,
   linkStatusUnreadable,
   phaseMessage,
@@ -206,7 +207,7 @@ const make = Effect.gen(function* () {
     const offered = output.code === 0 ? decodeJson(Probe, output.stdout) : undefined;
     return offered?.alias === alias
       ? { ok: true as const, ...offered }
-      : { ok: false as const, phase: output.phase };
+      : { ok: false as const, phase: output.phase, message: output.message };
   });
 
   const unreachable = (error: HubOcxError) => ({
@@ -236,7 +237,7 @@ const make = Effect.gen(function* () {
             Effect.map((output: OcxOutput) =>
               output.code === 0
                 ? { outcome: "ok" as const }
-                : { outcome: "failed" as const, detail: phaseMessage(output.phase) },
+                : { outcome: "failed" as const, detail: phaseMessage(output) },
             ),
             Effect.catch((error) => Effect.succeed(unreachable(error))),
           );
@@ -261,7 +262,7 @@ const make = Effect.gen(function* () {
           Effect.map((output: OcxOutput) =>
             output.code === 0
               ? { outcome: "ok" as const }
-              : { outcome: "failed" as const, detail: `ocx ${rung.step} exited ${output.code}.` },
+              : { outcome: "failed" as const, detail: deviceExit(rung.step, output) },
           ),
           Effect.catch((error) => Effect.succeed(unreachable(error))),
         );
@@ -301,9 +302,9 @@ const make = Effect.gen(function* () {
     const linkId = added.code === 0 ? decodeJson(Added, added.stdout)?.linkId : undefined;
     if (caller.provisioning) yield* provisioned.finishAdd(alias, linkId, homeLinks());
     if (linkId === undefined) {
-      steps.push({ step: "link_add", outcome: "failed", detail: phaseMessage(added.phase) });
+      steps.push({ step: "link_add", outcome: "failed", detail: phaseMessage(added) });
       yield* audit(caller, `hub.${action}`, alias, "failed", decisionId);
-      return result(action, alias, "failed", phaseMessage(added.phase), steps, {
+      return result(action, alias, "failed", phaseMessage(added), steps, {
         transport: "remote-link",
       });
     }
@@ -349,7 +350,7 @@ const make = Effect.gen(function* () {
           reported = output.deviceRole;
           return output.code === 0
             ? { outcome: "ok" as const }
-            : { outcome: "failed" as const, detail: `ocx ${kind} exited ${output.code}.` };
+            : { outcome: "failed" as const, detail: deviceExit(kind, output) };
         }),
         Effect.catch((error) => Effect.succeed(unreachable(error))),
       );
@@ -389,7 +390,7 @@ const make = Effect.gen(function* () {
       HOME_TIMEOUT_MS,
     );
     if (revoked.code !== 0 && revoked.phase !== "link_not_found") {
-      steps.push({ step: "revoke", outcome: "failed", detail: phaseMessage(revoked.phase) });
+      steps.push({ step: "revoke", outcome: "failed", detail: phaseMessage(revoked) });
       return false;
     }
     steps.push({ step: "revoke", outcome: "ok", detail: record.id });
@@ -533,7 +534,7 @@ const make = Effect.gen(function* () {
       const detail =
         handoff.phase === undefined
           ? `ocx hub invite exited ${handoff.exit}. This machine must run OpenCodex in Hub mode with hub.dataPublicOrigin and hub.managementPublicOrigin set.`
-          : phaseMessage(handoff.phase);
+          : phaseMessage(handoff);
       steps.push({ step: "invite", outcome: "failed", detail });
       yield* audit(caller, "hub.join", alias, "failed", decisionId);
       return result("join", alias, "failed", detail, steps, { transport });
@@ -639,8 +640,8 @@ const make = Effect.gen(function* () {
       if (platform !== undefined) yield* ocx.device(alias, ["--version"], DEVICE_TIMEOUT_MS);
       const offered = yield* probe(alias);
       if (!offered.ok) {
-        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });
-        return result("join", alias, "failed", phaseMessage(offered.phase), steps, { transport });
+        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered) });
+        return result("join", alias, "failed", phaseMessage(offered), steps, { transport });
       }
       steps.push({
         step: "probe",
@@ -837,8 +838,8 @@ const make = Effect.gen(function* () {
         if (record === undefined) return yield* invalid(`${alias} has no link to re-create.`);
         const offered = yield* probe(alias);
         if (!offered.ok) {
-          steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });
-          return result("repair", alias, "failed", phaseMessage(offered.phase), steps);
+          steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered) });
+          return result("repair", alias, "failed", phaseMessage(offered), steps);
         }
         steps.push({
           step: "probe",
@@ -911,7 +912,7 @@ const make = Effect.gen(function* () {
       }
       const offered = yield* probe(alias);
       if (!offered.ok) {
-        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });
+        steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered) });
         yield* audit(caller, "hub.repair", alias, "failed", undefined);
         return result("repair", alias, "failed", exhausted, steps, { parity: repaired });
       }

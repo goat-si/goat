@@ -55,12 +55,25 @@ export const hubDeviceResult = (
             next: { after: "approval", call: "goat_hub_device_repair" },
           };
 };
-export const phaseMessage = (phase: string | undefined) =>
-  phase === "remote_platform_unsupported"
+/** Why OpenCodex refused: its own known sentence first, then its failure code. */
+export const phaseMessage = (output?: {
+  readonly phase?: string | undefined;
+  readonly message?: string | undefined;
+}) =>
+  output?.phase === "remote_platform_unsupported"
     ? "OpenCodex could not execute Remote Link on this device. Update OpenCodex on Home and check PowerShell on a Windows Child, then retry."
-    : phase === undefined
-      ? "OpenCodex refused the command."
-      : `OpenCodex stopped at ${phase}.`;
+    : output?.message !== undefined
+      ? `OpenCodex: ${output.message}`
+      : output?.phase === undefined
+        ? "OpenCodex refused the command. Run it on that machine to see OpenCodex's own output."
+        : `OpenCodex stopped at ${output.phase}.`;
+
+/** A device's ocx exit, with OpenCodex's own sentence when it printed a known one. */
+export const deviceExit = (
+  command: string,
+  output: { readonly code: number; readonly message?: string | undefined },
+) =>
+  `ocx ${command} exited ${output.code}${output.message === undefined ? "." : `: ${output.message}`}`;
 
 export const linkStatusUnreadable = (forbidden: boolean) =>
   forbidden

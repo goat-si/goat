@@ -28,6 +28,7 @@ import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import { interruptibleTurns } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
+import { ocxMessage } from "../opencodex/ocxMessage.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
@@ -79,10 +80,14 @@ export interface OcxOutput {
   readonly stdout: string;
   /** OpenCodex's machine-readable failure code from stderr, never free text. */
   readonly phase?: string;
+  /** A sentence OpenCodex is known to print for this refusal; see ocxMessage. */
+  readonly message?: string;
   /** OpenCodex's management API answered 403, as `ocx link status` does on a Hub (opencodex#8184). */
   readonly forbidden?: true;
   /** The role the device's own GOAT read after a connection change it ran. */
   readonly deviceRole?: "standalone" | "hub" | "client" | "unknown";
+  /** Whether the device's GOAT found its OpenCodex executable and listener in agreement then. */
+  readonly deviceHealthy?: boolean;
 }
 
 export class HubOcxError extends Data.TaggedError("HubOcxError")<{
@@ -232,6 +237,9 @@ export class HubOcx extends Context.Service<
 
 const phaseOf = (stderr: string) =>
   /\b((?:remote|child|home)_[a-z_]{2,60}|link_not_found)\b/u.exec(stderr)?.[1];
+/** Home commands whose refusal is worth naming; `hub invite` mints a pairing code and is never read. */
+const explained = (args: ReadonlyArray<string>) =>
+  args[0] === "link" && ["add", "probe", "reconnect", "revoke"].includes(args[1] ?? "");
 
 export const platformOf = (uname: string): DevicePlatform | undefined => {
   const name = uname.trim();
@@ -391,10 +399,13 @@ const make = Effect.gen(function* () {
     );
     const phase = phaseOf(output.stderr);
     const forbidden = /\brequest failed \(403\)/u.test(output.stderr);
+    const code = output.timedOut ? 124 : (output.code ?? 1);
+    const message = code !== 0 && explained(args) ? ocxMessage(output.stderr) : undefined;
     return {
-      code: output.timedOut ? 124 : (output.code ?? 1),
+      code,
       stdout: output.stdoutTruncated ? "" : output.stdout,
       ...(phase === undefined ? {} : { phase }),
+      ...(message === undefined ? {} : { message }),
       ...(forbidden ? { forbidden: true as const } : {}),
     } satisfies OcxOutput;
   });
@@ -508,6 +519,8 @@ const make = Effect.gen(function* () {
     return {
       code: result.code,
       stdout: "",
+      deviceHealthy: result.healthy,
+      ...(result.message === undefined ? {} : { message: result.message }),
       ...(result.role === undefined ? {} : { deviceRole: result.role }),
     } satisfies OcxOutput;
   });
