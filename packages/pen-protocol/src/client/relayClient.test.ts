@@ -76,6 +76,21 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(seen).toEqual([1, 2]);
   });
 
+  it("a peer close during the held drain waits for it: every earlier message, then one close notice", async () => {
+    const { socket, link } = await opened();
+    socket.receive(Uint8Array.of(1));
+    socket.receive(Uint8Array.of(2));
+    const seen: Array<string> = [];
+    link.attach(
+      (message) => {
+        seen.push("data:" + message[0]);
+        if (message[0] === 1) socket.remoteClose(1000);
+      },
+      (code) => seen.push("close:" + code),
+    );
+    expect(seen).toEqual(["data:1", "data:2", "close:1000"]);
+  });
+
   it.each(["held", "live"] as const)(
     "a receiver that throws on a %s message is reported, closes the link 1011 and gets nothing more",
     async (when) => {

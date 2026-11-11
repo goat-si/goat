@@ -61,6 +61,8 @@ export class SecureSession {
   #closedCode: number | undefined;
   /** Counts close() calls: one made during the held-record drain stops it, even when the link had closed already. */
   #closeRequests = 0;
+  /** While held records are handed over, a link close waits: observers hear of it after the drain. */
+  #draining = false;
 
   constructor(link: RelayLink, keys: SessionKeys) {
     this.link = link;
@@ -107,22 +109,32 @@ export class SecureSession {
 
   #onLinkClose(code: number): void {
     this.#closedCode = code;
+    if (this.#draining) return;
     for (const fn of this.#onClose.splice(0)) notify(fn, code);
   }
 
   /** Takes the session's records, held ones first. */
   onRecord(handler: (plaintext: Uint8Array) => void): void {
-    this.#onRecord = handler;
-    // Records that arrived before an earlier close are still handed over (the peer sent them first); a held record
-    // that ends the session now (a protocol error, a throwing receiver) ends the drain: nothing after it is delivered.
-    const closedBefore = this.#closedCode !== undefined;
     const requests = this.#closeRequests;
-    for (const record of this.#held.splice(0)) {
-      if (this.#closeRequests !== requests || (!closedBefore && this.#closedCode !== undefined))
-        break;
-      this.#deliver(handler, record);
+    // Held records go first and in order, with any that arrive meanwhile. They arrived before any close, so a link
+    // close does not stop the drain; only a close() this side makes (a protocol error, a throwing receiver) does, and
+    // nothing after that record is delivered. Observers hear of a close during the drain after it.
+    this.#draining = true;
+    try {
+      while (this.#closeRequests === requests) {
+        const record = this.#held.shift();
+        if (record === undefined) break;
+        this.#heldBytes -= record.length;
+        this.#deliver(handler, record);
+      }
+    } finally {
+      this.#draining = false;
     }
+    this.#held = [];
     this.#heldBytes = 0;
+    this.#onRecord = handler;
+    const code = this.#closedCode;
+    if (code !== undefined) for (const fn of this.#onClose.splice(0)) notify(fn, code);
   }
 
   onClose(handler: (code: number) => void): void {

@@ -113,6 +113,9 @@ class Link implements RelayLink {
   #state: "connecting" | "open" | "closed" = "connecting";
   /** Counts this side's close requests: one made during a held-message drain stops it, closed link or not. */
   #closeRequests = 0;
+  /** While held messages are handed over, a peer close waits: its notice comes after the drain. */
+  #draining = false;
+  #closeDeferred = false;
   #closeCode = 1006;
   #received = 0;
   #acked = 0;
@@ -233,19 +236,30 @@ class Link implements RelayLink {
   }
 
   attach(receiver: (message: Uint8Array) => void, onClose?: (code: number) => void): void {
-    this.#receiver = receiver;
     this.#onClose = onClose;
     const closedBefore = this.#state === "closed";
     const requests = this.#closeRequests;
-    const held = this.#held.splice(0);
-    this.#heldBytes = 0;
-    // Messages that arrived before a close (either side's) are still handed over; once the receiver asks for a close
-    // during the drain (or throws), the rest are not. A close during the drain told onClose through #finish.
-    for (const message of held) {
-      if (this.#closeRequests !== requests || (!closedBefore && this.#state === "closed")) break;
-      this.#deliver(receiver, message);
+    // Held messages go first and in order, with any that arrive meanwhile (they are held, as the receiver is not set
+    // yet). They arrived before any close, so a peer close does not stop the drain; only this side's close request or
+    // a throwing receiver does. The close notice, from before or during the drain, comes once, after it.
+    this.#draining = true;
+    try {
+      while (this.#closeRequests === requests) {
+        const message = this.#held.shift();
+        if (message === undefined) break;
+        this.#heldBytes -= message.length;
+        this.#deliver(receiver, message);
+      }
+    } finally {
+      this.#draining = false;
     }
-    if (closedBefore) this.#notifyClose();
+    this.#held = [];
+    this.#heldBytes = 0;
+    this.#receiver = receiver;
+    if (closedBefore || this.#closeDeferred) {
+      this.#closeDeferred = false;
+      this.#notifyClose();
+    }
   }
 
   /** A receiver that throws ends the link (1011, WebSocket's internal error) and is reported; nothing escapes. */
@@ -398,7 +412,8 @@ class Link implements RelayLink {
     for (const waiter of this.#receivers.splice(0)) waiter.reject(error);
     for (const writer of this.#writers.splice(0)) writer.reject(error);
     this.#resolveClosed(code);
-    this.#notifyClose();
+    if (this.#draining) this.#closeDeferred = true;
+    else this.#notifyClose();
   }
 
   #notifyClose(): void {
