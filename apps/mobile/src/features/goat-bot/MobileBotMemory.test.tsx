@@ -327,7 +327,7 @@ it("a note whose text names an object property still lists and can be changed", 
 const editorAfter = (date: string) => {
   const text = container.textContent ?? "";
   const field = container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]');
-  return { field, after: field !== null && text.indexOf(date) < text.lastIndexOf("Fill message") };
+  return { field, after: field !== null && text.indexOf(date) < text.lastIndexOf("Discard") };
 };
 
 it("opens the change on the note pressed when two notes read the same but differ by date", async () => {
@@ -349,7 +349,7 @@ it("opens the change on the note pressed when two notes read the same but differ
   // Only the older note opens its editor; the newer one still offers Ask to change.
   expect(container.querySelectorAll('[aria-label="New wording"]')).toHaveLength(1);
   const text = container.textContent ?? "";
-  expect(text.indexOf("2026-11-01")).toBeLessThan(text.indexOf("Fill message"));
+  expect(text.indexOf("2026-11-01")).toBeLessThan(text.indexOf("Discard"));
   expect(text.indexOf("Ask to change")).toBeLessThan(text.indexOf("2026-11-01"));
   // A new read with both notes still there keeps the wording on the older one.
   await typeWording("Keep replies very short");
@@ -361,6 +361,57 @@ it("opens the change on the note pressed when two notes read the same but differ
   await render({ onDraft: () => true });
   expect(editorAfter("2026-11-01")).toMatchObject({ after: true });
   expect(editorAfter("2026-11-01").field?.value).toBe("Keep replies very short");
+});
+
+it("offers no fill for a note whose text another note shares, since the request could change the other one", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        { index: 2, date: "2026-11-11", text: "Use metric units" },
+        { index: 1, date: "2026-11-10", text: "Keep replies short" },
+        { index: 0, date: "2026-11-01", text: "Keep replies short" },
+      ],
+      truncated: false,
+    },
+  });
+  const onDraft = vi.fn(() => true);
+  await render({ onDraft });
+  const changes = () =>
+    [...container.querySelectorAll("button")].filter(
+      (item) => item.textContent === "Ask to change",
+    );
+  await act(async () => changes()[2]?.click());
+  await typeWording("Keep replies very short");
+  expect(button("Fill message")).toBeUndefined();
+  expect(container.textContent).toContain(
+    "Two notes read “Keep replies short”, so GOAT Bot can't tell which one you mean.",
+  );
+  state.copy.mockClear();
+  await press("Copy");
+  expect(state.copy).toHaveBeenCalledWith("Keep replies very short", { target: "new wording" });
+  expect(onDraft).not.toHaveBeenCalled();
+  // The wording survives another read of the file.
+  state.data = { ...(state.data as object), revision: "r2" };
+  await render({ onDraft });
+  expect(container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]')?.value).toBe(
+    "Keep replies very short",
+  );
+  // A note with text of its own still fills as before.
+  await act(async () => changes()[0]?.click());
+  const fields = container.querySelectorAll<HTMLTextAreaElement>('[aria-label="New wording"]');
+  const unique = fields[0]!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(unique, "Use metric units only");
+    unique.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await press("Fill message");
+  expect(onDraft).toHaveBeenCalledWith(
+    goatBotChangeNoteMessage("Use metric units", "Use metric units only"),
+  );
+  await press("Discard");
+  expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
 });
 
 it("keeps a wording apart when a new read leaves identical notes it cannot tell apart", async () => {
