@@ -555,6 +555,17 @@ describe("planRun", () => {
     assert.ok(titles.includes("test-server related 1/" + result.server.shards));
   });
 
+  it("runs a quick run's changed tests on a hosted runner when they include relay tests, which need Docker (#2893)", async () => {
+    const runnerFor = async (file) => {
+      const result = await plan(pr(), labels([]), [file]);
+      return matrixFor(result.tasks, result.server, result.changedTests).include.find(
+        (entry) => entry.task === "test-changed",
+      )?.runner;
+    };
+    assert.equal(await runnerFor("infra/relay/src/clientConfig.test.ts"), "hosted");
+    assert.equal(await runnerFor("apps/server/src/channels/ChannelDispatcher.ts"), "linux");
+  });
+
   it("quick PR includes cross-package importing tests (#1705)", async () => {
     const result = await plan(pr(), labels([]), [
       "packages/provider-opencode/src/server/v2/textGeneration.ts",
