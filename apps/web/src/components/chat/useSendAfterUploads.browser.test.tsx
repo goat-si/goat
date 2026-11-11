@@ -50,6 +50,16 @@ it("unlocks with the message intact and sends nothing when an upload fails", asy
   expect(send).not.toHaveBeenCalled();
 });
 
+it("unlocks as soon as one upload fails, even while another is still uploading", async () => {
+  const send = vi.fn();
+  await using screen = await render(mount({ uploadsPending: true, uploadFailed: false, send }));
+  await userEvent.click(page.getByRole("button", { name: "Send" }));
+  await screen.rerender(mount({ uploadsPending: true, uploadFailed: true, send }));
+  await expect.element(page.getByRole("button", { name: "Send" })).toBeVisible();
+  await screen.rerender(mount({ uploadsPending: false, uploadFailed: true, send }));
+  expect(send).not.toHaveBeenCalled();
+});
+
 it("cancels a queued send from its notice", async () => {
   const send = vi.fn();
   await using screen = await render(mount({ uploadsPending: true, uploadFailed: false, send }));

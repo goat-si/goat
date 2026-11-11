@@ -7,7 +7,10 @@ import {
 } from "../../lib/attachmentUploadState";
 import { toastManager } from "../ui/toast";
 
-/** Answers and approval redirects need their uploads first; a plain send can wait for them. */
+/**
+ * Answers and approval redirects need their uploads first; a plain send can wait for them.
+ * With a failed upload in the draft, every send waits for the rest to settle, as before.
+ */
 export function attachmentUploadGate(input: {
   readonly imageIds: ReadonlyArray<string>;
   readonly uploadsByImageId: Readonly<Record<string, AttachmentUploadState>>;
@@ -17,13 +20,15 @@ export function attachmentUploadGate(input: {
 }) {
   const blockReason = attachmentUploadBlockReason(input);
   const uploadsPending = input.uploadsSupported && blockReason !== null;
+  const uploadFailed = input.imageIds.some((id) => input.uploadsByImageId[id]?.status === "failed");
+  const plainSend = !input.answering && !uploadFailed;
   return {
     blockReason,
-    plainSend: !input.answering,
+    plainSend,
     uploadsPending,
     /** A plain send with uploads still running queues instead of sending. */
-    canQueue: uploadsPending && !input.answering,
-    uploadFailed: input.imageIds.some((id) => input.uploadsByImageId[id]?.status === "failed"),
+    canQueue: uploadsPending && plainSend,
+    uploadFailed,
   };
 }
 
@@ -65,7 +70,8 @@ export function useSendAfterUploads(
   const [settled, setSettled] = useState<{ readonly send: boolean } | null>(null);
   const toastId = useRef<string | null>(null);
   const queued = queuedKey === draftKey;
-  if (queued && !input.uploadsPending) {
+  // A failed upload unlocks at once, even while another attachment is still uploading.
+  if (queued && (!input.uploadsPending || input.uploadFailed)) {
     setQueuedKey(null);
     setSettled({ send: !input.uploadFailed });
   }
