@@ -614,6 +614,47 @@
       }
     },
     {
+      "id": "H17",
+      "name": "Content-Length over the cap on a HEAD response, though no body follows",
+      "context": {
+        "method": "HEAD"
+      },
+      "input": [
+        {
+          "hex": "485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a20383338383630390d0a0d0a"
+        }
+      ],
+      "expect": {
+        "error": "http1/H17"
+      }
+    },
+    {
+      "id": "H17",
+      "name": "Content-Length over the cap on a 204",
+      "context": {},
+      "input": [
+        {
+          "hex": "485454502f312e3120323034204e6f20436f6e74656e740d0a436f6e74656e742d4c656e6774683a20383338383630390d0a0d0a"
+        }
+      ],
+      "expect": {
+        "error": "http1/H17"
+      }
+    },
+    {
+      "id": "H17",
+      "name": "Content-Length over the cap on a 304",
+      "context": {},
+      "input": [
+        {
+          "hex": "485454502f312e3120333034204e6f74204d6f6469666965640d0a436f6e74656e742d4c656e6774683a20383338383630390d0a0d0a"
+        }
+      ],
+      "expect": {
+        "error": "http1/H17"
+      }
+    },
+    {
       "id": "H18",
       "name": "two equal Content-Length fields",
       "context": {},

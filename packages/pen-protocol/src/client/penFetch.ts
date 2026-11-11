@@ -250,9 +250,10 @@ class PenFetcher {
     else next.grant();
   }
 
-  #discard(code: number): void {
-    this.#current?.stream.close(code);
-    this.#current = undefined;
+  /** Closes slot's stream (the current one when none is named); a later exchange's stream is never touched. */
+  #discard(code: number, slot: IdleStream | undefined = this.#current): void {
+    slot?.stream.close(code);
+    if (this.#current === slot) this.#current = undefined;
   }
 
   /** The stream for the next exchange: the idle one if nothing arrived on it, else a new one. */
@@ -285,6 +286,9 @@ class PenFetcher {
     await this.#turn(signal);
     const deadline = new Deadline(this.#options.clock);
     let onAbort: (() => void) | undefined;
+    // Cleared when the exchange settles, so a run still awaiting the stream or the sink stops at its next step.
+    const live = { value: true };
+    let slot: IdleStream | undefined;
     try {
       const aborted = new Promise<never>((_resolve, reject) => {
         onAbort = () => reject(abortError());
@@ -292,19 +296,20 @@ class PenFetcher {
       });
       aborted.catch(() => undefined);
       if (isAborted(signal)) throw abortError();
-      const slot = await this.#acquire(signal, aborted);
+      slot = await this.#acquire(signal, aborted);
       if (isAborted(signal)) throw abortError();
       return await Promise.race([
-        this.#run(slot, prepared, bodyCap, onBody, deadline),
+        this.#run(slot, prepared, bodyCap, onBody, deadline, live),
         deadline.fired,
         aborted,
       ]);
     } catch (error) {
       // No reuse after any error and no retry (H43).
       const code = error instanceof PenError ? (error.closeCode ?? 4400) : 1000;
-      this.#discard(code);
+      this.#discard(code, slot ?? this.#current);
       throw error;
     } finally {
+      live.value = false;
       deadline.disarm();
       if (onAbort !== undefined) signal?.removeEventListener("abort", onAbort);
       this.#release();
@@ -317,12 +322,18 @@ class PenFetcher {
     bodyCap: number,
     onBody: (bytes: Uint8Array) => void | Promise<void>,
     deadline: Deadline,
+    live: { readonly value: boolean },
   ): Promise<ResponseHead> {
     const stream = slot.stream;
+    const stillLive = () => {
+      if (!live.value) throw new PenError("fetch-ended", "the exchange already ended");
+    };
     await stream.write(prepared.head);
+    stillLive();
     const body = prepared.body ?? new Uint8Array(0);
     for (let at = 0; at < body.length; at += FETCH_LIMITS.writePiece) {
       await stream.write(body.subarray(at, at + FETCH_LIMITS.writePiece));
+      stillLive();
     }
     if (slot.spoiled) throw new PenError("http1/H42", "bytes arrived before the request was sent");
     slot.sent();
@@ -339,6 +350,7 @@ class PenFetcher {
     let head: ResponseHead | undefined;
     for (;;) {
       const chunk = await slot.read();
+      stillLive();
       const events = chunk === null ? parser.finish() : parser.push(chunk);
       for (const event of events) {
         if (event.type === "head") {
@@ -347,6 +359,7 @@ class PenFetcher {
         } else if (event.type === "body") {
           idle();
           await onBody(event.bytes);
+          stillLive();
         } else if (head !== undefined) {
           deadline.disarm();
           // Reuse only after a length- or chunk-delimited response with nothing after it and no request to close
@@ -361,7 +374,7 @@ class PenFetcher {
             parser.leftover().length === 0 &&
             !closeAsked;
           if (reusable) slot.idle();
-          else this.#discard(1000);
+          else this.#discard(1000, slot);
           return head;
         }
       }

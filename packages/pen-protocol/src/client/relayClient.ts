@@ -165,8 +165,8 @@ class Link implements RelayLink {
   #schedulePing(): void {
     this.#pingTimer = this.clock.setTimer(RELAY_LIMITS.pingMs, () => {
       if (this.#state !== "open") return;
-      this.#sendText("ping");
-      this.#schedulePing();
+      this.#sendControl("ping");
+      if (this.#state === "open") this.#schedulePing();
     });
   }
 
@@ -189,7 +189,7 @@ class Link implements RelayLink {
     this.#received += bytes.length;
     if (this.#received - this.#acked >= RELAY_LIMITS.ackEvery) {
       this.#acked = this.#received;
-      this.#sendText("a:" + this.#received);
+      this.#sendControl("a:" + this.#received);
       if (this.#state !== "open") return;
     }
     const message = bytes.slice();
@@ -246,8 +246,25 @@ class Link implements RelayLink {
 
   #sendText(text: string): void {
     if (this.#state !== "open") return;
-    this.socket.send(text);
+    try {
+      this.socket.send(text);
+    } catch (error) {
+      this.#abort();
+      throw error;
+    }
     this.#checkBuffered();
+  }
+
+  /**
+   * A ping or an ack sent from a timer or a message callback: a failure has already finished the link (1006 for a
+   * refused send, 4408 for an unreadable buffer), and the link's close is how its users learn of it.
+   */
+  #sendControl(text: string): void {
+    try {
+      this.#sendText(text);
+    } catch {
+      // The link is closed; its waiters were woken by #finish.
+    }
   }
 
   writable(): Promise<void> {
@@ -291,16 +308,36 @@ class Link implements RelayLink {
     if (this.#recheckTimer === undefined) {
       this.#recheckTimer = this.clock.setTimer(RELAY_LIMITS.recheckMs, () => {
         this.#recheckTimer = undefined;
-        this.#checkBuffered();
+        try {
+          this.#checkBuffered();
+        } catch {
+          // An unreadable buffer closed the link 4408 before throwing.
+        }
       });
     }
   }
 
   close(code: number): void {
     if (this.#state === "closed") return;
-    if (this.#state === "connecting") this.socket.close();
-    else this.socket.close(code);
+    const connecting = this.#state === "connecting";
     this.#finish(code, true);
+    try {
+      if (connecting) this.socket.close();
+      else this.socket.close(code);
+    } catch {
+      // A socket that cannot even close is dropped; the link is finished either way.
+    }
+  }
+
+  /** Ends the link after the socket refused a send: 1006 locally, and the socket is closed with no code. */
+  #abort(): void {
+    if (this.#state === "closed") return;
+    this.#finish(1006, true);
+    try {
+      this.socket.close();
+    } catch {
+      // As in close().
+    }
   }
 
   abandon(): void {

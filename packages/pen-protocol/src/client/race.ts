@@ -187,16 +187,15 @@ function pickError(
 /**
  * The dial deadline outlives the race's decision: dials still connecting when it fires are abandoned, whatever the
  * race already decided (Go keeps the dial context until the losers drain). It stops once every dial has settled.
+ * It is only the dials' deadline: a race that waits on open sockets keeps its own timer.
  */
 function dialDeadline(
   options: SessionOptions,
   dials: ReadonlyArray<{ readonly dial: PendingDial }>,
-  onExpire: () => void = () => undefined,
 ): void {
   let unsettled = dials.length;
   const timer = options.clock.setTimer(RACE_LIMITS.dialMs, () => {
     for (const { dial } of dials) dial.abandon();
-    onExpire();
   });
   for (const { dial } of dials) {
     void dial.opened
@@ -215,15 +214,22 @@ function dialAll(
   options: SessionOptions,
   relays: ReadonlyArray<string>,
 ): Array<{ relay: string; dial: PendingDial }> {
-  return relays.map((relay) => ({
-    relay,
-    dial: dialRelay({
-      relay,
-      nodeId: options.nodeId,
-      factory: options.factory,
-      clock: options.clock,
-    }),
-  }));
+  return relays.map((relay) => {
+    try {
+      return {
+        relay,
+        dial: dialRelay({
+          relay,
+          nodeId: options.nodeId,
+          factory: options.factory,
+          clock: options.clock,
+        }),
+      };
+    } catch (error) {
+      // A relay whose socket cannot be made has failed like a dial that did not connect; the others still race.
+      return { relay, dial: { opened: Promise.reject(error), abandon: () => undefined } };
+    }
+  });
 }
 
 function handshakeRace(options: SessionOptions): Promise<OpenedSession> {
@@ -313,7 +319,9 @@ async function pingRace(
     const errors: Array<{ error: unknown; handshake: boolean }> = [];
     const live = new Set<RelayLink>();
     const dials = dialAll(options, relays);
-    dialDeadline(options, dials, () => {
+    dialDeadline(options, dials);
+    // The race's own 15 s: it runs until a pong, every relay failing, or expiry, open sockets or not.
+    const deadline = options.clock.setTimer(RACE_LIMITS.dialMs, () => {
       if (decided) return;
       decided = true;
       for (const link of live) link.close(1000);
@@ -324,6 +332,7 @@ async function pingRace(
       remaining -= 1;
       if (remaining === 0 && !decided) {
         decided = true;
+        deadline.cancel();
         reject(pickError(errors));
       }
     };
@@ -354,6 +363,7 @@ async function pingRace(
                 return;
               }
               decided = true;
+              deadline.cancel();
               for (const other of live) if (other !== link) other.close(1000);
               resolve({ relay, link });
             },
@@ -386,7 +396,12 @@ async function pingRace(
     }
     return pingRace(options, rest);
   }
-  winner.link.send(result.keys.send.seal(new Uint8Array(0)));
+  try {
+    winner.link.send(result.keys.send.seal(new Uint8Array(0)));
+  } catch (error) {
+    winner.link.close(1000);
+    throw error;
+  }
   return {
     session: new SecureSession(winner.link, result.keys),
     relay: winner.relay,

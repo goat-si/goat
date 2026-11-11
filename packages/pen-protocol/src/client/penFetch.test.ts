@@ -425,4 +425,39 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     await expect(over).rejects.toBeInstanceOf(PenError);
     await expect(over).rejects.toMatchObject({ code: "http1/H37" });
   });
+
+  it("an exchange aborted while its sink write is pending stops there and cannot close the next exchange's stream", async () => {
+    const t = setup();
+    const controller = new AbortController();
+    let finishWrite!: () => void;
+    let writeStarted!: () => void;
+    const started = new Promise<void>((resolve) => (writeStarted = resolve));
+    const writes: Array<number> = [];
+    const sink = {
+      cap: 16,
+      write: (bytes: Uint8Array) => {
+        writes.push(bytes.length);
+        if (writes.length > 1) return Promise.resolve();
+        writeStarted();
+        return new Promise<void>((resolve) => (finishWrite = resolve));
+      },
+    };
+    const first = t.toSink(ORIGIN + "/file", { signal: controller.signal }, sink);
+    const one = await t.stream(1);
+    await request(one);
+    one.write(
+      "HTTP/1.1 200 OK\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
+    );
+    await started;
+    controller.abort();
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    const second = t.toSink(ORIGIN + "/b", undefined, { cap: 16, write: () => undefined });
+    const two = await t.stream(2);
+    await request(two);
+    finishWrite();
+    two.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    expect((await second).status).toBe(200);
+    expect(two.closeCode()).toBeUndefined();
+    expect(writes).toEqual([2]);
+  });
 });

@@ -65,6 +65,27 @@ describe("relay client socket (CONTRACT Relay, design 10.1)", () => {
     expect(socket.textSent()).toEqual(["ping", "ping"]);
   });
 
+  it("a ping or an ack the socket refuses to send closes the link 1006 and wakes its waiters", async () => {
+    const pinged = await opened();
+    pinged.socket.send = () => {
+      throw new Error("socket gone");
+    };
+    const waiting = pinged.link.receive();
+    pinged.clock.advance(RELAY_LIMITS.pingMs);
+    await expect(waiting).rejects.toMatchObject({ code: "relay-closed", closeCode: 1006 });
+    expect(await pinged.link.closed).toBe(1006);
+
+    const acked = await opened();
+    const delivered: Array<number> = [];
+    acked.link.attach((message) => delivered.push(message.length));
+    acked.socket.send = () => {
+      throw new Error("socket gone");
+    };
+    acked.socket.receive(new Uint8Array(RELAY_LIMITS.ackEvery));
+    expect(await acked.link.closed).toBe(1006);
+    expect(delivered).toEqual([]);
+  });
+
   it("closes 1003 on any text other than pong and 1009 on a binary message over 1 MiB (CONTRACT Relay text, 1 MiB cap)", async () => {
     const first = await opened();
     first.socket.receive("pong");

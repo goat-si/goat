@@ -436,7 +436,10 @@ jobs:
       # digest. The script prints the report summary and fails on any failing, missing or unexpected case.
       - name: Pen client WebSocket conformance (Autobahn)
         if: matrix.task == 'test-pen'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          echo "Autobahn on commit $(git rev-parse HEAD); pull request head: ${PR_HEAD_SHA:-none}"
           reports="$RUNNER_TEMP/autobahn-reports"
           mkdir -p "$reports"
           docker run -d --name autobahn --network host \

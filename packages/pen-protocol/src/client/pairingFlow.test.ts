@@ -44,6 +44,16 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+/** Another attempt's pending record, written over the one under test. */
+function newerPending(stage: "pre-202" | "post-202") {
+  return {
+    key: { privateKey: "n", publicKey: "newer" },
+    stage,
+    server: { nodeId: NODE, noisePub: "x", relays: [] },
+    startedAt: 1,
+  };
+}
+
 function setup(
   options: { record?: PairingRecord; failSave?: (record: PairingRecord) => boolean } = {},
 ) {
@@ -410,6 +420,48 @@ describe("phone pairing flow (design 5.2, 5.6, 6.2)", () => {
     expect(await done).toEqual({ tag: "superseded" });
     expect(t.probes).toHaveLength(0);
     expect(t.views.some((view) => view.tag === "checking")).toBe(false);
+    expect(t.stored()).toEqual({ pending: newer });
+  });
+
+  it.each(["dial fails", "request breaks", "unexpected answer"] as const)(
+    "a replaced attempt whose %s shows nothing and keeps the newer attempt's key",
+    async (failure) => {
+      const t = setup();
+      const done = runPairing(t.deps, qr);
+      await t.when("dial");
+      const newer = newerPending("pre-202");
+      if (failure !== "dial fails") {
+        t.race.resolve(t.channel);
+        await t.when("request");
+      }
+      await t.deps.store.save(NODE, { pending: newer });
+      const before = t.views.length;
+      if (failure === "dial fails") t.race.reject(new Error("no relay"));
+      else if (failure === "request breaks") t.replies.request.reject(new Error("stream closed"));
+      else t.replies.request.resolve({ status: 204 });
+      expect(await done).toEqual({ tag: "superseded" });
+      expect(t.views.slice(before)).toEqual([]);
+      expect(t.stored()).toEqual({ pending: newer });
+    },
+  );
+
+  it("Checking stops at a discard: a negative probe neither probes again nor reports over a newer attempt", async () => {
+    const t = setup();
+    const done = runPairing(t.deps, qr);
+    void toChecking(t, done);
+    await t.when("probe");
+    await discardPairing(t.deps, NODE);
+    const newer = newerPending("post-202");
+    await t.deps.store.save(NODE, { pending: newer });
+    const before = t.views.length;
+    t.probes[0]?.answer.resolve({ issued: false });
+    const outcome = await Promise.race([
+      done,
+      t.clock.nextTimer().then(() => ({ tag: "probing on" }) as const),
+    ]);
+    expect(outcome).toEqual({ tag: "superseded" });
+    expect(t.views.slice(before)).toEqual([]);
+    expect(t.probes).toHaveLength(1);
     expect(t.stored()).toEqual({ pending: newer });
   });
 

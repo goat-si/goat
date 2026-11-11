@@ -306,6 +306,10 @@ export class ResponseParser {
       if (value.toLowerCase() !== "identity")
         throw fail("H29", "content encodings are not accepted");
     }
+    // Design 10.2 caps Content-Length itself, before any allocation, whether or not a body follows.
+    if (length !== undefined && Number(length) > this.#context.bodyCap) {
+      throw fail("H17", "Content-Length over the body cap");
+    }
     if (this.#context.method === "HEAD" || this.#status === 204 || this.#status === 304) {
       this.#end(events, "none");
       return;
@@ -316,7 +320,6 @@ export class ResponseParser {
     }
     if (length !== undefined) {
       const size = Number(length);
-      if (size > this.#context.bodyCap) throw fail("H17", "Content-Length over the body cap");
       this.#remaining = size;
       if (size === 0) this.#end(events, "length");
       else this.#phase = "length";

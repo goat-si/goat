@@ -257,6 +257,28 @@ describe("handshake race (CONTRACT Several relays; Go daemon/race.go)", () => {
     expect([a.closedWith, b.closedWith]).toEqual([1000, 1000]);
     expect(a.binarySent()).toHaveLength(0);
   });
+
+  it("a relay whose socket cannot be created counts as failed; the other relay still races", async () => {
+    const fake = fakeFactory();
+    const t = setup({
+      factory: (url) => {
+        if (url.startsWith(B)) throw new Error("no socket");
+        return fake.factory(url);
+      },
+    });
+    const a = fake.socketFor(A);
+    await flushOpen(a);
+    answer(a);
+    expect((await t.result).relay).toBe(A);
+
+    const lone = setup({
+      relays: [A],
+      factory: () => {
+        throw new Error("no socket");
+      },
+    });
+    await expect(lone.result).rejects.toThrow("no socket");
+  });
 });
 
 describe("ping race (CONTRACT Several relays, kinds 0x03 and 0x04)", () => {
@@ -312,5 +334,31 @@ describe("ping race (CONTRACT Several relays, kinds 0x03 and 0x04)", () => {
     await b2.whenSent(2);
     b2.remoteClose(4401);
     await expect(t.result).rejects.toMatchObject({ closeCode: 4401 });
+  });
+
+  it("relays that open but never answer ping: the race ends at 15 s and closes them 1000", async () => {
+    const t = setup(pingOptions);
+    const a = t.fake.socketFor(A);
+    const b = t.fake.socketFor(B);
+    await flushOpen(a, b);
+    t.clock.advance(15_000);
+    await expect(t.result).rejects.toMatchObject({ code: "dial-timeout" });
+    expect([a.closedWith, b.closedWith]).toEqual([1000, 1000]);
+  });
+
+  it("a key confirmation that cannot be sent fails the race and closes the winner", async () => {
+    const t = setup({ ...pingOptions, relays: [A] });
+    const a = t.fake.socketFor(A);
+    await flushOpen(a);
+    a.receive("pong");
+    await a.whenSent(2);
+    const send = a.send.bind(a);
+    a.send = (data) => {
+      if (typeof data !== "string" && a.binarySent().length >= 1) throw new Error("socket gone");
+      send(data);
+    };
+    answerJoin(a);
+    await expect(t.result).rejects.toThrow("socket gone");
+    expect(a.closedWith).toBe(1000);
   });
 });

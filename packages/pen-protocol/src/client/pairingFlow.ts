@@ -105,7 +105,7 @@ export type PairingView =
   | { readonly tag: "connect-once" }
   | { readonly tag: "pending-unresolved" }
   | { readonly tag: "discarded" }
-  /** The outcome belonged to an attempt the person discarded or replaced; nothing changed. */
+  /** The outcome belonged to an attempt the person discarded or replaced; nothing changed, and it is never shown. */
   | { readonly tag: "superseded" }
   /** A replacement is waiting for the new key's first session; until then the original key is kept (§6.2). */
   | { readonly tag: "replacement-pending" };
@@ -196,13 +196,27 @@ function promoteAttempt(
   });
 }
 
-/** Removes the attempt's pending key after its own refusal or failure; another attempt's key is left alone. */
-async function dropPending(deps: PairingDeps, nodeId: string, publicKey: string): Promise<boolean> {
+/**
+ * Removes the attempt's pending key after its own refusal or failure; another attempt's key is left alone
+ * ("superseded"). "failed" means the store refused: the key stays, and start-up recovery removes it.
+ */
+async function dropPending(
+  deps: PairingDeps,
+  nodeId: string,
+  publicKey: string,
+): Promise<"dropped" | "superseded" | "failed"> {
   return update(deps, nodeId, (record) =>
     isAttempt(record, publicKey)
-      ? { next: withoutPending(record), result: true }
-      : { result: false },
-  ).catch(() => false);
+      ? { next: withoutPending(record), result: "dropped" as const }
+      : { result: "superseded" as const },
+  ).catch(() => "failed" as const);
+}
+
+/** Whether the attempt still owns the pending record after its 202, read in turn with every other change. */
+function ownsChecking(deps: PairingDeps, nodeId: string, publicKey: string): Promise<boolean> {
+  return update(deps, nodeId, (record) => ({
+    result: isAttempt(record, publicKey) && record.pending?.stage === "post-202",
+  }));
 }
 
 /** Replaces the attempt's pending entry; false when the attempt is no longer the pending one. */
@@ -223,6 +237,9 @@ function finish(deps: PairingDeps, view: PairingView): PairingView {
   deps.show(view);
   return view;
 }
+
+/** An outcome for an attempt the person discarded or replaced: returned, never shown over the newer screen. */
+const SUPERSEDED: PairingView = { tag: "superseded" };
 
 async function saveOrRemove(
   deps: Pick<PairingDeps, "store">,
@@ -302,7 +319,7 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
       psk: servicePsk(qr.secret, qr.nodeId, qr.serverNoisePub, GOAT_SERVICE),
     });
   } catch {
-    await dropPending(deps, qr.nodeId, attempt);
+    if ((await dropPending(deps, qr.nodeId, attempt)) === "superseded") return SUPERSEDED;
     return finish(deps, { tag: "not-paired", reason: "could not reach the server for pairing" });
   }
 
@@ -311,7 +328,7 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
   try {
     if (!(await setPending(deps, qr.nodeId, attempt, requested))) {
       channel.close();
-      return finish(deps, { tag: "superseded" });
+      return SUPERSEDED;
     }
     deps.show({ tag: "requesting" });
     answer = await channel.request({
@@ -320,7 +337,7 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
     });
   } catch {
     channel.close();
-    await dropPending(deps, qr.nodeId, attempt);
+    if ((await dropPending(deps, qr.nodeId, attempt)) === "superseded") return SUPERSEDED;
     return finish(deps, {
       tag: "not-paired",
       reason: "the pairing stream closed before the server answered",
@@ -328,12 +345,12 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
   }
   if (answer.status === 409) {
     channel.close();
-    if (!(await dropPending(deps, qr.nodeId, attempt))) return finish(deps, { tag: "superseded" });
+    if ((await dropPending(deps, qr.nodeId, attempt)) === "superseded") return SUPERSEDED;
     return finish(deps, { tag: "refused", reason: answer.reason });
   }
   if (answer.status !== 202) {
     channel.close();
-    await dropPending(deps, qr.nodeId, attempt);
+    if ((await dropPending(deps, qr.nodeId, attempt)) === "superseded") return SUPERSEDED;
     return finish(deps, { tag: "not-paired", reason: "unexpected answer " + answer.status });
   }
 
@@ -343,12 +360,12 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
     marked = await setPending(deps, qr.nodeId, attempt, { ...requested, stage: "post-202" });
   } catch {
     channel.close();
-    await dropPending(deps, qr.nodeId, attempt);
+    if ((await dropPending(deps, qr.nodeId, attempt)) === "superseded") return SUPERSEDED;
     return finish(deps, { tag: "not-paired", reason: "this phone could not record the pairing" });
   }
   if (!marked) {
     channel.close();
-    return finish(deps, { tag: "superseded" });
+    return SUPERSEDED;
   }
   deps.show({ tag: "code", code: pairingCode(pairingSas(channel.handshakeHash)) });
 
@@ -363,14 +380,11 @@ export async function runPairing(deps: PairingDeps, qr: PairQr): Promise<Pairing
     if (result.status === 204) continue;
     channel.close();
     if (result.status === 200) {
-      if (!(await promoteAttempt(deps, qr.nodeId, attempt, result.deviceId))) {
-        return finish(deps, { tag: "superseded" });
-      }
+      if (!(await promoteAttempt(deps, qr.nodeId, attempt, result.deviceId))) return SUPERSEDED;
       return finish(deps, { tag: "paired", deviceId: result.deviceId });
     }
     if (result.status === 409) {
-      if (!(await dropPending(deps, qr.nodeId, attempt)))
-        return finish(deps, { tag: "superseded" });
+      if ((await dropPending(deps, qr.nodeId, attempt)) === "superseded") return SUPERSEDED;
       return finish(deps, { tag: "refused", reason: result.reason });
     }
     return checking(deps, qr.nodeId, attempt);
@@ -397,7 +411,7 @@ async function checking(
   if (!own) {
     return expected === undefined
       ? finish(deps, { tag: "not-paired", reason: "no pairing in progress" })
-      : finish(deps, { tag: "superseded" });
+      : SUPERSEDED;
   }
   const attempt = pending.key.publicKey;
   const key = loadKey(pending.key);
@@ -410,17 +424,20 @@ async function checking(
       .catch((): ProbeResult => ({ issued: false }));
     if (result.issued) {
       // The session proves this attempt's key only; a discarded or replaced attempt promotes nothing.
-      if (!(await promoteAttempt(deps, nodeId, attempt, result.deviceId ?? null))) {
-        return finish(deps, { tag: "superseded" });
-      }
+      if (!(await promoteAttempt(deps, nodeId, attempt, result.deviceId ?? null)))
+        return SUPERSEDED;
       return finish(deps, { tag: "paired", deviceId: result.deviceId ?? null });
     }
+    // A discard or a newer attempt during the probe or the wait ends this Checking without a word.
+    if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
     const next = at + PROBE_INTERVAL_MS;
     if (next >= until) {
       await sleep(deps.clock, until - deps.clock.now());
+      if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
       return finish(deps, { tag: "not-confirmed" });
     }
     await sleep(deps.clock, next - deps.clock.now());
+    if (!(await ownsChecking(deps, nodeId, attempt))) return SUPERSEDED;
   }
 }
 
