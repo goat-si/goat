@@ -8,6 +8,12 @@ import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import type { ChannelTransport } from "../ChannelTransport.ts";
 import { markdownTablesToLists } from "../channelTables.ts";
+import { chunkFenceAware } from "../slack/slackMessageChunking.ts";
+
+/** One message's text stays far below the osascript argument limit (1 MiB). */
+export const IMESSAGE_TEXT_LIMIT = 16_000;
+export const IMESSAGE_MAX_MESSAGES = 8;
+export const IMESSAGE_TRUNCATED_NOTE = "… The rest of this reply was too long for Messages.";
 
 export type ImessageSendFailure = {
   readonly outcome: "not_sent" | "unknown";
@@ -118,13 +124,25 @@ export function makeImessageTransport(input: {
           return yield* new ChannelGatewayError({ reason: "invalid_input" });
         if (!(yield* input.isActive()))
           return yield* new ChannelGatewayError({ reason: "adapter_unavailable" });
-        const result = yield* Effect.promise(() =>
-          input.sender.sendText({
-            chatGuid: target.chatGuid,
-            text: markdownTablesToLists(message.text, { bullet: "•", boldFirst: false }),
-          }),
-        );
-        if ("outcome" in result) {
+        const pieces = chunkFenceAware(
+          markdownTablesToLists(message.text, { bullet: "•", boldFirst: false }),
+          IMESSAGE_TEXT_LIMIT,
+        ).filter((piece) => piece.trim() !== "");
+        const kept =
+          pieces.length === 0
+            ? [message.text]
+            : pieces.length <= IMESSAGE_MAX_MESSAGES
+              ? pieces
+              : [...pieces.slice(0, IMESSAGE_MAX_MESSAGES - 1), IMESSAGE_TRUNCATED_NOTE];
+        let acceptedAt = "";
+        for (const [index, text] of kept.entries()) {
+          const result = yield* Effect.promise(() =>
+            input.sender.sendText({ chatGuid: target.chatGuid, text }),
+          );
+          if (!("outcome" in result)) {
+            acceptedAt ||= result.acceptedAt;
+            continue;
+          }
           const code =
             result.code === "automation_denied"
               ? "invalid_auth"
@@ -137,11 +155,12 @@ export function makeImessageTransport(input: {
                     : "unknown";
           return yield* new ChannelGatewayError({
             reason: "delivery_failed",
-            deliveryOutcome: result.outcome,
+            // Earlier pieces were sent, so a retry would repeat them.
+            deliveryOutcome: index === 0 ? result.outcome : "unknown",
             deliveryErrorCode: code,
           });
         }
-        return { deliveryId: message.deliveryId, acceptedAt: result.acceptedAt };
+        return { deliveryId: message.deliveryId, acceptedAt };
       }),
   };
 }

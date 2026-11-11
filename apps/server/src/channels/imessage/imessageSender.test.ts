@@ -6,7 +6,10 @@ import type * as NodeChildProcess from "node:child_process";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
+  IMESSAGE_MAX_MESSAGES,
   IMESSAGE_SCRIPT,
+  IMESSAGE_TEXT_LIMIT,
+  IMESSAGE_TRUNCATED_NOTE,
   makeImessageTransport,
   makeOsascriptImessageSender,
 } from "./imessageSender.ts";
@@ -213,6 +216,54 @@ describe("tables in iMessage replies", () => {
         },
       });
       expect(sent).toEqual(["Results:\n• docs (Count: 20)\n• `internals` (Count: 44)"]);
+    }),
+  );
+
+  it.effect("are split into messages that each stay far below the osascript argument limit", () =>
+    Effect.gen(function* () {
+      const sent: Array<string> = [];
+      let fail = false;
+      const transport = makeImessageTransport({
+        connectionId: "imessage-000000000001",
+        sender: {
+          sendText: async ({ text }) => {
+            sent.push(text);
+            return fail && sent.length === 2
+              ? { outcome: "not_sent", code: "unknown" }
+              : { acceptedAt: "2026-10-19T00:00:00.000Z" };
+          },
+        },
+        isActive: () => Effect.succeed(true),
+      });
+      const destination = {
+        kind: "imessage" as const,
+        connectionId: "imessage-000000000001",
+        chatGuid: "guid",
+      };
+      const rows = Array.from({ length: 300 }, (_, row) => `| r${row} | ${"v".repeat(200)} |`);
+      const huge = `| Name | Value |\n|---|---|\n${rows.join("\n")}\n\n${"word ".repeat(40_000)}`;
+      yield* transport.send({
+        deliveryId: "d" as never,
+        kind: "receipt" as const,
+        text: huge,
+        destination,
+      });
+      expect(sent.length).toBe(IMESSAGE_MAX_MESSAGES);
+      expect(sent.every((text) => text.length <= IMESSAGE_TEXT_LIMIT)).toBe(true);
+      expect(sent.at(-1)).toBe(IMESSAGE_TRUNCATED_NOTE);
+
+      sent.length = 0;
+      fail = true;
+      const error = yield* Effect.flip(
+        transport.send({
+          deliveryId: "d" as never,
+          kind: "receipt" as const,
+          text: "word ".repeat(5_000),
+          destination,
+        }),
+      );
+      expect(sent.length).toBe(2);
+      expect(error.deliveryOutcome).toBe("unknown");
     }),
   );
 });
