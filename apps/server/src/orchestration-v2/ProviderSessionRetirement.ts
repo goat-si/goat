@@ -178,7 +178,11 @@ export const make = <
    */
   const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
     providerSessionId: ProviderSessionId,
-    turn?: { readonly model: string; readonly threadId: string; readonly id?: string | undefined },
+    turn?: {
+      readonly model?: string | undefined;
+      readonly threadId: string;
+      readonly id?: string | undefined;
+    },
   ) {
     const key = String(providerSessionId);
     const model = turn?.model;
@@ -269,9 +273,9 @@ export const make = <
     );
   });
 
-  /** A turn-start open for `model`; only one with a run, which settles it on exit, reserves the process. */
+  /** A turn-start open: one with a run reserves the process until it settles; one with a model is checked. */
   const turnFor = <T extends string>(model: string | undefined, threadId: T, runId?: string) =>
-    model === undefined ? undefined : { model, threadId, id: runId };
+    model === undefined && runId === undefined ? undefined : { model, threadId, id: runId };
 
   /** Ends a start attempt's reservation on every session once it exits, registered or not. */
   const settleTurnStart = (turn: { readonly threadId: string; readonly id: string }) =>

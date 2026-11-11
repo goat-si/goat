@@ -107,10 +107,21 @@ it.effect("a model the process learns later is listed again on a miss, then reme
       served: [[known], [known, added]],
     });
     assert.strictEqual(yield* modelStatus(added), "predated");
-    // Codex refreshed its catalog online and now lists the model.
+    // Codex refreshed its catalog online and now lists the model; a minute on, GOAT asks again.
+    yield* TestClock.adjust("1 minute");
     assert.strictEqual(yield* modelStatus(added), "ready");
     assert.strictEqual(yield* modelStatus(known), "ready");
     assert.strictEqual(yield* lists, 2);
+  }),
+);
+
+it.effect("a process that just answered is not asked again for a model it did not list", () =>
+  Effect.gen(function* () {
+    // Without GOAT's catalog a miss is unconfirmed; the open's later checks reuse the answer.
+    const { modelStatus, lists } = yield* arrivals({ atOpen: [], now: [], served: [[known]] });
+    assert.strictEqual(yield* modelStatus(added), "unconfirmed");
+    assert.strictEqual(yield* modelStatus(added), "unconfirmed");
+    assert.strictEqual(yield* lists, 1);
   }),
 );
 

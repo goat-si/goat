@@ -339,13 +339,13 @@ const sharedSession = Effect.gen(function* () {
   const providerSessionId: ProviderSessionId = idAllocator.derive.providerSession({
     providerInstanceId: instanceId,
   });
-  const open = (threadId: ThreadId, model = modelSelection.model) =>
+  const open = (threadId: ThreadId, model = modelSelection.model, startsTurn = true) =>
     manager.open({
       threadId,
       providerSessionId,
       modelSelection: { instanceId, model },
       runtimePolicy,
-      startsTurn: true,
+      startsTurn,
       runId: runOf(threadId),
     });
   const runTurn = (threadId: ThreadId) =>
@@ -799,31 +799,44 @@ it.effect("a process that cannot list its models still runs the turn and is neve
   }),
 );
 
+/** Thread B's start opens while the idle timer armed when thread A's turn ended comes due. */
+const idleReleaseDuringStart = (startsTurn: boolean) =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open, runTurn } = yield* sharedSession;
+      yield* finishTurn(fixture, runTurn, threadA);
+      yield* TestClock.adjust("29 minutes");
+      const rearming = yield* Deferred.make<void>();
+      const rearm = yield* Deferred.make<void>();
+      // B's open is about to re-arm the idle timer; the old timer has not been stopped yet.
+      fixture.beforeIdleInterrupt = Effect.suspend(() => {
+        fixture.beforeIdleInterrupt = Effect.void;
+        return Deferred.succeed(rearming, undefined).pipe(Effect.andThen(Deferred.await(rearm)));
+      });
+      const opening = yield* open(threadB, modelSelection.model, startsTurn).pipe(
+        Effect.exit,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(rearming);
+      yield* TestClock.adjust("2 minutes");
+      yield* Deferred.succeed(rearm, undefined);
+      assert.isTrue(Exit.isSuccess(yield* Fiber.join(opening)));
+      assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+    }).pipe(Effect.provide(layer(fixture)));
+  });
+
 it.effect(
   "an idle release already under way when a turn reserves the process leaves it running",
+  () => idleReleaseDuringStart(true),
+);
+
+it.effect(
+  "a start exempt from the model check still reserves its process against idle release",
   () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture;
-      yield* Effect.gen(function* () {
-        const { open, runTurn } = yield* sharedSession;
-        yield* finishTurn(fixture, runTurn, threadA);
-        yield* TestClock.adjust("29 minutes");
-        const reserved = yield* Deferred.make<void>();
-        const rearm = yield* Deferred.make<void>();
-        // Thread B's start has reserved the process; its re-arm has not yet stopped the old timer.
-        fixture.beforeIdleInterrupt = Effect.suspend(() => {
-          fixture.beforeIdleInterrupt = Effect.void;
-          return Deferred.succeed(reserved, undefined).pipe(Effect.andThen(Deferred.await(rearm)));
-        });
-        const opening = yield* open(threadB).pipe(Effect.exit, Effect.forkChild);
-        yield* Deferred.await(reserved);
-        yield* TestClock.adjust("2 minutes");
-        yield* Deferred.succeed(rearm, undefined);
-        assert.isTrue(Exit.isSuccess(yield* Fiber.join(opening)));
-        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
-        assert.strictEqual(yield* Ref.get(fixture.opens), 1);
-      }).pipe(Effect.provide(layer(fixture)));
-    }),
+    // A goal pause or a survivor adoption opens without the model check.
+    idleReleaseDuringStart(false),
 );
 
 it.effect("a turn on a process that does not answer its model list waits for one listing", () =>
@@ -840,6 +853,8 @@ it.effect("a turn on a process that does not answer its model list waits for one
         Effect.andThen(Deferred.succeed(asked, undefined)),
         Effect.andThen(Effect.never),
       );
+      // The process last answered when thread A's turn opened; it is asked again after a minute.
+      yield* TestClock.adjust("1 minute");
       const opening = yield* open(threadB, addedModel).pipe(Effect.exit, Effect.forkChild);
       yield* Deferred.await(asked);
       yield* TestClock.adjust("10 seconds");
