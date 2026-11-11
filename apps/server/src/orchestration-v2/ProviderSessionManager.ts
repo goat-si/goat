@@ -277,6 +277,11 @@ export interface ProviderSessionManagerV2Shape {
    * on `ownProviderThreadIds` is busy on it. Checked atomically with turn starts. Succeeds with
    * whether it was released.
    */
+  /** Ends a turn start's catalog-restart reservation once that start attempt has exited. */
+  readonly settleTurnStart: (input: {
+    readonly threadId: ThreadId;
+    readonly runId: RunId;
+  }) => Effect.Effect<void>;
   readonly releaseUnlessBusy: (input: {
     readonly providerSessionId: ProviderSessionId;
     readonly ownProviderThreadIds: ReadonlyArray<ProviderThreadId>;
@@ -2604,7 +2609,7 @@ export const layerWithOptions = (
                 cause,
               });
             const model = input.startsTurn === true ? input.modelSelection.model : undefined;
-            const turn = retirement.turnFor(model, input.threadId);
+            const turn = retirement.turnFor(model, input.threadId, input.runId);
             return sessionOpen
               .withLock(
                 input.providerSessionId,
@@ -2840,10 +2845,7 @@ export const layerWithOptions = (
                   );
                 }),
               )
-              .pipe(
-                Effect.tap((runtime) => Retirement.refuseUnready(runtime, model, openError)),
-                Effect.onError(() => retirement.clearTurnOpen(input.providerSessionId, turn)),
-              );
+              .pipe(Effect.tap((runtime) => Retirement.refuseUnready(runtime, model, openError)));
           }),
         isLive: (providerSessionId) =>
           Ref.get(sessions).pipe(
@@ -2913,6 +2915,8 @@ export const layerWithOptions = (
             ),
         ),
         release: releaseEntry,
+        settleTurnStart: ({ threadId, runId }) =>
+          retirement.settleTurnStart({ threadId, id: runId }),
         releaseUnlessBusy: Effect.fn("ProviderSessionManager.releaseUnlessBusy")(function* (input) {
           const key = sessionKey(input.providerSessionId);
           const before = (yield* Ref.get(sessions)).get(key);

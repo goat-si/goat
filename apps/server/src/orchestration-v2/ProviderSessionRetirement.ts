@@ -106,13 +106,13 @@ export const restartRequired = (retired: Retirement, runningTurns: number, model
 /** One turn-start open; `id` keeps a failed attempt from clearing a newer one on the same thread. */
 export interface TurnOpen {
   readonly at: number;
-  readonly id: number;
+  readonly id: string;
 }
 
 export const withoutTurnOpen = <K extends string>(
   opens: ReadonlyMap<K, TurnOpen>,
   threadId: K,
-  id?: number,
+  id?: string,
 ) => {
   const open = opens.get(threadId);
   if (open === undefined || (id !== undefined && open.id !== id)) return opens;
@@ -188,7 +188,7 @@ export const make = <
    */
   const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
     providerSessionId: ProviderSessionId,
-    turn?: { readonly model: string; readonly threadId: string; readonly id: number },
+    turn?: { readonly model: string; readonly threadId: string; readonly id: string },
   ) {
     const key = String(providerSessionId);
     const model = turn?.model;
@@ -282,25 +282,20 @@ export const make = <
   });
 
   let turnOpenIds = 0;
-  /** Removes a turn-start open that failed or was interrupted before its turn registered. */
-  const clearTurnOpen = (
-    providerSessionId: ProviderSessionId,
-    turn: { readonly threadId: string; readonly id: number } | undefined,
-  ) =>
+  /** A turn-start open for `model`, identified by its run, or none when the open starts no turn. */
+  const turnFor = <T extends string>(model: string | undefined, threadId: T, runId?: string) =>
+    model === undefined ? undefined : { model, threadId, id: runId ?? `open:${++turnOpenIds}` };
+
+  /** Ends a start attempt's reservation on every session once it exits, registered or not. */
+  const settleTurnStart = (turn: { readonly threadId: string; readonly id: string }) =>
     Ref.update(input.sessions, (current) => {
-      if (turn === undefined) return current;
-      const key = String(providerSessionId);
-      const entry = current.get(key);
-      if (entry === undefined) return current;
-      const turnOpens = withoutTurnOpen(entry.turnOpens, turn.threadId, turn.id);
-      return turnOpens === entry.turnOpens
-        ? current
-        : new Map(current).set(key, { ...entry, turnOpens });
+      let next = current;
+      for (const [key, entry] of current) {
+        const turnOpens = withoutTurnOpen(entry.turnOpens, turn.threadId, turn.id);
+        if (turnOpens !== entry.turnOpens) next = new Map(next).set(key, { ...entry, turnOpens });
+      }
+      return next;
     });
 
-  /** A new turn-start open for `model`, or none when the open does not start a turn. */
-  const turnFor = <T extends string>(model: string | undefined, threadId: T) =>
-    model === undefined ? undefined : { model, threadId, id: ++turnOpenIds };
-
-  return { retireIfStale, follow, clearTurnOpen, turnFor };
+  return { retireIfStale, follow, settleTurnStart, turnFor };
 };

@@ -301,6 +301,10 @@ const sharedSession = Effect.gen(function* () {
         },
       ],
     });
+  const runOf = (threadId: ThreadId) => idAllocator.derive.run({ threadId, ordinal: 1 });
+  // What the turn-start service does when a start attempt exits, registered or not.
+  const endStart = (threadId: ThreadId) =>
+    manager.settleTurnStart({ threadId, runId: runOf(threadId) });
   const providerSessionId: ProviderSessionId = idAllocator.derive.providerSession({
     providerInstanceId: instanceId,
   });
@@ -311,6 +315,7 @@ const sharedSession = Effect.gen(function* () {
       modelSelection: { instanceId, model },
       runtimePolicy,
       startsTurn: true,
+      runId: runOf(threadId),
     });
   const runTurn = (threadId: ThreadId) =>
     Effect.gen(function* () {
@@ -352,7 +357,7 @@ const sharedSession = Effect.gen(function* () {
         runtimePolicy,
       });
     });
-  return { manager, providerSessionId, open, runTurn };
+  return { manager, providerSessionId, open, runTurn, endStart };
 });
 
 const editSettings = (fixture: Fixture, patch: Partial<Fixture["instance"]>) =>
@@ -690,15 +695,31 @@ it.effect("a refused turn leaves no start behind; the next newer-model turn rest
   Effect.gen(function* () {
     const fixture = yield* makeFixture;
     yield* Effect.gen(function* () {
-      const { open, runTurn } = yield* sharedSession;
+      const { open, runTurn, endStart } = yield* sharedSession;
       const turn = yield* runTurn(threadA).pipe(Effect.exit, Effect.forkChild);
       yield* Deferred.await(fixture.turnStarted);
       fixture.catalog.push(addedModel);
       assert.isTrue(Exit.isFailure(yield* open(threadB, addedModel).pipe(Effect.exit)));
+      yield* endStart(threadB);
 
       yield* Deferred.succeed(fixture.endTurn, undefined);
       yield* Fiber.join(turn);
       yield* open(threadC, addedModel);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("a start that fails after its open stops holding the process at once", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open, endStart } = yield* sharedSession;
+      // Thread A's open returned, then its start failed (say, loading its thread) before registering.
+      yield* open(threadA);
+      yield* endStart(threadA);
+      fixture.catalog.push(addedModel);
+      yield* open(threadB, addedModel);
       assert.strictEqual(yield* Ref.get(fixture.opens), 2);
     }).pipe(Effect.provide(layer(fixture)));
   }),
