@@ -39,7 +39,13 @@ export interface GoatBotVisitSnapshot {
  * conversation's shell has loaded, and while the chat is not focused.
  */
 export function useGoatBotVisitSnapshot(input: {
+  /** A visit lasts while the chat is focused and the app is in the foreground. */
   readonly focused: boolean;
+  /**
+   * The person can see the chat now; false while iOS is inactive (Control Center, the app
+   * switcher). Replies that arrive then stay unread, though the visit and its boundary continue.
+   */
+  readonly reading?: boolean;
   readonly conversation: string | null;
   /** The conversation's shell and messages have loaded; lastVisitedAt may still be null. */
   readonly loaded: boolean;
@@ -57,6 +63,13 @@ export function useGoatBotVisitSnapshot(input: {
   const [snapshot, setSnapshot] = useState<GoatBotVisitSnapshot | null>(null);
   if (key !== null && snapshot?.key !== key && input.loaded) {
     setSnapshot({ key, readUpTo: input.lastVisitedAt, newestAtOpen: input.newestAt });
+  } else if (
+    key !== null &&
+    snapshot?.key === key &&
+    input.reading === false &&
+    snapshot.newestAtOpen !== input.newestAt
+  ) {
+    setSnapshot({ ...snapshot, newestAtOpen: input.newestAt });
   }
   return key !== null && snapshot?.key === key ? snapshot : null;
 }

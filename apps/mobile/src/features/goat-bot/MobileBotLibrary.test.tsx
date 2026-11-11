@@ -63,6 +63,9 @@ vi.mock("expo-file-system", () => {
 });
 vi.mock("expo-sharing", () => ({ isAvailableAsync: state.available, shareAsync: state.share }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "00000000-0000-4000-8000-000000000000" }));
+// A fixed "now", so the day headings do not depend on when the test runs.
+const LIBRARY_NOW = Date.parse("2026-11-08T12:00:00.000Z");
+vi.mock("../../lib/clock", () => ({ useNowMinuteMs: () => LIBRARY_NOW }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -355,4 +358,17 @@ it("an image preview says why sharing did not start", async () => {
   state.share.mockRejectedValue(new Error("no"));
   await press("Share");
   expect(container.textContent).toContain("Could not open the share sheet. Try again.");
+});
+
+it("puts the files under a heading for each day they were saved", async () => {
+  setup();
+  await render();
+  const { goatBotDayLabel } = await import("@goat/client-runtime/goatBot");
+  const text = container.textContent ?? "";
+  const first = goatBotDayLabel("2026-11-07T10:00:00.000Z", LIBRARY_NOW);
+  const second = goatBotDayLabel("2026-11-06T10:00:00.000Z", LIBRARY_NOW);
+  expect(first).not.toBe(second);
+  const order = [first, "deck.pdf", second, "chart.png"].map((part) => text.indexOf(part));
+  expect(order.every((at) => at >= 0)).toBe(true);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
 });

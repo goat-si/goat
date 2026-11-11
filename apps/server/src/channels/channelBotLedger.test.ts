@@ -18,8 +18,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -32,6 +34,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { botProfileKey, mainBotKey, memberBotKey } from "./channelBotLedger.ts";
 import { bindingIdFor, contentHashFor, conversationIdFor, inputIdFor } from "./channelIds.ts";
+import { TASK_CHANGES_COALESCE } from "./channelTaskChanges.ts";
 import { makeCreatedTasks } from "./channelTaskWrites.ts";
 import {
   botThreadId,
@@ -222,8 +225,17 @@ describe("channel tasks keep their bot", () => {
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MAIN);
       const inboxBefore = yield* sql`SELECT * FROM channel_inbox ORDER BY input_id`;
       const outboxBefore = yield* sql`SELECT * FROM channel_outbox ORDER BY delivery_id`;
+      // A mounted list hears that the owner's tasks moved to another bot.
+      const seen = yield* Queue.unbounded<number>();
+      yield* ledger.taskChangeRevisions("owner").pipe(
+        Stream.runForEach((revision) => Queue.offer(seen, revision)),
+        Effect.forkChild,
+      );
+      assert.strictEqual(yield* Queue.take(seen), 0);
 
       assert.strictEqual(yield* ledger.repairTaskBots(), 1);
+      yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+      assert.strictEqual(yield* Queue.take(seen), 1);
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MEMBER);
       assert.strictEqual(yield* ledger.repairTaskBots(), 0);
       assert.deepStrictEqual(

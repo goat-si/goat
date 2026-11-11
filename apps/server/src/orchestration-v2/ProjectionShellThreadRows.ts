@@ -32,6 +32,7 @@ export type ShellThreadRow = {
   readonly latest_run_completion_notification: string | null;
   readonly blocking_run_completion_notification: string | null;
   readonly latest_run_stop_requested: number;
+  readonly latest_run_start_held: number;
   readonly active_run_id: string | null;
   readonly active_run_status: string | null;
   readonly activity_run_status: string | null;
@@ -123,6 +124,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                 WHERE json_extract(e.value, '$.watch') IS NOT NULL) AS has_pull_request_watch,
               presented.run_id AS latest_run_id,
               presented.status AS latest_run_status,
+              (json_extract(presented.payload_json, '$.startHold') IS NOT NULL) AS latest_run_start_held,
               presented.requested_at AS latest_run_requested_at,
               json_extract(presented.payload_json, '$.startedAt') AS latest_run_started_at,
               presented.completed_at AS latest_run_completed_at,

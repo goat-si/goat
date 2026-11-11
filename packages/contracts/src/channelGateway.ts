@@ -314,6 +314,39 @@ export const ChannelGetBotStatusResult = Schema.Struct({
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 
+/**
+ * One thing a bot waits on the person for, across all of the owner's bots: an open question, an
+ * approval, a sign-in or a usage-limit pause, with the words its card shows. `taskId` (with
+ * `questionId` or `requestId` when there is one) is the card or task view it opens.
+ */
+export const ChannelOpenAsk = Schema.Struct({
+  botId: BotId,
+  taskId: ChannelTaskId,
+  kind: Schema.Literals(["question", "approval", "sign_in", "usage_limit"]),
+  text: Schema.String,
+  askedAt: IsoDateTime,
+  questionId: Schema.optionalKey(ChannelQuestionId),
+  requestId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ChannelOpenAsk = typeof ChannelOpenAsk.Type;
+export const ChannelListOpenAsksInput = Schema.Struct({});
+export type ChannelListOpenAsksInput = typeof ChannelListOpenAsksInput.Type;
+/** The newest asks; `total` counts them all, and `truncated` says it is a lower bound. */
+export const ChannelListOpenAsksResult = Schema.Struct({
+  asks: Schema.Array(ChannelOpenAsk),
+  total: NonNegativeInt,
+  truncated: Schema.Boolean,
+});
+export type ChannelListOpenAsksResult = typeof ChannelListOpenAsksResult.Type;
+export const ChannelSubscribeTaskChangesInput = Schema.Struct({});
+export type ChannelSubscribeTaskChangesInput = typeof ChannelSubscribeTaskChangesInput.Type;
+/**
+ * Revision 0 when the subscription starts, then a higher one after each change to the owner's
+ * tasks or bots (several close together arrive as one). It says only "read again".
+ */
+export const ChannelTaskChangesEvent = Schema.Struct({ revision: NonNegativeInt });
+export type ChannelTaskChangesEvent = typeof ChannelTaskChangesEvent.Type;
+
 /** Main first; never creates a bot. Deleted members only when asked for. */
 export const ChannelListBotsInput = Schema.Struct({
   includeDeleted: Schema.optionalKey(Schema.Boolean),
@@ -565,6 +598,8 @@ export type ChannelBotHomeClaimResult = typeof ChannelBotHomeClaimResult.Type;
 export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
+  listOpenAsks: "channel.listOpenAsks",
+  subscribeTaskChanges: "channel.subscribeTaskChanges",
   listBots: "channel.listBots",
   updateBot: "channel.updateBot",
   createBot: "channel.createBot",

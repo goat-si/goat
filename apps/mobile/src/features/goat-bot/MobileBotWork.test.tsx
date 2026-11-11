@@ -33,6 +33,18 @@ vi.mock("react-native", () => ({
   ),
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  FlatList: (
+    props: {
+      data: ReadonlyArray<{ key: string }>;
+      renderItem: (info: { item: { key: string }; index: number }) => ReactNode;
+    } & Record<string, unknown>,
+  ) => (
+    <div>
+      {props.data.map((item, index) => (
+        <div key={item.key}>{props.renderItem({ item, index })}</div>
+      ))}
+    </div>
+  ),
   Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
     visible ? <div>{children}</div> : null,
   Alert: { alert: vi.fn() },

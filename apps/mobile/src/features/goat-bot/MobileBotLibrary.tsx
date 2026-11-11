@@ -2,10 +2,12 @@ import {
   botArtifactName,
   botArtifactSizeLabel,
   botArtifactsFailure,
+  goatBotArtifactDays,
 } from "@goat/client-runtime/goatBot";
 import type { ChannelBotArtifact, EnvironmentId } from "@goat/contracts";
 import { useEffect, useRef, useState } from "react";
 import { Image, Modal, Pressable, Text, View } from "react-native";
+import { useNowMinuteMs } from "../../lib/clock";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
 import { type ImagePreview, openBotLibraryFile } from "./openBotLibraryFile";
@@ -36,6 +38,7 @@ export function MobileBotLibrary(props: {
     if (readable) refresh();
   }, [readable, refresh]);
   const [opening, setOpening] = useState<string | null>(null);
+  const nowMs = useNowMinuteMs();
   const [messages, setMessages] = useState<Readonly<Record<string, string>>>({});
   const [preview, setPreview] = useState<ImagePreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -110,35 +113,42 @@ export function MobileBotLibrary(props: {
       {files.data.truncated ? (
         <Text className="text-foreground-muted">Showing the newest files only.</Text>
       ) : null}
-      {files.data.artifacts.map((file) => {
-        const name = botArtifactName(file.relativePath);
-        const folder = file.relativePath.slice(0, -name.length).replace(/\/$/, "");
-        return (
-          <View key={file.relativePath} className="border-b border-border py-1">
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Open ${name}`}
-              disabled={opening !== null}
-              onPress={() => void open(file)}
-              className="min-h-[44px] justify-center"
-            >
-              <Text className="text-foreground">{name}</Text>
-              <Text className="text-foreground-muted">
-                {[
-                  folder,
-                  botArtifactSizeLabel(file.size),
-                  opening === file.relativePath ? "Opening…" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </Text>
-            </Pressable>
-            {messages[file.relativePath] ? (
-              <Text className="text-danger-foreground">{messages[file.relativePath]}</Text>
-            ) : null}
-          </View>
-        );
-      })}
+      {goatBotArtifactDays(files.data.artifacts, nowMs).map((day) => (
+        <View key={day.label} className="gap-1 pt-2">
+          <Text accessibilityRole="header" className="text-xs font-medium text-foreground-muted">
+            {day.label}
+          </Text>
+          {day.files.map((file) => {
+            const name = botArtifactName(file.relativePath);
+            const folder = file.relativePath.slice(0, -name.length).replace(/\/$/, "");
+            return (
+              <View key={file.relativePath} className="border-b border-border py-1">
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${name}`}
+                  disabled={opening !== null}
+                  onPress={() => void open(file)}
+                  className="min-h-[44px] justify-center"
+                >
+                  <Text className="text-foreground">{name}</Text>
+                  <Text className="text-foreground-muted">
+                    {[
+                      folder,
+                      botArtifactSizeLabel(file.size),
+                      opening === file.relativePath ? "Opening…" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
+                </Pressable>
+                {messages[file.relativePath] ? (
+                  <Text className="text-danger-foreground">{messages[file.relativePath]}</Text>
+                ) : null}
+              </View>
+            );
+          })}
+        </View>
+      ))}
       <Modal
         visible={preview !== null}
         animationType="slide"
