@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { EnvironmentId, ThreadId, RuntimeRequestId } from "./baseSchemas.ts";
+import { Handoff } from "./handoff.ts";
 import { OrchestrationV2UserInputQuestion } from "./orchestrationV2.ts";
 import { ProviderRequestKind, ProviderUserInputAnswers } from "./providerPolicy.ts";
 import { PermissionProfile } from "./permissionProfiles.ts";
@@ -79,8 +80,21 @@ export const DecisionListResult = Schema.Struct({
   truncated: Schema.Boolean,
 });
 export type DecisionListResult = typeof DecisionListResult.Type;
+/** An approval handoff a person has not answered, with the names the Inbox shows beside it. */
+export const DecisionHandoff = Schema.Struct({
+  threadTitle: Schema.String,
+  parentThreadId: Schema.optionalKey(ThreadId),
+  parentThreadTitle: Schema.optionalKey(Schema.String),
+  /** Never carries the person's instructions; those come only from the handoff open RPC. */
+  handoff: Handoff,
+});
+export type DecisionHandoff = typeof DecisionHandoff.Type;
 /** Every open item of one environment with its routing; pushed again whenever any of it changes. */
-export const DecisionFeed = Schema.Struct({ items: Schema.Array(DecisionItem) });
+export const DecisionFeed = Schema.Struct({
+  items: Schema.Array(DecisionItem),
+  /** Every open approval handoff; older servers omit it, so absent means "cannot list". */
+  handoffs: Schema.optionalKey(Schema.Array(DecisionHandoff)),
+});
 export type DecisionFeed = typeof DecisionFeed.Type;
 export const DecisionGetInput = Schema.Struct({
   id: TrimmedNonEmptyString,

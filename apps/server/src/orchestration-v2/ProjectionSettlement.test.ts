@@ -681,7 +681,7 @@ it.effect.each([
       );
       const projection = yield* store.getThreadProjection(threadId);
       for (const candidate of [shell, ProjectionStore.threadShellFromProjection(projection)]) {
-        assert.equal(candidate?.pendingRuntimeRequest?.id, handoffId);
+        assert.equal(candidate?.pendingRuntimeRequest?.id, String(handoffId));
         // Older clients keep reading user_input; the handoff field marks it as an approval.
         assert.equal(candidate?.pendingRuntimeRequest?.kind, "user_input");
         assert.deepEqual(candidate?.pendingRuntimeRequest?.handoff, {
