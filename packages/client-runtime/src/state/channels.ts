@@ -4,6 +4,7 @@ import {
   type ChannelIngestInput,
   type ChannelListBotThreadsInput,
   type ChannelQuestionId,
+  type ChannelSubscribeTaskChangesInput,
   type ChannelTaskId,
   type ChatAttachment,
   type EnvironmentId,
@@ -17,11 +18,14 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { botRowListedUntil, botRowRetiresAt } from "../goatBot/taskVisibility.ts";
 import { sameBotColor } from "../goatBot/botColor.ts";
 import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
+import { subscribeOrUnavailable } from "../rpc/client.ts";
 import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
 } from "./runtime.ts";
+import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
 
 const NO_WORK: ReadonlyArray<GoatBotWorkRef> = Object.freeze([]);
@@ -39,6 +43,9 @@ const PENDING_REMOTE_WINDOW_MS = 2 * 60_000;
  * go through `ingest`, which returns once the server stored the message; the reply arrives on
  * the bot thread. Sends are not serialized: the bot takes a new message while work runs.
  */
+/** How long the task change stream stays open after its last view unmounts. */
+const TASK_CHANGES_IDLE_TTL_MS = 2_000;
+
 export function createChannelEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
@@ -257,6 +264,31 @@ export function createChannelEnvironmentAtoms<R, E>(
       staleTimeMs: 2_000,
     }),
     listBotThreads,
+    listOpenAsks: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-open-asks",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,
+      staleTimeMs: 2_000,
+    }),
+    /** Whether this client may read open asks; without it the strip shows nothing. */
+    listOpenAsksPermission: createCommandPermissions(
+      runtime,
+      CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,
+    ).permissionAtom,
+    /**
+     * "Read again" for the owner's channel tasks, one stream per environment however many views
+     * use it. It closes soon after the last one unmounts: the server allows few per connection.
+     * A session without the stream says so, and the next session asks again.
+     */
+    taskChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
+      label: "environment-data:channel:task-changes",
+      idleTtlMs: TASK_CHANGES_IDLE_TTL_MS,
+      subscribe: (input: ChannelSubscribeTaskChangesInput) =>
+        subscribeOrUnavailable(CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges, input),
+    }),
+    taskChangesPermission: createCommandPermissions(
+      runtime,
+      CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges,
+    ).permissionAtom,
     listBotNotes: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-notes",
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,

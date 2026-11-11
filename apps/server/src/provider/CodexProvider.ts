@@ -48,9 +48,11 @@ import {
 import {
   buildServerProvider,
   classifySpawnFailure,
+  isCommandMissingCause,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   providerModelsFromSettings,
+  providerProbeEnvironment,
   safeProcessCwd,
   spawnAndCollect,
   spawnFailureMessage,
@@ -633,7 +635,9 @@ const probeCodexCliVersion = Effect.fn("probeCodexCliVersion")(
   Effect.timeoutOption(Duration.millis(DEFAULT_TIMEOUT_MS)),
   Effect.map(Option.getOrNull),
   Effect.catch((cause) =>
-    Effect.logDebug("Codex --version fallback failed.", { cause }).pipe(Effect.as(null)),
+    Effect.logDebug("Codex --version fallback failed.", { cause }).pipe(
+      Effect.as(isCommandMissingCause(cause) ? ("missing" as const) : null),
+    ),
   ),
 );
 
@@ -646,7 +650,10 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
   readonly cwd: string;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
-  const { client } = yield* withCodexAppServerClient(input);
+  const { client } = yield* withCodexAppServerClient({
+    ...input,
+    environment: providerProbeEnvironment(input.environment ?? process.env),
+  });
   const skillsResponse = yield* client.request("skills/list", { cwds: [input.cwd] });
   return parseCodexSkillsListResponse(skillsResponse, input.cwd);
 });
@@ -716,7 +723,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   ServerSettingsError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
-  const resolvedEnvironment = environment ?? process.env;
+  const resolvedEnvironment = providerProbeEnvironment(environment ?? process.env);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   let routeStatus: import("@goat/contracts").CodexRouteStatus | undefined;
   const buildStatus = (input: Parameters<typeof buildServerProvider>[0]) => ({
@@ -830,9 +837,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
           env: { ...process.env, ...routeInput.success.execution.environment },
         })
       : "unknown";
-    const installed = routeFailure !== undefined || failure !== "missing";
-    const version =
-      installed && failure === "unknown"
+    const maybeInstalled = routeFailure !== undefined || failure !== "missing";
+    const versionProbe =
+      maybeInstalled && failure === "unknown"
         ? yield* probeCodexCliVersion({
             binaryPath: codexSettings.binaryPath,
             homePath: codexSettings.homePath,
@@ -840,6 +847,8 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
             environment: routeInput.success.execution.environment,
           })
         : null;
+    const installed = maybeInstalled && versionProbe !== "missing";
+    const version = versionProbe === "missing" ? null : versionProbe;
     return buildStatus({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,

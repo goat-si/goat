@@ -10,6 +10,7 @@ import { Button } from "../ui/button";
 import { SidebarGroup } from "../ui/sidebar";
 import { Tabs, TabsList, TabsTab } from "../ui/tabs";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { GoatBotNeedsYou } from "./GoatBotNeedsYou";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
 import { GoatBotChildRows } from "./GoatBotChildRows";
 import { GoatBotMemberRoster } from "./GoatBotMemberRows";
@@ -43,6 +44,14 @@ export function GoatBotSidebarTabs() {
           </TabsList>
         </Tabs>
       </SidebarGroup>
+      {environmentId && (
+        <GoatBotNeedsYou
+          key={environmentId}
+          environmentId={environmentId}
+          bots={bots ?? []}
+          visible={mode === "bot"}
+        />
+      )}
       {mode === "bot" && (
         <div className="max-h-[70dvh] overflow-y-auto">
           <GoatBotSidebarRow

@@ -9,8 +9,14 @@ const state = vi.hoisted(() => ({
     canCreate: true,
     canManage: true,
     canEdit: true,
-    create: vi.fn(async () => ({ botId: "research", name: "Research" })),
-    update: vi.fn(async () => null),
+    create: vi.fn(async (..._args: unknown[]): Promise<object | string> => ({
+      botId: "research",
+      name: "Research",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    })),
+    update: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
     hide: vi.fn(async () => true),
     remove: vi.fn(async () => true),
     restore: vi.fn(async () => true),
@@ -20,8 +26,10 @@ const state = vi.hoisted(() => ({
     onSubmit: (changes: object) => Promise<string | null>;
     onClose: () => void;
     extraChanged?: boolean;
+    colorEditable?: boolean;
   },
   modelEditable: true,
+  colorEditable: true,
   pickModel: null as null | ((model: object | null) => void),
 }));
 vi.mock("react-native", () => ({
@@ -52,6 +60,7 @@ vi.mock("./MobileBotRosterView", () => ({
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => state.manage }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({
   useMobileGoatBotMemberModelEditable: () => ({ editable: state.modelEditable }),
+  useMobileGoatBotColorEditable: () => state.colorEditable,
 }));
 vi.mock("./MobileNewBotModel", () => ({
   MobileNewBotModel: (props: { onChange: (model: object | null) => void }) => {
@@ -66,6 +75,7 @@ vi.mock("./MobileBotProfileSheet", () => ({
     onSubmit: (changes: object) => Promise<string | null>;
     onClose: () => void;
     extraChanged?: boolean;
+    colorEditable?: boolean;
     children?: React.ReactNode;
   }) => {
     state.sheet = props;
@@ -136,8 +146,89 @@ it("creates a bot from New bot with one request id and opens its conversation", 
   );
   expect(opened).toHaveBeenCalledWith({
     kind: "member",
-    profile: { botId: "research", name: "Research" },
+    profile: {
+      botId: "research",
+      name: "Research",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    },
   });
+  expect(state.manage.update).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+});
+
+it("a retry after a create the server kept, though the phone saw it fail, still carries the edits", async () => {
+  state.manage.update.mockClear();
+  const stored = {
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+  };
+  // The first request was stored, but its answer never reached the phone.
+  state.manage.create
+    .mockResolvedValueOnce("Couldn't reach GOAT Bot's computer.")
+    .mockResolvedValueOnce(stored);
+  const opened = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  let failure: string | null | undefined;
+  await act(async () => {
+    failure = await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "" });
+  });
+  expect(failure).toBe("Couldn't reach GOAT Bot's computer.");
+  const luna = { instanceId: "codex", model: "luna" };
+  await act(async () => state.pickModel?.(luna));
+  await act(async () => {
+    failure = await state.sheet?.onSubmit({ name: "Researcher", avatar: "🔬", purpose: "" });
+  });
+  // The same request id finds the stored bot; the edits made since reach it as a change.
+  expect(state.manage.create).toHaveBeenLastCalledWith(
+    { name: "Researcher", avatar: "🔬", purpose: "" },
+    luna,
+    "request-1",
+  );
+  expect(state.manage.update).toHaveBeenCalledExactlyOnceWith(
+    stored,
+    { name: "Researcher", avatar: "🔬" },
+    luna,
+  );
+  expect(failure).toBeNull();
+  expect(opened).toHaveBeenCalledWith({
+    kind: "member",
+    profile: { ...stored, name: "Researcher", avatar: "🔬", defaultModelSelection: luna },
+  });
+  await act(async () => root.unmount());
+});
+
+it("keeps the New bot sheet open with the reason when the edits cannot reach a bot the server kept", async () => {
+  state.manage.update.mockClear();
+  const stored = {
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+  };
+  state.manage.create.mockResolvedValueOnce(stored);
+  state.manage.update.mockResolvedValueOnce("You can't change this bot.");
+  const opened = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  let failure: string | null | undefined;
+  await act(async () => {
+    failure = await state.sheet?.onSubmit({ name: "Researcher", avatar: null, purpose: "" });
+  });
+  expect(failure).toBe("You can't change this bot.");
+  expect(opened).not.toHaveBeenCalled();
   await act(async () => root.unmount());
 });
 
@@ -176,5 +267,80 @@ it("changes a member's model from Edit only where its server takes the change", 
   });
   expect(state.manage.update).toHaveBeenLastCalledWith(profile, { name: "Research 2" }, undefined);
   state.modelEditable = true;
+  await act(async () => root.unmount());
+});
+
+it("offers a colour where the server stores one, and a create retried after a picked colour still carries it", async () => {
+  state.manage.update.mockClear();
+  const stored = {
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+  };
+  // The first request was stored without a colour, and its answer never reached the phone.
+  state.manage.create
+    .mockResolvedValueOnce("Couldn't reach GOAT Bot's computer.")
+    .mockResolvedValueOnce(stored);
+  const opened = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  expect(state.sheet?.colorEditable).toBe(true);
+  await act(async () => {
+    await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "" });
+  });
+  await act(async () => {
+    await state.sheet?.onSubmit({ name: "Research", avatar: null, purpose: "", color: "#0F766E" });
+  });
+  expect(state.manage.create).toHaveBeenLastCalledWith(
+    { name: "Research", avatar: null, purpose: "", color: "#0F766E" },
+    null,
+    "request-1",
+  );
+  expect(state.manage.update).toHaveBeenCalledExactlyOnceWith(
+    stored,
+    { color: "#0F766E" },
+    undefined,
+  );
+  expect(opened).toHaveBeenCalledWith({
+    kind: "member",
+    profile: { ...stored, color: "#0F766E" },
+  });
+  await act(async () => root.unmount());
+});
+
+it("offers a member's colour on Edit only where the server stores one, and never the main bot's", async () => {
+  state.alert.mockClear();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  const members = state.members as { onLongPressBot: (entry: object) => void };
+  const edit = async (entry: object) => {
+    await act(async () => members.onLongPressBot(entry));
+    await act(async () => choose("Edit"));
+  };
+  await edit({
+    kind: "member",
+    profile: { ...member, role: "member", defaultModelSelection: null },
+  });
+  expect(state.sheet?.colorEditable).toBe(true);
+  await act(async () => state.sheet?.onClose());
+  await edit({
+    kind: "main",
+    profile: { botId: "main", role: "main", name: "GOAT Bot", defaultModelSelection: null },
+  });
+  expect(state.sheet?.colorEditable).toBe(false);
+  await act(async () => state.sheet?.onClose());
+  state.colorEditable = false;
+  await edit({
+    kind: "member",
+    profile: { ...member, role: "member", defaultModelSelection: null },
+  });
+  expect(state.sheet?.colorEditable).toBe(false);
+  state.colorEditable = true;
   await act(async () => root.unmount());
 });

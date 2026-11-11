@@ -36,6 +36,7 @@ vi.mock("./runtime.ts", async () => {
   return {
     createEnvironmentRpcCommand: (_runtime: unknown, options: unknown) => ({ options }),
     createEnvironmentRpcSubscriptionAtomFamily: () => () => A.make(null),
+    createEnvironmentSubscriptionAtomFamily: () => () => A.make(null),
     createEnvironmentRpcQueryAtomFamily: (
       _runtime: unknown,
       options: {

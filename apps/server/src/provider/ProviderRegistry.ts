@@ -27,6 +27,12 @@ import * as Scope from "effect/Scope";
 
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as ModelManifest from "./ModelManifest.ts";
+import {
+  dropProviderWorkspaceSnapshot,
+  upsertProviderWorkspaceSnapshot,
+} from "./ProviderWorkspaceSnapshots.ts";
+export { upsertProviderWorkspaceSnapshot } from "./ProviderWorkspaceSnapshots.ts";
+import { makeModelCatalogRefresh } from "./ModelCatalogRefresh.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
@@ -38,10 +44,7 @@ import {
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "./providerStatusCache.ts";
-import type {
-  ProviderInstance,
-  ProviderWorkspaceSnapshot,
-} from "@goat/provider-core/server/driver";
+import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import {
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilities,
@@ -91,6 +94,7 @@ export class ProviderRegistry extends Context.Service<
       readonly cwd?: string | undefined;
       readonly fresh?: boolean | undefined;
     }) => Effect.Effect<void>;
+    readonly refreshModelCatalog: Effect.Effect<void>;
 
     readonly getProviderMaintenanceCapabilitiesForInstance: (
       instanceId: ProviderInstanceId,
@@ -130,43 +134,6 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
 
 const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean =>
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
-
-const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 16;
-
-function dropProviderWorkspaceSnapshot(provider: ServerProvider, cwd: string): ServerProvider {
-  return provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === cwd)
-    ? {
-        ...provider,
-        workspaceSnapshots: provider.workspaceSnapshots.filter((snapshot) => snapshot.cwd !== cwd),
-      }
-    : provider;
-}
-
-export function upsertProviderWorkspaceSnapshot(
-  provider: ServerProvider,
-  cwd: string,
-  scopedSnapshot: ProviderWorkspaceSnapshot,
-): ServerProvider {
-  const previousSnapshot = provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd);
-  const optionDescriptors = scopedSnapshot.optionDescriptors ?? previousSnapshot?.optionDescriptors;
-  const workspaceSnapshot = {
-    cwd,
-    checkedAt: scopedSnapshot.checkedAt,
-    slashCommands: scopedSnapshot.slashCommandsPending
-      ? (previousSnapshot?.slashCommands ?? scopedSnapshot.slashCommands)
-      : scopedSnapshot.slashCommands,
-    ...(scopedSnapshot.slashCommandsPending ? { slashCommandsPending: true } : {}),
-    skills: scopedSnapshot.skills,
-    ...(optionDescriptors === undefined ? {} : { optionDescriptors }),
-  } satisfies NonNullable<ServerProvider["workspaceSnapshots"]>[number];
-  return {
-    ...provider,
-    workspaceSnapshots: [
-      ...(provider.workspaceSnapshots ?? []).filter((snapshot) => snapshot.cwd !== cwd),
-      workspaceSnapshot,
-    ].slice(-MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER),
-  };
-}
 
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
   if (["pi", "omo"].includes(provider.driver)) {
@@ -632,6 +599,11 @@ export const layer = Layer.effect(
       );
     });
 
+    const catalogRefresh = yield* makeModelCatalogRefresh(
+      manifestService,
+      latestVersions,
+      initialManifest,
+    );
     type RefreshAllCompletion = Deferred.Deferred<ReadonlyArray<ServerProvider>>;
     const refreshAllInFlightRef = yield* Ref.make<Option.Option<RefreshAllCompletion>>(
       Option.none(),
@@ -655,22 +627,27 @@ export const layer = Layer.effect(
       );
       if (claimed.owner) {
         // Detach shared passes so the first caller's interruption cannot cancel other callers' work.
-        yield* syncLiveSourcesAndContinue.pipe(
-          Effect.andThen(Ref.get(liveSubsRef)),
-          Effect.flatMap((instances) =>
-            Effect.forEach(instances.values(), (instance) => refreshOneSource(instance), {
-              concurrency: "unbounded",
-              discard: true,
-            }),
-          ),
-          Effect.andThen(Ref.get(providersRef)),
-          Effect.onExit((exit) =>
-            Ref.set(refreshAllInFlightRef, Option.none()).pipe(
-              Effect.andThen(Deferred.done(claimed.completion, exit)),
+        yield* catalogRefresh
+          .capture(
+            syncLiveSourcesAndContinue.pipe(
+              Effect.andThen(Ref.get(liveSubsRef)),
+              Effect.flatMap((instances) =>
+                Effect.forEach(instances.values(), (instance) => refreshOneSource(instance), {
+                  concurrency: "unbounded",
+                  discard: true,
+                }),
+              ),
+              Effect.andThen(Ref.get(providersRef)),
             ),
-          ),
-          Effect.forkDetach,
-        );
+          )
+          .pipe(
+            Effect.onExit((exit) =>
+              Ref.set(refreshAllInFlightRef, Option.none()).pipe(
+                Effect.andThen(Deferred.done(claimed.completion, exit)),
+              ),
+            ),
+            Effect.forkDetach,
+          );
       }
       return yield* Deferred.await(claimed.completion);
     });
@@ -1091,6 +1068,9 @@ export const layer = Layer.effect(
         refreshWorkspaceSnapshot(input).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshAfterUpdate,
       invalidateModelCaches,
+      refreshModelCatalog: catalogRefresh
+        .check(refreshAll())
+        .pipe(Effect.catchCause(recoverRefreshFailure), Effect.asVoid),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       get streamChanges() {

@@ -1,4 +1,6 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
+import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
+import { composerPathOrModelReplacement } from "./composerModelMentions";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -64,11 +66,16 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
-  isPathSuggestionCurrent,
   extendReplacementRangeForTrailingSpace,
   replaceTextRange,
 } from "../../composer-logic";
-import { DEFAULT_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
+import { composerPlaceholder } from "../../composerPlaceholder";
+import {
+  attachmentUploadGate,
+  composerSendWaitNotice,
+  useQueuedSendDelivery,
+  useSendAfterUploads,
+} from "./useSendAfterUploads";
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
@@ -133,7 +140,6 @@ import {
   startAttachmentUpload,
   useAttachmentUploadStore,
 } from "../../lib/attachmentUploadQueue";
-import { attachmentUploadBlockReason } from "../../lib/attachmentUploadState";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
@@ -272,6 +278,7 @@ import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { resolveProviderSlashCommandsForCwd } from "@goat/client-runtime/providerSkills";
 import { useOfferedSkills } from "./providerSkillsWithBuiltIns";
 import { useDelayedStatus } from "../../hooks/useDelayedStatus";
+import type { ComposerForkCommand } from "../../hooks/useForkThread";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -408,6 +415,7 @@ export interface ChatComposerProps {
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
   onUsageLimitsCommand?: (() => void) | undefined;
+  forkCommand?: ComposerForkCommand | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -679,6 +687,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const activeTasksProgress = shownSyncPhase === null ? props.activeTasksProgress : null;
   const activeTaskSteps = shownSyncPhase === null ? props.activeTaskSteps : null;
   const isEditingQueuedMessage = editingQueuedAttachments !== null;
+  const applyThreadModelPick = useApplyThreadModelPick();
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
   const composerDraftTargetKeyRef = useRef("");
   useLayoutEffect(() => {
@@ -823,6 +832,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     supportsAttachmentUploads,
     maxFileAttachmentBytes,
   });
+  const uploadGate = attachmentUploadGate({
+    imageIds: [...composerImages, ...composerFiles].map((item) => item.id),
+    uploadsByImageId,
+    environmentId,
+    uploadsSupported: supportsAttachmentUploads,
+    answering:
+      !!questionAttachmentTarget || pendingApprovals.some((a) => !heldRequestIds.has(a.requestId)),
+  });
   const attachmentBlockReason =
     (questionAttachmentTarget &&
     !supportsQuestionAttachments &&
@@ -835,11 +852,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ? needsReattachFileCount === 1
           ? "Attach the interrupted file again or remove it"
           : "Attach the interrupted files again or remove them"
-        : attachmentUploadBlockReason({
-            imageIds: [...composerImages, ...composerFiles].map((attachment) => attachment.id),
-            uploadsByImageId,
-            environmentId,
-          })
+        : uploadGate.plainSend
+          ? null
+          : uploadGate.blockReason
       : null);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
@@ -1188,6 +1203,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     threadPullRequests,
     planModeUiEnabled,
     sideChatAvailable,
+    forkDescription: props.forkCommand?.description ?? null,
     compactSlashCommandAvailable,
     selectedProvider,
     selectedProviderSkills,
@@ -1199,6 +1215,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       providerInstanceEntries,
     ),
     workspaceSkillsScanning,
+    modelMentions: { instanceEntries: providerInstanceEntries, modelOptionsByInstance },
   });
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1891,7 +1908,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
-  const { onUsageLimitsCommand } = props;
+  const { onUsageLimitsCommand, forkCommand } = props;
   const navigate = useNavigate();
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
@@ -1901,6 +1918,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
+    const clearTrigger = (focusEditorAfterReplace?: false) =>
+      applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        ...(focusEditorAfterReplace === false ? { focusEditorAfterReplace } : {}),
+      });
     // Replaces the typed trigger, swallowing one following space so chips never double it.
     const replaceTriggerWith = (replacement: string) => {
       const end = extendReplacementRangeForTrailingSpace(
@@ -1928,9 +1950,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         setComposerHighlightedItemId(null);
       });
     }
-    if (item.type === "path") {
-      if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
-      const replacement = `${serializeComposerFileLink(item.path)} `;
+    if (item.type === "path" || item.type === "model") {
+      const replacement = composerPathOrModelReplacement(item, trigger, environmentId, gitCwd);
+      if (replacement === null) return;
       const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
@@ -1938,15 +1960,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
-      if (item.command === "model") {
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-          focusEditorAfterReplace: false,
-        });
-        if (applied) {
-          setComposerHighlightedItemId(null);
-          setIsComposerModelPickerOpen(true);
-        }
+      if (item.command === "model" || item.command === "fork") {
+        if (!clearTrigger(false)) return;
+        setComposerHighlightedItemId(null);
+        if (item.command === "model") setIsComposerModelPickerOpen(true);
+        else forkCommand?.run();
         return;
       }
       if (item.command === "side") {
@@ -1959,21 +1977,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       if (!planModeUiEnabled) return;
       void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
-      const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-      });
-      if (applied) {
-        setComposerHighlightedItemId(null);
-      }
+      if (clearTrigger()) setComposerHighlightedItemId(null);
       return;
     }
     if (item.type === "provider-slash-command") {
       if (item.command.name === USAGE_LIMITS_COMMAND.name && onUsageLimitsCommand) {
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-          focusEditorAfterReplace: false,
-        });
-        if (applied) {
+        if (clearTrigger(false)) {
           setComposerHighlightedItemId(null);
           onUsageLimitsCommand();
         }
@@ -2083,10 +2092,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
   };
 
+  const sendAfterUploads = useSendAfterUploads(composerDraftTargetKey, uploadGate);
   const submitComposer = (
     event?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
     submissionIntent?: ComposerSubmissionIntent,
+    fromQueue = false,
   ) => {
     if (
       voice.blocksSubmission() ||
@@ -2097,27 +2108,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event?.preventDefault();
       return;
     }
-    // A send while a pasted image is still compressing would strand that image:
-    // the turn snapshot wouldn't include it, and it would surface in the *next*
-    // draft instead.
-    if (activeThreadId && countPreparingComposerImages(attachmentTargetKey) > 0) {
+    const waitNotice = composerSendWaitNotice({
+      compressingImage: !!activeThreadId && countPreparingComposerImages(attachmentTargetKey) > 0,
+      resolvingContext: pendingDraftWork.has(attachmentTargetKey),
+    });
+    if (waitNotice) {
       event?.preventDefault();
-      toastManager.add({
-        type: "info",
-        title: "Still compressing a pasted image.",
-        description: "Send again once its thumbnail appears.",
-      });
+      toastManager.add({ type: "info", ...waitNotice });
       return;
     }
-    if (pendingDraftWork.has(attachmentTargetKey)) {
-      event?.preventDefault();
-      toastManager.add({
-        type: "info",
-        title: "Still bringing attached context into this message.",
-        description: "Send again once its chip resolves.",
-      });
-      return;
-    }
+    if (sendAfterUploads.intercept(event, fromQueue)) return;
     const submission = submitComposerDraft({
       prompt: promptRef.current,
       submissionTarget: activePendingProgress ? "pending-user-input" : "provider-turn",
@@ -2146,6 +2146,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
   };
   const submitComposerStable = useStableCallback(submitComposer);
+  useQueuedSendDelivery(sendAfterUploads, () =>
+    submitComposerStable(undefined, undefined, undefined, true),
+  );
   const handleSubmitMessage = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     submitComposer(
@@ -2827,8 +2830,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     event.preventDefault();
     event.stopPropagation();
   };
-  // The editor is memoized; fresh closures here re-render it on every parent
-  // render, which during a stream is every delta.
+  // Stable closures keep streaming updates from re-rendering the memoized editor.
   const onComposerPasteStable = useStableCallback(onComposerPaste);
   const insertContextReferencesAtCaret = (
     references: ReadonlyArray<ComposerContextReference>,
@@ -3085,6 +3087,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             model: selectedModel,
             persistSticky: true,
           });
+        void applyThreadModelPick(composerDraftTarget);
         if (change.prompt !== promptRef.current) {
           applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
             expandedCursorAfterReplace: change.cursor,
@@ -3737,28 +3740,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onCitationSubmitAndSend={submitCitationAndSendStable}
                     onCitationDraftSave={saveCitationDraftToPromptStable}
                     onPaste={onComposerPasteStable}
-                    placeholder={
-                      isComposerApprovalState
-                        ? activePendingApproval?.supportsFeedback
-                          ? "Send feedback to decline this request"
-                          : "Send a message to decline and redirect the agent"
-                        : activePendingProgress
-                          ? isChoiceOnlyPendingQuestion
-                            ? "Choose an option above"
-                            : "Type your own answer, or leave this blank to use the selected option"
-                          : showPlanFollowUpPrompt && activeProposedPlan
-                            ? "Add feedback to refine the plan, or leave this blank to implement it"
-                            : projectSelectionRequired
-                              ? "Choose a project above to start a thread"
-                              : showProviderUnavailable
-                                ? "Enable a provider in Settings to send a message"
-                                : DEFAULT_COMPOSER_PLACEHOLDER
-                    }
+                    placeholder={composerPlaceholder({
+                      approval: isComposerApprovalState ? (activePendingApproval ?? {}) : null,
+                      question: activePendingProgress ? { isChoiceOnlyPendingQuestion } : null,
+                      planFollowUp: showPlanFollowUpPrompt && activeProposedPlan !== null,
+                      projectSelectionRequired,
+                      showProviderUnavailable,
+                    })}
                     disabled={
                       isConnecting ||
                       projectSelectionRequired ||
                       isChoiceOnlyPendingQuestion ||
-                      activePendingIsResponding
+                      activePendingIsResponding ||
+                      sendAfterUploads.queued
                     }
                   />
                 </ComposerContextActionsContext>

@@ -18,12 +18,30 @@ export interface ClaimedOutboxRow {
   readonly destination_kind: string;
 }
 
-/** A task's interim message, to a channel that keeps every message it was sent. */
-export const isInterimMessage = (row: ClaimedOutboxRow, message: ChannelOutboundMessage) =>
-  message.interim === true &&
-  row.task_id !== null &&
-  ONE_MESSAGE_BEFORE_ANSWER.has(row.destination_kind) &&
-  row.cause_key !== "reply:" + row.input_id;
+/** A task's interim message, including narration written before the interim marker existed. */
+export const isInterimMessage = Effect.fn("channelInterimMessages.isInterim")(function* (
+  sql: SqlClient.SqlClient,
+  row: ClaimedOutboxRow,
+  message: ChannelOutboundMessage,
+) {
+  if (
+    row.kind !== "receipt" ||
+    message.kind !== "receipt" ||
+    row.task_id === null ||
+    !ONE_MESSAGE_BEFORE_ANSWER.has(row.destination_kind) ||
+    row.cause_key === "reply:" + row.input_id
+  )
+    return false;
+  if (message.interim === true) return true;
+  const events = yield* sql<{
+    readonly found: number;
+  }>`SELECT 1 AS found FROM channel_task_events event
+    WHERE event.task_id = ${row.task_id}
+      AND event.event_id = substr(${row.cause_key}, 11, length(${row.cause_key}) - 17)
+      AND ${row.cause_key} = 'narration:' || event.event_id || ':origin'
+      AND event.type IN ('task.progress', 'task.dispatch.claimed', 'task.moved') LIMIT 1`;
+  return events.length > 0;
+});
 
 /**
  * Whether the person already heard (or may have heard) a message before this one: the input's
@@ -47,7 +65,13 @@ export const interimAlreadyHeard = Effect.fn("channelInterimMessages.alreadyHear
     SELECT 1 AS heard FROM channel_outbox told
     WHERE told.task_id = ${row.task_id} AND told.destination_kind = ${row.destination_kind}
       AND told.kind = 'receipt' AND told.state IN ('delivered', 'ambiguous')
-      AND json_extract(told.message_json, '$.interim') = 1
+      AND (json_extract(told.message_json, '$.interim') = 1 OR EXISTS (
+        SELECT 1 FROM channel_task_events event
+        WHERE event.task_id = told.task_id
+          AND event.event_id = substr(told.cause_key, 11, length(told.cause_key) - 17)
+          AND told.cause_key = 'narration:' || event.event_id || ':origin'
+          AND event.type IN ('task.progress', 'task.dispatch.claimed', 'task.moved')
+      ))
       AND told.delivery_id != ${row.delivery_id}
     LIMIT 1`;
   return earlier.length > 0;

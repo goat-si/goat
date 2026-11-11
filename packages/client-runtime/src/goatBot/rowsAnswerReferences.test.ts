@@ -327,3 +327,26 @@ describe("an answer the server refused stays what the person said", () => {
     expect(ids(rows)).toEqual(["b1"]);
   });
 });
+
+describe("the card's record of who answered wins over the message's own claim", () => {
+  it("shows a second claim on a question the card says another message answered as a plain message", () => {
+    const rows = chat([
+      card("task-1", 2, [], [{ questionId: "q1", inputId: "in-u1" }]),
+      question("b1", 1, "task-1", "q1"),
+      person("u1", 2, "Keep", { taskId: "task-1", answersQuestionId: "q1" }),
+      person("u2", 3, "Clear", { taskId: "task-1", answersQuestionId: "q1" }),
+    ]);
+    expect(ids(rows)).toEqual(["b1", "u2"]);
+    expect(bot(rows, "b1")).toMatchObject({ answer: "Keep", answerIndex: 0 });
+  });
+
+  it("folds a message recorded as refused when the card names it as the answer", () => {
+    const rows = chat([
+      card("task-1", 2, [], [{ questionId: "q1", inputId: "in-u1" }]),
+      question("b1", 1, "task-1", "q1"),
+      person("u1", 2, "Keep", { taskId: "task-1", answersQuestionId: null }),
+    ]);
+    expect(ids(rows)).toEqual(["b1"]);
+    expect(bot(rows, "b1")).toMatchObject({ answer: "Keep", answerIndex: 0 });
+  });
+});

@@ -47,6 +47,10 @@ export const protocolExecutable = (
     nodeReadiness?: boolean;
     /** Hold SIGTERM until the stop controller releases it, then report actual exit via EOF. */
     stopBarrier?: boolean;
+    /** Log SIGTERM and keep running, as a runtime that ignores it does. */
+    ignoreSigterm?: boolean;
+    /** Start one long-running child, as a provider app-server, and record its PID in .test/child-pid. */
+    spawnChild?: boolean;
     /** Advertise `drainRestart` with a per-start instance id and answer the drain endpoint. */
     drain?: boolean;
     /** Build commit time answered by `__ssh-helper commit-time`; unstamped when absent. */
@@ -299,6 +303,7 @@ server.close(() => process.exit(0));
   }
   process.on("SIGTERM", () => {
 event("stop");
+if (${JSON.stringify(signals.ignoreSigterm ?? false)}) return;
 if (${JSON.stringify(signals.stopBarrier ?? false)}) {
   stopRequested = true;
   for (const socket of stopObservers) socket.write("stopping\\n");
@@ -316,6 +321,11 @@ const record = {version: 1, pid: process.pid, port: server.address().port,
 fs.mkdirSync(path.dirname(runtimeFile), {recursive: true}); fs.writeFileSync(runtimeFile, JSON.stringify(record));
 if (drainCapable) fs.writeFileSync(tokenFile, "fixture-token-" + process.pid + "\\n", {mode: 0o600});
 fs.appendFileSync(path.join(test, "pids"), process.pid + "\\n");
+if (${JSON.stringify(signals.spawnChild ?? false)}) {
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
+  fs.appendFileSync(path.join(test, "pids"), child.pid + "\\n");
+  fs.writeFileSync(path.join(test, "child-pid"), String(child.pid));
+}
 event("start", { runner: fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") });
 if (args.includes("--test-seed") || process.env.T3_TEST_SEED === "1") {
   fs.writeFileSync(path.join(test, "accepted-ready-" + process.pid), "ready");
@@ -346,6 +356,8 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   descriptor404?: boolean;
   nodeMode?: boolean;
   stopBarrier?: boolean;
+  ignoreSigterm?: boolean;
+  spawnChild?: boolean;
   contestedPort?: number;
   contestedAttempts?: number;
   homePrefix?: string;
@@ -503,7 +515,7 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
           },
         ),
       );
-      if (input.stopBarrier)
+      if (input.stopBarrier || input.ignoreSigterm)
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             if (yield* child.isRunning) yield* child.kill({ killSignal: "SIGKILL" });

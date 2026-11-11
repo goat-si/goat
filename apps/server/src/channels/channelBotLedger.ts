@@ -3,7 +3,13 @@
  * trimmed, so no main key has a space after "bot:"; both still match the "bot:%" scan
  * ChannelBotDirectory and older builds use to recognise bot threads.
  */
-import { BotId, ChannelBotRef, MAIN_BOT_ID, type ThreadId } from "@goat/contracts";
+import {
+  BotId,
+  ChannelBotRef,
+  type ChannelGatewayError,
+  MAIN_BOT_ID,
+  type ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -90,7 +96,7 @@ export interface ChannelBotLedgerOps {
    * Revision 0, then one more after each committed burst of changes to the owner's tasks or bots,
    * so a mounted list knows to read again. Carries no task data.
    */
-  readonly taskChangeRevisions: (ownerId: string) => Stream.Stream<number>;
+  readonly taskChangeRevisions: (ownerId: string) => Stream.Stream<number, ChannelGatewayError>;
   /** For a caller whose own transaction wrapped task writes: announce once it committed. */
   readonly announceTaskChanges: (ownerIds: Iterable<string>) => Effect.Effect<void>;
 }

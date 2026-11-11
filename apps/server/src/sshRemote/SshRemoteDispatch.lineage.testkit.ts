@@ -89,6 +89,14 @@ export const launchAgainst = (remote: {
   readonly listFails?: boolean;
   /** The listing never answers until the caller gives up and aborts it. */
   readonly onListStalled?: () => void;
+  readonly declaresPlacement?: boolean;
+  readonly placement?: import("../fleet/admission/PlacementKey.ts").PlacementArgument;
+  /** Launch twice; only the second carries placement. */
+  readonly placementOnSecondLaunch?: import("../fleet/admission/PlacementKey.ts").PlacementArgument;
+  /** goat_thread_launch refuses with this payload, as a remote GOAT encodes a failure. */
+  readonly launchRefusal?: Record<string, unknown>;
+  /** Merged into goat_thread_launch's answer. */
+  readonly launchAnswer?: Record<string, unknown>;
 }) =>
   Effect.gen(function* () {
     const host = "lineage-host";
@@ -202,6 +210,9 @@ export const launchAgainst = (remote: {
                       ...(remote.declaresNotifyOnCompletion === true
                         ? { notifyOnCompletion: { type: "boolean" } }
                         : {}),
+                      ...(remote.declaresPlacement === true
+                        ? { placement: { type: "object" } }
+                        : {}),
                     },
                   },
                 },
@@ -244,6 +255,15 @@ export const launchAgainst = (remote: {
               },
             });
           }
+          if (request.params?.name === "goat_thread_launch" && remote.launchRefusal !== undefined)
+            return Response.json({
+              jsonrpc: "2.0",
+              id: request.id,
+              result: {
+                isError: true,
+                content: [{ type: "text", text: JSON.stringify(remote.launchRefusal) }],
+              },
+            });
           const report = request.params?.arguments?.report as
             | { readonly correlationId: string }
             | undefined;
@@ -274,6 +294,7 @@ export const launchAgainst = (remote: {
                 ...(report === undefined
                   ? {}
                   : { report: { correlationId: report.correlationId } }),
+                ...(request.params?.name === "goat_thread_launch" ? remote.launchAnswer : {}),
               },
             },
           });
@@ -325,8 +346,12 @@ export const launchAgainst = (remote: {
     try {
       const result = yield* Effect.gen(function* () {
         const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-        const launch = (memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling) => {
+        const launch = (
+          memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling,
+          placement = remote.placement,
+        ) => {
           const input: SshRemoteDispatch.SshLaunchInput = {
+            ...(placement === undefined ? {} : { placement, message: "Placed work" }),
             host,
             cwd: "/home/agent/repo",
             workspace: { type: "cwd" },
@@ -406,6 +431,10 @@ export const launchAgainst = (remote: {
           let result = yield* launch(firstCeiling);
           for (const ceiling of moreCeilings) result = yield* launch(ceiling);
           return result;
+        }
+        if (remote.placementOnSecondLaunch !== undefined) {
+          yield* launch();
+          return yield* launch(undefined, remote.placementOnSecondLaunch);
         }
         if (remote.upgradeBetweenLaunches !== true) return yield* launch();
         yield* launch();

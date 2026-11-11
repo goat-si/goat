@@ -86,6 +86,7 @@ import * as ThreadSearchMcpService from "./ThreadSearchMcpService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
+import * as ThreadForkWorkspace from "../orchestration-v2/goat/ThreadForkWorkspace.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -311,6 +312,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
   Layer.mock(ThreadResultService.ThreadResultService)({}),
   Layer.mock(WorktreeMcpService.WorktreeMcpService)({}),
+  Layer.mock(ThreadForkWorkspace.ThreadForkWorkspaceService)({}),
   Layer.mock(CloudMachineService.CloudMachineService)({}),
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   NodeCrypto.layer,

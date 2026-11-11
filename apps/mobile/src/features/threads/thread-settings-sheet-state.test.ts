@@ -155,6 +155,9 @@ vi.mock("../agent-awareness/remoteRegistration", () => ({
 vi.mock("./use-composer-command-menu", () => ({
   useComposerCommandMenu: () => ({ trigger: null, items: [], skills: [], selection: null }),
 }));
+vi.mock("./useForkThread", () => ({
+  useComposerFork: () => ({ offersFork: false, startFork: () => {} }),
+}));
 vi.mock("../voice-input/useVoiceInputController", () => ({
   useVoiceInputController: () => ({ state: { phase: "idle" }, elapsedSeconds: 0 }),
 }));

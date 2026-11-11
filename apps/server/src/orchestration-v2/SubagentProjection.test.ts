@@ -422,6 +422,34 @@ it("orders a task's assistant messages by turn item, not by timestamps", () => {
   assert.equal(result.text, "All steps passed.");
   assert.equal(result.messageId, report.message.id);
   assert.equal(result.turnItemId, report.turnItem.id);
+  const reported = { runAttemptId: run.activeAttemptId, ordinal: 1, model: "claude-opus-4-5" };
+  const withModel = subagentResultForRun(
+    { ...projection, messages: [report.message], providerTurns: [reported as never] },
+    run,
+  );
+  assert.equal(
+    withModel.text,
+    "Requested model gpt-5.4; the provider reported running claude-opus-4-5.\n\nAll steps passed.",
+  );
+  const otherAttempt = { ...reported, runAttemptId: RunAttemptId.make("other") };
+  assert.equal(
+    subagentResultForRun(
+      { ...projection, messages: [report.message], providerTurns: [otherAttempt as never] },
+      run,
+    ).text,
+    "All steps passed.",
+  );
+  assert.equal(
+    subagentResultForRun(
+      {
+        ...projection,
+        messages: [report.message],
+        providerTurns: [{ ...reported, model: "gpt-5.4" } as never],
+      },
+      run,
+    ).text,
+    "All steps passed.",
+  );
 });
 
 it.effect("ends an orphaned native subagent's node when only its record already ended", () =>

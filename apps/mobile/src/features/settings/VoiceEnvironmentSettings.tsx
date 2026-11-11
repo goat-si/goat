@@ -6,6 +6,7 @@ import {
   type EnvironmentId,
   type SpeechConfiguration,
   type SpeechModelList,
+  speechBenchmarkTiers,
 } from "@goat/contracts";
 import {
   configureEnvironmentSpeechEffect,
@@ -276,6 +277,20 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
               disabled={busy || (model.selected && model.installed)}
               onPress={() => void change(model.installed ? "select" : "download", model.id)}
             />
+            {model.benchmark ? (
+              <Text className="px-2 text-sm text-foreground-muted">
+                Reference time for 30 s:{" "}
+                {speechBenchmarkTiers(config?.acceleration).map((tier, index) => (
+                  <Text key={tier}>
+                    {index ? " · " : ""}
+                    {tier === "cpu" ? "CPU" : "GPU"}{" "}
+                    {model.benchmark?.[tier] == null
+                      ? "not benchmarked"
+                      : `${model.benchmark[tier]} s`}
+                  </Text>
+                ))}
+              </Text>
+            ) : null}
             {model.installed ? (
               <SettingsActionRow
                 label={`Remove ${model.name}`}

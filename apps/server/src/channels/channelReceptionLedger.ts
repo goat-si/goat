@@ -1,4 +1,9 @@
-import { ChannelReceptionResult, type ChannelTask, type ChannelTaskEvent } from "@goat/contracts";
+import {
+  type ChannelInputId,
+  ChannelReceptionResult,
+  type ChannelTask,
+  type ChannelTaskEvent,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
@@ -11,6 +16,7 @@ import type {
   ChannelOutboxInsert,
 } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { answerDecisionDelivery } from "./channelPersonMessage.ts";
 
 const encodeDecision = Schema.encodeSync(Schema.fromJsonString(ChannelReceptionResult));
 const encodeReply = (reply: { text: string }) => JSON.stringify(reply);
@@ -51,6 +57,17 @@ export const receptionLedger = (
   | "takeSessionAcknowledgment"
 > => {
   const { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes } = deps;
+  // Every settling pass commits its answer decision itself, so no caller can leave it out.
+  const withAnswerDecision = (
+    inputId: ChannelInputId,
+    deliveries: ReadonlyArray<ChannelOutboxInsert>,
+    taskEvents?: ReadonlyArray<ChannelTaskEventWrite>,
+  ) =>
+    Effect.map(readInbox(inputId), (stored) =>
+      stored === undefined
+        ? deliveries
+        : [...deliveries, ...answerDecisionDelivery(stored, taskEvents)],
+    );
   const operations: ReturnType<typeof receptionLedger> = {
     beginReception: (input) =>
       sql
@@ -99,7 +116,10 @@ export const receptionLedger = (
               for (const item of created) yield* insertTask(item.task, row.owner_id, item.event);
               for (const write of input.taskEvents ?? []) yield* writeTaskEvent(write);
               if (taskIds.length > 0) touched.push(row.owner_id);
-              yield* insertDeliveries(input.deliveries, input.now);
+              yield* insertDeliveries(
+                yield* withAnswerDecision(input.inputId, input.deliveries, input.taskEvents),
+                input.now,
+              );
               return true;
             }),
           ),
@@ -121,7 +141,10 @@ export const receptionLedger = (
               RETURNING input_id
             `;
             if (rows.length === 0) return false;
-            yield* insertDeliveries(input.deliveries, input.now);
+            yield* insertDeliveries(
+              yield* withAnswerDecision(input.inputId, input.deliveries),
+              input.now,
+            );
             return true;
           }),
         )
@@ -174,7 +197,10 @@ export const receptionLedger = (
       (input_id, task_id, source, run_id, turn_item_id, text, committed_at)
       VALUES (${input.inputId}, ${input.taskId}, ${input.source}, ${input.runId ?? null},
         ${input.turnItemId ?? null}, ${input.text}, ${input.now})`;
-            yield* insertDeliveries(input.deliveries, input.now);
+            yield* insertDeliveries(
+              yield* withAnswerDecision(input.inputId, input.deliveries),
+              input.now,
+            );
             return true;
           }),
         )

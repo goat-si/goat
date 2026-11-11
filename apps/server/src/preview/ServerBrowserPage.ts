@@ -21,7 +21,7 @@ import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
 import { captureFullPage } from "./fullPageScreenshot.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
-import { evaluationExpired, requireEvaluationChannel } from "./actionEvaluation.ts";
+import { evaluateWithTimeout, requireEvaluationChannel } from "./actionEvaluation.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
   abortable,
@@ -989,17 +989,7 @@ export const evaluate = async (
   const before = frameUrls(page);
   await gate?.();
   const channel = requireEvaluationChannel(gate);
-  const evaluation = channel.send("Runtime.evaluate", {
-    expression: input.expression,
-    awaitPromise: input.awaitPromise ?? true,
-    returnByValue: input.returnByValue ?? true,
-  });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => evaluationExpired(channel, reject, timeoutMs), timeoutMs);
-  });
-  void evaluation.catch(constVoid);
-  const result = await Promise.race([evaluation, expired]).finally(() => clearTimeout(timer));
+  const result = await evaluateWithTimeout(channel, input, timeoutMs);
   if (result.exceptionDetails) {
     const { exception, text } = result.exceptionDetails;
     // The page writes its own exception's message, so it is masked like a result.

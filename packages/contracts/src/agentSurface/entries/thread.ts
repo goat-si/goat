@@ -758,9 +758,9 @@ export const threadEntries = {
     toolkit: "thread",
     summary: "Fork a thread from a stable run or checkpoint using the existing fork command.",
     description:
-      "Create a GOAT thread fork from a stable run or checkpoint, inheriting its configuration. Retry with the same clientRequestId to reuse the first fork. Acceptance confirms the fork command, not completion of a provider turn.",
+      "Create a GOAT thread fork from a stable run or checkpoint, inheriting its configuration, in the source's checkout or a new GOAT-managed worktree. Retry with the same clientRequestId to reuse the first fork. Acceptance confirms the fork command, not completion of a provider turn.",
     guide:
-      "Omit threadId to fork this thread. Choose latest_stable, a run, or a checkpoint as sourcePoint. This uses the existing fork command and its stable-source rules. The new thread inherits the source configuration; command acceptance does not mean a provider turn has completed.",
+      "Omit threadId to fork this thread. Choose latest_stable, a run, or a checkpoint as sourcePoint. This uses the existing fork command and its stable-source rules. workspace {type:'worktree'} starts the fork on a new branch in a new GOAT-managed worktree at the source checkout's current HEAD and carries its uncommitted changes, except ignored files, unless includeUncommitted is false. The new thread inherits the source configuration; command acceptance does not mean a provider turn has completed.",
     idempotency: "key",
     reconcile: "thread.list",
     effect: "destructive",

@@ -389,6 +389,9 @@ export function makeLocalCommandHarness(input: {
       ),
     ensureThread: fallbackEnsureThread,
   };
+  const settleTurnStart = vi.fn(
+    (_turn: { readonly threadId: ThreadId; readonly runId: RunId }) => Effect.void,
+  );
   const open = vi.fn(() =>
     input.interruptOpen === true
       ? Effect.interrupt
@@ -590,6 +593,7 @@ export function makeLocalCommandHarness(input: {
           ? []
           : [Layer.mock(MemorySnapshot.MemorySnapshot)({ forThread: input.memory.select })]),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          settleTurnStart,
           open,
           ...(input.memory === undefined ? {} : { currentMemoryPolicy: input.memory.policy }),
           get: () =>
@@ -623,6 +627,7 @@ export function makeLocalCommandHarness(input: {
     resolveRuntimePolicy,
     createWorktree,
     open,
+    settleTurnStart,
     fallbackEnsureThread,
     writeIfRunCurrent,
     startRootRun,

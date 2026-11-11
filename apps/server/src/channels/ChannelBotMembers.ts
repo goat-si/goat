@@ -14,6 +14,7 @@ import {
   type ChannelDeleteBotInput,
   ChannelGatewayError,
   type ChannelListOpenAsksResult,
+  type ChannelListOpenAsksInput,
   type ChannelListBotsInput,
   type ChannelRestoreBotInput,
   type ChannelSetBotHiddenInput,
@@ -45,6 +46,11 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { botProfileKey } from "./channelBotLedger.ts";
 import { memberBotLaunchIdsFor, memberBotStepCommandIdFor } from "./channelIds.ts";
 import { listOpenAsks } from "./channelOpenAsks.ts";
+import {
+  MAX_TASK_CHANGE_STREAMS_PER_CONNECTION,
+  makeStreamLimit,
+  streamUnavailable,
+} from "./channelTaskChanges.ts";
 
 export type MemberBot = BotProfile;
 type Owner = Pick<ChannelConnectionOwner, "ownerId">;
@@ -78,12 +84,13 @@ export class ChannelBotMembers extends Context.Service<
     /** Every owner's unfinished creates and steps; failures are logged and retried later. */
     readonly reconcileAll: Effect.Effect<void>;
     readonly update: ChannelBotProfiles.ChannelBotProfiles["Service"]["update"];
-    /** What this owner's bots wait on the person for, newest first. */
+    /** What this owner's bots wait on the person for, newest first; `limit` asks at most. */
     readonly openAsks: (
       owner: Owner,
+      limit?: number,
     ) => Effect.Effect<ChannelListOpenAsksResult, ChannelGatewayError>;
     /** Revisions of this owner's tasks and bots; a new one means read the open asks again. */
-    readonly taskChanges: (owner: Owner) => Stream.Stream<number>;
+    readonly taskChanges: (owner: Owner) => Stream.Stream<number, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotMembers") {}
 
@@ -420,7 +427,7 @@ const make = Effect.gen(function* () {
 
   const openAsks: ChannelBotMembers["Service"]["openAsks"] = Effect.fn(
     "ChannelBotMembers.openAsks",
-  )(function* (owner: Owner) {
+  )(function* (owner: Owner, limit?: number) {
     // Older tasks name their bot only after the repair; asks are filtered by bot.
     yield* ledger.ensureTaskBotsRepaired();
     // The main bot takes channel work before its GOAT thread exists, so it is always asked.
@@ -430,6 +437,7 @@ const make = Effect.gen(function* () {
       threads,
       ownerId: owner.ownerId,
       botIds: new Set<string>([MAIN_BOT_ID, ...members]),
+      ...(limit === undefined ? {} : { limit }),
     });
   }, Effect.mapError(failed));
 
@@ -465,20 +473,30 @@ const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(ChannelBotMembers, make);
 
-export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => ({
-  [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () => service.openAsks(owner),
-  [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>
-    service.taskChanges(owner).pipe(Stream.map((revision) => ({ revision }))),
-  [CHANNEL_GATEWAY_WS_METHODS.listBots]: (input: ChannelListBotsInput) =>
-    service.list(input, owner).pipe(Effect.map((bots) => ({ bots }))),
-  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
-    service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
-    service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
-    service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>
-    service.remove(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-  [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: (input: ChannelRestoreBotInput) =>
-    service.restore(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-});
+/** Built once per connection, so the change stream limit counts this connection's streams. */
+export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => {
+  const connectionStreams = makeStreamLimit(MAX_TASK_CHANGE_STREAMS_PER_CONNECTION);
+  return {
+    [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: (input: ChannelListOpenAsksInput) =>
+      service.openAsks(owner, input.limit),
+    [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>
+      connectionStreams(
+        service.taskChanges(owner).pipe(Stream.map((revision) => ({ revision }))),
+      ).pipe(
+        // The stream never ends while the connection lives; if it does, the client stops waiting on it.
+        Stream.concat(Stream.fail(streamUnavailable())),
+      ),
+    [CHANNEL_GATEWAY_WS_METHODS.listBots]: (input: ChannelListBotsInput) =>
+      service.list(input, owner).pipe(Effect.map((bots) => ({ bots }))),
+    [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
+      service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.createBot]: (input: ChannelCreateBotInput) =>
+      service.create(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: (input: ChannelSetBotHiddenInput) =>
+      service.setHidden(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: (input: ChannelDeleteBotInput) =>
+      service.remove(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+    [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: (input: ChannelRestoreBotInput) =>
+      service.restore(input, owner).pipe(Effect.map((bot) => ({ bot }))),
+  };
+};

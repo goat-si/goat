@@ -3,6 +3,7 @@ import {
   type EnvironmentId,
   type SpeechConfiguration,
   type SpeechModelList,
+  speechBenchmarkTiers,
 } from "@goat/contracts";
 import {
   configureEnvironmentSpeech,
@@ -38,26 +39,42 @@ export function VoiceModelDialog(props: {
 }) {
   const [search, setSearch] = useState("");
   const [installedOnly, setInstalledOnly] = useState(false);
-  const [sort, setSort] = useState<"recommended" | "size" | "name">("recommended");
-  const [models, setModels] = useState<readonly Model[]>([]);
-  const [config, setConfig] = useState<SpeechConfiguration | null>(null);
+  const [sorting, setSorting] = useState<{
+    environmentId: EnvironmentId;
+    value: "recommended" | "size" | "name" | "speed-cpu" | "speed-gpu";
+  }>({ environmentId: props.environmentId, value: "recommended" });
+  const [snapshot, setSnapshot] = useState<{
+    environmentId: EnvironmentId;
+    models: readonly Model[];
+    config: SpeechConfiguration;
+  } | null>(null);
+  const models = snapshot?.environmentId === props.environmentId ? snapshot.models : [];
+  const config = snapshot?.environmentId === props.environmentId ? snapshot.config : null;
+  const tiers = speechBenchmarkTiers(config?.acceleration);
+  const selectedSort =
+    sorting.environmentId === props.environmentId ? sorting.value : "recommended";
+  const sort =
+    (selectedSort === "speed-cpu" && !tiers.includes("cpu")) ||
+    (selectedSort === "speed-gpu" && !tiers.includes("accelerated"))
+      ? "recommended"
+      : selectedSort;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const active = useRef<AbortController | null>(null);
   const refresh = useStableCallback(async (signal: AbortSignal) => {
-    if (!props.canManage || !readEnvironmentScope(props.environmentId, AuthVoiceManageScope))
+    const environmentId = props.environmentId;
+    if (!props.canManage || !readEnvironmentScope(environmentId, AuthVoiceManageScope))
       throw new Error("This connection cannot manage voice models.");
-    const context = await props.resolveContext(props.environmentId);
+    const context = await props.resolveContext(environmentId);
     signal.throwIfAborted();
-    if (!context || !readEnvironmentScope(props.environmentId, AuthVoiceManageScope))
+    if (!context || !readEnvironmentScope(environmentId, AuthVoiceManageScope))
       throw new Error("Connect to an environment with voice management permission.");
     const [list, current] = await Promise.all([
       listEnvironmentSpeechModels(context, signal),
       getEnvironmentSpeechConfiguration(context, signal),
     ]);
     signal.throwIfAborted();
-    setModels(list.models);
-    setConfig(current);
+    setSnapshot({ environmentId, models: list.models, config: current });
   });
   // oxlint-disable-next-line goat/react-effect-budget -- Cancel model requests when the dialog closes or the destination changes.
   useEffect(() => {
@@ -79,7 +96,8 @@ export function VoiceModelDialog(props: {
       controller.abort();
       if (active.current === controller) active.current = null;
     };
-  }, [props.open, props.canManage, refresh]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A destination change must cancel and reload the model list.
+  }, [props.open, props.canManage, props.environmentId, refresh]);
 
   async function mutate(
     operation: (context: EnvironmentVoiceRequestContext, signal: AbortSignal) => Promise<unknown>,
@@ -142,15 +160,34 @@ export function VoiceModelDialog(props: {
               value={sort}
               onChange={(event) => {
                 const value = event.target.value;
-                if (value === "recommended" || value === "size" || value === "name") setSort(value);
+                if (
+                  value === "recommended" ||
+                  value === "size" ||
+                  value === "name" ||
+                  value === "speed-cpu" ||
+                  value === "speed-gpu"
+                )
+                  setSorting({ environmentId: props.environmentId, value });
               }}
             >
               <option value="recommended">Recommended</option>
               <option value="size">Size</option>
               <option value="name">Name</option>
+              <option value="speed-cpu" disabled={!tiers.includes("cpu")}>
+                Speed (CPU reference)
+              </option>
+              <option value="speed-gpu" disabled={!tiers.includes("accelerated")}>
+                Speed (GPU reference)
+              </option>
             </select>
           </label>
-          {filterSpeechModels(models, search, installedOnly, sort).map((model) => (
+          {filterSpeechModels(
+            models,
+            search,
+            installedOnly,
+            sort === "speed-cpu" || sort === "speed-gpu" ? "speed" : sort,
+            sort === "speed-cpu" ? "cpu" : sort === "speed-gpu" ? "accelerated" : undefined,
+          ).map((model) => (
             <div key={model.id} className="flex items-center justify-between gap-3 py-2">
               <div>
                 <p>
@@ -160,6 +197,20 @@ export function VoiceModelDialog(props: {
                 <p className="text-xs text-muted-foreground">
                   {model.description} · {(model.size / 1_000_000_000).toFixed(1)} GB
                 </p>
+                {model.benchmark ? (
+                  <p className="text-xs text-muted-foreground">
+                    Reference time for 30 s:{" "}
+                    {tiers.map((tier, index) => (
+                      <span key={tier}>
+                        {index ? " · " : ""}
+                        {tier === "cpu" ? "CPU" : "GPU"}{" "}
+                        {model.benchmark?.[tier] == null
+                          ? "not benchmarked"
+                          : `${model.benchmark[tier]} s`}
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
               </div>
               <div className="flex gap-1">
                 {!model.installed ? (

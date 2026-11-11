@@ -43,7 +43,10 @@ vi.mock("react-native-reanimated", () => {
   };
 });
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
-vi.mock("uniwind", () => ({ withUniwind: (component: unknown) => component }));
+vi.mock("uniwind", () => ({
+  withUniwind: (component: unknown) => component,
+  useResolveClassNames: () => ({ backgroundColor: "#f3f3f3" }),
+}));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../native/StackHeader", () => ({
   NativeStackScreenOptions: (props: {

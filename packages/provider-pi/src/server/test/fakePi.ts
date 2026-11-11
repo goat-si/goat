@@ -50,6 +50,7 @@ export interface FakePi {
   readonly lastSpawn: () => {
     readonly args: ReadonlyArray<string>;
     readonly env: NodeJS.ProcessEnv;
+    readonly cwd?: string | undefined;
   };
 }
 
@@ -224,7 +225,7 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     }
   });
 
-  let lastSpawn: { readonly args: ReadonlyArray<string>; readonly env: NodeJS.ProcessEnv } = {
+  let lastSpawn: ReturnType<FakePi["lastSpawn"]> = {
     args: [],
     env: {},
   };
@@ -234,6 +235,7 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         lastSpawn = {
           args: command.args,
           env: command.options.env ?? {},
+          cwd: command.options.cwd,
         };
       }
       return ChildProcessSpawner.makeHandle({

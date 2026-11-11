@@ -2,14 +2,20 @@ import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput } from "@goat/contracts";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
+import * as ChannelWake from "./ChannelWake.ts";
+import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { deliveryIdFor } from "./channelIds.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
@@ -21,6 +27,7 @@ import {
   makeHarness,
   modelSelection,
   onlyTask,
+  ownerId,
   setupBot,
   slackContext,
   slackInput,
@@ -256,6 +263,380 @@ describe("one message before the answer, whatever the order", () => {
         const [moved] = yield* sql<{ readonly state: string }>`
           SELECT state FROM channel_outbox WHERE delivery_id = 'moved'`;
         assert.strictEqual(moved?.state, "superseded");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});
+
+describe("hand-over persistence recovery", () => {
+  /**
+   * A worker over the real ledger whose hand-overs, releases and reconciliation fail as `faults`
+   * says. A hand-over of a row with a gate waits until the gate opens.
+   */
+  const releaseHarness = (harness: ReturnType<typeof harnessWith>) =>
+    Effect.gen(function* () {
+      const { task } = yield* startSlackTurn(harness, "release-retry");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const sent: string[] = [];
+      const counts = { marks: 0, releases: 0, reconciles: 0 };
+      const faults: {
+        mark: (n: number) => boolean;
+        release: (n: number) => boolean;
+        reconcile: () => boolean;
+      } = { mark: (n) => n === 1, release: () => false, reconcile: () => false };
+      const gates = new Map<
+        string,
+        { readonly reached: Deferred.Deferred<void>; readonly open: Deferred.Deferred<void> }
+      >();
+      const error = new ChannelLedgerError({ reason: "persistence", detail: "unavailable" });
+      const wrapped = {
+        ...ledger,
+        markSending: (input: Parameters<typeof ledger.markSending>[0]) =>
+          Effect.suspend(() => {
+            if (faults.mark(++counts.marks)) return Effect.fail(error);
+            const gate = gates.get(input.deliveryId);
+            if (gate === undefined) return ledger.markSending(input);
+            return Deferred.succeed(gate.reached, undefined).pipe(
+              Effect.andThen(Deferred.await(gate.open)),
+              Effect.andThen(ledger.markSending(input)),
+            );
+          }),
+        recordDelivery: (input: Parameters<typeof ledger.recordDelivery>[0]) =>
+          Effect.suspend(() =>
+            input.outcome.type === "retry" && faults.release(++counts.releases)
+              ? Effect.fail(error)
+              : ledger.recordDelivery(input),
+          ),
+        releaseUnsentDeliveries: (input: Parameters<typeof ledger.releaseUnsentDeliveries>[0]) =>
+          Effect.suspend(() => {
+            counts.reconciles += 1;
+            return faults.reconcile() ? Effect.fail(error) : ledger.releaseUnsentDeliveries(input);
+          }),
+      };
+      const enqueue = (
+        key: string,
+        target:
+          | {
+              readonly taskId: typeof task.taskId;
+              readonly originAddress: typeof task.originAddress;
+            }
+          | undefined,
+      ) =>
+        Effect.gen(function* () {
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const taskId = target?.taskId;
+          yield* ledger.enqueueDeliveries(
+            [
+              {
+                deliveryId: deliveryIdFor(key),
+                causeKey: key,
+                ...(taskId === undefined ? {} : { taskId }),
+                message: {
+                  deliveryId: deliveryIdFor(key),
+                  destination: (target ?? task).originAddress,
+                  kind: "question" as const,
+                  text: key,
+                  ...(taskId === undefined ? {} : { taskId }),
+                },
+              },
+            ],
+            now,
+          );
+        });
+      const state = (key: string) => ledger.getDeliveryState(deliveryIdFor(key));
+      const gate = (key: string) =>
+        Effect.gen(function* () {
+          const entry = {
+            reached: yield* Deferred.make<void>(),
+            open: yield* Deferred.make<void>(),
+          };
+          gates.set(deliveryIdFor(key), entry);
+          return entry;
+        });
+      const ungate = (key: string) => Effect.sync(() => gates.delete(deliveryIdFor(key)));
+      const services = ChannelDeliveryWorker.layer.pipe(
+        Layer.provide(Layer.succeed(ChannelLedger.ChannelLedger)(wrapped)),
+        Layer.provide(
+          Layer.mock(ChannelGateway.ChannelGateway)({
+            send: (message) =>
+              Effect.sync(() => {
+                sent.push(message.text);
+                return { deliveryId: message.deliveryId, acceptedAt: "1970-01-01T00:00:00.000Z" };
+              }),
+          }),
+        ),
+        Layer.provide(ChannelWake.layer),
+      );
+      const owner = runtime.ownerToken;
+      return { task, owner, sent, counts, faults, enqueue, state, gate, ungate, services };
+    });
+
+  /** The owner token is per server, so another person is a second linked Slack user and task. */
+  const otherPersonTask = (first: { readonly taskId: string }) =>
+    Effect.gen(function* () {
+      yield* linkSlackUser("U2");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(
+        slackInput("look: is the backup done?", "other-person", "1760000000.000200", "U2"),
+        slackContext,
+      );
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const tasks = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+      const other = tasks.find((candidate) => candidate.taskId !== first.taskId);
+      assert.isDefined(other);
+      return other!;
+    });
+
+  const passes = (count: number, step: Duration.Input) =>
+    Effect.gen(function* () {
+      for (let pass = 0; pass < count; pass += 1) yield* TestClock.adjust(step);
+    });
+
+  it.effect("a release that recovers lets the task's held message go on the next pass", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { task, owner, sent, counts, faults, enqueue, state, services } =
+        yield* releaseHarness(harness);
+      faults.release = (n) => n === 1;
+      yield* enqueue("release-first", task);
+      yield* enqueue("release-later", task);
+      yield* Effect.gen(function* () {
+        const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+        yield* worker.deliverDue(owner);
+        assert.deepStrictEqual(sent, []);
+        assert.strictEqual(yield* state("release-first"), "delivering");
+        yield* TestClock.adjust("5 seconds");
+        assert.strictEqual(counts.releases, 2);
+        assert.strictEqual(yield* state("release-first"), "pending");
+        yield* TestClock.adjust("5 seconds");
+        yield* worker.deliverDue(owner);
+        assert.deepStrictEqual(sent, ["release-first", "release-later"]);
+      }).pipe(Effect.provide(Layer.fresh(services)));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "a release that keeps failing holds back only its own task: another person's messages still go, and its retries stop at the bound",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { task, owner, sent, counts, faults, enqueue, state, services } =
+          yield* releaseHarness(harness);
+        // The database stays down, so reconciliation cannot free the row either.
+        faults.release = () => true;
+        faults.reconcile = () => true;
+        const other = yield* otherPersonTask(task);
+        yield* enqueue("stuck-first", task);
+        yield* enqueue("stuck-later", task);
+        yield* enqueue("other-before", other);
+        yield* Effect.gen(function* () {
+          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, ["other-before"]);
+          yield* TestClock.adjust("5 seconds");
+          yield* enqueue("other-during", other);
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, ["other-before", "other-during"]);
+          yield* passes(ChannelDeliveryWorker.RELEASE_ATTEMPTS + 2, "5 seconds");
+          assert.strictEqual(counts.releases, ChannelDeliveryWorker.RELEASE_ATTEMPTS);
+          assert.strictEqual(yield* state("stuck-first"), "delivering");
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, ["other-before", "other-during"]);
+        }).pipe(Effect.provide(Layer.fresh(services)));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "a row whose release gave up is put back once the database is, and its task's messages go in order",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { task, owner, sent, counts, faults, enqueue, state, services } =
+          yield* releaseHarness(harness);
+        const database = { down: true };
+        faults.release = () => database.down;
+        faults.reconcile = () => database.down;
+        yield* enqueue("stranded-first", task);
+        yield* enqueue("stranded-later", task);
+        yield* Effect.gen(function* () {
+          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+          yield* worker.deliverDue(owner);
+          // The release gives up after its sixth try, and the first reconciliation fails too.
+          yield* passes(12, "5 seconds");
+          assert.strictEqual(counts.releases, ChannelDeliveryWorker.RELEASE_ATTEMPTS);
+          assert.strictEqual(counts.reconciles, 1);
+          assert.strictEqual(yield* state("stranded-first"), "delivering");
+          database.down = false;
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, []);
+          yield* TestClock.adjust("30 seconds");
+          assert.strictEqual(yield* state("stranded-first"), "pending");
+          yield* worker.deliverDue(owner);
+          assert.deepStrictEqual(sent, ["stranded-first", "stranded-later"]);
+        }).pipe(Effect.provide(Layer.fresh(services)));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a row that found the retry list full is put back once the database is", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { task, owner, sent, counts, faults, enqueue, state, services } =
+        yield* releaseHarness(harness);
+      const database = { down: true };
+      faults.mark = () => database.down;
+      faults.release = () => database.down;
+      faults.reconcile = () => database.down;
+      for (let index = 0; index < 100; index += 1) {
+        yield* enqueue("filler-" + String(index).padStart(3, "0"), undefined);
+      }
+      yield* enqueue("overflow-first", task);
+      yield* enqueue("overflow-later", task);
+      yield* Effect.gen(function* () {
+        const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+        for (let pass = 0; pass < 3; pass += 1) yield* worker.deliverDue(owner);
+        assert.strictEqual(counts.releases, 101);
+        database.down = false;
+        // The retry loop frees every row it holds; the one it had no room for stays delivering.
+        yield* passes(5, "5 seconds");
+        assert.strictEqual(yield* state("filler-099"), "pending");
+        assert.strictEqual(yield* state("overflow-first"), "delivering");
+        yield* TestClock.adjust("5 seconds");
+        assert.strictEqual(yield* state("overflow-first"), "pending");
+        for (let pass = 0; pass < 4; pass += 1) yield* worker.deliverDue(owner);
+        assert.deepStrictEqual(
+          sent.filter((text) => text.startsWith("overflow-")),
+          ["overflow-first", "overflow-later"],
+        );
+      }).pipe(Effect.provide(Layer.fresh(services)));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("reconciliation leaves a row this worker is still handing over", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { owner, sent, faults, enqueue, state, gate, services } =
+        yield* releaseHarness(harness);
+      faults.release = () => true;
+      yield* enqueue("abandoned", undefined);
+      yield* enqueue("in-flight", undefined);
+      const handOver = yield* gate("in-flight");
+      yield* Effect.gen(function* () {
+        const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+        const pass = yield* worker.deliverDue(owner).pipe(Effect.forkChild);
+        yield* Deferred.await(handOver.reached);
+        // Both rows are past the age threshold when the round runs; only the abandoned one is free.
+        yield* passes(11, "5 seconds");
+        assert.strictEqual(yield* state("abandoned"), "pending");
+        assert.strictEqual(yield* state("in-flight"), "delivering");
+        yield* Deferred.succeed(handOver.open, undefined);
+        yield* Fiber.join(pass);
+        assert.deepStrictEqual(sent, ["in-flight", "abandoned"]);
+      }).pipe(Effect.provide(Layer.fresh(services)));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "a hand-over that commits after its row was put back and claimed again sends nothing",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { owner, sent, faults, enqueue, state, gate, ungate, services } =
+          yield* releaseHarness(harness);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        faults.mark = () => false;
+        yield* enqueue("reclaimed", undefined);
+        const handOver = yield* gate("reclaimed");
+        yield* Effect.gen(function* () {
+          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+          const original = yield* worker.deliverDue(owner).pipe(Effect.forkChild);
+          yield* Deferred.await(handOver.reached);
+          // Put back as if this worker had lost track of the claim, then claimed and sent again.
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const put = yield* ledger.releaseUnsentDeliveries({
+            owner,
+            now,
+            before: now,
+            exclude: [],
+            limit: 20,
+          });
+          assert.strictEqual(put.released, 1);
+          const newer = yield* gate("reclaimed");
+          const again = yield* worker.deliverDue(owner).pipe(Effect.forkChild);
+          yield* Deferred.await(newer.reached);
+          // The original hand-over commits while the newer claim holds the row, and must not send.
+          yield* Deferred.succeed(handOver.open, undefined);
+          yield* Fiber.join(original);
+          assert.deepStrictEqual(sent, []);
+          yield* ungate("reclaimed");
+          yield* Deferred.succeed(newer.open, undefined);
+          yield* Fiber.join(again);
+          assert.deepStrictEqual(sent, ["reclaimed"]);
+          assert.strictEqual(yield* state("reclaimed"), "delivered");
+        }).pipe(Effect.provide(Layer.fresh(services)));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});
+
+describe("pre-upgrade narration", () => {
+  it.effect(
+    "counts legacy progress and suppresses legacy placement and moves, but sends questions and failures",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { runtime, task, sql, sentSince, ackKey } = yield* startSlackTurn(
+          harness,
+          "legacy-interim",
+        );
+        yield* sql`UPDATE channel_outbox SET state = 'failed' WHERE cause_key = ${ackKey}`;
+        const [ack] = yield* sql<{
+          readonly message_json: string;
+          readonly destination_kind: string;
+        }>`
+        SELECT message_json, destination_kind FROM channel_outbox WHERE cause_key = ${ackKey}`;
+        const [version] = yield* sql<{ readonly n: number }>`
+        SELECT MAX(task_version) AS n FROM channel_task_events WHERE task_id = ${task.taskId}`;
+        const rows = [
+          ["legacy-progress", "task.progress", "receipt", "Working"],
+          ["legacy-placement", "task.dispatch.claimed", "receipt", "Placed"],
+          ["legacy-move", "task.moved", "receipt", "Moved"],
+          ["legacy-question", "task.question.opened", "question", "Proceed?"],
+          ["legacy-failure", "task.failed", "failure", "Failed"],
+        ] as const;
+        for (const [index, [id, type, kind, text]] of rows.entries()) {
+          yield* sql`INSERT INTO channel_task_events (event_id, task_id, task_version, type, event_json, occurred_at)
+          VALUES (${id}, ${task.taskId}, ${version!.n + index + 1}, ${type}, '{}', '1970-01-01T00:00:00.000Z')`;
+          yield* sql`INSERT INTO channel_outbox ${sql.insert({
+            delivery_id: id,
+            cause_key: "narration:" + id + ":origin",
+            input_id: null,
+            task_id: task.taskId,
+            kind,
+            destination_kind: ack!.destination_kind,
+            message_json: JSON.stringify({
+              ...JSON.parse(ack!.message_json),
+              deliveryId: id,
+              kind,
+              text,
+              taskId: task.taskId,
+            }),
+            state: "pending",
+            attempts: 0,
+            next_attempt_at: "1970-01-01T00:00:00.000Z",
+            created_at: "1970-01-01T00:00:00.000Z",
+            updated_at: "1970-01-01T00:00:00.000Z",
+          })}`;
+        }
+        const before = harness.slackSent.length;
+        yield* runtime.drain;
+        assert.deepStrictEqual(sentSince(before), ["Working", "Proceed?", "Failed"]);
       }).pipe(Effect.provide(harness.layer));
     },
   );

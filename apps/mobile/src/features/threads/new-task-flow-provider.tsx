@@ -1,7 +1,7 @@
 import { ActiveNewTaskContext } from "../../state/active-new-task";
 import * as Dialog from "../../components/ui/Dialog";
 import React, { useCallback, useEffect, useMemo } from "react";
-
+import { refuseSideChatWithoutThread } from "./newDraftSideChat";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -22,7 +22,6 @@ import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextRe
 import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
-
 import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
@@ -764,6 +763,7 @@ export function NewTaskFlowProvider(
     if ((text.length === 0 && draft.attachments.length === 0) || !draftModelSelection) {
       return null;
     }
+    if (refuseSideChatWithoutThread(text, editingPendingTask !== null)) return null;
     if (
       threadContextsOutsideEnvironment({
         text: draft.text,

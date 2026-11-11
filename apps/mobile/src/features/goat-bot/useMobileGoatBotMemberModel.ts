@@ -30,6 +30,16 @@ export function useMobileGoatBotMemberModelEditable(environmentId: EnvironmentId
   return { supported, editable: supported && permitted };
 }
 
+/** Whether the server stores a member's colour; older ones drop the key, so they get no field. */
+export function useMobileGoatBotColorEditable(environmentId: EnvironmentId | null): boolean {
+  const { presentationById } = useEnvironments();
+  return (
+    environmentId !== null &&
+    presentationById.get(environmentId)?.serverConfig?.environment.capabilities
+      .goatBotProfileColor === true
+  );
+}
+
 export type MobileGoatBotMemberModelMenu = NonNullable<
   ReturnType<typeof useMobileGoatBotMemberModelMenu>
 >;

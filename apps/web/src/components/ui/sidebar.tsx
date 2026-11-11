@@ -579,7 +579,7 @@ function SidebarRail({
               // A framed sidebar's edge starts at the titlebar hairline; so does its hover line.
               "group-data-[variant=framed]:after:top-[calc(var(--workspace-topbar-height)-1px)]",
               "[[data-panel-animations=true]_&]:transition-all [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
-              "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
+              "touch-none in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
               "[[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
               "group-data-[collapsible=offcanvas]:translate-x-0 hover:group-data-[collapsible=offcanvas]:bg-sidebar group-data-[collapsible=offcanvas]:after:left-full",
               "[[data-side=left][data-collapsible=offcanvas]_&]:-right-2",

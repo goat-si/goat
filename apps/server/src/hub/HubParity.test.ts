@@ -7,11 +7,14 @@ import {
   EnvironmentId,
   OrchestratorMcpFailure,
   type GoatHostStatusResult,
+  type HubParityCheckId,
+  type HubParityResult,
   type OpenCodexInventorySnapshot,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -29,6 +32,7 @@ import { fleetSnapshot } from "./parity.testkit.ts";
 
 const decodeProviderInstances = Schema.decodeUnknownEffect(ProviderInstanceConfigMap);
 const decodeProvider = Schema.decodeUnknownEffect(ServerProvider);
+const isFailure = Schema.is(OrchestratorMcpFailure);
 
 const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("hub-fixture"),
@@ -44,6 +48,8 @@ const setup = Effect.fn("HubParityTest.setup")(function* (
     home?: OpenCodexInventorySnapshot;
     remote?: GoatHostStatusResult;
     failure?: OrchestratorMcpFailure;
+    /** Answers for successive device reads; "never" is a read that does not complete. */
+    answers?: ReadonlyArray<"never" | GoatHostStatusResult | OrchestratorMcpFailure>;
     scheduler?: boolean;
     hubEnabled?: boolean;
     providerInstances?: ServerSettings["providerInstances"];
@@ -51,6 +57,7 @@ const setup = Effect.fn("HubParityTest.setup")(function* (
   } = {},
 ) {
   const calls = yield* Queue.unbounded<string>();
+  let read = 0;
   const hubEnabled = yield* Ref.make(options.hubEnabled ?? true);
   const home = options.home ?? fleetSnapshot("home");
   const device = fleetSnapshot("mac-studio");
@@ -93,27 +100,31 @@ const setup = Effect.fn("HubParityTest.setup")(function* (
               expect(input.timeoutMs).toBe(10_000);
               yield* Queue.offer(calls, input.host);
               if (options.failure) return yield* options.failure;
+              const answer = options.answers?.[read++];
+              if (answer === "never") return yield* Effect.never;
+              if (isFailure(answer)) return yield* answer;
               return yield* decode(
-                options.remote ?? {
-                  hosts: [
-                    {
-                      host: null,
-                      reachability: "ok",
-                      metrics: {
-                        sampledAt: 0,
-                        cpuCount: 1,
-                        cpuUtilization: 0,
-                        totalMemoryBytes: 1,
-                        availableMemoryBytes: 1,
-                        loadAvg: null,
-                        disk: null,
-                        threads: { running: 0, waiting: 0, queued: 0 },
-                        quotas: [],
-                        opencodex: device,
+                answer ??
+                  options.remote ?? {
+                    hosts: [
+                      {
+                        host: null,
+                        reachability: "ok",
+                        metrics: {
+                          sampledAt: 0,
+                          cpuCount: 1,
+                          cpuUtilization: 0,
+                          totalMemoryBytes: 1,
+                          availableMemoryBytes: 1,
+                          loadAvg: null,
+                          disk: null,
+                          threads: { running: 0, waiting: 0, queued: 0 },
+                          quotas: [],
+                          opencodex: device,
+                        },
                       },
-                    },
-                  ],
-                },
+                    ],
+                  },
               ).pipe(
                 Effect.map((result) => ({ ...result, host: input.host })),
                 Effect.mapError(
@@ -292,4 +303,69 @@ it.effect(
         ["unproven", "unproven"],
       );
     }),
+);
+
+it.effect("a built-in Codex instance without a settings entry counts as wiring evidence", () =>
+  Effect.gen(function* () {
+    const providerInstances = yield* decodeProviderInstances({
+      claude: {
+        driver: "claudeAgent",
+        environment: [{ name: "ANTHROPIC_BASE_URL", value: "http://127.0.0.1:10100" }],
+      },
+    });
+    const provider = yield* decodeProvider({
+      instanceId: "codex",
+      driver: "codex",
+      enabled: true,
+      installed: true,
+      version: "fixture",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-10-21T00:00:00.000Z",
+      models: [],
+      codexRoute: { modelRoute: "default", effectiveBaseUrl: "https://api.openai.com/v1" },
+    });
+    const { parity } = yield* setup({ providerInstances, providers: [provider] });
+    expect((yield* parity.readLocal).parityEvidence?.wiring?.map(({ status }) => status)).toEqual([
+      "ok",
+      "unproven",
+    ]);
+  }),
+);
+
+const check = (result: HubParityResult, id: HubParityCheckId) =>
+  result.checks.find((entry) => entry.id === id)?.status;
+
+it.effect("a device read that times out once is retried before P1 fails", () =>
+  Effect.gen(function* () {
+    const { parity, calls } = yield* setup({ answers: ["never"] });
+    const verifying = yield* Effect.forkChild(parity.verify("mac-studio", scope));
+    expect(yield* Queue.take(calls)).toBe("mac-studio");
+    yield* TestClock.adjust("10 seconds");
+    const result = yield* Fiber.join(verifying);
+    expect(check(result, "P1")).toBe("ok");
+    expect(yield* Queue.size(calls)).toBe(1);
+  }),
+);
+
+it.effect("a stale first answer is read again before P1 fails", () =>
+  Effect.gen(function* () {
+    const stale = {
+      hosts: [{ host: null, reachability: "unreachable" as const, lastKnown: true as const }],
+    };
+    const { parity, calls } = yield* setup({ answers: [stale] });
+    const result = yield* parity.verify("mac-studio", scope);
+    expect(yield* Queue.size(calls)).toBe(2);
+    expect(check(result, "P1")).toBe("ok");
+  }),
+);
+
+it.effect("an authority refusal on the first read fails at once and is not retried", () =>
+  Effect.gen(function* () {
+    const refusal = new OrchestratorMcpFailure({ code: "capability_denied", message: "Fixture" });
+    const { parity, calls } = yield* setup({ answers: [refusal] });
+    const result = yield* parity.verify("mac-studio", scope).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    expect(yield* Queue.size(calls)).toBe(1);
+  }),
 );

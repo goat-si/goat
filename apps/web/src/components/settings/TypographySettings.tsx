@@ -41,13 +41,21 @@ import {
   revealSettingsSearchTarget,
   searchableSetting,
 } from "./settingsSearch";
+import { makeFontDefaultFamiliesCache } from "./fontDefaultFamiliesCache";
 
-function useFontDefaultFamilies() {
-  const settings = useScopedSettings();
-  const [defaults] = useState(() => ({
+let fontDefaultFamilies: ReturnType<typeof makeFontDefaultFamiliesCache> | undefined;
+
+function resolveFontDefaultFamilies() {
+  fontDefaultFamilies ??= makeFontDefaultFamiliesCache(document.fonts, window);
+  return fontDefaultFamilies.get(() => ({
     sans: resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK) ?? "System default",
     code: resolveDefaultFamilyLabel(DEFAULT_CODE_FONT_STACK) ?? "System monospace",
   }));
+}
+
+function useFontDefaultFamilies() {
+  const settings = useScopedSettings();
+  const [defaults] = useState(resolveFontDefaultFamilies);
   return {
     sans: defaults.sans,
     code: defaults.code,

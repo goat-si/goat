@@ -240,6 +240,10 @@ export const CodexDriver: ProviderDriver<
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+        // The snapshot is built after the adapter, from its own catalog probe.
+        offeredModels: Effect.suspend(() => snapshot.getSnapshot).pipe(
+          Effect.map((value) => value.models),
+        ),
         ...(Option.isNone(memoryAdmission)
           ? {}
           : {

@@ -254,6 +254,8 @@ export const ChildReadyConnectionResult = Schema.Struct({
   code: Schema.Int,
   healthy: Schema.Boolean,
   role: Schema.optional(Schema.Literals(["standalone", "hub", "client", "unknown"])),
+  /** A sentence OpenCodex is known to print for a refused disconnect or restart. */
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
 });
 export type ChildReadyConnectionResult = typeof ChildReadyConnectionResult.Type;
 export const ChildReadyDevice = Schema.Struct({

@@ -769,6 +769,7 @@ export const layer: Layer.Layer<
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           runId: run.id,
+          startsTurn: input.reattach !== true,
           ...(run.delegatedTaskId === undefined ? {} : { delegatedTaskId: run.delegatedTaskId }),
           threadId: projection.thread.id,
           providerSessionId,
@@ -1456,6 +1457,8 @@ export const layer: Layer.Layer<
               attaching = true;
             },
           }).pipe(
+            // A start that ends before its turn registers must not keep holding the process.
+            Effect.ensuring(providerSessions.settleTurnStart(input)),
             Effect.catch((cause) =>
               Effect.gen(function* () {
                 // A retried start finds the attach run already running and returns, so an

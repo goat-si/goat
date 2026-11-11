@@ -22,6 +22,10 @@ export function useMobileBotPreview(
     visibleTurnItems: items,
     pendingInputs: [],
     readers: goatBotItemReaders,
+    // The bot's own conversation, read as its main chat.
+    taskId: null,
+    // As the chat reads it: an answer is what the server recorded.
+    answerReferences: true,
   });
   return goatBotConversationPreview({ rows, lastVisitedAt: shell?.lastVisitedAt, active: false });
 }

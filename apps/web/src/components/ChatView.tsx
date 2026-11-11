@@ -230,7 +230,7 @@ import { type TerminalContextDraft } from "../lib/terminalContext";
 import { collectInlineContextIds } from "../lib/composerContextReferences";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
-import { useEnvironmentQuery } from "../state/query";
+import { useEnvironmentQueryRefresh } from "../state/query";
 import { useEnvironmentScope } from "~/state/session";
 import {
   primaryServerAvailableEditorsAtom,
@@ -239,7 +239,7 @@ import {
 } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useOfferedSkills } from "./chat/providerSkillsWithBuiltIns";
-import { vcsEnvironment } from "../state/vcs";
+import { chatGitStatusAtom, NO_CHAT_GIT_STATUS_ATOM, vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
   useEnvironmentProviders,
@@ -1725,19 +1725,22 @@ export default function ChatView(props: ChatViewProps) {
     serverConfig?.environment.capabilities.worktreeRestore === true,
     `${activeLatestRun?.runId ?? ""}:${activeLatestRun?.status ?? ""}`,
   );
-  const gitStatusQuery = useEnvironmentQuery(
+  const gitStatusAtom =
     gitStatusCwd === null ||
-      workspaceUnavailable(
-        workspaceStatus.data?.state,
-        activeThread?.worktreePath ?? null,
-        gitStatusCwd,
-      )
+    workspaceUnavailable(
+      workspaceStatus.data?.state,
+      activeThread?.worktreePath ?? null,
+      gitStatusCwd,
+    )
       ? null
       : vcsEnvironment.status({
           environmentId,
           input: { cwd: gitStatusCwd },
-        }),
-  );
+        });
+  const gitStatusQuery = {
+    data: useAtomValue(gitStatusAtom ? chatGitStatusAtom(gitStatusAtom) : NO_CHAT_GIT_STATUS_ATOM),
+    refresh: useEnvironmentQueryRefresh(gitStatusAtom).refresh,
+  };
   useWorkspaceMutationRefresh({
     enabled: gitStatusCwd !== null,
     mutationId: workspaceMutationId,
@@ -2926,6 +2929,7 @@ export default function ChatView(props: ChatViewProps) {
     onTimelineRollbackCheckpointStable,
   } = useTimelineRewind({
     isCloudThread,
+    isGitRepo,
     environmentId,
     routeThreadRef,
     routeThreadKey,
@@ -3066,7 +3070,7 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentUnavailable,
     defaultRuntimeMode,
   });
-  const { onSend, continueThreadOnSsh } = useComposerSend({
+  const { onSend, continueThreadOnSsh, forkCommand } = useComposerSend({
     environmentId,
     routeThreadRef,
     primaryEnvironmentId,
@@ -3839,6 +3843,7 @@ export default function ChatView(props: ChatViewProps) {
                                 isRevertingCheckpoint={isRevertingCheckpoint}
                                 sshWorktreeSelected={sshDestination !== null}
                                 sideChatAvailable={sideChatAvailable}
+                                forkCommand={forkCommand}
                                 sendDisabledReason={
                                   cloudState.composerBlockReason ??
                                   sshSendBlockReason ??

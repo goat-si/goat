@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./composer-model-mentions": {
+      "types": "./src/composerModelMentions.ts",
+      "default": "./src/composerModelMentions.ts"
+    },
     "./blocked-browser-hosts": {
       "types": "./src/blockedBrowserHosts.ts",
       "default": "./src/blockedBrowserHosts.ts"

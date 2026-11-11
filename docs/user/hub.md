@@ -101,6 +101,11 @@ Claude Code, OpenCode, and Pi use the hub only when you route them there; see
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.
 **Leave** disconnects the device and returns it to its own sign-ins, then revokes
 its link or Hub key on the hub; GOAT asks before it does that.
+To move a Child to another SSH alias of the same machine, such as its
+`pen-<name>` alias, ask an agent to move it (`goat_hub_device_move`): you approve
+once, for both aliases, the machine, the old link and the new host key, and GOAT
+leaves the old alias and links the new one. If the new link fails, the same
+approval finishes the move later. Aliases that name different machines are refused.
 
 ## Sync OpenCodex models
 

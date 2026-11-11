@@ -30,7 +30,7 @@ import {
   classifySpawnFailure,
   safeProcessCwd,
   spawnFailureMessage,
-  parseGenericCliVersion,
+  parseCliVersionResult,
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
@@ -495,7 +495,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   }
 
   const versionOutput = versionResult.success.value;
-  const version = parseGenericCliVersion(`${versionOutput.stdout}\n${versionOutput.stderr}`);
+  const version = parseCliVersionResult(versionOutput);
   if (versionOutput.code !== 0) {
     yield* Effect.logWarning("Grok CLI version probe exited with a non-zero status.", {
       exitCode: versionOutput.code,

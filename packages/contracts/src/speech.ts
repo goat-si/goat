@@ -25,6 +25,20 @@ export const SpeechSettingsPatchFields = { speech: Schema.optionalKey(SpeechConf
 export const SpeechModelRequest = Schema.Struct({
   modelId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160)),
 });
+export const SpeechBenchmarkTier = Schema.Literals(["cpu", "accelerated"]);
+export type SpeechBenchmarkTier = typeof SpeechBenchmarkTier.Type;
+export const SpeechBenchmark = Schema.Struct({
+  cpu: Schema.NullOr(Schema.Finite),
+  accelerated: Schema.NullOr(Schema.Finite),
+});
+export type SpeechBenchmark = typeof SpeechBenchmark.Type;
+export function speechBenchmarkTiers(
+  acceleration: SpeechConfiguration["acceleration"] | undefined,
+): readonly SpeechBenchmarkTier[] {
+  if (acceleration === "cpu") return ["cpu"];
+  if (acceleration?.startsWith("gpu:")) return ["accelerated"];
+  return ["cpu", "accelerated"];
+}
 export const SpeechModelList = Schema.Struct({
   models: Schema.Array(
     Schema.Struct({
@@ -35,6 +49,7 @@ export const SpeechModelList = Schema.Struct({
       installed: Schema.Boolean,
       selected: Schema.Boolean,
       recommended: Schema.optionalKey(Schema.Boolean),
+      benchmark: Schema.optionalKey(SpeechBenchmark),
     }),
   ),
 });

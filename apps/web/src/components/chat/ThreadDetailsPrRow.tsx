@@ -419,8 +419,8 @@ export function ThreadDetailsPrRow({
             variant="ghost"
             size="sm"
             part={part}
-            multiline={wrap}
-            className={wrap ? "items-start [&>svg]:mt-0.5" : undefined}
+            multiline={wrap ? "relaxed" : false}
+            className={wrap ? "items-start [&>svg]:mt-px" : undefined}
             aria-label={openAriaLabel}
             onClick={onOpen}
             onAuxClick={onOpen}

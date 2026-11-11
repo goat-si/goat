@@ -10,7 +10,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 138 });
+      yield* runMigrations({ toMigrationInclusive: 140 });
       for (const [id, subject] of [
         ["bootstrap", "desktop-bootstrap"],
         ["browser", "browser"],
@@ -19,8 +19,8 @@ it.effect(
       ]) {
         yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at, client_device_type) VALUES (${id}, ${subject}, '["orchestration:read"]', 'bearer-access-token', '2026-10-28T00:00:00.000Z', '2027-10-28T00:00:00.000Z', 'unknown')`;
       }
-      expect(yield* runMigrations({ toMigrationInclusive: 139 })).toEqual([
-        [139, "AuthSessionPenBinding"],
+      expect(yield* runMigrations({ toMigrationInclusive: 141 })).toEqual([
+        [141, "AuthSessionPenBinding"],
       ]);
       expect(
         yield* sql`SELECT subject, principal_kind, pen_node_id FROM auth_sessions ORDER BY subject`,
@@ -37,6 +37,6 @@ it.effect(
       expect(Exit.isFailure(rewrite)).toBe(true);
       // Revocation and other columns stay writable.
       yield* sql`UPDATE auth_sessions SET revoked_at = '2026-11-01T00:00:00.000Z' WHERE session_id = 'mcp'`;
-      expect(yield* runMigrations({ toMigrationInclusive: 139 })).toEqual([]);
+      expect(yield* runMigrations({ toMigrationInclusive: 141 })).toEqual([]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

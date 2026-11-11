@@ -2,7 +2,7 @@ import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotMembers from "./channels/ChannelBotMembers.ts";
-import { channelBotWorkMocks } from "./channels/testkit/channelBotWorkMocks.ts";
+import { wsHandlerMocks } from "./wsHandlerMocks.testkit.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -160,7 +160,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
   Layer.mock(ChannelBotRegistry.ChannelBotRegistry)({}),
   Layer.mock(ChannelBotMembers.ChannelBotMembers)({}),
-  channelBotWorkMocks,
+  wsHandlerMocks,
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelIdentityService.ChannelIdentityService)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),

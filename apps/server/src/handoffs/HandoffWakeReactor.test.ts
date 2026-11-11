@@ -746,3 +746,20 @@ it.effect(
       }),
     ),
 );
+
+it.effect("tells the agent to continue an approved move with the old link's values", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_move");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      const sent = yield* wakes(world);
+      expect(sent[0]!.text).toContain(`again with decisionId "${summary.handoffId}"`);
+      expect(sent[0]!.text).toContain("fromLinkId and fromTunnelPort");
+    }),
+  ),
+);

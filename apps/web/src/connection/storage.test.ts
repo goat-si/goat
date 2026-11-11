@@ -8,10 +8,53 @@ import { ConnectionCatalogDocument, Persistence } from "@goat/client-runtime/pla
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { afterEach, vi } from "vite-plus/test";
+import { makeThreadProjectionFixture } from "../test-fixtures";
+import { projectFaviconCache } from "../assets/projectFaviconCache";
+
+const acquisition = vi.hoisted(() => ({
+  gate: null as null | {
+    started: Deferred.Deferred<void>;
+    release: Deferred.Deferred<void>;
+    rangeOnly?: boolean;
+  },
+}));
+
+vi.mock("./databaseHandle", async (original) => {
+  const real = await original<typeof import("./databaseHandle")>();
+  const Effect = await import("effect/Effect");
+  const Deferred = await import("effect/Deferred");
+  return {
+    ...real,
+    withDatabase: (
+      database: Parameters<typeof real.withDatabase>[0],
+      use: Parameters<typeof real.withDatabase>[1],
+    ) =>
+      real.withDatabase(
+        {
+          ...database,
+          get: Effect.suspend(() => {
+            const gate = acquisition.gate;
+            if (
+              !gate ||
+              (gate.rangeOnly && !String(use).includes("removeDatabaseValuesInRangeOnConnection"))
+            )
+              return database.get;
+            acquisition.gate = null;
+            return Deferred.succeed(gate.started, undefined).pipe(
+              Effect.andThen(Deferred.await(gate.release)),
+              Effect.andThen(database.get),
+            );
+          }),
+        },
+        use,
+      ),
+  };
+});
 
 vi.mock("../lib/indexedDbMigration", () => ({
   createMigratingDatabaseOpener: (name: string) => () =>
@@ -36,8 +79,162 @@ const decodeCatalog = Schema.decodeUnknownSync(Schema.fromJsonString(ConnectionC
 const encodeCatalog = Schema.encodeSync(Schema.fromJsonString(ConnectionCatalogDocument));
 
 afterEach(() => {
+  acquisition.gate = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("IndexedDB thread cache ordering", () => {
+  it.effect("an older environment clear cannot delete a newer completed thread save", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("window", {});
+      vi.stubGlobal("IDBKeyRange", { bound: () => ({}) });
+      vi.spyOn(projectFaviconCache, "clearEnvironment").mockResolvedValue(undefined);
+      const values = new Map<IDBValidKey, unknown>();
+      const database = Object.assign(new EventTarget(), {
+        close: () => {},
+        transaction: (storeName: string) => {
+          const transaction = Object.assign(new EventTarget(), {
+            error: null,
+            objectStore: () => ({
+              put: (value: unknown, key: IDBValidKey) => {
+                if (storeName === "thread") values.set(key, value);
+                queueMicrotask(() => transaction.dispatchEvent(new Event("complete")));
+              },
+              delete: () => queueMicrotask(() => transaction.dispatchEvent(new Event("complete"))),
+              openCursor: () => {
+                const keys = storeName === "thread" ? [...values.keys()] : [];
+                const request = Object.assign(new EventTarget(), {
+                  result: null as null | object,
+                  error: null,
+                });
+                const next = () => {
+                  const key = keys.shift();
+                  request.result =
+                    key === undefined
+                      ? null
+                      : {
+                          primaryKey: key,
+                          delete: () => values.delete(key),
+                          continue: next,
+                        };
+                  queueMicrotask(() => {
+                    request.dispatchEvent(new Event("success"));
+                    if (request.result === null) transaction.dispatchEvent(new Event("complete"));
+                  });
+                };
+                next();
+                return request;
+              },
+            }),
+          });
+          return transaction;
+        },
+      });
+      vi.stubGlobal("indexedDB", {
+        open: () => {
+          const request = Object.assign(new EventTarget(), { result: database, error: null });
+          queueMicrotask(() => request.dispatchEvent(new Event("success")));
+          return request;
+        },
+      });
+      yield* Effect.gen(function* () {
+        const cache = yield* Persistence.EnvironmentCacheStore;
+        const environmentId = EnvironmentId.make("clear-order");
+        const projection = makeThreadProjectionFixture();
+        const oldProjection = {
+          ...projection,
+          thread: { ...projection.thread, id: ThreadId.make("old-thread") },
+        };
+        yield* cache.saveThread(environmentId, { snapshotSequence: 8, projection: oldProjection });
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        acquisition.gate = { started, release, rangeOnly: true };
+        const olderClear = yield* cache.clear(environmentId).pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* cache.saveThread(environmentId, { snapshotSequence: 9, projection });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(olderClear);
+        expect(values.size).toBe(1);
+        expect(JSON.parse(String([...values.values()][0])).snapshot.snapshotSequence).toBe(9);
+      }).pipe(Effect.provide(ConnectionStorage.layer));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "does not restore a deleted thread when an older save acquires its connection late",
+    () =>
+      Effect.gen(function* () {
+        vi.stubGlobal("window", {});
+        const values = new Map<IDBValidKey, unknown>();
+        const database = Object.assign(new EventTarget(), {
+          close: () => {},
+          transaction: () => {
+            const transaction = Object.assign(new EventTarget(), {
+              error: null,
+              objectStore: () => ({
+                put: (value: unknown, key: IDBValidKey) => {
+                  values.set(key, value);
+                  queueMicrotask(() => transaction.dispatchEvent(new Event("complete")));
+                },
+                delete: (key: IDBValidKey) => {
+                  values.delete(key);
+                  queueMicrotask(() => transaction.dispatchEvent(new Event("complete")));
+                },
+              }),
+            });
+            return transaction;
+          },
+        });
+        vi.stubGlobal("indexedDB", {
+          open: () => {
+            const request = Object.assign(new EventTarget(), { result: database, error: null });
+            queueMicrotask(() => request.dispatchEvent(new Event("success")));
+            return request;
+          },
+        });
+        yield* Effect.gen(function* () {
+          const cache = yield* Persistence.EnvironmentCacheStore;
+          const environmentId = EnvironmentId.make("cache-order");
+          const projection = makeThreadProjectionFixture();
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          acquisition.gate = { started, release };
+          const older = yield* cache
+            .saveThread(environmentId, { snapshotSequence: 1, projection })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          yield* cache.removeThread(environmentId, projection.thread.id);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(older);
+          expect(values.size).toBe(0);
+
+          const saveStarted = yield* Deferred.make<void>();
+          const saveRelease = yield* Deferred.make<void>();
+          acquisition.gate = { started: saveStarted, release: saveRelease };
+          const staleSave = yield* cache
+            .saveThread(environmentId, { snapshotSequence: 2, projection })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(saveStarted);
+          yield* cache.saveThread(environmentId, { snapshotSequence: 3, projection });
+          yield* Deferred.succeed(saveRelease, undefined);
+          yield* Fiber.join(staleSave);
+          expect(JSON.parse(String([...values.values()][0])).snapshot.snapshotSequence).toBe(3);
+
+          const deleteStarted = yield* Deferred.make<void>();
+          const deleteRelease = yield* Deferred.make<void>();
+          acquisition.gate = { started: deleteStarted, release: deleteRelease };
+          const staleDelete = yield* cache
+            .removeThread(environmentId, projection.thread.id)
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(deleteStarted);
+          yield* cache.saveThread(environmentId, { snapshotSequence: 4, projection });
+          yield* Deferred.succeed(deleteRelease, undefined);
+          yield* Fiber.join(staleDelete);
+          expect(JSON.parse(String([...values.values()][0])).snapshot.snapshotSequence).toBe(4);
+        }).pipe(Effect.provide(ConnectionStorage.layer));
+      }).pipe(Effect.scoped),
+  );
 });
 
 describe("ConnectionStorage.makeCatalogStore", () => {

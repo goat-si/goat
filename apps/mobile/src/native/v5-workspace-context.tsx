@@ -35,4 +35,6 @@ export const NativePrimaryColumnContext = createContext<{
 export const NativeWorkspaceInspectorContext = createContext<{
   readonly render: (() => ReactNode) | undefined;
   readonly visible: boolean;
-}>({ render: undefined, visible: false });
+  readonly widthFraction: number;
+  readonly setWidthFraction: (fraction: number) => void;
+}>({ render: undefined, visible: false, widthFraction: 0.4, setWidthFraction: () => {} });

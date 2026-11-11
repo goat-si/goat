@@ -104,13 +104,19 @@ const make = Effect.gen(function* () {
     });
   }
 
-  const command = (message: DesktopBrowserCommandType) =>
+  const command = (message: DesktopBrowserCommandType, current: () => boolean = () => true) =>
     writeLock.withPermits(1)(
-      encodeCommand(message).pipe(
-        Effect.flatMap((line) => writeAllToFileDescriptor(controlFd, Buffer.from(`${line}\n`))),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("desktop browser command failed", { cause }),
-        ),
+      Effect.suspend(() =>
+        current()
+          ? encodeCommand(message).pipe(
+              Effect.flatMap((line) =>
+                writeAllToFileDescriptor(controlFd, Buffer.from(`${line}\n`)),
+              ),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("desktop browser command failed", { cause }),
+              ),
+            )
+          : Effect.void,
       ),
     );
 
@@ -148,6 +154,7 @@ const make = Effect.gen(function* () {
           attachedTabs.delete(id);
           shownTabs.delete(id);
           const queue = inbound.get(id);
+          inbound.delete(id);
           return (queue ? Queue.shutdown(queue) : Effect.void).pipe(
             Effect.andThen(PubSub.publish(changes, { key, attached: false })),
           );
@@ -180,9 +187,9 @@ const make = Effect.gen(function* () {
     }
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        if (inbound.get(id) === queue) inbound.delete(id);
         yield* Queue.shutdown(queue);
-        yield* command({ type: "release", ...key });
+        yield* command({ type: "release", ...key }, () => inbound.get(id) === queue);
+        if (inbound.get(id) === queue) inbound.delete(id);
       }),
     );
     // The relay serves one Playwright connection; a second would see the first's sessions.

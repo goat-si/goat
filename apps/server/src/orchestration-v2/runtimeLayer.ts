@@ -67,6 +67,7 @@ import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
+import * as ThreadForkWorkspace from "./goat/ThreadForkWorkspace.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -321,6 +322,19 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
 const layerThreadLifecycleProvided = ThreadLifecycleService.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
+/** One instance, so the WS handler and the MCP tool share its per-command single-flight. */
+const layerThreadForkWorkspaceProvided = ThreadForkWorkspace.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerThreadManagementProvided,
+      layerCommandReceiptStoreProvided,
+      layerProjectService,
+      layerManagedProjectFoldersProvided,
+      layerProviderAdapterRegistryProvided,
+      layerProjectSetupScriptRunner,
+    ),
+  ),
+);
 const layerSecretRequestsProvided = SecretRequests.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
@@ -436,6 +450,7 @@ export const layerProduction = Layer.mergeAll(
   ),
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
+  layerThreadForkWorkspaceProvided,
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerScratchThreadPromotionProvided,

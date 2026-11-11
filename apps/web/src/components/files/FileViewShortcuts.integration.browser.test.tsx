@@ -92,7 +92,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 
 import FileBrowserPanel from "./FileBrowserPanel";
 import { isPdfFindShortcut } from "./pdf/pdfShortcuts";
-import { FileViewMenu, keepsEditorFindAgain } from "./FileViewMenu";
+import { editorFindOpen, FileViewMenu, keepsEditorFindAgain } from "./FileViewMenu";
 import { claimAwaitedEditorFocus } from "./sourceEditorContent";
 
 const MAC = /mac|iphone|ipad/i.test(navigator.platform);
@@ -253,7 +253,8 @@ async function editorContent(screen: { container: HTMLElement; editorAttached: P
 
 const findMode = (container: HTMLElement) =>
   editorRoot(container)
-    .querySelector("[data-search-panel] [data-mode]")
+    .querySelector("[data-search-panel]")
+    ?.shadowRoot?.querySelector("[data-mode]")
     ?.getAttribute("data-mode") ?? null;
 
 function view(container: HTMLElement): HTMLElement {
@@ -376,6 +377,7 @@ describe("go to line", () => {
     content.focus();
     await userEvent.keyboard(chord([MOD], "f"));
     await vi.waitFor(() => expect(findMode(screen.container)).toBe("find"));
+    expect(editorFindOpen(content)).toBe(true);
     content.focus();
     await userEvent.keyboard(MAC ? chord(["Meta"], "g") : "{Control>}g{/Control}");
     expect(screen.container.querySelector('[aria-label="Go to line"]')).toBeNull();

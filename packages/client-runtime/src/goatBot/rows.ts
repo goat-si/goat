@@ -10,7 +10,11 @@ import * as DateTime from "effect/DateTime";
 
 import { parseGoatBotQuote } from "./quote.ts";
 import { goatBotPreviewText } from "./previewText.ts";
-import { decidedAnswerInputs, foldTaskQuestionAnswer } from "./rowsAnswerReferences.ts";
+import {
+  answerReferenceOf,
+  decidedAnswerInputs,
+  foldTaskQuestionAnswer,
+} from "./rowsAnswerReferences.ts";
 
 /** The quote and the person's words of a reply; nothing for a message that quotes nothing. */
 const quotedParts = (text: string): { readonly quote?: string; readonly reply?: string } => {
@@ -426,6 +430,7 @@ export function buildGoatBotTimeline(input: {
   const decidedInputs = references
     ? decidedAnswerInputs([...newestCards.values(), ...newestQuestionChips.values()])
     : new Map<string, string>();
+  const answerReference = answerReferenceOf(decidedInputs);
   // Sends a task question's record or card governs; the older matching never takes them.
   const referenceSends = new Set<string>();
   const taskQuestions = new Map<string, string>();
@@ -519,15 +524,13 @@ export function buildGoatBotTimeline(input: {
         inputTexts.set(presentation.requestKey, item.text);
       }
       if (presentation?.clientKey) committedRequestKeys.add(presentation.clientKey);
-      const verdict = references ? presentation?.answersQuestionId : undefined;
+      const verdict = references
+        ? answerReference(presentation?.answersQuestionId, presentation?.requestKey)
+        : undefined;
       // Sent from a question's card and refused: it stays here as what the person said, and
       // never answers another question.
       const refusedAnswer = verdict === null;
-      const referenced =
-        references && !refusedAnswer
-          ? (verdict ??
-            (presentation?.requestKey ? decidedInputs.get(presentation.requestKey) : undefined))
-          : undefined;
+      const referenced = refusedAnswer ? undefined : verdict;
       // The option they pressed stays beside the question, including after its buttons close.
       const answersShownQuestion =
         refusedAnswer ||

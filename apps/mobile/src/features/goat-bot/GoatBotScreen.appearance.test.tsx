@@ -115,9 +115,11 @@ it("puts the bot's model in the composer, opening a member's menu even when it c
     select,
   };
   const main = await render(<GoatBotScreen visible />);
-  const pill = () => main.container.querySelector('[aria-label="Model"]');
+  const pill = () => main.container.querySelector('[aria-label="GOAT Bot model: gpt-6-luna"]');
   expect(pill()?.textContent).toBe("gpt-6-luna");
-  expect(pill()?.getAttribute("data-opens")).toBe("false");
+  // A main model that cannot change does not open a menu.
+  expect(pill()?.hasAttribute("disabled")).toBe(true);
+  expect(pill()?.closest('[data-box="model-menu"]')).toBeNull();
   await main.unmount();
 
   models.member = {
@@ -137,9 +139,10 @@ it("puts the bot's model in the composer, opening a member's menu even when it c
     avatar: null,
   } as unknown as import("@goat/contracts").BotProfile;
   const member = await render(<GoatBotScreen visible member={scout} />);
-  const memberPill = member.container.querySelector('[aria-label="Model"]');
+  const memberPill = member.container.querySelector('[aria-label="Scout model: claude-opus"]');
   expect(memberPill?.textContent).toBe("claude-opus");
-  expect(memberPill?.getAttribute("data-opens")).toBe("true");
+  expect(memberPill?.hasAttribute("disabled")).toBe(false);
+  expect(memberPill?.closest('[data-box="model-menu"]')).not.toBeNull();
   await member.unmount();
   models.main = null;
   models.member = null;
@@ -495,7 +498,7 @@ it("shows a task chip in the task header only when one exists", async () => {
   screenSession.supportsTaskThreads = false;
 });
 
-it("keeps Send in the composer row after a long model name, at its full size", async () => {
+it("keeps Send in the composer row beside the real model pill with a long name, at its full size", async () => {
   models.main = {
     label: "a-very-long-provider/model-name-that-does-not-fit-a-narrow-phone",
     accessibilityLabel: "GOAT Bot model",
@@ -508,8 +511,16 @@ it("keeps Send in the composer row after a long model name, at its full size", a
     await typeInto(view.container, "Check the disks");
     const send = view.container.querySelector('[aria-label="Send message"]');
     const row = send?.parentElement;
-    const pill = row?.querySelector('[aria-label="Model"]');
+    const menu = row?.querySelector('[data-box="model-menu"]');
+    const pill = menu?.querySelector('[aria-label="GOAT Bot model"]');
     expect(pill?.textContent).toContain("a-very-long-provider");
+    // Everything from the row down to the one-line label gives way, so the label truncates.
+    expect(JSON.parse(menu?.getAttribute("data-style") ?? "null")).toMatchObject({
+      flexShrink: 1,
+      minWidth: 0,
+    });
+    for (const node of [pill, ...(pill?.querySelectorAll("[data-class]") ?? [])])
+      expect(node?.getAttribute("data-class")).toContain("shrink");
     // The pill comes before Send in the same row, and Send keeps its 44-point target.
     expect(row?.lastElementChild).toBe(send);
     expect(JSON.parse(send?.getAttribute("data-style") ?? "null")).toMatchObject({
@@ -624,6 +635,46 @@ it("redraws messages already shown when the member's color changes, and keeps at
       node.textContent?.includes("notes.txt"),
     );
     expect(JSON.parse(label?.getAttribute("data-style") ?? "{}").opacity ?? 1).toBe(1);
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
+
+it("fills a picked answer's badge with a member bot's color, with a letter that reads on it", async () => {
+  const answered: GoatBotRow = {
+    ...bot,
+    id: "asked",
+    text: "Which project?",
+    tone: "question",
+    options: [],
+    choices: ["server", "web"],
+    answer: "web",
+    answerIndex: 1,
+  };
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    role: "member",
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+    avatar: null,
+    color: "#1d3a8a",
+  } as unknown as import("@goat/contracts").BotProfile;
+  screenSession.rows = [answered];
+  const view = await render(<GoatBotScreen visible member={scout} />);
+  try {
+    const letter = [...view.container.querySelectorAll("span")].find(
+      (node) => node.textContent === "B",
+    );
+    const badge = letter?.parentElement;
+    expect(JSON.parse(badge?.getAttribute("data-style") ?? "null")).toMatchObject({
+      backgroundColor: "#1D3A8A",
+    });
+    expect(JSON.parse(letter?.getAttribute("data-style") ?? "null")).toMatchObject({
+      color: "#FFFFFF",
+    });
   } finally {
     await view.unmount();
     screenSession.rows = [];
