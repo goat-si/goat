@@ -97,7 +97,8 @@ function splitAtTables(text: string): GoatBotReplySplit {
   }
   flush();
 
-  return parts.length > 1 ? { parts, linkUrls: linkUrlsOf(tree.children) } : whole;
+  // A table-only reply is one card; only several cards need the reply's links to share.
+  return parts.length > 1 ? { parts, linkUrls: linkUrlsOf(tree.children) } : { parts };
 }
 
 const card = (kind: GoatBotReplyPart["kind"], text: string, source: string): GoatBotReplyPart => ({

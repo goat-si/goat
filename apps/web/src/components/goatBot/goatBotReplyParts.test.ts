@@ -28,6 +28,12 @@ describe("goatBotReplySplit", () => {
     expect(kinds(`${table}\n\nAnd:\n${other}`)).toEqual(["table", "text", "table"]);
   });
 
+  it("keeps a reply that is only a table as one table part", () => {
+    expect(kinds(table)).toEqual(["table"]);
+    expect(texts(table)).toEqual([table]);
+    expect(goatBotReplySplit(table).linkUrls).toBeUndefined();
+  });
+
   it("groups the blocks around a table into one text part, byte-exact", () => {
     const text = `# Plans\n\nPick one:\n\n${table}\n\n- Pro adds sync\n- Basic does not`;
     const [opening, , closing] = texts(text);

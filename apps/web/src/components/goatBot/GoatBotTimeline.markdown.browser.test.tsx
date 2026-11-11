@@ -136,6 +136,19 @@ it("draws an answer's table on its own card between the text around it", async (
   expect(screen.getByRole("button", { name: "Copy table" }).all()).toHaveLength(1);
 });
 
+it("draws a reply that is only a table on its table card with the copy control", async () => {
+  const text = ["| Plan | Price |", "| --- | --- |", "| Basic | $5 |"].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline environmentId={environmentId} onRetry={() => {}} rows={[bot("only", text)]} />,
+  );
+  await expect.element(screen.getByRole("table")).toBeVisible();
+  const cards = [...screen.container.querySelectorAll(".goat-bot-card")];
+  expect(cards).toHaveLength(1);
+  expect(cards[0]?.classList.contains("goat-bot-table")).toBe(true);
+  const copy = screen.getByRole("button", { name: "Copy table" });
+  expect(cards[0]?.contains(copy.element())).toBe(true);
+});
+
 it("resolves a reference link defined after the table in the card that uses it", async () => {
   const text = [
     "Start with [the docs][docs].",
