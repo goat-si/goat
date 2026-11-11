@@ -12,8 +12,8 @@ const worktree = NodePath.dirname(import.meta.dirname);
 
 /** Set for the setup this one starts under the pinned Node, so it never starts a third. */
 const PINNED_NODE_RERUN = "GOAT_SETUP_PINNED_NODE";
-/** A rerun that still found an unsupported Node: its runner did not supply the pin. */
-const RERUN_UNSUPPORTED_NODE_EXIT = 3;
+/** Where a rerun leaves its outcome; the setup that started it owns the markers agents read. */
+const RERUN_RESULT = "setup-rerun-result";
 
 /**
  * Ways to run setup again under the pinned Node when PATH's Node is another release.
@@ -45,7 +45,7 @@ export function pinnedNodeRunners(input: {
 
 /** The vite-plus release pnpm-workspace.yaml pins, so npx runs that one and not the latest. */
 export function pinnedVitePlusVersion(workspaceYaml: string): string | undefined {
-  return /^ {2}vite-plus: (\d+\.\d+\.\d+)\s*$/m.exec(workspaceYaml)?.[1];
+  return /^ {2}vite-plus: ["']?(\d+\.\d+\.\d+)["']?\s*(?:#.*)?$/m.exec(workspaceYaml)?.[1];
 }
 
 export function worktreeInstallCandidates(tools: {
@@ -59,11 +59,16 @@ export function worktreeInstallCandidates(tools: {
   return [
     ...(tools.vp ? [{ command: "vp i --frozen-lockfile", tool: "vp" }] : []),
     ...(tools.pnpm ? [{ command: "pnpm install --frozen-lockfile", tool: "pnpm" }] : []),
-    {
-      // The package's executables are vp, vpr and vpx, so npx has to be told which to run.
-      command: `npx --yes --package=vite-plus${tools.vitePlusVersion === undefined ? "" : `@${tools.vitePlusVersion}`} -- vp i --frozen-lockfile`,
-      tool: "npx vite-plus",
-    },
+    // Without the workspace's pin npx would run whatever release it finds, so it is left out.
+    // The package's executables are vp, vpr and vpx, so npx has to be told which to run.
+    ...(tools.vitePlusVersion === undefined
+      ? []
+      : [
+          {
+            command: `npx --yes --package=vite-plus@${tools.vitePlusVersion} -- vp i --frozen-lockfile`,
+            tool: "npx vite-plus",
+          },
+        ]),
   ];
 }
 
@@ -125,18 +130,34 @@ async function main(): Promise<void> {
   const runningMarker = NodePath.join(markerDir, "setup-running");
   const doneMarker = NodePath.join(markerDir, "setup-done");
   const failedMarker = NodePath.join(markerDir, "setup-failed");
-  NodeFS.rmSync(doneMarker, { force: true });
-  NodeFS.rmSync(failedMarker, { force: true });
+  const rerunResult = NodePath.join(markerDir, RERUN_RESULT);
+  // A rerun writes no marker: the setup that started it stays the live setup-running process.
+  const isRerun = process.env[PINNED_NODE_RERUN] === "1";
   createMarkerDirectory(markerDir);
-  NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+  if (!isRerun) {
+    NodeFS.rmSync(doneMarker, { force: true });
+    NodeFS.rmSync(failedMarker, { force: true });
+    NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+  }
   let failureDetail = "";
+  let rerunFoundUnsupportedNode = false;
   process.on("uncaughtExceptionMonitor", (error) => {
     failureDetail = error.stack ?? String(error);
   });
   process.on("exit", (code) => {
+    if (isRerun) {
+      const outcome =
+        code === 0
+          ? "done\n"
+          : rerunFoundUnsupportedNode
+            ? "unsupported-node\n"
+            : `failed\n${failureDetail}\n`;
+      NodeFS.writeFileSync(rerunResult, outcome);
+      return;
+    }
+    NodeFS.rmSync(rerunResult, { force: true });
     if (code === 0) NodeFS.writeFileSync(doneMarker, "");
     else {
-      // A cancelled rerun may have finished first; only one end marker may remain.
       NodeFS.rmSync(doneMarker, { force: true });
       NodeFS.writeFileSync(failedMarker, `Setup exited with code ${code}.\n${failureDetail}\n`);
     }
@@ -166,7 +187,7 @@ async function main(): Promise<void> {
     const runners =
       // Windows has no process group to cancel a rerun through, so it keeps refusing.
       // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before `vp i`, with no Effect runtime.
-      process.env[PINNED_NODE_RERUN] === "1" || process.platform === "win32"
+      isRerun || process.platform === "win32"
         ? []
         : pinnedNodeRunners({ pinned, vp: toolOnPath("vp"), npx: toolOnPath("npx") });
     const tried: string[] = [];
@@ -174,6 +195,7 @@ async function main(): Promise<void> {
       process.stderr.write(
         `Worktree setup: Node.js ${process.versions.node} is not the pinned ${pinned}; running setup under it with ${runner.tool}.\n`,
       );
+      NodeFS.rmSync(rerunResult, { force: true });
       const rerun = NodeChildProcess.spawn(runner.command, {
         cwd: worktree,
         shell: true,
@@ -197,26 +219,23 @@ async function main(): Promise<void> {
       }
       const status = await new Promise<number | null>((resolve) => rerun.on("close", resolve));
       activeRerun = undefined;
-      // The rerun leaves setup-done or setup-failed; neither means the runner never started it.
-      if (status === 0 && !cancelSignal && NodeFS.existsSync(doneMarker)) process.exit(0);
-      if (status === RERUN_UNSUPPORTED_NODE_EXIT && !cancelSignal) {
-        // The runner started setup under a Node that is still not the pin; the next may do better.
-        NodeFS.rmSync(failedMarker, { force: true });
-        NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
-        tried.push(`${runner.tool}: it ran setup under a Node.js that is not ${pinned}`);
-        continue;
-      }
-      const rerunFailure = NodeFS.existsSync(failedMarker)
-        ? NodeFS.readFileSync(failedMarker, "utf8").split("\n").slice(1).join("\n").trimEnd()
-        : undefined;
-      if (cancelSignal || rerunFailure !== undefined) {
-        failureDetail = cancelSignal ? `Cancelled by ${cancelSignal}.` : (rerunFailure ?? "");
+      if (cancelSignal) {
+        failureDetail = `Cancelled by ${cancelSignal}.`;
         process.exit(status || 1);
       }
-      // Agents wait on this marker; the runner's own exit must not look like no setup.
-      NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+      // What the rerun itself says happened; a runner's exit code alone cannot tell these apart.
+      const outcome = NodeFS.existsSync(rerunResult)
+        ? NodeFS.readFileSync(rerunResult, "utf8")
+        : undefined;
+      if (outcome === "done\n") process.exit(0);
+      if (outcome?.startsWith("failed\n")) {
+        failureDetail = outcome.slice("failed\n".length).trimEnd();
+        process.exit(status || 1);
+      }
       tried.push(
-        `${runner.tool}: ${rerunOutput.trimEnd().split("\n").slice(-10).join("\n") || "no output"}`,
+        outcome === "unsupported-node\n"
+          ? `${runner.tool}: it ran setup under a Node.js that is not ${pinned}`
+          : `${runner.tool}: ${rerunOutput.trimEnd().split("\n").slice(-10).join("\n") || "no output"}`,
       );
     }
     failureDetail =
@@ -224,7 +243,8 @@ async function main(): Promise<void> {
         ? unsupportedNode
         : `${unsupportedNode}\nSetup could not start itself under Node.js ${pinned}. Tried:\n${tried.join("\n")}`;
     process.stderr.write(`${failureDetail}\n`);
-    process.exit(process.env[PINNED_NODE_RERUN] === "1" ? RERUN_UNSUPPORTED_NODE_EXIT : 1);
+    rerunFoundUnsupportedNode = true;
+    process.exit(1);
   }
 
   // GOAT passes the project root, older builds under its legacy T3 name. The git
@@ -241,6 +261,12 @@ async function main(): Promise<void> {
       ? pinnedVitePlusVersion(NodeFS.readFileSync(workspaceYaml, "utf8"))
       : undefined,
   });
+  if (candidates.length === 0) {
+    failureDetail =
+      "No installer: vp and pnpm are not on PATH, and npx is not used because the vite-plus release pinned in pnpm-workspace.yaml could not be read.";
+    process.stderr.write(`${failureDetail}\n`);
+    process.exit(1);
+  }
   // Shell resolves Windows shims; closed stdin prevents unattended prompts.
   // pnpm 12 builds can reject --yes, and the frozen lockfile prevents rewrites.
   // Capture output so the failure marker can include its tail.
