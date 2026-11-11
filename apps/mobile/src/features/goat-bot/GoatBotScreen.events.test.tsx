@@ -1,4 +1,4 @@
-import { act, useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
+import { act, useEffect, useImperativeHandle, useState, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { BotThreadRow } from "@goat/contracts";
@@ -11,15 +11,27 @@ const session = vi.hoisted(() => ({
   onSend: vi.fn(() => true),
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
   refresh: vi.fn(),
-  // The home's reads: null while loading, "failed" when the read failed.
-  routines: null as null | "failed" | ReadonlyArray<object>,
-  tasks: null as null | "failed" | ReadonlyArray<object>,
+  // The home's reads: null while loading, "failed" when the read failed, and a failed refresh
+  // that still holds an earlier read.
+  routines: null as Read,
+  tasks: null as Read,
   dispatch: vi.fn(),
   scrollToIndex: vi.fn(
     (_params: { index: number; viewPosition: number; viewOffset: number }) => {},
   ),
   homeKeys: [] as string[],
+  // Home's entries the virtualized list has mounted; null mounts them all.
+  window: null as null | string[],
+  // The last entry the list has measured; scrolling to one past it fails, as the real list does.
+  measured: null as null | number,
+  failedScrolls: 0,
 }));
+type Read =
+  | null
+  | "failed"
+  | ReadonlyArray<object>
+  | { readonly failedAfter: ReadonlyArray<object> }
+  | { readonly refreshing: ReadonlyArray<object> };
 vi.mock("react-native", () => ({
   // Views report where they sit, as native layout does once they mount.
   View: function View({
@@ -36,15 +48,54 @@ vi.mock("react-native", () => ({
   FlatList: function FlatList(props: {
     data: ReadonlyArray<{ key: string }>;
     renderItem: (info: { item: { key: string }; index: number }) => ReactNode;
-    ref?: Ref<{ scrollToIndex: typeof session.scrollToIndex }>;
+    onScrollToIndexFailed?: (info: {
+      index: number;
+      highestMeasuredFrameIndex: number;
+      averageItemLength: number;
+    }) => void;
+    onContentSizeChange?: (width: number, height: number) => void;
+    ref?: Ref<{
+      scrollToIndex: (params: { index: number; viewPosition: number; viewOffset: number }) => void;
+      scrollToOffset: (params: { offset: number }) => void;
+    }>;
   }) {
-    useImperativeHandle(props.ref, () => ({ scrollToIndex: session.scrollToIndex }));
+    const [layouts, setLayouts] = useState(0);
+    const onContentSizeChange = props.onContentSizeChange;
+    // More entries laid out change the content size once they render.
+    useEffect(() => {
+      if (layouts > 0) onContentSizeChange?.(393, layouts);
+    }, [layouts, onContentSizeChange]);
+    // Scrolling to an entry mounts it, as the real list does.
+    useImperativeHandle(props.ref, () => ({
+      scrollToIndex: (params) => {
+        if (session.measured !== null && params.index > session.measured) {
+          session.failedScrolls += 1;
+          props.onScrollToIndexFailed?.({
+            index: params.index,
+            highestMeasuredFrameIndex: session.measured,
+            averageItemLength: 40,
+          });
+          return;
+        }
+        session.scrollToIndex(params);
+        const key = props.data[params.index]?.key;
+        if (session.window !== null && key !== undefined) session.window = [...session.window, key];
+        setLayouts((count) => count + 1);
+      },
+      // A scroll near an unmeasured entry lays out a few more, short of where it estimated.
+      scrollToOffset: () => {
+        if (session.measured !== null) session.measured += 3;
+        setLayouts((count) => count + 1);
+      },
+    }));
     session.homeKeys = props.data.map((item) => item.key);
     return (
       <div>
-        {props.data.map((item, index) => (
-          <div key={item.key}>{props.renderItem({ item, index })}</div>
-        ))}
+        {props.data.map((item, index) =>
+          session.window === null || session.window.includes(item.key) ? (
+            <div key={item.key}>{props.renderItem({ item, index })}</div>
+          ) : null,
+        )}
       </div>
     );
   },
@@ -234,15 +285,18 @@ vi.mock("./MobileBotComputer", () => ({ MobileBotComputer: () => null }));
 vi.mock("./MobileBotLibrary", () => ({ MobileBotLibrary: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: string | null) => {
-    const value =
+    const read =
       atom === "routines" ? session.routines : atom === "tasks" ? session.tasks : undefined;
-    const failed = value === "failed";
+    const stale = typeof read === "object" && read !== null && "failedAfter" in read;
+    const refreshing = typeof read === "object" && read !== null && "refreshing" in read;
+    const value = stale ? read.failedAfter : refreshing ? read.refreshing : read;
+    const failed = value === "failed" || stale;
     const data =
       value === undefined
         ? atom === "notes"
           ? { revision: "r", notes: [], truncated: false }
           : null
-        : failed || value === null
+        : value === "failed" || value === null
           ? null
           : atom === "routines"
             ? { tasks: value }
@@ -251,8 +305,8 @@ vi.mock("../../state/query", () => ({
       data,
       cause: null,
       error: failed ? new Error("failed") : null,
-      isPending: data === null && !failed,
-      isSuccess: data !== null,
+      isPending: (data === null && !failed) || refreshing,
+      isSuccess: data !== null && !failed,
       refresh: () => {},
     };
   },
@@ -296,6 +350,9 @@ async function render(rows: GoatBotRow[]) {
   session.rows = rows;
   session.dispatch.mockClear();
   session.scrollToIndex.mockClear();
+  session.window = null;
+  session.measured = null;
+  session.failedScrolls = 0;
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -335,6 +392,59 @@ it("a routine's event line opens Home with that routine scrolled into view, even
   const [scroll] = session.scrollToIndex.mock.calls[0] ?? [];
   expect(session.homeKeys[scroll?.index ?? -1]).toBe("routines");
   expect(scroll).toMatchObject({ viewPosition: 0, viewOffset: 56 - 240 });
+  await view.unmount();
+});
+
+it("a routine past what the list has measured is tried again as the list lays out more", async () => {
+  session.routines = [routine("r-1", "Daily check")];
+  session.tasks = [];
+  const view = await render([event({ kind: "routine", id: "r-1", name: "Daily check" })]);
+  session.window = [];
+  session.measured = 1;
+  await press(view.button("Routine Daily check ran. Open routine Daily check"));
+  const routinesIndex = session.homeKeys.indexOf("routines");
+  expect(session.failedScrolls).toBeGreaterThan(0);
+  expect(session.scrollToIndex.mock.calls.map(([params]) => params)).toEqual([
+    { index: routinesIndex, viewPosition: 0, viewOffset: 56 },
+    { index: routinesIndex, viewPosition: 0, viewOffset: 56 - 240 },
+  ]);
+  await view.unmount();
+});
+
+it("a task tapped during a failed refresh peeks once a retry lists it, or opens its screen if not", async () => {
+  session.routines = [];
+  session.tasks = { failedAfter: [] };
+  const view = await render([
+    event({ kind: "task", id: "task-1", name: "Check disks" }),
+    event({ kind: "task", id: "task-gone", name: "Old work" }),
+  ]);
+  await press(view.button("Task Check disks ran. Open task Check disks"));
+  session.tasks = [listedTask("task-1")];
+  await view.rerender();
+  expect(view.container.querySelector('[aria-label="Peek task-1"]')).not.toBeNull();
+  await press(view.button("Close"));
+  session.tasks = { failedAfter: [listedTask("task-1")] };
+  await view.rerender();
+  await press(view.button("Task Old work ran. Open task Old work"));
+  expect(session.dispatch).not.toHaveBeenCalled();
+  session.tasks = [listedTask("task-1")];
+  await view.rerender();
+  expect(session.dispatch).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "GoatBot", params: { taskId: "task-gone" } }),
+  );
+  await view.unmount();
+});
+
+it("a list still refreshing is not read as the task being gone", async () => {
+  session.routines = [];
+  session.tasks = { refreshing: [] };
+  const view = await render([event({ kind: "task", id: "task-1", name: "Check disks" })]);
+  await press(view.button("Task Check disks ran. Open task Check disks"));
+  expect(session.dispatch).not.toHaveBeenCalled();
+  expect(view.sheet()).not.toBeNull();
+  session.tasks = [listedTask("task-1")];
+  await view.rerender();
+  expect(view.container.querySelector('[aria-label="Peek task-1"]')).not.toBeNull();
   await view.unmount();
 });
 
@@ -390,6 +500,54 @@ it("a task list still loading or failed is not read as the task being gone", asy
   await press(view.button("Close"));
   session.tasks = "failed";
   await view.rerender();
+  await press(view.button("Task Check disks ran. Open task Check disks"));
+  expect(session.dispatch).not.toHaveBeenCalled();
+  expect(view.sheet()).not.toBeNull();
+  await view.unmount();
+});
+
+it("a routine below Home's window is scrolled to by its entry first, then onto its row", async () => {
+  session.routines = [routine("r-1", "Daily check")];
+  session.tasks = [];
+  const view = await render([event({ kind: "routine", id: "r-1", name: "Daily check" })]);
+  // Home opens scrolled to its top: the routines entry is outside the list's window.
+  session.window = [];
+  await press(view.button("Routine Daily check ran. Open routine Daily check"));
+  const calls = session.scrollToIndex.mock.calls.map(([params]) => params);
+  const routinesIndex = session.homeKeys.indexOf("routines");
+  // The entry comes into the window clear of the tabs, and its row then refines the place.
+  expect(calls).toEqual([
+    { index: routinesIndex, viewPosition: 0, viewOffset: 56 },
+    { index: routinesIndex, viewPosition: 0, viewOffset: 56 - 240 },
+  ]);
+  await view.unmount();
+});
+
+it("a task the loading list turns out not to have opens its own screen once the list arrives", async () => {
+  session.routines = [];
+  session.tasks = null;
+  const view = await render([event({ kind: "task", id: "task-gone", name: "Old work" })]);
+  await press(view.button("Task Old work ran. Open task Old work"));
+  expect(view.sheet()).not.toBeNull();
+  session.tasks = [listedTask("task-1")];
+  await view.rerender();
+  expect(view.sheet()).toBeNull();
+  expect(session.dispatch).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "GoatBot", params: { taskId: "task-gone" } }),
+  );
+  await view.unmount();
+});
+
+it("a refresh that failed is not read as absence, though an earlier read lacked the subject", async () => {
+  session.routines = { failedAfter: [routine("r-other", "Inbox sweep")] };
+  session.tasks = { failedAfter: [] };
+  const view = await render([
+    event({ kind: "routine", id: "r-1", name: "Daily check" }),
+    event({ kind: "task", id: "task-1", name: "Check disks" }),
+  ]);
+  await press(view.button("Routine Daily check ran. Open routine Daily check"));
+  expect(view.sheet()?.textContent).toContain("Couldn't load routines");
+  await press(view.button("Close"));
   await press(view.button("Task Check disks ran. Open task Check disks"));
   expect(session.dispatch).not.toHaveBeenCalled();
   expect(view.sheet()).not.toBeNull();

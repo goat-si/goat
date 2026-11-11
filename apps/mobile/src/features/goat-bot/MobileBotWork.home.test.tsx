@@ -49,9 +49,19 @@ vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   Text: (props: Props) => <span>{props.children}</span>,
   Pressable: (
-    props: Props & { onPress?: () => void; accessibilityLabel?: string; disabled?: boolean },
+    props: Props & {
+      onPress?: () => void;
+      accessibilityLabel?: string;
+      disabled?: boolean;
+      accessibilityState?: { selected?: boolean };
+    },
   ) => (
-    <button onClick={props.onPress} aria-label={props.accessibilityLabel} disabled={props.disabled}>
+    <button
+      onClick={props.onPress}
+      aria-label={props.accessibilityLabel}
+      disabled={props.disabled}
+      aria-pressed={props.accessibilityState?.selected}
+    >
       {props.children}
     </button>
   ),
@@ -74,6 +84,8 @@ const state = vi.hoisted(() => ({
   machinesKey: undefined as string | undefined,
   // The check-in save the form starts; a test settles it when it chooses.
   upsert: vi.fn<() => Promise<unknown>>(),
+  // The live routines list; a saved check-in arrives here.
+  routineTasks: [] as object[],
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) => (atom === "openable" ? state.remoteOpenable : true),
@@ -106,6 +118,8 @@ vi.mock("../../state/server", () => ({
   serverEnvironment: {
     scheduledTasksLive: () => "routines",
     upsertScheduledTask: { label: "upsert", permissionAtom: () => "permission", run: state.upsert },
+    setScheduledTaskEnabled: { permissionAtom: () => "permission" },
+    runScheduledTaskNow: { permissionAtom: () => "permission" },
   },
 }));
 vi.mock("../../state/entities", () => ({
@@ -133,7 +147,7 @@ vi.mock("../../state/query", () => ({
         : key === "child"
           ? { groups: state.groups }
           : key === "routines"
-            ? { tasks: [] }
+            ? { tasks: state.routineTasks }
             : null,
     error: null,
     isPending: false,
@@ -267,6 +281,7 @@ afterEach(async () => {
     workRevision: null,
     hidden: [],
     machinesKey: undefined,
+    routineTasks: [],
   });
   state.draft.mockClear();
   state.openTask.mockClear();
@@ -610,4 +625,60 @@ it("a check-in save that fails after its entry scrolled away shows why when the 
   expect(container.textContent).toContain("Couldn't save the check-in: Denied");
   // Saving again is allowed once the failed save is over.
   expect(button("Save")?.disabled).toBe(false);
+});
+
+const checkInRoutine = (timeOfDay: string) => ({
+  id: "goat-bot-check-in:bot",
+  title: "Check in",
+  prompt: "Check in",
+  enabled: true,
+  schedule: { type: "fixed_time", timeOfDay, weekdays: [1, 2, 3, 4, 5] },
+  threadId: "bot",
+  nextRunAt: null,
+  lastRunAt: null,
+  lastRunStatus: null,
+  lastRunError: null,
+});
+
+it("a check-in changed while its save runs stays on Home once the routine arrives, and Save updates it", async () => {
+  const settle = pendingSave();
+  await open();
+  await press("Check in on me");
+  await press("Save");
+  await press("Check-in time, 09:00");
+  await press("Set 07:30");
+  // The first save lands on the server and the live list brings the routine before the reply.
+  state.routineTasks = [checkInRoutine("09:00")];
+  await open();
+  expect(button("Check-in time, 07:30")).toBeDefined();
+  await settle(AsyncResult.success({ task: {} }));
+  expect(button("Check-in time, 07:30")).toBeDefined();
+  state.upsert.mockReset();
+  state.upsert.mockResolvedValue(AsyncResult.success({ task: {} }));
+  await press("Save");
+  expect(state.upsert).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: expect.objectContaining({
+      id: "goat-bot-check-in:bot",
+      schedule: expect.objectContaining({ timeOfDay: "07:30" }),
+    }),
+  });
+  // Saved with nothing changed since: the form goes and the routine's own row stays.
+  expect(button("Check-in time, 07:30")).toBeUndefined();
+});
+
+it("Cancel during a check-in save never lets that save close a newer draft or start a second save", async () => {
+  const settle = pendingSave();
+  await open();
+  await press("Check in on me");
+  await press("Sat");
+  await press("Save");
+  await press("Cancel");
+  await press("Check in on me");
+  // The first save is still running, so this draft cannot start another.
+  expect(button("Save")?.disabled).toBe(true);
+  await press("Sun");
+  await settle(AsyncResult.success({ task: {} }));
+  expect(button("Save")?.disabled).toBe(false);
+  expect(button("Sun")?.getAttribute("aria-pressed")).toBe("true");
 });
