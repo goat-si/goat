@@ -14,6 +14,10 @@ import * as TestClock from "effect/testing/TestClock";
 import * as HostPowerMonitor from "../../background/HostPowerMonitor.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import Migration0087 from "../../persistence/Migrations/102_FleetHealth.ts";
+import Migration0139 from "../../persistence/Migrations/139_PlacementAdmission.ts";
+import { layer as PlacementAttemptsLayer } from "../admission/PlacementAttempts.ts";
+import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
+import * as PlacementPlacer from "../admission/PlacementPlacer.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import { Placement, PlacementHostConditions } from "../resources/Placement.ts";
 import { place } from "../resources/placementRules.ts";
@@ -55,9 +59,15 @@ interface World {
   loseInterruptAnswers: boolean;
   /** Branches never pushed: a destination cannot start a worktree from them. */
   readonly unpushed: Set<string>;
+  /** Placed launches by key, as a target with placement admission answers a retry from its row. */
+  readonly placed: Map<string, ThreadId>;
+  /** The next placed launch is fenced after its thread exists and answers not started. */
+  fenceNextPlacement: boolean;
 }
 
 export const newWorld = (): World => ({
+  placed: new Map(),
+  fenceNextPlacement: false,
   reachable: { A: true, B: true },
   threads: [{ host: "A", threadId: ThreadId.make("thread:a1"), title: "Worker", phase: "running" }],
   launches: [],
@@ -247,8 +257,40 @@ const fakeDispatch = (world: World) =>
               baseRef +
               '" does not resolve to a commit in project "repo" (/home/me/.goat/worktrees/repo). No thread was created.',
           });
+        const placedKey =
+          input.placement === undefined
+            ? undefined
+            : [input.placement.ownerKey, input.placement.attempt, input.placement.issuedAt].join(
+                " ",
+              );
+        const known = placedKey === undefined ? undefined : world.placed.get(placedKey);
+        if (known !== undefined)
+          return {
+            host,
+            cwd: input.cwd,
+            projectId: "project",
+            projectCreated: false,
+            threadId: known,
+            reportsSupported: false,
+            runId: null,
+            workspaceStrategy: { type: "worktree" },
+            runtimeMode: input.runtimeMode,
+            remoteServerKind: null,
+            notes: [],
+          };
+        if (placedKey !== undefined && world.fenceNextPlacement) {
+          world.fenceNextPlacement = false;
+          return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+            reason: "remote_refused",
+            message: "This placement did not start here: lease lapsed.",
+            remoteClassification: "placement_not_started",
+            remoteThreadId: "idle:" + host,
+            launchMayHaveStarted: false,
+          });
+        }
         world.launches.push(input);
         const threadId = ThreadId.make("thread:" + host + world.launches.length);
+        if (placedKey !== undefined) world.placed.set(placedKey, threadId);
         world.threads.push({ host, threadId, title: input.title, phase: "running" });
         if (world.loseNextLaunchResponse) {
           world.loseNextLaunchResponse = false;
@@ -333,8 +375,17 @@ const layerFor = (
   world: World,
   filename: string,
   power?: Layer.Layer<HostPowerMonitor.HostPowerMonitor>,
+  placement = false,
 ) =>
-  Layer.mergeAll(Health.layer, Rescheduler.layer).pipe(
+  Layer.mergeAll(
+    Health.layer,
+    placement
+      ? Rescheduler.layer.pipe(
+          Layer.provide(PlacementPlacer.layer.pipe(Layer.provideMerge(PlacementAttemptsLayer))),
+          Layer.provide(Layer.succeed(PlacementAdmissionEnabled, true)),
+        )
+      : Rescheduler.layer,
+  ).pipe(
     Layer.provideMerge(fakePlacement(world)),
     Layer.provideMerge(layerPlacementConditions),
     Layer.provideMerge(
@@ -346,9 +397,9 @@ const layerFor = (
     Layer.provideMerge(Layer.mergeAll(FleetHostStates.layer, FleetHostStates.layerClaims)),
     Layer.provideMerge(
       // A restart reopens the same file; the tables already exist then.
-      Layer.effectDiscard(Effect.ignore(Migration0087)).pipe(
-        Layer.provideMerge(NodeSqliteClient.layer({ filename })),
-      ),
+      Layer.effectDiscard(
+        Effect.ignore(Migration0087).pipe(Effect.andThen(Effect.ignore(Migration0139))),
+      ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename }))),
     ),
     Layer.provideMerge(
       Layer.mergeAll(
@@ -365,7 +416,8 @@ export const withServer = <A, E>(
   filename: string,
   body: Effect.Effect<A, E, Services>,
   power?: Layer.Layer<HostPowerMonitor.HostPowerMonitor>,
-) => body.pipe(Effect.provide(layerFor(world, filename, power)));
+  placement = false,
+) => body.pipe(Effect.provide(layerFor(world, filename, power, placement)));
 
 export const databaseFile = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;

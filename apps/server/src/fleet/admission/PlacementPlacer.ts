@@ -45,6 +45,8 @@ export const argumentOf = (attempt: Attempt): PlacementArgument => ({
 const describe = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 export interface PlacementPlacerShape {
+  /** Whether this owner has ever sent a placed attempt; without one nothing was sent. */
+  readonly hasAttempt: (ownerKey: string) => Effect.Effect<boolean, PlacementAttemptsError>;
   /** One attempt on another GOAT over SSH dispatch; a retry resends the frozen payload. */
   readonly placeRemote: <E, R>(input: {
     readonly ownerKey: string;
@@ -277,7 +279,13 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return PlacementPlacer.of({ placeRemote, placeLocal });
+  return PlacementPlacer.of({
+    hasAttempt: Effect.fn("PlacementPlacer.hasAttempt")(function* (ownerKey: string) {
+      return (yield* attempts.latest(ownerKey)) !== null;
+    }),
+    placeRemote,
+    placeLocal,
+  });
 });
 
 export const layer = Layer.effect(PlacementPlacer, make);
