@@ -308,7 +308,17 @@ function carryDefinitions(
   const split = carried.flatMap((part) =>
     referenceDestinations(parser.parse(goatBotReplyPartSource(part))),
   );
-  return sameDestinations(whole, split) ? carried : null;
+  if (!sameDestinations(whole, split)) return null;
+  // A stretch of nothing but definitions draws nothing, so it gets no card of its own.
+  return carried.filter(
+    (part, index) =>
+      part.kind !== "prose" ||
+      !parser
+        .parse(part.text)
+        .children.every(
+          (node) => node.type === "definition" && definitions.some((each) => each.part === index),
+        ),
+  );
 }
 
 /** A key for each part: where it starts in the reply, which stays put while the reply streams on. */

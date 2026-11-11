@@ -111,14 +111,14 @@ describe("splitGoatBotReply", () => {
       const cells = ["| Step | Link |", "| --- | --- |", "| Read | " + words + " |"];
       const text = [words, "", ...cells, "", ...definition].join("\n");
       const parts = splitGoatBotReply(text);
-      expect(parts.map((part) => part.kind)).toEqual(["prose", "table", "prose"]);
+      // The definitions alone draw nothing, so they are not a card of their own.
+      expect(parts.map((part) => part.kind)).toEqual(["prose", "table"]);
       expect(parts.flatMap((part) => resolved(goatBotReplyPartSource(part)))).toEqual(
         resolved(text),
       );
       expect(resolved(text).every((destination) => destination !== null)).toBe(true);
-      // A card carries a definition from elsewhere once, and the one that holds it adds none.
-      expect(parts[2]?.definitions).toBeUndefined();
       expect(parts[0]?.definitions).toBe(definition.join("\n"));
+      expect(parts[1]?.definitions).toBe(definition.join("\n"));
     }
   });
 
@@ -133,8 +133,11 @@ describe("splitGoatBotReply", () => {
       "Then [two][b].",
     ].join("\n");
     const parts = splitGoatBotReply(text);
+    // The stretch that holds the definitions also has words, so it stays, and carries none.
+    expect(parts.map((part) => part.kind)).toEqual(["prose", "table", "prose"]);
     expect(parts[0]?.definitions).toBe("[a]: https://example.com/a");
     expect(parts[1]?.definitions).toBeUndefined();
+    expect(parts[2]?.definitions).toBeUndefined();
     expect(parts.flatMap((part) => resolved(goatBotReplyPartSource(part)))).toEqual(resolved(text));
   });
 

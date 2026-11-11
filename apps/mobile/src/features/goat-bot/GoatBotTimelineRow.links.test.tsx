@@ -368,7 +368,8 @@ it("draws the tables of a reply with link references in their own cards, every r
   ].join("\n");
   await show(reply(text));
   expect(view.container.querySelector('[aria-label="Copy table"]')).not.toBeNull();
-  expect(native.markdown.length).toBeGreaterThan(1);
+  // The words and the table, each in its own card; the definitions alone draw no card.
+  expect(native.markdown).toHaveLength(2);
   expect(native.markdown.flatMap((markdown) => resolvedLinks(markdown))).toEqual(
     resolvedLinks(text),
   );
