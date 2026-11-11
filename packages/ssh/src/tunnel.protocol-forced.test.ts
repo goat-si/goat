@@ -201,7 +201,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               stdin: {
                 stream: Stream.make(
                   new TextEncoder().encode(
-                    buildRemoteRuntimeProbeScript(ARCHIVE.archiveVersion, REMOTE_RUNTIME_STATE_KEY),
+                    buildRemoteRuntimeProbeScript(
+                      ARCHIVE.archiveVersion,
+                      REMOTE_RUNTIME_STATE_KEY,
+                      false,
+                      false,
+                      undefined,
+                      true,
+                    ),
                   ),
                 ),
                 endOnDone: true,
