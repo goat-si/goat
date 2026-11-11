@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +30,14 @@ func unlistableDir(t *testing.T) string {
 	if err := denyFirst(p, listDirectory); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { state.RestrictDir(p) }) // before TempDir's cleanup, which must list it
+	t.Cleanup(func() { // before TempDir's cleanup, which must list it
+		if err := state.RestrictDir(p); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := os.ReadDir(p); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("listing the denied folder gave %v, want access denied", err)
+	}
 	return p
 }
 
