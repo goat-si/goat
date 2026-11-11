@@ -279,7 +279,26 @@ export function callAcpMcpTool<E = never, R = never>(
 export interface AcpMcpListedTool {
   readonly name: string;
   readonly argumentNames: ReadonlyArray<string>;
+  /**
+   * The fields each object argument declares, by argument name. A server that decodes an
+   * object drops fields it does not know, so only this shows a nested field will be kept.
+   */
+  readonly nestedArgumentNames?: Readonly<Record<string, ReadonlyArray<string>>>;
 }
+
+/** Property names of an object schema, or of the object branch of a nullable/optional union. */
+const objectPropertyNames = (schema: unknown): ReadonlyArray<string> | undefined => {
+  if (typeof schema !== "object" || schema === null) return undefined;
+  const entry = schema as { readonly properties?: unknown; readonly anyOf?: unknown };
+  if (typeof entry.properties === "object" && entry.properties !== null)
+    return Object.keys(entry.properties);
+  if (!Array.isArray(entry.anyOf)) return undefined;
+  for (const branch of entry.anyOf) {
+    const names = objectPropertyNames(branch);
+    if (names !== undefined) return names;
+  }
+  return undefined;
+};
 
 /**
  * List the tools an MCP endpoint offers, with the top-level arguments each declares.
@@ -341,11 +360,21 @@ export function listAcpMcpTools(options: {
       };
       if (typeof entry.name !== "string") return [];
       const properties = entry.inputSchema?.properties;
+      const nested =
+        typeof properties === "object" && properties !== null
+          ? Object.fromEntries(
+              Object.entries(properties).flatMap(([name, schema]) => {
+                const names = objectPropertyNames(schema);
+                return names === undefined ? [] : [[name, names] as const];
+              }),
+            )
+          : {};
       return [
         {
           name: entry.name,
           argumentNames:
             typeof properties === "object" && properties !== null ? Object.keys(properties) : [],
+          ...(Object.keys(nested).length === 0 ? {} : { nestedArgumentNames: nested }),
         },
       ];
     });

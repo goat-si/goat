@@ -65,14 +65,62 @@ that already announced does not block the mesh; a member that never announced st
 - **A served copy can be cut.** The member that admits a new machine chooses which records to send. A revoked
   or stolen machine that the registry still lists could send its own admit and its revokes of the honest
   members. The joiner therefore also syncs with every node the registry listed that its copy does not count
-  as a member, and a refusal from one of them fails the join (`FinishJoin` in `apps/pen/internal/daemon/account.go`).
-  This helps only while an honest listed node is online.
+  as a member (`FinishJoin` in `apps/pen/internal/daemon/account.go`). One that refuses it is asked to check
+  the joiner's records against its own view (`serveCheck` in `apps/pen/internal/mesh/check.go`); the join
+  fails only if it still refuses, which it does when the joiner's admits pass a key its own view revoked
+  (plainly or as compromised) before reaching one it counts as a current member. Two honest cases refuse too:
+  a machine admitted by a since-revoked key that this node has not heard of yet, which passes once the members
+  sync, and a machine whose admit lost to a concurrent revoke of its admitter in the canonical order, which was
+  never a member anywhere and must join again (`admittedCleanly` and its tests in `mesh/check_test.go`). Such a
+  machine admits nobody: the Google join (after its refresh), the invite (before it is used) and `pen approve` all
+  check `mesh.IsMember` before signing, and the refusal carries `notMember` so a Google joiner tries the next
+  listed machine. The check and the signature (and the invite's burn, or queueing a request) hold the mesh
+  store's lock together (`Store.AppendAsMember`, `Store.DoAsMember`), so a revoke merged in between still stops
+  them. `pen ls` on such a machine says it is not a member and how to start over. This protects a join only while an honest listed node answers: a listed node that is offline,
+  out of session slots or slower than the 30 s push timeout takes no part, and one older than the check
+  (pen 0.2.6 and before) still refuses every joiner it does not know.
 - **The registry is not the mesh.** Any node with a valid sign-in for the account registers, even one a locked
   mesh only queued, and any registered node can remove the others from the account's list. One phished
   sign-in can therefore make the service offer new machines only the attacker's node. Members and invites
   are unaffected; the remedy is lock mode plus the reset page. Binding registration to a member's
   signature would close this and is not done. A forget that the service refuses because the revoking
   node is not registered shows in `pen ls` and the dashboard instead of retrying silently.
+
+## Mesh state on disk
+
+`mesh.json` decides what may replace it, because more than one writer can hold a set for it: an older save
+of the same store, the store of a mesh this node just left (`replaceMesh`), or another process (`pen join`
+or `pen login` while no daemon runs). Under the state lock a save reads the file first: for the same mesh it
+writes the union with the file's records (records only grow), for another mesh it writes nothing unless the
+store was adopted (`Store.Adopt`), and after the file was removed (`pen leave`) it does not recreate it
+(`Store.SaveFile`). `config.json` changes read to write under the same lock (`state.UpdateConfig`).
+
+A merge reaches memory before disk. When the save fails the store knows it holds unsaved records
+(`Store.Unsaved`): no sync is acknowledged (4507) until a save succeeds, the daemon retries on every push
+and every minute, and `pen ls` shows the error until then. Meanwhile the daemon enforces the view in memory:
+a revoke it holds but could not write still closes that peer's sessions, which errs toward the revoke; a
+restart before a successful save forgets it until a member sends it again.
+
+The record space is shared: no signer has a quota, so one member can fill it with valid records (3840
+ordinary ones, then revokes to 4096), after which no member can record anything, its own revoke included.
+The remedy is a new mesh; issue #2864 tracks a bound that admitted keys cannot multiply.
+
+## Lock order
+
+Three rounds of review findings came from locks taken in the wrong order or released between a check and
+the step it guards. The daemon takes them in this order only, never back:
+
+1. The per-file save mutexes (`Store.saveMu`, `cfgSave`, `versionsSave`): one save of that file at a time.
+2. `Daemon.mu` (sessions, presence, `saveErr`), then the store's `Store.mu` (`viewChanged` and
+   `register` read the view under `Daemon.mu`). Nothing holding `Store.mu` takes `Daemon.mu`.
+3. Under `Store.mu`: the decision callbacks of `Store.AppendAsMember` and `Store.DoAsMember`, which check
+   membership, the binding and the lock against the view of that moment, burn an invite (`Invites.mu`) or
+   queue a request (`pendingBook.mu`), and sign. `Merged` callbacks run after `Store.mu` is released.
+4. The state lock (`state.Lock`, a file lock that also orders other processes) last. A save takes its
+   snapshot under `Store.mu`, releases it, then takes the state lock and does not take `Store.mu` again
+   while it holds it, since an invite burn holds `Store.mu` while it writes `offers.json`.
+
+`Daemon.meshMu` only guards which store and invite book are current and is never held across a call into them.
 
 ## Dials
 

@@ -114,6 +114,20 @@ const runRecentThreads = (input: {
     return outcomes.flatMap((outcome) => (outcome._tag === "Importable" ? [outcome.thread] : []));
   }).pipe(Effect.provide(layerScannerTest(input)));
 
+const runScan = (input: {
+  readonly claudeHomePath: string;
+  readonly codexHomePath: string;
+  readonly piAgentDir: string;
+  readonly windowDays?: number;
+}) =>
+  Effect.gen(function* () {
+    const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+    return yield* scanner.scan({
+      includePi: true,
+      ...(input.windowDays === undefined ? {} : { windowDays: input.windowDays }),
+    });
+  }).pipe(Effect.provide(layerScannerTest(input)));
+
 const transcript = (workspace: string, sessionId: string) =>
   `${JSON.stringify({
     type: "user",
@@ -169,6 +183,48 @@ it.layer(NodeServices.layer)("AgentSessionScanner import window", (it) => {
         "claude-recent",
         "claude-old",
       ]);
+    }),
+  );
+
+  it.effect("reports project counts for the selected window", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+      yield* TestClock.setTime(nowMs);
+      const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const piAgentDir = yield* makeTempDir("goat-pi-agent-");
+      const workspace = yield* makeTempDir("goat-workspace-");
+
+      yield* writeTranscript({
+        filePath: path.join(claudeHomePath, "projects", "-selected", "claude-recent.jsonl"),
+        contents: transcript(workspace, "claude-recent"),
+        mtimeMs: nowMs - 24 * 60 * 60 * 1000,
+      });
+      yield* writeTranscript({
+        filePath: path.join(claudeHomePath, "projects", "-selected", "claude-old.jsonl"),
+        contents: transcript(workspace, "claude-old"),
+        mtimeMs: nowMs - 45 * 24 * 60 * 60 * 1000,
+      });
+
+      const defaultWindow = yield* runScan({
+        claudeHomePath,
+        codexHomePath,
+        piAgentDir,
+        windowDays: 30,
+      });
+      expect(defaultWindow.candidates[0]?.threadCount).toBe(1);
+
+      const widerWindow = yield* runScan({
+        claudeHomePath,
+        codexHomePath,
+        piAgentDir,
+        windowDays: 60,
+      });
+      expect(widerWindow.candidates[0]?.threadCount).toBe(2);
+
+      const omittedWindow = yield* runScan({ claudeHomePath, codexHomePath, piAgentDir });
+      expect(omittedWindow.candidates[0]?.threadCount).toBe(1);
     }),
   );
 });

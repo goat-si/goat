@@ -221,6 +221,8 @@ sh -c ${shellSingleQuote(installer)} -- --version
                 version,
                 stateKey,
                 runner?.keepExistingRunner ?? false,
+                false,
+                runner?.ownRuntimeVersion,
               ),
             }).pipe(
               // Native Windows has no sh to start; it is prepared without one.
@@ -871,6 +873,8 @@ sh -c ${shellSingleQuote(installer)} -- --version
               version,
               stateKey,
               runner?.keepExistingRunner ?? false,
+              false,
+              runner?.ownRuntimeVersion,
             ),
           }).pipe(
             Effect.mapError(runtimePreparationError),

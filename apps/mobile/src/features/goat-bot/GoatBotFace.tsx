@@ -170,7 +170,8 @@ export function GoatBotFaceAvatar(props: {
         <Text
           allowFontScaling={false}
           style={{ fontSize: props.size * 0.5, lineHeight: props.size * 0.62 }}
-          className={signal.dimmed ? "opacity-50" : undefined}
+          // A member's initial needs a text colour; an emoji ignores it.
+          className={signal.dimmed ? "text-foreground opacity-50" : "text-foreground"}
         >
           {picture}
         </Text>
@@ -180,6 +181,42 @@ export function GoatBotFaceAvatar(props: {
       {signal.waitingDot ? (
         <View className="absolute top-0 right-0 h-2.5 w-2.5 rounded-full bg-warning" />
       ) : null}
+    </View>
+  );
+}
+
+/** The progress line's face takes the screen's one motion from the header while the line shows. */
+const PROGRESS_FACE_RANK = FACE_MOTION_RANK.header + 1;
+
+/**
+ * The bot beside what it is doing: its drawn face, moving only while the line is in view and motion
+ * is allowed, or its emoji, which never moves.
+ */
+export function GoatBotProgressFace(props: {
+  readonly state: GoatBotFaceState;
+  readonly emoji?: string | null | undefined;
+  readonly inView: boolean;
+}) {
+  const emoji = goatBotAvatarEmoji(props.emoji);
+  const motion = useMobileGoatBotFaceMotion(
+    props.state,
+    PROGRESS_FACE_RANK,
+    null,
+    props.inView && emoji === null,
+  );
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      className="h-6 w-6 items-center justify-center"
+    >
+      {emoji !== null ? (
+        <Text allowFontScaling={false} style={{ fontSize: 15, lineHeight: 19 }}>
+          {emoji}
+        </Text>
+      ) : (
+        <GoatBotFace state={props.state} size={20} motion={motion} />
+      )}
     </View>
   );
 }

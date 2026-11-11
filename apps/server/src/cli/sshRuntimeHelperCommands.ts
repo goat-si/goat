@@ -7,6 +7,7 @@ import {
   protocol,
   runtimeManifest,
 } from "./sshRuntimeProbes.ts";
+import { capabilities, facts } from "./sshRuntimeFactsCommands.ts";
 import { supervise } from "./sshRuntimeSupervisor.ts";
 
 export {
@@ -36,4 +37,6 @@ export const sshRuntimeHelperCommands = [
   compat,
   drain,
   supervise,
+  capabilities,
+  facts,
 ] as const;

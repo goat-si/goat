@@ -14,10 +14,14 @@ import { isRemoteShellScript, READ_TICK, withRemoteDeadline } from "./remoteDead
 // reads it and so blocks until the test closes its end once the shell exits. The run then settles
 // only when every process holding fd 3 has exited, including a tick a stopped watchdog leaves.
 const HOLD = "exec /bin/cat <&3 >/dev/null";
+// The script's EXIT trap marks it done and wakes a tick already waiting on done.fifo; a tick that
+// opened the FIFO before looking for the mark cannot miss it. It drops the test's fd 3 only to wait,
+// so the test cannot finish and remove the mark between a stopped watchdog's last tick and its look.
+const SCRIPT_DONE = 'trap \': >"$1/done"; printf "x\\\\n" 1<>"$1/done.fifo"\' EXIT';
+const UNTIL_DONE =
+  'exec 5<>"$GOAT_TEST_DIR/done.fifo"; [ -e "$GOAT_TEST_DIR/done" ] || { exec 3>&-; read -r line <&5; }';
 const bashBefore4 =
-  Number(
-    NodeChildProcess.spawnSync("bash", ["-c", "echo $BASH_VERSINFO"], { encoding: "utf8" }).stdout,
-  ) < 4;
+  NodeChildProcess.spawnSync("bash", ["-c", "((BASH_VERSINFO < 4))"]).status === 0;
 
 const spawnHeld = (
   command: string,
@@ -209,39 +213,55 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       }
     },
   );
-  const returnsAsSoonAsScriptExits = async (shell: string) => {
-    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
-    try {
-      for (const fifo of ["ticking"])
-        NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-      // The watchdog's clock records the watchdog's PID and then ticks far past the test.
-      const clock = NodePath.join(dir, "sleep");
+  // TERM interrupts wait in dash and bash 4+, so the watchdog stops mid-tick: tick 1 blocks on a FIFO
+  // only the test releases, and the shell must exit while it still blocks. bash before 4 traps during
+  // wait only signals that came once wait began, so there tick 1 ends when the script exits.
+  it.for(["dash", "bash"])(
+    "returns as soon as the script exits, leaving no watchdog behind (%s)",
+    async (shell, { onTestFinished }) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      const file = (name: string) => NodePath.join(dir, name);
+      // After a pass, a failure or the project timeout: release the tick by ending it through the PID
+      // it recorded before it signalled the script, then remove what the test made.
+      onTestFinished(() => {
+        const tick = NodeFS.existsSync(file("tick.pid"))
+          ? Number(NodeFS.readFileSync(file("tick.pid"), "utf8"))
+          : 0;
+        if (tick > 0 && isAlive(tick)) process.kill(tick);
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      });
+      const midTick = shell === "dash" || !bashBefore4;
+      for (const fifo of ["ticking", "done.fifo", "release"])
+        NodeChildProcess.execFileSync("mkfifo", [file(fifo)]);
+      const clock = file("sleep");
       NodeFS.writeFileSync(
         clock,
-        '#!/bin/sh\necho $PPID > "$GOAT_TEST_DIR/watchdog.pid"\nprintf x > "$GOAT_TEST_DIR/ticking"\n' +
-          HOLD +
-          "\n",
+        [
+          "#!/bin/sh",
+          'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
+          '[ "$n" = 1 ] || exit 0',
+          'echo $$ > "$GOAT_TEST_DIR/tick.pid"; echo $PPID > "$GOAT_TEST_DIR/watchdog.pid"',
+          'printf x > "$GOAT_TEST_DIR/ticking"',
+          // Two statements: bash 3.2 (macOS /bin/sh) keeps a saved copy of fd 3 open in the command
+          // that `exec 3>&- cmd` starts, so the test's pipe would never close.
+          midTick ? 'exec 3>&-\nexec /bin/cat "$GOAT_TEST_DIR/release" >/dev/null' : UNTIL_DONE,
+        ].join("\n") + "\n",
         { mode: 0o755 },
       );
-      const script = withRemoteDeadline('cat "$1/ticking" >/dev/null\nexit 3', 60_000, clock);
+      const body = SCRIPT_DONE + '\ncat "$1/ticking" >/dev/null\nexit 3';
+      const script = withRemoteDeadline(body, 60_000, clock);
       expect(await runShell(script, [dir], { GOAT_TEST_DIR: dir }, { shell })).toEqual({
         code: 3,
         stdout: "",
       });
       // A watchdog left ticking would hold a Windows SSH channel open until its next tick.
-      const watchdog = Number(NodeFS.readFileSync(NodePath.join(dir, "watchdog.pid"), "utf8"));
-      expect(() => process.kill(watchdog, 0)).toThrow();
-    } finally {
-      NodeFS.rmSync(dir, { recursive: true, force: true });
-    }
-  };
-  it("returns as soon as the script exits, leaving no watchdog behind (dash)", () =>
-    returnsAsSoonAsScriptExits("dash"));
-  // bash before 4 runs a trap during wait only for a signal that came after wait began, so a TERM
-  // that lands as a tick starts waits for that tick, which here never ends.
-  it.skipIf(bashBefore4)(
-    "returns as soon as the script exits, leaving no watchdog behind (bash)",
-    () => returnsAsSoonAsScriptExits("bash"),
+      expect(isAlive(Number(NodeFS.readFileSync(file("watchdog.pid"), "utf8")))).toBe(false);
+      if (midTick) {
+        // It stopped while its tick still blocked, and started no other.
+        expect(isAlive(Number(NodeFS.readFileSync(file("tick.pid"), "utf8")))).toBe(true);
+        expect(NodeFS.readFileSync(file("ticks"), "utf8").trim()).toBe("1");
+      }
+    },
   );
 
   it.each(["dash", "bash"])(
@@ -402,23 +422,35 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     async ({ shell, deadline }) => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
       try {
-        for (const fifo of ["go"])
+        for (const fifo of ["go", "gate", "done.fifo"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-        // Ticks pass at once. Without a deadline tick 3 lets the script finish; with one, the script
-        // waits to be hung up.
+        // Tick 1 waits until the script has set its traps, and ticks from 4 on until it has exited, so
+        // no tick races its finish. Without a deadline tick 3 lets the script finish; with one, the
+        // script waits to be hung up.
         const clock = NodePath.join(dir, "sleep");
         NodeFS.writeFileSync(
           clock,
           [
             "#!/bin/sh",
             'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
+            'if [ "$n" = 1 ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
             'if [ "$n" = 3 ] && [ "$GOAT_TEST_DEADLINE" = false ]; then printf x > "$GOAT_TEST_DIR/go"; fi',
+            'if [ "$n" -gt 3 ]; then ' + UNTIL_DONE + "; fi",
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
         const result = await runShell(
           RECORD_KILLS +
-            withRemoteDeadline('cat "$1/go" >/dev/null', deadline ? 1_000 : 60_000, clock),
+            withRemoteDeadline(
+              [
+                SCRIPT_DONE,
+                "trap 'exit 129' HUP",
+                'printf x > "$1/gate"',
+                'cat "$1/go" >/dev/null',
+              ].join("\n"),
+              deadline ? 1_000 : 60_000,
+              clock,
+            ),
           [dir],
           { GOAT_TEST_DIR: dir, GOAT_TEST_DEADLINE: String(deadline) },
           { shell, sessionLeader: true },

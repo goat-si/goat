@@ -53,6 +53,7 @@ import {
   type PreparationAdmission,
 } from "./ensureFlight.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
+import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
 import { admitLive } from "./tunnelAttachment.ts";
@@ -131,6 +132,7 @@ import {
   VERIFY_OWNED_BEFORE_PUBLICATION,
 } from "./runtimeOwnershipScripts.ts";
 import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./launchListenerScripts.ts";
+import { REMOTE_LAUNCH_READY_REPORT_SCRIPT } from "./launchReadyReportScripts.ts";
 import {
   baseSshArgs,
   buildSshHostSpecEffect,
@@ -716,19 +718,18 @@ if ! goat_runtime_ready; then
   done
 fi
 if ! goat_runtime_ready; then
-  case "$(uname -s)" in
-    Darwin) GOAT_PLATFORM="darwin" ;;
-    Linux) GOAT_PLATFORM="linux" ;;
-    MINGW* | MSYS* | CYGWIN*) GOAT_PLATFORM="win32" ;;
-    *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -s)" >&2; exit 1 ;;
+  # Keep aligned with CLI_ARCHIVE_PLATFORM_KEYS in packages/shared/src/cliRelease.ts.
+  case "$(uname -s) $(uname -m)" in
+    "Darwin arm64") GOAT_PLATFORM_KEY="darwin-arm64" ;;
+    "Linux arm64" | "Linux aarch64") GOAT_PLATFORM_KEY="linux-arm64" ;;
+    "Linux x86_64" | "Linux amd64") GOAT_PLATFORM_KEY="linux-x64" ;;
+    MINGW*" arm64" | MSYS*" arm64" | CYGWIN*" arm64" | MINGW*" aarch64" | MSYS*" aarch64" | CYGWIN*" aarch64") GOAT_PLATFORM_KEY="win32-arm64" ;;
+    MINGW*" x86_64" | MSYS*" x86_64" | CYGWIN*" x86_64") GOAT_PLATFORM_KEY="win32-x64" ;;
+    MINGW*" amd64" | MSYS*" amd64" | CYGWIN*" amd64") GOAT_PLATFORM_KEY="win32-x64" ;;
+    *) printf 'Remote host %s %s has no GOAT release archive.\n' "$(uname -s)" "$(uname -m)" >&2; exit 1 ;;
   esac
-  case "$(uname -m)" in
-    arm64 | aarch64) GOAT_ARCH="arm64" ;;
-    x86_64 | amd64) GOAT_ARCH="x64" ;;
-    *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -m)" >&2; exit 1 ;;
-  esac
-  GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"
-  if [ "$GOAT_PLATFORM" = win32 ]; then GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.zip"; fi
+  GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"
+  case "$GOAT_PLATFORM_KEY" in win32-*) GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.zip" ;; esac
   GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
   goat_fetch() {
     if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 30 --max-time "$3" "$1" -o "$2"
@@ -747,12 +748,10 @@ if ! goat_runtime_ready; then
   if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
     printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
   fi
-  if [ "$GOAT_PLATFORM" = win32 ]; then
-    # Git Bash's GNU tar cannot read zip; Windows ships bsdtar in System32.
-    "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
-  else
-    tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
-  fi
+  case "$GOAT_PLATFORM_KEY" in
+    win32-*) "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;; # GNU tar cannot read zip.
+    *) tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;;
+  esac
   rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
   # Verify the executable and exact version before replacing a runtime,
   # including a same-version directory whose completion marker is broken.
@@ -805,7 +804,7 @@ ownership_unverified() {
 @@GOAT_LEGACY_IDENTITY@@
 @@GOAT_RUNNER_SETUP@@
 IDENTITY_NEXT="$STATE_DIR/identity.next.$$"
-trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT"; exit "$runner_exit"' EXIT
+trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$" "$STATE_DIR/netstat.$$"; exit "$runner_exit"' EXIT
 GOAT_ARCHIVE_MODE=@@GOAT_ARCHIVE_MODE@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
@@ -815,7 +814,6 @@ if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
   ensure_remote_node_path || true
   [ "$NODE_RESTORE_NOGLOB" = 0 ] || set -f
 fi
-recheck_selected_before_use
 pick_port() {
   if [ "$GOAT_ARCHIVE_MODE" = "1" ]; then
     "$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE" "@@GOAT_DEFAULT_REMOTE_PORT@@" "@@GOAT_REMOTE_PORT_SCAN_WINDOW@@"
@@ -827,13 +825,14 @@ NODE
 }
 wait_ready() {
   if [ "$GOAT_ARCHIVE_MODE" = "1" ]; then
-    "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@"
+    launch_bounded $(( ($1 + 999) / 1000 + 10 )) "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@"
     return
   fi
-  node - "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" <<'NODE'
+  launch_bounded $(( ($1 + 999) / 1000 + 10 )) node - "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" <<'NODE'
 @@GOAT_WAIT_READY_SCRIPT@@
 NODE
 }
+${REMOTE_LAUNCH_READY_REPORT_SCRIPT}
 ${REMOTE_LAUNCH_LISTENER_SCRIPT}
 reuse_live_server() {
     REMOTE_PORT="$LIVE_PORT"
@@ -1057,7 +1056,8 @@ while [ -z "$REMOTE_PORT" ]; do
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
   printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
   printf 'managed\\n' >"$MANAGED_FILE"
-  if ! wait_launched_listener || ! wait_ready "@@GOAT_READY_TIMEOUT_MS@@" ||
+  launch_caps_begin
+  if ! wait_launched_listener || ! launch_wait_ready "@@GOAT_READY_TIMEOUT_MS@@" ||
      ! server_owns_listener "$REMOTE_PID" "$REMOTE_PORT"; then
     # Only this attempt's exited child and bind error authorize another port selection.
     # Never signal the listener that won the race between pick-port and serve.
@@ -1088,8 +1088,7 @@ while [ -z "$REMOTE_PORT" ]; do
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
-    if launch_server_alive "$REMOTE_PID"; then server_kill "$REMOTE_PID" || true; fi
-    launch_wait_exit "$REMOTE_PID"
+    launch_stop_server "$REMOTE_PID"
     rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
     if [ "$database_ahead" = 1 ]; then
       printf '%s\\n' "$SELECTED_VERSION" >"$DATABASE_AHEAD_FILE.next.$$"
@@ -1309,6 +1308,7 @@ capture_reconnect_baseline() {
       : "",
     GOAT_RETAINED_RUNNER_SHA256: shellSingleQuote(selection.retainedRunnerSha256 ?? ""),
     GOAT_INSTALLED_EXECUTABLE_SHA256: shellSingleQuote(selection.installedExecutableSha256 ?? ""),
+    GOAT_OWN_RUNTIME_VERSION: shellSingleQuote(input?.ownRuntimeVersion?.trim() ?? ""),
     GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
     GOAT_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteGoatRunnerScript(input)),
     GOAT_PROTOCOL_GUARD: applyScriptPlaceholders(REMOTE_PROTOCOL_GUARD_SCRIPT, {
@@ -1450,7 +1450,7 @@ export function buildRemoteStopScript(
 function buildReconnectProbeScript(selected: PreparedRemoteRuntime) {
   return `reconnect_probe() {
 sh -s -- "\${1:-}" <<'GOAT_RECONNECT_PROBE_SCRIPT'
-${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true)}
+${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion)}
 GOAT_RECONNECT_PROBE_SCRIPT
 }`;
 }
@@ -2185,10 +2185,13 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
     }),
   );
   yield* Effect.raceFirst(
-    waitForHttpReady({
-      baseUrl: input.httpBaseUrl,
-      timeoutMs: input.readiness.timeoutMs,
-      probeTimeoutMs: input.readiness.probeTimeoutMs,
+    waitForTunnelReady({
+      alias: input.resolvedTarget.alias,
+      localPort: input.localPort,
+      // Matches the node-script launch command's whole ssh run against the same host.
+      connectTimeoutMs: REMOTE_LAUNCH_TIMEOUT_MS,
+      httpBaseUrl: input.httpBaseUrl,
+      readiness: input.readiness,
     }),
     exitFailure,
   ).pipe(
@@ -4219,7 +4222,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         );
         if (app !== undefined) return app;
       }
-      const output = yield* NativeWindows.statusRuntimeProbe(resolvedTarget, requestedVersion);
+      const output = yield* NativeWindows.statusRuntimeProbe(
+        resolvedTarget,
+        requestedVersion,
+        runner?.ownRuntimeVersion,
+      );
       const probe = yield* decodeRemoteJsonOutput(output.stdout, decodeRemoteRuntimeProbe).pipe(
         Effect.mapError(runtimePreparationError),
       );

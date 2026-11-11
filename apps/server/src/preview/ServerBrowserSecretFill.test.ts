@@ -686,6 +686,21 @@ it.live(
   },
 );
 
+it.live("preserves both screenshot encodings while masking snapshot text", () => {
+  const { tab } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
+    const data = `prefix${PASSWORD}suffix`;
+    const answer = fill.mask(request("snapshot", {}))({
+      ok: true,
+      result: { text: `shown ${PASSWORD}`, screenshot: { data }, fullScreenshot: { data } },
+    });
+    expect(answer.result.screenshot.data).toBe(data);
+    expect(answer.result.fullScreenshot.data).toBe(data);
+    expect(answer.result.text).not.toContain(PASSWORD);
+  });
+});
+
 it.live("drops an image a tab sharing sign-ins took while a password was filled", () => {
   const shared = {};
   const { tab } = makeTab({}, shared);

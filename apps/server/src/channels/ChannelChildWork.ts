@@ -26,6 +26,7 @@ import {
   isChannelChildWorkActive,
   isChannelTaskTerminal,
   isGoatBotSessionThreadId,
+  localChildThreadId,
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
@@ -511,7 +512,7 @@ const make = Effect.gen(function* () {
       }
       // Delegates stop with the worker's own cascade; reconcile settles their records.
       if (record.surface === "delegate_local" || record.surface === "delegate_remote") continue;
-      const threadId = record.destination?.threadId;
+      const threadId = localChildThreadId(record.destination);
       // A remote-binding child has no local thread to stop; reconcile (and the destination's
       // resolve-or-fence hook) settles it.
       if (threadId === undefined) continue;
@@ -687,8 +688,8 @@ const make = Effect.gen(function* () {
       const changed = yield* Effect.gen(function* () {
         if (record.state === "reserved") return yield* reconcileReserved(record);
         const destination = record.destination;
-        if (destination?.threadId !== undefined)
-          return yield* reconcileLocal(record, destination.threadId);
+        const localThreadId = localChildThreadId(destination);
+        if (localThreadId !== undefined) return yield* reconcileLocal(record, localThreadId);
         if (destination?.correlationId !== undefined) {
           return yield* reconcileRemote(record, destination.correlationId);
         }

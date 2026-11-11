@@ -806,6 +806,19 @@ describe("pen suites", () => {
     }
   });
 
+  it("selects test-pen when a root file the Pen packages resolve through changes", async () => {
+    for (const file of [
+      "pnpm-workspace.yaml",
+      "pnpm-lock.yaml",
+      "tsconfig.base.json",
+      "vite.config.ts",
+    ]) {
+      const result = await quick([file]);
+      assert.ok(result.tasks.includes("test-pen"), file);
+      assert.equal(result.reasons.get("test-pen"), file, file);
+    }
+  });
+
   it("leaves Pen's own test files to test-pen instead of test-changed", async () => {
     const result = await quick([
       "infra/pen-login/test/login.test.ts",

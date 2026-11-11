@@ -34,18 +34,25 @@ const setup = (gate: ReadonlyArray<{ readonly apply: boolean }>) => {
     evaluate: [] as number[],
     expire: [] as number[],
     purge: 0,
+    reset: 0,
     passes: [] as boolean[],
   };
   let next = 0;
+  const hooks = { onEvaluate: Effect.void as Effect.Effect<void> };
   const layer = Layer.mergeAll(
     Layer.succeed(WorktreeCleanupPreviewState, {
       evaluate: (input) =>
-        Effect.sync(() => {
-          calls.evaluate.push(input.plannedCount);
-          const apply = gate[Math.min(next++, gate.length - 1)]?.apply ?? false;
-          return { apply, preview: apply ? null : preview };
-        }),
+        Effect.suspend(() => hooks.onEvaluate).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              calls.evaluate.push(input.plannedCount);
+              const apply = gate[Math.min(next++, gate.length - 1)]?.apply ?? false;
+              return { apply, preview: apply ? null : preview };
+            }),
+          ),
+        ),
       respond: () => Effect.void,
+      reset: Effect.sync(() => void calls.reset++),
     }),
     Layer.succeed(WorktreeSnapshotStore, {
       capture: () => Effect.die("unused"),
@@ -64,10 +71,26 @@ const setup = (gate: ReadonlyArray<{ readonly apply: boolean }>) => {
       into.push(entry(dryRun), entry(false));
       return { waiting: false, kept: [] };
     });
-  return { calls, layer, clean };
+  return { calls, layer, clean, hooks };
 };
 
 describe("worktree cleanup preview gate", () => {
+  it.effect(
+    "removes on the first sweep, with no dry pass or preview, when the preview is off",
+    () => {
+      const { calls, layer, clean } = setup([{ apply: false }]);
+      return Effect.gen(function* () {
+        const run = yield* makeWorktreeCleanupRun(Effect.succeed(true));
+        const entries: StorageCleanupReportEntry[] = [];
+        const result = yield* run({ nowMs: 0, snapshotDays: 30, preview: false, entries, clean });
+        expect(calls.passes).toEqual([false]);
+        expect(calls.evaluate).toEqual([]);
+        expect(result.preview).toBeNull();
+        expect(calls.expire).toEqual([30]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect(
     "removes nothing until the preview is approved, and reports what it would remove",
     () => {
@@ -75,7 +98,7 @@ describe("worktree cleanup preview gate", () => {
       return Effect.gen(function* () {
         const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
         const entries: StorageCleanupReportEntry[] = [];
-        const result = yield* run({ nowMs: 0, snapshotDays: 30, entries, clean });
+        const result = yield* run({ nowMs: 0, snapshotDays: 30, preview: true, entries, clean });
         expect(calls.passes).toEqual([true]);
         expect(calls.evaluate).toEqual([1]);
         expect(result.preview).toEqual(preview);
@@ -92,10 +115,11 @@ describe("worktree cleanup preview gate", () => {
       const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
       const first: StorageCleanupReportEntry[] = [];
       expect(
-        (yield* run({ nowMs: 0, snapshotDays: null, entries: first, clean })).preview,
+        (yield* run({ nowMs: 0, snapshotDays: null, preview: true, entries: first, clean }))
+          .preview,
       ).toBeNull();
       expect(first.some((candidate) => candidate.planned === true)).toBe(false);
-      yield* run({ nowMs: 1, snapshotDays: null, entries: [], clean });
+      yield* run({ nowMs: 1, snapshotDays: null, preview: true, entries: [], clean });
       expect(calls.passes).toEqual([true, false, false]);
       expect(calls.evaluate).toEqual([1]);
       expect(calls.expire).toEqual([]);
@@ -109,12 +133,52 @@ describe("worktree cleanup preview gate", () => {
       const result = yield* run({
         nowMs: 0,
         snapshotDays: null,
+        preview: true,
         entries: [],
         clean: (_dryRun, into) =>
           Effect.sync(() => (into.push(entry(false)), { waiting: false, kept: [] })),
       });
       expect(result.preview).toBeNull();
       expect(calls.evaluate).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "asks for a new preview once the preview is forgotten, even if no sweep saw it off",
+    () => {
+      const { calls, layer, clean } = setup([{ apply: true }, { apply: false }]);
+      return Effect.gen(function* () {
+        const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
+        const sweep = (nowMs: number) =>
+          run({ nowMs, snapshotDays: null, preview: true, entries: [], clean });
+        yield* sweep(0);
+        yield* run.forgetPreview;
+        const again = yield* sweep(1);
+        expect(calls.passes).toEqual([true, false, true]);
+        expect(calls.evaluate).toEqual([1, 1]);
+        expect(calls.reset).toBe(1);
+        expect(again.preview).toEqual(preview);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("asks again when the preview is forgotten while a sweep is being approved", () => {
+    const { calls, layer, clean, hooks } = setup([{ apply: true }, { apply: false }]);
+    return Effect.gen(function* () {
+      const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
+      const sweep = (nowMs: number) =>
+        run({ nowMs, snapshotDays: null, preview: true, entries: [], clean });
+      hooks.onEvaluate = Effect.suspend(() => {
+        hooks.onEvaluate = Effect.void;
+        return run.forgetPreview;
+      });
+      const first = yield* sweep(0);
+      const again = yield* sweep(1);
+      // The sweep whose approval was forgotten removes nothing; the next one asks again.
+      expect(calls.passes).toEqual([true, true]);
+      expect(first.preview).toBeNull();
+      expect(calls.evaluate).toEqual([1, 1]);
+      expect(again.preview).toEqual(preview);
     }).pipe(Effect.provide(layer));
   });
 });

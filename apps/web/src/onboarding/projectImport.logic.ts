@@ -7,7 +7,6 @@ import {
 } from "@goat/contracts";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const DEFAULT_SELECTION_MIN_THREADS = 3;
 
 /** Treat candidates missing git as repositories for servers predating git scans. */
 export function partitionOnboardingProjects<T extends AgentSessionProjectCandidate>(
@@ -20,8 +19,7 @@ export function partitionOnboardingProjects<T extends AgentSessionProjectCandida
   return {
     available: candidates,
     recent: candidates.filter((candidate) => {
-      if (candidate.git === null) return false;
-      if (candidate.threadCount < DEFAULT_SELECTION_MIN_THREADS) return false;
+      if (candidate.threadCount === 0) return false;
       if (candidate.lastActiveAt === null) return false;
       const lastActiveAt = Date.parse(candidate.lastActiveAt);
       return lastActiveAt >= cutoff && lastActiveAt <= now;

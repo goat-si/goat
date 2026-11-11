@@ -9,6 +9,7 @@
 		<string>__PEN__</string>
 		<string>up</string>
 		<string>--foreground</string>
+		<string>--service</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

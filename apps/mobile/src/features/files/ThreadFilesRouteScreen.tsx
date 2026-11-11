@@ -844,7 +844,9 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             onPress: () =>
               setFullScreenPreview({
                 kind: "pdf",
-                uri: previewUri,
+                ...(environmentId !== null && assetPreview.resource !== null
+                  ? { environmentId, resource: assetPreview.resource }
+                  : { uri: previewUri }),
                 name: basename(relativePath),
               }),
           } as const)

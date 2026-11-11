@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -568,4 +568,75 @@ describe("ChannelChildWork cancelForTask", () => {
       ),
     );
   });
+});
+
+describe("ChannelChildWork SSH launches that know their remote thread", () => {
+  const remoteThreadId = childThread;
+  const bindRemote = Effect.gen(function* () {
+    const childWork = yield* ChannelChildWork.ChannelChildWork;
+    const admission = yield* admit("remote chore", { surface: "ssh_thread_launch" });
+    if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+    const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+    yield* Effect.scoped(
+      childWork.claimLaunch(admission.record, { correlationId, host: "box", workKind: "chore" }),
+    );
+    yield* childWork.markBound(admission.record, {
+      correlationId,
+      host: "box",
+      threadId: remoteThreadId,
+      environmentId: EnvironmentId.make("remote-environment"),
+      workKind: "chore",
+    });
+    return { record: admission.record, correlationId };
+  });
+
+  it.effect("settles from its dispatch row even when a local thread has the same id", () =>
+    Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const sql = yield* SqlClient.SqlClient;
+      const { record, correlationId } = yield* bindRemote;
+      yield* sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, created_at, updated_at)
+        VALUES (${correlationId}, 'thread', ${record.callerThreadId}, 'box', 'read-key', 'wake', 'settled', ${NOW}, ${NOW})`;
+      assert.strictEqual(yield* childWork.reconcile, 1);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      const settled = yield* store.get(taskId, record.childWorkId);
+      assert.strictEqual(settled?.state, "completed");
+      // A terminal update keeps everything the bind proved about the destination.
+      assert.deepStrictEqual(settled?.destination, {
+        correlationId,
+        host: "box",
+        threadId: remoteThreadId,
+        environmentId: EnvironmentId.make("remote-environment"),
+        workKind: "chore",
+      });
+    }).pipe(Effect.provide(makeLayer(new Map([[childThread, [fakeRun("running")]]])))),
+  );
+
+  it.effect("a task stop never stops a local thread that shares the remote thread's id", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      yield* bindRemote;
+      yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId: taskEventIdFor(taskId, 99),
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.deepStrictEqual(dispatched, []);
+    }).pipe(Effect.provide(makeLayer(new Map(), new Map(), dispatched)));
+  });
+
+  it.effect("a local thread that shares the remote thread's id is not a recorded child", () =>
+    Effect.gen(function* () {
+      yield* seedWorker;
+      yield* bindRemote;
+      const admission = yield* admit("from the local twin", { callerThreadId: remoteThreadId });
+      assert.strictEqual(admission._tag, "not_channel_owned");
+    }).pipe(Effect.provide(makeLayer())),
+  );
 });

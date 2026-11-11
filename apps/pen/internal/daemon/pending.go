@@ -21,16 +21,20 @@ const (
 // Pending is a queued account join on a locked mesh.
 type Pending struct {
 	// ID is the first 8 characters of the fingerprint ("XXXX XXXX").
-	ID          string     `json:"id"`
-	Fingerprint string     `json:"fingerprint"`
-	Name        string     `json:"name"`
-	NodeID      string     `json:"nodeId"`
-	SignPub     string     `json:"signPub"`
-	Email       string     `json:"email"`
-	Sub         string     `json:"sub"`
-	Assertion   string     `json:"assertion"`
-	At          int64      `json:"at"`
-	Card        *mesh.Card `json:"card"`
+	ID          string `json:"id"`
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name"`
+	NodeID      string `json:"nodeId"`
+	SignPub     string `json:"signPub"`
+	Email       string `json:"email"`
+	Sub         string `json:"sub"`
+	// Kid is the login key the request's assertion was checked against ("" in older entries).
+	Kid string `json:"kid,omitempty"`
+	// Issuer is the login service URL it was checked against ("" in older entries).
+	Issuer    string     `json:"issuer,omitempty"`
+	Assertion string     `json:"assertion"`
+	At        int64      `json:"at"`
+	Card      *mesh.Card `json:"card"`
 }
 
 type pendingFile struct {

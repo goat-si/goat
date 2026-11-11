@@ -46,6 +46,14 @@ it.effect(
           number: 7,
           source: "manual",
         },
+        { id: "settled", host: "github.com", repository: "acme/web", number: 7, source: "manual" },
+        {
+          id: "auto-settled",
+          host: "github.com",
+          repository: "acme/web",
+          number: 7,
+          source: "manual",
+        },
         { id: "active", host: "github.com", repository: "acme/web", number: 7, source: "manual" },
         {
           id: "archived",
@@ -87,6 +95,8 @@ it.effect(
       for (const fixture of fixtures) {
         const payload = yield* encodePayload({
           linkedPullRequest: null,
+          settledOverride: fixture.id === "settled" ? "settled" : null,
+          settledAt: fixture.id === "auto-settled" ? archivedAt : null,
           pullRequests: [{ ...fixture, linkedAt: createdAt, snapshot: null, stack: null }],
         });
         yield* sql`
@@ -157,8 +167,28 @@ it.effect(
       });
       expect(result).toEqual({
         threads: [
-          { id: "archived", projectId: "project-1", title: "archived", archivedAt },
-          { id: "active", projectId: "project-1", title: "active", archivedAt: null },
+          { id: "archived", projectId: "project-1", title: "archived", archivedAt, settled: false },
+          {
+            id: "active",
+            projectId: "project-1",
+            title: "active",
+            archivedAt: null,
+            settled: false,
+          },
+          {
+            id: "auto-settled",
+            projectId: "project-1",
+            title: "auto-settled",
+            archivedAt: null,
+            settled: true,
+          },
+          {
+            id: "settled",
+            projectId: "project-1",
+            title: "settled",
+            archivedAt: null,
+            settled: true,
+          },
         ],
       });
       assert.deepStrictEqual(

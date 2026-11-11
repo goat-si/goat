@@ -1,8 +1,6 @@
-import { SourceControlProviderKind } from "@goat/contracts";
 import { assert, it, describe } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -17,7 +15,6 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
 import type {
-  BackgroundScope,
   VcsStatusLocalResult,
   VcsStatusRemoteResult,
   VcsStatusStreamEvent,
@@ -25,150 +22,17 @@ import type {
 import { GitCommandError, GitManagerError } from "@goat/contracts";
 
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
+import {
+  baseLocalStatus,
+  baseRemoteStatus,
+  layerBackgroundPolicy,
+  layerTestFor,
+  remoteStatusWithPr,
+} from "./vcsStatusBroadcaster.testkit.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { refuseSshHostsScoped } from "@goat/ssh/hostAccess";
-import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
-
-const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
-
-const baseLocalStatus: VcsStatusLocalResult = {
-  isRepo: true,
-  sourceControlProvider: {
-    kind: SourceControlProviderKind.make("github"),
-    name: "GitHub",
-    baseUrl: "https://github.com",
-  },
-  hasPrimaryRemote: true,
-  isDefaultRef: false,
-  refName: "feature/status-broadcast",
-  hasWorkingTreeChanges: false,
-  workingTree: { files: [], insertions: 0, deletions: 0 },
-};
-
-const baseRemoteStatus: VcsStatusRemoteResult = {
-  hasUpstream: true,
-  aheadCount: 0,
-  behindCount: 0,
-  pr: null,
-};
-
-const remoteStatusWithPr: VcsStatusRemoteResult = {
-  ...baseRemoteStatus,
-  pr: {
-    number: 2978,
-    title: "[codex] Rewrite client connection architecture",
-    url: "https://github.com/goat-si/goat/pull/2978",
-    baseRef: "main",
-    headRef: "upstream-topic",
-    state: "open",
-  },
-};
-
-function layerTestFor(state: {
-  currentLocalStatus: VcsStatusLocalResult;
-  currentRemoteStatus: VcsStatusRemoteResult | null;
-  localStatusCalls: number;
-  remoteStatusCalls: number;
-  localInvalidationCalls: number;
-  remoteInvalidationCalls: number;
-  remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
-  remoteStatusError?: GitManagerError;
-  backgroundWorkEnabled?: boolean;
-  automaticFetchInterval?: Effect.Effect<Duration.Duration>;
-  beforeRemoteStatus?: Effect.Effect<void>;
-  beforeLocalStatus?: Effect.Effect<void>;
-  fileSystem?: FileSystem.FileSystem;
-  pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
-}) {
-  return VcsStatusBroadcaster.layer.pipe(
-    Layer.provideMerge(
-      state.fileSystem
-        ? Layer.succeed(FileSystem.FileSystem, state.fileSystem)
-        : NodeServices.layer,
-    ),
-    Layer.provide(layerBackgroundPolicy(() => state.backgroundWorkEnabled !== false)),
-    Layer.provide(
-      Layer.succeed(
-        VcsStatusBroadcaster.VcsAutomaticFetchInterval,
-        state.automaticFetchInterval ?? Effect.succeed(Duration.seconds(30)),
-      ),
-    ),
-    Layer.provide(
-      Layer.mock(GitWorkflowService.GitWorkflowService)({
-        localStatus: () =>
-          Effect.suspend(() => {
-            state.localStatusCalls += 1;
-            return (state.beforeLocalStatus ?? Effect.void).pipe(
-              Effect.as(state.currentLocalStatus),
-            );
-          }),
-        currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
-        remoteStatus: (_input, options) =>
-          Effect.suspend(() => {
-            return (state.beforeRemoteStatus ?? Effect.void).pipe(
-              Effect.andThen(
-                Effect.sync(() => {
-                  state.remoteStatusCalls += 1;
-                  state.remoteStatusRefreshUpstreamValues?.push(options?.refreshUpstream);
-                  return state.currentRemoteStatus;
-                }),
-              ),
-              Effect.tap(() =>
-                state.remoteStatusError ? Effect.fail(state.remoteStatusError) : Effect.void,
-              ),
-            );
-          }),
-        invalidateLocalStatus: () =>
-          Effect.sync(() => {
-            state.localInvalidationCalls += 1;
-          }),
-        invalidateRemoteStatus: () =>
-          Effect.sync(() => {
-            state.remoteInvalidationCalls += 1;
-          }),
-        invalidateStatus: () =>
-          Effect.sync(() => {
-            state.localInvalidationCalls += 1;
-            state.remoteInvalidationCalls += 1;
-          }),
-        ...(state.pullCurrentBranch ? { pullCurrentBranch: state.pullCurrentBranch } : {}),
-      }),
-    ),
-  );
-}
-
-function layerBackgroundPolicy(shouldRunScopeWork: (scope: BackgroundScope) => boolean) {
-  return Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-    reportClientActivity: () => Effect.void,
-    removeRpcClient: () => Effect.void,
-    reportHostPowerState: () => Effect.void,
-    snapshot: Effect.succeed({
-      hostPower: {
-        source: "unknown",
-        idle: "unknown",
-        idleSeconds: null,
-        locked: "unknown",
-        suspended: false,
-        onBattery: "unknown",
-        lowPowerMode: "unknown",
-        thermalState: "unknown",
-        stale: true,
-        updatedAt: TEST_EPOCH,
-      },
-      leases: [],
-      activeForegroundLeaseCount: 0,
-      activeScopeKeys: [],
-      shouldRunOpportunisticWork: false,
-      updatedAt: TEST_EPOCH,
-    }),
-    streamChanges: Stream.empty,
-    hasDemand: () => Effect.succeed(true),
-    shouldRunScopeWork: (scope) => Effect.sync(() => shouldRunScopeWork(scope)),
-    shouldRunOpportunisticWork: Effect.succeed(true),
-  });
-}
 
 describe("VcsStatusBroadcaster", () => {
   it.effect("refreshes queued behind a running one share the next git status read", () => {
@@ -237,24 +101,28 @@ describe("VcsStatusBroadcaster", () => {
       yield* Deferred.await(subscribed);
 
       state.currentLocalStatus = { ...baseLocalStatus, refName: "main" };
+      state.currentRemoteStatus = baseRemoteStatus;
       const refreshed = yield* broadcaster.refreshStatus("/repo", { localOnly: true });
       assert.equal(refreshed.refName, "main");
       assert.isNull(refreshed.pr);
       assert.equal(state.localInvalidationCalls, 1);
       assert.equal(state.remoteStatusCalls, 1);
-      assert.equal(state.remoteInvalidationCalls, 2);
+      assert.equal(state.remoteInvalidationCalls, 1);
       assert.deepStrictEqual((yield* Fiber.join(events)).slice(1), [
         { _tag: "remoteUpdated", remote: null },
         { _tag: "localUpdated", local: state.currentLocalStatus },
       ]);
       assert.isNull((yield* broadcaster.getStatus({ cwd: "/repo" })).pr);
+      assert.equal(state.remoteStatusCalls, 2);
+      state.currentLocalStatus = { ...state.currentLocalStatus, hasWorkingTreeChanges: true };
+      yield* broadcaster.refreshLocalStatus("/repo");
       const snapshot = yield* broadcaster
         .streamStatus({ cwd: "/repo", includeRemote: false })
         .pipe(Stream.take(1), Stream.runCollect);
       assert.deepStrictEqual(snapshot[0], {
         _tag: "snapshot",
         local: state.currentLocalStatus,
-        remote: null,
+        remote: baseRemoteStatus,
       });
     }).pipe(Effect.provide(layerTestFor(state)));
   });
@@ -314,13 +182,14 @@ describe("VcsStatusBroadcaster", () => {
       yield* Deferred.succeed(releaseRemoteRead, undefined);
       yield* Fiber.join(remoteRefresh);
       yield* Fiber.join(localRefresh);
+      state.currentRemoteStatus = baseRemoteStatus;
 
       const status = yield* broadcaster.getStatus({ cwd: "/repo" });
       assert.equal(status.refName, "main");
       assert.isNull(status.pr);
       assert.equal(status.aheadCount, 0);
       assert.equal(status.behindCount, 0);
-      assert.equal(state.remoteStatusCalls, 2);
+      assert.equal(state.remoteStatusCalls, 3);
     }).pipe(Effect.provide(layerTestFor(state)));
   });
 

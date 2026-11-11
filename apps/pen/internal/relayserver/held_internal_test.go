@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"runtime"
 	"testing"
 	"time"
 	"unsafe"
@@ -14,17 +13,10 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
-// heapInUse is the bytes live on the heap after a full collection.
-func heapInUse() int64 {
-	runtime.GC()
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return int64(m.HeapAlloc)
-}
-
-// A frame the relay read stays in memory for as long as its payload waits in a client's queue, and
-// with it the buffer it was read into. The server-wide count has to cover all of that, or a budget
-// that looks full at 192 MiB can hold several times as much.
+// A frame the relay read stays in memory for as long as its payload waits in a client's queue. A
+// payload sliced from its read buffer would keep that whole buffer alive, so a queued payload must
+// be its own copy no larger than its allocation, and the server-wide count must cover every queued
+// payload's capacity and the ring that holds them.
 func TestTheQueueCountCoversTheMemoryQueuedFramesHold(t *testing.T) {
 	s := New(DefaultLimits())
 	ws := &stalledWS{release: make(chan struct{})}
@@ -33,7 +25,6 @@ func TestTheQueueCountCoversTheMemoryQueuedFramesHold(t *testing.T) {
 	up := testSock(s, rm, roleNode, 0, "192.0.2.1", ws)
 	c := testSock(s, rm, roleClient, 1, "192.0.2.2", ws)
 	frame := wire.Frame{Type: wire.FrameData, SID: 1, Payload: []byte{}}.Encode()
-	before := heapInUse()
 	for range 10_000 {
 		// What the uplink's reader hands the room for each message.
 		data, err := io.ReadAll(io.LimitReader(bytes.NewReader(frame), MessageMax+1))
@@ -44,14 +35,23 @@ func TestTheQueueCountCoversTheMemoryQueuedFramesHold(t *testing.T) {
 		rm.onUplinkFrame(up, data)
 		rm.mu.Unlock()
 	}
-	held := heapInUse() - before
 	if c.closed {
 		t.Fatal("the session ended; the test needs it to keep queueing")
 	}
-	if q := s.Queued(); q < held {
+	q := c.out
+	q.mu.Lock()
+	held := len(q.ring)*int(unsafe.Sizeof(outItem{})) + q.writing
+	for _, it := range q.ring {
+		if cap(it.data) > allocSize(len(it.data)) && len(it.data) > 0 || len(it.data) == 0 && cap(it.data) > 0 {
+			q.mu.Unlock()
+			t.Fatalf("a queued %d-byte payload keeps %d bytes alive", len(it.data), cap(it.data))
+		}
+		held += cap(it.data)
+	}
+	q.mu.Unlock()
+	if q := s.Queued(); q < int64(held) {
 		t.Fatalf("the relay counts %d queued bytes while the queue holds %d", q, held)
 	}
-	runtime.KeepAlive(c)
 }
 
 // countingWS lets n writes through, reporting each one, then blocks.
@@ -66,18 +66,20 @@ func (w *countingWS) Write(ctx context.Context, typ websocket.MessageType, p []b
 		return nil
 	case <-w.release:
 		return nil
+	case <-w.closed():
+		return errors.New("closed")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
 // Once the writer has sent an item, nothing in the queue may keep its payload alive: the count
-// dropped when it left, so memory that stays behind would be uncounted.
+// dropped when it left, so memory that stays behind would be uncounted. Every ring slot must be
+// empty once the queue is.
 func TestADrainedQueueKeepsNoSentPayloadAlive(t *testing.T) {
 	ws := &countingWS{stalledWS: stalledWS{release: make(chan struct{})}, wrote: make(chan struct{})}
 	defer close(ws.release)
 	q := newOutq(ws, time.Hour, testBudget(New(DefaultLimits()), "192.0.2.1"))
-	before := heapInUse()
 	const items = 64
 	for range items {
 		q.binary(make([]byte, 32<<10))
@@ -89,17 +91,20 @@ func TestADrainedQueueKeepsNoSentPayloadAlive(t *testing.T) {
 	// queued item has been written every earlier one has left the queue.
 	q.binary([]byte{1})
 	<-ws.wrote
-	if held := heapInUse() - before; held > 64<<10 {
-		t.Fatalf("an emptied queue still holds %d bytes of sent payloads", held)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, it := range q.ring {
+		if it.data != nil {
+			t.Fatalf("ring slot %d of an emptied queue still holds a %d-byte payload", i, cap(it.data))
+		}
 	}
-	runtime.KeepAlive(q)
 }
 
-// A message the relay is still reading holds memory as well: it counts toward the budget while it
-// grows, and a message that would pass the budget stops being read.
+// A message the relay is still reading holds memory as well: past the socket's read allowance it
+// counts toward the large-read pool while it grows, and one that would pass it stops being read.
 func TestAPartlyReadMessageCountsTowardTheBudgetUntilItWouldPassIt(t *testing.T) {
 	s := New(DefaultLimits())
-	s.MaxQueued = 1 << 20
+	s.MaxReading = 8 << 20 // one source may hold 1 MiB of it
 	b := testBudget(s, "192.0.2.1")
 	pr, pw := io.Pipe()
 	defer pr.Close()
@@ -116,16 +121,16 @@ func TestAPartlyReadMessageCountsTowardTheBudgetUntilItWouldPassIt(t *testing.T)
 	if _, err := pw.Write(make([]byte, 300<<10)); err != nil {
 		t.Fatal(err)
 	}
-	if q := s.Queued(); q < 300<<10 {
-		t.Fatalf("%d bytes counted while 300 KiB of a message sat in the read buffer", q)
+	if r := s.Reading(); r < 300<<10-readAllowance {
+		t.Fatalf("%d bytes counted while 300 KiB of a message sat in the read buffer", r)
 	}
 	go pw.Write(make([]byte, 1<<20))
 	r := <-done
 	if !errors.Is(r.err, errOverBudget) {
 		t.Fatalf("reading past the budget: %d bytes, %v; want errOverBudget", len(r.data), r.err)
 	}
-	if q := s.Queued(); q != 0 {
-		t.Fatalf("%d bytes still counted after the read stopped", q)
+	if r := s.Reading(); r != 0 {
+		t.Fatalf("%d bytes still counted after the read stopped", r)
 	}
 }
 

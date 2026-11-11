@@ -16,7 +16,7 @@ import { THREAD_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { hasThreadLinks, parseThreadLinkHref } from "@goat/shared/threadLinks";
 
 const THREAD_LINK_HREF_IN_MARKDOWN = new RegExp(
-  String.raw`\]\(((?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s)]+)\)`,
+  String.raw`\]\(<?((?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s>)]+)>?\)`,
   "g",
 );
 

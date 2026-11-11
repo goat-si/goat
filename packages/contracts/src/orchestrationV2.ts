@@ -88,6 +88,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChannelMessageMeta } from "./channelCommon.ts";
+import { GoatBotWorkKind } from "./channelChildWork.ts";
 import { ChannelTimelineRecord } from "./channelLedger.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import { OrchestrationV2CloudTask } from "./cloudTask.ts";
@@ -176,6 +177,8 @@ export const OrchestrationV2ThreadLauncher = Schema.Struct({
   via: Schema.optional(
     Schema.Literals(["thread_launch", "create_threads", "ssh_thread_launch", "delegate_task"]),
   ),
+  /** Set when GOAT Bot's own work launched the thread; absent on everything else. */
+  workKind: Schema.optional(GoatBotWorkKind),
   /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
   runId: Schema.optional(RunId),
 });
@@ -718,6 +721,18 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 
 export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_preparation_failed";
 
+/** Another Codex turn on the thread that a starting run must wait for. */
+export const OrchestrationV2RunStartHold = Schema.Struct({
+  /**
+   * `restart_survivor`: a turn that kept running across a GOAT server restart.
+   * `unowned_turn`: a turn Codex started that no run owns, such as a goal continuation.
+   */
+  reason: Schema.Literals(["restart_survivor", "unowned_turn"]),
+  /** Codex's id for the turn, when GOAT knows it. */
+  nativeTurnId: Schema.optional(Schema.String),
+});
+export type OrchestrationV2RunStartHold = typeof OrchestrationV2RunStartHold.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
   currentMemoryAccess: Schema.optionalKey(MemoryCurrentAccess),
@@ -735,6 +750,8 @@ export const OrchestrationV2Run = Schema.Struct({
   terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   queueHeld: Schema.optional(Schema.Boolean),
+  /** Why a `starting` run has not started; meaningful only while the run is `starting`. */
+  startHold: Schema.optional(OrchestrationV2RunStartHold),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -3592,6 +3609,14 @@ const OrchestrationV2InternalCommand = Schema.Union([
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
   }),
+  /** Records, or with null clears, what a starting run waits for. */
+  Schema.Struct({
+    type: Schema.Literal("run.start-hold.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    startHold: Schema.NullOr(OrchestrationV2RunStartHold),
+  }),
   Schema.Struct({
     type: Schema.Literal("thread.background-work.settle"),
     commandId: CommandId,
@@ -3673,6 +3698,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getNativeChildWork: "orchestration.getNativeChildWork",
   stopWorkflow: "orchestration.stopWorkflow",
   forceStopThread: "orchestration.forceStopThread",
+  stopHeldTurn: "orchestration.stopHeldTurn",
   getTurnItem: "orchestration.getTurnItem",
   launchThread: "orchestration.launchThread",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
@@ -4121,6 +4147,38 @@ export class OrchestrationV2ForceStopThreadError extends Schema.TaggedError<Orch
   }
 }
 
+/** Stops the Codex turn no run owns that holds the thread's next start; it must be the one shown. */
+export const OrchestrationV2StopHeldTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  nativeTurnId: TrimmedNonEmptyString,
+});
+export type OrchestrationV2StopHeldTurnInput = typeof OrchestrationV2StopHeldTurnInput.Type;
+
+export const OrchestrationV2StopHeldTurnResult = Schema.Struct({
+  /**
+   * `stopped`: the turn ended; the message starts unless another Codex turn still holds the
+   * thread, which the thread then names. `stopping`: Codex took the stop but
+   * has not reported the end yet; the message starts when it does. `none`: that turn no longer
+   * holds the thread as a turn no run owns, so nothing was stopped.
+   */
+  outcome: Schema.Literals(["stopped", "stopping", "none"]),
+});
+export type OrchestrationV2StopHeldTurnResult = typeof OrchestrationV2StopHeldTurnResult.Type;
+
+export class OrchestrationV2StopHeldTurnError extends Schema.TaggedError<OrchestrationV2StopHeldTurnError>()(
+  "OrchestrationV2StopHeldTurnError",
+  {
+    threadId: ThreadId,
+    /** Why, in words a person can act on. */
+    detail: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.detail ?? "Could not stop the Codex turn this message waits for.";
+  }
+}
+
 export const OrchestrationV2GetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   scriptPath: TrimmedNonEmptyString,
@@ -4357,6 +4415,10 @@ export const OrchestrationV2RpcSchemas = {
   forceStopThread: {
     input: OrchestrationV2ForceStopThreadInput,
     output: OrchestrationV2ForceStopThreadResult,
+  },
+  stopHeldTurn: {
+    input: OrchestrationV2StopHeldTurnInput,
+    output: OrchestrationV2StopHeldTurnResult,
   },
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,

@@ -15,6 +15,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -97,13 +98,13 @@ const layerScannerTest = (input: ScannerTestInput) =>
       ),
     ),
   );
-
-const runScan = (input: ScannerTestInput) =>
+const runScan = (input: ScannerTestInput & { readonly windowDays?: number }) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-    return yield* scanner.scan({ includePi: true });
+    const nowMs = yield* Clock.currentTimeMillis;
+    yield* TestClock.setTime(nowMs === 0 ? Date.parse("2026-12-31T12:00:00.000Z") : nowMs);
+    return yield* scanner.scan({ includePi: true, windowDays: input.windowDays ?? 3650 });
   }).pipe(Effect.provide(layerScannerTest(input)));
-
 const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
@@ -112,7 +113,6 @@ const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceR
       Effect.map((outcomes) => Array.from(outcomes)),
     );
   }).pipe(Effect.provide(layerScannerTest(input)));
-
 const runRecentThreads = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
   runRecentThreadOutcomes(input).pipe(
     Effect.map((outcomes) =>

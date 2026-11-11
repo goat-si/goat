@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
-	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
@@ -29,6 +28,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&relayURLs, "relay", "relay URL (https://...); repeat for several relays")
 	name := fs.String("name", "", "this node's name")
 	foreground := fs.Bool("foreground", false, "run the daemon in this process")
+	service := fs.Bool("service", false, "internal: for the systemd and launchd service; a start it refuses exits 0, so the caller cannot tell it failed")
 	noService := fs.Bool("no-service", false, "never install a service (systemd, launchd or a Windows logon task)")
 	spawnDaemon := fs.Bool("spawn-daemon", false, "internal: start the daemon detached, print its pid and exit")
 	supervise := fs.Bool("supervise", false, "internal: the Windows logon task's action; runs the daemon and restarts it after a crash")
@@ -42,11 +42,20 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if *spawnDaemon {
 		return spawnDetached(st, stdout, stderr)
 	}
+	// refused ends a start pen up cannot make: the service exits 0, since its manager restarts
+	// only a failure and nothing changes between restarts; everyone else sees the failure.
+	asService := *service || startedByService()
+	refused := func(err error) int {
+		if *foreground && asService {
+			fmt.Fprintln(stderr, "pen:", err)
+			return 0
+		}
+		return fail(stderr, err)
+	}
 	if *foreground || *supervise {
 		// A service manager restarting the daemon after pen leave must not mint a new node.
 		if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
-			fmt.Fprintln(stderr, "pen: this node left its mesh; run pen up or pen join to start again")
-			return 0
+			return refused(errors.New("this node left its mesh; run pen up or pen join to start again"))
 		}
 	} else if err := clearLeft(st); err != nil {
 		return fail(stderr, err)
@@ -58,46 +67,15 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	cfg, err := st.LoadConfig()
+	cfg, err := startConfig(st, relayURLs, *name)
+	if errors.Is(err, errNoRelay) {
+		return refused(errors.New("no relay configured; run pen up --relay https://<relay>"))
+	}
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if len(relayURLs) > 0 {
-		var list []string
-		for _, u := range relayURLs {
-			list = append(list, strings.TrimRight(u, "/"))
-		}
-		if err := daemon.ValidRelays(list); err != nil {
-			return fail(stderr, err)
-		}
-		cfg.SetRelays(list)
-	}
-	if len(cfg.RelayList()) == 0 {
-		if *foreground {
-			fmt.Fprintln(stderr, "pen: no relay configured; run pen up --relay https://<relay>")
-			return 0
-		}
-		return fail(stderr, errors.New("no relay configured; pass --relay https://<relay>"))
-	}
-	if *name != "" {
-		cfg.Name = *name
-	}
-	if cfg.Name == "" {
-		cfg.Name = defaultName()
-	}
-	if !ident.ValidName(cfg.Name) {
-		return fail(stderr, fmt.Errorf("invalid name %q (1-32 of a-z 0-9 - _ ., starting with a letter or digit)", cfg.Name))
-	}
-	if err := st.SaveConfig(cfg); err != nil {
-		return fail(stderr, err)
-	}
 	if err := daemon.CheckConfig(cfg); err != nil {
-		if *foreground {
-			// The service restarts a failed start, and nothing changes between restarts.
-			fmt.Fprintln(stderr, "pen:", err)
-			return 0
-		}
-		return fail(stderr, err)
+		return refused(err)
 	}
 	if _, err := mesh.Load(st); errors.Is(err, os.ErrNotExist) {
 		if _, err := mesh.Found(st, id, cfg.Name, time.Now().UnixMilli()); err != nil {
@@ -138,6 +116,13 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	}
 	printStatus(stdout, s)
 	return 0
+}
+
+// startedByService reports whether systemd (248 and later set SYSTEMD_EXEC_PID to the pid they
+// started) or launchd (XPC_SERVICE_NAME is the job's label) started this process: units written
+// before --service run plain --foreground and must not restart a refused start either.
+func startedByService() bool {
+	return os.Getenv("SYSTEMD_EXEC_PID") == strconv.Itoa(os.Getpid()) || os.Getenv("XPC_SERVICE_NAME") == launchdLabel
 }
 
 // clearLeft removes the leave marker: pen up and pen join, run by a person, start the node again.

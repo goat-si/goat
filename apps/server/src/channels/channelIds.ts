@@ -21,6 +21,7 @@ import {
   type ChannelTaskId,
   CommandId,
   GOAT_BOT_SESSION_THREAD_PREFIX,
+  MAIN_BOT_ID,
   MessageId,
   type RunId,
   ThreadId,
@@ -57,6 +58,10 @@ export const conversationIdFor = (input: {
     input.connectionId,
     input.conversationKey,
   ]) as ChannelConversationId;
+
+/** The GOAT app's conversation with one bot: main keeps the original key, members get their own. */
+export const goatConversationKeyFor = (botId: string) =>
+  botId === MAIN_BOT_ID ? "goat-bot" : "goat-bot:" + botId;
 
 export const bindingIdFor = (conversationId: ChannelConversationId, replyAddressKey: string) =>
   stableId("channel-binding", [conversationId, replyAddressKey]) as ChannelBindingId;

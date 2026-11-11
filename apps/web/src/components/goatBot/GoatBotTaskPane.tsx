@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   canSendToGoatBot,
+  goatBotOpenQuestionPlaceholder,
   isRetryableTaskStatus,
   presentTaskStatus,
   taskAttemptLabel,
@@ -51,7 +52,7 @@ export function GoatBotTaskPane({
   );
   const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const { rows, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
+  const { rows, remoteWork, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
   const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
@@ -65,6 +66,7 @@ export function GoatBotTaskPane({
   }, [canUpdate, environmentId, taskId, readThrough, update, refresh]);
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
+  const timelineRows = session.rowsForTask(taskId);
   return (
     <section
       aria-label="Task thread"
@@ -161,11 +163,16 @@ export function GoatBotTaskPane({
         )}
       </header>
       <div className="px-3">
-        <GoatBotWorkDetails environmentId={environmentId} taskId={taskId} rows={rows} />
+        <GoatBotWorkDetails
+          environmentId={environmentId}
+          taskId={taskId}
+          rows={rows}
+          remoteWork={remoteWork}
+        />
       </div>
       <GoatBotTimeline
         taskDetails
-        rows={session.rowsForTask(taskId)}
+        rows={timelineRows}
         environmentId={environmentId}
         onRetry={session.onRetryInput}
         onDiscard={session.onDiscardInput}
@@ -176,7 +183,7 @@ export function GoatBotTaskPane({
         botName={botName}
         placeholder={
           canSend
-            ? `Message ${botName}`
+            ? (goatBotOpenQuestionPlaceholder(timelineRows) ?? `Message ${botName}`)
             : memberDeleted
               ? `${member.name} was deleted`
               : `${botName} isn't available`

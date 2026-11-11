@@ -12,14 +12,15 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import type * as SessionStore from "../auth/SessionStore.ts";
-import { SAFE_ALIAS } from "../hub/HubOcx.ts";
+import { type HubOcxError, SAFE_ALIAS } from "../hub/HubOcx.ts";
 import type { HubPerson } from "../hub/HubMembership.ts";
-import type { SshAliasRevision } from "../sshRemote/SshAliasEvents.ts";
 import { authorizeSshHost, type SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
 
 /**
@@ -45,6 +46,10 @@ export type SshChildConsent =
   /** `dropped`: the grant is void and gone; otherwise it could not be checked and stays. */
   | { readonly state: "revoked"; readonly dropped: boolean; readonly message: string };
 
+/** Why an alias's SSH settings could not be read: a Pen read names its own reason. */
+const unreadMessage = (alias: string, error: PlatformError.PlatformError | HubOcxError) =>
+  error._tag === "HubOcxError" ? error.message : `GOAT could not read ${alias}'s SSH settings.`;
+
 const storageFailure = () =>
   new OrchestratorMcpFailure({
     code: "orchestration_error",
@@ -55,7 +60,10 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
   readonly directory: string;
   readonly file: string;
   readonly sessions: SessionStore.SessionStore["Service"];
-  readonly revision: SshAliasRevision;
+  /** A failure leaves a grant in place; only a different answer voids it. */
+  readonly revision: (
+    alias: string,
+  ) => Effect.Effect<string | undefined, PlatformError.PlatformError | HubOcxError>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const stored = yield* fs.readFileString(options.file).pipe(
@@ -63,6 +71,8 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
     Effect.orElseSucceed((): Readonly<Record<string, SshChildGrant>> => ({})),
   );
   const grants = yield* Ref.make<Readonly<Record<string, SshChildGrant>>>(stored);
+  // Memory dropped a grant the file still holds; the next write or flush catches the file up.
+  const unsaved = yield* Ref.make(false);
   const writing = yield* Semaphore.make(1);
   const persist = Effect.fn("SshChildConsent.persist")(function* (
     next: Readonly<Record<string, SshChildGrant>>,
@@ -84,9 +94,19 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
         if (grantId !== undefined && current[alias]?.grantId !== grantId) return;
         const { [alias]: _gone, ...rest } = current;
         yield* Ref.set(grants, rest);
+        yield* Ref.set(unsaved, true);
         yield* persist(rest);
+        yield* Ref.set(unsaved, false);
       }),
     );
+  /** Saves a removal whose write failed, so a restart cannot bring the grant back. */
+  const flush = writing.withPermits(1)(
+    Effect.gen(function* () {
+      if (!(yield* Ref.get(unsaved))) return;
+      yield* persist(yield* Ref.get(grants));
+      yield* Ref.set(unsaved, false);
+    }),
+  );
   /** Expiry counts: listActive still lists a connected session past it, this does not. */
   const scopesOf = (sessionId: AuthSessionId) =>
     options.sessions
@@ -116,7 +136,15 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
         message: "Only an SSH host GOAT set up has this setting; cloud machines follow the hub's.",
       });
     if (!enabled) return yield* drop(alias);
-    const revision = yield* options.revision(alias).pipe(Effect.mapError(storageFailure));
+    const revision = yield* options.revision(alias).pipe(
+      Effect.mapError(
+        (error) =>
+          new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            message: unreadMessage(alias, error),
+          }),
+      ),
+    );
     if (revision === undefined)
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
@@ -132,6 +160,7 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
       Effect.gen(function* () {
         const next = { ...(yield* Ref.get(grants)), [alias]: grant };
         yield* persist(next);
+        yield* Ref.set(unsaved, false);
         yield* Ref.set(grants, next);
       }),
     );
@@ -145,10 +174,10 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
       dropped: false,
       message,
     });
-    const revision = yield* options.revision(alias).pipe(Effect.option);
-    if (Option.isNone(revision))
-      return unchecked(`GOAT could not read ${alias}'s SSH settings; it tries again next time.`);
-    if (revision.value !== grant.revision) {
+    const revision = yield* options.revision(alias).pipe(Effect.result);
+    if (Result.isFailure(revision))
+      return unchecked(`${unreadMessage(alias, revision.failure)} GOAT tries again next time.`);
+    if (revision.success !== grant.revision) {
       // Forgotten, added again or re-pinned: consent given for the old alias does not carry over.
       yield* drop(alias, grant.grantId).pipe(Effect.ignore({ log: true }));
       return { state: "none" } satisfies SshChildConsent;
@@ -186,6 +215,9 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
     confirm,
     /** Durable before it returns; a failure means the grant may still be on disk. */
     forget: (alias: string) => drop(alias),
+    /** Drops this grant only, never one given after the caller read it, and saves the removal. */
+    retire: (alias: string, grantId: string) => drop(alias, grantId),
+    flush,
     held: (alias: string) => Ref.get(grants).pipe(Effect.map((current) => current[alias])),
   };
 });

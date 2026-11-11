@@ -26,8 +26,8 @@ type Server struct {
 	// them before the relay serves (the relaytest command's flags); tests use HoldForwarding and
 	// HoldPongs instead.
 	ForwardDelay, PongDelay time.Duration
-	// nodeDelay holds the next binary message any uplink sends this long (DelayNextNodeMessage).
-	nodeDelay atomic.Int64
+	// nodeHold is the gate the next binary message an uplink sends waits for (HoldNextUplinkMessage).
+	nodeHold atomic.Pointer[chan struct{}]
 
 	forward, pongs gate
 
@@ -36,6 +36,7 @@ type Server struct {
 	acks        map[string]chan uint64
 	uplinks     map[string]chan struct{}
 	uplinkPings map[string]chan struct{}
+	clientMsgs  map[string]chan struct{}
 }
 
 // gate blocks callers of wait while it is held.
@@ -79,10 +80,25 @@ func (s *Server) HoldForwarding() (release func()) { return s.forward.hold() }
 // client messages are still forwarded.
 func (s *Server) HoldPongs() (release func()) { return s.pongs.hold() }
 
-// DelayNextNodeMessage makes the relay take d longer to handle the next binary message an uplink
-// sends (an authentication answer, typically), as a busy relay would. A gate cannot stand in: the
-// code under test may rightly wait for that message's effect before doing anything else.
-func (s *Server) DelayNextNodeMessage(d time.Duration) { s.nodeDelay.Store(int64(d)) }
+// HoldNextUplinkMessage keeps the relay from handling the next binary message any uplink sends (an
+// authentication answer, typically) until release runs, as a busy relay would; that uplink's
+// later messages wait behind it.
+func (s *Server) HoldNextUplinkMessage() (release func()) {
+	ch := make(chan struct{})
+	s.nodeHold.Store(&ch)
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
+}
+
+// NextClientMessage waits until a client of nodeID sends a message the relay takes.
+func (s *Server) NextClientMessage(ctx context.Context, nodeID string) error {
+	select {
+	case <-s.chanOf(s.clientMsgs, nodeID):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // New starts a relay with the contract limits on 127.0.0.1.
 func New() *Server {
@@ -98,7 +114,7 @@ func NewUnstarted() *Server { return NewWithLimits(relayserver.DefaultLimits()) 
 // NewWithLimits builds an unstarted relay with custom timeouts.
 func NewWithLimits(l relayserver.Limits) *Server {
 	s := &Server{Relay: relayserver.New(l), online: map[string]chan struct{}{}, acks: map[string]chan uint64{},
-		uplinks: map[string]chan struct{}{}, uplinkPings: map[string]chan struct{}{}}
+		uplinks: map[string]chan struct{}{}, uplinkPings: map[string]chan struct{}{}, clientMsgs: map[string]chan struct{}{}}
 	s.Relay.Hooks = relayserver.Hooks{
 		OnUplink: func(nodeID string) {
 			s.mu.Lock()
@@ -120,10 +136,16 @@ func NewWithLimits(l relayserver.Limits) *Server {
 		},
 		OnBadAck: func() { s.BadAcks.Add(1) },
 		OnMessage: func(nodeID, role string, text bool) {
+			if role == "client" {
+				select {
+				case s.chanOf(s.clientMsgs, nodeID) <- struct{}{}:
+				default:
+				}
+			}
 			switch {
 			case role == "node" && !text:
-				if d := s.nodeDelay.Swap(0); d > 0 {
-					time.Sleep(time.Duration(d))
+				if g := s.nodeHold.Swap(nil); g != nil {
+					<-*g
 				}
 			case role == "node" && text:
 				select {

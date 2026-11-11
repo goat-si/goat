@@ -25,14 +25,16 @@ import (
 
 // Contract limits.
 const (
-	MessageMax    = 1 << 20
-	SocketWindow  = 4 << 20
-	LightSession  = 16 << 10
-	RelayHeadroom = 64 << 10
-	PendingMax    = 8
-	ActiveMax     = 32
-	challengeLen  = 32
-	answerLen     = 96
+	MessageMax   = 1 << 20
+	SocketWindow = 4 << 20
+	LightSession = 16 << 10
+	// FirstMessageMax is the largest first message a client sends on a session (contract "Sessions").
+	FirstMessageMax = 4096
+	RelayHeadroom   = 64 << 10
+	PendingMax      = 8
+	ActiveMax       = 32
+	challengeLen    = 32
+	answerLen       = 96
 	// queueSlack is what a socket's outbound queue may hold past the contract windows (pongs).
 	queueSlack = 64 << 10
 	// maxQueuedPongs caps pongs waiting behind a slow write; more pings get no pong until it drains.
@@ -76,6 +78,13 @@ type Hooks struct {
 	// relay handles it; blocking here holds that socket's later messages too (tests hold forwarding
 	// or pongs).
 	OnMessage func(nodeID, role string, text bool)
+	// OnEnd is called when the relay ends a socket with a close code (role "node" or "client"),
+	// and OnWriteFailed when a socket's write failed or timed out (tests count exit paths).
+	OnEnd         func(role string, code uint16)
+	OnWriteFailed func(role string)
+	// FailWrite, when set, is asked before each data write to a socket (role, and for a client its
+	// node id and session id) and fails that write as a timed-out one when it returns an error.
+	FailWrite func(nodeID, role string, sid uint32) error
 }
 
 // Server is a relay. It is an http.Handler.
@@ -97,12 +106,14 @@ type Server struct {
 	// DefaultMaxQueuedPerSource, never more than MaxQueued).
 	MaxQueued          int
 	MaxQueuedPerSource int
+	// MaxReading caps what messages being read hold past each socket's read allowance (0 means
+	// DefaultMaxReading); one source holds at most an eighth of it.
+	MaxReading int
 
-	queued atomic.Int64
+	queued, reading atomic.Int64
 
 	mu     sync.Mutex
 	rooms  map[string]*room
-	sids   map[string]uint32
 	socks  map[*sock]struct{}
 	total  int
 	perIP  map[string]int
@@ -117,6 +128,7 @@ const (
 	DefaultMaxUnauthPerNode   = 4
 	DefaultMaxQueued          = 192 << 20
 	DefaultMaxQueuedPerSource = 16 << 20
+	DefaultMaxReading         = 32 << 20
 )
 
 func orDefault(v, d int) int {
@@ -140,7 +152,7 @@ func New(l Limits) *Server {
 			*f.v = f.d
 		}
 	}
-	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{},
+	return &Server{Limits: l, rooms: map[string]*room{}, socks: map[*sock]struct{}{},
 		perIP: map[string]int{}, shares: map[string]*source{}, unauth: map[string][]*sock{}}
 }
 
@@ -174,6 +186,11 @@ func (s *Server) maxQueued() int64 { return int64(orDefault(s.MaxQueued, Default
 func (s *Server) maxPerSource() int64 {
 	return min(int64(orDefault(s.MaxQueuedPerSource, DefaultMaxQueuedPerSource)), s.maxQueued())
 }
+
+func (s *Server) maxReading() int64 { return int64(orDefault(s.MaxReading, DefaultMaxReading)) }
+
+// Reading is what messages being read hold past their sockets' read allowance now.
+func (s *Server) Reading() int64 { return s.reading.Load() }
 
 // shareLocked is ip's part of the budget, held once more.
 func (s *Server) shareLocked(ip string) *source {
@@ -246,6 +263,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
 	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget)
+	if f := s.Hooks.OnWriteFailed; f != nil {
+		k.out.onWriteFail = func() { f(k.roleName()) }
+	}
+	if f := s.Hooks.FailWrite; f != nil {
+		k.out.failWrite = func() error { return f(nodeID, k.roleName(), k.sid) }
+	}
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -263,8 +286,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.room = rm
 	evicted := k.evicted
 	s.mu.Unlock()
-	defer s.release(k)
 	if f := s.Hooks.OnSocketDone; f != nil {
+		// Deferred first so it runs last, once release has given back the socket's room and share.
 		defer func() {
 			role := "client"
 			if k.role == roleNode {
@@ -273,6 +296,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f(nodeID, role)
 		}()
 	}
+	defer s.release(k)
 	if role == "node" {
 		rm.acceptUplink(k, origin)
 		if evicted {
@@ -390,12 +414,17 @@ func (s *Server) hostMatches(host string) bool {
 	return err == nil && o == s.PublicOrigin
 }
 
-// nextSid hands out session ids per node; they are never reused while this process runs.
-func (s *Server) nextSid(nodeID string) uint32 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sids[nodeID]++
-	return s.sids[nodeID]
+func (k *sock) roleName() string {
+	if k.role == roleNode {
+		return "node"
+	}
+	return "client"
+}
+
+func (s *Server) ended(k *sock, code uint16) {
+	if f := s.Hooks.OnEnd; f != nil {
+		f(k.roleName(), code)
+	}
 }
 
 // Close aborts every socket.
@@ -470,8 +499,14 @@ type sock struct {
 	origin    string
 	challenge []byte
 	// client
-	sid       uint32
-	pending   bool
+	sid     uint32
+	pending bool
+	// pendingSent counts the messages the client sent before the node answered.
+	pendingSent int
+	// held is the uplink whose queue holds this client's CLOSE reservation (nil once it is sent);
+	// closeWire, on an uplink, is the wire bytes of the CLOSE frames reserved there.
+	held      *sock
+	closeWire uint64
 	upEnd     uint64
 	upUnacked uint64
 }
@@ -485,6 +520,22 @@ type room struct {
 	mu      sync.Mutex
 	uplink  *sock
 	clients map[uint32]*sock
+	// sid is the last session id this room handed out. The room outlives its uplink only while
+	// clients remain, so a node never sees ids from before its uplink connection's room.
+	sid uint32
+}
+
+// nextSid hands out the next session id that is not 0 and not live in this room; past
+// 0xffffffff it wraps to 1. Called with rm.mu held.
+func (rm *room) nextSid() uint32 {
+	for {
+		if rm.sid++; rm.sid == 0 {
+			continue
+		}
+		if _, live := rm.clients[rm.sid]; !live {
+			return rm.sid
+		}
+	}
 }
 
 func (rm *room) armIdle(k *sock) {
@@ -521,28 +572,25 @@ func (rm *room) acceptClient(k *sock) bool {
 	defer rm.mu.Unlock()
 	if rm.uplink == nil {
 		k.closed = true
+		rm.srv.ended(k, wire.CodeOffline)
 		k.out.close(wire.CodeOffline)
 		return false
 	}
-	k.sid = rm.srv.nextSid(rm.nodeID)
+	// Admission pays: the session's OPEN and its CLOSE are reserved on the uplink's queue now, so
+	// a CLOSE always fits and control frames never end an uplink. A node that cannot take more
+	// refuses the new client 4429 and queues nothing.
+	up := rm.uplink
+	if up.sent-up.acked+up.closeWire+sessionFrameWire > SocketWindow+RelayHeadroom || !up.out.reserve(2*sessionFrameCost) {
+		k.closed = true
+		rm.srv.ended(k, wire.CodeCaps)
+		k.out.close(wire.CodeCaps)
+		return false
+	}
+	k.held = up
+	up.closeWire += closeFrameWire
+	k.sid = rm.nextSid()
 	k.pending = true
-	var pending []*sock
-	for _, c := range rm.clients {
-		if c.pending {
-			pending = append(pending, c)
-		}
-	}
-	for len(pending) >= PendingMax {
-		oldest := pending[0]
-		at := 0
-		for i, c := range pending {
-			if c.sid < oldest.sid {
-				oldest, at = c, i
-			}
-		}
-		rm.endSession(oldest, wire.CodeCaps)
-		pending = append(pending[:at], pending[at+1:]...)
-	}
+	rm.makePendingRoom(k.ip)
 	rm.clients[k.sid] = k
 	k.deadline = time.AfterFunc(rm.srv.Limits.PendingTimeout, func() {
 		rm.mu.Lock()
@@ -552,10 +600,49 @@ func (rm *room) acceptClient(k *sock) bool {
 		}
 	})
 	rm.armIdle(k)
-	if rm.uplink != nil {
-		rm.sendRelayFrame(wire.Frame{Type: wire.FrameOpen, SID: k.sid})
-	}
+	open := wire.Frame{Type: wire.FrameOpen, SID: k.sid}.Encode()
+	up.out.pushReserved(open, sessionFrameCost)
+	up.sent += uint64(len(open))
 	return true
+}
+
+// Wire bytes of a session's OPEN and CLOSE frames toward the uplink.
+const (
+	closeFrameWire   = wire.HeaderLen + 2
+	sessionFrameWire = wire.HeaderLen + closeFrameWire
+)
+
+// makePendingRoom makes room for a pending session from ip: past PendingMax per node, the oldest
+// pending session of the address holding the most ends 4429 (ip's own on a tie), so one address
+// opening many sessions cannot displace another's, while one machine may still open several at
+// once (an SSH client or several forwarded connections).
+func (rm *room) makePendingRoom(ip string) {
+	for {
+		bySource := map[string][]*sock{}
+		total := 0
+		for _, c := range rm.clients {
+			if c.pending {
+				bySource[c.ip] = append(bySource[c.ip], c)
+				total++
+			}
+		}
+		if total < PendingMax {
+			return
+		}
+		victims := bySource[ip]
+		for _, list := range bySource {
+			if len(list) > len(victims) {
+				victims = list
+			}
+		}
+		oldest := victims[0]
+		for _, c := range victims {
+			if c.sid < oldest.sid {
+				oldest = c
+			}
+		}
+		rm.endSession(oldest, wire.CodeCaps)
+	}
 }
 
 func (k *sock) readLoop() {
@@ -587,7 +674,7 @@ func (k *sock) readLoop() {
 			return
 		}
 		stop := k.handle(typ, data, preAuth)
-		k.budget.count(-cap(data))
+		k.budget.countRead(-readCharge(cap(data)))
 		if stop {
 			return
 		}
@@ -697,6 +784,12 @@ func (rm *room) onUplinkFrame(k *sock, b []byte) {
 	}
 	if c := rm.clients[f.SID]; c != nil {
 		rm.closeSock(c, sendable(f.CloseCode()))
+		// The node closed it, so no CLOSE goes back: give the reservation back.
+		if c.held == k {
+			c.held = nil
+			k.out.unreserve(sessionFrameCost)
+			k.closeWire -= closeFrameWire
+		}
 	}
 }
 
@@ -734,11 +827,11 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 		rm.closeSock(c, wire.CodeOffline)
 		return
 	}
-	frame := wire.Frame{Type: wire.FrameData, SID: c.sid, Payload: payload}.Encode()
+	frameLen := wire.HeaderLen + len(payload)
 	if up.acked >= c.upEnd {
 		c.upUnacked = 0
 	}
-	mine := c.upUnacked + uint64(len(frame))
+	mine := c.upUnacked + uint64(frameLen)
 	others := max(1, len(rm.clients)-1)
 	limit := uint64(SocketWindow)
 	if mine > LightSession {
@@ -746,38 +839,49 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	}
 	// The same fair share applies to what the uplink's queue holds, where each frame also costs
 	// itemOverhead: a flood of empty frames ends its own session before the queue overflows.
-	cost := len(frame) + itemOverhead
+	cost := allocSize(frameLen) + itemOverhead
 	qMine, qTotal := up.out.queued(c.sid)
 	qLimit := SocketWindow
 	if qMine+cost > LightSession {
 		qLimit = SocketWindow - LightSession*others
 	}
-	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit || !up.out.offer(frame, c.sid) {
+	// Until the node answers, a client may send one message of at most 4096 bytes, its first
+	// (contract "Sessions"): the eight pending sessions a node may have hold little of its share.
+	if c.pending {
+		if c.pendingSent++; c.pendingSent > 1 || len(payload) > FirstMessageMax {
+			rm.endSession(c, wire.CodeTimeout)
+			return
+		}
+	}
+	// Data toward an uplink never ends another queue: when it does not fit, only its session ends.
+	if up.sent-up.acked+uint64(frameLen) > limit || qTotal+cost > qLimit || !up.out.offerFrame(c.sid, payload) {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
-	up.sent += uint64(len(frame))
+	up.sent += uint64(frameLen)
 	c.upEnd = up.sent
 	c.upUnacked = mine
 }
 
-// sendRelayFrame sends OPEN or CLOSE, which may use RelayHeadroom past the window.
-func (rm *room) sendRelayFrame(f wire.Frame) {
-	up := rm.uplink
-	b := f.Encode()
-	if up.sent-up.acked+uint64(len(b)) > SocketWindow+RelayHeadroom {
-		rm.dropUplink(up, wire.CodeTimeout)
+// sendClose tells the node a client session ended, from the reservation made when it was
+// admitted, so it always fits.
+func (rm *room) sendClose(c *sock, code uint16) {
+	up := c.held
+	c.held = nil
+	if up == nil || up != rm.uplink {
 		return
 	}
-	up.out.binary(b)
-	up.sent += uint64(len(b))
+	f := wire.CloseFrame(c.sid, code).Encode()
+	up.out.pushReserved(f, sessionFrameCost)
+	up.sent += uint64(len(f))
+	up.closeWire -= closeFrameWire
 }
 
 // endSession closes a client with code and tells the node.
 func (rm *room) endSession(c *sock, code uint16) {
 	rm.closeSock(c, code)
 	if rm.uplink != nil {
-		rm.sendRelayFrame(wire.CloseFrame(c.sid, code))
+		rm.sendClose(c, code)
 	}
 }
 
@@ -815,6 +919,7 @@ func (rm *room) closeSock(k *sock, code uint16) {
 	if k.role == roleClient && rm.clients[k.sid] == k {
 		delete(rm.clients, k.sid)
 	}
+	rm.srv.ended(k, code)
 	k.out.close(code)
 }
 
@@ -833,7 +938,7 @@ func (rm *room) peerGone(k *sock, code uint16) {
 		code = 1000
 	}
 	if rm.uplink != nil {
-		rm.sendRelayFrame(wire.CloseFrame(k.sid, code))
+		rm.sendClose(k, code)
 	}
 }
 

@@ -7,6 +7,8 @@ import type {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { goatBotPreviewText } from "./previewText.ts";
+
 /**
  * GOAT Bot's messenger timeline. Only conversation survives: the user's
  * messages, the bot's replies and one card per piece of work. Tool calls,
@@ -158,6 +160,16 @@ export type GoatBotRow =
       readonly replyTo: string | null;
       /** Answers to pick, only while nothing has been sent since the question. */
       readonly options: ReadonlyArray<string>;
+      /** Every answer the question offered, kept after it is answered; absent without choices. */
+      readonly choices?: ReadonlyArray<string>;
+      /** What the person sent back to a question, picked from its answers or typed. */
+      readonly answer?: string;
+      /** Which of `choices` the answer is, when the person picked one. */
+      readonly answerIndex?: number;
+      /** The picked answer is still on its way; the question shows that in place of the pick's own message. */
+      readonly answerSending?: boolean;
+      /** When the picked answer was sent, for previews that read it as the newest message. */
+      readonly answeredAt?: string;
       /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
       readonly answerTaskId?: string;
       readonly memory?: MemoryReportReference;
@@ -196,6 +208,17 @@ export function goatBotConversationPreview(input: {
 }): GoatBotConversationPreview | null {
   const last = input.rows.findLast((row) => row.kind !== "day" && row.kind !== "event");
   if (!last) return null;
+  // A pick shown inside its question is still the person's message, newest when nothing came after.
+  const lastAt = last.kind === "task" ? last.card.updatedAt : last.createdAt;
+  const newestPick = input.rows.findLast(
+    (row) => row.kind === "bot" && row.answerIndex !== undefined && row.answeredAt !== undefined,
+  );
+  const picked =
+    newestPick?.kind === "bot" &&
+    newestPick.answeredAt !== undefined &&
+    Date.parse(newestPick.answeredAt) >= Date.parse(lastAt)
+      ? { answer: newestPick.answer ?? "", at: newestPick.answeredAt }
+      : null;
   const visitedAt = input.lastVisitedAt
     ? Date.parse(input.lastVisitedAt)
     : Number.NEGATIVE_INFINITY;
@@ -208,12 +231,14 @@ export function goatBotConversationPreview(input: {
     );
   return {
     text:
-      last.kind === "user"
-        ? `You: ${last.text.trim() || (last.attachments ?? []).map((file) => file.name).join(", ")}`
-        : last.kind === "bot"
-          ? last.text
-          : `${last.card.statusLabel}: ${last.card.title}`,
-    at: last.kind === "task" ? last.card.updatedAt : last.createdAt,
+      picked !== null
+        ? `You: ${goatBotPreviewText(picked.answer)}`
+        : last.kind === "user"
+          ? `You: ${goatBotPreviewText(last.text) || (last.attachments ?? []).map((file) => file.name).join(", ")}`
+          : last.kind === "bot"
+            ? goatBotPreviewText(last.text)
+            : `${last.card.statusLabel}: ${last.card.title}`,
+    at: picked?.at ?? lastAt,
     unread,
   };
 }
@@ -225,11 +250,14 @@ const GOAT_BOT_GROUP_GAP_MS = 5 * 60 * 1000;
  * by this point is not coming and the reading indicator stops.
  */
 export const GOAT_BOT_READING_LIMIT_MS = 90_000;
-const GOAT_BOT_STAMP_GAP_MS = 60 * 60 * 1000;
+/** A quiet stretch this long gets a centered time stamp, like a new day does. */
+const GOAT_BOT_STAMP_GAP_MS = 15 * 60 * 1000;
 const NO_OPTIONS: ReadonlyArray<string> = [];
 
 interface GoatBotQuestionState {
   readonly revision: number;
+  /** When the task last changed; a question it closed was open until then. */
+  readonly updatedAt?: string;
   readonly askInChat?: boolean;
   readonly openQuestionIds?: ReadonlyArray<string>;
 }
@@ -243,6 +271,7 @@ const questionStateFromChip = (
     key: chip.taskId,
     state: {
       revision: chip.taskVersion,
+      updatedAt: chip.updatedAt,
       ...(chip.askInChat === true ? { askInChat: true } : {}),
       ...(chip.openQuestionIds === undefined ? {} : { openQuestionIds: chip.openQuestionIds }),
     },
@@ -310,8 +339,14 @@ export function buildGoatBotTimeline(input: {
   readonly readers: GoatBotItemReaders;
   readonly taskId?: string | null;
   readonly knownTaskIds?: ReadonlyArray<string>;
+  /**
+   * The main chat shows conversation only: a work card stays in its task's own view when the
+   * bot's work list (`knownTaskIds`) can open it; cards of tasks outside that list still show.
+   */
+  readonly conversationOnly?: boolean;
 }): GoatBotRow[] {
   const knownTasks = new Set(input.knownTaskIds ?? []);
+  const listedTasks = new Set(input.knownTaskIds ?? []);
   // Each task's newest card, read before the messages so it also governs messages above it.
   const newestCards = new Map<string, GoatBotTaskCard>();
   const newestQuestionChips = new Map<string, GoatBotQuestionState>();
@@ -354,7 +389,13 @@ export function buildGoatBotTimeline(input: {
   const tasksWithOpenQuestion = new Set<string>();
   const shownQuestionOptions = new Map<string, Set<string>>();
   const answeredRequestKeys = new Set<string>();
+  // The task each question and each of the person's messages belongs to, so an answer finds its question.
+  const askedQuestions = new Map<string, string | null>();
+  const openOnCard = new Set<string>();
+  const sentTasks = new Map<string, string | null>();
   const committed: UngroupedRow[] = [];
+  // Requests the person made in this view, so a task's reply to one of them is part of it.
+  const mainInputs = new Set<string>();
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
   let previousInputKey: string | null = null;
@@ -380,6 +421,8 @@ export function buildGoatBotTimeline(input: {
         answeredRequestKeys.add(presentation.requestKey);
       }
       previousInputKey = presentation?.requestKey ?? null;
+      sentTasks.set(item.id, presentation?.taskId ?? null);
+      if (input.taskId == null && presentation?.requestKey) mainInputs.add(presentation.requestKey);
       committed.push({
         kind: "user",
         id: item.id,
@@ -402,10 +445,21 @@ export function buildGoatBotTimeline(input: {
         input.taskId === null &&
         presentation?.replyToKey != null &&
         answeredRequestKeys.has(presentation.replyToKey);
-      if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer) continue;
+      // Without work cards the chat still hears from its tasks: the reply to a request made here,
+      // what a task asks, and how the work ended.
+      const toldInChat =
+        input.conversationOnly === true &&
+        input.taskId == null &&
+        (presentation?.tone === "result" ||
+          presentation?.tone === "failure" ||
+          presentation?.tone === "question" ||
+          (presentation?.replyToKey != null && mainInputs.has(presentation.replyToKey)));
+      if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer && !toldInChat)
+        continue;
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
+      if (open === true) openOnCard.add(item.id);
       if (input.taskId === null && hasOptions && presentation?.taskId != null) {
         const options = shownQuestionOptions.get(presentation.taskId) ?? new Set<string>();
         for (const option of presentation.options ?? []) options.add(option);
@@ -414,6 +468,8 @@ export function buildGoatBotTimeline(input: {
       if (hasOptions && open !== false && presentation?.taskId != null) {
         tasksWithOpenQuestion.add(presentation.taskId);
       }
+      if (hasOptions || tone === "question")
+        askedQuestions.set(item.id, presentation?.taskId ?? null);
       committed.push({
         kind: "bot",
         id: item.id,
@@ -428,18 +484,19 @@ export function buildGoatBotTimeline(input: {
             ? (inputTexts.get(presentation.replyToKey)?.slice(0, 160) ?? null)
             : null,
         options: open === false ? NO_OPTIONS : (presentation?.options ?? NO_OPTIONS),
+        ...(hasOptions ? { choices: presentation?.options ?? NO_OPTIONS } : {}),
         // Only a server that names the question also routes an answer sent to its task.
         ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
       });
-      previousInputKey = null;
+      // The conversation is now about what this reply answered; a later reply about it needs no quote.
+      previousInputKey = presentation?.replyToKey ?? null;
       continue;
     }
     if (item.type === "notification") {
       if (item.source.kind === "goat_bot_event" && item.ledgerTask === undefined) {
         // Event lines describe the bot: the main chat shows them, a single task's view does not.
         if (input.taskId == null) {
-          previousInputKey = null;
           committed.push({
             kind: "event",
             id: item.id,
@@ -452,9 +509,10 @@ export function buildGoatBotTimeline(input: {
       const card = input.readers.taskCard(item);
       if (card === null) continue;
       if (input.taskId != null && card.key !== input.taskId) continue;
+      if (input.conversationOnly === true && input.taskId == null && listedTasks.has(card.key))
+        continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
-        previousInputKey = null;
         cardIndexByKey.set(card.key, committed.length);
         committed.push({ kind: "task", id: item.id, createdAt: itemCreatedAt(item), card });
         continue;
@@ -479,49 +537,135 @@ export function buildGoatBotTimeline(input: {
         !committedRequestKeys.has(entry.clientKey) &&
         (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
     )
-    .map((entry) => ({
-      kind: "user",
-      id: `pending:${entry.clientKey}`,
-      sendKey: entry.clientKey,
-      requestKey: entry.requestKey,
-      text: entry.text,
-      ...attachmentLabels(entry.attachments),
-      createdAt: entry.createdAt,
-      delivery:
-        entry.state === "failed"
-          ? {
-              state: "failed",
-              clientKey: entry.clientKey,
-              ...(entry.rejectionReason === undefined
-                ? {}
-                : { rejectionReason: entry.rejectionReason }),
-            }
-          : entry.state === "accepted"
-            ? { state: "sent" }
-            : { state: entry.state },
-    }));
+    .map((entry) => {
+      sentTasks.set(`pending:${entry.clientKey}`, entry.taskId ?? null);
+      return {
+        kind: "user",
+        id: `pending:${entry.clientKey}`,
+        sendKey: entry.clientKey,
+        requestKey: entry.requestKey,
+        text: entry.text,
+        ...attachmentLabels(entry.attachments),
+        createdAt: entry.createdAt,
+        delivery:
+          entry.state === "failed"
+            ? {
+                state: "failed",
+                clientKey: entry.clientKey,
+                ...(entry.rejectionReason === undefined
+                  ? {}
+                  : { rejectionReason: entry.rejectionReason }),
+              }
+            : entry.state === "accepted"
+              ? { state: "sent" }
+              : { state: entry.state },
+      } satisfies UngroupedRow;
+    });
 
   const ordered = [...committed, ...pending];
-  // Choices answer the question they came with. The task's card says when that question closed;
-  // without it, anything the user sent since retires them.
-  let answered = false;
+  // Choices answer the question they came with. The task's card says when that question closed,
+  // and it stays open until then; without a card, anything the user sent since answers it. A send
+  // that failed answers nothing. A later question of the same conversation takes the replies after
+  // it. One walk back keeps the nearest later send and question, overall and per task.
+  let nearestSend: number | undefined;
+  let nearestQuestion: number | undefined;
+  const nearestSendByTask = new Map<string | null | undefined, number>();
+  const nearestQuestionByTask = new Map<string | null | undefined, number>();
+  // A picked choice shows inside its question, so the person's message saying it again is left out.
+  const folded = new Set<string>();
   for (let index = ordered.length - 1; index >= 0; index--) {
     const row = ordered[index]!;
-    if (row.kind === "user") answered = true;
-    else if (
-      answered &&
-      row.kind === "bot" &&
-      row.options.length > 0 &&
-      !cardDecidesOptions.has(row.id)
-    ) {
-      ordered[index] = { ...row, options: NO_OPTIONS };
+    if (row.kind === "user") {
+      if (row.delivery.state === "failed") continue;
+      nearestSend = index;
+      nearestSendByTask.set(sentTasks.get(row.id), index);
+      continue;
     }
+    if (row.kind !== "bot" || !askedQuestions.has(row.id)) continue;
+    const taskId = askedQuestions.get(row.id) ?? null;
+    if (openOnCard.has(row.id)) {
+      // The task's card still lists the question while a pick is on its way or not yet recorded:
+      // the person's next message to its task, one of its choices, is that pick until a newer card
+      // shows the task saw it and kept the question open.
+      const send = taskId === null ? undefined : nearestSendByTask.get(taskId);
+      const until = nearestQuestionByTask.get(taskId);
+      const candidate =
+        send !== undefined && send === nearestSend && (until === undefined || send < until)
+          ? ordered[send]
+          : undefined;
+      const cardAt = questionState(taskId)?.updatedAt;
+      const unseen =
+        candidate?.kind === "user" &&
+        (candidate.sendKey !== null ||
+          cardAt === undefined ||
+          Date.parse(cardAt) <= Date.parse(candidate.createdAt));
+      if (unseen && candidate?.kind === "user" && (candidate.attachments ?? []).length === 0) {
+        const answer = candidate.text.trim();
+        const answerIndex = (row.choices ?? []).indexOf(answer);
+        if (answerIndex >= 0) {
+          folded.add(candidate.id);
+          ordered[index] = {
+            ...row,
+            options: NO_OPTIONS,
+            answer,
+            answerIndex,
+            answeredAt: candidate.createdAt,
+            ...(candidate.delivery.state === "queued" || candidate.delivery.state === "sending"
+              ? { answerSending: true }
+              : {}),
+          };
+        }
+      }
+    } else {
+      const decidedByCard = cardDecidesOptions.has(row.id);
+      const send = decidedByCard
+        ? taskId === null
+          ? undefined
+          : nearestSendByTask.get(taskId)
+        : nearestSend;
+      const until = decidedByCard ? nearestQuestionByTask.get(taskId) : nearestQuestion;
+      const reply = send !== undefined && (until === undefined || send < until) ? send : undefined;
+      // A question its task's card closed was open until that card changed; a message sent after
+      // that did not answer it.
+      const closedAt = decidedByCard ? questionState(taskId)?.updatedAt : undefined;
+      const candidate = reply === undefined ? undefined : ordered[reply];
+      const answered =
+        candidate !== undefined &&
+        closedAt !== undefined &&
+        Date.parse(candidate.createdAt) > Date.parse(closedAt)
+          ? undefined
+          : candidate;
+      if (answered?.kind === "user") {
+        const answer =
+          answered.text.trim() || (answered.attachments ?? []).map((file) => file.name).join(", ");
+        const answerIndex =
+          (answered.attachments ?? []).length === 0 ? (row.choices ?? []).indexOf(answer) : -1;
+        // Only the person's next message after the question can be its pick.
+        const picked = answerIndex >= 0 && reply === nearestSend;
+        if (picked) folded.add(answered.id);
+        const sending =
+          picked && (answered.delivery.state === "queued" || answered.delivery.state === "sending");
+        ordered[index] = {
+          ...row,
+          options: NO_OPTIONS,
+          answer,
+          ...(picked ? { answerIndex, answeredAt: answered.createdAt } : {}),
+          ...(sending ? { answerSending: true } : {}),
+        };
+      } else if (!decidedByCard && send !== undefined) {
+        ordered[index] = { ...row, options: NO_OPTIONS };
+      }
+    }
+    nearestQuestion = index;
+    nearestQuestionByTask.set(askedQuestions.get(row.id), index);
   }
+  const shown = folded.size === 0 ? ordered : ordered.filter((row) => !folded.has(row.id));
 
   const rows: GoatBotRow[] = [];
-  const lastUserIndex = ordered.findLastIndex((row) => row.kind === "user");
-  const breaks = ordered.map((row, index) => {
-    const previous = index === 0 ? null : ordered[index - 1]!;
+  // The receipt belongs to the newest message sent, even when that message is a pick shown in its question.
+  const lastUserId = ordered.findLast((row) => row.kind === "user")?.id;
+  const breaks = shown.map((row, index) => {
+    const previous = index === 0 ? null : shown[index - 1]!;
     const newDay =
       previous === null || localDayKey(previous.createdAt) !== localDayKey(row.createdAt);
     const gap =
@@ -537,7 +681,7 @@ export function buildGoatBotTimeline(input: {
       (row.kind === "bot" && row.proactive && !(previous?.kind === "bot" && previous.proactive));
     return { stamp, first };
   });
-  for (const [index, row] of ordered.entries()) {
+  for (const [index, row] of shown.entries()) {
     const { stamp, first } = breaks[index]!;
     if (stamp)
       rows.push({
@@ -545,11 +689,11 @@ export function buildGoatBotTimeline(input: {
         id: `day:${localDayKey(row.createdAt)}:${row.id}`,
         at: row.createdAt,
       });
-    const last = index === ordered.length - 1 || breaks[index + 1]!.first;
+    const last = index === shown.length - 1 || breaks[index + 1]!.first;
     const groupPosition = first ? (last ? "single" : "first") : last ? "last" : "middle";
     rows.push(
       row.kind === "user"
-        ? { ...row, firstInGroup: first, groupPosition, showReceipt: index === lastUserIndex }
+        ? { ...row, firstInGroup: first, groupPosition, showReceipt: row.id === lastUserId }
         : { ...row, firstInGroup: first, groupPosition },
     );
   }

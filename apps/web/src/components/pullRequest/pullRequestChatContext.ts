@@ -49,9 +49,15 @@ const FINDING_BODY_MAX_LENGTH = 1_000;
 
 export function bounded(value: string): string {
   const trimmed = value.trim();
-  return trimmed.length <= FINDING_BODY_MAX_LENGTH
-    ? trimmed
-    : `${trimmed.slice(0, FINDING_BODY_MAX_LENGTH - 3)}...`;
+  if (trimmed.length <= FINDING_BODY_MAX_LENGTH) return trimmed;
+  // Cut between surrogate halves splits an emoji into a broken character.
+  let end = FINDING_BODY_MAX_LENGTH - 3;
+  const previous = trimmed.charCodeAt(end - 1);
+  const next = trimmed.charCodeAt(end);
+  if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    end -= 1;
+  }
+  return `${trimmed.slice(0, end)}...`;
 }
 
 export function reviewThreadContext(

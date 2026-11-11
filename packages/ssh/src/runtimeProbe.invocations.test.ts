@@ -10,6 +10,7 @@ import { assert } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { buildRemoteRuntimeProbeScript } from "./runtimeProbe.ts";
+import { OLD_HELPER_CAPS_STDERR } from "./runtimeFactsScripts.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const version = "1.2.3";
@@ -54,6 +55,7 @@ case "$*" in
       printf '${options.manifest ?? `${version} 1 1 0 has`}\\n'`
       : "exit 2"
   } ;;
+  '__ssh-helper capabilities') printf '%s' '${OLD_HELPER_CAPS_STDERR}' >&2; exit 1 ;;
   *) exit 2 ;;
 esac
 `;
@@ -280,21 +282,15 @@ it.effect("keyable modern Windows probes warm the existing facts cache", () =>
   Effect.gen(function* () {
     const f = yield* fixture(true, true, { keyed: true });
     const first = yield* f.run();
-    assert.deepEqual(yield* f.asks(), ["__ssh-helper runtime-manifest --shell"]);
+    // This runtime predates the combined call: one failed capability start per install.
+    const cold = ["__ssh-helper capabilities", "__ssh-helper runtime-manifest --shell"];
+    assert.deepEqual(yield* f.asks(), cold);
     assert.equal(yield* f.run(), first);
-    assert.deepEqual(yield* f.asks(), ["__ssh-helper runtime-manifest --shell"]);
+    assert.deepEqual(yield* f.asks(), cold);
     yield* f.replace();
     assert.equal(yield* f.run(), first);
-    assert.deepEqual(yield* f.asks(), [
-      "__ssh-helper runtime-manifest --shell",
-      "--version",
-      "__ssh-helper protocol --shell",
-    ]);
+    assert.deepEqual(yield* f.asks(), [...cold, "--version", "__ssh-helper protocol --shell"]);
     yield* f.run();
-    assert.deepEqual(yield* f.asks(), [
-      "__ssh-helper runtime-manifest --shell",
-      "--version",
-      "__ssh-helper protocol --shell",
-    ]);
+    assert.deepEqual(yield* f.asks(), [...cold, "--version", "__ssh-helper protocol --shell"]);
   }).pipe(Effect.scoped),
 );

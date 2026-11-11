@@ -630,7 +630,7 @@ const make = Effect.gen(function* () {
           "join",
           alias,
           "failed",
-          `${alias} does not resolve to a direct SSH host. Use a direct Tailscale alias without ProxyJump or ProxyCommand.`,
+          `${alias} does not resolve to a direct SSH host. Use a direct alias, such as a Tailscale alias or a pen-<name> alias from pen ssh-config, without ProxyJump or another ProxyCommand.`,
           steps,
           { transport },
         );
@@ -647,7 +647,7 @@ const make = Effect.gen(function* () {
         outcome: "ok",
         detail: `${offered.keyType} ${offered.fingerprint}`,
       });
-      const pin = yield* ocx.pinnedFingerprint(alias);
+      const pin = yield* ocx.pinnedFingerprint(alias, offered.keyType);
       const binding = decisionBinding("join", alias, offered.fingerprint);
       if (caller.pinnedOnly && pin !== offered.fingerprint) {
         const detail =

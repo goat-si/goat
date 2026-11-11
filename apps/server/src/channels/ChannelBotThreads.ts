@@ -4,6 +4,7 @@ import {
   ChannelChildWork,
   ChannelGatewayError,
   ChannelTask,
+  type BotRemoteWork,
   type BotThreadRow,
   type ChannelListBotThreadsInput,
   type ChannelListBotThreadsResult,
@@ -13,14 +14,18 @@ import {
   type ChannelRetryTaskInput,
   type ChannelRetryTaskResult,
   type ChannelUpdateTaskViewInput,
+  GoatBotWorkKind,
   MAIN_BOT_ID,
+  ProjectId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
@@ -31,6 +36,7 @@ import { makeTaskRetry } from "./channelTaskRetry.ts";
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const decodeView = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskView));
 const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildWork));
+const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 
@@ -147,15 +153,38 @@ const make = Effect.gen(function* () {
     const childRows = yield* sql<{
       readonly value_json: string;
       readonly title: string | null;
-    }>`SELECT s.value_json, p.title FROM channel_runtime_state s
+      readonly project_id: string | null;
+      readonly work_kind: unknown;
+    }>`SELECT s.value_json, p.title, p.project_id,
+        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
+      FROM channel_runtime_state s
       JOIN json_each(${encodeJson(tasks.map((task) => task.taskId))}) ids
         ON s.key >= ('child-work:' || ids.value || ':') AND s.key < ('child-work:' || ids.value || ';')
-      LEFT JOIN orchestration_v2_projection_threads p ON p.thread_id = json_extract(s.value_json, '$.destination.threadId')
+      -- Only a local launch's thread is in this machine's projection; a remote one with the same
+      -- id is another thread.
+      LEFT JOIN orchestration_v2_projection_threads p
+        ON json_extract(s.value_json, '$.surface') = 'thread_launch'
+        AND json_extract(s.value_json, '$.destination.host') IS NULL
+        AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
       ORDER BY s.key`.pipe(Effect.mapError(failed));
     const children = yield* Effect.try(() =>
-      childRows.map((item) => ({ child: decodeChild(item.value_json), title: item.title })),
+      childRows.map((item) => ({
+        child: decodeChild(item.value_json),
+        title: item.title,
+        projectId: item.project_id,
+        recordedKind: isWorkKind(item.work_kind) ? item.work_kind : undefined,
+      })),
     ).pipe(Effect.mapError(failed));
+    // Launches from before work kinds were recorded: one in Scratch was a chore.
+    const folders = yield* Effect.serviceOption(ManagedProjectFolders.ManagedProjectFolders);
+    const workKindOf = (projectId: string | null, recorded: GoatBotWorkKind | undefined) =>
+      recorded !== undefined || projectId === null || Option.isNone(folders)
+        ? Effect.succeed(recorded)
+        : folders.value
+            .isScratchProject(ProjectId.make(projectId))
+            .pipe(Effect.map((scratch) => (scratch ? ("chore" as const) : undefined)));
     const rows: Array<BotThreadRow> = [];
+    const remoteWork: Array<BotRemoteWork> = [];
     const seen = new Set<string>();
     for (const task of tasks) {
       const view = viewsByTask.get(task.taskId) ?? {
@@ -179,19 +208,43 @@ const make = Effect.gen(function* () {
         unread:
           view.readThrough === null || Date.parse(task.updatedAt) > Date.parse(view.readThrough),
         mainMessagesSinceQuiet: countMap.get(task.taskId) ?? 0,
+        // A worker on another machine is not a thread this machine's rows can open.
+        ...(task.worker === undefined || task.worker.host !== undefined
+          ? {}
+          : {
+              worker: {
+                environmentId: task.worker.environmentId,
+                threadId: task.worker.threadId,
+              },
+            }),
       });
-      for (const { child, title } of children) {
-        const threadId = child.destination?.threadId;
-        if (
-          child.ownerId !== owner.ownerId ||
-          child.taskId !== task.taskId ||
-          child.surface !== "thread_launch" ||
-          threadId === undefined
-        )
+      for (const { child, title, projectId, recordedKind } of children) {
+        if (child.ownerId !== owner.ownerId || child.taskId !== task.taskId) continue;
+        const destination = child.destination;
+        // Work on another machine is listed by its record alone; one never launched ran nothing.
+        if (child.surface === "ssh_thread_launch") {
+          if (destination?.host === undefined || child.state === "released") continue;
+          remoteWork.push({
+            childWorkId: child.childWorkId,
+            taskId: task.taskId,
+            callerThreadId: child.callerThreadId,
+            host: destination.host,
+            state: child.state,
+            lastActivityAt: child.updatedAt,
+            ...(destination.threadId === undefined ? {} : { threadId: destination.threadId }),
+            ...(destination.environmentId === undefined
+              ? {}
+              : { environmentId: destination.environmentId }),
+            ...(destination.workKind === undefined ? {} : { workKind: destination.workKind }),
+          });
           continue;
+        }
+        const threadId = destination?.threadId;
+        if (child.surface !== "thread_launch" || threadId === undefined) continue;
         const key = bot.bot.environmentId + ":" + threadId;
         if (seen.has(key)) continue;
         seen.add(key);
+        const workKind = yield* workKindOf(projectId, recordedKind);
         rows.push({
           kind: "coding",
           taskId: task.taskId,
@@ -200,10 +253,15 @@ const make = Effect.gen(function* () {
           ...(title === null ? {} : { title }),
           state: child.state,
           lastActivityAt: child.updatedAt,
+          ...(workKind === undefined ? {} : { workKind }),
         });
       }
     }
-    return { rows, mainMessageCount: counts[0]?.count ?? 0 };
+    return {
+      rows,
+      mainMessageCount: counts[0]?.count ?? 0,
+      ...(remoteWork.length === 0 ? {} : { remoteWork }),
+    };
   });
   const listChildWorkFor = Effect.fn("ChannelBotThreads.listChildWork")(function* (
     input: ChannelListChildWorkInput,

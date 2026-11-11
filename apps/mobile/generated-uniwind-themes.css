@@ -14,6 +14,9 @@
       --color-goat-avatar: #eeeeee;
       --color-goat-avatar-border: #dedede;
       --color-goat-avatar-foreground: #303030;
+      --color-goat-bot-message: #eeeeee;
+      --color-goat-person-message: #0d0d0d;
+      --color-goat-person-message-foreground: #ffffff;
       --color-screen: #ffffff;
       --color-sheet: rgba(255, 255, 255, 0.98);
       --color-sheet-solid: #ffffff;
@@ -193,6 +196,9 @@
       --color-goat-avatar: #222222;
       --color-goat-avatar-border: #2d2d2d;
       --color-goat-avatar-foreground: #c1c1c1;
+      --color-goat-bot-message: #222222;
+      --color-goat-person-message: #3c3c3c;
+      --color-goat-person-message-foreground: #ececec;
       --color-screen: #181818;
       --color-sheet: rgba(24, 24, 24, 0.98);
       --color-sheet-solid: #181818;
@@ -372,6 +378,9 @@
       --color-goat-avatar: #f2e9f2;
       --color-goat-avatar-border: #e7dae8;
       --color-goat-avatar-foreground: #6e3f71;
+      --color-goat-bot-message: #f2e9f2;
+      --color-goat-person-message: oklch(0.325698 0.116116 325.037);
+      --color-goat-person-message-foreground: oklch(0.982446 0.010114 325.653);
       --color-screen: #fdf7fd;
       --color-sheet: rgba(253, 247, 253, 0.98);
       --color-sheet-solid: #fdf7fd;
@@ -551,6 +560,9 @@
       --color-goat-avatar: #2a252f;
       --color-goat-avatar-border: #35303a;
       --color-goat-avatar-foreground: #cdcbd0;
+      --color-goat-bot-message: #2a252f;
+      --color-goat-person-message: #444049;
+      --color-goat-person-message-foreground: oklch(0.980735 0.004092 301.426);
       --color-screen: #1f1a24;
       --color-sheet: rgba(31, 26, 36, 0.98);
       --color-sheet-solid: #1f1a24;
@@ -730,6 +742,9 @@
       --color-goat-avatar: #e5e8e6;
       --color-goat-avatar-border: #d7d8d8;
       --color-goat-avatar-foreground: #453744;
+      --color-goat-bot-message: #e5e8e6;
+      --color-goat-person-message: oklch(0.222003 0.03479 328.979);
+      --color-goat-person-message-foreground: oklch(0.972369 0.005497 157.15);
       --color-screen: #f3f7f4;
       --color-sheet: rgba(243, 247, 244, 0.98);
       --color-sheet-solid: #f3f7f4;
@@ -909,6 +924,9 @@
       --color-goat-avatar: #26322c;
       --color-goat-avatar-border: #323d37;
       --color-goat-avatar-foreground: #d1d0d2;
+      --color-goat-bot-message: #26322c;
+      --color-goat-person-message: #424c47;
+      --color-goat-person-message-foreground: oklch(0.990339 0.008411 325.64);
       --color-screen: #1b2821;
       --color-sheet: rgba(27, 40, 33, 0.98);
       --color-sheet-solid: #1b2821;
@@ -1088,6 +1106,9 @@
       --color-goat-avatar: #e7e7ea;
       --color-goat-avatar-border: #d9d8dc;
       --color-goat-avatar-foreground: #453744;
+      --color-goat-bot-message: #e7e7ea;
+      --color-goat-person-message: oklch(0.222003 0.03479 328.979);
+      --color-goat-person-message-foreground: oklch(0.974199 0.002856 241.597);
       --color-screen: #f5f7f8;
       --color-sheet: rgba(245, 247, 248, 0.98);
       --color-sheet-solid: #f5f7f8;
@@ -1267,6 +1288,9 @@
       --color-goat-avatar: #232c36;
       --color-goat-avatar-border: #2e3741;
       --color-goat-avatar-foreground: #d0ced5;
+      --color-goat-bot-message: #232c36;
+      --color-goat-person-message: #3f4650;
+      --color-goat-person-message-foreground: oklch(0.990339 0.008411 325.64);
       --color-screen: #17212b;
       --color-sheet: rgba(23, 33, 43, 0.98);
       --color-sheet-solid: #17212b;
@@ -1446,6 +1470,9 @@
       --color-goat-avatar: #eae7e7;
       --color-goat-avatar-border: #dcd8d9;
       --color-goat-avatar-foreground: #453744;
+      --color-goat-bot-message: #eae7e7;
+      --color-goat-person-message: oklch(0.222003 0.03479 328.979);
+      --color-goat-person-message-foreground: oklch(0.976527 0.002685 60.725);
       --color-screen: #f9f7f5;
       --color-sheet: rgba(249, 247, 245, 0.98);
       --color-sheet-solid: #f9f7f5;
@@ -1625,6 +1652,9 @@
       --color-goat-avatar: #342925;
       --color-goat-avatar-border: #3f3430;
       --color-goat-avatar-foreground: #d4ced0;
+      --color-goat-bot-message: #342925;
+      --color-goat-person-message: #4e4340;
+      --color-goat-person-message-foreground: oklch(0.990339 0.008411 325.64);
       --color-screen: #291e1a;
       --color-sheet: rgba(41, 30, 26, 0.98);
       --color-sheet-solid: #291e1a;
@@ -1804,6 +1834,9 @@
       --color-goat-avatar: #e9e7eb;
       --color-goat-avatar-border: #dbd8dd;
       --color-goat-avatar-foreground: #453744;
+      --color-goat-bot-message: #e9e7eb;
+      --color-goat-person-message: oklch(0.222003 0.03479 328.979);
+      --color-goat-person-message-foreground: oklch(0.976531 0.003855 303.226);
       --color-screen: #f8f7f9;
       --color-sheet: rgba(248, 247, 249, 0.98);
       --color-sheet-solid: #f8f7f9;
@@ -1983,6 +2016,9 @@
       --color-goat-avatar: #282434;
       --color-goat-avatar-border: #33303f;
       --color-goat-avatar-foreground: #d1ccd4;
+      --color-goat-bot-message: #282434;
+      --color-goat-person-message: #433f4f;
+      --color-goat-person-message-foreground: oklch(0.990339 0.008411 325.64);
       --color-screen: #1d1929;
       --color-sheet: rgba(29, 25, 41, 0.98);
       --color-sheet-solid: #1d1929;

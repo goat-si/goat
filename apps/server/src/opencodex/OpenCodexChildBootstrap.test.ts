@@ -356,6 +356,114 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
+  it.effect(
+    "a Pen member's SSH host gets the switch, and consent ends when it becomes another member",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+        expect(yield* home.bootstrap.sshOptIn("pen-other")).toBeUndefined();
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(true);
+        expect((yield* home.bootstrap.ensure("pen-box"))?.state).toBe("child");
+        expect(home.calls).toEqual(["prepare pen-box 2.91.0", "join pen-box as person"]);
+        // The name now belongs to a machine that joined Pen later: the consent was not for it.
+        home.machine.penRevisions.set("pen-box", "pen:node2");
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+        // Revoked or left: the alias is gone, and so is the switch.
+        home.machine.penRevisions.delete("pen-box");
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      }),
+  );
+
+  it.effect("a Pen member whose settings cannot be read keeps its consent", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+      yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      home.machine.penRevisionReadable = false;
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      home.machine.penRevisionReadable = true;
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(true);
+    }),
+  );
+  it.effect("opt-in and setup say why a Pen member's settings could not be read", () =>
+    Effect.gen(function* () {
+      const reason =
+        "Pen's ssh config is larger than the 4 MiB GOAT reads, so GOAT treats no pen-<name> alias as a Pen member.";
+      const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+      home.machine.penRevisionReadable = false;
+      home.machine.penRevisionError = reason;
+      const refused = yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON).pipe(Effect.flip);
+      expect(refused.message).toContain(reason);
+      home.machine.penRevisionReadable = true;
+      yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      home.machine.penRevisionReadable = false;
+      expect((yield* home.bootstrap.ensure("pen-box"))?.message).toContain(reason);
+    }),
+  );
+
+  it.effect("a grant for an alias seen gone from Pen's config does not come back with it", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+      yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      home.machine.penRevisions.delete("pen-box");
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      home.machine.penRevisions.set("pen-box", "pen:node1");
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+    }),
+  );
+
+  it.effect("a read that finds the alias gone never drops a grant given while it ran", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+      yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      home.machine.penRevisions.delete("pen-box");
+      // The member comes back and a person turns the switch on while the stale read is in flight.
+      home.machine.duringPenRead = Effect.gen(function* () {
+        home.machine.penRevisions.set("pen-box", "pen:node2");
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      }).pipe(Effect.orDie);
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(true);
+    }),
+  );
+
+  it.effect(
+    "a grant seen gone stays gone after a restart, even when its first removal could not be saved",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+        home.machine.penRevisions.delete("pen-box");
+        yield* fs.chmod(home.stateDir, 0o500);
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+        yield* fs.chmod(home.stateDir, 0o700);
+        // A later read, with the file writable again, saves the removal.
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+        home.machine.penRevisions.set("pen-box", "pen:node1");
+        const restarted = yield* build(home.baseDir, home.machine, home.calls);
+        expect(yield* restarted.bootstrap.sshOptIn("pen-box")).toBe(false);
+      }),
+  );
+  it.effect(
+    "a removal that could not be saved is saved once storage works, even after the alias returns",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+        home.machine.penRevisions.delete("pen-box");
+        yield* fs.chmod(home.stateDir, 0o500);
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+        yield* fs.chmod(home.stateDir, 0o700);
+        home.machine.penRevisions.set("pen-box", "pen:node1");
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+        const restarted = yield* build(home.baseDir, home.machine, home.calls);
+        expect(yield* restarted.bootstrap.sshOptIn("pen-box")).toBe(false);
+      }),
+  );
+
   it.effect("an opted-in SSH host joins on the person's consent now and after setups, once", () =>
     Effect.gen(function* () {
       const home = yield* setup();

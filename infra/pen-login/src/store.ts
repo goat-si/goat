@@ -58,6 +58,8 @@ export interface SessionRow {
   readonly csrf: string;
   readonly sub: string;
   readonly email: string;
+  /** When this session last went to Google; a reset of the account after it ends the sign-in. */
+  readonly started_at: number;
 }
 
 export interface NodeRow {
@@ -104,6 +106,26 @@ export class Store {
     this.storage = storage;
     this.sql = storage.sql;
     for (const statement of SCHEMA) this.sql.exec(statement);
+    const columns = this.sql.exec("PRAGMA table_info(web_sessions)").toArray() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "started_at"))
+      this.sql.exec("ALTER TABLE web_sessions ADD COLUMN started_at INTEGER NOT NULL DEFAULT 0");
+  }
+
+  /**
+   * A strictly increasing time for ordering sign-ins against resets: two requests in one millisecond still
+   * get different stamps, so a sign-in started right after a reset is never taken for one before it.
+   */
+  stamp(now: number): number {
+    const value = Math.max(now, (this.storage.kv.get<number>("stamp") ?? 0) + 1);
+    this.storage.kv.put("stamp", value);
+    return value;
+  }
+
+  /** When sub's account was last reset (0 for never). */
+  resetAt(sub: string): number {
+    return this.first<{ at: number }>("SELECT at FROM resets WHERE sub = ?", sub)?.at ?? 0;
   }
 
   private first<T>(query: string, ...bindings: Array<string | number | null>): T | null {
@@ -322,8 +344,7 @@ export class Store {
       );
       if (!issued || issued.sub !== input.sub) return { ok: false, error: "unknown_assertion" };
       if (issued.used) return { ok: false, error: "assertion_used" };
-      const resetAt =
-        this.first<{ at: number }>("SELECT at FROM resets WHERE sub = ?", input.sub)?.at ?? 0;
+      const resetAt = this.resetAt(input.sub);
       if (issued.issued_at <= resetAt) return { ok: false, error: "issued_before_reset" };
       const meshId = this.meshOf(input.sub);
       if (meshId !== null && meshId !== input.meshId) return { ok: false, error: "mesh_mismatch" };
@@ -362,23 +383,35 @@ export class Store {
   }
 
   /**
-   * Clears the account and makes what was in flight useless: approved device codes nobody polled are denied,
-   * and assertions not yet registered are spent.
+   * Clears the account and ends everything that predates the reset: approved device codes nobody polled and
+   * pending ones a browser signed in as sub is confirming are denied, assertions not yet registered are spent,
+   * and browser sessions signed in as sub are signed out. A sign-in that went to Google before the reset is
+   * refused when it returns (started_at), so only a new Google sign-in leads to an assertion again.
    */
   reset(sub: string, now: number): void {
+    const at = this.stamp(now);
     this.storage.transactionSync(() => {
       this.sql.exec("DELETE FROM nodes WHERE sub = ?", sub);
       this.sql.exec("DELETE FROM accounts WHERE sub = ?", sub);
       this.sql.exec(
         "INSERT INTO resets (sub, at) VALUES (?, ?) ON CONFLICT(sub) DO UPDATE SET at = excluded.at",
         sub,
-        now,
+        at,
       );
       this.sql.exec(
         "UPDATE devices SET status = 'denied' WHERE sub = ? AND status = 'approved'",
         sub,
       );
       this.sql.exec("UPDATE assertions SET used = 1 WHERE sub = ? AND used = 0", sub);
+      this.sql.exec(
+        `UPDATE devices SET status = 'denied' WHERE status = 'pending' AND user_code IN
+         (SELECT user_code FROM web_sessions WHERE sub = ? AND purpose = 'device' AND user_code != '')`,
+        sub,
+      );
+      this.sql.exec(
+        "UPDATE web_sessions SET purpose = '', user_code = '', state = '', verifier = '', nonce = '', csrf = '', sub = '', email = '' WHERE sub = ?",
+        sub,
+      );
     });
   }
 

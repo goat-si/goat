@@ -22,13 +22,27 @@ vi.mock("./MobileBotWork", () => ({
   },
 }));
 const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
-vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
+vi.mock("./GoatBotFace", () => ({
+  GoatBotHeaderFace: () => null,
+  GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
+    <i data-face={`${props.state}:${props.inView}`} />
+  ),
+}));
+vi.mock("./GoatBotShimmerText", () => ({
+  GoatBotShimmerText: (props: { label: string; animate: boolean; style?: unknown }) => (
+    <span data-sweep={String(props.animate)} data-style={JSON.stringify(props.style)}>
+      {props.label}
+    </span>
+  ),
+}));
 const picker = vi.hoisted(() => ({
   onPicked: null as
     | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)
     | null,
   release: vi.fn(),
 }));
+type LayoutHandler = (event: { nativeEvent: { layout: { height: number } } }) => void;
+const layouts = vi.hoisted(() => new Map<string, LayoutHandler>());
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -41,15 +55,22 @@ vi.mock("react-native", () => ({
     children,
     style,
     className,
+    testID,
+    onLayout,
   }: {
     children?: ReactNode;
     style?: unknown;
     className?: string;
-  }) => (
-    <div data-style={JSON.stringify(style)} data-class={className}>
-      {children}
-    </div>
-  ),
+    testID?: string;
+    onLayout?: LayoutHandler;
+  }) => {
+    if (testID && onLayout) layouts.set(testID, onLayout);
+    return (
+      <div data-style={JSON.stringify(style)} data-class={className}>
+        {children}
+      </div>
+    );
+  },
   Text: ({
     children,
     style,
@@ -84,7 +105,8 @@ vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
-vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -226,14 +248,12 @@ it("marks a failed answer as danger and prefixes its accessibility label", async
   await view.unmount();
 });
 
-it("uses the selected app appearance for answer chips and the send button", async () => {
+it("keeps answer chips and the send button off the retired blue message palette", async () => {
   appearance.mode = "dark";
   const rowView = await render(<GoatBotTimelineRow {...props} row={{ ...bot, tone: "reply" }} />);
   const chip = rowView.container.querySelector("button");
-  expect(JSON.parse(chip?.getAttribute("data-style") ?? "null").borderColor).toBe("#2B66C6");
-  expect(JSON.parse(chip?.querySelector("span")?.getAttribute("data-style") ?? "null").color).toBe(
-    "#2B66C6",
-  );
+  expect(chip?.textContent).toBe("Try again");
+  expect(rowView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await rowView.unmount();
 
   const screenView = await render(<GoatBotScreen visible />);
@@ -256,9 +276,7 @@ it("uses the selected app appearance for answer chips and the send button", asyn
     height: 28,
     borderRadius: 14,
   });
-  expect(
-    JSON.parse(send?.querySelector("div")?.getAttribute("data-style") ?? "null").backgroundColor,
-  ).toBe("#2B66C6");
+  expect(screenView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await screenView.unmount();
 });
 
@@ -303,6 +321,86 @@ it("shows the shared reader's reading and working text below the conversation", 
   const idle = await render(<GoatBotScreen visible />);
   expect(idle.container.textContent).not.toContain("Run df -h");
   await idle.unmount();
+});
+
+it("moves the progress line only while at least half of it shows, whatever moved the list", async () => {
+  screenSession.activity = { state: "working", text: "Run df -h" };
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    const sweep = () => view.container.querySelector("[data-sweep]")?.getAttribute("data-sweep");
+    const face = () => view.container.querySelector("[data-face]")?.getAttribute("data-face");
+    const on = list.props as unknown as {
+      onLayout: LayoutHandler;
+      onContentSizeChange: (width: number, height: number) => void;
+      onScroll: (event: {
+        nativeEvent: {
+          contentOffset: { y: number };
+          contentSize: { height: number };
+          layoutMeasurement: { height: number };
+        };
+      }) => void;
+    };
+    const scrollTo = (y: number, height = 2000) =>
+      act(async () =>
+        on.onScroll({
+          nativeEvent: {
+            contentOffset: { y },
+            contentSize: { height },
+            layoutMeasurement: { height: 600 },
+          },
+        }),
+      );
+    // Nothing moves before the line and the list are measured.
+    expect(sweep()).toBe("false");
+    expect(face()).toBe("working:false");
+    await act(async () => on.onLayout({ nativeEvent: { layout: { height: 600 } } }));
+    await act(async () => on.onContentSizeChange(393, 2000));
+    await act(async () =>
+      layouts.get("goat-bot-progress-line")?.({ nativeEvent: { layout: { height: 40 } } }),
+    );
+    await scrollTo(1400);
+    expect(sweep()).toBe("true");
+    expect(face()).toBe("working:true");
+    // Scrolled up a screen.
+    await scrollTo(800);
+    expect(sweep()).toBe("false");
+    expect(face()).toBe("working:false");
+    await scrollTo(1400);
+    expect(sweep()).toBe("true");
+    // A new message grows the content below a resting position.
+    await act(async () => on.onContentSizeChange(393, 2300));
+    expect(sweep()).toBe("false");
+    await scrollTo(1700, 2300);
+    expect(sweep()).toBe("true");
+    // The keyboard shrinks the viewport so the line falls below it.
+    await act(async () => on.onLayout({ nativeEvent: { layout: { height: 300 } } }));
+    expect(sweep()).toBe("false");
+  } finally {
+    screenSession.activity = null;
+    await view.unmount();
+  }
+});
+
+it("keeps the progress line in the label text role at larger text sizes", async () => {
+  screenSession.activity = { state: "working", text: "Run df -h" };
+  const styleAt = async (baseFontSize: number) => {
+    appearance.baseFontSize = baseFontSize;
+    const view = await render(<GoatBotScreen visible />);
+    const style = JSON.parse(
+      view.container.querySelector("[data-sweep]")?.getAttribute("data-style") ?? "null",
+    ) as { fontSize?: number } | null;
+    await view.unmount();
+    return style?.fontSize;
+  };
+  try {
+    const regular = await styleAt(16);
+    const large = await styleAt(20);
+    expect(regular).toBeGreaterThan(0);
+    expect(large).toBeGreaterThan(regular ?? 0);
+  } finally {
+    appearance.baseFontSize = 16;
+    screenSession.activity = null;
+  }
 });
 
 it("opens the conversation at its newest message and keeps following it", async () => {

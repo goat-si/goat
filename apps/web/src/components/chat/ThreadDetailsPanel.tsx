@@ -26,6 +26,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import type { MachineWithoutProject } from "../../lib/runOnArrival";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -54,7 +55,7 @@ export interface ThreadDetailsPanelProps
   isGitRepo: boolean;
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
-  environmentsWithoutProject: readonly EnvironmentOption[];
+  environmentsWithoutProject: readonly MachineWithoutProject[];
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;

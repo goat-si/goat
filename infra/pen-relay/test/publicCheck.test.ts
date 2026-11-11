@@ -94,4 +94,24 @@ describe("pre-deploy check of public/", () => {
     expect(r3.status).toBe(1);
     expect(r3.stderr).toContain("pen-linux-amd64.gz");
   });
+
+  it("refuses a SHA256SUMS that install.sh would read differently: a second line for an archive, or a binary-mode line", () => {
+    const doubled = publicDir("https://a.example", "1.2.3", true);
+    const sums = NodePath.join(doubled, "dl", "1.2.3", "SHA256SUMS");
+    const lines = NodeFS.readFileSync(sums, "utf8");
+    NodeFS.writeFileSync(sums, `${"0".repeat(64)}  pen-linux-amd64.gz\n${lines}`);
+    const r1 = run(doubled);
+    expect(r1.status).toBe(1);
+    expect(r1.stderr).toContain("pen-linux-amd64.gz");
+
+    const binary = publicDir("https://a.example", "1.2.3", true);
+    const sums2 = NodePath.join(binary, "dl", "1.2.3", "SHA256SUMS");
+    NodeFS.writeFileSync(
+      sums2,
+      NodeFS.readFileSync(sums2, "utf8").replace("  pen-darwin-arm64.gz", " *pen-darwin-arm64.gz"),
+    );
+    const r2 = run(binary);
+    expect(r2.status).toBe(1);
+    expect(r2.stderr).toContain("pen-darwin-arm64.gz");
+  });
 });

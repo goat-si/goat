@@ -93,6 +93,14 @@ const LINUX_COMPUTER_USE_TASK = "smoke-linux-computer-use";
 const PEN_PATHS = ["apps/pen/", "packages/pen-protocol/", "infra/pen-relay/", "infra/pen-login/"];
 /** The CI files that define test-pen; changing them runs it too. */
 const PEN_CI_FILES = [".github/workflows/goat-ci.yml", ".github/scripts/goat-ci-scope.cjs"];
+/** Root files the Pen TypeScript packages resolve through: the dependency catalog and lockfile,
+ * the shared tsconfig and the root Vitest config their test configs merge. */
+const PEN_SHARED_FILES = [
+  "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
+  "tsconfig.base.json",
+  "vite.config.ts",
+];
 const PEN_TASK = "test-pen";
 /** Pen's Go node and the vectors its suite reads; a change under one also selects test-pen-windows. */
 const PEN_GO_PATHS = ["apps/pen/", "packages/pen-protocol/"];
@@ -782,7 +790,9 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
     tasks.add(LINUX_COMPUTER_USE_TASK);
     reasons.set(LINUX_COMPUTER_USE_TASK, linuxChange);
   }
-  const penChange = changed.find((file) => isPen(file) || PEN_CI_FILES.includes(file));
+  const penChange = changed.find(
+    (file) => isPen(file) || PEN_CI_FILES.includes(file) || PEN_SHARED_FILES.includes(file),
+  );
   if (penChange !== undefined) {
     tasks.add(PEN_TASK);
     reasons.set(PEN_TASK, penChange);

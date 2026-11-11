@@ -112,6 +112,10 @@ export const PreviewAutomationSnapshot = Schema.Struct({
       ...Screen.ScreenshotPlacementFields,
     }),
   ),
+  /** The capture before `screenshot` was capped for the agent, when a saved file asked for it. */
+  fullScreenshot: Schema.optional(
+    Schema.Struct({ data: Schema.String, width: Schema.Int, height: Schema.Int }),
+  ),
   treeComplete: Schema.optional(Schema.Boolean),
   refGeneration: Schema.optional(Schema.String),
   /** The tab the snapshot read, so callers can key per-tab state when they omitted tabId. */

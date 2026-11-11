@@ -430,6 +430,29 @@ it.effect.each([undefined, "hub-client"] as const)(
     }),
 );
 
+it.effect("a device SSH cannot reach is reported unreachable, not as possibly Windows", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "unreachable", pin: PINNED });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "pen-box" });
+    expect(result.state).toBe("failed");
+    expect(result.message).toContain("could not be reached over SSH");
+    expect(result.message).not.toContain("Windows");
+  }),
+);
+
+it.effect(
+  "a join says why Pen's files could not be read, instead of calling the alias indirect",
+  () =>
+    Effect.gen(function* () {
+      const cap =
+        "Pen's ssh config is larger than the 4 MiB GOAT reads, so GOAT treats no pen-<name> alias as a Pen member.";
+      const hub = yield* setup({ directFailure: cap, pin: PINNED });
+      const result = yield* hub.membership.join(scope, { deviceAlias: "pen-box" });
+      expect(result.state).toBe("failed");
+      expect(result.message).toBe(cap);
+    }),
+);
+
 it.effect("a native Windows Child leaves on the role its own GOAT reports, without /healthz", () =>
   Effect.gen(function* () {
     const hub = yield* setup({

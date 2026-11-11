@@ -541,6 +541,10 @@ type DashState struct {
 	LoginCommandWindows string `json:"loginCommandWindows"`
 	// Unforgotten are revoked machines the login service still offers (see LsReply).
 	Unforgotten []Unforgotten `json:"unforgotten"`
+	// SaveError and Full show what pen ls shows: the mesh cannot be saved, or holds its cap of
+	// ordinary records.
+	SaveError string `json:"saveError,omitempty"`
+	Full      bool   `json:"full"`
 	// ApproveQuestion is the warning pen approve asks before approving by request id.
 	ApproveQuestion string `json:"approveQuestion"`
 	Now             int64  `json:"now"`
@@ -556,7 +560,7 @@ func (d *Daemon) dashState() DashState {
 	v := d.view()
 	s := DashState{Self: d.status(), Uplink: ls.Uplink, Members: ls.Members, Locked: v.Locked, Relays: d.relayStates(),
 		Pending: []DashPending{}, Events: d.events(v), DownloadRelay: d.downloadRelay(), ApproveQuestion: ApproveQuestion,
-		Now: d.now().UnixMilli(), Unforgotten: ls.Unforgotten}
+		Now: d.now().UnixMilli(), Unforgotten: ls.Unforgotten, SaveError: ls.SaveError, Full: ls.Records >= mesh.MaxOrdinary}
 	if s.Unforgotten == nil {
 		s.Unforgotten = []Unforgotten{}
 	}

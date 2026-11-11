@@ -1,4 +1,5 @@
 export * from "./rows.ts";
+export * from "./previewText.ts";
 export * from "./labels.ts";
 export * from "./readers.ts";
 export * from "./activity.ts";
@@ -11,6 +12,7 @@ export * from "./model.ts";
 export * from "./taskVisibility.ts";
 export * from "./botRoster.ts";
 export * from "./botWork.ts";
+export * from "./remoteWork.ts";
 export * from "./face.ts";
 export * from "./avatar.ts";
 export * from "./faceMotion.ts";
@@ -18,3 +20,4 @@ export * from "./botNotes.ts";
 export * from "./diagnostics.ts";
 export * from "./botArtifacts.ts";
 export * from "./retry.ts";
+export * from "./botColor.ts";

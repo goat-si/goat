@@ -103,7 +103,7 @@ describe("agent tool listing", () => {
 });
 
 describe("storage cleanup settings", () => {
-  it("turns worktree cleanup on by default, with snapshots before removal", () => {
+  it("turns worktree cleanup on by default, with snapshots before removal and no preview wait", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
     expect(decodeServerSettings({}).storageCleanup).toMatchObject({
       worktreeAfterDays: 7,
@@ -113,6 +113,7 @@ describe("storage cleanup settings", () => {
       worktreeSnapshotChanges: true,
       worktreeSnapshotDays: 30,
       worktreeKeepWhen: "uncommitted-changes",
+      worktreeCleanupPreview: false,
     });
   });
 

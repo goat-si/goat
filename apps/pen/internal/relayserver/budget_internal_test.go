@@ -6,8 +6,9 @@ import (
 )
 
 // The server-wide queue budget, without kernel socket buffers in the way (they absorb a different
-// amount on every OS): clients that never read, each under its own window, end 4408 once the
-// budget is spent, and what stays queued never passes it.
+// amount on every OS): clients that never read, each under its own window, lose their sessions once
+// the budget is spent (refused 4408, or their queue ended for a smaller holder), and what stays
+// queued never passes it.
 func TestSessionDataPastTheServerQueueBudgetEndsItsSession(t *testing.T) {
 	const budget = 4 << 20
 	s := New(DefaultLimits())
@@ -32,7 +33,10 @@ func TestSessionDataPastTheServerQueueBudgetEndsItsSession(t *testing.T) {
 	}
 	ended := 0
 	for _, c := range clients {
-		if c.closed {
+		c.out.mu.Lock()
+		aborted := c.out.done
+		c.out.mu.Unlock()
+		if c.closed || aborted {
 			ended++
 		}
 	}

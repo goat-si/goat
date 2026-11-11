@@ -124,22 +124,84 @@ after Pen restarts. `pen dashboard --stop` closes the page and signs out every o
 
 ## Remove a machine
 
-| Command                             | Use it when                                                                                                                                                                                                                                                                                                       |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pen leave`                         | You are retiring this machine. It leaves the mesh and deletes its keys.                                                                                                                                                                                                                                           |
-| `pen revoke <member>`               | A machine should no longer be a member. Every member refuses it from then on.                                                                                                                                                                                                                                     |
-| `pen revoke <member> --compromised` | A machine was lost or stolen, even if it already left. Also removes every machine it admitted, and its unlocks and account changes stop counting. It prints which machine it revokes; when a machine that left and a current one share the name, it stops and asks for the node id or fingerprint `pen ls` shows. |
+| Command                             | Use it when                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pen leave`                         | You are retiring this machine. It leaves the mesh and deletes its keys.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `pen revoke <member>`               | A machine should no longer be a member. Every member refuses it from then on.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `pen revoke <member> --compromised` | A machine was lost or stolen, even if it already left. Also removes every machine it admitted, and its unlocks and account changes stop counting. It prints which machine it revokes; when a machine that left and a current one share the name, it stops and prints a command naming each by its fingerprint. A name, a node id (or its first 4 or more characters) and a fingerprint (or its first 8 or more digits) all work, as long as only one machine matches. |
+
+A removed machine that is still running shows it in `pen ls`: "this machine is not a member of
+mesh …". To use it again, run `pen down` there, delete the state folder `pen ls` names (usually
+`~/.pen`), and join again with an invite or `pen login`. A member that has not heard of the removal
+yet still lists the machine until it syncs with one that has; `pen revoke <name>` on that member
+removes it there at once.
 
 After `--compromised` on a mesh with Google sign-in, Pen tells you what else to do: turn on
 `pen lock on`, change your Google password, and clear your account's machine list from the reset
-link on the sign-in page.
+link on the sign-in page. A reset ends every sign-in for the account that started before it, so after it
+only a new Google sign-in registers a machine.
+
+When a member cannot keep a change another machine sends it, the command that made the change
+(`pen revoke`, `pen lock`, `pen approve` and the like) lists that member as "not taken", and `pen ls`
+on that member says why:
+
+- "the relay is busy (4429)": the relay refused the connection for a moment. Nothing is wrong with the member; the
+  change reaches it at the next sync (within 10 minutes).
+- "it cannot write its state folder (4507)": the member's state folder is full or not writable. Free disk space or
+  fix the folder's permissions; the member retries on its own every minute and at each sync, and takes no change
+  until it can save.
+- "its mesh is full (4508)": the mesh holds 3840 records, the most Pen keeps for new members, names, locks and
+  sign-in changes (removals still fit up to 4096). Start over in a new mesh, below.
+
+### Start over in a new mesh
+
+Use this when a mesh is full, or to split from a mesh you no longer trust. Each machine keeps its keys and name;
+only its mesh is dropped, and that step needs no other machine, so it works on a machine that cannot reach any
+member.
+
+1. On every machine: `pen down`, then delete these files from the state folder (`~/.pen`, or `PEN_HOME`):
+   `mesh.json`, `offers.json`, `pending.json`, `forgets.json`, `versions.json`, `joined.json` and `login.json`.
+   (`pen up` on a machine that still has `mesh.json` starts its old mesh again; it does not found a new one.)
+2. On the first machine: `pen up`. It founds a new mesh with this machine as its only member.
+3. On each other machine: `pen join <token>` with a token from `pen invite` on a machine already in the new mesh.
+   Joining replaces the machine's relay list with the inviting machine's. A machine that used other relays on
+   purpose puts them back with `pen relay add <url>` (and `pen relay rm <url>` for one it does not want); `pen relay
+   ls` then lists them with their uplink state.
+4. If the old mesh used Google sign-in: the new mesh is not bound to the account, and the account is still registered
+   with the old mesh. Reset the account's machine list at the reset link on the sign-in page, then run `pen login`
+   on one machine of the new mesh and answer yes to binding it; after that, new machines join it with `pen login`.
+
+`pen-<name>` SSH hosts keep working: each machine rewrites `~/.ssh/pen/known_hosts` from the new mesh when it starts,
+and the names stay the same. Machines you did not move stay in the old mesh, which keeps listing the moved ones as
+members; they are not reachable from the new one.
 
 ## Relays
 
 Each machine keeps a connection to every relay in its list and uses whichever answers first, so one
 relay going down does not cut the mesh. An install gets the relays the release lists, and invites
-carry the inviting machine's list. `pen relay ls` shows the list; `pen relay add <url>` and
+carry the inviting machine's list: `pen join` replaces the joining machine's list with it, whether Pen is running
+or not. `pen up --relay <url>` replaces the list, also on a running machine. `pen login --relay <url>` saves that list for this machine before
+the sign-in starts, and Pen uses it afterwards whether it was running or not, with one exception: a machine where
+Pen runs in a mesh of its own and that joins the account's mesh keeps the relays it was using and saves them back.
+If the sign-in does not finish, the saved list takes effect the next time Pen starts or `pen up` runs. In every case, check
+`pen relay ls` after signing in and use `pen relay add` or `pen relay rm` to match the mesh, so the other machines
+can reach this one. `pen relay ls` shows the list; `pen relay add <url>` and
 `pen relay rm <url>` change it. Relays must use `https`.
+
+A relay run with `pen relay serve` keeps at most 16 MiB of undelivered data for each internet
+address, so machines behind one home or office connection share it: about four sessions whose
+receiving side has stopped reading fill it, and until those read again or are cut off (after 10
+seconds without progress), new data for that connection's other sessions is refused. A relay that
+cannot hold a message ends only the session that sent it, with code 4408; it never drops other
+sessions or a machine's own relay connection to make room. Open the session again, and Pen picks a
+relay again; the machine stays reachable through its other relays.
+
+Two other causes of 4408 on such a relay: all sessions to one machine share a 4 MiB window, so
+while that machine reads slowly (a busy or slow connection) and one session fills it, data on its
+other sessions is refused; and a flood from many addresses can fill the whole relay for everyone for
+a while. In both cases open the session again later; the machine's other relays are not affected. A
+new connection refused with 4429 means the machine is taking too many new sessions at once through
+that relay; retry, or it goes through another relay.
 
 You can run your own relay with `pen relay serve` on a machine with a public address; see
 `pen help`.

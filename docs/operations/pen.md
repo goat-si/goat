@@ -19,11 +19,13 @@ every Pen suite, and `test-pen-windows` the Go suite and install check on Window
 uplinks and exchanges 64 KiB each way with a client through the relay, with timings. It exits 1 on any failure or
 when `--timeout` (30 s) runs out, including a certificate that expires within 14 days (`--min-cert-days`), so it
 works as a cron or monitor probe. The check node's keys live in `relay-check/` under the state directory
-(`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id and leave each
-relay one small entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same).
+(`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id. The Go relay
+keeps nothing for it once the check's sockets close; the Worker keeps one Durable Object holding that node id's next
+session id.
 That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
 sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
-while one runs waits for it, within its own `--timeout`. Run it against both relays after every deploy:
+while one runs waits for it, within its own `--timeout`. Run the same build of `pen` as the relay (see
+"Deploy a new binary" under Seoul relay): a check from pen 0.2.5 or 0.2.6 fails 4408 against a newer Go relay. Run it against both relays after every deploy:
 
 ```sh
 pen relay check https://pen-relay.pos090001.workers.dev
@@ -45,6 +47,17 @@ downloads the version it was built for unless `PEN_VERSION` names another.
 Upgrade a running node by replacing its
 `~/.local/bin/pen` (or rerunning `install.sh`, or `install.ps1` on Windows, which renames a running `pen.exe` aside)
 and restarting it with `pen down` and `pen up`. `apps/pen/scripts/installcheck.ps1` is `installcheck.sh` for Windows.
+A node on pen 0.2.6 or older does not know the Google join's check: while it is listed for the account and refuses a
+new machine it has not heard of (it left, or has not synced yet), that machine's `pen login` fails naming it.
+Upgrade it, or add the machine with an invite.
+`pen up` rewrites the service unit or plist; replacing the binary does not. A unit written by pen 0.2.6 or older runs
+`pen up --foreground` without `--service`, and a refused start (a stored relay list pen no longer accepts) then exits
+non-zero. pen recognises such a start by `SYSTEMD_EXEC_PID` (systemd 248 and later) or by `XPC_SERVICE_NAME` being
+`si.goat.pen` (launchd) and exits 0 as the new unit does. On systemd older than 248, an upgraded old unit keeps restarting every 2 s
+(`Restart=on-failure`, `RestartSec=2`; five starts take about 8 s, so the default limit of 5 starts in 10 s is not
+reached) until `pen up` is run once, which rewrites the unit; meanwhile `journalctl --user -u pen` shows the refusal
+(`pen: the relays in config.json cannot be used ...`) and a restart every 2 s. A shell or container that carries `XPC_SERVICE_NAME=si.goat.pen`, or
+the internal `--service` flag, likewise makes a refused `pen up --foreground` print the reason and exit 0.
 
 ## pen-relay Worker
 
@@ -149,10 +162,28 @@ For the operator's own mesh (mac-studio, `PEN_HOME=~/goat-research/pen-boxes-tes
 The VM (`clisu-oracle`, Ubuntu on arm64) runs `/opt/pen-relay/pen relay serve` under the system unit
 `apps/pen/install/pen-relay.service`, installed as `/etc/systemd/system/pen-relay.service`. It runs as a dynamic
 user with a read-only system and no access to home directories (`systemd-analyze security pen-relay` rates it 1.6).
-Its memory ceiling is 768 MiB with `GOMEMLIMIT=224MiB`, sized for the caps the unit passes: 1024 connections, 64 per
-source address, 128 MiB of queued data with 16 MiB per source. The unit's comment carries the arithmetic and the
-measurement; change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections and
-ends the sessions of whichever source fills its share (4408 in the nodes' logs); it does not run out of memory.
+The unit passes 1024 connections, 64 per source address, and 128 MiB of queued data with 16 MiB per source; the unit's
+comment adds up what each part may hold at worst against `MemoryMax` and records the measured peaks. `GOMEMLIMIT`
+only makes the collector work harder near it; it is not a cap, so the margin under `MemoryMax` is headroom, not a
+proof. Change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections. Queued data is charged to the session's 4 MiB window, the
+16 MiB share of the address that will receive it, and the 128 MiB total; data that does not fit any of them ends the
+session that sent it with 4408, and nothing else ends because of memory: no other session and never an uplink. A
+socket that stops reading is closed only when one write stalls for 10 s. A new client session is admitted only if
+its OPEN and CLOSE frames toward the node fit like data (and within 256 KiB of such frames per uplink); otherwise it
+is refused 4429, so clients that open and close faster than a slow node reads get refused instead of ending the
+node's uplink. Pongs, the challenge and close frames are not charged (about 1.4 KiB per socket at most), so a full
+relay still answers uplinks. Before a node answers a session, its client may send one message of at most 4 KiB;
+anything more ends that session. Past 8 pending sessions per node, the address holding the most loses its oldest
+(4429), so one address cannot push out another's. One address therefore cannot end another address's
+sessions, and data between other addresses fits while they hold less than the total minus one share (112 MiB). What
+can still happen, each time as 4408 on the refused session, with nothing reopened by itself and the node's other
+relay unaffected: a peer the node has answered can fill that node's 4 MiB uplink window while the node reads slowly,
+and other sessions' data toward the node is refused until it reads; machines behind one NAT address share its 16 MiB,
+so about four sessions whose clients stopped reading (each may queue its 4 MiB window) leave the address's other
+sessions refused until those clients read or their writes time out after 10 s; a flood from many addresses fills
+the relay for everyone until the stalled sockets time out. When every connection slot is taken, a Let's Encrypt validation connection
+is refused like any other; `autocert` renews 30 days before expiry and retries every 30 to 60 minutes, and
+`pen relay check` fails 14 days before expiry, so a renewal fails only if the relay stays full for weeks.
 `/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
 (the VCN's private address behind the public `158.180.76.7`) and `PEN_RELAY_HOST=158-180-76-7.sslip.io`. The
 Let's Encrypt account and certificate are cached in `/var/lib/pen-relay/acme` (systemd keeps it in
@@ -162,7 +193,11 @@ Install on a new VM: put the binary at `/opt/pen-relay/pen` (0755), write `/etc/
 then `sudo systemctl daemon-reload && sudo systemctl enable --now pen-relay`. To keep an existing certificate, copy its
 cache into `/var/lib/private/pen-relay/acme` before the first start; systemd hands it to the service user.
 
-Deploy a new binary: copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen
+Deploy a new binary in this order. First, before the relay, install the same build of `pen` on every machine that
+runs `pen relay check` against this relay (your own machine, and any cron job or monitor). A check from pen 0.2.5
+or 0.2.6 against a relay newer than 0.2.6 prints `ok: healthz …` and then `FAIL: client to node: closed 4408` and
+exits 1, although the relay works: that check sends 64 KiB before its node answers, which the relay now refuses.
+Nodes of those versions are not affected. Then copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen
 /opt/pen-relay/pen.prev`, `sudo install -m 0755 <new> /opt/pen-relay/pen`, `sudo systemctl restart pen-relay`, then
 `pen relay check https://158-180-76-7.sslip.io`. When the unit file changed too, copy it to
 `/etc/systemd/system/pen-relay.service` (keep the old one as `pen-relay.service.prev`) and run
@@ -191,8 +226,19 @@ here, or use the reset link.
 
 **Someone else could sign in to the account.** The login service registers any machine with a valid sign-in, even one
 a locked mesh only queued, and any registered machine can remove the others from the account's list, so new machines
-would be offered only that one. Lock the mesh, then reset the account's machine list at `/reset` and run `pen login`
-on one trusted member.
+would be offered only that one. Change the Google password first, lock the mesh, then reset the account's machine list
+at `/reset` and run `pen login` on one trusted member. A reset ends everything that predates it for that account:
+the machine list and the account's mesh registration, sign-in codes approved but not yet collected, codes a browser
+signed in as that account was confirming, browser sign-ins waiting at their confirmation page, sign-ins that had left
+for Google before the reset and return after it, and sign-in results not yet registered. After it, only a new Google
+sign-in leads to a machine being registered, and the members of an existing mesh are not changed. A device code is denied for every
+account whose browser was confirming it, so when browsers signed in to two accounts are at the confirmation page of
+the same code, a reset of one denies the code for both; the other account's registry and sessions are untouched.
+
+**One member filled the mesh's record space.** `pen ls` says `mesh full`. A mesh keeps at most 4096 records and no
+signer has a share of its own, so a hostile member can fill it with valid records; after that no member can record
+anything, its own revoke included (issue #2864). The remedy is a new mesh, done as in the user guide ("Start over in a
+new mesh"); a machine that cannot reach any member drops the old mesh the same way, since that step is local.
 
 **A relay is down.** Nodes keep working through their other relays; dials race every relay, so no action is needed for
 running meshes. New installs need the download relay (the Worker). Check `/healthz` on each relay and, for the Worker,

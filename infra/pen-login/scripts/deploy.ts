@@ -145,8 +145,9 @@ if (status !== 0) {
   const now =
     after.status === 0 ? (JSON.parse(after.stdout) as { name: string }[]).map((s) => s.name) : [];
   if (secrets.LOGIN_SIGNING_KEY && now.includes("LOGIN_SIGNING_KEY")) {
+    // secret list shows only that a key is set; another deploy at the same time could have set its own.
     fail(
-      `wrangler deploy failed (exit ${status}) after the Worker took the secrets: LOGIN_SIGNING_KEY is set, from ${keyFile}. Check pnpm exec wrangler deployments list; to deploy again, run this without --signing-key-file`,
+      `wrangler deploy failed (exit ${status}) but the Worker has a LOGIN_SIGNING_KEY now, most likely the one from ${keyFile}: check that the kid printed above is the one ${new URL(CALLBACK).origin}/v1/keys lists, and pnpm exec wrangler deployments list; to deploy again, run this without --signing-key-file`,
     );
   }
   fail(

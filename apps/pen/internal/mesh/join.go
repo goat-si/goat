@@ -274,6 +274,22 @@ func refuse(c *Lines, reason string) error {
 	return fmt.Errorf("join refused: %s", reason)
 }
 
+// NotMemberReason is the reason a node that is not a member of its mesh refuses an admission.
+const NotMemberReason = "this machine is not a member of the mesh"
+
+// IsMember reports whether id's key is a current member in s's view. Every admitting path checks
+// it at its point of no return: an admit signed by a key that is not a member has no effect.
+func IsMember(s *Store, id *ident.Identity) bool {
+	_, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]
+	return ok
+}
+
+func refuseNotMember(c *Lines) error {
+	c.Write(Msg{T: "refused", Reason: NotMemberReason, NotMember: true})
+	c.L.Close(wire.CodeNotAdmitted)
+	return &RefusedError{Reason: NotMemberReason, NotMember: true}
+}
+
 // ServeJoin runs the inviter side after a confirmed kind 0x03 session from remoteStatic.
 func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*Member, error) {
 	c := &Lines{L: l}
@@ -312,12 +328,22 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 		}
 	}
 	now := a.Now()
-	if err := a.Invites.Burn(a.InviteID, now); err != nil {
+	// The membership check, the burn and the signature hold the store's lock together: an
+	// inviter that is no longer a member keeps the invite unused.
+	errBurn := errors.New("burn")
+	admit, err := a.Store.AppendAsMember(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card}, func(*View) error {
+		if err := a.Invites.Burn(a.InviteID, now); err != nil {
+			return errBurn
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, ErrNotMember):
+		return nil, refuseNotMember(c)
+	case errors.Is(err, errBurn):
 		l.Close(wire.CodeNotAdmitted)
 		return nil, &relay.CloseError{Code: wire.CodeNotAdmitted}
-	}
-	admit, err := a.Store.Append(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card})
-	if err != nil {
+	case err != nil:
 		return nil, refuse(c, "could not sign the admit")
 	}
 	member, ok := a.Store.View().Members[cb.SignPub]
@@ -336,8 +362,11 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	return &member, nil
 }
 
-// RefusedError is the inviter's refusal.
-type RefusedError struct{ Reason string }
+// RefusedError is the inviter's refusal; NotMember says the inviter is not a member of its mesh.
+type RefusedError struct {
+	Reason    string
+	NotMember bool
+}
 
 func (e *RefusedError) Error() string { return "join refused: " + e.Reason }
 
@@ -349,7 +378,7 @@ func Join(ctx context.Context, l Link, id *ident.Identity, name string) (string,
 		return "", nil, err
 	}
 	if m.T == "refused" {
-		return "", nil, &RefusedError{Reason: m.Reason}
+		return "", nil, &RefusedError{Reason: m.Reason, NotMember: m.NotMember}
 	}
 	if m.T != "offer" || m.Mesh == "" || !ident.ValidNodeID(m.Inviter) {
 		l.Close(wire.CodeCrypto)
@@ -371,7 +400,7 @@ func Join(ctx context.Context, l Link, id *ident.Identity, name string) (string,
 		}
 		switch m.T {
 		case "refused":
-			return "", nil, &RefusedError{Reason: m.Reason}
+			return "", nil, &RefusedError{Reason: m.Reason, NotMember: m.NotMember}
 		case "records":
 			recs = append(recs, m.Records...)
 			if len(recs) > MaxRecords {

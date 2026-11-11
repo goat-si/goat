@@ -17,8 +17,10 @@ import { deriveThreadTurnSubagents, type ThreadTurnSubagents } from "./threadSub
 import {
   deriveUsageLimitNoticeRows,
   presentRunStop,
+  presentRunStartHold,
   withoutUsageLimitNoticeRows,
   type RunStopPresentation,
+  type RunStartHoldPresentation,
   type UsageLimitNoticeRows,
 } from "./threadExecution.ts";
 import {
@@ -436,6 +438,19 @@ export function createEnvironmentThreadDetailAtoms<E>(
       return stop;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-run-stop:${key}`));
   });
+  const startHoldAtomFamily = Atom.family((key: string) => {
+    let previousRuns: OrchestrationV2ThreadProjection["runs"] | null = null;
+    let hold: RunStartHoldPresentation | null = null;
+    return Atom.make((get) => {
+      const runs = Option.getOrNull(get(threadStateValueAtomFamily(key)).data)?.runs ?? null;
+      if (runs !== previousRuns) {
+        previousRuns = runs;
+        const next = runs === null ? null : presentRunStartHold(runs);
+        if (next?.runId !== hold?.runId || next?.description !== hold?.description) hold = next;
+      }
+      return hold;
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-start-hold:${key}`));
+  });
   const queuedCountAtomFamily = Atom.family((key: string) => {
     let previous: Pick<OrchestrationV2ThreadProjection, "runs" | "messages"> | null = null;
     let count = 0;
@@ -589,6 +604,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     queueWorkflowAtom: (ref: ScopedThreadRef) => queueWorkflowAtomFamily(threadKey(ref)),
     queuedCountAtom: (ref: ScopedThreadRef) => queuedCountAtomFamily(threadKey(ref)),
     runStopAtom: (ref: ScopedThreadRef) => runStopAtomFamily(threadKey(ref)),
+    startHoldAtom: (ref: ScopedThreadRef) => startHoldAtomFamily(threadKey(ref)),
     turnSubagentsAtom: (ref: ScopedThreadRef) => turnSubagentsAtomFamily(threadKey(ref)),
     checkpointSummariesAtom: (ref: ScopedThreadRef) =>
       checkpointSummariesAtomFamily(threadKey(ref)),

@@ -207,7 +207,7 @@ func TestAnAccountAdmitNamesAtMostEightHeadsKeepingTheSignersOwn(t *testing.T) {
 	if h := len(s.heads()); h != 10 {
 		t.Fatalf("%d heads, want 10", h)
 	}
-	got, err := AdmitAccount(a, s, b.card(x, a, "x"), Claim{SignPub: pub(x), NoisePub: ident.B64.EncodeToString(x.NoisePub), Email: "x@example.com", Hash: HashOf([]byte("a"))}, time.UnixMilli(5))
+	got, err := AdmitAccount(a, s, b.card(x, a, "x"), Claim{SignPub: pub(x), NoisePub: ident.B64.EncodeToString(x.NoisePub), Email: "x@example.com", Hash: HashOf([]byte("a"))}, time.UnixMilli(5), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

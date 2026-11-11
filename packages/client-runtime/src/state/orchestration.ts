@@ -124,6 +124,10 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       label: "environment-data:orchestration:force-stop-thread",
       tag: ORCHESTRATION_V2_WS_METHODS.forceStopThread,
     }),
+    stopHeldTurn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:orchestration:stop-held-turn",
+      tag: ORCHESTRATION_V2_WS_METHODS.stopHeldTurn,
+    }),
     turnItem: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:turn-item",
       tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,

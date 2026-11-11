@@ -39,11 +39,43 @@ listener_probe_available() {
   if [ -d /proc/self/fd ]; then return 0; fi
   listener_lsof >/dev/null 2>&1
 }
+# netstat answers in about 0.15 s where a PowerShell start takes 1.5 s, but its state word is
+# localized on some display languages. It proves server $1 owns 127.0.0.1:$2 only after it exited
+# 0 within 5 s and its whole output has exactly one row from 127.0.0.1:$2 to 0.0.0.0:0, and it is
+# TCP 127.0.0.1:$2 0.0.0.0:0 LISTENING $1. Output that ends mid-line was cut short and proves nothing.
+# Bash only. read -d '' takes the file whole and succeeds only at a NUL byte, which netstat never
+# prints (a command substitution would drop it).
+listener_netstat_owns() {
+  if launch_bounded 5 netstat.exe -ano -p TCP </dev/null >"$STATE_DIR/netstat.$$" 2>/dev/null; then
+    listener_status=0; else listener_status=1; fi
+  listener_netstat=
+  if IFS= read -r -d '' listener_netstat 2>/dev/null <"$STATE_DIR/netstat.$$"; then listener_status=1; fi
+  rm -f "$STATE_DIR/netstat.$$" || :
+  [ "$listener_status" = 0 ] || return 1
+  listener_pid="$1"; listener_port="$2"; listener_found=1
+  printf -v listener_cr '\r'; printf -v IFS ' \t'; set -f
+  while :; do
+    case "$listener_netstat" in *"
+"*) ;; *) [ -z "$listener_netstat" ] || return 1; break ;; esac
+    listener_line="${"${"}listener_netstat%%"
+"*}"
+    listener_netstat="${"${"}listener_netstat#*"
+"}"
+    set -- ${"${"}listener_line%"$listener_cr"}
+    [ "$#" -ge 3 ] && [ "$1" = TCP ] && [ "$2" = "127.0.0.1:$listener_port" ] && [ "$3" = 0.0.0.0:0 ] || continue
+    [ "$#" = 5 ] && [ "$4" = LISTENING ] && [ "$5" = "$listener_pid" ] || return 1
+    case "$5" in ''|*[!0123456789]*) return 1 ;; esac
+    [ "$listener_found" = 1 ] || return 1
+    listener_found=0
+  done
+  return "$listener_found"
+}
 server_owns_listener() (
   # Protocol parsing leaves noglob enabled; socket fd discovery needs expansion.
   set +f
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-    GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand("$ErrorActionPreference = 'Stop'; $connections = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:GOAT_LISTEN_PORT) -ErrorAction Stop); if ($connections | Where-Object { $_.OwningProcess -eq [int]$env:GOAT_PROCESS_ID -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }; exit 1")}' </dev/null >/dev/null 2>&1
+    if [ -n "${"${"}BASH_VERSION:-}" ] && listener_netstat_owns "$1" "$2"; then return 0; fi
+    GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" launch_bounded 15 powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand("$ErrorActionPreference = 'Stop'; $connections = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:GOAT_LISTEN_PORT) -ErrorAction Stop); if ($connections | Where-Object { $_.OwningProcess -eq [int]$env:GOAT_PROCESS_ID -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }; exit 1")}' </dev/null >/dev/null 2>&1
   elif [ -d /proc/self/fd ]; then
     listen_sockets=' '
     for listen_fd in /proc/"$1"/fd/*; do
@@ -60,14 +92,67 @@ server_owns_listener() (
     "$lsof_bin" -nP -a -p "$1" -iTCP@127.0.0.1:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1"
   fi
 )
-# Windows: each PowerShell start costs about 1.5 s, so one waits for server $1 to own the listener on
-# port $2 every 0.1 s: exit 0 once it does, 3 once the server is gone, 4 at the epoch second $3. Run
-# in the background, the job is PowerShell itself.
-server_awaits_listener() {
-  GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_UNTIL_MS="${"${"}3}000" MSYS2_ARG_CONV_EXCL='*' exec powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+# Sets launch_now_us to the wall clock in microseconds without a process where it can: bash 5's
+# EPOCHREALTIME (its decimal point follows the locale), else SECONDS from one date per script.
+LAUNCH_EPOCH_BASE=
+launch_now() {
+  launch_now_us="${"${"}EPOCHREALTIME:-}"
+  case "$launch_now_us" in
+    *[.,]*)
+      launch_now_us="${"${"}launch_now_us%[.,]*}${"${"}launch_now_us#*[.,]}"
+      case "$launch_now_us" in ''|*[!0123456789]*) ;; *) return 0 ;; esac ;;
+  esac
+  if [ -z "${"${"}SECONDS:-}" ]; then launch_now_us=$(( $(date +%s) * 1000000 )); return 0; fi
+  [ -n "$LAUNCH_EPOCH_BASE" ] || LAUNCH_EPOCH_BASE=$(( $(date +%s) - SECONDS ))
+  launch_now_us=$(( (LAUNCH_EPOCH_BASE + SECONDS) * 1000000 ))
 }
-# True while the single-process job with PID $1 still runs.
+# fd 7 is a private FIFO that only carries this shell's job list: bash lists it there and reads it
+# back, and waits on it with read -t, so a pass starts no process. Its name is removed once open (the
+# launch's EXIT trap removes it too). Any failed step falls back to tr and sleep, as does bash before
+# 4, which crashes after a function that ran command exec returns and cannot read -t 0.05.
+LAUNCH_FIFO=
+launch_fifo_open() {
+  LAUNCH_FIFO=0
+  [ "${"${"}BASH_VERSINFO:-0}" -ge 4 ] || return 0
+  # A killed script can leave its name behind. Only names of shells kill -0 finds gone are removed:
+  # a live script's name stays, and one that loses its name before opening it falls back to sleep.
+  case "$-" in *f*) launch_fifo_glob=1; set +f ;; *) launch_fifo_glob= ;; esac
+  for launch_fifo_stale in "$STATE_DIR"/launch-tick.*; do
+    launch_fifo_pid="${"${"}launch_fifo_stale##*.}"
+    case "$launch_fifo_pid" in ''|*[!0123456789]*) continue ;; esac
+    if [ -p "$launch_fifo_stale" ] && ! kill -0 "$launch_fifo_pid" 2>/dev/null; then
+      rm -f "$launch_fifo_stale" || :
+    fi
+  done
+  [ -z "$launch_fifo_glob" ] || set -f
+  if mkfifo "$STATE_DIR/launch-tick.$$" 2>/dev/null; then
+    if { command exec 7<>"$STATE_DIR/launch-tick.$$"; } 2>/dev/null; then LAUNCH_FIFO=1; fi
+    rm -f "$STATE_DIR/launch-tick.$$" || :
+  fi
+}
+launch_fifo_close() { LAUNCH_FIFO=0; exec 7<&-; }
+# Waits $1 microseconds.
+launch_pause() {
+  launch_pause_s=$(( $1 % 1000000 + 1000000 )); launch_pause_s="$(( $1 / 1000000 )).${"${"}launch_pause_s#1}"
+  if [ "$LAUNCH_FIFO" = 1 ]; then
+    if read -t "$launch_pause_s" -u 7 launch_pause_line 2>/dev/null; then launch_pause_r=0; else launch_pause_r=$?; fi
+    [ "$launch_pause_r" -le 128 ] || return 0
+    launch_fifo_close
+  fi
+  sleep "$launch_pause_s"
+}
+# True while the single-process job with PID $1 still runs: bash lists a job as running only until
+# it reaps it, so no reused PID can match.
 listen_running() {
+  if [ "$LAUNCH_FIFO" = 1 ]; then
+    if jobs -pr >&7 2>/dev/null && echo . >&7 2>/dev/null; then
+      listen_found=1
+      while IFS= read -r -t 1 -u 7 listen_line; do
+        case "$listen_line" in .) return "$listen_found" ;; "$1") listen_found=0 ;; esac
+      done
+    fi
+    launch_fifo_close
+  fi
   case " $(jobs -pr 2>/dev/null | tr '\n' ' ') " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 # Ends single-process job $2 through its job spec $1, which bash refuses once the job is reaped and
@@ -75,38 +160,59 @@ listen_running() {
 # a dead member). TERM, then KILL after up to 2 s of clock-checked waits; waited for only after.
 end_job() {
   kill -TERM "$1" 2>/dev/null || :
-  end_job_until=$(( $(date +%s) + 2 ))
-  while listen_running "$2" && [ "$(date +%s)" -lt "$end_job_until" ]; do sleep 0.1; done
+  launch_now; end_job_until=$((launch_now_us + 2000000))
+  while listen_running "$2" && launch_now && [ "$launch_now_us" -lt "$end_job_until" ]; do launch_pause 100000; done
   if listen_running "$2"; then kill -KILL "$1" 2>/dev/null || :; fi
   wait "$2" 2>/dev/null || :
 }
+# The bounded job: the command replaces this subshell, so the job is that one process.
+launch_bounded_job() { MSYS2_ARG_CONV_EXCL='*' exec "$@"; }
+# Windows commands can stall, so after the listener wait starts every one the launch runs goes
+# through here: command $2... runs for at most $1 s of clock and returns its own status, or 124 once
+# it was ended at the bound. It is checked at once and then after 0.05, 0.1 and every 0.25 s. Other
+# hosts, and shells other than bash, whose job specs cannot name it safely, run it directly.
+launch_bounded() {
+  if [ "$GOAT_HOST_WINDOWS" != 1 ] || [ -z "${"${"}BASH_VERSION:-}" ]; then shift; "$@"; return; fi
+  [ -n "$LAUNCH_FIFO" ] || launch_fifo_open
+  launch_now; launch_bound_until=$((launch_now_us + $1 * 1000000)); shift
+  launch_bounded_job "$@" <&0 7<&- &
+  launch_bound_job=$!
+  launch_bound_step=50000
+  while listen_running "$launch_bound_job"; do
+    launch_now
+    if [ "$launch_now_us" -ge "$launch_bound_until" ]; then
+      end_job '%?launch_bounded_job' "$launch_bound_job"; return 124
+    fi
+    launch_bound_left=$((launch_bound_until - launch_now_us))
+    [ "$launch_bound_left" -lt "$launch_bound_step" ] || launch_bound_left="$launch_bound_step"
+    launch_pause "$launch_bound_left"
+    case "$launch_bound_step" in 50000) launch_bound_step=100000 ;; *) launch_bound_step=250000 ;; esac
+  done
+  wait "$launch_bound_job"
+}
+# The launch runs under set -u; these start empty, before any check reads them.
+LISTEN_GONE=; LAUNCH_TASKLIST_STALLED=
 wait_launched_listener() {
-  listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   LISTEN_GONE=
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-    # tasklist and PowerShell can stall, so only the PowerShell child looks at the server. This shell
-    # checks the clock and that child alone, ends it at the deadline, and returns 1 there, 2 once the
-    # server is gone. Another exit, such as a failed start, starts a new child before the deadline.
-    while [ "$(date +%s)" -lt "$listen_deadline" ]; do
-      server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_deadline" &
-      listen_ps=$!
-      while listen_running "$listen_ps"; do
-        if [ "$(date +%s)" -ge "$listen_deadline" ]; then
-          end_job '%?server_awaits_listener' "$listen_ps"
-          return 1
-        fi
-        sleep 0.1
-      done
-      if wait "$listen_ps"; then listen_status=0; else listen_status=$?; fi
+    launch_now; listen_deadline=$(( launch_now_us / 1000000 + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
+    # Each PowerShell start costs about 1.5 s, so one waits for the server to own its listener,
+    # checking it every 0.1 s: exit 0 once it does, 3 once the server is gone, 4 at the deadline.
+    # A failed start (any other exit) is started again before the deadline.
+    while launch_now && [ "$launch_now_us" -lt "$((listen_deadline * 1000000))" ]; do
+      if GOAT_PROCESS_ID="$REMOTE_PID" GOAT_LISTEN_PORT="$REMOTE_PORT" GOAT_WAIT_UNTIL_MS="$listen_deadline"000 \
+        launch_bounded $((listen_deadline - launch_now_us / 1000000)) powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+      then listen_status=0; else listen_status=$?; fi
       case "$listen_status" in
-        0) [ "$(date +%s)" -lt "$listen_deadline" ] && return 0; return 1 ;;
+        0) launch_now; [ "$launch_now_us" -lt "$((listen_deadline * 1000000))" ] && return 0; return 1 ;;
         3) LISTEN_GONE="$REMOTE_PID"; return 2 ;;
-        4) return 1 ;;
+        4|124) return 1 ;;
       esac
-      sleep 0.1
+      launch_pause 100000
     done
     return 1
   fi
+  listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   while server_alive "$REMOTE_PID"; do
     [ "$(date +%s)" -lt "$listen_deadline" ] || return 1
     server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
@@ -114,35 +220,42 @@ wait_launched_listener() {
   done
   return 2
 }
-# After the listener wait. Windows: PowerShell's word that the server is gone stands; otherwise one
-# tasklist runs as a job writing to a file (one process, for end_job). One that has not answered in
-# 5 s is ended and counts as alive, and later checks in this script do not run tasklist again.
+# After the listener wait. Windows: PowerShell's word that the server is gone stands; otherwise
+# tasklist runs bounded to 5 s. Gone is only its localized "INFO: no tasks" answer: exit 0 and one
+# line that is no CSV row but holds ": ". Anything else counts as alive, and after a timeout later
+# checks in this script do not run tasklist again.
 launch_server_alive() {
   [ "$GOAT_HOST_WINDOWS" = 1 ] || { server_alive "$1"; return; }
-  [ "$LISTEN_GONE" != "$1" ] || return 1
-  [ -z "$LAUNCH_TASKLIST_STALLED" ] || return 0
-  MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "PID eq $1" /NH /FO CSV </dev/null >"$STATE_DIR/alive.$$" 2>/dev/null &
-  launch_probe=$!
-  launch_probe_until=$(( $(date +%s) + 5 ))
-  while listen_running "$launch_probe"; do
-    if [ "$(date +%s)" -ge "$launch_probe_until" ]; then
-      end_job '%?tasklist.exe' "$launch_probe"; LAUNCH_TASKLIST_STALLED=1
-      rm -f "$STATE_DIR/alive.$$"; return 0
-    fi
-    sleep 0.1
-  done
-  wait "$launch_probe" 2>/dev/null || :
-  if grep -q "^\"[^\"]*\",\"$1\"," "$STATE_DIR/alive.$$" 2>/dev/null; then launch_alive=0; else launch_alive=1; fi
+  [ "${"${"}LISTEN_GONE:-}" != "$1" ] || return 1
+  [ -z "${"${"}LAUNCH_TASKLIST_STALLED:-}" ] || return 0
+  if launch_bounded 5 tasklist.exe /FI "PID eq $1" /NH /FO CSV </dev/null >"$STATE_DIR/alive.$$" 2>/dev/null; then
+    launch_probe=0; else launch_probe=$?; fi
+  if [ "$launch_probe" = 124 ]; then LAUNCH_TASKLIST_STALLED=1; rm -f "$STATE_DIR/alive.$$"; return 0; fi
+  launch_alive=0
+  if [ "$launch_probe" = 0 ] && LC_ALL=C awk '{ sub(/\r$/, "") } $0 != "" { n++; line = $0 }
+    END { exit !(n == 1 && substr(line, 1, 1) != "\"" && index(line, ": ") > 0) }' \
+    "$STATE_DIR/alive.$$" 2>/dev/null; then launch_alive=1; fi
   rm -f "$STATE_DIR/alive.$$"
   return "$launch_alive"
 }
-# Waits up to about 2 s for server $1 to exit.
-launch_wait_exit() {
-  launch_wait_count=0; launch_wait_until=$(( $(date +%s) + 3 ))
-  while [ "$launch_wait_count" -lt 20 ] && [ "$(date +%s)" -lt "$launch_wait_until" ] &&
+# Stops server $1 after a failed launch: taskkill is bounded to 10 s, then up to about 2 s for the
+# exit. A kill that timed out, or a server still seen or not answered for afterwards, is reported
+# as not confirmed stopped.
+launch_stop_server() {
+  launch_stop_unconfirmed=
+  if launch_server_alive "$1"; then
+    if [ "$GOAT_HOST_WINDOWS" != 1 ]; then server_kill "$1" || :
+    elif launch_bounded 10 taskkill.exe /PID "$1" /F >/dev/null 2>&1; then :
+    elif [ "$?" = 124 ]; then launch_stop_unconfirmed=1; fi
+  fi
+  launch_stop_count=0; launch_stop_until=$(( $(date +%s) + 3 ))
+  while [ "$launch_stop_count" -lt 20 ] && [ "$(date +%s)" -lt "$launch_stop_until" ] &&
     launch_server_alive "$1"; do
-    launch_wait_count=$((launch_wait_count + 1))
+    launch_stop_count=$((launch_stop_count + 1))
     sleep 0.1
   done
+  if [ -n "$launch_stop_unconfirmed" ] || launch_server_alive "$1"; then
+    printf 'GOAT could not confirm that the server (PID %s) stopped; it may still be running on this host.\n' "$1" >&2
+  fi
 }
 `;

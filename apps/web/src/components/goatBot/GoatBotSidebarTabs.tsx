@@ -29,16 +29,8 @@ export function GoatBotSidebarTabs() {
   const { enabled } = useGoatBotEnabled();
   const mode = useGlobalAgentStore(selectGlobalAgentMode);
   const setMode = useGlobalAgentStore((state) => state.setMode);
-  const {
-    roster,
-    groups,
-    rows,
-    rowsLoaded,
-    environmentId,
-    refresh,
-    slackEnabled,
-    supportsMembers,
-  } = useBotRoster();
+  const { roster, groups, rows, environmentId, refresh, slackEnabled, supportsMembers } =
+    useBotRoster();
   const mainName = roster[0]?.profile?.name ?? "GOAT Bot";
   if (!enabled) return null;
   return (
@@ -58,11 +50,6 @@ export function GoatBotSidebarTabs() {
             slackEnabled={slackEnabled}
             main={roster[0]?.profile ?? null}
           />
-          {rowsLoaded && rows.length === 0 && (
-            <p className="px-4 text-xs text-sidebar-muted-foreground">
-              Work {mainName} starts will appear here.
-            </p>
-          )}
           {environmentId && (
             <GoatBotChildRows environmentId={environmentId} rows={rows} refresh={refresh} />
           )}
@@ -89,9 +76,28 @@ function NewBotButton({
 }) {
   const canCreate = useAtomValue(channelEnvironment.createBot.permissionAtom(environmentId));
   const [open, setOpen] = useState(false);
+  // The new bot's row shows at once; the roster's own row replaces it when the bot arrives.
+  const [creating, setCreating] = useState<string | null>(null);
   const navigate = useNavigate();
   return (
     <SidebarGroup>
+      {creating !== null ? (
+        <div
+          role="status"
+          className="mb-1 flex items-center gap-2 rounded-lg px-2 py-2 text-sm text-sidebar-muted-foreground"
+        >
+          <span
+            aria-hidden
+            className="flex size-8 shrink-0 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar text-goat-avatar-foreground"
+          >
+            {creating.slice(0, 1).toUpperCase()}
+          </span>
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-sidebar-foreground">{creating}</span>
+            <span className="text-xs">Creating…</span>
+          </span>
+        </div>
+      ) : null}
       <Button
         variant="outline"
         size="sm"
@@ -108,6 +114,7 @@ function NewBotButton({
           canSubmit={canCreate}
           mainName={mainName}
           onClose={() => setOpen(false)}
+          onPending={setCreating}
           onCreated={(bot) => void navigate({ to: "/bot", search: { bot: bot.botId } })}
         />
       ) : null}

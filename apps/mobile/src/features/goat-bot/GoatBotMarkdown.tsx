@@ -13,20 +13,20 @@ import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { goatBotMarkdownLinkTarget } from "./goatBotMarkdownLinks";
 
 /**
- * Bot text that holds Markdown, rendered by the chat's native renderer in the bubble's type and
+ * Bot text that holds Markdown, rendered by the chat's native renderer in the transcript's type and
  * colour. Thread links open where the shown history lives; other links leave the app.
  */
 export function GoatBotMarkdown(props: {
   readonly text: string;
-  readonly textColor: string;
   readonly failed?: boolean;
   readonly environmentId: EnvironmentId | null;
   readonly onSelectThread: (thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) => void;
 }) {
   const styles = useMarkdownPreviewStyles();
   const bodyText = useScaledTextRole("body");
-  const danger = useUniwindTheme()["--color-danger-foreground"];
-  const color = props.failed ? danger : props.textColor;
+  const theme = useUniwindTheme();
+  const danger = theme["--color-danger-foreground"];
+  const color = props.failed ? danger : theme["--color-foreground"];
   const openLink = (href: string) => {
     const target = goatBotMarkdownLinkTarget(
       href,

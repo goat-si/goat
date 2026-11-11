@@ -3,11 +3,20 @@ import {
   effectiveSnoozed,
   type ThreadSnoozeShell,
 } from "@goat/client-runtime/state/thread-settled";
+import { isSideChatThread } from "@goat/contracts";
 import { sortThreads, type ThreadSortInput } from "../../lib/threadSort";
 import type { Thread } from "../../types";
 
+/** Subagents and side chats have no sidebar row of their own. */
+function isSidebarHiddenThread(thread: Pick<Thread, "lineage" | "sideChatOf">): boolean {
+  return isSideChatThread(thread) || thread.lineage.relationshipToParent === "subagent";
+}
+
 export function getFallbackThreadIdAfterDelete<
-  T extends Pick<Thread, "id" | "projectId" | "createdAt" | "updatedAt" | "settledOverride"> &
+  T extends Pick<
+    Thread,
+    "id" | "projectId" | "createdAt" | "updatedAt" | "settledOverride" | "lineage" | "sideChatOf"
+  > &
     ThreadSortInput &
     ThreadSnoozeShell,
 >(input: {
@@ -31,7 +40,8 @@ export function getFallbackThreadIdAfterDelete<
           thread.id !== deletedThreadId &&
           !deletedThreadIds?.has(thread.id) &&
           thread.settledOverride !== "settled" &&
-          !effectiveSnoozed(thread, { now }),
+          !effectiveSnoozed(thread, { now }) &&
+          !isSidebarHiddenThread(thread),
       ),
       sortOrder,
     )[0]?.id ?? null

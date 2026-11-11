@@ -5,7 +5,9 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { ThreadId, type WorktreeSnapshot } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
@@ -211,4 +213,49 @@ it.effect("refuses to restore onto a branch that moved since the snapshot", () =
     assert.equal(error.reason, "snapshot-conflict");
     assert.isFalse(NodeFS.existsSync(worktreePath));
   }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect(
+  "a restore stopped during setup keeps the folder, and resuming it keeps work done since",
+  () =>
+    Effect.gen(function* () {
+      const { repo, worktreePath, git, snapshot } = yield* fixture;
+      const restored: string[] = [];
+      const setupStarted = yield* Deferred.make<void>();
+      const blockingSetup = Layer.mergeAll(
+        services(snapshot, restored, 0),
+        Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
+          runForThread: () =>
+            Deferred.succeed(setupStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        }),
+      );
+      const stopped = yield* makeRestoreThreadWorkspace.pipe(Effect.provide(blockingSetup));
+      const fiber = yield* stopped({ threadId, cwd: repo, worktreePath, branch: "feature" }).pipe(
+        Effect.forkChild,
+      );
+      yield* Deferred.await(setupStarted);
+      yield* Fiber.interrupt(fiber);
+      const pending = yield* makeRestorePending;
+      assert.isTrue(NodeFS.existsSync(worktreePath));
+      assert.isFalse(yield* pending.ready(worktreePath));
+      // Work in the folder after the stop: a new file and a commit.
+      NodeFS.writeFileSync(NodePath.join(worktreePath, "since"), "kept");
+      git(worktreePath, ["add", "since"]);
+      git(worktreePath, ["commit", "-m", "since"]);
+      const failing = yield* makeRestoreThreadWorkspace.pipe(
+        Effect.provide(services(snapshot, restored, 1)),
+      );
+      const error = yield* Effect.flip(
+        failing({ threadId, cwd: repo, worktreePath, branch: "feature" }),
+      );
+      assert.equal(error.reason, "setup-failed");
+      assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "since"), "utf8"), "kept");
+      const resumed = yield* makeRestoreThreadWorkspace.pipe(
+        Effect.provide(services(snapshot, restored, 0)),
+      );
+      yield* resumed({ threadId, cwd: repo, worktreePath, branch: "feature" });
+      assert.isTrue(yield* pending.ready(worktreePath));
+      assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "since"), "utf8"), "kept");
+      assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "untracked"), "utf8"), "new");
+    }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );

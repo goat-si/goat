@@ -45,7 +45,8 @@ Socket attachments carry `{role, sid, sent, acked, at, deadline}`; client socket
 - A path whose nodeId is not 26 characters of `[a-z2-7]` is HTTP 400; a non-upgrade request to a WebSocket path is 426.
 - Mux frame on the uplink: `[type u8][sid u32 LE][payload]`.
   - 1 OPEN (relay -> node): no payload. The relay assigns sid: a positive u32 from a per-node counter that
-    survives hibernation and uplink replacement, so a sid is never reused for that node.
+    survives hibernation and uplink replacement. Past 0xffffffff the counter wraps to 1 and skips every sid still
+    live for that node, so a live sid is never handed out twice.
   - 2 DATA (both ways): opaque bytes.
   - 3 CLOSE (both ways): payload = u16 LE close code. Either side closing a session sends CLOSE; the relay closes the
     client socket with that code; a client socket that closes produces CLOSE toward the node with the client's code
@@ -80,6 +81,12 @@ Socket attachments carry `{role, sid, sent, acked, at, deadline}`; client socket
 | `a:<total bytes received>` | receiver of relay traffic, after each 64 KiB received (counted on arrival) | cumulative ack                  |
 
 Any other text closes the socket 1003.
+
+A relay sends nothing when an uplink authenticates and answers `ping` on its own (the Worker even before it has
+handled the uplink's answer), so no message tells a node that clients now reach its uplink. A client that dials before
+the relay has handled the answer reaches the uplink being replaced, whose sessions close 4404 when it is replaced, or
+no uplink (4404). A node that needs a session on its new uplink at once (`pen relay check`) opens it again until its
+own side answers.
 
 ## Sessions
 
@@ -165,7 +172,11 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   key, the oldest dropped first; the pool is not persisted. A node's own records never enter the pool. A mesh holds at
   most 4096 records: a record that is not a `revoke` is refused once 3840 are stored, and a `revoke` once 4096 are
   stored, so a set full of other records can still revoke and every set fits a 4096-hash `have`. A node reloading its
-  own saved set applies no cap.
+  own saved set applies no cap. A node that refuses a received record for a cap closes that sync 4508 without its
+  `done`, and one that cannot save what it received closes it 4507, so the sender learns the records were not taken.
+  Limit: no signer has a share of the record space, so one member can fill it with valid records (ordinary ones to
+  3840, then revokes to 4096), after which every node refuses every new record, the revoke of that member included;
+  the remedy is a new mesh.
 
 ### View
 
@@ -251,17 +262,43 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   listens on loopback only (tests and local relays), where the origin follows the request. Beyond the contract it caps all
   connections (4096, `--max-sockets`) and one IPv4 address's or IPv6 /64's connections (64, `--max-per-ip`), counted
   from accept: one past a cap is closed before any request is read (HTTP 429 when a cap is reached between accept and
-  upgrade). Past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It caps the memory that queued and partly read messages hold, each counted at its allocation size plus 128
-  bytes: all of it (192 MiB, `--max-queued-mib`) and one source address's part (16 MiB,
-  `--max-queued-per-source-mib`, the same IPv4 address or IPv6 /64). Data that would pass either ends the session whose
-  socket would hold it 4408: a client that stops reading ends its own session, and a socket whose message being read
-  would pass it closes 4408. So a full relay ends the sessions of the source that holds the memory, and sessions from
-  other sources go on until enough sources fill the total. Each connection gets fixed 64 KiB kernel send and receive
-  buffers and at most 8 KiB of request headers. It
+  upgrade). Past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It counts the memory messages hold, charged before it is allocated: queued messages at their allocation size plus
+  128 bytes, all of them at most 192 MiB (`--max-queued-mib`) and one source address's at most 16 MiB
+  (`--max-queued-per-source-mib`; a source is an IPv4 address or an IPv6 /64). Each socket reads a message of up to
+  96 KiB (a ping, an ack or a whole Noise message) without a charge; a larger message being read draws on a separate
+  32 MiB pool, a source at most 4 MiB of it, and a socket whose message would pass that closes 4408. Queued session data
+  is charged before it is copied, to the socket's window (4 MiB), the share of the address of the socket that will
+  receive it (16 MiB) and the total (128 MiB on the reference unit). Data that does not fit any of the three ends the
+  session that offered it 4408 (the client is closed 4408 and the node gets CLOSE 4408); nothing else ends because of
+  memory: no other session, no other queue, never an uplink. A socket that stops reading is ended only when one write
+  stalls for 10 s (WriteTimeout). A client session is admitted only if its OPEN and its
+  eventual CLOSE frame toward the uplink fit, charged like data (136 bytes each in the queue, 12 bytes of window) and
+  within 256 KiB of session frames per uplink queue; otherwise the new client is closed 4429 and nothing is queued,
+  so a CLOSE always fits and session frames never end an uplink. The rest of what the relay queues is not charged and
+  is bounded per socket by a constant: the 32-byte challenge once, at most 8 pongs, and one close frame, about 1.4 KiB.
+  So a full relay still answers an uplink and closes sessions cleanly. Before the node has sent DATA for a session, its
+  client may send one message of at most 4096 bytes (its first); a second message of any size, or a larger first one,
+  ends the session 4408. Past 8 pending sessions per node, the oldest pending session of the address holding the most
+  pending sessions there (the new client's own on a tie) closes 4429, so one address cannot displace another's
+  pending session (the Worker keeps the node-wide rule above). So one source cannot end another source's sessions or uplinks, and data between other
+  sources is not refused while the sources other than it together hold less than the total minus one share. Limits:
+  the sessions on one uplink share its 4 MiB window, so a peer the node has answered can fill it while the node reads
+  slowly, and other sessions' data toward that node is refused (4408) until the node reads; the node bounds such a peer
+  itself (a `tcp` stream past its 512 KiB credit window is closed 4408, an account session that sends no assertion is
+  closed after its wait). An address whose 16 MiB share is held by its sockets that do not read gets data for its other
+  sockets refused until those sockets read or their writes time out. Under a flood from many addresses the relay is
+  full for everyone and offered data is refused until stalled sockets time out. In each case the refused session ends
+  4408, nothing reopens by itself, and the node's other relay is unaffected. Each connection
+  gets fixed 64 KiB kernel send and receive buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
   handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
-  flooding empty DATA ends only its own session 4408. Session ids are never
-  reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
+  flooding empty DATA ends only its own session 4408. Session ids count per node id while
+  that node has sockets on the relay and wrap like the Worker's (skipping live ids), so a node sees only its own
+  sessions' ids and nothing is kept per node id once its last socket is gone. The room, and with it the counter, outlives an uplink only while clients
+  remain, so a new counter always meets a new uplink connection, and a node keys sessions by its uplink connection:
+  an id from an earlier counter (a restart, or a room that emptied) cannot reach a session of the new one. The counter
+  does not read the clock. (The Worker keeps its counter in that node id's Durable Object, one stored integer per node
+  id that ever had a client reach its authenticated uplink, with no cleanup.)
 
 ## Accounts (v1.1)
 
@@ -384,14 +421,38 @@ a member after those syncs, and only then serves `tcp` streams and registers. It
 offered that its copy of the mesh does not count as a member. One that refuses it (4401) is asked again with a check on
 kind 0x04: the first line is `{"t":"check","assertion":{...}}` instead of `assertion`. The node runs the assertion
 checks above (a lock does not matter here) and then a sync as on kind 0x01, with the joiner as initiator, except that it
-sends its own records and `done` only after the joiner's `done`, and only if, with the joiner's records merged into a
-scratch copy of its own set, the joiner is a member whose admit and every admit before it back to the founder were signed
-by keys its own view does not count as revoked; otherwise it sends `refused` and closes 4401. It stores nothing the
-joiner sent. A node that already left the mesh, or has not heard of the joiner yet, so passes it its records, and the
-joiner applies them like any sync. A node that still refuses holds records the admitting member left out (a revoked or
-stolen member can serve a cut copy, and a stolen key can win a revoke race in the merged order, so the check does not
-rely on that order), so the join fails with that node's name and nothing is installed. A refusal also stands when the
-check does not complete; a node older than the check answers `refused` ("expected an assertion") and 4401, as before.
+sends its own records and `done` only after the joiner's `done`, and only if both hold in a scratch copy of its own set
+with the joiner's records merged in: the joiner is a member, and a walk from the joiner toward the founder accepts it.
+The walk visits a key, starting with the joiner's: if this node's own view counts the key as a current member, it
+accepts; if its own view revoked the key (plainly or as compromised), or the key has no admitter (a founder this node
+does not count), it refuses; otherwise it moves to the key's admitter (the member entry's `admittedBy` in the merged
+copy, current or revoked) and visits that. It never walks past a key its own view revoked: an admit by a revoked key
+that this node does not already hold looks the same as one signed after the revoke. Keys it never heard of are walked
+through, so the walk must still reach a current member. Otherwise it sends `refused` and closes 4401. It stores nothing
+the joiner sent. A node that left, was revoked, or has not heard of the joiner yet so passes it its records whenever the
+joiner's admits reach a member it still counts, and the joiner applies them like any sync. A node that still refuses
+holds a revoke along the joiner's admits (a revoked or stolen member can serve a cut copy and a stolen key can win a
+revoke race in the merged order, so the check decides on the node's own view), so the join fails with that node's name
+and nothing is installed. The walk refuses in two honest cases.
+If a machine Y admitted by a since-revoked key X admits the joiner and this node has not received X's admit of Y yet,
+the join succeeds once the members have synced that admit. If X's admit of Y and a plain revoke of X share their past
+and the revoke sorts first in the canonical order, replay ignores the admit: Y was never a member in any converged view,
+no sync changes that, and Y has to join again (invite, or sign-in through a current member) before machines can join
+through it. The joiner's message says to run `pen login` again and, if it keeps failing, to join the admitting machine
+again. A node that is not a member of its own view (revoked, or its admit never took effect) admits nobody: on kind 0x04 it
+answers an `assertion`, at once and again after the refresh before deciding, and on kind 0x03 a card, before the
+invite is used, with `{"t":"refused","reason":"this machine is not a member of the mesh","notMember":true}` and 4401,
+signing and queueing nothing; it still answers a `check`. The membership check and the admit's signature (with the
+invite's burn, or the queueing of a request) are one step under the node's store lock, so a revoke that arrives in
+between still stops them. For a Google join that step also repeats the decision: the assertion against the binding
+then in effect, and the lock; a lock merged in the meantime queues the request, an unbind or rebind refuses it. An
+approval checks the request's account and login key against the binding at signing time. A Google joiner leaves such a node out and races the other
+listed nodes again in the same sign-in; an invited joiner is told the invite was not used and to ask a current member
+for a new one. An older joiner ignores `notMember` and reports the refusal as before. A refusal also stands when the check
+does not complete. A node older than the check (pen 0.2.6 and before) answers `refused` ("expected an assertion") and
+4401, so while such a node is the one refusing, a join fails in exactly the cases the check was added for; updating it,
+or joining by invite, is the way through. A listed node that does not answer (offline, out of session slots, slower than
+the 30 s push timeout) takes no part, so the cut-copy protection holds only while an honest listed node answers.
 When its assertion has expired by then
 (a slow approval), it stays a member and says registration waits for the next `pen login`. `pen login` on a member whose
 mesh is unbound, or bound to an older login key, offers to bind it again (same question).
@@ -400,7 +461,8 @@ mesh is unbound, or bound to an older login key, offers to bind it again (same q
 
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
 no live invite, refused card); 4402 relay protocol error; 4403 relay auth failed; 4404 node offline or port refused;
-4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps. 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
+4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps; 4507 a mesh sync whose records the node could not save, or while it holds records it could not save;
+4508 a mesh sync that brought a record the node refused for its record cap (relays never send 45xx). 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
 or card that did not arrive within 10 s.
 
 ## Vectors
@@ -431,9 +493,25 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   already revoked can be revoked again as compromised. The registry's trust limit and the kind 0x04 slot timing are
   stated. Vectors: two new login check cases.
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
-  messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so a
-  full relay ends the sessions of the source holding the memory. Relay implementation only; no wire change.
+  messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
+  fill it. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
+  (else 4429), and past 8 pending sessions per node the address holding the most loses its oldest (4429). Go relay
+  only; the Worker keeps the node-wide rule. No wire change.
+- v1.1 (2026-11-11): session ids wrap past 0xffffffff to 1 and skip live ones, on both relays (the Worker's counter
+  grew past u32 and its frames truncated it); the Go relay counts them per node id. No wire change.
+- v1.1 (2026-11-11): a mesh sync that brings a record the receiver refuses for its cap closes 4508 (4429 is the relays' busy code), and one whose
+  records it cannot save closes 4507; before, both answered `done`. Older nodes still answer `done`; an older
+  sender reads 4507 and 4508 as a failed sync (the member shown offline), never as taken.
+- v1.1 (2026-11-11): `refused` may carry `"notMember":true` from a node that is not a member of its own view; joiners
+  try another node (Google join) or report that the invite was not used. Older joiners ignore the member. No vector.
+- v1.1 (2026-11-11): `pen relay serve` reads a message of up to 96 KiB per socket without a charge and larger ones
+  from a separate 32 MiB pool; data that does not fit the window, the receiving address's share or the total ends only
+  the session that offered it, and a session the node has not answered may send one message of at most 4096 bytes.
+  Control messages are not charged. The "Relay text" section states that nothing confirms an uplink's authentication
+  and that a pong proves nothing about it. No wire change.
 - v1.1 (2026-11-11): kind 0x04 `check`: a Google joiner that a listed node refused asks it to check the joiner's
-  records against its own, so a node that left or has not heard of the joiner no longer fails the join while a cut copy
-  served by a revoked member still does. Nodes before this answer the check as an unexpected first line (4401), which
+  records against its own, so a node that left or has not heard of the joiner no longer fails the join while the
+  joiner's admits reach a member it counts; a copy whose admits pass a key it revoked, plainly or as compromised,
+  still fails. Nodes before this answer the check as an unexpected first line (4401), which
   the joiner counts as the refusal it was. No account-stream messages are in the shared vectors.

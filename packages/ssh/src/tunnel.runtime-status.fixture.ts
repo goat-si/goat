@@ -81,6 +81,7 @@ export const fixture = (
     }),
   );
   const calls = { probes: 0, uploads: 0, launches: 0, forwards: 0, prompts: 0, strict: false };
+  const probeScripts: Array<string> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
@@ -114,6 +115,7 @@ export const fixture = (
       if (command.args.includes("goat-runtime-cleanup")) return makeSuccessfulProcess("");
       if (script.includes("ready=false") && !isRemoteLaunch(command.args)) {
         calls.probes++;
+        probeScripts.push(script);
         const gate = probeGate;
         if (gate !== undefined) {
           probeGate = undefined;
@@ -167,6 +169,7 @@ export const fixture = (
   );
   return {
     calls,
+    probeScripts,
     setToolFixProbe: (value: string) => {
       toolFixProbe = value;
     },

@@ -78,6 +78,7 @@ import { resolveProviderCompatibility } from "../../provider/providerCompatibili
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { buildCodexDevelopmentContext } from "../../provider/CodexDeveloperInstructions.ts";
 import {
+  CODEX_EXPECTED_THREAD_CONFIG,
   CODEX_TEST_MODEL_SELECTION,
   CODEX_TEST_RUNTIME_POLICY,
   makeCodexTestTurnInput,
@@ -1963,8 +1964,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           cwd: CODEX_TEST_RUNTIME_POLICY.cwd!,
           model: CODEX_TEST_MODEL_SELECTION.model,
           config: {
-            "tools.update_plan.enabled": true,
-            mcp_optional_startup_grace_ms: 10_000,
+            ...CODEX_EXPECTED_THREAD_CONFIG,
             "mcp_servers.goat": {
               url: attachment.endpoint,
               disabled_tools: [...disabledTools, "goat_thread_wait"],
@@ -2262,8 +2262,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           cwd: "/workspace",
           model: CODEX_TEST_MODEL_SELECTION.model,
           config: {
-            "tools.update_plan.enabled": true,
-            mcp_optional_startup_grace_ms: 10_000,
+            ...CODEX_EXPECTED_THREAD_CONFIG,
             ...limits,
           },
         });
@@ -8748,7 +8747,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 nativeThreadId,
                 nativeTurnId: "goal-turn-1",
                 prompt: objective,
-                sentPrompt: `Start working toward this goal: ${objective}`,
+                sentPrompt: `This thread's goal is already set. Do not call create_goal. Start working on it now: ${objective}`,
               }).slice(5),
               5,
             ),
@@ -8868,7 +8867,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 nativeThreadId,
                 nativeTurnId: "goal-turn-limit",
                 prompt: atLimit,
-                sentPrompt: `Start working toward this goal: ${atLimit}`,
+                sentPrompt: `This thread's goal is already set. Do not call create_goal. Start working on it now: ${atLimit}`,
               }).slice(5),
               5,
             ),
@@ -9666,8 +9665,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           cwd: "/workspace",
           model: "gpt-5.4",
           config: {
-            "tools.update_plan.enabled": true,
-            mcp_optional_startup_grace_ms: 10_000,
+            ...CODEX_EXPECTED_THREAD_CONFIG,
             "shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",
             "shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
             "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",

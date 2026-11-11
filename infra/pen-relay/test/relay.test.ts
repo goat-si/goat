@@ -131,6 +131,27 @@ describe("pen relay contract (default limits)", () => {
     expect(next.sid).toBeGreaterThan(Math.max(...seen));
   });
 
+  // The relay answers ping on its own, before it has handled an uplink's answer, and says nothing
+  // when it takes the uplink. So a pong proves nothing: a client dialed after it reaches the uplink
+  // being replaced, whose sessions then close 4404 (pen relay check opens its session again).
+  it("an uplink's pong comes before its answer is handled, so a client dialed after it can reach the uplink it replaces", async () => {
+    const seed = randomSeed();
+    const old = await fakeNode(relay.url, seed);
+    await old.ready();
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    const replacement = await fakeNode(relay.url, seed, { answerAfter: answered });
+    await replacement.opened;
+    replacement.sendRaw("ping");
+    expect(await replacement.texts.next()).toBe("pong");
+    const c = client(relay.url, old.nodeId);
+    await old.expect(FrameType.Open);
+    answer();
+    expect(await old.closed).toBe(CloseCode.Replaced);
+    expect(await c.closed).toBe(CloseCode.Offline);
+    await replacement.ready();
+  });
+
   it("a ninth pending session closes the oldest pending one 4429", async () => {
     const node = await readyNode(relay);
     const pending: Array<{ c: Client; sid: number }> = [];
@@ -282,6 +303,30 @@ describe("pen relay contract (default limits)", () => {
     );
     node.sendRaw("hello");
     expect(await node.closed).toBe(CloseCode.Unsupported);
+  });
+});
+
+describe("pen relay session ids at the u32 boundary", () => {
+  let relay: Relay;
+  beforeAll(async () => {
+    relay = await startRelay({ SID_START: "4294967293" });
+  });
+  afterAll(async () => {
+    await relay?.stop();
+  });
+
+  // readyNode's probe client takes 4294967294.
+  it("the counter wraps from 0xffffffff to 1 and DATA still routes both ways on both sides of the wrap", async () => {
+    const node = await readyNode(relay);
+    const last = await session(relay, node);
+    const wrapped = await session(relay, node);
+    expect([last.sid, wrapped.sid]).toEqual([0xffffffff, 1]);
+    for (const s of [last, wrapped]) {
+      await s.c.send(bytes(`to node ${s.sid}`));
+      expect(text((await node.expect(FrameType.Data, s.sid)).payload)).toBe(`to node ${s.sid}`);
+      node.send(FrameType.Data, s.sid, bytes(`to client ${s.sid}`));
+      expect(text(await s.c.messages.next())).toBe(`to client ${s.sid}`);
+    }
   });
 });
 

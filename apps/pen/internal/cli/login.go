@@ -99,33 +99,8 @@ func RunLogin(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	cfg, err := st.LoadConfig()
+	cfg, err := startConfig(st, relayURLs, *name)
 	if err != nil {
-		return fail(stderr, err)
-	}
-	if len(relayURLs) > 0 {
-		var list []string
-		for _, u := range relayURLs {
-			list = append(list, strings.TrimRight(u, "/"))
-		}
-		if err := daemon.ValidRelays(list); err != nil {
-			return fail(stderr, err)
-		}
-		cfg.SetRelays(list)
-	}
-	if len(cfg.RelayList()) == 0 {
-		return fail(stderr, errors.New("no relay configured; pass --relay https://<relay>"))
-	}
-	if *name != "" {
-		cfg.Name = *name
-	}
-	if cfg.Name == "" {
-		cfg.Name = defaultName()
-	}
-	if !ident.ValidName(cfg.Name) {
-		return fail(stderr, fmt.Errorf("invalid name %q", cfg.Name))
-	}
-	if err := st.SaveConfig(cfg); err != nil {
 		return fail(stderr, err)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -164,7 +139,7 @@ func (l *loginRun) run(ctx context.Context) error {
 		return err
 	}
 	l.tok, l.signedIn = tok, time.Now()
-	fmt.Fprintf(l.stdout, "signed in as %s\n", tok.Account.Email)
+	fmt.Fprintf(l.stdout, "signed in as %s\n", safe(tok.Account.Email))
 	cur, err := mesh.Load(l.st)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -186,7 +161,7 @@ func (l *loginRun) run(ctx context.Context) error {
 	}
 	if cur != nil && len(cur.View().Members) > 1 {
 		return fmt.Errorf("this machine is in mesh %s with %d members, and %s is registered with mesh %s; pen leave first",
-			cur.MeshID, len(cur.View().Members), tok.Account.Email, tok.Mesh.MeshID)
+			cur.MeshID, len(cur.View().Members), safe(tok.Account.Email), tok.Mesh.MeshID)
 	}
 	return l.join(ctx)
 }
@@ -204,18 +179,10 @@ func (l *loginRun) bindAgain(ctx context.Context, meshID string) error {
 		return err
 	}
 	want := l.account()
-	var q string
-	switch cur := ls.Account; {
-	case cur != nil && *cur == want:
+	if ls.Account != nil && *ls.Account == want {
 		return nil
-	case cur == nil:
-		q = fmt.Sprintf("Mesh %s is not bound to a Google account. Bind it to %s again?", meshID, l.tok.Account.Email)
-	case cur.Sub == want.Sub:
-		q = fmt.Sprintf("Mesh %s is bound to an older login key (%s). Bind it to the service's current key %s?", meshID, cur.LoginKey.Kid, want.LoginKey.Kid)
-	default:
-		q = fmt.Sprintf("Mesh %s is bound to another Google account (sub %s). Bind it to %s instead?", meshID, cur.Sub, l.tok.Account.Email)
 	}
-	if !confirm(l.stdout, l.yes, q) {
+	if !confirm(l.stdout, l.yes, bindAgainQuestion(meshID, ls.Account, want, l.tok.Account.Email)) {
 		fmt.Fprintln(l.stdout, "the mesh's binding is unchanged")
 		return nil
 	}
@@ -224,21 +191,36 @@ func (l *loginRun) bindAgain(ctx context.Context, meshID string) error {
 	if err := daemon.Call(l.st, daemon.Request{Op: "login-bind", Account: &acct}, &r); err != nil {
 		return err
 	}
-	fmt.Fprintf(l.stdout, "mesh %s is bound to %s again\n", meshID, l.tok.Account.Email)
+	fmt.Fprintf(l.stdout, "mesh %s is bound to %s again\n", meshID, safe(l.tok.Account.Email))
 	return nil
+}
+
+// bindAgainQuestion asks to bind a mesh bound to cur (nil: unbound) to want instead.
+func bindAgainQuestion(meshID string, cur *mesh.Account, want mesh.Account, email string) string {
+	switch {
+	case cur == nil:
+		return fmt.Sprintf("Mesh %s is not bound to a Google account. Bind it to %s again?", meshID, safe(email))
+	case cur.Sub == want.Sub:
+		return fmt.Sprintf("Mesh %s is bound to an older login key (%s). Bind it to the service's current key %s?", meshID, cur.LoginKey.Kid, want.LoginKey.Kid)
+	}
+	return fmt.Sprintf("Mesh %s is bound to another Google account (sub %s). Bind it to %s instead?", meshID, safe(cur.Sub), safe(email))
+}
+
+func otherAccountWarning(meshID, sub string) string {
+	return fmt.Sprintf("warning: mesh %s is bound to another Google account (sub %s); binding replaces it", meshID, safe(sub))
 }
 
 // foundAndBind binds this node's mesh (founding one if there is none) to the account.
 func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
-	q := fmt.Sprintf("No mesh is registered for %s. Found a mesh with this machine and bind it to %s?", l.tok.Account.Email, l.tok.Account.Email)
+	q := fmt.Sprintf("No mesh is registered for %s. Found a mesh with this machine and bind it to %s?", safe(l.tok.Account.Email), safe(l.tok.Account.Email))
 	if cur != nil {
 		v := cur.View()
 		if n := len(v.Members); n > 1 {
-			fmt.Fprintf(l.stdout, "warning: mesh %s has %d other members; binding it lets every machine that signs in as %s join them\n", cur.MeshID, n-1, l.tok.Account.Email)
-			q = fmt.Sprintf("No mesh is registered for %s. Bind this machine's mesh %s (%d members) to %s?", l.tok.Account.Email, cur.MeshID, n, l.tok.Account.Email)
+			fmt.Fprintf(l.stdout, "warning: mesh %s has %d other members; binding it lets every machine that signs in as %s join them\n", cur.MeshID, n-1, safe(l.tok.Account.Email))
+			q = fmt.Sprintf("No mesh is registered for %s. Bind this machine's mesh %s (%d members) to %s?", safe(l.tok.Account.Email), cur.MeshID, n, safe(l.tok.Account.Email))
 		}
 		if v.Account != nil && v.Account.Sub != l.tok.Account.Sub {
-			fmt.Fprintf(l.stdout, "warning: mesh %s is bound to another Google account (sub %s); binding replaces it\n", cur.MeshID, v.Account.Sub)
+			fmt.Fprintln(l.stdout, otherAccountWarning(cur.MeshID, v.Account.Sub))
 		}
 	}
 	if !confirm(l.stdout, l.yes, q) {
@@ -262,7 +244,7 @@ func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 	if err := l.register(ctx, r.Status.MeshID); err != nil {
 		return err
 	}
-	fmt.Fprintf(l.stdout, "mesh %s is bound to %s; other machines join it with pen login\n", r.Status.MeshID, l.tok.Account.Email)
+	fmt.Fprintf(l.stdout, "mesh %s is bound to %s; other machines join it with pen login\n", r.Status.MeshID, safe(l.tok.Account.Email))
 	return nil
 }
 
@@ -287,7 +269,7 @@ func (l *loginRun) saveLogin(meshID string) error {
 // join asks, joins the offered mesh through the first member to answer, syncs and starts the node.
 func (l *loginRun) join(ctx context.Context) error {
 	offer := l.tok.Mesh
-	fmt.Fprintf(l.stdout, "%s is registered with mesh %s:\n", l.tok.Account.Email, offer.MeshID)
+	fmt.Fprintf(l.stdout, "%s is registered with mesh %s:\n", safe(l.tok.Account.Email), offer.MeshID)
 	for _, m := range offer.Members {
 		fmt.Fprintf(l.stdout, "  %-20s %s\n", m.Name, fingerprintOf(m.NoisePub))
 	}
@@ -410,6 +392,7 @@ func (l *loginRun) install(s *mesh.Store) error {
 	} else if !errors.Is(err, daemon.ErrNotRunning) {
 		return err
 	}
+	s.Adopt()
 	if err := s.SaveFile(l.st, "mesh.json"); err != nil {
 		return err
 	}
@@ -448,7 +431,7 @@ func RunLogout(args []string, stdout, stderr io.Writer) int {
 	if err := os.Remove(st.Path(loginFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fail(stderr, err)
 	}
-	fmt.Fprintf(stdout, "signed out of %s; this node stays in mesh %s (pen leave leaves it)\n", ls.Email, ls.MeshID)
+	fmt.Fprintf(stdout, "signed out of %s; this node stays in mesh %s (pen leave leaves it)\n", safe(ls.Email), ls.MeshID)
 	return 0
 }
 

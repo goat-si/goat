@@ -1,3 +1,4 @@
+import type { MediaActionsSource } from "./mediaActionsSource";
 import type { FilePreviewItem, FilePreviewSource } from "../components/FilePreviewModal.types";
 
 export function filePreviewKey(source: FilePreviewItem): string {
@@ -42,4 +43,16 @@ export function filePreviewName(source: FilePreviewItem): string {
   return Array.from(filename, (character) =>
     character.charCodeAt(0) < 32 || "/:\\".includes(character) ? "_" : character,
   ).join("");
+}
+
+export function pdfActionsSource(item: FilePreviewItem): MediaActionsSource {
+  if (item.actionsSource) return item.actionsSource;
+  const metadata = {
+    name: filePreviewName(item),
+    mimeType: item.mimeType ?? "application/pdf",
+    ...(item.sourceIdentifier ? { sourceIdentifier: item.sourceIdentifier } : {}),
+  };
+  if ("uri" in item) return { ...metadata, uri: item.uri };
+  if ("attachment" in item) return { ...metadata, attachment: item.attachment };
+  return { ...metadata, environmentId: item.environmentId, resource: item.resource };
 }

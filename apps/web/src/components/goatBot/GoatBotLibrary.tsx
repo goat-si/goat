@@ -1,63 +1,39 @@
 import {
   botArtifactName,
-  botArtifactOpenMessage,
   botArtifactSizeLabel,
   botArtifactsFailure,
-  readWholeBotArtifact,
+  goatBotArtifactDays,
 } from "@goat/client-runtime/goatBot";
-import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type {
-  ChannelBotArtifact,
-  ChannelReadBotArtifactInput,
-  ChannelReadBotArtifactResult,
-  EnvironmentId,
-} from "@goat/contracts";
-import { useEffect, useRef, useState } from "react";
+import type { ChannelBotArtifact, EnvironmentId } from "@goat/contracts";
+import { useEffect, useState } from "react";
+
+import { FileIcon, FileTextIcon, ImageIcon } from "~/components/solar";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
-import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { useGoatBotName } from "./goatBotMemberContext";
-import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
+import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 
-const TEXT_TYPES = new Set(["application/json", "text/markdown", "text/csv"]);
-
-const withoutKey = (record: Readonly<Record<string, string>>, key: string) =>
-  Object.fromEntries(Object.entries(record).filter(([entry]) => entry !== key));
-
-type Preview =
-  | { readonly kind: "image"; readonly name: string; readonly url: string }
-  | { readonly kind: "text"; readonly name: string; readonly text: string };
-
-type ReadResult =
-  | { readonly kind: "file"; readonly bytes: Uint8Array<ArrayBuffer>; readonly mimeType: string }
-  | { readonly kind: "message"; readonly message: string }
-  | { readonly kind: "aborted" };
-
-/** Reads a whole Library file. Never throws, so the caller needs no try/finally. */
-async function readBotLibraryFile(
-  relativePath: string,
-  readChunk: (input: ChannelReadBotArtifactInput) => Promise<ChannelReadBotArtifactResult>,
-  signal: AbortSignal,
-  botName: string,
-): Promise<ReadResult> {
-  try {
-    const result = await readWholeBotArtifact(relativePath, readChunk, signal);
-    if (signal.aborted) return { kind: "aborted" };
-    if (result.status !== "ok") {
-      const message = botArtifactOpenMessage(botArtifactName(relativePath), result, botName);
-      return { kind: "message", message };
-    }
-    return { kind: "file", bytes: result.bytes, mimeType: result.mimeType };
-  } catch (error) {
-    if (signal.aborted) return { kind: "aborted" };
-    return { kind: "message", message: botArtifactsFailure(error, botName).message };
-  }
+function FileKindIcon({ relativePath }: { readonly relativePath: string }) {
+  if (/\.(png|jpe?g|gif|webp|svg|avif)$/i.test(relativePath))
+    return <ImageIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />;
+  if (/\.(md|markdown|txt|csv|json|log)$/i.test(relativePath))
+    return <FileTextIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />;
+  return <FileIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />;
 }
 
-/** Files GOAT Bot's workers saved; opening one reads it chunk by chunk from the home server. */
-export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId }) {
+/** Files GOAT Bot's workers saved, by day; a file opens in place of the conversation. */
+export function GoatBotLibrary({
+  environmentId,
+  openPath = null,
+  onOpen,
+}: {
+  readonly environmentId: EnvironmentId;
+  /** The file open in the chat, marked in the list. */
+  readonly openPath?: string | null;
+  readonly onOpen: (file: ChannelBotArtifact) => void;
+}) {
   const botName = useGoatBotName();
   const supported =
     useServerConfigs().get(environmentId)?.environment.capabilities.goatBotLibrary === true;
@@ -69,62 +45,7 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
   useEffect(() => {
     if (supported) refresh();
   }, [supported, refresh]);
-  const read = useAtomCommand(channelEnvironment.readBotArtifact, { reportFailure: false });
-  const [opening, setOpening] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Readonly<Record<string, string>>>({});
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const previewUrl = useRef<string | null>(null);
-  const lifetime = useRef<AbortController | null>(null);
-  // oxlint-disable-next-line goat/react-effect-budget -- A read and a preview's Blob URL outlive a render; stop the read and let the URL go when the tab goes away.
-  useEffect(() => {
-    const controller = new AbortController();
-    lifetime.current = controller;
-    return () => {
-      controller.abort();
-      if (previewUrl.current !== null) URL.revokeObjectURL(previewUrl.current);
-      previewUrl.current = null;
-    };
-  }, []);
-  const closePreview = () => {
-    if (previewUrl.current !== null) URL.revokeObjectURL(previewUrl.current);
-    previewUrl.current = null;
-    setPreview(null);
-  };
-  const readChunk = async (input: ChannelReadBotArtifactInput) => {
-    const result = await read({ environmentId, input });
-    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-    return result.value;
-  };
-  const open = async (file: ChannelBotArtifact) => {
-    const signal = lifetime.current?.signal;
-    if (signal === undefined || signal.aborted) return;
-    const name = botArtifactName(file.relativePath);
-    setOpening(file.relativePath);
-    setMessages((current) => withoutKey(current, file.relativePath));
-    const result = await readBotLibraryFile(file.relativePath, readChunk, signal, botName);
-    if (result.kind === "aborted" || signal.aborted) return;
-    setOpening(null);
-    if (result.kind === "message") {
-      setMessages((current) => ({ ...current, [file.relativePath]: result.message }));
-      return;
-    }
-    const type = result.mimeType.split(";", 1)[0]?.trim() ?? "";
-    if (type.startsWith("text/") || TEXT_TYPES.has(type)) {
-      setPreview({ kind: "text", name, text: new TextDecoder().decode(result.bytes) });
-      return;
-    }
-    const url = URL.createObjectURL(new Blob([result.bytes], { type: result.mimeType }));
-    if (type.startsWith("image/")) {
-      previewUrl.current = url;
-      setPreview({ kind: "image", name, url });
-      return;
-    }
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = name;
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  };
+  const [nowMs] = useState(() => Date.now());
   if (!supported) return <p>Files need a newer GOAT server.</p>;
   const failure = files.failure === null ? null : botArtifactsFailure(files.failure, botName);
   if (failure !== null)
@@ -139,72 +60,45 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
       </div>
     );
   if (files.data === null) return <p className="text-muted-foreground">Loading files…</p>;
-  if (files.data.artifacts.length === 0) return <p>Files {botName} saves will appear here.</p>;
+  if (files.data.artifacts.length === 0)
+    return (
+      <GoatBotPanelEmpty title="No files yet" next={`Files ${botName} saves will appear here.`} />
+    );
   return (
-    <div className="space-y-3">
+    <div className="space-y-5">
       {files.data.truncated && (
         <p className="text-xs text-muted-foreground">Showing the newest files only.</p>
       )}
-      <ul className="space-y-1">
-        {files.data.artifacts.map((file) => {
-          const name = botArtifactName(file.relativePath);
-          const folder = file.relativePath.slice(0, -name.length).replace(/\/$/, "");
-          return (
-            <li key={file.relativePath} className="border-b border-border pb-1">
-              <Button
-                variant="ghost"
-                size="sm-multiline"
-                aria-label={`Open ${name}`}
-                disabled={opening !== null}
-                onClick={() => void open(file)}
-                className="w-full justify-start"
-              >
-                <span className="min-w-0 flex-1 text-left">
-                  <span className="block truncate">{name}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {[
-                      folder,
-                      botArtifactSizeLabel(file.size),
-                      new Date(file.modifiedAt).toLocaleString(),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                </span>
-                {opening === file.relativePath && (
-                  <span className="text-xs text-muted-foreground">Opening…</span>
-                )}
-              </Button>
-              {messages[file.relativePath] && (
-                <p className="px-2 text-xs text-destructive-foreground">
-                  {messages[file.relativePath]}
-                </p>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      <Dialog
-        open={preview !== null}
-        onOpenChange={(open) => {
-          if (!open) closePreview();
-        }}
-      >
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>{preview?.name}</DialogTitle>
-          </DialogHeader>
-          <DialogPanel>
-            {preview?.kind === "image" ? (
-              <img src={preview.url} alt={preview.name} className="max-h-[70vh] max-w-full" />
-            ) : preview?.kind === "text" ? (
-              <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap text-xs">
-                {preview.text}
-              </pre>
-            ) : null}
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
+      {goatBotArtifactDays(files.data.artifacts, nowMs).map((day) => (
+        <section key={day.label} aria-label={day.label} className="space-y-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground">{day.label}</h3>
+          <ul className="overflow-hidden rounded-xl border border-border">
+            {day.files.map((file) => {
+              const name = botArtifactName(file.relativePath);
+              const folder = file.relativePath.slice(0, -name.length).replace(/\/$/, "");
+              const open = file.relativePath === openPath;
+              return (
+                <li key={file.relativePath} className="border-b border-border last:border-b-0">
+                  <button
+                    type="button"
+                    aria-current={open ? "true" : undefined}
+                    onClick={() => onOpen(file)}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[current=true]:bg-accent"
+                  >
+                    <FileKindIcon relativePath={file.relativePath} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{name}</span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {[folder, botArtifactSizeLabel(file.size)].filter(Boolean).join(" · ")}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }

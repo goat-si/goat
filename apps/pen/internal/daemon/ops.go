@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"os"
 	"slices"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
-	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 func (d *Daemon) selfKey() string { return ident.B64.EncodeToString(d.id.SignPub) }
@@ -142,8 +142,14 @@ func (d *Daemon) adopt(ctx context.Context) error {
 
 // replaceMesh makes store this node's mesh; relays (when set) replace the relay list.
 func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) error {
+	store.Adopt()
 	if err := store.Save(); err != nil {
 		return err
+	}
+	// mesh.json now refuses a save of the old set (another mesh), and the old set stops writing,
+	// so a save of it that was already running cannot be the last write.
+	if old := d.mesh(); old != nil && old != store {
+		old.Retire()
 	}
 	// The old mesh's invites go; new ones persist in offers.json as before. The old book is retired
 	// first, so a prune or invite still holding it cannot write them back.
@@ -161,19 +167,14 @@ func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) er
 	d.store = store
 	d.invites = invites
 	d.meshMu.Unlock()
-	// A save of the old set that was already running must not be the last write.
-	if err := store.Save(); err != nil {
-		return err
-	}
 	d.cfgMu.Lock()
 	changed := relays != nil && !slices.Equal(d.cfg.RelayList(), relays)
 	if changed {
 		d.cfg.SetRelays(relays)
 	}
 	d.cfg.Name = name
-	cfg := d.cfg
 	d.cfgMu.Unlock()
-	if err := d.saveConfig(cfg); err != nil {
+	if err := d.saveConfig(); err != nil {
 		return err
 	}
 	if changed {
@@ -196,9 +197,8 @@ func (d *Daemon) rename(ctx context.Context, name string) error {
 	}
 	d.cfgMu.Lock()
 	d.cfg.Name = name
-	cfg := d.cfg
 	d.cfgMu.Unlock()
-	if err := d.saveConfig(cfg); err != nil {
+	if err := d.saveConfig(); err != nil {
 		return err
 	}
 	d.viewChanged()
@@ -206,11 +206,20 @@ func (d *Daemon) rename(ctx context.Context, name string) error {
 	return nil
 }
 
-// saveConfig writes the daemon's config, keeping the download relay pen relay download may have
-// set on disk since the daemon loaded it.
-func (d *Daemon) saveConfig(cfg state.Config) error {
-	if disk, err := d.st.LoadConfig(); err == nil && disk.DownloadRelay != "" {
-		cfg.DownloadRelay = disk.DownloadRelay
-	}
-	return d.st.SaveConfig(cfg)
+// saveConfig writes the daemon's current config, keeping the download relay pen relay download
+// may have set on disk since the daemon loaded it. One save at a time runs from its snapshot to
+// its write, so an older snapshot never replaces a newer one.
+func (d *Daemon) saveConfig() error {
+	d.cfgSave.Lock()
+	defer d.cfgSave.Unlock()
+	d.cfgMu.Lock()
+	cfg := d.cfg
+	d.cfgMu.Unlock()
+	return d.st.UpdateConfig(func(disk *state.Config) {
+		dl := disk.DownloadRelay
+		*disk = cfg
+		if dl != "" {
+			disk.DownloadRelay = dl
+		}
+	})
 }

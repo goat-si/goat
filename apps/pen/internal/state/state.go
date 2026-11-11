@@ -223,3 +223,20 @@ func (s *Store) SaveConfig(c Config) error {
 	c.SetRelays(c.RelayList())
 	return s.WriteJSON("config.json", c, 0o600)
 }
+
+// UpdateConfig changes config.json read to write under the state lock, so a writer in another
+// process (the daemon, pen relay download) never replaces a field it did not change with an older
+// value.
+func (s *Store) UpdateConfig(f func(*Config)) error {
+	unlock, err := s.Lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	c, err := s.LoadConfig()
+	if err != nil {
+		return err
+	}
+	f(&c)
+	return s.SaveConfig(c)
+}

@@ -1,5 +1,7 @@
 import type { EnvironmentId, ThreadContextRecord } from "@goat/contracts";
 import { collectInlineContextIds } from "../../lib/composerContextReferences";
+import { stackedThreadToast } from "../ui/toastHelpers";
+import { buildExpiredTerminalContextToastCopy } from "../ChatView.logic";
 
 /** Attached threads the prompt still links to; replacing linked text leaves stale records. */
 export function referencedThreadContexts(draft: {
@@ -78,4 +80,12 @@ export function approvalRedirectNotice(input: {
     return "Another approval arrived, so your message wasn't sent.";
   }
   return null;
+}
+/** Warning toast shown when expired terminal contexts are left out of an empty send or a sent message. */
+export function expiredTerminalContextToast(
+  expiredTerminalContextCount: number,
+  variant: "omitted" | "empty",
+) {
+  const copy = buildExpiredTerminalContextToastCopy(expiredTerminalContextCount, variant);
+  return stackedThreadToast({ type: "warning", title: copy.title, description: copy.description });
 }

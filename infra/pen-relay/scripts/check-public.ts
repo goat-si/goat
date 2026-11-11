@@ -67,15 +67,21 @@ function checkArchives(version: string) {
     problems.push(`install.sh installs ${version}, but dl/${version}/SHA256SUMS is missing`);
     return;
   }
-  const listed = new Map<string, string>();
-  for (const line of sums.split("\n")) {
-    const [, sum, name] = /^([0-9a-f]{64}) [ *]?(\S+)$/.exec(line.trim()) ?? [];
-    if (sum && name) listed.set(name, sum);
-  }
+  // Read it as install.sh does: every line ending in " <archive>", and its first field.
+  const lines = sums.split("\n");
   for (const name of archives) {
-    const want = listed.get(name);
-    if (!want) {
+    const matches = lines.filter((line) => line.endsWith(` ${name}`));
+    if (matches.length === 0) {
       problems.push(`dl/${version}/SHA256SUMS does not list ${name}`);
+      continue;
+    }
+    if (matches.length > 1) {
+      problems.push(`dl/${version}/SHA256SUMS lists ${name} more than once`);
+      continue;
+    }
+    const want = matches[0]?.split(" ")[0] ?? "";
+    if (!/^[0-9a-f]{64}$/.test(want)) {
+      problems.push(`dl/${version}/SHA256SUMS has no sum for ${name}`);
       continue;
     }
     let body: Buffer;

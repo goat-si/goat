@@ -1,12 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - seeds another GOAT app's database the way its server writes it.
 import * as NodeSqlite from "node:sqlite";
-
 import * as Effect from "effect/Effect";
-
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-
 import * as Stream from "effect/Stream";
 import { SCAN_CACHE_FILE_NAME } from "./usage/usageScanCache.ts";
 import { TestClock } from "effect/testing";
@@ -245,6 +242,8 @@ const submoduleCleanupFixture = () =>
         yield* command(submodule, ["commit", "-am", "record child"]);
         yield* command(submodule, ["push", "origin", "HEAD:submodule"]);
         yield* command(worktree, ["commit", "-am", "record module"]);
+        // Shipped to the project branch, so only the submodule rules decide.
+        yield* command(repo, ["merge", "--ff-only", "feature"]);
       });
     yield* recordSubmodules();
     return { ...fixture, submodule, child, recordSubmodules };
@@ -398,6 +397,7 @@ it.live("preserves late tracked edits when submodules were never initialized", (
       yield* command(worktree, ["add", ".gitmodules"]);
       yield* command(worktree, ["update-index", "--add", "--cacheinfo", `160000,${head},module`]);
       yield* command(worktree, ["commit", "-m", "record uninitialized module"]);
+      yield* command(fixture.repo, ["merge", "--ff-only", "feature"]);
       yield* fs.makeDirectory(`${worktree}/module`);
       fixture.editBeforeRemoval();
       expect(
@@ -1765,7 +1765,11 @@ describe("storage cleanup reports and local file policies", () => {
   );
   it.live.each([
     ["unchanged", "removed", "No commits beyond the project branch"],
-    ["unmerged", "kept", "Has commits beyond the project branch"],
+    [
+      "unmerged",
+      "kept",
+      "Unshipped commits (1 not on the project branch trunk). Merge them into trunk to let cleanup remove this worktree",
+    ],
     ["detached", "kept", "Project branch is unavailable"],
     ["merged-only", "kept", "No remote is configured for merged-worktree cleanup"],
   ] as const)("cleans archived local-only worktrees: %s", ([state, outcome, reason]) =>
@@ -1845,34 +1849,12 @@ describe("storage cleanup reports and local file policies", () => {
           const report = yield* service.runNow;
           expect(report.entries[0]).toMatchObject({
             outcome: "kept",
-            reason: "Has commits beyond the default branch",
+            reason:
+              "Unshipped commits (1 not in origin/trunk). Merge them to let cleanup remove this worktree",
           });
           expect(yield* fs.readFileString(`${worktree}/tracked.txt`)).toBe("unmerged work\n");
         }),
       ),
-  );
-  it.live("keeps the worktree when the remote default is unavailable even if main exists", () =>
-    runCleanupTest(
-      Effect.gen(function* () {
-        const { service, fs, repo, worktree, command } = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
-          ...LEGACY_WORKTREE_RULES,
-          worktreeUnchanged: true,
-        });
-        const remote = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-remote-" });
-        yield* command(remote, ["init", "--bare", "-b", "trunk"]);
-        yield* command(repo, ["remote", "add", "origin", remote]);
-        // The remote HEAD names an unborn trunk; main exists but is not its default.
-        yield* command(repo, ["push", "origin", "main"]);
-
-        const report = yield* service.runNow;
-        expect(report.entries[0]).toMatchObject({
-          outcome: "kept",
-          reason: "Default branch is unavailable",
-        });
-        expect(yield* fs.exists(worktree)).toBe(true);
-      }),
-    ),
   );
   it.live("preserves tracked edits written after the final status check", () =>
     runCleanupTest(

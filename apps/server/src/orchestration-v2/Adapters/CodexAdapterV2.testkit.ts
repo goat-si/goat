@@ -312,11 +312,41 @@ export const CODEX_TEST_MODEL_SELECTION = {
   instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
   model: "gpt-5.4",
 } satisfies ModelSelection;
+/** The thread config Codex receives on thread/start, resume, and fork, spelled out. */
+export const CODEX_EXPECTED_THREAD_CONFIG = {
+  "tools.update_plan.enabled": true,
+  mcp_optional_startup_grace_ms: 10_000,
+  "features.concurrent_reasoning_summaries": true,
+} as const;
 export const CODEX_TEST_RUNTIME_POLICY = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
   runtimeMode: "full-access",
   interactionMode: "default",
   cwd: "/workspace",
 });
+
+/** A thread goal with every field the adapter reads, as Codex reports it. */
+export function makeCodexThreadGoal(input: {
+  readonly threadId: string;
+  readonly status: "active" | "paused";
+  readonly objective?: string;
+}) {
+  return {
+    threadId: input.threadId,
+    objective: input.objective ?? "test",
+    status: input.status,
+    tokensUsed: 0,
+    timeUsedSeconds: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+/** The goal the adapter last published on a provider thread, which is what the UI reads. */
+export function lastPublishedGoal(events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) {
+  for (const event of [...events].reverse())
+    if (event.type === "provider_thread.updated") return event.providerThread.goal;
+  return undefined;
+}
 
 function makeCodexTestAppThread(input: {
   readonly threadId: ThreadId;

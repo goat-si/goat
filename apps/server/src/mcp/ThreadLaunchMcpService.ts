@@ -355,6 +355,20 @@ const make = Effect.gen(function* () {
             Effect.mapError(unavailable),
             Effect.map(Option.getOrUndefined),
           );
+          // GOAT Bot's launches record what they are for, so thread lists keep its chores under
+          // the bot. A worktree requested in Scratch runs in its root, so it is a chore too.
+          const worktreeRequested =
+            input.workspaceStrategy?.type === "worktree" ||
+            input.workspaceStrategy?.type === "existing_worktree";
+          const workKind =
+            admission === undefined
+              ? undefined
+              : worktreeRequested &&
+                  !(yield* ManagedProjectFolders.ManagedProjectFolders.pipe(
+                    Effect.flatMap((folders) => folders.isScratchProject(projectId)),
+                  ))
+                ? ("coding" as const)
+                : ("chore" as const);
           // A caller outside a thread has nothing to inherit, so it starts with the
           // project's effective defaults, as the composer does. Its mode stays
           // within the ceiling it was approved with.
@@ -590,6 +604,7 @@ const make = Effect.gen(function* () {
                           environmentLabel: null,
                           threadTitle: caller.title,
                           via: "thread_launch" as const,
+                          ...(workKind === undefined ? {} : { workKind }),
                         },
                       }
                     : input.launchedBy === undefined

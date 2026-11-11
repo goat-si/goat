@@ -44,8 +44,12 @@ read -r _ _ <"$work/relay2.out"
 inst() {
 	n="$1"
 	shift
-	mkdir -p "$work/$n"
-	curl -fsSL "$relay/install.sh" | HOME="$work/$n" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
+	mkdir -p "$work/$n/tmp"
+	curl -fsSL "$relay/install.sh" | TMPDIR="$work/$n/tmp" HOME="$work/$n" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
+}
+# install.sh downloads into a folder under TMPDIR; it must be gone also when install.sh ends by running pen.
+notmp() {
+	[ -z "$(ls -A "$work/$1/tmp")" ] || { echo "FAIL: install.sh $2 left its download behind:"; ls -R "$work/$1/tmp"; exit 1; }
 }
 pen() {
 	n="$1"
@@ -65,6 +69,7 @@ grep -q "no mesh here yet; run pen login" "$work/z.err" || { echo "FAIL: pen ls 
 echo "ok: a bare install.sh installs pen and founds nothing"
 
 inst a --name a --up
+notmp a --up
 pen a version
 relays="$(pen a relay ls)"
 for r in "$relay" "$relay2"; do
@@ -73,10 +78,20 @@ done
 [ "$(pen a relay download)" = "$relay" ] || { echo "FAIL: a's download relay is $(pen a relay download), want $relay"; exit 1; }
 echo "ok: install.sh --up gave a both relays and kept the download relay"
 inst b --name b --join "$(pen a invite --auto)"
+notmp b --join
 [ "$(pen b relay download)" = "$relay" ] || { echo "FAIL: b's download relay is $(pen b relay download), want $relay"; exit 1; }
 members="$(pen a ls --json | grep -c '"fingerprint"')"
 [ "$members" = 2 ] || { echo "FAIL: a lists $members members"; exit 1; }
 echo "ok: install.sh installed and started a; install.sh --join added b (a lists 2)"
+
+# A line whose name only matches as a pattern (pen-linux-amd64Xgz) is another archive's; check-public.ts ignores it,
+# so install.sh must too.
+sums="$work/public/dl/0.0.0-check/SHA256SUMS"
+sed 's/\.gz$/Xgz/; s/^[0-9a-f]*/0000000000000000000000000000000000000000000000000000000000000000/' "$sums" >"$work/decoys"
+cat "$work/decoys" >>"$sums"
+inst d --name d 2>"$work/d.err" || { echo "FAIL: install.sh refused a SHA256SUMS whose extra lines name other files:"; cat "$work/d.err"; exit 1; }
+[ -x "$work/d/.local/bin/pen" ] || { echo "FAIL: install.sh installed nothing"; exit 1; }
+echo "ok: install.sh reads only the SHA256SUMS line that names its archive"
 
 printf '0000000000000000000000000000000000000000000000000000000000000000  pen-darwin-arm64.gz\n0000000000000000000000000000000000000000000000000000000000000000  pen-darwin-amd64.gz\n0000000000000000000000000000000000000000000000000000000000000000  pen-linux-arm64.gz\n0000000000000000000000000000000000000000000000000000000000000000  pen-linux-amd64.gz\n' >"$work/public/dl/0.0.0-check/SHA256SUMS"
 if inst c --name c 2>"$work/c.err"; then

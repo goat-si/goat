@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { BotThreadRow, ChannelChildWorkGroup, EnvironmentId } from "@goat/contracts";
+import { BotRemoteWork, BotThreadRow, ChannelChildWorkGroup, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { groupBotWork } from "./botWork.ts";
 
@@ -79,5 +79,40 @@ describe("groupBotWork", () => {
     ]);
     expect(result.inProgress[0]?.threads).toEqual([{ environmentId: "env", threadId: "thread" }]);
     expect(result.inProgress[0]?.truncated).toBe(true);
+  });
+
+  it("opens a task's worker from its task, since thread lists leave it to the bot", () => {
+    const withWorker = (threadId: string) =>
+      row({ ...task("a", null), worker: { environmentId: "env", threadId } });
+    const threadsOf = (taskRow: ReturnType<typeof withWorker>) =>
+      groupBotWork([taskRow], [], EnvironmentId.make("env")).inProgress[0]?.threads;
+    expect(threadsOf(withWorker("channel-worker:a"))).toEqual([
+      { environmentId: "env", threadId: "channel-worker:a" },
+    ]);
+    // A bot turn runs in the bot's own conversation, which is the chat already open.
+    expect(threadsOf(withWorker("goat-bot-session:a"))).toEqual([]);
+  });
+
+  it("lists a task's work on other machines with that task only", () => {
+    const remote = Schema.decodeUnknownSync(BotRemoteWork);
+    const onBox = remote({
+      childWorkId: "cw-box",
+      taskId: "a",
+      callerThreadId: "channel-worker:a",
+      host: "box",
+      state: "bound",
+      lastActivityAt: at,
+      threadId: "remote-thread",
+      environmentId: "env-box",
+      workKind: "chore",
+    });
+    const otherTask = remote({ ...onBox, childWorkId: "cw-b", taskId: "b" });
+    const result = groupBotWork([task("a", null)], [], EnvironmentId.make("env"), [
+      onBox,
+      otherTask,
+    ]);
+    expect(result.inProgress[0]?.remote).toEqual([onBox]);
+    // A remote thread is never opened in the bot's own environment.
+    expect(result.inProgress[0]?.threads).toEqual([]);
   });
 });

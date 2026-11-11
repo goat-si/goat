@@ -168,7 +168,7 @@ const projection = (requestStatus: "pending" | "resolved") => ({
 it("follows the acknowledged task's worker without loading its detail", async () => {
   setup({ activityRunStatus: "preparing", pendingRuntimeRequest: null });
   await using screen = await render(<Conversation items={conversation()} />, { router: false });
-  await expect.element(screen.getByRole("status")).toHaveTextContent("Starting");
+  await expect.element(screen.getByRole("button", { name: /^Starting/ })).toBeVisible();
   expect(mocks.shellReads).toContain("worker-1");
   expect(appAtomRegistry.getNodes().has(detailAtom)).toBe(false);
 });
@@ -182,10 +182,12 @@ it("updates from a detail-only change while another view keeps the worker loaded
       <Conversation items={conversation({ worker: sessionWorker })} />,
       { router: false },
     );
-    await expect.element(screen.getByRole("status")).toHaveTextContent("Waiting for your approval");
+    await expect
+      .element(screen.getByRole("button", { name: /^Waiting for your approval/ }))
+      .toBeVisible();
     await act(() => appAtomRegistry.set(detailAtom, projection("resolved")));
-    await expect.element(screen.getByRole("status")).toHaveTextContent("Working");
-    await expect.element(screen.getByRole("status")).not.toHaveTextContent("Run df -h");
+    await expect.element(screen.getByRole("button", { name: /^Working/ })).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: /Run df -h/ })).not.toBeInTheDocument();
   } finally {
     unmountOtherView();
   }
@@ -202,8 +204,8 @@ it("never reads a remote worker through a local thread with the same id", async 
     });
     await using screen = await render(<Conversation items={remote} />, { router: false });
     await expect
-      .element(screen.getByRole("status"))
-      .toHaveTextContent("Copying files on mac-studio");
+      .element(screen.getByRole("button", { name: /^Copying files on mac-studio/ }))
+      .toBeVisible();
     expect(mocks.shellReads).not.toContain("worker-1");
   } finally {
     unmountOtherView();

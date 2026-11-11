@@ -3,6 +3,7 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type OrchestrationV2ThreadProjection,
   type OrchestratorMcpThreadDetail,
+  type OrchestratorMcpThreadRun,
   type OrchestrationV2Run,
   type OrchestrationV2RunStatus,
   type OrchestrationV2ThreadShell,
@@ -154,6 +155,25 @@ export function boundedStatus<
 const iso = (value: DateTime.DateTime | null | undefined) =>
   value === null || value === undefined ? null : DateTime.formatIso(value);
 
+/** What a starting run waits for; a hold left on a run that moved on says nothing. */
+const startHoldOf = (run: Pick<OrchestrationV2Run, "status" | "startHold">) =>
+  run.status === "starting" && run.startHold !== undefined ? { startHold: run.startHold } : {};
+
+export function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
+  return {
+    runId: run.id,
+    ordinal: run.ordinal,
+    status: run.status,
+    ...(run.terminationCause === undefined ? {} : { terminationCause: run.terminationCause }),
+    ...startHoldOf(run),
+    providerInstanceId: run.modelSelection.instanceId,
+    model: run.modelSelection.model,
+    requestedAt: DateTime.formatIso(run.requestedAt),
+    startedAt: iso(run.startedAt),
+    completedAt: iso(run.completedAt),
+  };
+}
+
 /**
  * A local thread's status from its shell and the runs it names (the active and
  * latest run), with those runs' turn items for the message excerpt.
@@ -197,6 +217,7 @@ export function statusFromShell(
             ...(run.terminationCause === undefined
               ? {}
               : { terminationCause: run.terminationCause }),
+            ...startHoldOf(run),
             requestedAt: DateTime.formatIso(run.requestedAt),
             startedAt: iso(run.startedAt),
             completedAt: iso(run.completedAt),
@@ -261,6 +282,7 @@ export function statusFromRead(
             ...(run.terminationCause === undefined
               ? {}
               : { terminationCause: run.terminationCause }),
+            ...(run.startHold === undefined ? {} : { startHold: run.startHold }),
             requestedAt: run.requestedAt,
             startedAt: run.startedAt,
             completedAt: run.completedAt,

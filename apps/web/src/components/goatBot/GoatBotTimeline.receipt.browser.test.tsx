@@ -44,14 +44,18 @@ const user = (
   showReceipt,
 });
 
-it("shows one read receipt under the newest sent bubble", async () => {
-  const rows = [
+it("says Sending only while the newest message is on its way, and never shows read receipts", async () => {
+  const read = [
     user("old", { state: "read", readAt: "2026-10-12T09:40:00Z" }, false),
     user("new", { state: "read", readAt: "2026-10-12T09:41:00Z" }, true),
   ];
-  await act(() => root.render(<GoatBotTimeline rows={rows} onRetry={() => {}} />));
-  expect(container.querySelectorAll("[aria-label^='Read by GOAT Bot']")).toHaveLength(1);
-  expect(container.querySelector("li:last-child")?.textContent).toContain("Read");
+  await act(() => root.render(<GoatBotTimeline rows={read} onRetry={() => {}} />));
+  expect(container.querySelector("[aria-label^='Read by']")).toBeNull();
+  expect(container.textContent).not.toContain("Read");
+  const sending = [read[0]!, user("new", { state: "sending" }, true)];
+  await act(() => root.render(<GoatBotTimeline rows={sending} onRetry={() => {}} />));
+  expect(container.querySelectorAll("[aria-label='Sending']")).toHaveLength(1);
+  expect(container.querySelector("li:last-child")?.textContent).toContain("Sending…");
 });
 
 it("keeps an older failed send actionable, but never retries a final rejection", async () => {

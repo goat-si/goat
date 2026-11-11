@@ -1545,6 +1545,12 @@ function ImportStep({
           </div>
         </div>
       ) : null}
+      {importSelection === null && candidates.length > 0 && selected.length === 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground" role="status">
+          No conversations were found in this window. Choose a longer window or select projects
+          manually.
+        </p>
+      ) : null}
       <ScrollArea scrollFade className="mt-2 h-auto max-h-80">
         <div className="space-y-5 pr-3">
           {scans.map((scan) => {

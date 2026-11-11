@@ -68,8 +68,33 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
     appearance: { baseFontSize: 16 },
   }),
 }));
-vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
-vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("./GoatBotFace", () => ({
+  GoatBotHeaderFace: () => null,
+  GoatBotFaceAvatar: () => null,
+  GoatBotProgressFace: () => null,
+}));
+vi.mock("./GoatBotShimmerText", () => ({ GoatBotShimmerText: () => null }));
+// Work sits in the iOS header's trailing items; they render as buttons here.
+vi.mock("../../native/StackHeader", () => ({
+  NativeStackScreenOptions: ({
+    options,
+  }: {
+    options: {
+      unstable_headerRightItems: () => {
+        label: string;
+        accessibilityLabel: string;
+        onPress: () => void;
+      }[];
+    };
+  }) =>
+    options.unstable_headerRightItems().map((item) => (
+      <button key={item.label} aria-label={item.accessibilityLabel} onClick={item.onPress}>
+        {item.label}
+      </button>
+    )),
+}));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -164,6 +189,9 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
+// A member's model menu reads server config and native menus this test does not load.
+vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: string | null) =>
@@ -313,9 +341,7 @@ it("the open Memory tab reads the notes again after the answer and after the tas
   session.rows = [botRow, taskRow(2)];
   await view.rerender();
   expect(session.refresh).toHaveBeenCalledTimes(opened + 3);
-  expect(view.container.textContent).toContain(
-    "No notes yet. Ask GOAT Bot to remember a standing rule.",
-  );
+  expect(view.container.textContent).toContain("Ask GOAT Bot to remember a standing rule.");
   await press(view.container, "Close");
   await openMemory(view.container);
   expect(session.refresh).toHaveBeenCalledTimes(opened + 4);

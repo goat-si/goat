@@ -7,6 +7,8 @@ export interface Env {
   readonly PENDING_TIMEOUT_MS?: string;
   readonly IDLE_TIMEOUT_MS?: string;
   readonly AUTH_TIMEOUT_MS?: string;
+  // Where a node's first session id counts from (tests of the u32 wrap); unset starts at 0.
+  readonly SID_START?: string;
 }
 
 export interface RelayLimits {

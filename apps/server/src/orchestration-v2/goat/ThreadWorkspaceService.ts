@@ -24,7 +24,11 @@ import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
-import { makeRestorePending, makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
+import {
+  makeRestorePending,
+  makeRestoreThreadWorkspace,
+  verifyInterruptedRestore,
+} from "./restoreThreadWorkspace.ts";
 import { verifyRestoredWorktree } from "./restoreSnapshot.ts";
 
 /** What a client shows for a thread whose worktree cleanup removed, and the ways back. */
@@ -92,6 +96,22 @@ const make = Effect.gen(function* () {
     const { worktreePath, branch } = loaded.value;
     if (yield* present(worktreePath))
       return { threadId, state: "present", worktreePath, branch, snapshot: null } as const;
+    // A stop during restore leaves the marker on a folder that may be fine; only setup is owed.
+    const interrupted = yield* restorePending.read(worktreePath);
+    const usable =
+      interrupted !== null &&
+      (yield* verifyInterruptedRestore({ worktreePath, branch, state: interrupted }).pipe(
+        Effect.result,
+      ))._tag === "Success";
+    if (usable)
+      return {
+        threadId,
+        state: "present",
+        worktreePath,
+        branch,
+        snapshot: null,
+        setupIncomplete: true,
+      } as const;
     const snapshot = yield* snapshots.latestForThread(threadId);
     return {
       threadId,
@@ -184,10 +204,20 @@ const make = Effect.gen(function* () {
         "The thread is running or its worktree changed. Try again when it is idle.",
       );
     const stamp = (yield* Clock.currentTimeMillis).toString(36);
+    // The thread's commits come along: its branch, else its pushed copy, else the project base.
+    const tip = (revision: string) =>
+      vcs.resolveCommit({ cwd: project.workspaceRoot, revision }).pipe(Effect.option);
+    const local = yield* tip(`refs/heads/${branch}`);
+    const pushed = Option.isSome(local) ? local : yield* tip(`refs/remotes/origin/${branch}`);
+    const startedFrom = Option.isSome(local)
+      ? ("branch" as const)
+      : Option.isSome(pushed)
+        ? ("remote-branch" as const)
+        : ("base" as const);
     const created = yield* git
       .createWorktree({
         cwd: project.workspaceRoot,
-        refName: "HEAD",
+        refName: Option.isSome(pushed) ? pushed.value.commitSha : "HEAD",
         newRefName: `${branch}-fresh-${stamp}`,
         path: null,
       })
@@ -273,6 +303,7 @@ const make = Effect.gen(function* () {
       headSha: yield* headOf(worktreePath),
       restoredFrom: "fresh" as const,
       setupScript: setup.status === "started" ? ("started" as const) : ("none" as const),
+      startedFrom,
     };
   });
 

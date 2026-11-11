@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -98,7 +99,7 @@ func (d *Daemon) checkAssertion(raw json.RawMessage, v *mesh.View) (mesh.Claim, 
 	if d.pending.isDenied(a.A.SignPub, d.now()) {
 		return mesh.Claim{}, errors.New("a member denied this machine; it may ask again after 24 hours")
 	}
-	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash()}, nil
+	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash(), Kid: b.Key.Kid, Issuer: b.LoginURL}, nil
 }
 
 // queueRequest keeps an account join while the mesh is locked.
@@ -109,7 +110,7 @@ func (d *Daemon) queueRequest(card *mesh.Card, c mesh.Claim) (string, error) {
 	}
 	fp := ident.Fingerprint(noise)
 	p := Pending{ID: fp[:9], Fingerprint: fp, Name: card.C.Name, NodeID: card.C.NodeID, SignPub: card.C.SignPub,
-		Email: c.Email, Sub: c.Sub, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
+		Email: c.Email, Sub: c.Sub, Kid: c.Kid, Issuer: c.Issuer, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
 	if err := d.pending.add(p, d.now()); err != nil {
 		return "", err
 	}
@@ -175,14 +176,37 @@ func (d *Daemon) approve(ctx context.Context, arg string) (ApproveResult, error)
 	if err != nil {
 		return ApproveResult{}, err
 	}
+	if p.Issuer == "" || p.Kid == "" {
+		return ApproveResult{}, errors.New("this request was queued by an older pen and does not say which login service and key it signed in with; on the new machine run pen login again, then approve the new request")
+	}
+	sameBinding := func(v *mesh.View) error {
+		a := v.Account
+		if a == nil || a.Sub != p.Sub || a.LoginURL != p.Issuer || a.LoginKey.Kid != p.Kid {
+			return errors.New("the mesh is no longer bound to the account, login service and key this request signed in with; on the new machine run pen login again")
+		}
+		return nil
+	}
 	v := d.view()
-	if v.Account == nil || v.Account.Sub != p.Sub {
-		return ApproveResult{}, errors.New("the mesh is no longer bound to the account this request signed in with")
+	if err := sameBinding(v); err != nil {
+		return ApproveResult{}, err
 	}
 	if _, gone := v.Revoked[p.SignPub]; gone {
 		return ApproveResult{}, errors.New("this key was revoked")
 	}
-	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now())
+	// The binding is checked again with the signature, under the store's lock: an unbind or a
+	// rebind to another account, login service or key merged since the request was queued refuses it.
+	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now(), func(v *mesh.View) error {
+		if err := sameBinding(v); err != nil {
+			return err
+		}
+		if _, gone := v.Revoked[p.SignPub]; gone {
+			return errors.New("this key was revoked")
+		}
+		return nil
+	})
+	if errors.Is(err, mesh.ErrNotMember) {
+		return ApproveResult{}, errors.New("this machine is not a member of the mesh, so its approval would not count; approve on a current member (pen ls there shows the request once the joiner asks it)")
+	}
 	if err != nil {
 		return ApproveResult{}, err
 	}
@@ -292,8 +316,30 @@ func (d *Daemon) forgetRevoked(old, v *mesh.View) {
 var ErrNoMemberOnline = errors.New("no member online yet")
 
 // AccountJoin races the offered members for a kind 0x04 session and runs the join on the first
-// that answers. It returns the outcome and the member that served it.
+// that answers. A machine that refuses as not a member of its mesh (still listed, but revoked or
+// never admitted) is left out and the race runs again among the rest. It returns the outcome and
+// the member that served it.
 func AccountJoin(ctx context.Context, relays []string, id *ident.Identity, name string, a *login.Assertion, members []login.OfferedMember) (mesh.AccountOutcome, login.OfferedMember, error) {
+	left := slices.Clone(members)
+	var skipped []string
+	for {
+		out, by, err := accountJoinOnce(ctx, relays, id, name, a, left)
+		var refused *mesh.RefusedError
+		if !errors.As(err, &refused) || !refused.NotMember {
+			return out, by, err
+		}
+		skipped = append(skipped, by.Name)
+		left = slices.DeleteFunc(left, func(m login.OfferedMember) bool { return m.NodeID == by.NodeID })
+		if len(left) == 0 {
+			return out, by, fmt.Errorf("every listed machine that answered (%s) is not a member of the mesh; sign in on a current member, or reset the account's machine list on the sign-in page", strings.Join(skipped, ", "))
+		}
+	}
+}
+
+// raceHooks, when set, run around each machine's dial in an account join race (tests).
+var raceHooks struct{ before, after func(nodeID string) }
+
+func accountJoinOnce(ctx context.Context, relays []string, id *ident.Identity, name string, a *login.Assertion, members []login.OfferedMember) (mesh.AccountOutcome, login.OfferedMember, error) {
 	raw, err := json.Marshal(a)
 	if err != nil {
 		return mesh.AccountOutcome{}, login.OfferedMember{}, err
@@ -306,6 +352,7 @@ func AccountJoin(ctx context.Context, relays []string, id *ident.Identity, name 
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan won, len(members))
+	before, after := raceHooks.before, raceHooks.after
 	n := 0
 	for _, m := range members {
 		noise, err := ident.DecodeKey(m.NoisePub)
@@ -314,10 +361,16 @@ func AccountJoin(ctx context.Context, relays []string, id *ident.Identity, name 
 		}
 		n++
 		go func() {
+			if before != nil {
+				before(m.NodeID)
+			}
 			sec, err := OpenAny(rctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
 				return session.Initiate(rctx, conn, session.KindAccount, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "account", Name: name})
 			})
 			results <- won{sec, m, err}
+			if after != nil {
+				after(m.NodeID)
+			}
 		}()
 	}
 	var first *won
@@ -438,7 +491,7 @@ func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mes
 	// holds records the admitting member left out (a revoke of it, typically), so this copy cannot
 	// be trusted. One that takes them hands over its records, which may still revoke this machine.
 	if names := refusedByListed(ctx, relays, id, s, listed, as); len(names) > 0 {
-		return taken, others, fmt.Errorf("%s, listed for this account but not a member in the copy of the mesh this machine was given, refuse(s) this machine: the member that admitted it may be revoked or stolen and served a partial mesh. Nothing was changed here; check pen ls on a machine you trust, revoke a stolen one with pen revoke --compromised, and reset the account's machine list on the sign-in page", strings.Join(names, ", "))
+		return taken, others, fmt.Errorf("%s, listed for this account but not a member in the copy of the mesh this machine was given, refuse(s) this machine. Nothing was changed here. Run pen login again; if it keeps failing, the machine that admitted this one is not a member of the mesh (its own admission lost to a revoke): on a current member check pen ls, join that machine again with an invite or pen login through a current member, then sign in here again. If pen ls on a member you trust shows a machine you do not know, or the machine that admitted this one was lost or stolen, revoke it with pen revoke --compromised and reset the account's machine list on the sign-in page", strings.Join(names, ", "))
 	}
 	if _, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]; !ok {
 		return taken, others, errors.New("after syncing with the other members this machine is not a member (revoked); nothing was changed here")

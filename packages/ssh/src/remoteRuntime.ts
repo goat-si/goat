@@ -39,6 +39,12 @@ export interface RemoteGoatRunnerOptions {
    * the host's when their versions cannot be ordered, such as two `0.1.0-dev.<sha>` builds.
    */
   readonly archiveCommitTime?: number;
+  /**
+   * The runtime version of this client's own build, set only by the client's runner configuration
+   * and never derived from the version a host is asked for. A probe may ask that version for its
+   * facts directly (see facts_frame_ask).
+   */
+  readonly ownRuntimeVersion?: string;
   /** Acquisition authority recorded only when an archive is installed. */
   readonly archiveSource?: "bundle" | "cache" | "mirror" | "https" | "gh";
   readonly releaseBaseUrl?: string | null;

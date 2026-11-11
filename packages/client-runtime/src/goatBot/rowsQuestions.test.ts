@@ -11,8 +11,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildGoatBotTimeline,
+  goatBotConversationPreview,
   type GoatBotItemReaders,
   type GoatBotMessagePresentation,
+  type GoatBotPendingInput,
   type GoatBotRow,
   type GoatBotTaskCard,
 } from "./rows.ts";
@@ -182,7 +184,7 @@ describe("questions a task asks in the main chat", () => {
     expect(optionsIn(null, items, { n1: proposal(1) })).toEqual([["b1", []]]);
   });
 
-  it("sends a pressed answer to the question's task, and shows that send in the main chat", () => {
+  it("sends a pressed answer to the question's task, and shows it in the main chat", () => {
     const items = [
       notice("n1", "2026-10-12T12:00:00Z"),
       bot("b1", "2026-10-12T12:00:01Z", "Save this as a skill? deploy-check"),
@@ -204,14 +206,11 @@ describe("questions a task asks in the main chat", () => {
           readers: readers({ b1: asked }, cards),
           taskId: null,
         }),
-      ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId] : [row.id]));
-    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([
-      ["n1"],
-      ["b1", "proposal"],
-      ["pending:c1"],
-    ]);
-    // A server that does not name open questions may not route an answer sent to a task.
-    expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", undefined], ["pending:c1"]]);
+      ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId ?? row.answer] : [row.id]));
+    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([["n1"], ["b1", "proposal"]]);
+    // A server that does not name open questions may not route an answer sent to a task, and the
+    // send answers the question there, so the picked choice shows inside it.
+    expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", "Save"]]);
   });
 
   it("shows an approval question of a known task in the main chat and closes it with the chip", () => {
@@ -255,10 +254,11 @@ describe("questions a task asks in the main chat", () => {
       }),
     ).map((row) => row.id);
     expect(pending).toContain("b1");
-    expect(pending).toContain("pending:c1");
+    // The pick on its way shows inside the question rather than as a second message.
+    expect(pending).not.toContain("pending:c1");
   });
 
-  it("keeps a pressed answer and the reply to it in the main chat", () => {
+  it("keeps a pressed answer, inside its question, and the reply to it in the main chat", () => {
     const work = { tone: "reply" as const, readAt: null, requestKey: null, taskId: "work" };
     const ids = content(
       buildGoatBotTimeline({
@@ -282,7 +282,7 @@ describe("questions a task asks in the main chat", () => {
         taskId: null,
       }),
     ).map((row) => row.id);
-    expect(ids).toEqual(["n1", "b1", "u1", "b2"]);
+    expect(ids).toEqual(["n1", "b1", "b2"]);
   });
 
   it("routes a turn's question from its chip and does not show the turn as a card", () => {
@@ -327,5 +327,421 @@ describe("questions a task asks in the main chat", () => {
     expect(closed.some((row) => row.kind === "task")).toBe(false);
     expect(closed.find((row) => row.id === "b1")).toMatchObject({ options: [] });
     expect(closed.find((row) => row.id === "b1")).not.toHaveProperty("answerTaskId");
+  });
+});
+
+describe("a question the person answered", () => {
+  const which: GoatBotMessagePresentation = {
+    tone: "question",
+    readAt: null,
+    requestKey: null,
+    options: ["CI fix", "Release"],
+  };
+  const asked = [bot("b1", "2026-10-12T12:00:01Z", "Which one?")];
+  const questionRow = (
+    items: OrchestrationV2TurnItem[],
+    pendingInputs: GoatBotPendingInput[] = [],
+    messages: Record<string, GoatBotMessagePresentation> = { b1: which },
+    cards: Record<string, GoatBotTaskCard> = {},
+    taskId: string | null | undefined = undefined,
+  ) =>
+    content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs,
+        readers: readers(messages, cards),
+        ...(taskId === undefined ? {} : { taskId }),
+      }),
+    ).find((row) => row.id === "b1");
+  const pending = (
+    text: string,
+    state: GoatBotPendingInput["state"],
+    extra: Partial<GoatBotPendingInput> = {},
+  ): GoatBotPendingInput => ({
+    clientKey: "c1",
+    text,
+    createdAt: "2026-10-12T12:00:02Z",
+    state,
+    requestKey: null,
+    ...extra,
+  });
+
+  it("keeps the picked choice as the answer while it is on its way and after it lands", () => {
+    expect(questionRow(asked, [pending("CI fix", "sending")])).toMatchObject({
+      options: [],
+      answer: "CI fix",
+    });
+    expect(questionRow([...asked, user("u1", "2026-10-12T12:00:02Z", "CI fix")])).toMatchObject({
+      options: [],
+      answer: "CI fix",
+    });
+  });
+
+  it("takes a typed reply as the answer", () => {
+    expect(
+      questionRow([...asked, user("u1", "2026-10-12T12:00:02Z", "  Neither, wait for Monday ")]),
+    ).toMatchObject({ options: [], answer: "Neither, wait for Monday" });
+  });
+
+  it("takes a typed reply to a question without choices, sent to its task, as the answer", () => {
+    const open = { ...card("turn", 2), askInChat: true, openQuestionIds: [] };
+    const routed: GoatBotMessagePresentation = {
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId: "turn",
+      questionId: "which-guide",
+    };
+    const reply = { tone: "reply" as const, readAt: null, requestKey: "in-2", taskId: "turn" };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      bot("b1", "2026-10-12T12:00:01Z", "Which guide next?"),
+      user("u1", "2026-10-12T12:00:02Z", "README"),
+    ];
+    expect(questionRow(items, [], { b1: routed, u1: reply }, { n1: open }, null)).toMatchObject({
+      answer: "README",
+    });
+    // A status line is not a question, so a later message does not answer it.
+    expect(
+      questionRow(items, [], { b1: { ...routed, tone: "status" }, u1: reply }, { n1: open }, null),
+    ).not.toHaveProperty("answer");
+  });
+
+  it("keeps the choices open when the answer failed to send", () => {
+    const row = questionRow(asked, [pending("CI fix", "failed")]);
+    expect(row).toMatchObject({ options: ["CI fix", "Release"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+
+  it("shows a picked choice inside the question, without a second message from the person", () => {
+    const timeline = (
+      items: OrchestrationV2TurnItem[],
+      pendingInputs: GoatBotPendingInput[] = [],
+    ) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: rowsOf(items),
+          pendingInputs,
+          readers: readers({ b1: which }),
+        }),
+      );
+    for (const rows of [
+      timeline(asked, [pending("Release", "sending")]),
+      timeline([...asked, user("u1", "2026-10-12T12:00:02Z", "Release")]),
+    ]) {
+      expect(rows.filter((row) => row.kind === "user")).toEqual([]);
+      expect(rows.find((row) => row.id === "b1")).toMatchObject({
+        options: [],
+        choices: ["CI fix", "Release"],
+        answer: "Release",
+        answerIndex: 1,
+      });
+    }
+    // A typed answer stays the person's own message, and a failed pick stays visible to retry.
+    const typed = timeline([...asked, user("u1", "2026-10-12T12:00:02Z", "Neither")]);
+    expect(typed.filter((row) => row.kind === "user")).toHaveLength(1);
+    expect(typed.find((row) => row.id === "b1")).not.toHaveProperty("answerIndex");
+    const failed = timeline(asked, [pending("Release", "failed")]);
+    expect(failed.filter((row) => row.kind === "user")).toHaveLength(1);
+  });
+
+  it("shows a pick on its way in the question, and gives no older message the newest receipt", () => {
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([user("u0", "2026-10-12T12:00:00Z", "Ship it"), ...asked]),
+        pendingInputs: [pending("Release", "sending")],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(rows.find((row) => row.id === "b1")).toMatchObject({
+      answerIndex: 1,
+      answerSending: true,
+    });
+    expect(rows.filter((row) => row.kind === "user" && row.showReceipt)).toEqual([]);
+    // The roster still reads the pick as the person's newest message.
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })).toMatchObject({
+      text: "You: Release",
+      at: "2026-10-12T12:00:02Z",
+    });
+    // Also when the bot said something else between the question and the pick.
+    const withStatus = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([...asked, bot("s1", "2026-10-12T12:00:01.500Z", "Still here")]),
+        pendingInputs: [pending("Release", "sending")],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(
+      goatBotConversationPreview({ rows: withStatus, lastVisitedAt: null, active: true }),
+    ).toMatchObject({ text: "You: Release", at: "2026-10-12T12:00:02Z" });
+  });
+
+  it("shows a pick sent to a task's open question inside it while the task has not seen it", () => {
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const open = { ...card("proposal", 1), askInChat: true, openQuestionIds: ["q-save"] };
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([notice("n1", "2026-10-12T12:00:00Z"), ...asked]),
+        pendingInputs: [pending("Skip", "sending", { taskId: "proposal" })],
+        readers: readers({ b1: routed }, { n1: open }),
+        taskId: null,
+      }),
+    );
+    expect(rows.filter((row) => row.kind === "user")).toEqual([]);
+    expect(rows.find((row) => row.id === "b1")).toMatchObject({
+      options: [],
+      answerIndex: 1,
+      answerSending: true,
+    });
+    // Recorded but not yet seen by the task (its card is older than the pick): still the pick.
+    const unseen = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          notice("n1", "2026-10-12T12:00:00Z"),
+          ...asked,
+          user("u1", "2026-10-12T12:00:02Z", "Skip"),
+        ]),
+        pendingInputs: [],
+        readers: readers(
+          {
+            b1: routed,
+            u1: { tone: "reply", readAt: null, requestKey: "in-1", taskId: "proposal" },
+          },
+          { n1: { ...open, updatedAt: "2026-10-12T12:00:00Z" } },
+        ),
+        taskId: null,
+      }),
+    );
+    expect(unseen.filter((row) => row.kind === "user")).toEqual([]);
+    expect(unseen.find((row) => row.id === "b1")).toMatchObject({ answerIndex: 1 });
+  });
+
+  it("keeps a later message that only matches a choice as the person's own message", () => {
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          ...asked,
+          user("u1", "2026-10-12T12:00:02Z", "Neither"),
+          user("u2", "2026-10-12T12:00:03Z", "Release"),
+        ]),
+        pendingInputs: [],
+        readers: readers({ b1: which }),
+      }),
+    );
+    expect(rows.filter((row) => row.kind === "user").map((row) => row.id)).toEqual(["u1", "u2"]);
+    expect(rows.find((row) => row.id === "b1")).not.toHaveProperty("answerIndex");
+  });
+
+  it("still shows the answer after a reload, once the task closed the question", () => {
+    const proposal = {
+      ...card("proposal", 2, "Working"),
+      askInChat: true,
+      openQuestionIds: [],
+    } satisfies GoatBotTaskCard;
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      ...asked,
+      user("u1", "2026-10-12T12:00:02Z", "Save"),
+    ];
+    const messages = {
+      b1: routed,
+      u1: {
+        tone: "reply" as const,
+        readAt: "2026-10-12T12:00:02Z",
+        requestKey: "in-1",
+        taskId: "proposal",
+      },
+    };
+    expect(questionRow(items, [], messages, { n1: proposal }, null)).toMatchObject({
+      options: [],
+      answer: "Save",
+    });
+  });
+
+  it("keeps a task's question open until its card closes it, though an answer was sent", () => {
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      ...asked,
+      user("u1", "2026-10-12T12:00:02Z", "Save"),
+    ];
+    const messages = {
+      b1: routed,
+      u1: { tone: "reply" as const, readAt: null, requestKey: "in-1", taskId: "proposal" },
+    };
+    const stillOpen = { ...card("proposal", 2), askInChat: true, openQuestionIds: ["q-save"] };
+    const row = questionRow(items, [], messages, { n1: stillOpen }, null);
+    expect(row).toMatchObject({ options: ["Save", "Skip"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+
+  it("does not take a message about something else as the answer to a task's open question", () => {
+    const open = { ...card("proposal", 1), askInChat: true, openQuestionIds: ["q-save"] };
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const row = questionRow(
+      [notice("n1", "2026-10-12T12:00:00Z"), ...asked, user("u1", "2026-10-12T12:00:02Z", "hi")],
+      [],
+      { b1: routed },
+      { n1: open },
+      null,
+    );
+    expect(row).toMatchObject({ options: ["Save", "Skip"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+});
+
+describe("a long chat of questions", () => {
+  it("gives each of hundreds of questions its own reply, in the chat and per task", () => {
+    const start = Date.parse("2026-10-12T12:00:00Z");
+    let clock = 0;
+    const at = () => DateTime.formatIso(DateTime.makeUnsafe(start + clock++ * 1_000));
+    const closed = (key: string): GoatBotTaskCard => ({
+      ...card(key, 1, "Waiting for your answer"),
+      // The cards closed their questions after the last reply came back.
+      updatedAt: "2026-10-13T00:00:00Z",
+      askInChat: true,
+      openQuestionIds: [],
+    });
+    const question = (taskId: string | null, questionId: string): GoatBotMessagePresentation => ({
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId,
+      questionId,
+      options: ["Yes", "No"],
+    });
+    const sentTo = (taskId: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId,
+    });
+    const items: OrchestrationV2TurnItem[] = [notice("na", at()), notice("nb", at())];
+    const messages: Record<string, GoatBotMessagePresentation> = {};
+    const expected: Array<readonly [string, ReadonlyArray<string>, string | undefined]> = [];
+    const rounds = 200;
+    for (let round = 0; round < rounds; round++) {
+      // Two tasks ask, the chat asks, then the replies come back in another order.
+      items.push(bot(`qa${round}`, at(), `A asks ${round}`));
+      messages[`qa${round}`] = question("a", `qa${round}`);
+      items.push(bot(`qb${round}`, at(), `B asks ${round}`));
+      messages[`qb${round}`] = question("b", `qb${round}`);
+      items.push(bot(`qc${round}`, at(), `Chat asks ${round}`));
+      messages[`qc${round}`] = question(null, `qc${round}`);
+      if (round === rounds - 1) {
+        expected.push([`qa${round}`, [], undefined], [`qb${round}`, [], undefined]);
+        expected.push([`qc${round}`, ["Yes", "No"], undefined]);
+        continue;
+      }
+      items.push(user(`uc${round}`, at(), `chat ${round}`));
+      items.push(user(`ub${round}`, at(), `b ${round}`));
+      messages[`ub${round}`] = sentTo("b");
+      items.push(user(`ua${round}`, at(), `a ${round}`));
+      messages[`ua${round}`] = sentTo("a");
+      expected.push([`qa${round}`, [], `a ${round}`], [`qb${round}`, [], `b ${round}`]);
+      expected.push([`qc${round}`, [], `chat ${round}`]);
+    }
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs: [],
+        readers: readers(messages, { na: closed("a"), nb: closed("b") }),
+        taskId: null,
+      }),
+    );
+    expect(
+      rows.flatMap((row) => (row.kind === "bot" ? [[row.id, row.options, row.answer]] : [])),
+    ).toEqual(expected);
+  });
+});
+
+describe("a conversation-only main chat", () => {
+  it("keeps a listed task's card out of the main chat, and in the task's own view", () => {
+    const items = rowsOf([
+      notice("n1", "2026-10-12T12:00:00Z"),
+      bot("b1", "2026-10-12T12:00:01Z", "Started."),
+      notice("n2", "2026-10-12T12:00:02Z"),
+    ]);
+    const cards = { n1: card("t1", 1, "Working"), n2: card("old", 1, "Done") };
+    const main = buildGoatBotTimeline({
+      visibleTurnItems: items,
+      pendingInputs: [],
+      readers: readers({}, cards),
+      taskId: null,
+      knownTaskIds: ["t1"],
+      conversationOnly: true,
+    });
+    // A task the work list no longer reaches keeps its card, the only way to open it.
+    expect(content(main).map((row) => row.id)).toEqual(["b1", "n2"]);
+    const own = buildGoatBotTimeline({
+      visibleTurnItems: items,
+      pendingInputs: [],
+      readers: readers(
+        { b1: { tone: "reply", readAt: null, requestKey: null, taskId: "t1" } },
+        cards,
+      ),
+      taskId: "t1",
+      knownTaskIds: ["t1"],
+      conversationOnly: true,
+    });
+    expect(content(own).map((row) => row.kind)).toEqual(["task", "bot"]);
+  });
+
+  it("hears a task's reply to a request made in the chat and how it ended, not its other talk", () => {
+    const task = (extra: Partial<GoatBotMessagePresentation>): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId: "t1",
+      ...extra,
+    });
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([
+        user("ask", "2026-10-12T12:00:00Z", "Count the stars"),
+        notice("n1", "2026-10-12T12:00:01Z"),
+        bot("ack", "2026-10-12T12:00:02Z", "On it."),
+        bot("milestone", "2026-10-12T12:00:03Z", "Cloned the repo."),
+        bot("inside", "2026-10-12T12:00:04Z", "Answering a question asked in the task."),
+        bot("asks", "2026-10-12T12:00:05Z", "Which repository?"),
+        bot("done", "2026-10-12T12:00:06Z", "17.8k stars."),
+      ]),
+      pendingInputs: [],
+      readers: readers(
+        {
+          ask: { tone: "reply", readAt: null, requestKey: "in-ask" },
+          ack: task({ replyToKey: "in-ask" }),
+          milestone: task({ tone: "status" }),
+          inside: task({ replyToKey: "in-task-view" }),
+          asks: task({ tone: "question" }),
+          done: task({ tone: "result" }),
+        },
+        { n1: card("t1", 1, "Working") },
+      ),
+      taskId: null,
+      knownTaskIds: ["t1"],
+      conversationOnly: true,
+    });
+    expect(content(rows).map((row) => row.id)).toEqual(["ask", "ack", "asks", "done"]);
   });
 });

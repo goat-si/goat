@@ -16,7 +16,7 @@ import {
  * the next line is a judgment, not a test failure: does an agent without it reach a wrong
  * conclusion, or only earn a refusal that names the right call? Only the first belongs.
  */
-const ALWAYS_INJECTED_BUDGET_BYTES = 5_632;
+const ALWAYS_INJECTED_BUDGET_BYTES = 5_888;
 
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
@@ -89,6 +89,14 @@ describe("GOAT provider instructions", () => {
     assert.notInclude(
       goatAcpPromptWithInstructions({ prompt: "Read", state: { ...available, hasGoatMcp: false } }),
       "## GOAT browser",
+    );
+  });
+
+  it("distinguishes top-level threads and lane admission", () => {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "starts a top-level sidebar thread");
+    assert.include(
+      GOAT_ORCHESTRATION_INSTRUCTIONS,
+      "admits dispatched lanes and counts the native subagents GOAT has seen running",
     );
   });
 

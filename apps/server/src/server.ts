@@ -118,6 +118,7 @@ import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as ProviderInstallation from "./provider/providerInstallation.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
@@ -176,6 +177,7 @@ import * as LinuxHelperHost from "./cua/linuxHelperHost/LinuxHelperHost.ts";
 import * as LinuxHelperReport from "./cua/linuxHelperHost/LinuxHelperReport.ts";
 import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
+import * as RunStartHoldReactor from "./orchestration-v2/goat/RunStartHoldReactor.ts";
 import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
@@ -744,6 +746,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerObservedCheckWorker,
   layerIdleCompactionWorker,
   ComputerUseTurnEnd.layer,
+  RunStartHoldReactor.layer.pipe(Layer.provide(RuntimeLayer.layerEventSink)),
   StorageCleanupLayer.layer,
   WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
@@ -792,6 +795,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
+  ProviderInstallation.layer,
   CloudFolderTrust.layer,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),

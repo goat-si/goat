@@ -65,35 +65,47 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 // resolveCompromised finds the machine to revoke as compromised among current members and the
 // machines that left or were revoked: a stolen machine may be found after it left. A name both a
 // departed and a current machine carry is refused, since a replacement may join under the old
-// name; the node id or fingerprint then picks one.
+// name; the node id or fingerprint (or a start of either) then picks one.
 func resolveCompromised(ls daemon.LsReply, arg string) (mesh.Member, error) {
 	all := append(lsMembers(ls), ls.Revoked...)
-	if fp := normalFingerprint(arg); len(fp) == 40 {
-		for _, m := range all {
-			if normalFingerprint(fingerprintOf(m.NoisePub)) == fp {
-				return m, nil
-			}
-		}
-		return mesh.Member{}, fmt.Errorf("no machine has fingerprint %s", arg)
-	}
 	q := strings.ToLower(strings.TrimPrefix(arg, "pen-"))
-	var named []mesh.Member
+	full := strings.ToLower(arg)
+	fp := normalFingerprint(arg)
+	hexStart := len(fp) >= 8 && isHex(fp)
+	// Every way arg can name a machine counts: a name can be another machine's node id or
+	// fingerprint start, and a wrong pick revokes a healthy machine and what it admitted.
+	var found []mesh.Member
 	for _, m := range all {
-		if m.NodeID == q {
-			return m, nil
-		}
-		if m.Name == q || m.Name == strings.ToLower(arg) {
-			named = append(named, m)
+		if m.Name == q || m.Name == full || len(q) >= 4 && strings.HasPrefix(m.NodeID, q) ||
+			hexStart && strings.HasPrefix(normalFingerprint(fingerprintOf(m.NoisePub)), fp) {
+			found = append(found, m)
 		}
 	}
-	if len(named) > 1 {
-		lines := make([]string, len(named))
-		for i, m := range named {
-			lines[i] = "  " + describe(m, stateOf(ls, m))
-		}
-		return mesh.Member{}, fmt.Errorf("%d machines are named %q:\n%s\nname the stolen one by its node id or fingerprint: pen revoke --compromised <node id>", len(named), arg, strings.Join(lines, "\n"))
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return mesh.Member{}, fmt.Errorf("no machine is named %q or has a node id (4 characters or more) or fingerprint (8 digits or more) starting with it", arg)
 	}
-	return Resolve(all, arg)
+	return mesh.Member{}, fmt.Errorf("%d machines match %q by name, node id or fingerprint:\n%s", len(found), arg, choices(ls, found))
+}
+
+// choices lists the machines an argument matched, each with the command that names it alone.
+func choices(ls daemon.LsReply, ms []mesh.Member) string {
+	lines := []string{}
+	for _, m := range ms {
+		lines = append(lines, "  "+describe(m, stateOf(ls, m)))
+	}
+	// A whole fingerprint is longer than any name or node id, so it names one machine.
+	lines = append(lines, "name the stolen one by its fingerprint:")
+	for _, m := range ms {
+		lines = append(lines, "  pen revoke --compromised "+normalFingerprint(fingerprintOf(m.NoisePub)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func isHex(s string) bool {
+	return strings.Trim(s, "0123456789ABCDEF") == ""
 }
 
 // stateOf says whether m is a current member or one that left or was revoked.

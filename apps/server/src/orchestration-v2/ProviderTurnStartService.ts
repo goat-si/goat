@@ -5,7 +5,7 @@ import { isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
-import { makeRestorePending, makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
+import { makePrepareTurnWorkspace, workspaceRestoredItem } from "./goat/prepareTurnWorkspace.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -33,7 +33,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
@@ -42,7 +41,6 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
@@ -67,7 +65,6 @@ import * as RunExecutionService from "./RunExecutionService.ts";
 import { settledBeforeStartRun } from "./runTerminationCause.ts";
 import { abandonedTurnRepairEvents, endedRunsByAttempt } from "./goat/StoppedEarlierTurn.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
-import { tryWithWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -130,11 +127,9 @@ export const layer: Layer.Layer<
     const eventSink = yield* EventSink.EventSinkV2;
     const prepareHandoffRecovery = yield* makeProviderTurnHandoffRecovery;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
-    const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const globalSkillsDir = (yield* ServerConfig.ServerConfig).globalSkillsDir;
-    const recreateMissingWorktree = yield* makeRestoreThreadWorkspace;
-    const restorePending = yield* makeRestorePending;
+    const prepareWorkspace = yield* makePrepareTurnWorkspace;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
@@ -145,7 +140,6 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const adapterRegistry = yield* Effect.serviceOption(ProviderAdapters.ProviderAdapterRegistryV2);
     const cloudSources = yield* Effect.serviceOption(CloudSource.CloudTaskSourceService);
-    const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     // Build draining callbacks outside startup scope so they cannot retain full thread history.
     const makeRunControls = (input: {
@@ -633,52 +627,54 @@ export const layer: Layer.Layer<
         return;
       const { worktreePath, branch } = projection.thread;
       if (!cloud && worktreePath !== null) {
-        // Removal may hold this lease for minutes. Return to the outbox's
-        // retry schedule instead of occupying an effect-worker slot waiting.
-        const prepared = yield* tryWithWorkspaceLease(
-          path.resolve(worktreePath),
-          Effect.gen(function* () {
-            // A rebinding that committed after this start loaded the thread sends it to retry.
-            const bound = yield* projectionStore.getThreadShell(input.threadId).pipe(Effect.option);
-            if (Option.getOrNull(bound)?.worktreePath !== worktreePath) return "rebound" as const;
-            if (branch === null) return;
-            const ready = yield* restorePending.ready(worktreePath);
-            if (!ready && (yield* isManagedWorktreePath(worktreePath))) {
-              const project = yield* projects.getById(projection.thread.projectId).pipe(
-                Effect.map(Option.getOrUndefined),
-                Effect.orElseSucceed(() => undefined),
-              );
-              if (project !== undefined) {
-                yield* Effect.logWarning("provider turn start recreating missing worktree", {
-                  threadId: projection.thread.id,
-                  worktreePath,
-                  branch,
-                });
-                yield* recreateMissingWorktree({
-                  threadId: projection.thread.id,
-                  cwd: project.workspaceRoot,
-                  worktreePath,
-                  branch,
-                });
-              }
-            }
-          }).pipe(Effect.result),
-        );
-        if (Option.isNone(prepared) || Result.getOrUndefined(prepared.value) === "rebound") {
+        const prepared = yield* prepareWorkspace({ ...projection.thread, worktreePath });
+        if (prepared._tag === "Busy")
           return yield* new ProviderTurnStartError({
             runId,
             cause: new WorkspaceLeaseBusyError({}),
           });
-        }
-        if (prepared.value._tag === "Failure") {
-          if (input.willRetry === true) return yield* prepared.value.failure;
+        if (prepared._tag === "Failed") {
+          if (input.willRetry === true) return yield* prepared.error;
           yield* settleStartFailure({
             signal: "worktree-recreate-failure",
             title: "Couldn't recreate thread workspace",
-            error: prepared.value.failure,
-            message: prepared.value.failure.detail,
+            error: prepared.error,
+            message: prepared.error.detail,
           });
           return;
+        }
+        if (prepared.restored !== undefined && branch !== null) {
+          const now = yield* DateTime.now;
+          const item = workspaceRestoredItem({
+            threadId: projection.thread.id,
+            runId,
+            nodeId: rootNode.id,
+            now,
+            branch,
+            id: idAllocator.derive.runSignalTurnItem({ runId, signal: "worktree-restored" }),
+            providerThreadId: providerThread.id,
+            turnItems: projection.turnItems,
+            restored: prepared.restored,
+          });
+          const eventId = yield* idAllocator.allocate.event({ threadId: projection.thread.id });
+          yield* eventSink.writeIfRunCurrent({
+            threadId: projection.thread.id,
+            runId,
+            activeAttemptId: attempt.id,
+            expectedStatus: expectedStartStatus,
+            events: [
+              {
+                type: "turn-item.updated",
+                id: eventId,
+                payload: item,
+                occurredAt: now,
+                threadId: projection.thread.id,
+                runId,
+                nodeId: rootNode.id,
+                providerInstanceId: run.providerInstanceId,
+              },
+            ],
+          });
         }
       }
       const selectInheritedBackgroundItems = (

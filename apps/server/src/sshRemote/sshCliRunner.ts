@@ -34,6 +34,7 @@ export const resolveSshCliRunner = Effect.fn("SshRemoteDispatch.resolveSshCliRun
       ? { nodeScriptPath: nodeScriptPath.trim(), nodeEngineRange: packageJson.engines.node }
       : {}),
     archiveVersion: packageJson.version,
+    ownRuntimeVersion: packageJson.version,
     ...(BUILD_COMMIT_TIME === undefined ? {} : { archiveCommitTime: BUILD_COMMIT_TIME }),
     archiveDirectory,
     ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),

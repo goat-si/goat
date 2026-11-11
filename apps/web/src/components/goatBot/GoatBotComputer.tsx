@@ -9,6 +9,7 @@ import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
 import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
+import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 
 /** The machines GOAT Bot's running work uses, from its task list. */
 export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentId }) {
@@ -42,12 +43,10 @@ export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentI
   const groups = botComputers(tasks.data.tasks);
   if (groups.length === 0)
     return (
-      <div className="space-y-1">
-        <p>No work is running right now.</p>
-        <p className="text-xs text-muted-foreground">
-          Machines {botName} works on will appear here.
-        </p>
-      </div>
+      <GoatBotPanelEmpty
+        title="No work running"
+        next={`Machines ${botName} works on will appear here.`}
+      />
     );
   return (
     <div className="space-y-4">

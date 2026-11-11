@@ -9,24 +9,34 @@ Wants=network-online.target
 [Service]
 EnvironmentFile=/etc/pen-relay.env
 ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert ${PEN_RELAY_HOST} --cache /var/lib/pen-relay/acme --max-sockets 1024 --max-per-ip 64 --max-queued-mib 128 --max-queued-per-source-mib 16
-# Memory, with every term (the four flags above, the Go relay's fixed kernel buffers):
-# - Go, bounded by GOMEMLIMIT=224MiB (the collector's target for all memory Go maps):
-#   queued and partly read messages at their allocation size, at most 128 MiB (--max-queued-mib;
-#   one IPv4 address or IPv6 /64 holds at most 16 MiB of it); per connection, counted from accept,
-#   about 48 KiB of TLS and bufio buffers, timers and goroutine stacks (27 KiB measured idle over
-#   3000 TLS sockets), so 48 MiB at 1024 connections (--max-sockets); about 10 MiB of runtime.
-#   Live memory stays near 186 MiB, under the limit with room for the collector.
+# Memory, what each part may hold at worst (the four flags above and the relay's built-in limits).
+# These are not a bound the kernel enforces: GOMEMLIMIT only makes the Go collector work harder near
+# it, so the margin under MemoryMax is headroom checked by measurement, not a proof.
+# - Go: queued messages at their allocation size, at most 128 MiB (--max-queued-mib; one IPv4
+#   address or IPv6 /64 at most 16 MiB); messages being read, up to 108 KiB per connection without a
+#   charge (a 96 KiB message and its 4 KiB first buffer; 108 MiB at 1024 connections, --max-sockets)
+#   and larger ones from a 32 MiB pool; about 48 KiB per connection of TLS and bufio buffers, timers
+#   and goroutine stacks (27 KiB measured idle over 3000 TLS sockets), 48 MiB; about 10 MiB of
+#   runtime; what the relay queues without a charge is bounded per connection (the 32-byte
+#   challenge once, at most 8 pongs, one close frame: about 1.4 KiB with ring slots; session OPEN
+#   and CLOSE frames are charged when a client is admitted), 1.4 MiB at 1024. About 328 MiB live at
+#   worst, under GOMEMLIMIT=384MiB with room for the collector.
 # - Kernel, outside GOMEMLIMIT but inside MemoryMax under cgroup v2: each connection's send and
 #   receive buffers are fixed at 64 KiB (Linux doubles them); a send queue may pass its buffer by
 #   about one segment (228 KiB measured per client that stops reading), the receive side stays near
-#   130 KiB, so at most about 360 KiB per connection, 360 MiB at 1024.
+#   130 KiB, so about 360 KiB per connection, 360 MiB at 1024.
 # - The binary, slab and other kernel memory: about 32 MiB.
-# 224 + 360 + 32 = 616 MiB under MemoryMax=768M. Measured (linux x86_64, 2026-11-11, these values):
-# 400 idle TLS uplinks plus 600 clients from 10 addresses that never read, each sent 320 KiB,
-# peaked at 296 MiB (Go 203 MiB, kernel sockets 82 MiB); 850 idle uplinks, 64 partly read 1 MiB
-# messages and clients from 12 addresses holding the 128 MiB budget peaked at 216 MiB. Change the
-# flags, GOMEMLIMIT and MemoryMax together.
-Environment=GOMEMLIMIT=224MiB
+# 384 + 360 + 32 = 776 MiB, with MemoryMax=1G leaving about 250 MiB of headroom. Measured on the
+# relay of commit ea4c30d27a (linux x86_64, load about 0.8 on 16 cores, 2026-11-11, these flags,
+# TLS, sources on loopback addresses): 400 uplinks with 600 clients from 10 addresses that never
+# read, each sent 320 KiB, peaked at 299 MiB (Go 206, kernel sockets 75); 856 uplinks, 64 partly
+# sent 1 MiB messages and 96 non-reading clients from 12 addresses filling the queue budget peaked
+# at 372 MiB (Go 353); 960 non-reading clients from 64 addresses each sent up to 4 MiB peaked at
+# 376 MiB (Go 341, sockets 12); 64 uplinks that never read and 373,495 client sessions opened and
+# closed from 8 addresses in 30 s peaked at 26 MiB (Go 17 after). No run reached MemoryMax or was
+# refused a connection. Not measured on arm64 (the Seoul VM).
+# Change the flags, GOMEMLIMIT and MemoryMax together.
+Environment=GOMEMLIMIT=384MiB
 DynamicUser=yes
 StateDirectory=pen-relay
 StateDirectoryMode=0700
@@ -57,7 +67,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 UMask=0077
 LimitNOFILE=4096
-MemoryMax=768M
+MemoryMax=1G
 TasksMax=256
 Restart=on-failure
 RestartSec=2

@@ -1,6 +1,7 @@
 package relayserver
 
 import (
+	"bytes"
 	"testing"
 	"time"
 )
@@ -30,15 +31,13 @@ func testSock(s *Server, rm *room, role int, sid uint32, ip string, ws wsWriter)
 func TestClientsThatStopReadingFillOnlyTheirSourcesShareOfTheQueueBudget(t *testing.T) {
 	s := New(DefaultLimits())
 	s.MaxQueued = 64 << 20
-	ws := &stalledWS{release: make(chan struct{})}
-	defer close(ws.release)
 	const greedy = "198.51.100.7"
 	chunk := make([]byte, 64<<10)
 	for range 2 {
 		rm := &room{srv: s, clients: map[uint32]*sock{}}
-		testSock(s, rm, roleNode, 0, greedy, ws)
+		testSock(s, rm, roleNode, 0, greedy, stalled(t))
 		for sid := uint32(1); sid <= 31; sid++ {
-			c := testSock(s, rm, roleClient, sid, greedy, ws)
+			c := testSock(s, rm, roleClient, sid, greedy, stalled(t))
 			rm.mu.Lock()
 			for range (SocketWindow - RelayHeadroom) / len(chunk) {
 				if c.closed {
@@ -50,8 +49,8 @@ func TestClientsThatStopReadingFillOnlyTheirSourcesShareOfTheQueueBudget(t *test
 		}
 	}
 	other := &room{srv: s, clients: map[uint32]*sock{}}
-	testSock(s, other, roleNode, 0, "203.0.113.1", ws)
-	honest := testSock(s, other, roleClient, 1, "203.0.113.2", ws)
+	testSock(s, other, roleNode, 0, "203.0.113.1", stalled(t))
+	honest := testSock(s, other, roleClient, 1, "203.0.113.2", stalled(t))
 	other.mu.Lock()
 	other.onClientData(honest, make([]byte, 1<<10))
 	other.mu.Unlock()
@@ -59,3 +58,41 @@ func TestClientsThatStopReadingFillOnlyTheirSourcesShareOfTheQueueBudget(t *test
 		t.Fatalf("a session from another source ended once one source filled the relay (%d bytes queued)", s.Queued())
 	}
 }
+
+func isDone(q *outq) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.done
+}
+
+// fill queues size bytes to c in 64 KiB messages.
+func fill(rm *room, c *sock, size int) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	for sent := 0; sent < size && !c.closed; sent += 64 << 10 {
+		rm.toClient(c, make([]byte, 64<<10))
+	}
+}
+
+// Every message up to 96 KiB is read without a charge to the shared large-read pool, also when
+// that pool is full.
+func TestAMessageOfUpTo96KiBIsReadWithAFullLargeReadPool(t *testing.T) {
+	s := New(DefaultLimits())
+	s.reading.Store(s.maxReading())
+	for _, size := range []int{73 << 10, 96 << 10} {
+		data, err := readMessage(bytes.NewReader(make([]byte, size)), MessageMax, testBudget(s, "192.0.2.1"))
+		if err != nil || len(data) != size {
+			t.Fatalf("a %d-byte message with the pool full: %d bytes, %v", size, len(data), err)
+		}
+	}
+}
+
+// stalled is a socket of its own that stopped reading, released when the test ends.
+func stalled(t *testing.T) *stalledWS {
+	ws := &stalledWS{release: make(chan struct{})}
+	t.Cleanup(func() { close(ws.release) })
+	return ws
+}
+
+// timerNever is an idle timer that does not fire during a test.
+func timerNever() *time.Timer { return time.NewTimer(time.Hour) }

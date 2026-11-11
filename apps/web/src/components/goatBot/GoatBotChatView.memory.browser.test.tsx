@@ -21,7 +21,9 @@ const state = vi.hoisted(() => ({
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
-vi.mock("./GoatBotModelPicker", () => ({ GoatBotModelPicker: () => null }));
+vi.mock("./GoatBotModelPicker", () => ({
+  GoatBotModelPicker: () => <button type="button">Choose model</button>,
+}));
 vi.mock("./GoatBotAvatar", () => ({
   GoatBotAvatar: () => null,
   GoatBotMainAvatar: () => null,
@@ -109,13 +111,44 @@ function setup(narrow = false) {
 }
 
 async function openMemory(screen: Awaited<ReturnType<typeof render>>) {
-  await userEvent.click(screen.getByRole("button", { name: "Toggle GOAT Bot work panel" }));
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
   // The narrow layout puts the panel in a sheet outside the rendered container.
-  await userEvent.click(page.getByRole("tab", { name: "Memory" }));
+  await userEvent.click(page.getByRole("tab", { name: "Library" }));
 }
 
 const composer = (screen: Awaited<ReturnType<typeof render>>) =>
   screen.getByRole("textbox", { name: "Message GOAT Bot" });
+
+it("the home chip toggles by click and keyboard without losing the draft", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  const field = composer(screen);
+  await userEvent.type(field, "Keep this draft");
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await userEvent.click(chip);
+  await expect.element(chip).toHaveAttribute("aria-expanded", "true");
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await expect.element(field).toHaveValue("Keep this draft");
+  expect(
+    screen.getByRole("button", { name: "Choose model" }).element().closest("form"),
+  ).not.toBeNull();
+});
+
+it("closing the narrow home sheet returns focus and keeps the draft", async () => {
+  const { view } = setup(true);
+  await using screen = await render(view());
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  const field = composer(screen);
+  await userEvent.type(field, "Draft on mobile");
+  await userEvent.click(chip);
+  await userEvent.click(page.getByRole("button", { name: "Close" }));
+  await expect.element(chip).toHaveFocus();
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await expect.element(field).toHaveValue("Draft on mobile");
+});
 
 it("Ask to forget puts the quoted note in the composer and sends nothing", async () => {
   const { view, onSend } = setup();
@@ -154,7 +187,7 @@ it("on a narrow screen the work sheet closes and the composer holds the draft", 
   await using screen = await render(view());
   await openMemory(screen);
   await userEvent.click(page.getByRole("button", { name: "Ask to forget" }));
-  await expect.element(page.getByRole("tab", { name: "Memory" })).not.toBeInTheDocument();
+  await expect.element(page.getByRole("tab", { name: "Library" })).not.toBeInTheDocument();
   await expect.element(composer(screen)).toHaveValue(goatBotForgetNoteMessage(note.text));
   expect(onSend).not.toHaveBeenCalled();
 });
@@ -195,7 +228,7 @@ const taskRow = (revision: number, statusLabel: string): GoatBotRow => {
   };
 };
 
-it("the open Memory tab reads the notes again after the answer and after the task finishes", async () => {
+it("the memory in Library reads the notes again after the answer and after the task finishes", async () => {
   const { view } = setup();
   await using screen = await render(view());
   await openMemory(screen);
@@ -209,10 +242,8 @@ it("the open Memory tab reads the notes again after the answer and after the tas
   state.notes = [];
   await screen.rerender(view([botRow("On it."), taskRow(2, "Done")]));
   expect(state.refresh).toHaveBeenCalledTimes(opened + 3);
-  await expect
-    .element(screen.getByText("No notes yet. Ask GOAT Bot to remember a standing rule."))
-    .toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Tasks" }));
-  await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
+  await expect.element(screen.getByText("No notes yet")).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   expect(state.refresh).toHaveBeenCalledTimes(opened + 4);
 });

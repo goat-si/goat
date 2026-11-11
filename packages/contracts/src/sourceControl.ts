@@ -105,6 +105,13 @@ export const SourceControlPublishRepositoryResult = Schema.Struct({
 });
 export type SourceControlPublishRepositoryResult = typeof SourceControlPublishRepositoryResult.Type;
 
+export const SourceControlStarredInput = Schema.Struct({
+  // Repository is intentionally absent: the server pins it to goat-si/goat.
+  provider: SourceControlProviderKind,
+  host: TrimmedNonEmptyString,
+});
+export type SourceControlStarredInput = typeof SourceControlStarredInput.Type;
+
 export const SourceControlDiscoveryStatus = Schema.Literals(["available", "missing"]);
 export type SourceControlDiscoveryStatus = typeof SourceControlDiscoveryStatus.Type;
 

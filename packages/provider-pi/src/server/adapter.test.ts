@@ -52,7 +52,14 @@ import {
   PI_PROVIDER,
   type PiAdapterV2Options,
 } from "./adapter.ts";
-import { makePiRpcConnection, type PiRpcRecord } from "./rpc.ts";
+import { makePiRpcConnection } from "./rpc.ts";
+import {
+  FAKE_PID,
+  FAKE_SESSION_FILE,
+  PI_COMPACTING_PROMPT_ERROR,
+  makeFakePi,
+  type FakePi,
+} from "./test/fakePi.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 import { registerOmoAdapterChecks } from "./omoAdapterChecks.testkit.ts";
 import { turnItemOutputText as outputText } from "../../../client-runtime/src/work-log/itemDetail.ts";
@@ -68,15 +75,9 @@ const decodeUserInputQuestions = Schema.decodeUnknownSync(
   Schema.Array(OrchestrationV2UserInputQuestion),
 );
 
-const decodeJsonLine = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
-const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-
 const PI_INSTANCE_ID = ProviderInstanceId.make("pi");
 export const THREAD_ID = ThreadId.make("thread-pi-test");
 export const SESSION_ID = ProviderSessionId.make("provider-session-pi-test");
-const FAKE_SESSION_FILE = "/fake/.pi/agent/sessions/--workspace--/0001_abc.jsonl";
-/** Deliberately outside the valid pid range so a group-kill can never land. */
-const FAKE_PID = 999_999_999;
 
 const at = (seconds: number) => DateTime.makeUnsafe(seconds * 1000);
 
@@ -152,287 +153,6 @@ export const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make
 export const modelSelection = (model: string): ModelSelection => ({
   instanceId: PI_INSTANCE_ID,
   model,
-});
-
-interface FakePi {
-  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
-  readonly emit: (record: PiRpcRecord, chunkBytes?: number) => Effect.Effect<void>;
-  readonly takeRequest: (type: string) => Effect.Effect<PiRpcRecord>;
-  readonly queueEntries: (data: unknown) => void;
-  readonly queueMessages: (data: unknown) => void;
-  readonly vetoNextSwitch: () => void;
-  readonly queueState: (data: Record<string, unknown>) => void;
-  readonly setStreaming: (streaming: boolean) => void;
-  readonly setCompacting: (compacting: boolean) => void;
-  readonly deferNextState: () => void;
-  readonly resolveDeferredState: (data: unknown) => Effect.Effect<void>;
-  readonly failNextState: () => void;
-  readonly failNextPrompt: () => void;
-  readonly deferNextLifecycle: (type: "switch_session" | "new_session" | "fork" | "abort") => void;
-  readonly deferNextModelSelection: () => void;
-  readonly queueModels: (models: ReadonlyArray<unknown>) => void;
-  readonly vetoNextNewSession: () => void;
-  readonly allRequests: () => ReadonlyArray<PiRpcRecord>;
-  readonly queueStats: (data: unknown) => void;
-  /** Pi before 0.84.4 answers clear_queue as an unknown command. */
-  readonly setClearQueue: (
-    result:
-      | { readonly steering: ReadonlyArray<string>; readonly followUp: ReadonlyArray<string> }
-      | "unknown_command",
-  ) => void;
-  readonly closeStdout: Effect.Effect<void>;
-  readonly lastSpawn: () => {
-    readonly args: ReadonlyArray<string>;
-    readonly env: NodeJS.ProcessEnv;
-  };
-}
-
-/** Pi omits `model` when none is selected and `sessionName` until one is set. */
-const recordedIdleState = (sessionFile: string) => ({
-  thinkingLevel: "high",
-  isStreaming: false,
-  isCompacting: false,
-  steeringMode: "one-at-a-time",
-  followUpMode: "one-at-a-time",
-  sessionFile,
-  sessionId: "00000000-0000-4000-8000-000000000002",
-  autoCompactionEnabled: true,
-  messageCount: 0,
-  pendingMessageCount: 0,
-});
-
-/** Pi 1.4.0 rejects every prompt while compaction runs, including steers. */
-const PI_COMPACTING_PROMPT_ERROR =
-  "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.";
-
-export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
-  const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
-  const requests = yield* Queue.unbounded<PiRpcRecord>();
-  const entriesQueue: Array<unknown> = [];
-  const messagesQueue: Array<unknown> = [];
-  const stateQueue: Array<Record<string, unknown>> = [];
-  const statsQueue: Array<unknown> = [];
-  const allRequests: Array<PiRpcRecord> = [];
-  let deferState = false;
-  let deferredStateRequest: PiRpcRecord | undefined;
-  let failState = false;
-  let failPrompt = false;
-  let vetoSwitch = false;
-  let vetoNewSession = false;
-  let deferredLifecycle: string | undefined;
-  let sessionFile = FAKE_SESSION_FILE;
-  let sessionGeneration = 0;
-  let models: ReadonlyArray<unknown> = [];
-  let isStreaming: boolean | null = null;
-  let isCompacting = false;
-  let clearQueue: Parameters<FakePi["setClearQueue"]>[0] = { steering: [], followUp: [] };
-  let stdinBuffer = "";
-
-  const emit = (record: PiRpcRecord, chunkBytes?: number) =>
-    Effect.gen(function* () {
-      const bytes = new TextEncoder().encode(`${encodeJsonLine(record)}\n`);
-      const size = chunkBytes ?? bytes.byteLength;
-      for (let offset = 0; offset < bytes.byteLength; offset += size) {
-        yield* Queue.offer(stdout, bytes.subarray(offset, offset + size));
-      }
-    });
-
-  const respondTo = (record: PiRpcRecord): PiRpcRecord | null => {
-    if (
-      typeof record["id"] !== "string" &&
-      !(record["type"] === "prompt" && (isStreaming !== null || isCompacting))
-    )
-      return null;
-    const base = {
-      type: "response",
-      id: record["id"],
-      command: String(record["type"]),
-      success: true,
-    };
-    switch (record["type"]) {
-      case "get_state":
-        if (failState) {
-          failState = false;
-          return { ...base, success: false, error: "state unavailable" };
-        }
-        return {
-          ...base,
-          data: {
-            ...recordedIdleState(sessionFile),
-            isStreaming: isStreaming ?? false,
-            ...stateQueue.shift(),
-          },
-        };
-      case "prompt":
-        if (failPrompt) {
-          failPrompt = false;
-          return { ...base, success: false, error: "prompt unavailable" };
-        }
-        if (isCompacting) {
-          return { ...base, success: false, error: PI_COMPACTING_PROMPT_ERROR };
-        }
-        if (isStreaming && record["streamingBehavior"] === undefined) {
-          return {
-            ...base,
-            success: false,
-            error:
-              "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-          };
-        }
-        return base;
-      case "get_available_models":
-        return { ...base, data: { models } };
-      case "new_session": {
-        const cancelled = vetoNewSession;
-        vetoNewSession = false;
-        if (!cancelled) sessionFile = `/fake/new-${++sessionGeneration}.jsonl`;
-        return { ...base, data: { cancelled } };
-      }
-      case "switch_session": {
-        const cancelled = vetoSwitch;
-        vetoSwitch = false;
-        return { ...base, data: { cancelled } };
-      }
-      case "get_entries":
-        return {
-          ...base,
-          data: entriesQueue.shift() ?? { entries: [], leafId: null, hasMore: false },
-        };
-      case "get_messages":
-        return { ...base, data: messagesQueue.shift() ?? { messages: [] } };
-      case "get_session_stats":
-        return { ...base, data: statsQueue.shift() ?? {} };
-      case "fork":
-        return { ...base, data: { text: "Hello pi", cancelled: false } };
-      case "clear_queue":
-        return clearQueue === "unknown_command"
-          ? { ...base, success: false, error: "Unknown command: clear_queue" }
-          : { ...base, data: clearQueue };
-      default:
-        return base;
-    }
-  };
-
-  const handleStdinChunk = (chunk: Uint8Array) =>
-    Effect.gen(function* () {
-      stdinBuffer += new TextDecoder().decode(chunk);
-      while (true) {
-        const newline = stdinBuffer.indexOf("\n");
-        if (newline === -1) return;
-        const line = stdinBuffer.slice(0, newline);
-        stdinBuffer = stdinBuffer.slice(newline + 1);
-        if (line.length === 0) continue;
-        const record = decodeJsonLine(line) as PiRpcRecord;
-        allRequests.push(record);
-        yield* Queue.offer(requests, record);
-        if (record["type"] === "get_state" && deferState) {
-          deferState = false;
-          deferredStateRequest = record;
-          continue;
-        }
-        if (record["type"] === deferredLifecycle) {
-          deferredLifecycle = undefined;
-          continue;
-        }
-        const response = respondTo(record);
-        if (response !== null) yield* emit(response);
-      }
-    });
-
-  let lastSpawn: { readonly args: ReadonlyArray<string>; readonly env: NodeJS.ProcessEnv } = {
-    args: [],
-    env: {},
-  };
-  const spawner = ChildProcessSpawner.make((command) =>
-    Effect.sync(() => {
-      if (ChildProcess.isStandardCommand(command)) {
-        lastSpawn = {
-          args: command.args,
-          env: command.options.env ?? {},
-        };
-      }
-      return ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(FAKE_PID),
-        exitCode: Effect.never,
-        isRunning: Effect.succeed(true),
-        kill: () => Effect.void,
-        unref: Effect.succeed(Effect.void),
-        stdin: Sink.forEach(handleStdinChunk),
-        stdout: Stream.fromQueue(stdout),
-        stderr: Stream.empty,
-        all: Stream.empty,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-      });
-    }),
-  );
-
-  const takeRequest = (type: string): Effect.Effect<PiRpcRecord> =>
-    Effect.gen(function* () {
-      while (true) {
-        const record = yield* Queue.take(requests);
-        if (record["type"] === type) return record;
-      }
-    });
-
-  return {
-    spawner,
-    emit,
-    takeRequest,
-    queueEntries: (data) => entriesQueue.push(data),
-    queueMessages: (data) => messagesQueue.push(data),
-    deferNextState: () => {
-      deferState = true;
-    },
-    resolveDeferredState: (data) =>
-      Effect.gen(function* () {
-        const record = deferredStateRequest;
-        assert.isDefined(record);
-        deferredStateRequest = undefined;
-        yield* emit({
-          type: "response",
-          id: record!["id"],
-          command: "get_state",
-          success: true,
-          data,
-        });
-      }),
-    failNextState: () => {
-      failState = true;
-    },
-    failNextPrompt: () => {
-      failPrompt = true;
-    },
-    deferNextLifecycle: (type) => {
-      deferredLifecycle = type;
-    },
-    deferNextModelSelection: () => {
-      deferredLifecycle = "set_model";
-    },
-    queueModels: (value) => {
-      models = value;
-    },
-    vetoNextNewSession: () => {
-      vetoNewSession = true;
-    },
-    allRequests: () => allRequests,
-    vetoNextSwitch: () => {
-      vetoSwitch = true;
-    },
-    queueState: (data) => stateQueue.push(data),
-    setStreaming: (streaming) => {
-      isStreaming = streaming;
-    },
-    setCompacting: (compacting) => {
-      isCompacting = compacting;
-    },
-    queueStats: (data) => statsQueue.push(data),
-    setClearQueue: (result) => {
-      clearQueue = result;
-    },
-    closeStdout: Queue.end(stdout),
-    lastSpawn: () => lastSpawn,
-  } satisfies FakePi;
 });
 
 const makeAdapter = Effect.fnUntraced(function* (
@@ -1886,55 +1606,149 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("resets applied thinking when returning to Pi default", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      fake.queueState({
-        model: { provider: "xai", id: "grok-4.6" },
-        thinkingLevel: "medium",
-        sessionFile: FAKE_SESSION_FILE,
-        sessionId: "abc",
-      });
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-
-      yield* startTurn(runtime, providerThread, "default", [], "Hello pi", {
-        instanceId: PI_INSTANCE_ID,
-        model: "xai/grok-4.6",
-        options: [{ id: "thinking", value: "high" }],
-      });
-      const modelRequest = yield* fake.takeRequest("set_model");
-      assert.equal(modelRequest["provider"], "xai");
-      assert.equal(modelRequest["modelId"], "grok-4.6");
-      const levelRequest = yield* fake.takeRequest("set_thinking_level");
-      assert.equal(levelRequest["level"], "high");
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
-      yield* fake.emit({ type: "agent_settled" });
-      yield* takeEvent((event) => event.type === "turn.terminal");
-
-      yield* startTurn(
-        runtime,
-        providerThread,
-        "default",
-        [],
-        "Hello pi",
-        {
+  it.effect.each(["anthropic/model-b", "default"])(
+    "preserves explicit thinking when switching models to %s in the same runtime",
+    (targetModel) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        fake.queueState({
+          model: { provider: "anthropic", id: "model-b" },
+          thinkingLevel: "high",
+          sessionFile: FAKE_SESSION_FILE,
+        });
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        const selection = (model: string): ModelSelection => ({
           instanceId: PI_INSTANCE_ID,
-          model: "default",
-        },
-        2,
-      );
-      const replayModel = yield* fake.takeRequest("set_model");
-      assert.equal(replayModel["provider"], "xai");
-      assert.equal(replayModel["modelId"], "grok-4.6");
-      const resetLevel = yield* fake.takeRequest("set_thinking_level");
-      assert.equal(resetLevel["level"], "medium");
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+          model,
+          options: [{ id: "thinking", value: "high" }],
+        });
+
+        yield* startTurn(
+          runtime,
+          providerThread,
+          "default",
+          [],
+          "First",
+          selection("anthropic/model-a"),
+        );
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+        yield* fake.emit({ type: "agent_settled" });
+        yield* takeEvent((event) => event.type === "turn.terminal");
+
+        yield* startTurn(
+          runtime,
+          providerThread,
+          "default",
+          [],
+          "Second",
+          selection(targetModel),
+          2,
+        );
+        yield* fake.takeRequest("prompt");
+        assert.deepEqual(fake.promptThinkingLevels, ["high", "high"]);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each([false, true, "previous"] as const)(
+    "resets applied thinking when returning to Pi default (failed first restore: %s)",
+    (failFirstRestore) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        fake.queueState({
+          model: { provider: "xai", id: "grok-4.6" },
+          thinkingLevel: "medium",
+          sessionFile: FAKE_SESSION_FILE,
+          sessionId: "abc",
+        });
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+
+        yield* startTurn(runtime, providerThread, "default", [], "Hello pi", {
+          instanceId: PI_INSTANCE_ID,
+          model: "anthropic/model-a",
+          options: [{ id: "thinking", value: "high" }],
+        });
+        const modelRequest = yield* fake.takeRequest("set_model");
+        assert.equal(modelRequest["provider"], "anthropic");
+        assert.equal(modelRequest["modelId"], "model-a");
+        const levelRequest = yield* fake.takeRequest("set_thinking_level");
+        assert.equal(levelRequest["level"], "high");
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+        yield* fake.emit({ type: "agent_settled" });
+        yield* takeEvent((event) => event.type === "turn.terminal");
+
+        if (failFirstRestore) {
+          fake.failNextThinking();
+          const result = yield* startTurn(
+            runtime,
+            providerThread,
+            "default",
+            [],
+            "Hello pi",
+            {
+              instanceId: PI_INSTANCE_ID,
+              model: "default",
+            },
+            2,
+          ).pipe(Effect.exit);
+          assert.equal(result._tag, "Failure");
+          yield* fake.takeRequest("set_model");
+          yield* fake.takeRequest("set_thinking_level");
+        }
+
+        yield* startTurn(
+          runtime,
+          providerThread,
+          "default",
+          [],
+          "Hello pi",
+          {
+            instanceId: PI_INSTANCE_ID,
+            model: failFirstRestore === "previous" ? "anthropic/model-a" : "default",
+            ...(failFirstRestore === "previous"
+              ? { options: [{ id: "thinking", value: "high" }] }
+              : {}),
+          },
+          2,
+        );
+        yield* fake.takeRequest("prompt");
+        assert.deepEqual(fake.promptThinkingLevels, [
+          "high",
+          failFirstRestore === "previous" ? "high" : "medium",
+        ]);
+        assert.deepEqual(fake.promptModels, [
+          "anthropic/model-a",
+          failFirstRestore === "previous" ? "anthropic/model-a" : "xai/grok-4.6",
+        ]);
+        const replayModel = fake
+          .allRequests()
+          .findLast((request) => request["type"] === "set_model")!;
+        assert.equal(
+          replayModel["provider"],
+          failFirstRestore === "previous" ? "anthropic" : "xai",
+        );
+        assert.equal(
+          replayModel["modelId"],
+          failFirstRestore === "previous" ? "model-a" : "grok-4.6",
+        );
+        const resetLevel = fake
+          .allRequests()
+          .findLast((request) => request["type"] === "set_thinking_level")!;
+        assert.equal(resetLevel["level"], failFirstRestore === "previous" ? "high" : "medium");
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect.each([
