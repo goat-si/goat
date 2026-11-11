@@ -52,13 +52,12 @@ export function GoatBotStepsProvider({
   });
   const local = sources.find((source) => source.kind === "local");
   const refs = local?.kind === "local" ? local.refs : [];
-  // Sources hold at most two threads, read in fixed hook slots.
-  const first = useSourceSteps(refs[0]);
-  const second = useSourceSteps(refs[1]);
+  // A source holds one thread: the main chat's newest session or a task's worker.
+  const steps = useSourceSteps(refs[0]);
   const placement = goatBotActivityPlacement({
     rows,
     sources,
-    steps: [first, second].slice(0, refs.length),
+    steps: refs.length === 0 ? [] : [steps],
   });
   return <GoatBotStepsContext value={placement}>{children}</GoatBotStepsContext>;
 }

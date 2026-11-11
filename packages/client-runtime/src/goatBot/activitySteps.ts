@@ -40,8 +40,11 @@ import type { GoatBotRow } from "./rows.ts";
  * from a task's own worker in its view. The bot thread itself holds no tool calls.
  */
 
-/** A main chat reads its newest sessions only; older turns show no line, like history not loaded. */
-const MAIN_CHAT_SESSIONS = 2;
+/**
+ * A main chat reads its newest session only: every opening of a bot chat pays for its snapshot,
+ * so older turns on other sessions show no line, like history not loaded.
+ */
+const MAIN_CHAT_SESSIONS = 1;
 
 export type GoatBotActivitySource =
   | {

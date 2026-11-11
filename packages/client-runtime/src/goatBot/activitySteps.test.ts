@@ -246,7 +246,7 @@ describe("goatBotActivityPlacement", () => {
     expect(lineBefore(grown, "q1")?.key).toBe("activity:a");
   });
 
-  it("gives each per-task session its own line and none to a third, older session", () => {
+  it("reads only the newest per-task session, so older turns on other sessions get no line", () => {
     const botItems = [
       said("u0", 0),
       chip("c0", 1, local(sessionC)),
@@ -266,19 +266,15 @@ describe("goatBotActivityPlacement", () => {
     expect(sources).toEqual([
       {
         kind: "local",
-        refs: [
-          { environmentId: env, threadId: ThreadId.make(sessionB) },
-          { environmentId: env, threadId: ThreadId.make(sessionA) },
-        ],
+        refs: [{ environmentId: env, threadId: ThreadId.make(sessionB) }],
         running: false,
       },
     ]);
     const placement = place(botItems, [
       goatBotSourceSteps([ran("b1", 22, [], {}, sessionB)], false),
-      goatBotSourceSteps([read("a1", 12, sessionA)], false),
     ]);
     expect(lineBefore(placement, "r0")).toBeNull();
-    expect(lineBefore(placement, "r1")?.summary).toBe("Read 1 file");
+    expect(lineBefore(placement, "r1")).toBeNull();
     expect(lineBefore(placement, "r2")?.summary).toBe("Ran 1 command");
   });
 
@@ -297,7 +293,6 @@ describe("goatBotActivityPlacement", () => {
     })[0];
     expect(local0?.kind === "local" ? local0.refs.map((ref) => ref.threadId) : null).toEqual([
       sessionB,
-      sessionA,
     ]);
   });
 
