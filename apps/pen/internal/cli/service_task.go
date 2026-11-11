@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -118,23 +119,33 @@ func startTask(st *state.Store) error {
 	if err := os.Remove(st.Path(refusedRecord)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// The supervisor this start runs reads the request id before it checks the configuration, and a
+	// refusal counts only with this id: one from an earlier start, written late, is not this start's.
+	var id [8]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return err
+	}
+	req := hex.EncodeToString(id[:])
+	if err := st.WriteAtomic(startRequest, []byte(req), 0o600); err != nil {
+		return err
+	}
 	// A supervisor that pen down just ended can still count as running for Task Scheduler, which then
 	// drops this /Run (IgnoreNew); another /Run is harmless, since a second supervisor would find the
 	// lock held and exit, so repeat it until the daemon answers. A start the supervisor or its daemon
 	// refused ends the wait with the reason.
-	deadline := time.Now().Add(readyTimeout)
+	deadline := taskNow().Add(readyTimeout)
 	for {
 		if err := run("schtasks", "/Run", "/TN", name); err != nil {
 			return err
 		}
-		up, refusal := started(st, runRetry)
+		up, refusal := started(st, runRetry, req)
 		if up {
 			return nil
 		}
 		if refusal != "" {
 			return fmt.Errorf("the pen task %s refused to start: %s", name, strings.TrimPrefix(refusal, "pen: "))
 		}
-		if time.Now().After(deadline) {
+		if taskNow().After(deadline) {
 			return fmt.Errorf("the pen task %s did not start the daemon within %v", name, readyTimeout)
 		}
 	}
@@ -143,22 +154,36 @@ func startTask(st *state.Store) error {
 // runRetry is how long pen up waits for the daemon before it repeats schtasks /Run (a seam for tests).
 var runRetry = 2 * time.Second
 
+// taskNow and taskSleep are pen up's clock while it waits for the task (seams for tests).
+var taskNow, taskSleep = time.Now, time.Sleep
+
+// startRequest holds the id of the latest start pen up asked the task for.
+const startRequest = "start-request"
+
+// startRequestOf is the start the supervisor was run for: the id pen up wrote last ("" for none).
+func startRequestOf(st *state.Store) string {
+	b, _ := os.ReadFile(st.Path(startRequest))
+	return strings.TrimSpace(string(b))
+}
+
 // started waits up to d for the daemon to answer on the control socket (up) or for the task to record
-// that it refused the start (the reason).
-func started(st *state.Store, d time.Duration) (up bool, refusal string) {
-	deadline := time.Now().Add(d)
+// that it refused start req (the reason).
+func started(st *state.Store, d time.Duration, req string) (up bool, refusal string) {
+	deadline := taskNow().Add(d)
 	for {
 		var s daemon.Status
 		if daemon.Call(st, daemon.Request{Op: "status"}, &s) == nil {
 			return true, ""
 		}
-		if b, err := os.ReadFile(st.Path(refusedRecord)); err == nil && len(b) > 0 {
-			return false, strings.TrimSpace(string(b))
+		if b, err := os.ReadFile(st.Path(refusedRecord)); err == nil {
+			if id, reason, ok := strings.Cut(string(b), "\n"); ok && id == req && reason != "" {
+				return false, strings.TrimSpace(reason)
+			}
 		}
-		if !time.Now().Before(deadline) {
+		if !taskNow().Before(deadline) {
 			return false, ""
 		}
-		time.Sleep(100 * time.Millisecond)
+		taskSleep(100 * time.Millisecond)
 	}
 }
 
@@ -245,7 +270,7 @@ func removeTask(st *state.Store) error {
 
 // runSupervised is "pen up --supervise", the task's action: it drops the console window the task gave
 // it, runs the daemon as a windowless child that logs to daemon.log, and starts it again after a crash.
-func runSupervised(st *state.Store, stderr io.Writer) int {
+func runSupervised(st *state.Store, stderr io.Writer, req string) int {
 	logf, err := os.OpenFile(st.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fail(stderr, err)
@@ -280,6 +305,7 @@ func runSupervised(st *state.Store, stderr io.Writer) int {
 	return superviseLoop(func() int {
 		// --service: a daemon that refuses its start exits 0 and ends this loop instead of restarting.
 		cmd := exec.Command(exe, "up", "--foreground", "--service")
+		cmd.Env = append(os.Environ(), "PEN_START_REQUEST="+req)
 		cmd.Stdout, cmd.Stderr = logf, logf
 		hideWindow(cmd)
 		err := cmd.Run()
@@ -300,13 +326,14 @@ const restartFirst, restartMax = 2 * time.Second, time.Minute
 // superviseWait is the supervisor's wait before a restart (a seam for tests).
 var superviseWait = time.Sleep
 
-// refusedRecord holds the reason the Windows task refused to start Pen, for pen up to report.
+// refusedRecord holds the start request id and, on the next line, the reason the Windows task refused
+// to start Pen, for pen up to report.
 const refusedRecord = "start-refused"
 
 // noteRefused leaves the reason for a refused service start where it can be read: on stderr (daemon.log
 // for the daemon the supervisor runs), in daemon.log for the supervisor itself, whose console nobody
 // sees, and for the Windows task in refusedRecord, which pen up reports.
-func noteRefused(st *state.Store, supervise bool, err error, stderr io.Writer) {
+func noteRefused(st *state.Store, req string, supervise bool, err error, stderr io.Writer) {
 	msg := "pen: " + err.Error() + "\n"
 	io.WriteString(stderr, msg)
 	if supervise {
@@ -316,7 +343,7 @@ func noteRefused(st *state.Store, supervise bool, err error, stderr io.Writer) {
 		}
 	}
 	if supervise || serviceOS == "windows" {
-		st.WriteAtomic(refusedRecord, []byte(msg), 0o600) // best effort: the reason is in daemon.log too
+		st.WriteAtomic(refusedRecord, []byte(req+"\n"+msg), 0o600) // best effort: the reason is in daemon.log too
 	}
 }
 

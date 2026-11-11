@@ -330,9 +330,7 @@ func TestUpOnWindowsRunsTheTaskAgainWhenTheFirstRunIsDropped(t *testing.T) {
 		}
 		return nil
 	})
-	old := runRetry
-	runRetry = 300 * time.Millisecond
-	defer func() { runRetry = old }()
+	fakeTaskClock(t)
 	var out, errOut bytes.Buffer
 	code := RunUp([]string{"--relay", rs.URL, "--name", "a"}, &out, &errOut)
 	t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
@@ -454,11 +452,11 @@ func TestSupervisorDoesNotRestartADaemonThatRefusedItsStart(t *testing.T) {
 		t.Errorf("the supervisor restarts the daemon after %v", d)
 		st.WriteAtomic(downMarker, nil, 0o600) // ends the loop
 	}
-	if code := runSupervised(st, io.Discard); code != 0 {
+	if code := runSupervised(st, io.Discard, "req1"); code != 0 {
 		t.Fatalf("supervisor exit %d", code)
 	}
-	if b, _ := os.ReadFile(st.Path(refusedRecord)); runtime.GOOS == "windows" && len(b) == 0 {
-		t.Fatal("the daemon's refusal left no record for pen up")
+	if b, _ := os.ReadFile(st.Path(refusedRecord)); runtime.GOOS == "windows" && !strings.HasPrefix(string(b), "req1\n") {
+		t.Fatalf("the daemon's refusal left no record of start req1 for pen up: %q", b)
 	}
 }
 
@@ -477,18 +475,83 @@ func TestUpOnWindowsReportsAStartTheSupervisorRefused(t *testing.T) {
 			if runs > 1 {
 				t.Fatalf("pen up ran the task again after the supervisor refused the start")
 			}
-			if err := st.WriteAtomic(refusedRecord, []byte("this node left its mesh\n"), 0o600); err != nil {
+			req, err := os.ReadFile(st.Path(startRequest))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.WriteAtomic(refusedRecord, []byte(string(req)+"\npen: this node left its mesh\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
 		return nil
 	})
-	if err := st.WriteAtomic(refusedRecord, []byte("an older refusal\n"), 0o600); err != nil {
+	if err := st.WriteAtomic(refusedRecord, []byte("old\npen: an older refusal\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
 	code := RunUp([]string{"--relay", rs.URL, "--name", "a"}, &out, &errOut)
 	if code == 0 || !strings.Contains(errOut.String(), "this node left its mesh") {
 		t.Fatalf("pen up exit %d (%q): %s", code, *calls, errOut.String())
+	}
+}
+
+// fakeTaskClock makes pen up's waits for the task advance a fake clock instead of sleeping.
+func fakeTaskClock(t *testing.T) {
+	t.Helper()
+	oldNow, oldSleep := taskNow, taskSleep
+	t.Cleanup(func() { taskNow, taskSleep = oldNow, oldSleep })
+	clock := time.Unix(0, 0)
+	taskNow = func() time.Time { return clock }
+	taskSleep = func(d time.Duration) { clock = clock.Add(d) }
+}
+
+// A refusal an earlier start recorded late (its supervisor checked the configuration before this pen up
+// and wrote its reason after pen up cleared the record) is not this start's: pen up runs the task again.
+func TestUpOnWindowsIgnoresARefusalOfAnEarlierStart(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	var st *state.Store
+	runs := 0
+	st, calls := windowsHome(t, func(verb string, _ []string) error {
+		switch verb {
+		case "/Query":
+			return errors.New("not registered")
+		case "/Run":
+			runs++
+			if runs == 1 {
+				if err := st.WriteAtomic(refusedRecord, []byte("earlier\npen: an earlier refusal\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if runs == 2 {
+				if err := startDetached(st); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		return nil
+	})
+	fakeTaskClock(t)
+	var out, errOut bytes.Buffer
+	code := RunUp([]string{"--relay", rs.URL, "--name", "a"}, &out, &errOut)
+	t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+	if code != 0 || runs != 2 {
+		t.Fatalf("pen up exit %d after %d /Run calls (%q): %s", code, runs, *calls, errOut.String())
+	}
+}
+
+// The supervisor records the start request it was run for, so its refusal names that start.
+func TestSupervisorRecordsItsRefusalForTheStartRequestItSaw(t *testing.T) {
+	st := storeWithRelay(t, "http://relay.example.com")
+	t.Setenv("PEN_HOME", st.Dir)
+	if err := st.WriteAtomic(startRequest, []byte("req7"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := RunUp([]string{"--supervise"}, &out, &errOut); code != 0 {
+		t.Fatalf("pen up --supervise exit %d (%s)", code, errOut.String())
+	}
+	if b, _ := os.ReadFile(st.Path(refusedRecord)); !strings.HasPrefix(string(b), "req7\npen: ") {
+		t.Fatalf("start-refused = %q, want the reason for req7", b)
 	}
 }

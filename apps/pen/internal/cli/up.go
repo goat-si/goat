@@ -46,9 +46,15 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	// only a failure and nothing changes between restarts; everyone else sees the failure. The
 	// Windows task's supervisor is a service start too.
 	asService := *service || *supervise || startedByService()
+	// The start this service start serves: the supervisor reads the id pen up wrote before it checks
+	// anything, and hands it to the daemon it runs.
+	req := os.Getenv("PEN_START_REQUEST")
+	if *supervise {
+		req = startRequestOf(st)
+	}
 	refused := func(err error) int {
 		if (*foreground || *supervise) && asService {
-			noteRefused(st, *supervise, err, stderr)
+			noteRefused(st, req, *supervise, err, stderr)
 			return 0
 		}
 		return fail(stderr, err)
@@ -87,7 +93,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *supervise {
-		return runSupervised(st, stderr)
+		return runSupervised(st, stderr, req)
 	}
 	if *foreground {
 		return runForeground(st, stderr)
