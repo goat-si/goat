@@ -3,6 +3,7 @@ package mesh
 import (
 	"errors"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,8 @@ type Store struct {
 	// shares switches to ADR-0026 (shares.go); bare holds hashes kept records name without a record.
 	shares bool
 	bare   map[string]bool
+	// version is the body version of this mesh's records, its found record's (0 until one is held).
+	version int
 
 	// pool holds records whose prev is incomplete, in memory only.
 	pool    map[string]pooled
@@ -136,6 +139,11 @@ func LoadFile(st *state.Store, name string) (*Store, error) {
 
 // Found creates a new mesh with id as its only member and persists it when st is set.
 func Found(st *state.Store, id *ident.Identity, name string, at int64) (*Store, error) {
+	return FoundV(1, st, id, name, at)
+}
+
+// FoundV is Found for a mesh of body version v: 1, or EpochShared (ADR-0026).
+func FoundV(v int, st *state.Store, id *ident.Identity, name string, at int64) (*Store, error) {
 	nonce, err := randomNonce()
 	if err != nil {
 		return nil, err
@@ -144,7 +152,7 @@ func Found(st *state.Store, id *ident.Identity, name string, at int64) (*Store, 
 	if err != nil {
 		return nil, err
 	}
-	r, err := Sign(id, foundMesh, TypeFound, 1, nil, at, Fields{Card: card})
+	r, err := SignV(v, id, foundMesh, TypeFound, 1, nil, at, Fields{Card: card})
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +184,9 @@ func FromJoin(st *state.Store, meshID string, recs []*Record) (*Store, error) {
 }
 
 func (s *Store) belongs(r *Record) bool {
+	if s.version != 0 && r.B.V != s.version {
+		return false
+	}
 	if r.B.Type == TypeFound {
 		return MeshIDOf(r) == s.MeshID
 	}
@@ -206,6 +217,9 @@ func (s *Store) prevPresent(r *Record) bool {
 }
 
 func (s *Store) merge(recs []*Record) ([]*Record, error) {
+	if s.version == 0 {
+		s.learnVersion(recs)
+	}
 	if s.shares {
 		return s.mergeShared(recs), nil
 	}
@@ -513,7 +527,7 @@ func (s *Store) View() *View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.view == nil {
-		s.view = compute(s.MeshID, s.all(), s.bare)
+		s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
 	}
 	return s.view
 }
@@ -627,7 +641,7 @@ func (s *Store) memberLocked(id *ident.Identity) bool {
 		return false
 	}
 	if s.view == nil {
-		s.view = compute(s.MeshID, s.all(), s.bare)
+		s.view = compute(s.MeshID, s.all(), s.bare, s.shares)
 	}
 	_, ok := s.view.Members[ident.B64.EncodeToString(id.SignPub)]
 	return ok
@@ -656,7 +670,12 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		}
 	}
 	n = max(n, ownN) + 1
-	r, err := Sign(id, s.MeshID, typ, n, s.choosePrev(own, limit), at, f)
+	prev := s.choosePrev(own, limit)
+	if s.shares && own != "" && !slices.Contains(prev, own) {
+		// Under shares a record names its own previous one directly (ADR-0026 "Own chain").
+		prev = append([]string{own}, prev[:min(len(prev), limit-1)]...)
+	}
+	r, err := SignV(max(s.version, 1), id, s.MeshID, typ, n, prev, at, f)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err

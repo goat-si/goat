@@ -3,6 +3,7 @@ package mesh
 import (
 	"bytes"
 	"container/heap"
+	"slices"
 	"sort"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -156,10 +157,11 @@ type chainKey struct {
 }
 
 // Compute replays recs in canonical order (contract "View").
-func Compute(meshID string, recs []*Record) *View { return compute(meshID, recs, nil) }
+func Compute(meshID string, recs []*Record) *View { return compute(meshID, recs, nil, false) }
 
-// compute is Compute where a prev in bare counts as present and holds nothing (ADR-0026).
-func compute(meshID string, recs []*Record, bare map[string]bool) *View {
+// compute is Compute where a prev in bare counts as present and holds nothing, and with direct a
+// record's own previous one counts only when named in its prev (ADR-0026).
+func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *View {
 	order := canonicalOrder(recs, bare)
 	v := &View{MeshID: meshID, Members: map[string]Member{}, Revoked: map[string]Member{}, Effective: map[string]bool{}}
 	pos := make(map[string]int, len(order))
@@ -218,6 +220,9 @@ func compute(meshID string, recs []*Record, bare map[string]bool) *View {
 		if b.N > 1 {
 			inPast := false
 			for _, j := range byChain[chainKey{b.By, b.N - 1}] {
+				if direct && !slices.Contains(b.Prev, order[j].Hash) {
+					continue
+				}
 				if anc[i][j/64]&(1<<(j%64)) != 0 {
 					inPast = true
 					break

@@ -2,6 +2,25 @@ package mesh
 
 import "sort"
 
+// learnVersion takes the mesh's version from its found record among recs, and switches a mesh of the
+// shared epoch to shares.
+func (s *Store) learnVersion(recs []*Record) {
+	for _, r := range recs {
+		if r != nil && r.B.Type == TypeFound && MeshIDOf(r) == s.MeshID && r.Verify() == nil {
+			s.version = r.B.V
+			s.shares = s.shares || r.B.V == EpochShared
+			return
+		}
+	}
+}
+
+// Shared reports whether the store follows ADR-0026 shares (a mesh of the shared epoch).
+func (s *Store) Shared() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shares
+}
+
 // SetLineageShares switches the store to ADR-0026 shares; a mesh of the new epoch sets it.
 func (s *Store) SetLineageShares() {
 	s.mu.Lock()

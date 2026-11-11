@@ -12,8 +12,28 @@ import (
 // sync, so the peer does not count them as taken.
 type Merged func(added []*Record) error
 
-// Version is what a v1.1 node announces in its sync hello.
-const Version = "1.1"
+// Version is what a v1.1 node announces in its sync hello, and VersionShared what a node announces for
+// a mesh of the shared epoch (ADR-0026); such a node closes a sync whose peer announces anything else.
+const (
+	Version       = "1.1"
+	VersionShared = "2.0"
+)
+
+// announce is the version s announces, and refuse closes l when s is shared and the peer is not.
+func announce(s *Store, pen string) string {
+	if s.Shared() {
+		return VersionShared
+	}
+	return pen
+}
+
+func refuseEpoch(l Link, s *Store, peer string) error {
+	if s.Shared() && peer != VersionShared {
+		l.Close(wire.CodeEpoch)
+		return &relay.CloseError{Code: wire.CodeEpoch}
+	}
+	return nil
+}
 
 // Hello is called with the version the peer announced in its hello ("" for a v1.0 node).
 type Hello func(pen string)
@@ -78,6 +98,7 @@ func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged, onHell
 // SyncInitiateAs is SyncInitiate announcing pen in its hello ("" announces none, as v1.0 does).
 func SyncInitiateAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello, pen string) error {
 	c := &Lines{L: l}
+	pen = announce(s, pen)
 	if err := c.Write(Msg{T: "hello", Pen: pen, Have: s.hashes()}); err != nil {
 		return err
 	}
@@ -93,6 +114,9 @@ func SyncInitiateAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHe
 			if sentDone {
 				l.Close(errLine.Code)
 				return errLine
+			}
+			if err := refuseEpoch(l, s, m.Pen); err != nil {
+				return err
 			}
 			if onHello != nil {
 				onHello(m.Pen)
@@ -127,6 +151,7 @@ func SyncRespond(ctx context.Context, l Link, s *Store, onMerged Merged, onHello
 // SyncRespondAs is SyncRespond announcing pen in its hello.
 func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello, pen string) error {
 	c := &Lines{L: l}
+	pen = announce(s, pen)
 	if err := c.Write(Msg{T: "hello", Pen: pen, Have: s.hashes()}); err != nil {
 		return err
 	}
@@ -144,6 +169,9 @@ func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHel
 				return errLine
 			}
 			gotHello = true
+			if err := refuseEpoch(l, s, m.Pen); err != nil {
+				return err
+			}
 			if onHello != nil {
 				onHello(m.Pen)
 			}

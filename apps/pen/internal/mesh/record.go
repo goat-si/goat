@@ -342,7 +342,7 @@ func validHash(h string) bool {
 }
 
 func checkHead(b *Body) error {
-	if b.V != 1 || b.N < 1 {
+	if b.V != 1 && b.V != EpochShared || b.N < 1 {
 		return errors.New("mesh: body v or n")
 	}
 	if b.Prev == nil {
@@ -561,8 +561,18 @@ type Fields struct {
 	Via, Email, Assertion string
 }
 
-// Sign builds and signs a record body.
+// EpochShared is the body version of every record of a mesh that shares its record space out by
+// admission lineage (ADR-0026). A mesh's epoch is its found record's version, so it is part of the
+// mesh id, and nodes that only know version 1 drop every record of such a mesh.
+const EpochShared = 2
+
+// Sign builds and signs a version 1 record body.
 func Sign(id *ident.Identity, mesh, typ string, n uint64, prev []string, at int64, f Fields) (*Record, error) {
+	return SignV(1, id, mesh, typ, n, prev, at, f)
+}
+
+// SignV builds and signs a record body of version v (1, or EpochShared).
+func SignV(version int, id *ident.Identity, mesh, typ string, n uint64, prev []string, at int64, f Fields) (*Record, error) {
 	// Nodes before 0.2.6 sign and apply these, so stored ones still count everywhere; this node
 	// only refuses to make one (its text reaches terminals; pen ls prints it replaced).
 	if !login.Printable(f.Email) || f.Bind != nil && !login.Printable(f.Bind.Sub) {
@@ -571,7 +581,7 @@ func Sign(id *ident.Identity, mesh, typ string, n uint64, prev []string, at int6
 	if prev == nil {
 		prev = []string{}
 	}
-	h := bodyHead{V: 1, Mesh: mesh, Type: typ, By: ident.B64.EncodeToString(id.SignPub), N: n, Prev: prev, At: at}
+	h := bodyHead{V: version, Mesh: mesh, Type: typ, By: ident.B64.EncodeToString(id.SignPub), N: n, Prev: prev, At: at}
 	var v any
 	switch typ {
 	case TypeFound:
