@@ -163,7 +163,7 @@ export function feedOwnedApprovalThreads(
 
 /**
  * The one approval handoff a thread's shell notification stands for, with the title it names: the
- * newest among its own and its subagents'. None when the thread waits on its own provider approval.
+ * newest among its own and its live subagents'. None when a provider approval raises it.
  * Only an approval notification stands for one. Others are left for the feed to announce.
  */
 export function approvalHandoffShownBy(
@@ -173,28 +173,30 @@ export function approvalHandoffShownBy(
 ): { readonly id: string; readonly title: string } | null {
   if (status !== "approval") return null;
   const byId = new Map(threads.map((thread) => [thread.id, thread] as const));
-  const own = byId.get(threadId)?.pendingRuntimeRequest;
-  if (own != null && own.handoff === undefined && isPendingApprovalRequest(own)) return null;
-  let newest: { readonly id: string; readonly title: string; readonly at: number } | null = null;
-  for (const thread of threads) {
-    const request = thread.pendingRuntimeRequest;
-    if (request?.handoff?.kind !== "approval") continue;
-    if (thread.id !== threadId && subagentRequest(thread) === null) continue;
+  // Whether the thread's approval is raised on threadId: its own, or a live subagent's below it.
+  const raisedOn = (thread: OrchestrationV2ThreadShell) => {
+    if (thread.id !== threadId && subagentRequest(thread) === null) return false;
     const seen = new Set<ThreadId>();
     let current: OrchestrationV2ThreadShell | undefined = thread;
     while (current !== undefined && !seen.has(current.id)) {
-      if (current.id === threadId) {
-        const at = DateTime.toEpochMillis(request.createdAt);
-        if (newest === null || at > newest.at)
-          newest = { id: String(request.id), title: request.handoff.title, at };
-        break;
-      }
+      if (current.id === threadId) return true;
       seen.add(current.id);
       current =
         current.lineage.relationshipToParent === "subagent" && current.lineage.parentThreadId
           ? byId.get(current.lineage.parentThreadId)
           : undefined;
     }
+    return false;
+  };
+  let newest: { readonly id: string; readonly title: string; readonly at: number } | null = null;
+  for (const thread of threads) {
+    const request = thread.pendingRuntimeRequest;
+    if (!isPendingApprovalRequest(request) || request == null || !raisedOn(thread)) continue;
+    // A provider approval raises the same status; the notification may stand for it instead.
+    if (request.handoff === undefined) return null;
+    const at = DateTime.toEpochMillis(request.createdAt);
+    if (newest === null || at > newest.at)
+      newest = { id: String(request.id), title: request.handoff.title, at };
   }
   return newest === null ? null : { id: newest.id, title: newest.title };
 }

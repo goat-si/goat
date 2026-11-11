@@ -300,4 +300,8 @@ describe("which approvals the decision feed announces", () => {
     );
     expect([...owned].sort()).toEqual(["child", "parent"]);
   });
+  it("names no handoff when a child's provider approval is what raised the parent", () => {
+    const threads = [shell("parent", handoff("parent-a")), shell("child", provider("b"), "parent")];
+    expect(approvalHandoffShownBy(threads, ThreadId.make("parent"), "approval")).toBeNull();
+  });
 });
