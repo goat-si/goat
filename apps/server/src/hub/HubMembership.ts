@@ -329,10 +329,11 @@ const make = Effect.gen(function* () {
       steps,
       true,
     );
-    // Parity ties the Child to the Home's current record; the record must be this join's link.
+    // When P2 holds, parity ties the Child to the Home's current record; it must be this link.
     const recorded = (yield* homeLinks())?.links.find((entry) => entry.alias === alias)?.id;
+    const changed = synced.moved || (recorded !== undefined && recorded !== linkId);
     // An unreadable or missing record is no proof either.
-    const moved = synced.moved || recorded !== linkId;
+    const moved = changed || recorded !== linkId;
     const checked = finalState(verified);
     const state = moved && checked === "child" ? "degraded" : checked;
     yield* audit(caller, `hub.${action}`, alias, state, decisionId);
@@ -343,7 +344,9 @@ const make = Effect.gen(function* () {
       state === "child"
         ? withUnproven(`${alias} is linked to this Home.`, verified)
         : moved && checked === "child"
-          ? `${alias} is linked, but its connection changed during the join, so this link is not proven in use.`
+          ? changed
+            ? `${alias} is linked, but its connection changed during the join, so this link is not proven in use.`
+            : `${alias} is linked, but this Home could not confirm its record of the new link.`
           : `${alias} is linked, but ${verified.failingCheckIds.join(", ")} still fail.`,
       steps,
       { parity: verified, transport: "remote-link" },
