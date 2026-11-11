@@ -533,6 +533,13 @@ it("rolls back to a previous version whose protocol does not overlap this build"
     const pid = "pid" in result ? result.pid : 0;
     assert.isTrue(answersSignal0(pid));
     assert.equal(record(stateDir, "pid").trim(), String(pid));
+    // Every runtime it starts gets the launch record a later forced stop asks for.
+    const lstart = NodeChildProcess.execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      env: { LC_ALL: "C", TZ: "UTC" },
+    });
+    assert.equal(record(stateDir, "started").trim(), lstart.trim().replace(/\s+/gu, " "));
+    assert.isTrue(NodeFS.existsSync(NodePath.join(stateDir, "started.ticks")));
     const compat = await readSshRuntimeCompatibility(port);
     assert.equal(compat.verdict, "update-required");
     assert.equal(compat.serverVersion, previousVersion);

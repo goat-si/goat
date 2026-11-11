@@ -74,7 +74,34 @@ const writeAtomically = (file: string, contents: string, mode = 0o600) => {
   NodeFS.renameSync(next, file);
 };
 
-const writeLaunchRecords = (stateDir: string, identity: string, pid: number, port: number) => {
+/**
+ * The start time a launch records for a forced stop to compare, as `ps -o lstart=` prints it in
+ * UTC, and on Linux the start tick from /proc; undefined where neither can be read.
+ */
+const launchStart = (pid: number) => {
+  const ps = NodeChildProcess.spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+  });
+  const started = ps.status === 0 ? ps.stdout.trim().replace(/\s+/gu, " ") : "";
+  if (started === "") return undefined;
+  let ticks = "-";
+  try {
+    const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
+    ticks = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19] ?? "-";
+  } catch {
+    // No /proc on this host: the start time alone is recorded.
+  }
+  return { started, ticks };
+};
+
+const writeLaunchRecords = (
+  stateDir: string,
+  identity: string,
+  pid: number,
+  port: number,
+  platform: NodeJS.Platform | undefined,
+) => {
   for (const [name, contents] of [
     ["identity", `${identity}\n`],
     ["pid", `${pid}\n`],
@@ -82,6 +109,14 @@ const writeLaunchRecords = (stateDir: string, identity: string, pid: number, por
     ["managed", "managed\n"],
   ] as const)
     writeAtomically(NodePath.join(stateDir, name), contents);
+  const start = platform === "win32" ? undefined : launchStart(pid);
+  if (start === undefined) {
+    for (const name of ["started", "started.ticks"])
+      NodeFS.rmSync(NodePath.join(stateDir, name), { force: true });
+    return;
+  }
+  writeAtomically(NodePath.join(stateDir, "started"), `${start.started}\n`);
+  writeAtomically(NodePath.join(stateDir, "started.ticks"), `${start.ticks}\n`);
 };
 
 const restoreRunner = (input: SshRuntimeSupervisorInput) => {
@@ -255,7 +290,13 @@ const superviseReplacement = async (
       restoreRunner(input);
       NodeFS.rmSync(input.previousRunnerFile, { force: true });
     }
-    writeLaunchRecords(input.stateDir, input.previousIdentity, input.oldPid, input.port);
+    writeLaunchRecords(
+      input.stateDir,
+      input.previousIdentity,
+      input.oldPid,
+      input.port,
+      input.platform,
+    );
     return {
       status: "old-alive",
       reason: `The drained GOAT ${input.previousVersion} (pid ${input.oldPid}) did not exit; it was left running.`,
@@ -370,7 +411,7 @@ const superviseReplacement = async (
             ? value.instanceId !== undefined && value.instanceId !== input.oldInstanceId
             : !processExists(input.oldPid))
         ) {
-          writeLaunchRecords(input.stateDir, identity, pid, input.port);
+          writeLaunchRecords(input.stateDir, identity, pid, input.port, input.platform);
           return pid;
         }
       } catch {
