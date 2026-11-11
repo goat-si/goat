@@ -1,10 +1,14 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({ focused: true, active: true }));
 vi.mock("@react-navigation/native", () => ({ useIsFocused: () => state.focused }));
 vi.mock("../../lib/appState", () => ({ useAppActive: () => state.active }));
+vi.mock("react-native", () => ({
+  Platform: { OS: "ios" },
+  Text: (props: { readonly children?: ReactNode }) => <span>{props.children}</span>,
+}));
 
 import { ThreadListPaneVisibleContext, ThreadListV2Duration } from "./thread-list-pane-clock";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
