@@ -50,6 +50,7 @@ vi.mock("../../state/server", () => ({
   },
 }));
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
+import { MOBILE_CHECK_IN_DRAFT } from "./mobileCheckInDraft";
 
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
@@ -62,14 +63,20 @@ afterEach(async () => {
 async function show(tasks: { id: string; title: string; threadId: string | null }[]) {
   document.body.append(container);
   root ??= createRoot(container);
-  await act(async () =>
-    root?.render(
-      <MobileBotCheckInForm
-        environmentId={"env" as never}
-        botThreadId={"bot" as never}
-        tasks={tasks as never}
-      />,
-    ),
+  await act(async () => root?.render(<CheckInForm tasks={tasks} />));
+}
+
+// The Home list owns the draft; this holds it the same way.
+function CheckInForm(props: { tasks: { id: string; title: string; threadId: string | null }[] }) {
+  const [draft, setDraft] = React.useState(MOBILE_CHECK_IN_DRAFT);
+  return (
+    <MobileBotCheckInForm
+      environmentId={"env" as never}
+      botThreadId={"bot" as never}
+      tasks={props.tasks as never}
+      draft={draft}
+      onDraftChange={setDraft}
+    />
   );
 }
 

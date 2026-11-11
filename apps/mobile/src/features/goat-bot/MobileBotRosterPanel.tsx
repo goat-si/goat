@@ -7,6 +7,7 @@ import { MobileNewBotModel } from "./MobileNewBotModel";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
+import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
 import { useMobileGoatBotMemberModelEditable } from "./useMobileGoatBotMemberModel";
 import { uuidv4 } from "../../lib/uuid";
@@ -19,7 +20,7 @@ export function MobileBotRoster(props: {
   visible?: boolean;
 }) {
   const roster = useMobileBotRoster();
-  const preview = useMobileBotPreview();
+  const preview = useMobileBotPreview(useMobileGoatBotHomeMode().botRef);
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [sheet, setSheet] = useState<
