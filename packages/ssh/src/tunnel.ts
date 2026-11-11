@@ -936,7 +936,10 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   case "$drain_result" in
     drained) ;;
     cancelled) rm -f "$STATE_DIR/draining" "$PREVIOUS_RUNNER"; DRAIN_UNCERTAIN=0; emit_pending busy ;;
-    *) DRAIN_UNCERTAIN=1; rm -f "$PREVIOUS_RUNNER"; emit_pending unknown ;;
+    *)
+      # A runtime that does not answer its drain is stopped only when a person approved this process.
+      if forced_target_recorded "$UPGRADE_PID" "$UPGRADE_PORT"; then forced_stop_runtime
+      else DRAIN_UNCERTAIN=1; rm -f "$PREVIOUS_RUNNER"; emit_pending unknown; fi ;;
   esac
   LEGACY_TERMINATED=1
   rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"

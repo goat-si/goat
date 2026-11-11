@@ -384,3 +384,70 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
   },
 );
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement, final review",
+  () => {
+    it.live(
+      "an approved forced update replaces an owned runtime that does not answer its drain",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind: "managed",
+            oldVersion: OLDER,
+            drain: true,
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+          });
+          yield* f.fs.writeFileString(`${f.test}/drain`, "response-lost");
+          const result = yield* f.run("launch", false, {
+            refreshOwnedRuntimeOnFirstConnection: true,
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+          });
+          assert.isTrue(
+            Result.isSuccess(result),
+            String(Result.isFailure(result) && result.failure),
+          );
+          if (Result.isSuccess(result)) {
+            assert.equal(result.success.status, "ready");
+            assert.equal(result.success.version, ARCHIVE.archiveVersion);
+          }
+          assert.isFalse(isAlive(f.pid));
+          assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a malformed descendant row stops the update before any signal", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        const bin = `${f.test}/row-bin`;
+        yield* f.fs.makeDirectory(bin);
+        // The runtime's own row is right; a child row lost its start time.
+        yield* f.fs.writeFileString(
+          `${bin}/ps`,
+          `#!/bin/sh
+if [ "$*" = "-A -o pid= -o ppid= -o uid= -o lstart=" ]; then
+  echo "${f.pid} 1 $(id -u) $(LC_ALL=C TZ=UTC /bin/ps -o lstart= -p ${f.pid})"
+  echo "99999 ${f.pid} $(id -u)"
+  exit 0
+fi
+exec "$HOME/.test/identity-bin/ps" "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/ps`, 0o700);
+        f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: { pid: f.pid, port: f.port, startedAt: yield* startOf(f, f.pid) },
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.isTrue(isAlive(f.pid));
+        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
