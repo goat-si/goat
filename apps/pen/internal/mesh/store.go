@@ -64,12 +64,13 @@ type Store struct {
 	// changes counts edits of the set and saved the count mesh.json last received, so a set
 	// holding records it could not write knows it (Unsaved). onDisk names the files this store
 	// read or wrote; adopt lets the next save replace a file holding another mesh (all under
-	// mu). A retired store never writes; retired is read under the state lock, where mu must not
-	// be taken (lock order: mu before the state lock, docs/internals/pen.md).
+	// mu). Retire holds mu; retired is atomic for reads under the state lock (mu comes first).
 	changes, saved uint64
 	onDisk         map[string]bool
 	adopt          bool
 	retired        atomic.Bool
+	burnGate       func()
+	retireReached  func()
 }
 
 type pooled struct {
@@ -366,7 +367,14 @@ func (s *Store) Adopt() {
 }
 
 // Retire stops this store from writing again; the node has moved to another mesh.
-func (s *Store) Retire() { s.retired.Store(true) }
+func (s *Store) Retire() {
+	if s.retireReached != nil {
+		s.retireReached()
+	}
+	s.mu.Lock()
+	s.retired.Store(true)
+	s.mu.Unlock()
+}
 
 // Unsaved reports records this store holds that mesh.json has not received.
 func (s *Store) Unsaved() bool {

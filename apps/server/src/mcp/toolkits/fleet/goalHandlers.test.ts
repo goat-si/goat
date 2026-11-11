@@ -1,4 +1,3 @@
-import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import { AuthSessionId, EnvironmentId, FleetGoalId, GoatGoalApplyInput } from "@goat/contracts";
@@ -21,6 +20,7 @@ import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { liveThreadsLayer } from "../../McpToolAccess.testkit.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const GOAL_TOOLS = [
   "goat_goal_apply",
@@ -247,5 +247,5 @@ it.effect("lists the goal tools to an outside client in the full listing", () =>
     const http = yield* serveCatalogOverHttp({ client: client("session:bot") }, "full");
     const listed = (yield* http.listTools("client")).map((tool) => tool.name);
     expect(listed).toEqual(expect.arrayContaining(GOAL_TOOLS));
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );

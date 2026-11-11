@@ -5,7 +5,6 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -17,6 +16,7 @@ import {
   serveCatalogOverHttp,
   serveCatalogOverHttpWithSettings,
 } from "../../agentSurface.testkit.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const client: McpInvocationScope = {
   environmentId: EnvironmentId.make("environment"),
@@ -51,7 +51,7 @@ it.effect("lists computer-use settings only to outside clients", () =>
     expect((yield* http.listTools("thread")).map((tool) => tool.name)).not.toContain(
       "goat_computer_use_update",
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("refuses thread, read-only, missing-scope, and revoked clients", () =>
@@ -76,7 +76,7 @@ it.effect("refuses thread, read-only, missing-scope, and revoked clients", () =>
       const result = yield* http.callTool(caller, "goat_computer_use_update", { enabled: true });
       expect(textOf(result), caller).toContain("capability_denied");
     }
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("an authorized outside client enables after admission and can disable", () =>
@@ -102,7 +102,7 @@ it.effect("an authorized outside client enables after admission and can disable"
   }).pipe(
     Effect.provide(ServerSettings.layerTest()),
     Effect.scoped,
-    Effect.provide(NodeHttpServer.layerTest),
+    Effect.provide(layerTestLoopback),
   ),
 );
 
@@ -124,7 +124,7 @@ it.effect("a failed admission returns its reason and leaves computer use off", (
   }).pipe(
     Effect.provide(ServerSettings.layerTest()),
     Effect.scoped,
-    Effect.provide(NodeHttpServer.layerTest),
+    Effect.provide(layerTestLoopback),
   ),
 );
 
@@ -158,6 +158,6 @@ it.effect("a client revoked while the driver installs cannot commit the setting"
   }).pipe(
     Effect.provide(ServerSettings.layerTest()),
     Effect.scoped,
-    Effect.provide(NodeHttpServer.layerTest),
+    Effect.provide(layerTestLoopback),
   ),
 );

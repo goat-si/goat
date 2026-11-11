@@ -242,6 +242,7 @@ export function GoatBotWorkPanel({
                 tasks={routines.data?.tasks ?? null}
                 error={routines.error}
                 onRetry={routines.refresh}
+                onDraft={onDraft}
               />
             </HomeSection>
           </div>

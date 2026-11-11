@@ -1,4 +1,3 @@
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
@@ -29,6 +28,7 @@ import {
 import * as ServerConfig from "../config.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 interface RecordedBatchRequest {
   readonly path: string;
@@ -463,7 +463,7 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
             Layer.succeed(HostProcess.Architecture, "arm64"),
           ),
         ),
-        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provideMerge(layerTestLoopback),
       );
 
       yield* Effect.gen(function* () {
@@ -553,7 +553,7 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
             Layer.succeed(HostProcess.Architecture, "arm64"),
           ),
         ),
-        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provideMerge(layerTestLoopback),
       );
 
       yield* Effect.gen(function* () {

@@ -1,4 +1,3 @@
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import { assert, it } from "@effect/vitest";
@@ -16,6 +15,7 @@ import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { vi } from "vite-plus/test";
 
 import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const group = RpcGroup.make(Rpc.make("stream", { success: Schema.String, stream: true }));
 
@@ -59,7 +59,7 @@ const startServer = Effect.fnUntraced(function* (sendOutput = false, drain?: Eff
   );
   const services = yield* Layer.build(
     HttpRouter.serve(routes, { disableListenLog: true }).pipe(
-      Layer.provideMerge(NodeHttpServer.layerTest),
+      Layer.provideMerge(layerTestLoopback),
       Layer.provide(RpcSerialization.layerJson),
     ),
   );

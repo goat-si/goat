@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -11,13 +12,20 @@ const forward = (props: Props) => ({
   "data-pointer-events": props.pointerEvents as string | undefined,
   "aria-hidden": props.accessibilityElementsHidden === true ? true : undefined,
 });
+const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
 vi.mock("react-native", () => ({
-  Platform: { OS: "ios" },
+  Platform: nativePlatform,
   Switch: () => null,
   View: (props: Props) => <div {...forward(props)}>{props.children}</div>,
   ScrollView: (props: Props) => <div {...forward(props)}>{props.children}</div>,
-  Modal: (props: Props & { visible: boolean }) =>
-    props.visible ? <div>{props.children}</div> : null,
+  // Android's system back and an iOS swipe-down both reach the sheet as onRequestClose.
+  Modal: (props: Props & { visible: boolean; onRequestClose?: () => void }) =>
+    props.visible ? (
+      <div>
+        <button aria-label="System back" onClick={props.onRequestClose} />
+        {props.children}
+      </div>
+    ) : null,
   Alert: { alert: vi.fn() },
   Text: (props: Props) => <span>{props.children}</span>,
   Pressable: (
@@ -41,6 +49,8 @@ const state = vi.hoisted(() => ({
   draft: vi.fn(),
   openTask: vi.fn(),
   openThread: vi.fn(),
+  workRevision: null as string | null,
+  machinesKey: undefined as string | undefined,
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) => (atom === "openable" ? state.remoteOpenable : true),
@@ -125,7 +135,12 @@ vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
 vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => <p>status card</p> }));
-vi.mock("./MobileBotComputer", () => ({ MobileBotComputer: () => <p>bot computer</p> }));
+vi.mock("./MobileBotComputer", () => ({
+  MobileBotComputer: (props: { workKey?: string }) => {
+    state.machinesKey = props.workKey;
+    return <p>bot computer</p>;
+  },
+}));
 vi.mock("./MobileBotLibrary", () => ({ MobileBotLibrary: () => <p>bot files</p> }));
 vi.mock("./MobileBotMemory", () => ({
   MobileBotMemory: (props: { onDraft?: (text: string) => void }) => (
@@ -143,10 +158,20 @@ vi.mock("./goatBotHomeMode", () => ({
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
-vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotMarkdown", () => ({
-  GoatBotMarkdown: (props: { text: string }) => <span>{props.text}</span>,
+  GoatBotMarkdown: (props: {
+    text: string;
+    environmentId: string | null;
+    onSelectThread: (thread: { environmentId: string; id: string }) => void;
+  }) => (
+    <button
+      aria-label={`Link in: ${props.text}`}
+      onClick={() => props.onSelectThread({ environmentId: "env", id: "linked" })}
+    >
+      {props.text}
+    </button>
+  ),
 }));
 vi.mock("../../components/ui/Button", () => ({
   Button: (props: { label: string; onPress: () => void }) => (
@@ -154,6 +179,17 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { MobileBotWork } from "./MobileBotWork";
+
+// The chat's header chip opens the home; this stands in for it.
+function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      {props.taskId === undefined ? <button onClick={() => setOpen(true)}>Work</button> : null}
+      <MobileBotWork {...props} open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
 
 const at = "2026-11-11T02:00:00.000Z";
 const decode = Schema.decodeUnknownSync(BotThreadRow);
@@ -193,6 +229,8 @@ afterEach(async () => {
     detail: null,
     messages: [],
     life: [],
+    workRevision: null,
+    machinesKey: undefined,
   });
   state.draft.mockClear();
   state.openTask.mockClear();
@@ -203,12 +241,13 @@ async function open(taskId?: string) {
   root ??= createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork
+      <WorkWithChip
         visible
         taskId={taskId === undefined ? undefined : ChannelTaskId.make(taskId)}
         onOpenTask={state.openTask}
         onOpenThread={state.openThread}
         onDraft={state.draft}
+        workRevision={state.workRevision}
       />,
     ),
   );
@@ -414,4 +453,64 @@ it("keeps the task screen's remote work, subagents and actions", async () => {
   expect(button("Mark done")).toBeDefined();
   await press("Open work thread on mac-mini");
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env-remote", id: "remote-1" });
+});
+
+it("closes the peek first on the system back, then the sheet", async () => {
+  nativePlatform.OS = "android";
+  try {
+    state.rows = [task("t1", "Check the disks", "worker-1")];
+    await open();
+    await press("Check the disks");
+    expect(home()?.getAttribute("aria-hidden")).toBe("true");
+    await press("System back");
+    expect(home()?.getAttribute("aria-hidden")).toBeNull();
+    expect(button("Library")).toBeDefined();
+    await press("System back");
+    expect(button("Library")).toBeUndefined();
+  } finally {
+    nativePlatform.OS = "ios";
+  }
+});
+
+it("closes the whole sheet when it is swiped away on iOS, even from a peek", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  await open();
+  await press("Check the disks");
+  await press("System back");
+  expect(button("Library")).toBeUndefined();
+});
+
+it("forgets a peeked task that leaves the list, so it does not reopen when it returns", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  await open();
+  await press("Check the disks");
+  state.rows = [];
+  await open();
+  expect(home()?.getAttribute("aria-hidden")).toBeNull();
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  await open();
+  expect(home()?.getAttribute("aria-hidden")).toBeNull();
+  expect(button("Back to home. Check the disks")).toBeUndefined();
+});
+
+it("opens a thread linked in a peeked message", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  state.messages = [
+    { item: { id: "m1", type: "assistant_message", text: "See [it](goat-thread://v1/linked)" } },
+  ];
+  await open();
+  await press("Check the disks");
+  await press("Link in: See [it](goat-thread://v1/linked)");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "linked" });
+});
+
+it("reads the machines again when the bot's work changes outside its listed tasks", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  state.workRevision = "task-9:1";
+  await open();
+  const listed = state.machinesKey;
+  // The row list stops at the newest 100 tasks; the conversation's work records cover the rest.
+  state.workRevision = "task-9:2";
+  await open();
+  expect(state.machinesKey).not.toBe(listed);
 });

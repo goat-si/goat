@@ -1,4 +1,3 @@
-import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -19,6 +18,7 @@ import { type McpSchema, Tool } from "effect/ai";
 
 import { type ListedTool, serveCatalogOverHttp, toolkits } from "../../agentSurface.testkit.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const thread: McpInvocationScope = {
   environmentId: EnvironmentId.make("environment"),
@@ -87,7 +87,7 @@ it.effect("lists goat_call's signatures as the served schemas declare those keys
       // Every required key appears, every key shown exists, and ... marks the keys left out.
       expect(line).toBe(toSignature(path, schemaOf(tools, path), { pick: keysOf(line) }));
     }
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it("renders a signature for every schema shape tools declare", () => {
@@ -206,7 +206,7 @@ it.effect("goat_describe answers several paths at once and shows signatures in l
       expect(entry.signature, entry.path).toBe(
         toSignature(entry.path, schemaOf(tools, entry.path), { depth: 0 }),
       );
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("goat_call returns the path's signature with arguments it refuses before running", () =>
@@ -237,7 +237,7 @@ it.effect("goat_call returns the path's signature with arguments it refuses befo
     );
     expect(domain).toMatchObject({ status: "error", error: { code: "invalid_request" } });
     expect(domain.status === "error" && domain.error.details).toBeFalsy();
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 const notesOf = (entry: AgentSurfaceEntry) => entry.parameters;
@@ -334,5 +334,5 @@ it.effect(
         expect(served.examples, served.path).toEqual(
           resolveAgentSurfaceEntry(served.path)?.examples,
         );
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );

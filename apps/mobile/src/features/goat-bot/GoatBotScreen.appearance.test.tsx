@@ -14,6 +14,7 @@ const screenSession = vi.hoisted(() => ({
   supportsTaskThreads: false,
   requestedTaskId: undefined as string | null | undefined,
   workTaskId: undefined as string | undefined,
+  homeOpen: false,
   chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
 }));
 vi.mock("./MobileBotWork", () => ({
@@ -21,15 +22,25 @@ vi.mock("./MobileBotWork", () => ({
     taskId?: string;
     taskCard?: ReactNode;
     chatTasks?: ReadonlyArray<{ readonly key: string }>;
+    open?: boolean;
   }) => {
     screenSession.workTaskId = props.taskId;
+    screenSession.homeOpen = props.open ?? false;
     screenSession.chatTasks = props.chatTasks ?? [];
     return <section aria-label="Task header">{props.taskCard}</section>;
   },
 }));
-const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
+const list = vi.hoisted(() => ({
+  props: null as Record<string, unknown> | null,
+  scrollToIndex: vi.fn(),
+}));
 vi.mock("./GoatBotFace", () => ({
-  GoatBotHeaderFace: () => null,
+  GoatBotHeaderFace: (props: { title: string; onPress?: () => void }) =>
+    props.onPress ? (
+      <button aria-label={`Chip ${props.title}`} onClick={props.onPress}>
+        {props.title}
+      </button>
+    ) : null,
   GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
     <i data-face={`${props.state}:${props.inView}`} />
   ),
@@ -49,6 +60,7 @@ const picker = vi.hoisted(() => ({
 }));
 type LayoutHandler = (event: { nativeEvent: { layout: { height: number } } }) => void;
 const layouts = vi.hoisted(() => new Map<string, LayoutHandler>());
+const a11y = vi.hoisted(() => ({ announce: vi.fn(), focus: vi.fn() }));
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -65,6 +77,7 @@ vi.mock("react-native", () => ({
     onLayout,
     accessibilityLiveRegion,
     accessibilityLabel,
+    ref,
   }: {
     children?: ReactNode;
     style?: unknown;
@@ -73,10 +86,12 @@ vi.mock("react-native", () => ({
     onLayout?: LayoutHandler;
     accessibilityLiveRegion?: string;
     accessibilityLabel?: string;
+    ref?: import("react").Ref<HTMLDivElement>;
   }) => {
     if (testID && onLayout) layouts.set(testID, onLayout);
     return (
       <div
+        ref={ref}
         data-style={JSON.stringify(style)}
         data-class={className}
         data-live={accessibilityLiveRegion}
@@ -105,23 +120,55 @@ vi.mock("react-native", () => ({
     children,
     style,
     accessibilityLabel,
+    onPress,
   }: {
     children?: ReactNode;
     style?: unknown;
     accessibilityLabel?: string;
+    onPress?: () => void;
   }) => (
-    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel}>
+    <button data-style={JSON.stringify(style)} aria-label={accessibilityLabel} onClick={onPress}>
       {children}
     </button>
   ),
-  TextInput: ({ style }: { style?: unknown }) => (
-    <input aria-label="Message GOAT Bot" data-style={JSON.stringify(style)} />
+  TextInput: ({
+    style,
+    value,
+    onChangeText,
+  }: {
+    style?: unknown;
+    value?: string;
+    onChangeText?: (text: string) => void;
+  }) => (
+    <input
+      aria-label="Message GOAT Bot"
+      data-style={JSON.stringify(style)}
+      value={value ?? ""}
+      onChange={(event) => onChangeText?.(event.currentTarget.value)}
+    />
   ),
   Platform: { OS: "ios" },
+  AccessibilityInfo: { announceForAccessibility: a11y.announce, setAccessibilityFocus: a11y.focus },
+  findNodeHandle: (node: unknown) => node ?? null,
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+const models = vi.hoisted(() => ({
+  main: null as null | Record<string, unknown>,
+  member: null as null | Record<string, unknown>,
+}));
+vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => models.main }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({
+  useMobileGoatBotMemberModelMenu: () => models.member,
+}));
+vi.mock("./GoatBotModelPill", () => ({
+  GoatBotModelPill: (props: { menu: { label: string; opens: boolean } }) => (
+    <button aria-label="Model" data-opens={String(props.menu.opens)}>
+      {props.menu.label}
+    </button>
+  ),
+}));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
@@ -138,8 +185,10 @@ vi.mock("@legendapp/list/react-native", () => ({
     data?: GoatBotRow[];
     renderItem?: (item: { item: GoatBotRow }) => ReactNode;
     ListFooterComponent?: ReactNode;
+    ref?: { current: unknown };
   }) => {
     list.props = props;
+    if (props.ref) props.ref.current = { scrollToIndex: list.scrollToIndex };
     return (
       <>
         {props.data?.map((item) => (
@@ -213,6 +262,14 @@ const bot: Extract<GoatBotRow, { kind: "bot" }> = {
   groupPosition: "single",
 };
 
+async function typeInto(container: HTMLElement, value: string) {
+  const input = container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 async function render(element: ReactNode) {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -220,6 +277,9 @@ async function render(element: ReactNode) {
   await act(async () => root.render(element));
   return {
     container,
+    rerender: async (next: ReactNode) => {
+      await act(async () => root.render(next));
+    },
     unmount: async () => {
       await act(async () => root.unmount());
       container.remove();
@@ -273,6 +333,7 @@ it("keeps answer chips and the send button off the retired blue message palette"
   await rowView.unmount();
 
   const screenView = await render(<GoatBotScreen visible />);
+  await typeInto(screenView.container, "Hello");
   const send = screenView.container.querySelector('[aria-label="Send message"]');
   const composer = screenView.container.querySelector('[aria-label="Message GOAT Bot"]');
   expect(JSON.parse(composer?.getAttribute("data-style") ?? "null")).toMatchObject({
@@ -294,6 +355,199 @@ it("keeps answer chips and the send button off the retired blue message palette"
   });
   expect(screenView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await screenView.unmount();
+});
+
+it("shows Send only once there is something to send", async () => {
+  const view = await render(<GoatBotScreen visible />);
+  const send = () => view.container.querySelector('[aria-label="Send message"]');
+  expect(send()).toBeNull();
+  await typeInto(view.container, "Hello");
+  expect(send()).not.toBeNull();
+  await typeInto(view.container, "   ");
+  expect(send()).toBeNull();
+  await view.unmount();
+});
+
+it("puts the bot's model in the composer, opening a member's menu even when it cannot change", async () => {
+  const select = vi.fn();
+  models.main = {
+    label: "gpt-6-luna",
+    accessibilityLabel: "GOAT Bot model: gpt-6-luna",
+    items: [],
+    disabled: true,
+    select,
+  };
+  const main = await render(<GoatBotScreen visible />);
+  const pill = () => main.container.querySelector('[aria-label="Model"]');
+  expect(pill()?.textContent).toBe("gpt-6-luna");
+  expect(pill()?.getAttribute("data-opens")).toBe("false");
+  await main.unmount();
+
+  models.member = {
+    label: "claude-opus",
+    accessibilityLabel: "Scout model: claude-opus",
+    title: "You can't change Scout's model",
+    canChange: false,
+    items: [],
+    select,
+  };
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+    avatar: null,
+  } as unknown as import("@goat/contracts").BotProfile;
+  const member = await render(<GoatBotScreen visible member={scout} />);
+  const memberPill = member.container.querySelector('[aria-label="Model"]');
+  expect(memberPill?.textContent).toBe("claude-opus");
+  expect(memberPill?.getAttribute("data-opens")).toBe("true");
+  await member.unmount();
+  models.main = null;
+  models.member = null;
+});
+
+it("opens the bot's home from the header chip, which a task's own screen does not have", async () => {
+  const chat = await render(<GoatBotScreen visible />);
+  const chip = chat.container.querySelector<HTMLButtonElement>('[aria-label="Chip GOAT Bot"]');
+  expect(screenSession.homeOpen).toBe(false);
+  await act(async () => chip?.click());
+  expect(screenSession.homeOpen).toBe(true);
+  await chat.unmount();
+
+  screenSession.supportsTaskThreads = true;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const taskView = await render(<GoatBotScreen visible taskId={task} />);
+  expect(taskView.container.querySelector('[aria-label="Chip GOAT Bot"]')).toBeNull();
+  await taskView.unmount();
+  screenSession.supportsTaskThreads = false;
+});
+
+it("marks what the bot said since the last read, and points up to it until the person catches up", async () => {
+  const reply = (id: string, createdAt: string): GoatBotRow => ({
+    ...bot,
+    id,
+    createdAt,
+    tone: "reply",
+    options: [],
+  });
+  const opened = [
+    reply("read", "2026-11-11T10:00:00Z"),
+    reply("new-1", "2026-11-11T10:05:00Z"),
+    reply("new-2", "2026-11-11T10:06:00Z"),
+  ];
+  screenSession.rows = opened;
+  const snapshot = {
+    key: "env:bot:1",
+    readUpTo: "2026-11-11T10:01:00Z",
+    newestAtOpen: "2026-11-11T10:06:00Z",
+  };
+  const ids = () => ((list.props?.data ?? []) as GoatBotRow[]).map((row) => row.id);
+  const pill = (container: HTMLElement) =>
+    container.querySelector<HTMLButtonElement>(
+      '[aria-label="2 new messages, scrolls to the first"]',
+    );
+  const view = await render(<GoatBotScreen visible readSnapshot={snapshot} />);
+  try {
+    // A reply that arrives while the person is in the chat is read as it comes.
+    screenSession.rows = [...opened, reply("live", "2026-11-11T10:20:00Z")];
+    await view.rerender(<GoatBotScreen visible readSnapshot={snapshot} />);
+    expect(ids()).toEqual(["read", "unread-divider", "new-1", "new-2", "live"]);
+    expect(pill(view.container)).toBeNull();
+    const viewable = list.props?.onViewableItemsChanged as (info: {
+      viewableItems: { index: number }[];
+    }) => void;
+    await act(async () => viewable({ viewableItems: [{ index: 3 }, { index: 4 }] }));
+    expect(pill(view.container)).not.toBeNull();
+    await act(async () => pill(view.container)?.click());
+    expect(list.scrollToIndex).toHaveBeenCalledWith(
+      expect.objectContaining({ index: 1, viewPosition: 0 }),
+    );
+    expect(pill(view.container)).toBeNull();
+    // VoiceOver follows the jump to the "New" line, once.
+    expect(a11y.focus).toHaveBeenCalledTimes(1);
+    expect(a11y.focus.mock.calls[0]?.[0]?.getAttribute("aria-label")).toBe("New messages");
+    await view.rerender(<GoatBotScreen visible readSnapshot={snapshot} />);
+    expect(a11y.focus).toHaveBeenCalledTimes(1);
+    await typeInto(view.container, "Thanks");
+    await act(async () =>
+      view.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click(),
+    );
+    expect(ids()).not.toContain("unread-divider");
+  } finally {
+    await view.unmount();
+  }
+
+  // A task's own view keeps no read position.
+  screenSession.supportsTaskThreads = true;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const taskView = await render(<GoatBotScreen visible taskId={task} readSnapshot={snapshot} />);
+  expect(ids()).not.toContain("unread-divider");
+  await taskView.unmount();
+  screenSession.supportsTaskThreads = false;
+  screenSession.rows = [];
+});
+
+it("keeps a card marked new when it changes again during the visit", async () => {
+  const card = (updatedAt: string): GoatBotRow => ({
+    kind: "task",
+    id: "card",
+    createdAt: "2026-11-11T09:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    card: {
+      key: "task-1",
+      revision: 1,
+      updatedAt,
+      title: "Check disks",
+      statusLabel: "Running",
+      tone: "active",
+      sourceLabel: null,
+      summary: null,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  });
+  const read = { ...bot, id: "read", createdAt: "2026-11-11T10:00:00Z", tone: "reply" as const };
+  const snapshot = {
+    key: "env:bot:1",
+    readUpTo: "2026-11-11T10:01:00Z",
+    newestAtOpen: "2026-11-11T10:05:00Z",
+  };
+  const ids = () => ((list.props?.data ?? []) as GoatBotRow[]).map((row) => row.id);
+  screenSession.rows = [read, card("2026-11-11T10:05:00Z")];
+  const view = await render(<GoatBotScreen visible readSnapshot={snapshot} />);
+  try {
+    expect(ids()).toEqual(["read", "unread-divider", "card"]);
+    screenSession.rows = [read, card("2026-11-11T10:20:00Z")];
+    await view.rerender(<GoatBotScreen visible readSnapshot={snapshot} />);
+    expect(ids()).toEqual(["read", "unread-divider", "card"]);
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
+
+it("tells VoiceOver on iOS when the bot starts waiting on something new, once per wait", async () => {
+  a11y.announce.mockClear();
+  screenSession.activity = { state: "working", text: "Copying files" };
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    screenSession.activity = { state: "working", text: "Waiting for your answer" };
+    await view.rerender(<GoatBotScreen visible />);
+    await view.rerender(<GoatBotScreen visible />);
+    screenSession.activity = { state: "working", text: "Waiting on other work" };
+    await view.rerender(<GoatBotScreen visible />);
+    expect(a11y.announce.mock.calls.map((call) => call[0])).toEqual([
+      "GOAT Bot: Waiting for your answer",
+      "GOAT Bot: Waiting on other work",
+    ]);
+  } finally {
+    screenSession.activity = null;
+    await view.unmount();
+  }
 });
 
 it("uses the light filled composer", async () => {
@@ -416,8 +670,15 @@ it("announces only whether the bot works, reads or waits, not every step it take
     expect(first).toEqual({ label: "GOAT Bot is working", holdsStep: false, showsStep: true });
     expect(second.label).toBe(first.label);
     expect((await live({ state: "reading", text: "Reading" })).label).toBe("GOAT Bot is reading");
+    // A wait is said as it is, so moving from one wait to another is heard.
     expect((await live({ state: "working", text: "Waiting for your answer" })).label).toBe(
-      "GOAT Bot is waiting for you",
+      "GOAT Bot: Waiting for your answer",
+    );
+    expect((await live({ state: "working", text: "Waiting on other work" })).label).toBe(
+      "GOAT Bot: Waiting on other work",
+    );
+    expect((await live({ state: "working", text: "Paused on a usage limit" })).label).toBe(
+      "GOAT Bot: Paused on a usage limit",
     );
   } finally {
     screenSession.activity = null;

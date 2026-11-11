@@ -29,6 +29,9 @@ func startConfig(st *state.Store, relayURLs []string, name string) (state.Config
 	var out state.Config
 	var bad error
 	err := st.UpdateConfig(func(c *state.Config) {
+		if duringConfigUpdate != nil {
+			duringConfigUpdate()
+		}
 		next := *c
 		if len(list) > 0 {
 			next.SetRelays(list)
@@ -56,5 +59,6 @@ func startConfig(st *state.Store, relayURLs []string, name string) (state.Config
 }
 
 var afterConfigRead func()
+var duringConfigUpdate func()
 
 var errNoRelay = errors.New("no relay configured; pass --relay https://<relay>")
