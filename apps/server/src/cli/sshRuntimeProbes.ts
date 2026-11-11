@@ -607,7 +607,10 @@ export const requestSshRuntimeDrain = (input: {
                 JSON.parse(Buffer.concat(chunks).toString("utf8")),
               );
               // A drain is only proven for the start the caller named.
-              if (result.status !== "instance-changed" && result.instanceId !== input.instanceId)
+              if (
+                result.status === "relaunch-unavailable" ||
+                (result.status !== "instance-changed" && result.instanceId !== input.instanceId)
+              )
                 finish("unknown");
               else finish(result.status);
             } catch {
