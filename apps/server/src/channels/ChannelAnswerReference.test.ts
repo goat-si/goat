@@ -1,7 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelConversationId,
+  ChannelGatewayError,
   type ChannelInputId,
+  type ChannelOutboundMessage,
   type ChannelQuestionId,
   ChannelReceptionId,
   type ChannelTaskId,
@@ -9,7 +11,10 @@ import {
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -18,10 +23,12 @@ import { buildGoatBotTimeline } from "../../../../packages/client-runtime/src/go
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { ANSWER_DECISION_ATTEMPTS } from "./ChannelDeliveryWorker.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelTransport from "./ChannelTransport.ts";
 import { mainBotKey } from "./channelBotLedger.ts";
 import { answerVerdict } from "./channelPersonMessage.ts";
 import {
@@ -280,6 +287,46 @@ describe("what the server decided about an answer sent from a card", () => {
   );
 
   it.effect(
+    "what the server stored for a taken and a refused answer folds in the task's own view by reference (#2977)",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        const { gateway, runtime, task, questionId, options } = yield* askedTask;
+        yield* gateway.ingest(answer(options[0]!, "one", task.taskId, questionId), rpcContext);
+        yield* gateway.ingest(answer(options[0]!, "two", task.taskId, questionId), rpcContext);
+        yield* runtime.drain;
+        const records = yield* botMessages;
+        const rows = buildGoatBotTimeline({
+          visibleTurnItems: records.turnItems.map((item, position) => ({
+            position,
+            visibility: "local" as const,
+            sourceThreadId: botThreadId,
+            sourceItemId: item.id,
+            item,
+          })),
+          pendingInputs: [],
+          readers: goatBotItemReaders,
+          taskId: task.taskId,
+          knownTaskIds: [task.taskId],
+          conversationOnly: true,
+          answerReferences: true,
+        });
+        const asked = records.turnItems.find(
+          (item) => item.type === "assistant_message" && item.channel?.questionId === questionId,
+        );
+        const one = yield* personMessage("one");
+        const two = yield* personMessage("two");
+        const question = rows.find((row) => row.id === asked?.id);
+        assert.strictEqual(question?.kind === "bot" ? question.answer : undefined, options[0]);
+        assert.strictEqual(question?.kind === "bot" ? question.answerIndex : undefined, 0);
+        const people = rows.filter((row) => row.kind === "user").map((row) => row.id);
+        assert.notInclude(people, one?.id);
+        assert.include(people, two?.id);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
     "an answer reception never read (home moved, or past its deadline) ends refused and unread",
     () => {
       const harness = makeHarness({ projects: 2 });
@@ -323,19 +370,79 @@ const answerRow = (inputId: ChannelInputId) =>
     }));
   });
 
+/** The decision row's state and how many times it was handed to its transport. */
+const answerAttempts = (inputId: ChannelInputId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [row] = yield* sql<{ readonly state: string; readonly attempts: number }>`
+      SELECT state, attempts FROM channel_outbox WHERE cause_key = ${"answer:" + inputId}`;
+    return row;
+  });
+
+/**
+ * The GOAT transport with its decision writes failing while `failing` holds; `writes` lists the
+ * input each decision write was for.
+ */
+const decisionWrites = Effect.gen(function* () {
+  const registry = yield* ChannelTransport.ChannelTransportRegistry;
+  const goat = Option.getOrThrow(yield* registry.resolve("goat"));
+  const control = { failing: true, writes: [] as Array<string | undefined> };
+  yield* registry.register({
+    kind: "goat",
+    send: (message: ChannelOutboundMessage) => {
+      if (message.personAnswer === undefined) return goat.send(message);
+      control.writes.push(message.inReplyToInputId);
+      return control.failing
+        ? Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" }))
+        : goat.send(message);
+    },
+  });
+  return control;
+});
+
+/** Two picks sent while the question was open: the first is taken, the second refused. */
+const twoPicks = Effect.gen(function* () {
+  const { gateway, runtime, task, questionId, options } = yield* askedTask;
+  const one = yield* gateway.ingest(
+    answer(options[0]!, "one", task.taskId, questionId),
+    rpcContext,
+  );
+  const two = yield* gateway.ingest(
+    answer(options[0]!, "two", task.taskId, questionId),
+    rpcContext,
+  );
+  return { runtime, questionId, one, two };
+});
+
+/** Passes far enough apart (a decision waits at most ten minutes) that a failing write is tried once per pass. */
+const failPasses = (runtime: ChannelRuntime.ChannelRuntime["Service"], passes: number) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < passes; attempt += 1) {
+      yield* runtime.drain;
+      yield* TestClock.adjust("10 minutes");
+    }
+  });
+
 describe("delivering reception's decision about an answer", () => {
   it.effect(
-    "a decision whose receipt passed its deadline across a restart is still recorded, once",
+    "a decision write interrupted mid-send, then recovered after its receipt's deadline, is recorded once",
     () => {
       const harness = makeHarness({ projects: 2 });
       return Effect.gen(function* () {
         const { gateway, runtime, task, questionId, options } = yield* askedTask;
+        const held = yield* heldDecisionWrites;
         const sent = yield* gateway.ingest(
           answer(options[0]!, "one", task.taskId, questionId),
           rpcContext,
         );
-        yield* runtime.runPass;
-        yield* runtime.settle([sent.inputId]);
+        // The worker claims the decision write and is stopped while it is being written.
+        const pass = yield* runtime.drain.pipe(Effect.forkChild);
+        yield* Deferred.await(held.reached);
+        yield* Fiber.interrupt(pass);
+        assert.deepStrictEqual(yield* answerRow(sent.inputId), [
+          { state: "delivering", personAnswer: { answersQuestionId: questionId } },
+        ]);
+        held.holding = false;
         yield* TestClock.adjust("61 seconds");
         yield* runtime.recover;
         assert.deepStrictEqual(yield* answerRow(sent.inputId), [
@@ -355,6 +462,47 @@ describe("delivering reception's decision about an answer", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect(
+    "a refusal whose write keeps failing stays on the normal retry path past ten attempts, and is written once it succeeds (#2977)",
+    () => {
+      const harness = makeHarness({ projects: 2 });
+      return Effect.gen(function* () {
+        const { runtime, questionId, two } = yield* twoPicks;
+        const writes = yield* decisionWrites;
+        yield* failPasses(runtime, 10);
+        // Ten failed tries would fail any other delivery; a decision is still waiting for its next.
+        assert.deepStrictEqual(yield* answerAttempts(two.inputId), {
+          state: "pending",
+          attempts: 10,
+        });
+        // Acceptance expected the pick to answer the question; nothing has corrected it yet.
+        assert.strictEqual((yield* stored("two")).answersQuestionId, questionId);
+        writes.failing = false;
+        yield* runtime.drain;
+        assert.strictEqual((yield* answerAttempts(two.inputId))?.state, "delivered");
+        assert.strictEqual((yield* stored("two")).answersQuestionId, null);
+        assert.strictEqual((yield* stored("one")).answersQuestionId, questionId);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a decision write that keeps failing fails after its larger number of attempts", () => {
+    const harness = makeHarness({ projects: 2 });
+    return Effect.gen(function* () {
+      const { runtime, two } = yield* twoPicks;
+      const writes = yield* decisionWrites;
+      yield* failPasses(runtime, ANSWER_DECISION_ATTEMPTS + 2);
+      assert.strictEqual(
+        writes.writes.filter((inputId) => inputId === two.inputId).length,
+        ANSWER_DECISION_ATTEMPTS,
+      );
+      assert.deepStrictEqual(yield* answerAttempts(two.inputId), {
+        state: "failed",
+        attempts: ANSWER_DECISION_ATTEMPTS,
+      });
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect.each([
     { label: "its thread was replaced", gone: false },
@@ -523,4 +671,20 @@ describe("recording a person's message more than once", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+});
+
+/** The GOAT transport with its decision writes held forever while holding; reached settles at the first. */
+const heldDecisionWrites = Effect.gen(function* () {
+  const registry = yield* ChannelTransport.ChannelTransportRegistry;
+  const goat = Option.getOrThrow(yield* registry.resolve("goat"));
+  const reached = yield* Deferred.make<void>();
+  const control = { holding: true, reached };
+  yield* registry.register({
+    kind: "goat",
+    send: (message: ChannelOutboundMessage) =>
+      message.personAnswer === undefined || !control.holding
+        ? goat.send(message)
+        : Deferred.succeed(reached, undefined).pipe(Effect.andThen(Effect.never)),
+  });
+  return control;
 });

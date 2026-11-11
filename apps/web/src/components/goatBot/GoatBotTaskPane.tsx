@@ -6,7 +6,7 @@ import {
   presentTaskStatus,
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
-import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { ChannelQuestionId, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { useEffect, type CSSProperties } from "react";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { cn } from "~/lib/utils";
@@ -176,7 +176,20 @@ export function GoatBotTaskPane({
         environmentId={environmentId}
         onRetry={session.onRetryInput}
         onDiscard={session.onDiscardInput}
-        onPick={canSend ? (text) => session.onSendToTask(taskId, text) : undefined}
+        onPick={
+          canSend
+            ? (text, answerTask, questionId) =>
+                // A question id goes only with the task that asked it.
+                session.onSendToTask(
+                  taskId,
+                  text,
+                  [],
+                  answerTask === taskId && questionId !== undefined
+                    ? ChannelQuestionId.make(questionId)
+                    : undefined,
+                )
+            : undefined
+        }
       />
       <GoatBotComposer
         disabled={!canSend}
