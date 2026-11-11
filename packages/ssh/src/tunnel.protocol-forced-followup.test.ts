@@ -31,10 +31,29 @@ const foreignCommand = (f: Fixture) =>
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH forced replacement only stops a process GOAT can show it started",
   () => {
-    it.live("a process with neither a recorded start nor GOAT's launch command is refused", () =>
+    it.live(
+      "a process whose command is not GOAT's recorded launch is refused, even with a recorded start",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture(unverified);
+          yield* foreignCommand(f);
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: yield* approved(f),
+          });
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+          assert.isTrue(isAlive(f.pid));
+          assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a runtime from before launches recorded their start takes the manual path", () =>
       Effect.gen(function* () {
         const f = yield* makeProtocolFixture(unverified);
-        yield* foreignCommand(f);
+        yield* f.fs.remove(`${f.state}/started`);
+        yield* f.fs.remove(`${f.state}/started.ticks`);
         const result = yield* f.run("launch", false, {
           confirmReplacement: true,
           replacementGraceSeconds: 5,
@@ -44,22 +63,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-    );
-
-    it.live("a start time recorded at launch is evidence on its own", () =>
-      Effect.gen(function* () {
-        const f = yield* makeProtocolFixture(unverified);
-        yield* foreignCommand(f);
-        const target = yield* approved(f);
-        yield* f.fs.writeFileString(`${f.state}/started`, target.startedAt + "\n");
-        const result = yield* f.run("launch", false, {
-          confirmReplacement: true,
-          replacementGraceSeconds: 5,
-          forceReplace: target,
-        });
-        assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
-        assert.isFalse(isAlive(f.pid));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
@@ -73,20 +76,25 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           (yield* f.fs.readFileString(`${f.state}/started`)).trim(),
           yield* startOf(f, pid),
         );
+        assert.isTrue(yield* f.fs.exists(`${f.state}/started.ticks`));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live.each([false, true])(
-      "the status probe offers a process only with that evidence; recorded start=%s",
-      (recorded) =>
+    it.live.each([
+      { name: "a recorded start and GOAT's launch command", started: true, command: true },
+      { name: "a recorded start only", started: true, command: false },
+      { name: "GOAT's launch command only", started: false, command: true },
+    ])(
+      "the status probe offers a process only with both kinds of evidence: $name",
+      ({ started, command }) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture(unverified);
-          yield* foreignCommand(f);
+          if (!command) yield* foreignCommand(f);
+          if (!started) yield* f.fs.remove(`${f.state}/started`);
           const target = yield* approved(f);
-          if (recorded) yield* f.fs.writeFileString(`${f.state}/started`, target.startedAt + "\n");
           assert.deepEqual(
             replaceTargetOf(yield* statusProbe(f)),
-            recorded ? { replaceTarget: target } : {},
+            started && command ? { replaceTarget: target } : {},
           );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -148,20 +156,29 @@ exec /bin/sleep "$@"
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live("a child is signalled while the runtime it belongs to still runs", () =>
-      Effect.gen(function* () {
-        const f = yield* makeProtocolFixture({ ...unverified, spawnChild: true });
-        const result = yield* f.run("launch", false, {
-          confirmReplacement: true,
-          replacementGraceSeconds: 5,
-          forceReplace: yield* approved(f),
-        });
-        assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
-        assert.equal(
-          Number((yield* f.fs.readFileString(`${f.test}/child-term-ppid`)).trim()),
-          f.pid,
-        );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    it.live(
+      "a child of the stopped runtime is never signalled, and one still running is named",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({ ...unverified, spawnChild: true });
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: yield* approved(f),
+          });
+          assert.isTrue(
+            Result.isSuccess(result),
+            String(Result.isFailure(result) && result.failure),
+          );
+          // A shell cannot signal a PID that its child may have given up; the person checks it instead.
+          const child = Number((yield* f.fs.readFileString(`${f.test}/child-pid`)).trim());
+          assert.isFalse(yield* f.fs.exists(`${f.test}/child-term-ppid`));
+          assert.isTrue(isAlive(child));
+          assert.include(
+            yield* f.fs.readFileString(`${f.state}/server.log`),
+            `child process ${child}`,
+          );
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   },
 );
@@ -172,9 +189,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     it.live("a start time in a file other users can write is not evidence", () =>
       Effect.gen(function* () {
         const f = yield* makeProtocolFixture(unverified);
-        yield* foreignCommand(f);
         const target = yield* approved(f);
-        yield* f.fs.writeFileString(`${f.state}/started`, target.startedAt + "\n");
         yield* f.fs.chmod(`${f.state}/started`, 0o666);
         const result = yield* f.run("launch", false, {
           confirmReplacement: true,
@@ -284,6 +299,44 @@ exec /bin/mv "$@"
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement after publication",
+  () => {
+    it.live(
+      "an SSH drop right after the new runner is published does not strand the old runtime",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture(unverified);
+          const bin = `${f.test}/hup-mv-bin`;
+          yield* f.fs.makeDirectory(bin);
+          // Publishing the new runner hangs up the launch shell, as a dropped SSH session does.
+          yield* f.fs.writeFileString(
+            `${bin}/mv`,
+            `#!/bin/sh
+/bin/mv "$@" || exit $?
+if [ "$2" = '${f.state}/run-t3.sh' ] && [ ! -e "$HOME/.test/hup-sent" ]; then : >"$HOME/.test/hup-sent"; kill -HUP "$PPID"; fi
+`,
+          );
+          yield* f.fs.chmod(`${bin}/mv`, 0o700);
+          f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: yield* approved(f),
+          });
+          assert.isTrue(yield* f.fs.exists(`${f.test}/hup-sent`));
+          assert.isTrue(
+            Result.isSuccess(result),
+            String(Result.isFailure(result) && result.failure),
+          );
+          if (Result.isSuccess(result))
+            assert.equal(result.success.version, ARCHIVE.archiveVersion);
+          assert.isFalse(isAlive(f.pid));
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   },
 );

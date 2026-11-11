@@ -568,11 +568,28 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
       yield* fs.writeFileString(`${state}/port`, `${port}\n`);
       yield* fs.writeFileString(`${state}/managed`, input.kind + "\n");
     }
-    if (input.kind === "managed")
+    if (input.kind === "managed") {
       yield* fs.writeFileString(
         `${state}/identity`,
         `${old}/goat serve --host 127.0.0.1 --port ${port} --base-dir ${home}/.goat\n`,
       );
+      // A runtime this build started also has its start recorded, in seconds and, on Linux, ticks.
+      const ps = yield* realSpawner.spawn(
+        ChildProcess.make("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+          env: { LC_ALL: "C", TZ: "UTC" },
+          extendEnv: false,
+        }),
+      );
+      const lstart = (yield* ps.stdout.pipe(Stream.decodeText(), Stream.mkString))
+        .trim()
+        .replace(/\s+/gu, " ");
+      const stat = `/proc/${pid}/stat`;
+      const ticks = (yield* fs.exists(stat))
+        ? ((yield* fs.readFileString(stat)).replace(/^.*\) /su, "").split(" ")[19] ?? "-")
+        : "-";
+      yield* fs.writeFileString(`${state}/started`, `${lstart}\n`);
+      yield* fs.writeFileString(`${state}/started.ticks`, `${ticks}\n`);
+    }
   }
   const stem = `goat-${ARCHIVE.archiveVersion}-${platform}-${arch}`;
   const stage = `${home}/stage/${stem}`;

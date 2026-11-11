@@ -121,7 +121,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
 
     it.live(
-      "a runtime that ignores SIGTERM is killed after the grace, with its recorded child",
+      "a runtime that ignores SIGTERM is killed after the grace, and its child is left running and named",
       () =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
@@ -141,7 +141,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             String(Result.isFailure(result) && result.failure),
           );
           assert.isFalse(isAlive(f.pid));
-          assert.isFalse(isAlive(child));
+          // Children are never signalled: one still running is named for a person to check.
+          assert.isTrue(isAlive(child));
+          assert.include(
+            yield* f.fs.readFileString(`${f.state}/server.log`),
+            `child process ${child}`,
+          );
           assert.isTrue((yield* events(f)).some((entry) => entry.type === "stop"));
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -494,7 +499,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH forced replacement deep descendants",
   () => {
-    it.live("a descendant forty levels below the runtime is signalled too", () =>
+    it.live("a descendant forty levels below the runtime is found and named", () =>
       Effect.gen(function* () {
         const f = yield* makeProtocolFixture(unverified);
         const deep = yield* f.realSpawner.spawn(
@@ -535,7 +540,11 @@ exec "$HOME/.test/identity-bin/ps" "$@"
         });
         assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
         assert.isFalse(isAlive(f.pid));
-        assert.isFalse(isAlive(deepPid));
+        assert.isTrue(isAlive(deepPid));
+        assert.include(
+          yield* f.fs.readFileString(`${f.state}/server.log`),
+          `child process ${deepPid}`,
+        );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   },
