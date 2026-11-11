@@ -2,6 +2,8 @@ import {
   type DecisionFeed,
   type DecisionItem as DurableDecision,
   EnvironmentId,
+  type Handoff,
+  ProviderInstanceId,
   NodeId,
   RuntimeRequestId,
   ThreadId,
@@ -168,7 +170,8 @@ function harness() {
   };
 }
 const requestOf = (entry: DecisionItem) => {
-  if (entry.kind === "decision") throw new Error("Expected a thread request");
+  if (entry.kind === "decision" || entry.kind === "handoff")
+    throw new Error("Expected a thread request");
   return entry.request;
 };
 const item = (id: string, createdAt: string): DecisionItem => ({
@@ -215,6 +218,30 @@ const questionItem: OrchestrationV2ThreadProjection["turnItems"][number] = {
     },
   ],
 };
+const approval = (id: string): Handoff => ({
+  handoffId: TurnItemId.make(id),
+  kind: "approval",
+  title: `Approve ${id}`,
+  reason: "Needed",
+  requestedBy: {
+    threadId: ref(a).threadId,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    path: "hub.device_join",
+  },
+  target: { environmentId: a, path: "hub.device_join" },
+  dedupeKey: id,
+  state: "pending",
+  expiresAt: null,
+  createdAt: v2Now,
+  actor: { type: "agent", threadId: ref(a).threadId },
+});
+const handoffItem = (handoff: Handoff): OrchestrationV2ThreadProjection["turnItems"][number] => ({
+  ...questionItem,
+  id: handoff.handoffId,
+  status: handoff.state === "pending" ? "waiting" : "completed",
+  type: "human_handoff",
+  handoff,
+});
 const nonconnectedPhases: ReadonlyArray<EnvironmentConnectionPhase | null> = [
   "available",
   "offline",
@@ -840,6 +867,58 @@ describe("decision inbox", () => {
     } finally {
       stopItems();
       stopSummary();
+      h.registry.dispose();
+    }
+  });
+
+  it("lists, counts and docks an open approval handoff from the feed until the feed drops it", () => {
+    const h = harness();
+    const stopSummary = h.registry.mount(h.inbox.summaryAtom);
+    const stopItems = h.registry.mount(h.inbox.itemsAtom);
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      h.registry.set(h.shells, []);
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
+      });
+      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 1 });
+      const value = h.registry.get(h.inbox.itemsAtom);
+      expect(value.items.map((entry) => [entry.kind, entry.routing.threadTitle])).toEqual([
+        ["handoff", "Hub"],
+      ]);
+      expect(
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
+      ).toEqual(["one"]);
+      expect(h.registry.get(h.inbox.openApprovalsAtom(ref(b)))).toEqual([]);
+      const id = value.items[0]!.id;
+      h.registry.set(h.feeds(a), { items: [], handoffs: [] });
+      expect(isDecisionItemRemoved(h.registry.get(h.inbox.itemsAtom), id)).toBe(true);
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 0, total: 0 });
+      expect(h.registry.get(h.inbox.openApprovalsAtom(ref(a)))).toEqual([]);
+    } finally {
+      stopDock();
+      stopItems();
+      stopSummary();
+      h.registry.dispose();
+    }
+  });
+
+  it("docks a thread's loaded approval handoffs when its server's feed cannot list them", () => {
+    const h = harness();
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      h.registry.set(h.feeds(a), { items: [] });
+      h.set(ref(a), [], "live", null, [
+        handoffItem(approval("loaded")),
+        handoffItem({ ...approval("done"), state: "completed" }),
+      ]);
+      expect(
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
+      ).toEqual(["loaded"]);
+    } finally {
+      stopDock();
       h.registry.dispose();
     }
   });

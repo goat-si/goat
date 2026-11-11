@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  createApprovalNotificationGate,
   createThreadNotificationGate,
   type ThreadNotificationObservation,
 } from "./ThreadNotificationCoordinator.logic";
@@ -109,5 +110,32 @@ describe("createThreadNotificationGate", () => {
       gate.observe("thread", working, completed(1), visible);
       expect(notify.mock.calls).toEqual([["thread", "completion"]]);
     }
+  });
+});
+
+describe("approval notifications", () => {
+  it("notifies every new approval once, including two at once and a second in the same run", () => {
+    const notify = vi.fn();
+    const gate = createApprovalNotificationGate<string>(notify);
+    gate.observe(["open-before"]);
+    expect(notify).not.toHaveBeenCalled();
+    gate.observe(["open-before", "first", "second"]);
+    expect(notify.mock.calls).toEqual([["first"], ["second"]]);
+    gate.observe(["open-before", "first", "second", "third"]);
+    expect(notify.mock.calls.at(-1)).toEqual(["third"]);
+    expect(notify).toHaveBeenCalledTimes(3);
+  });
+
+  it("never notifies again for an approval that left and came back, or across a feed outage", () => {
+    const notify = vi.fn();
+    const gate = createApprovalNotificationGate<string>(notify);
+    gate.observe([]);
+    gate.observe(["one"]);
+    gate.observe([]);
+    gate.observe(["one"]);
+    expect(notify.mock.calls).toEqual([["one"]]);
+    // Created while the feed was away: the first list after it returns still announces it.
+    gate.observe(["one", "two"]);
+    expect(notify.mock.calls).toEqual([["one"], ["two"]]);
   });
 });

@@ -2590,6 +2590,7 @@ export default function ChatView(props: ChatViewProps) {
     acknowledgeActiveThreadWoke,
     activeBranchMismatchKey,
     activityBanners,
+    approvalBanners,
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,
@@ -2779,6 +2780,7 @@ export default function ChatView(props: ChatViewProps) {
         : [];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...approvalBanners,
         ...feedbackBannerItems,
         ...limitRecoveryItems,
         ...usageLimitsItems,
@@ -2789,6 +2791,7 @@ export default function ChatView(props: ChatViewProps) {
       ];
     }
     return [
+      ...approvalBanners,
       ...feedbackBannerItems,
       ...limitRecoveryItems,
       ...usageLimitsItems,

@@ -61,6 +61,7 @@ import { environmentShell } from "../../state/shell";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { targetShellOmitsChildren } from "../../lib/relatedThreadOpen";
 import { ThreadStatusLine } from "./ThreadStatusLine";
+import { useApprovalBanners } from "./ApprovalDockBanners";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readEnvironmentScope } from "../../state/session";
@@ -647,6 +648,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         onOpenThread: onOpenRelatedThreadStable,
       })
     : null;
+  const approvalBanners = useApprovalBanners(activeThreadRef);
   // The relative times read the clock; nowMinute re-renders them on the minute.
   const snoozedUntil = activeThreadShell?.snoozedUntil ?? null;
   const settledAt = activeThreadShell?.settledAt ?? null;
@@ -735,6 +737,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       goalBanner,
       backgroundWorkBanner,
     ].filter((item) => item !== null),
+    approvalBanners,
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,

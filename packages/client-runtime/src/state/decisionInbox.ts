@@ -1,14 +1,17 @@
 import type {
   DecisionFeed,
+  DecisionHandoff,
   DecisionItem as DurableDecision,
   EnvironmentId,
+  Handoff,
   ScopedThreadRef,
 } from "@goat/contracts";
 import { ThreadId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/reactivity";
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
-import { threadKey, threadRefsEqual } from "./entities.ts";
+import { arrayElementsEqual, parseThreadKey, threadKey, threadRefsEqual } from "./entities.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
 import type { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
 import type { ThreadPendingApproval, ThreadPendingUserInput } from "./threadRequests.ts";
@@ -31,6 +34,8 @@ export type DecisionItem = {
   | { readonly kind: "approval"; readonly request: ThreadPendingApproval }
   | { readonly kind: "user_input"; readonly request: ThreadPendingUserInput }
   | { readonly kind: "decision"; readonly decision: DurableDecision }
+  /** An approval handoff; its card answers it through the handoff RPCs. */
+  | { readonly kind: "handoff"; readonly handoff: Handoff }
 );
 
 const PERSON: DecisionRouting = { routedTo: "person" };
@@ -55,6 +60,19 @@ const pendingKey = (environmentId: string, threadId: string, requestId: string) 
   JSON.stringify([environmentId, threadId, requestId]);
 const decisionKey = (environmentId: string, id: string) =>
   JSON.stringify(["decision", environmentId, id]);
+const handoffKey = (environmentId: string, id: string) =>
+  JSON.stringify(["handoff", environmentId, id]);
+
+function handoffRouting(environmentId: EnvironmentId, entry: DecisionHandoff): DecisionRouting {
+  return {
+    routedTo: "person",
+    threadTitle: entry.threadTitle,
+    ...(entry.parentThreadId === undefined
+      ? {}
+      : { parentRef: { environmentId, threadId: entry.parentThreadId } }),
+    ...(entry.parentThreadTitle === undefined ? {} : { parentTitle: entry.parentThreadTitle }),
+  };
+}
 
 function routingOf(environmentId: EnvironmentId, item: DurableDecision): DecisionRouting {
   const parentThreadId = item.from.parentThreadId;
@@ -91,9 +109,9 @@ export function isDecisionItemRemoved(
   id: string,
 ): boolean {
   if (snapshot.items.some((item) => item.id === id)) return false;
-  // Pending ids are [environmentId, threadId, requestId]; durable ones ["decision", environmentId, id].
+  // Pending ids are [environmentId, threadId, requestId]; feed-owned ones [kind, environmentId, id].
   const [first, second] = JSON.parse(id) as [string, string, string];
-  if (first === "decision")
+  if (first === "decision" || first === "handoff")
     return (snapshot.feedEnvironments ?? []).some((environmentId) => environmentId === second);
   return snapshot.authoritativeRefs.some(
     (ref) => ref.environmentId === first && ref.threadId === second,
@@ -152,7 +170,7 @@ export function createDecisionInboxAtoms(input: {
   ) => Atom.Atom<EnvironmentPresentation | null>;
   readonly details: Pick<
     ReturnType<typeof createEnvironmentThreadDetailAtoms>,
-    "pendingRequestsAtom" | "statusAtom" | "errorAtom"
+    "pendingRequestsAtom" | "pendingHandoffsAtom" | "statusAtom" | "errorAtom"
   >;
   /** The environment's decision feed; null while unavailable (older servers, no read scope). */
   readonly feedAtom?: (environmentId: EnvironmentId) => Atom.Atom<DecisionFeed | null>;
@@ -203,6 +221,9 @@ export function createDecisionInboxAtoms(input: {
           unique.set(threadKey(ref), ref);
         }
       }
+      // Approval handoffs always wait on the person; their cards need no thread detail.
+      count += feed.handoffs?.length ?? 0;
+      total += feed.handoffs?.length ?? 0;
     }
     const refs = [...unique.entries()]
       .sort(([left], [right]) => compareStrings(left, right))
@@ -245,6 +266,16 @@ export function createDecisionInboxAtoms(input: {
           createdAt: item.createdAt,
           routing: routingOf(environmentId, item),
           decision: item,
+        });
+      }
+      for (const entry of feed.handoffs ?? []) {
+        items.push({
+          id: handoffKey(environmentId, entry.handoff.handoffId),
+          ref: { environmentId, threadId: entry.handoff.requestedBy.threadId },
+          kind: "handoff",
+          createdAt: DateTime.formatIso(entry.handoff.createdAt),
+          routing: handoffRouting(environmentId, entry),
+          handoff: entry.handoff,
         });
       }
     }
@@ -290,5 +321,31 @@ export function createDecisionInboxAtoms(input: {
     };
   }).pipe(Atom.setIdleTTL(0), Atom.withLabel("decision-inbox-items"));
 
-  return { summaryAtom, itemsAtom };
+  /**
+   * A thread's open approval handoffs for its composer. Reading it keeps the environment's feed
+   * subscribed, which lists every one; a server without that list falls back to loaded items.
+   */
+  const openApprovalsAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    let value: ReadonlyArray<Handoff> = [];
+    return Atom.make((get) => {
+      const handoffs = (
+        input.feedAtom === undefined ? null : get(input.feedAtom(ref.environmentId))
+      )?.handoffs;
+      const next =
+        handoffs === undefined
+          ? get(input.details.pendingHandoffsAtom(ref))
+          : handoffs.flatMap((entry) =>
+              entry.handoff.requestedBy.threadId === ref.threadId ? [entry.handoff] : [],
+            );
+      if (!arrayElementsEqual(value, next)) value = next;
+      return value;
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`decision-inbox-open-approvals:${key}`));
+  });
+
+  return {
+    summaryAtom,
+    itemsAtom,
+    openApprovalsAtom: (ref: ScopedThreadRef) => openApprovalsAtomFamily(threadKey(ref)),
+  };
 }

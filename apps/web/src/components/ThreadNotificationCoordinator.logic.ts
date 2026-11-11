@@ -45,3 +45,31 @@ export function createThreadNotificationGate<Key>(
     },
   };
 }
+
+// Enough for a long session; the oldest are forgotten first.
+const SEEN_APPROVAL_LIMIT = 1000;
+
+/**
+ * One notification per approval. The first list seeds what was already open; every later list,
+ * including the first after an outage, announces each id never seen before. Seen ids are kept
+ * after they leave, so an approval that leaves and returns stays quiet.
+ */
+export function createApprovalNotificationGate<Id>(notify: (id: Id) => void) {
+  const seen = new Set<Id>();
+  let seeded = false;
+  const remember = (id: Id) => {
+    seen.add(id);
+    if (seen.size > SEEN_APPROVAL_LIMIT) seen.delete(seen.values().next().value as Id);
+  };
+  return {
+    observe(ids: ReadonlyArray<Id>): void {
+      const fresh = ids.filter((id) => !seen.has(id));
+      for (const id of fresh) remember(id);
+      if (!seeded) {
+        seeded = true;
+        return;
+      }
+      for (const id of fresh) notify(id);
+    },
+  };
+}

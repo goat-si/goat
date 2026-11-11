@@ -10,6 +10,7 @@ import { useEnvironmentScope } from "../../state/session";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { HandoffCard } from "../chat/HandoffCard";
 import { ComposerPendingApprovalActions } from "../chat/ComposerPendingApprovalActions";
 import { ComposerPendingApprovalPanel } from "../chat/ComposerPendingApprovalPanel";
 import { Button } from "../ui/button";
@@ -143,7 +144,8 @@ function DecisionCard({
   const environment = useEnvironment(item.ref.environmentId);
   const canOperate = useEnvironmentScope(item.ref.environmentId, AuthOrchestrationOperateScope);
   const busy = submission?.phase === "submitting" || submission?.phase === "awaitingProjection";
-  const durable = item.kind === "decision";
+  // Durable decisions and approval handoffs are answered without the thread's live detail.
+  const durable = item.kind === "decision" || item.kind === "handoff";
   const canRespond =
     canOperate &&
     (durable || (!blockedBySync && item.request.responseCapability !== "not_resumable"));
@@ -202,6 +204,13 @@ function DecisionCard({
         <p role="status">
           Provider process is gone. Open the thread to interrupt or restart the run.
         </p>
+      ) : null}
+      {item.kind === "handoff" ? (
+        <HandoffCard
+          environmentId={item.ref.environmentId}
+          handoff={item.handoff}
+          inherited={false}
+        />
       ) : null}
       {item.kind === "approval" ? (
         <>
