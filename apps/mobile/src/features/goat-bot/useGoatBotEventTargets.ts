@@ -14,9 +14,9 @@ export interface MobileBotHomeFocus {
 
 /**
  * Where an event line's subject opens: the home on that routine or task, the task's own screen for
- * a task that left the list, or nowhere for a routine that is gone. A list still loading or that
- * failed to load is not read as absent: the home opens and shows that state. The reads are the
- * home's own, so they share its cache.
+ * a task that left the list, or nowhere for a routine that is gone. A list still loading, or whose
+ * last read failed even with an earlier read held, is not read as absent: the home opens and shows
+ * that state. The reads are the home's own, so they share its cache.
  */
 export function useGoatBotEventTargets(
   member: { readonly botId: BotId; readonly sessionThreadId: ThreadId } | null,
@@ -47,16 +47,20 @@ export function useGoatBotEventTargets(
       : null,
   );
   const botThreadId = member?.sessionThreadId ?? home.botRef?.threadId ?? null;
-  const routineIds = routines.data
-    ? new Set<string>(
-        routines.data.tasks.filter((task) => task.threadId === botThreadId).map((task) => task.id),
-      )
-    : null;
-  const taskIds = threads.data
-    ? new Set<string>(
-        threads.data.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
-      )
-    : null;
+  const routineIds =
+    routines.data && routines.error === null
+      ? new Set<string>(
+          routines.data.tasks
+            .filter((task) => task.threadId === botThreadId)
+            .map((task) => task.id),
+        )
+      : null;
+  const taskIds =
+    threads.data && threads.error === null
+      ? new Set<string>(
+          threads.data.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+        )
+      : null;
   const land = (subject: GoatBotEventSubject) => {
     if (subject.kind === "routine") {
       return routineIds === null || routineIds.has(subject.id)

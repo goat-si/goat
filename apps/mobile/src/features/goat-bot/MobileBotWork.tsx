@@ -164,13 +164,40 @@ export function MobileBotWork(props: {
   const [tab, setTab] = useState<(typeof tabs)[number]>("Home");
   // An event line opens the home on Home with its task peeked or its routine scrolled to.
   const [focusSeq, setFocusSeq] = useState(0);
-  const [routineFocus, setRoutineFocus] = useState<string | null>(null);
+  const [routineFocus, setRoutineFocus] = useState<{ id: string; seq: number } | null>(null);
+  // A task the list had not loaded yet when the home opened on it, and one it turned out to lack.
+  const [taskFocus, setTaskFocus] = useState<ChannelTaskId | null>(null);
+  const [leaveFor, setLeaveFor] = useState<{ id: ChannelTaskId; seq: number } | null>(null);
+  const leftFor = useRef(0);
+  // The focus whose routine row has reported its place and refined the scroll.
+  const routineLanded = useRef(0);
   const listRef = useRef<FlatList<MobileBotHomeItem>>(null);
   if (open && props.focus && props.focus.seq !== focusSeq) {
     setFocusSeq(props.focus.seq);
     setTab("Home");
-    setPeekTaskId(props.focus.kind === "task" ? ChannelTaskId.make(props.focus.id) : null);
-    setRoutineFocus(props.focus.kind === "routine" ? props.focus.id : null);
+    const focusedTask = props.focus.kind === "task" ? ChannelTaskId.make(props.focus.id) : null;
+    setPeekTaskId(focusedTask);
+    setTaskFocus(focusedTask);
+    setLeaveFor(null);
+    setRoutineFocus(
+      props.focus.kind === "routine" ? { id: props.focus.id, seq: props.focus.seq } : null,
+    );
+  }
+  // Once a fresh list answers, a focused task is either listed (the peek shows it) or has left the
+  // list and opens on its own screen. A failed read keeps the person on Home, showing the failure.
+  const listedTasks = threads.data !== null && threads.error === null ? rows : null;
+  const missingTask =
+    taskFocus !== null &&
+    listedTasks !== null &&
+    !listedTasks.some((row) => row.kind === "task" && row.task.taskId === taskFocus)
+      ? taskFocus
+      : null;
+  if (taskFocus !== null && missingTask === null && (listedTasks !== null || threads.error))
+    setTaskFocus(null);
+  if (missingTask !== null) {
+    setTaskFocus(null);
+    setPeekTaskId(null);
+    setLeaveFor({ id: missingTask, seq: focusSeq });
   }
   // A note's new wording outlives the sheet, which closes while the person deals with a message
   // already in the box; it goes on a successful fill or Cancel. Notes belong to the machine.
@@ -206,8 +233,17 @@ export function MobileBotWork(props: {
   if (peekTaskId !== null && peekEntry === null && threads.data !== null) setPeekTaskId(null);
   const closeSheet = () => {
     setPeekTaskId(null);
+    setTaskFocus(null);
     setOpen(false);
   };
+  const openTask = props.onOpenTask;
+  // oxlint-disable-next-line goat/react-effect-budget -- Navigate to a task screen once the list a focused task waited on arrives without it.
+  useEffect(() => {
+    if (leaveFor === null || leftFor.current === leaveFor.seq) return;
+    leftFor.current = leaveFor.seq;
+    setOpen(false);
+    openTask(leaveFor.id);
+  }, [leaveFor, openTask, setOpen]);
   // The system back (Android's button or gesture) leaves a peek before it leaves the sheet.
   const goBack = () => {
     if (peekTaskId !== null) setPeekTaskId(null);
@@ -414,7 +450,7 @@ export function MobileBotWork(props: {
       }
     }
     // The routines entry follows its section label, at the next two places in the list.
-    const routinesIndex = homeItems.length + 1;
+    const index = homeItems.length + 1;
     const routinesItem: MobileBotHomeItem = {
       key: "routines",
       render: () => (
@@ -428,11 +464,12 @@ export function MobileBotWork(props: {
           error={Boolean(routines.error)}
           onRetry={routines.refresh}
           rows={boundRoutines}
-          focusRoutineId={routineFocus}
+          focusRoutineId={routineFocus?.id ?? null}
           onFocusedRowLayout={(y) => {
+            if (routineFocus !== null) routineLanded.current = routineFocus.seq;
             setRoutineFocus(null);
             listRef.current?.scrollToIndex({
-              index: routinesIndex,
+              index,
               viewPosition: 0,
               viewOffset: STICKY_TABS_CLEARANCE - y,
             });
@@ -490,6 +527,17 @@ export function MobileBotWork(props: {
       },
     );
   }
+  const routinesIndex = homeItems.findIndex((item) => item.key === "routines");
+  // oxlint-disable-next-line goat/react-effect-budget -- Bring the routines entry into the virtualized list so a focused routine's row mounts and can refine the scroll.
+  useEffect(() => {
+    if (routineFocus === null || routinesIndex < 0) return;
+    if (routineLanded.current === routineFocus.seq) return;
+    listRef.current?.scrollToIndex({
+      index: routinesIndex,
+      viewPosition: 0,
+      viewOffset: STICKY_TABS_CLEARANCE,
+    });
+  }, [routineFocus, routinesIndex, listRef, routineLanded]);
   return (
     <>
       {props.taskId ? (
