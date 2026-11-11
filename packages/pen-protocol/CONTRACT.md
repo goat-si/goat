@@ -587,7 +587,8 @@ proved in the integrated review before any Pen route is enabled.
 Control op `watch.snapshot` (control socket only) answers one line now and one on every change of the view or of a
 member's online state:
 `{"t":"snapshot","gen":G,"mesh":M,"self":S,"members":[{"nodeId","signPub","noisePub","name","user","hostKeys","online"}],"revoked":[{"nodeId","name"}]}`.
-Every line is complete, and `user` and `hostKeys` are always present (empty when the member published none). G
+Every line is complete, and `user` and `hostKeys` are always present (empty when the member published none). `online` is
+the member as this node last saw it, and always true for the node itself. G
 rises by exactly 1 for each change the daemon publishes; a new watcher's first line carries the current G without
 raising it, and the state and the subscription are taken together, so each watcher sees consecutive values. A watcher
 that falls 16 lines behind, or whose socket does not take a line within 5 s, is closed; at most 8 watchers run at

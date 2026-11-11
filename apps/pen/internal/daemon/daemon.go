@@ -64,6 +64,8 @@ type Options struct {
 	PresenceTimeout time.Duration
 	// PresenceDone, when set, is told each finished presence sync (tests).
 	PresenceDone func()
+	// ServiceEnded, when set, is told the id of each service registration once it has ended (tests).
+	ServiceEnded func(id string)
 }
 
 // Daemon is one running node.
@@ -98,7 +100,10 @@ type Daemon struct {
 	sessions map[uint64]*live
 	nextLive uint64
 	watchers map[chan []byte]struct{}
-	seen     map[string]seenInfo
+	// snapWatchers follow watch.snapshot; snapGen is the generation of the last published snapshot.
+	snapWatchers map[chan []byte]struct{}
+	snapGen      uint64
+	seen         map[string]seenInfo
 	// versions is what each peer (by Noise key) announced in its last sync hello, kept in
 	// versions.json so an offline member's last announcement still counts.
 	versions map[string]string
@@ -108,6 +113,9 @@ type Daemon struct {
 	lastView   *mesh.View
 	// saveErr is the last mesh save's error (nil once a save succeeds), shown by pen ls.
 	saveErr error
+
+	// svc holds the registered local services (services.go).
+	svc serviceBook
 
 	khMu sync.Mutex
 	// sshUser is published in this node's hostkeys records.
@@ -233,7 +241,8 @@ func New(opt Options) (*Daemon, error) {
 	}
 	d := &Daemon{
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending, forgets: forgets,
-		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
+		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, snapWatchers: map[chan []byte]struct{}{}, snapGen: 1,
+		seen:     map[string]seenInfo{},
 		versions: versions, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
 	switch opt.SSHUser {
@@ -521,6 +530,9 @@ func (d *Daemon) markSeen(noisePub []byte, online bool, via string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s := d.seen[m.SignPub]
+	if s.Online != online {
+		defer d.publishSnapshotLocked()
+	}
 	s.Online = online
 	if online {
 		s.At = d.now()
@@ -595,6 +607,7 @@ func (d *Daemon) viewChanged() {
 			delete(d.watchers, ch)
 		}
 	}
+	d.publishSnapshotLocked()
 	d.mu.Unlock()
 	for _, l := range doomed {
 		l.sec.Close(4401)

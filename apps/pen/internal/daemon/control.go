@@ -31,6 +31,9 @@ type Request struct {
 	On      bool          `json:"on,omitempty"`
 	// Relays is the new relay list of op "relays".
 	Relays []string `json:"relays,omitempty"`
+	// Port and Key are a service.register's loopback port and base64url key.
+	Port int    `json:"port,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
 
 // LsMember is a member as ls reports it.
@@ -148,6 +151,13 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	switch req.Op {
 	case "watch":
 		d.controlWatch(ctx, c)
+		return
+	// These two run on the control socket only: the dashboard reaches do, never handleControl.
+	case "service.register":
+		d.controlRegister(ctx, c, req, reply, fail)
+		return
+	case "watch.snapshot":
+		d.controlSnapshot(ctx, c, fail)
 		return
 	case "invite":
 		if req.Wait {
