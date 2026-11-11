@@ -105,6 +105,8 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "bot" } }),
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+// The strip has its own tests and reads the server's open asks.
+vi.mock("./MobileNeedsYouStrip", () => ({ MobileNeedsYouStrip: () => null }));
 // Each member's own status, as channel.getBotStatus answers it for that bot.
 const members = vi.hoisted(() => ({
   status: {} as Record<
