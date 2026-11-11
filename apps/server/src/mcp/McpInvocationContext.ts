@@ -97,6 +97,14 @@ export const threadLinkFor = (
       );
 };
 
+export const remoteTaskLink = (task: {
+  readonly remote?: { readonly threadId: ThreadId | null } | undefined;
+  readonly title: string | null;
+}) => {
+  const id = task.remote?.threadId;
+  return id == null ? {} : { link: formatThreadLink(id, task.title ?? id) };
+};
+
 export class McpInvocationContext extends Context.Service<
   McpInvocationContext,
   McpInvocationScope

@@ -139,6 +139,7 @@ import {
   type McpInvocationScope,
   type McpThreadInvocationScope,
   requireThreadScope,
+  remoteTaskLink,
   threadLinkFor,
 } from "./McpInvocationContext.ts";
 
@@ -1542,6 +1543,7 @@ const make = Effect.gen(function* () {
         taskId: task.id,
         host: task.remote.host,
         childThreadId: task.remote.threadId,
+        ...remoteTaskLink(task),
         childRunId: null,
         childNodeId: task.id,
         status,
@@ -2520,7 +2522,7 @@ const make = Effect.gen(function* () {
               parentRunId: parentRun.id,
               parentNodeId,
               task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
-              ...(input.title === undefined ? {} : { title: input.title }),
+              title: input.title ?? taskPrompt(input).slice(0, 72),
               modelSelection: target.modelSelection,
               driver: target.driver,
               runtimeMode,
