@@ -270,6 +270,22 @@ describe("two bots", () => {
     },
   );
 
+  it.effect("a new member greets the person first in its own chat, once", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const member = yield* createMember("greets");
+      // Listing reconciles unfinished members; it must not greet again.
+      yield* members.list({}, owner);
+      const greetings = (yield* threadView(member.sessionThreadId)).texts;
+      assert.lengthOf(greetings, 1);
+      assert.include(greetings[0], "Helper");
+      assert.include(greetings[0], "Checks builds.");
+      assert.notInclude((yield* threadView(botThreadId)).texts, greetings[0]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("a member answers in its own conversation and thread, and keeps its work apart", () => {
     const harness = makeHarness();
     const identities: Array<string> = [];
