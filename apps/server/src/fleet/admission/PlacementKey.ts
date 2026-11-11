@@ -44,3 +44,21 @@ export const placementCommandId = (key: PlacementKey): CommandId =>
 
 export const initialMessageCommandId = (commandId: CommandId): CommandId =>
   CommandId.make(commandId + ":initial-message");
+
+/**
+ * With admission off, goat_thread_launch does not declare placement, so a placer's check of the
+ * declared arguments refuses this machine and a call that sends one is refused as undeclared.
+ */
+export const hidePlacementArgument = <S extends { readonly properties?: object | undefined }>(
+  toolName: string,
+  inputSchema: S,
+  declared: boolean,
+): S => {
+  if (declared || toolName !== "goat_thread_launch" || inputSchema.properties === undefined)
+    return inputSchema;
+  const { placement: _placement, ...properties } = inputSchema.properties as Record<
+    string,
+    unknown
+  >;
+  return { ...inputSchema, properties };
+};
