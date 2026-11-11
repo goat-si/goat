@@ -338,6 +338,14 @@ export const ChannelListOpenAsksResult = Schema.Struct({
   truncated: Schema.Boolean,
 });
 export type ChannelListOpenAsksResult = typeof ChannelListOpenAsksResult.Type;
+export const ChannelSubscribeTaskChangesInput = Schema.Struct({});
+export type ChannelSubscribeTaskChangesInput = typeof ChannelSubscribeTaskChangesInput.Type;
+/**
+ * Revision 0 when the subscription starts, then a higher one after each change to the owner's
+ * tasks or bots (several close together arrive as one). It says only "read again".
+ */
+export const ChannelTaskChangesEvent = Schema.Struct({ revision: NonNegativeInt });
+export type ChannelTaskChangesEvent = typeof ChannelTaskChangesEvent.Type;
 
 /** Main first; never creates a bot. Deleted members only when asked for. */
 export const ChannelListBotsInput = Schema.Struct({
@@ -591,6 +599,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
   listOpenAsks: "channel.listOpenAsks",
+  subscribeTaskChanges: "channel.subscribeTaskChanges",
   listBots: "channel.listBots",
   updateBot: "channel.updateBot",
   createBot: "channel.createBot",

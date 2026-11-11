@@ -15,7 +15,7 @@ import { approvalRequestDetail, nativeQuestionText } from "./channelNativeQuesti
 import { waitingTaskCondition } from "./channelWaitingTasks.ts";
 
 /** How many asks a client gets: the newest, which the strip names first. */
-export const OPEN_ASKS_LIMIT = 50;
+const OPEN_ASKS_LIMIT = 50;
 /** Waiting tasks read per request; more set `truncated`. */
 const CANDIDATE_LIMIT = 200;
 /** Asks whose words need a read of the worker thread; later ones keep their plain words. */

@@ -28,6 +28,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -81,6 +82,8 @@ export class ChannelBotMembers extends Context.Service<
     readonly openAsks: (
       owner: Owner,
     ) => Effect.Effect<ChannelListOpenAsksResult, ChannelGatewayError>;
+    /** Revisions of this owner's tasks and bots; a new one means read the open asks again. */
+    readonly taskChanges: (owner: Owner) => Stream.Stream<number>;
   }
 >()("goat/channels/ChannelBotMembers") {}
 
@@ -333,6 +336,8 @@ const make = Effect.gen(function* () {
             return updated;
           }),
         );
+        // Archiving, restoring or hiding a bot changes which tasks a list shows as waiting.
+        yield* ledger.announceTaskChanges([owner.ownerId]);
         if (record.lifecycle !== undefined) yield* finishMember(owner.ownerId, record);
         const settled = (yield* readMember(owner.ownerId, botId)) ?? record;
         return ChannelBotProfiles.memberProfile(settled);
@@ -440,6 +445,7 @@ const make = Effect.gen(function* () {
 
   return ChannelBotMembers.of({
     openAsks,
+    taskChanges: (owner) => ledger.taskChangeRevisions(owner.ownerId),
     create,
     setHidden,
     remove,
@@ -454,6 +460,8 @@ export const layer = Layer.effect(ChannelBotMembers, make);
 
 export const rpcHandlers = (service: ChannelBotMembers["Service"], owner: Owner) => ({
   [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: () => service.openAsks(owner),
+  [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: () =>
+    service.taskChanges(owner).pipe(Stream.map((revision) => ({ revision }))),
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: (input: ChannelListBotsInput) =>
     service.list(input, owner).pipe(Effect.map((bots) => ({ bots }))),
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>

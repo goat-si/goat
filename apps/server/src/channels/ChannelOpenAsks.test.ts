@@ -1,7 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import { NodeId, type OrchestrationV2RuntimeRequest, RuntimeRequestId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -10,6 +13,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { nextTaskChange, watchTaskChanges } from "./testkit/taskChanges.ts";
 import {
   linkSlackUser,
   makeHarness,
@@ -198,6 +202,56 @@ describe("open asks across bots", () => {
         result.asks.map((ask) => ask.text),
         "Old question",
       );
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("telling a mounted list that asks changed", () => {
+  it.effect(
+    "a new task and a worker that starts waiting each give its owner a revision, and no one else",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* linkSlackUser();
+        const mine = yield* watchTaskChanges(owner);
+        const theirs = yield* watchTaskChanges(stranger);
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* gateway.ingest(slackInput("do: fix the build", "changes-1"), slackContext);
+        yield* runtime.drain;
+        assert.isAbove(yield* nextTaskChange(mine), 0);
+        const [task] = (yield* ledger.listTasks({ ownerId: owner.ownerId, limit: 10 })).tasks;
+        harness.world.runtimeRequests.set(task!.worker!.threadId, [request("changes")]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.isAbove(yield* nextTaskChange(mine), 1);
+        yield* TestClock.adjust(Duration.seconds(5));
+        assert.isTrue(Option.isNone(yield* Queue.poll(theirs)));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("archiving and restoring a bot give its owner a revision", () => {
+    const harness = makeHarness({ projects: 2 });
+    return Effect.gen(function* () {
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const bot = yield* members.create(
+        {
+          clientRequestId: "changes-bot",
+          name: "Helper",
+          avatar: null,
+          purpose: "",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const seen = yield* watchTaskChanges(owner);
+      yield* members.remove({ botId: bot.botId }, owner);
+      assert.strictEqual(yield* nextTaskChange(seen), 1);
+      yield* members.restore({ botId: bot.botId }, owner);
+      assert.strictEqual(yield* nextTaskChange(seen), 2);
     }).pipe(Effect.provide(harness.layer));
   });
 });

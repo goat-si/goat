@@ -165,6 +165,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
   // What the bots wait on is task state, the same read their waiting badges need.
   [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: AuthOrchestrationReadScope,
   // A standing name and purpose are what ingest already allows: telling the bot what to do.
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: AuthOrchestrationOperateScope,
   // Adding, hiding, removing and bringing back a bot are the same standing kind of change.
