@@ -1,5 +1,10 @@
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
-import type { ChannelOpenAsk } from "@goat/contracts";
+import {
+  type BotProfile,
+  type ChannelOpenAsk,
+  type ChannelTaskId,
+  MAIN_BOT_ID,
+} from "@goat/contracts";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
@@ -10,15 +15,19 @@ import { useMobileOpenAsks } from "./useMobileOpenAsks";
 
 /**
  * Above the bot list: how much waits on the person across every bot, and the newest ask with its
- * bot and time, in one line. It opens in place to every ask, newest first; an ask opens its bot's
- * chat. A failed read says so rather than looking like nothing waits.
+ * bot and time, in one line. It opens in place to the asks, newest first; an ask opens its task in
+ * its bot's chat. A failed or partial read says so rather than looking like nothing waits.
  */
 export function MobileNeedsYouStrip(props: {
+  /** The shown bots; hidden members still have asks, and open from here too. */
   readonly bots: ReadonlyArray<BotRosterEntry>;
-  readonly onOpenBot: (bot: BotRosterEntry) => void;
+  readonly hidden: ReadonlyArray<BotProfile>;
+  /** The roster is on screen; coming back into view reads the asks again. */
+  readonly visible: boolean;
+  readonly onOpenAsk: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
 }) {
   const { botRef } = useMobileGoatBotHomeMode();
-  const open = useMobileOpenAsks(botRef?.environmentId ?? null);
+  const open = useMobileOpenAsks(botRef?.environmentId ?? null, props.visible);
   const [expanded, setExpanded] = useState(false);
   if (open.state === "failed") {
     return (
@@ -36,20 +45,33 @@ export function MobileNeedsYouStrip(props: {
       </View>
     );
   }
-  if (open.state !== "ready" || open.asks.length === 0) return null;
-  const main = props.bots.find((entry) => entry.kind === "main");
-  // The main bot's asks may name it before its profile exists; any bot not in the roster is it.
-  const botOf = (ask: ChannelOpenAsk) =>
-    props.bots.find((entry) => entry.profile?.botId === ask.botId) ?? main ?? null;
-  const nameOf = (ask: ChannelOpenAsk) => botOf(ask)?.profile?.name ?? "GOAT Bot";
+  if (open.state !== "ready" || open.total === 0) return null;
+  const main = props.bots.find((entry) => entry.kind === "main") ?? null;
+  const members = [
+    ...props.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile] : [])),
+    ...props.hidden,
+  ];
+  // Each ask names its bot; one not among the profiles yet has no destination until they load.
+  const botOf = (ask: ChannelOpenAsk): { entry: BotRosterEntry | null; name: string } => {
+    if (ask.botId === MAIN_BOT_ID) return { entry: main, name: main?.profile?.name ?? "GOAT Bot" };
+    const profile = members.find((member) => member.botId === ask.botId);
+    return profile === undefined
+      ? { entry: null, name: "A bot" }
+      : { entry: { kind: "member", profile }, name: profile.name };
+  };
   const count = `${open.total}${open.truncated ? "+" : ""}`;
   const newest = open.asks[0];
-  if (newest === undefined) return null;
-  const line = `${nameOf(newest)}: ${newest.text}`;
-  const openAsk = (ask: ChannelOpenAsk) => {
-    const bot = botOf(ask);
-    if (bot !== null) props.onOpenBot(bot);
-  };
+  if (newest === undefined) {
+    // The server counted waiting work it could not read.
+    return (
+      <View className="mx-4 my-2 rounded-2xl bg-goat-bot-message px-4 py-2">
+        <Text className="font-semibold text-foreground">Needs you · {count}</Text>
+        <Text className="text-foreground-muted">Some waiting work couldn't be read.</Text>
+      </View>
+    );
+  }
+  const line = `${botOf(newest).name}: ${newest.text}`;
+  const hiddenRows = open.total - open.asks.length;
   return (
     <View className="mx-4 my-2 overflow-hidden rounded-2xl bg-goat-bot-message">
       <Pressable
@@ -71,25 +93,38 @@ export function MobileNeedsYouStrip(props: {
           tintColorClassName="accent-icon-muted"
         />
       </Pressable>
-      {expanded
-        ? open.asks.map((ask) => (
-            <Pressable
-              key={JSON.stringify([ask.taskId, ask.questionId ?? null, ask.requestId ?? null])}
-              accessibilityRole="button"
-              accessibilityLabel={`${nameOf(ask)}, ${goatBotTime(ask.askedAt)}: ${ask.text}`}
-              accessibilityHint="Opens the chat"
-              onPress={() => openAsk(ask)}
-              className="min-h-[44px] justify-center border-t border-border px-4 py-2"
-            >
-              <Text className="text-foreground">
-                {nameOf(ask)} · {goatBotTime(ask.askedAt)}
-              </Text>
-              <Text numberOfLines={2} className="text-foreground-muted">
-                {ask.text}
-              </Text>
-            </Pressable>
-          ))
-        : null}
+      {expanded ? (
+        <>
+          {open.asks.map((ask) => {
+            const bot = botOf(ask);
+            const entry = bot.entry;
+            return (
+              <Pressable
+                key={JSON.stringify([ask.taskId, ask.questionId ?? null, ask.requestId ?? null])}
+                accessibilityRole="button"
+                accessibilityLabel={`${bot.name}, ${goatBotTime(ask.askedAt)}: ${ask.text}`}
+                accessibilityHint={entry ? "Opens the task" : undefined}
+                accessibilityState={{ disabled: entry === null }}
+                disabled={entry === null}
+                onPress={entry ? () => props.onOpenAsk(entry, ask.taskId) : undefined}
+                className="min-h-[44px] justify-center border-t border-border px-4 py-2"
+              >
+                <Text className="text-foreground">
+                  {bot.name} · {goatBotTime(ask.askedAt)}
+                </Text>
+                <Text numberOfLines={2} className="text-foreground-muted">
+                  {ask.text}
+                </Text>
+              </Pressable>
+            );
+          })}
+          {hiddenRows > 0 ? (
+            <Text className="border-t border-border px-4 py-2 text-xs text-foreground-muted">
+              {`Showing the newest ${open.asks.length} of ${count}.`}
+            </Text>
+          ) : null}
+        </>
+      ) : null}
     </View>
   );
 }

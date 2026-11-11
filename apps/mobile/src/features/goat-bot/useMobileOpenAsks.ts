@@ -33,10 +33,14 @@ export type MobileOpenAsks =
 
 /**
  * Everything that waits on the person on the bots' machine. Open asks close when they are answered,
- * not when a chat is visited. Read when the roster mounts and again when the app comes back; the
- * client runtime cannot subscribe to channel.subscribeTaskChanges yet.
+ * not when a chat is visited. Read again whenever the roster comes into view with the app in front;
+ * the client runtime cannot subscribe to channel.subscribeTaskChanges yet. A failed read wins over
+ * the last good one, so it never looks like nothing waits.
  */
-export function useMobileOpenAsks(environmentId: EnvironmentId | null): MobileOpenAsks {
+export function useMobileOpenAsks(
+  environmentId: EnvironmentId | null,
+  visible: boolean,
+): MobileOpenAsks {
   const { presentationById } = useEnvironments();
   const presentation = environmentId === null ? undefined : presentationById.get(environmentId);
   const supported =
@@ -44,13 +48,14 @@ export function useMobileOpenAsks(environmentId: EnvironmentId | null): MobileOp
     presentation?.connection.phase === "connected" &&
     presentation.serverConfig?.environment.capabilities.goatBotOpenAsks === true;
   const asks = useEnvironmentQuery(supported ? openAsks({ environmentId, input: {} }) : null);
-  const active = useAppActive();
+  const inView = useAppActive() && visible;
   const refresh = asks.refresh;
-  // oxlint-disable-next-line goat/react-effect-budget -- Read the open asks again whenever the app comes back to the foreground.
+  // oxlint-disable-next-line goat/react-effect-budget -- Read the open asks again each time the roster comes into view with the app in front.
   useEffect(() => {
-    if (supported && active) refresh();
-  }, [supported, active, refresh]);
+    if (supported && inView) refresh();
+  }, [supported, inView, refresh]);
   if (!supported) return { state: "unsupported" };
+  if (asks.error !== null) return { state: "failed", retry: refresh };
   if (asks.data !== null)
     return {
       state: "ready",
@@ -58,6 +63,5 @@ export function useMobileOpenAsks(environmentId: EnvironmentId | null): MobileOp
       total: asks.data.total,
       truncated: asks.data.truncated,
     };
-  if (asks.error !== null) return { state: "failed", retry: refresh };
   return { state: "loading" };
 }

@@ -6,7 +6,7 @@ import {
   goatBotFaceLabel,
   goatBotAccent,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile } from "@goat/contracts";
+import type { BotProfile, ChannelTaskId } from "@goat/contracts";
 import {
   Platform,
   Pressable,
@@ -87,6 +87,10 @@ export function MobileBotRosterView(props: {
   preview?: string;
   unread?: boolean;
   onOpenBot: (bot: BotRosterEntry) => void;
+  /** Opens one task in its bot's chat, from an ask in the Needs you strip. */
+  onOpenTask?: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
+  /** The roster is on screen; it stays mounted under other pages on some layouts. */
+  visible?: boolean;
   /** Member bots: shown ones are in `bots`; these two lists carry the reverse states. */
   members?: {
     readonly hidden: ReadonlyArray<BotProfile>;
@@ -133,7 +137,12 @@ export function MobileBotRosterView(props: {
       onMomentumScrollEnd={settle}
     >
       {props.header}
-      <MobileNeedsYouStrip bots={props.bots} onOpenBot={props.onOpenBot} />
+      <MobileNeedsYouStrip
+        bots={props.bots}
+        hidden={props.members?.hidden ?? []}
+        visible={props.visible ?? true}
+        onOpenAsk={props.onOpenTask ?? ((bot) => props.onOpenBot(bot))}
+      />
       {props.bots.map((bot) => {
         const key = bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`;
         const selected = props.selectedKey === key;
