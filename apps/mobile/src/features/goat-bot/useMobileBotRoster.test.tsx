@@ -51,7 +51,7 @@ import { useMobileBotRoster, useMobileGoatBotMember } from "./useMobileBotRoster
 
 let value: ReturnType<typeof useMobileBotRoster>;
 function Probe() {
-  value = useMobileBotRoster(null);
+  value = useMobileBotRoster();
   return null;
 }
 let root: ReturnType<typeof createRoot> | undefined;
@@ -65,7 +65,7 @@ afterEach(async () => {
   state.botRef = null;
 });
 
-it("queries only capabilities advertised by the selected bot environment", async () => {
+it("queries only capabilities advertised by the selected bot environment, and never the bot's tasks", async () => {
   const container = document.createElement("div");
   root = createRoot(container);
   await act(async () => root?.render(<Probe />));
@@ -74,7 +74,8 @@ it("queries only capabilities advertised by the selected bot environment", async
   expect(state.calls).toEqual([]);
   state.capabilities = { goatBotProfiles: true, goatBotTaskThreads: true };
   await act(async () => root?.render(<Probe />));
-  expect(state.calls).toEqual(["profiles", "threads"]);
+  // The list holds bots only; each bot's tasks are read by its own home sheet.
+  expect(state.calls).toEqual(["profiles"]);
 });
 
 it("names the main bot's chat with its renamed profile", async () => {

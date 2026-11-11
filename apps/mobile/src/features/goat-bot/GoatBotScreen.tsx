@@ -53,6 +53,7 @@ import {
   goatBotTime,
 } from "./GoatBotMessageParts";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
+import { goatBotChatRows } from "./goatBotChatRows";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -191,11 +192,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         <GoatBotUpdateLabel at={row.createdAt} name={botName} emoji={props.botEmoji} />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
-      {/* The shared rows fold a question once it is answered: the card settles to the answer. */}
       {row.options.length > 0 || row.answer !== undefined ? (
         <GoatBotQuestionCard
-          options={row.options}
-          answered={row.answer}
+          row={row}
           canAnswer={props.canSend}
           onPick={(answer) =>
             props.onSend(
@@ -361,9 +360,20 @@ export function GoatBotScreen(props: {
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
+  // The shared rows decide which work cards the main chat keeps (conversationOnly): only work the
+  // home lists and whose ending the chat told leaves it. A task's own view has its card above.
+  const hidesTaskCards = taskId !== undefined;
   const visibleRows = useMemo(
-    () => (taskId ? session.rows.filter((row) => row.kind !== "task") : session.rows),
-    [taskId, session.rows],
+    () =>
+      hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
+    [hidesTaskCards, session.rows],
+  );
+  const chatTasks = useMemo(
+    () =>
+      taskId === undefined && session.supportsTaskThreads
+        ? session.rows.flatMap((row) => (row.kind === "task" ? [row.card] : []))
+        : [],
+    [taskId, session.supportsTaskThreads, session.rows],
   );
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
@@ -405,6 +415,8 @@ export function GoatBotScreen(props: {
           main={props.main ?? null}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
+          chatTasks={chatTasks}
+          taskCardInfo={taskCard?.card ?? null}
           taskCard={
             taskCard ? (
               <GoatBotTaskRow card={taskCard.card} onSelectThread={onSelectThread} />

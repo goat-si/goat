@@ -8,6 +8,7 @@ import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type {
   BotRemoteWork,
   BotThreadRow,
+  ChannelBotArtifact,
   ChannelTaskId,
   EnvironmentId,
   ThreadId,
@@ -48,6 +49,8 @@ export function GoatBotWorkPanel({
   onShowChat,
   peekRows,
   onRetryInput,
+  openFile = null,
+  onOpenFile,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
@@ -59,6 +62,10 @@ export function GoatBotWorkPanel({
   /** A task's conversation, for reading it here without leaving the bot's chat. */
   peekRows?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
   onRetryInput?: ((clientKey: string) => void) | undefined;
+  /** The Library file open in the chat, if any. */
+  openFile?: string | null | undefined;
+  /** Opens a Library file in place of the conversation. */
+  onOpenFile: (file: ChannelBotArtifact) => void;
 }) {
   const [tab, setTab] = useState<Tab>("Home");
   const [peek, setPeek] = useState<{
@@ -225,7 +232,7 @@ export function GoatBotWorkPanel({
         </TabsPanel>
         <TabsPanel value="Library" className="mt-5 min-h-0 overflow-y-auto">
           <div className="space-y-6">
-            <GoatBotLibrary environmentId={environmentId} />
+            <GoatBotLibrary environmentId={environmentId} openPath={openFile} onOpen={onOpenFile} />
             <HomeSection title="Memory">
               <GoatBotMemory
                 environmentId={environmentId}

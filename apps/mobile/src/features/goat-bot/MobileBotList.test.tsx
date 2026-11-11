@@ -18,35 +18,27 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
 }));
 vi.mock("./MobileBotRosterView", () => ({ MobileHomeSegments: () => <div>Bots | Threads</div> }));
 vi.mock("./MobileBotRosterPanel", () => ({
-  MobileBotRoster: (props: { onOpenBot: () => void; onOpenChild: (row: object) => void }) => (
+  MobileBotRoster: (props: { onOpenBot: (bot: object) => void }) => (
     <div>
-      <button onClick={props.onOpenBot}>GOAT Bot Main</button>
-      <button onClick={() => props.onOpenChild({ kind: "task", task: { taskId: "task-1" } })}>
-        Task
-      </button>
-      <button
-        onClick={() =>
-          props.onOpenChild({ kind: "coding", environmentId: "env", threadId: "thread" })
-        }
-      >
-        Coding
+      <button onClick={() => props.onOpenBot({ kind: "main", profile: null })}>GOAT Bot</button>
+      <button onClick={() => props.onOpenBot({ kind: "member", profile: { botId: "research" } })}>
+        Research
       </button>
     </div>
   ),
 }));
 import { MobileBotList } from "./MobileBotList";
 
-it("opens the main bot, task, and coding thread from the bot list", async () => {
+it("opens the main bot and a member from the bot list, which lists only bots", async () => {
   state.select.mockClear();
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(async () => root.render(<MobileBotList />));
-  expect(container.textContent).toContain("GOAT Bot Main");
+  expect(container.textContent).toContain("GOAT Bot");
   for (const button of container.querySelectorAll("button")) await act(async () => button.click());
   expect(state.select.mock.calls).toEqual([
     [{ name: "GoatBot", params: {} }],
-    [{ name: "GoatBot", params: { taskId: "task-1" } }],
-    [{ name: "Thread", params: { environmentId: "env", threadId: "thread" } }],
+    [{ name: "GoatBot", params: { botId: "research" } }],
   ]);
   await act(async () => root.unmount());
 });

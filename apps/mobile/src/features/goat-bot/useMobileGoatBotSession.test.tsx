@@ -9,14 +9,10 @@ import {
   BotProfile,
   EnvironmentId,
   ChannelTaskId,
-  OrchestrationV2TurnItemJson,
   ProjectId,
-  RunId,
   ThreadId,
   type ChannelBotRef,
-  type OrchestrationV2ProjectedTurnItem,
 } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -26,6 +22,7 @@ const harness = vi.hoisted(() => ({
   botRef: null as ChannelBotRef | null,
   loaded: true,
   supportsTaskThreads: false,
+  listedTaskIds: [] as ReadonlyArray<string>,
   run: vi.fn(),
   save: vi.fn(),
   items: [] as ReadonlyArray<unknown>,
@@ -68,7 +65,15 @@ vi.mock("../../state/use-composer-drafts", () => ({
 const connection = AsyncResult.success({ phase: "connected", generation: 1 });
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: Atom.Atom<unknown>) =>
-    atom === permissionAtom ? true : atom === connectionAtom ? connection : AsyncResult.initial(),
+    atom === permissionAtom
+      ? true
+      : atom === connectionAtom
+        ? connection
+        : atom === threadsAtom && harness.listedTaskIds.length > 0
+          ? AsyncResult.success({
+              rows: harness.listedTaskIds.map((taskId) => ({ kind: "task", task: { taskId } })),
+            })
+          : AsyncResult.initial(),
   useAtomSet: () => harness.save,
   useAtomRefresh: () => harness.refresh,
 }));
@@ -125,6 +130,7 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   }),
 }));
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
+import { conversation, detail } from "./useMobileGoatBotSession.fixtures";
 import * as botSessions from "./useMobileGoatBotSession";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 import * as fileOwnership from "../../lib/composerAttachmentFiles";
@@ -174,6 +180,7 @@ beforeEach(() => {
   harness.botRef = null;
   harness.loaded = true;
   harness.supportsTaskThreads = false;
+  harness.listedTaskIds = [];
   harness.save.mockReset();
   harness.release.mockReset().mockResolvedValue(undefined);
   harness.key.mockReset().mockReturnValue("request");
@@ -739,101 +746,6 @@ describe("mobile GOAT Bot session selection", () => {
   });
 });
 
-const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
-const at = "2026-10-28T12:00:00.000Z";
-function conversation(worker: object): OrchestrationV2ProjectedTurnItem[] {
-  const base = {
-    threadId: "bot",
-    runId: null,
-    nodeId: null,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    status: "completed",
-    title: null,
-    startedAt: at,
-    completedAt: at,
-    updatedAt: at,
-  };
-  const meta = { conversationId: "conv-1", originKind: "goat" };
-  return [
-    {
-      ...base,
-      id: "in",
-      ordinal: 0,
-      type: "user_message",
-      messageId: "m-in",
-      inputIntent: "turn_start",
-      text: "Check the disks",
-      attachments: [],
-      createdBy: "user",
-      creationSource: "web",
-      channel: { ...meta, kind: "inbound", inputId: "in-1", readAt: at },
-    },
-    {
-      ...base,
-      id: "ack",
-      ordinal: 1,
-      type: "assistant_message",
-      messageId: "m-ack",
-      text: "Checking now.",
-      streaming: false,
-      channel: { ...meta, kind: "receipt", inReplyToInputId: "in-1", taskId: "task-1" },
-    },
-    {
-      ...base,
-      id: "card",
-      ordinal: 2,
-      type: "notification",
-      source: { kind: "background_task" },
-      outcome: "updated",
-      summary: "Work updated",
-      ledgerTask: {
-        taskId: "task-1",
-        conversationId: "conv-1",
-        taskVersion: 1,
-        title: "Check the disks",
-        status: "running",
-        originKind: "goat",
-        requesterLabel: "Jun",
-        createdAt: at,
-        updatedAt: at,
-        summary: "Copying files",
-        worker,
-        openQuestionCount: 0,
-      },
-    },
-  ].map((json, position) => {
-    const item = decodeItem(json);
-    return {
-      position,
-      visibility: "local" as const,
-      sourceThreadId: item.threadId,
-      sourceItemId: item.id,
-      item,
-    };
-  });
-}
-// A session run waiting on approval while its tool call runs; only the approval may show.
-const detail = (requestStatus: "pending" | "resolved") => ({
-  environmentId: "env",
-  projection: {
-    runs: [{ id: "run-1", status: "running" }],
-    nodes: [{ id: "node-1", runId: "run-1" }],
-    runtimeRequests: [{ nodeId: "node-1", kind: "command", status: requestStatus }],
-    turnItems: [
-      {
-        type: "command_execution",
-        runId: RunId.make("run-1"),
-        status: "running",
-        title: "Run df -h",
-        updatedAt: DateTime.makeUnsafe(at),
-      },
-    ],
-  },
-});
-
 describe("mobile GOAT Bot activity", () => {
   function setup(worker: object) {
     harness.items = conversation(worker);
@@ -960,4 +872,48 @@ it("sends a member's message to the member's own conversation, and stops once it
   expect(session.canSend).toBe(false);
   expect(session.onSend("still there?")).toBe(false);
   await botSessions.disposeMobileGoatBotEnvironment(env);
+});
+
+it("keeps the main chat to conversation where the work list opens the bot's tasks", async () => {
+  harness.environments = [environment("env")];
+  harness.botRef = bot(EnvironmentId.make("env"));
+  harness.supportsTaskThreads = true;
+  harness.items = conversation({ environmentId: "env", threadId: "worker-1" });
+  harness.listedTaskIds = ["task-1"];
+  await render();
+  expect(session.rows.map((row) => (row.kind === "day" ? "day" : `${row.kind}:${row.id}`))).toEqual(
+    ["day", "user:in", "bot:ack"],
+  );
+  harness.listedTaskIds = [];
+  await render();
+  expect(session.rows.some((row) => row.kind === "task")).toBe(true);
+});
+
+it("refreshes the work list per finished record or chip move (card or not), not per streamed chunk", async () => {
+  harness.environments = [environment("env")];
+  harness.botRef = bot(EnvironmentId.make("env"));
+  harness.supportsTaskThreads = true;
+  const [input, ack, card] = conversation({ environmentId: "env", threadId: "worker-1" });
+  const reply = (text: string, streaming: boolean) =>
+    ({ ...ack, sourceItemId: "reply", item: { ...ack!.item, text, streaming } }) as typeof ack;
+  const chip = card!.item as Extract<NonNullable<typeof ack>["item"], { type: "notification" }>;
+  const moved = {
+    ...card!,
+    item: { ...chip, ledgerTask: { ...chip.ledgerTask!, taskVersion: 2 } },
+  };
+  const items = [input!, ack!, card!];
+  const steps = [[reply("Look", true)], [reply("Looking", true)], [reply("Looked.", false)]];
+  harness.items = items;
+  await render();
+  harness.refresh.mockClear();
+  const counts: number[] = [];
+  for (const step of [
+    ...steps.map((tail) => [...items, ...tail]),
+    [input!, ack!, moved, reply("Looked.", false)],
+  ]) {
+    harness.items = step;
+    await render();
+    counts.push(harness.refresh.mock.calls.length);
+  }
+  expect(counts).toEqual([0, 0, 1, 2]);
 });

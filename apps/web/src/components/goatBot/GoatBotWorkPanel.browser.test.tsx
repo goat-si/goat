@@ -128,7 +128,11 @@ it.each(["main", "member"] as const)(
       environmentId: EnvironmentId.make("env"),
     } as BotProfile;
     const panel = (
-      <GoatBotWorkPanel environmentId={bot.environmentId} threadId={ThreadId.make("bot")} />
+      <GoatBotWorkPanel
+        environmentId={bot.environmentId}
+        threadId={ThreadId.make("bot")}
+        onOpenFile={() => {}}
+      />
     );
     await using screen = await render(
       role === "main" ? (
@@ -152,7 +156,11 @@ it("does not offer profile editing without permission", async () => {
   } as BotProfile;
   await using screen = await render(
     <GoatBotMainProfileContext value={bot}>
-      <GoatBotWorkPanel environmentId={bot.environmentId} threadId={ThreadId.make("bot")} />
+      <GoatBotWorkPanel
+        environmentId={bot.environmentId}
+        threadId={ThreadId.make("bot")}
+        onOpenFile={() => {}}
+      />
     </GoatBotMainProfileContext>,
   );
   expect(screen.container.querySelector("button[aria-label='Edit bot']")).toBeNull();
@@ -162,7 +170,11 @@ it("does not offer profile editing without permission", async () => {
 it("Home shows work and routines on one scroll, and Library holds files and memory", async () => {
   setup([]);
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("No tasks yet")).toBeVisible();
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
@@ -174,7 +186,11 @@ it("Home shows work and routines on one scroll, and Library holds files and memo
 it("keeps the machines on Home whether or not work runs", async () => {
   setup([]);
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByRole("heading", { name: "Machines" })).toBeVisible();
   await expect.element(screen.getByText("Machine list")).toBeVisible();
@@ -184,6 +200,7 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   setup([], [], [runningTask]);
   await using screen = await render(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -207,6 +224,7 @@ it("closes the peek when the task leaves the bot's work", async () => {
   setup([], [], [runningTask]);
   await using screen = await render(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -216,6 +234,7 @@ it("closes the peek when the task leaves the bot's work", async () => {
   setup([]);
   await screen.rerender(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -227,6 +246,7 @@ it("closes the peek when the task leaves the bot's work", async () => {
   setup([], [], [runningTask]);
   await screen.rerender(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -239,7 +259,11 @@ it("says the task list is loading, not empty, before the first read answers", as
   setup([]);
   mocks.threads = { loaded: false, failed: false };
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Loading tasks…")).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
@@ -249,7 +273,11 @@ it("a failed task read offers a retry and keeps the tasks it already knew", asyn
   setup([], [], [runningTask]);
   mocks.threads = { loaded: false, failed: true };
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Couldn't load GOAT Bot's tasks.")).toBeVisible();
   await expect
@@ -263,7 +291,11 @@ it("a failed first task read never claims there are no tasks", async () => {
   setup([]);
   mocks.threads = { loaded: false, failed: true };
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Couldn't load GOAT Bot's tasks.")).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
@@ -273,7 +305,11 @@ it("says routines are loading, not empty, before the first read answers", async 
   setup([]);
   mocks.routinesLoaded = false;
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Loading routines…")).toBeVisible();
   await expect.element(screen.getByText("No routines yet")).not.toBeInTheDocument();
@@ -283,7 +319,11 @@ it("a failed routine read offers a retry and keeps the routines it already knew"
   setup([digest]);
   mocks.routinesError = "Connection lost";
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Couldn't load routines.")).toBeVisible();
   await expect.element(screen.getByText("Daily at 09:00 · Not scheduled")).toBeVisible();
@@ -309,7 +349,11 @@ it("a refused pause keeps the routine's stored state and shows why", async () =>
   mocks.setEnabled.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Denied"))));
   const environmentId = EnvironmentId.make("env");
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={environmentId} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={environmentId}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Daily at 09:00 · Not scheduled")).toBeVisible();
   const toggle = screen.getByRole("switch", { name: "Pause Daily digest" });
@@ -329,6 +373,7 @@ it("points to the chat when the bot asked a question there that no task thread s
   const onShowChat = vi.fn();
   await using screen = await render(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       onShowChat={onShowChat}
@@ -376,7 +421,11 @@ it("opens the worker and the chores that thread lists leave to the bot from its 
     ],
   );
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect
     .element(screen.getByRole("link", { name: /Stop the port 3774 server/ }))

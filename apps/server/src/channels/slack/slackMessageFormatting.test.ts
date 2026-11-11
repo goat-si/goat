@@ -112,3 +112,35 @@ describe("formatSlackOutboundMessages", () => {
     expect(messages.at(-1)).toBe(SLACK_TRUNCATED_NOTE);
   });
 });
+
+describe("tables in Slack replies", () => {
+  it("become a bulleted list, since Slack draws no tables", () => {
+    const [message] = formatSlackOutboundMessages({
+      text: [
+        "Here is how they compare:",
+        "",
+        "| Sort | Average | Stable |",
+        "| --- | :---: | --- |",
+        "| Bubble | O(n²) | Yes |",
+        "| Quick | O(n log n) | No |",
+        "",
+        "Pick merge sort for stability.",
+      ].join("\n"),
+    });
+    expect(message).toBe(
+      [
+        "Here is how they compare:",
+        "",
+        "• *Bubble* (Average: O(n²), Stable: Yes)",
+        "• *Quick* (Average: O(n log n), Stable: No)",
+        "",
+        "Pick merge sort for stability.",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves a table inside a code block as it is", () => {
+    const text = "```\n| a | b |\n| - | - |\n| 1 | 2 |\n```";
+    expect(formatSlackOutboundMessages({ text })).toEqual([text]);
+  });
+});

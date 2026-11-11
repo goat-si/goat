@@ -27,6 +27,7 @@ export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
   /** Puts a drafted message in the box, keeping staged files; the person still sends it. */
   replaceText(text: string): void;
+  focus(): void;
 }
 
 /**
@@ -118,6 +119,9 @@ export function GoatBotComposer({
     },
     replaceText(next) {
       setText(next);
+      textareaRef.current?.focus();
+    },
+    focus() {
       textareaRef.current?.focus();
     },
   }));

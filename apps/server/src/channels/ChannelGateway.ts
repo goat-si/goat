@@ -58,6 +58,7 @@ import {
   bindingIdFor,
   contentHashFor,
   conversationIdFor,
+  goatConversationKeyFor,
   deliveryIdFor,
   inputIdFor,
   linkCodeHashFor,
@@ -68,7 +69,6 @@ export const GOAT_CONNECTION_ID = "goat";
 /** The fixed connection id of agent input over MCP; the request namespace scopes it. */
 export const MCP_CONNECTION_ID = "mcp";
 /** The owner's GOAT bot is one conversation, also across a bot thread replaced after deletion. */
-const GOAT_CONVERSATION_KEY = "goat-bot";
 
 /**
  * The GOAT bot takes only files this server just received as uploads: a node hands the provider
@@ -262,8 +262,7 @@ const scopedForCaller = (
   if (input.kind === "goat")
     return {
       ...input,
-      conversationKey:
-        botId === MAIN_BOT_ID ? GOAT_CONVERSATION_KEY : GOAT_CONVERSATION_KEY + ":" + botId,
+      conversationKey: goatConversationKeyFor(botId),
     };
   if (input.kind !== "mcp" || context.caller.type !== "mcp") return input;
   const namespace = context.caller.requestNamespace;
