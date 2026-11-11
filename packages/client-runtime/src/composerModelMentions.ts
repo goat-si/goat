@@ -13,7 +13,7 @@ function mentionSearchQueries(query: string): ReadonlyArray<string> {
   return unhyphenated === spaced ? [spaced] : [spaced, unhyphenated];
 }
 
-/** Returns the models matching an `@` mention, best first. A bare `@` matches none. */
+/** Returns the models matching an `@` mention, best first. */
 export function rankComposerModelMentions<T>(
   candidates: ReadonlyArray<T>,
   query: string,

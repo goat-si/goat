@@ -1,4 +1,5 @@
 import { documentIconColorForFileName } from "~/pierre-icons";
+import { ComposerModelExtension } from "./chat/composerModelNode";
 import { isProviderSkillUserInvocable } from "@goat/client-runtime/providerSkills";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import {
@@ -730,8 +731,7 @@ export function ComposerPromptEditorTiptap(props: ComposerPromptEditorProps) {
     setSelection({ value, cursor, expandedCursor });
     onPromptChange(value, cursor, expandedCursor, ...rest);
   };
-  // Changing text mode remounts the editor. Its collapsed cursor cannot represent
-  // a caret inside unknown `$name` text, so retain the exact Markdown offset here.
+  // A mode remount needs the exact Markdown offset inside unknown `$name` text.
   return (
     <ComposerPromptEditorTiptapInner
       key={`${props.draftKey ?? ""}:${props.literalText ? "literal" : props.richTextEnabled ? "rich" : "plain"}`}
@@ -788,6 +788,7 @@ function createComposerExtensions(richText: boolean) {
     ComposerUndoGroupingExtension,
     ComposerTextDirectionExtension,
     ComposerMentionExtension,
+    ComposerModelExtension,
     ComposerSkillExtension,
     ComposerCitationExtension,
     ComposerContextReferenceExtension,
@@ -1497,9 +1498,7 @@ function ComposerPromptEditorTiptapInner(
     onCitationDraftSave(replacedValue, serializeEditorDoc(current.state.doc).value);
   });
 
-  // Controlled value/cursor from the store (history recall, chip insertion…).
-  // Without a view the editor is about to be replaced or remounted, which
-  // reruns this with the latest value, so nothing is recorded as applied yet.
+  // A missing view will remount with the latest controlled value and cursor.
   useLayoutEffect(() => {
     latestValueRef.current = value;
     const view = mountedEditorView(mountedEditor);

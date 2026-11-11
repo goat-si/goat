@@ -387,6 +387,9 @@ row above the composer shows the goal and its progress.
 
 ## Context in your message
 
+Type `@` and a model or provider name to name a model for the agent, for example when delegating.
+This adds a model reference to the message; it does not change the thread's model.
+
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,
 a review comment from a diff or file, a preview annotation, or a file. You can type before and
 after a chip, move it by cutting and pasting, and delete it like a character. Hover a chip for

@@ -1,5 +1,6 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
+import { composerPathOrModelReplacement } from "./composerModelMentions";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -65,7 +66,6 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
-  isPathSuggestionCurrent,
   extendReplacementRangeForTrailingSpace,
   replaceTextRange,
 } from "../../composer-logic";
@@ -1212,6 +1212,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       providerInstanceEntries,
     ),
     workspaceSkillsScanning,
+    modelMentions: { instanceEntries: providerInstanceEntries, modelOptionsByInstance },
   });
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1941,9 +1942,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         setComposerHighlightedItemId(null);
       });
     }
-    if (item.type === "path") {
-      if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
-      const replacement = `${serializeComposerFileLink(item.path)} `;
+    if (item.type === "path" || item.type === "model") {
+      const replacement = composerPathOrModelReplacement(item, trigger, environmentId, gitCwd);
+      if (replacement === null) return;
       const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
