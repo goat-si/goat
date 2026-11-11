@@ -1893,7 +1893,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           scope,
         });
-        const events = yield* survivorHooks.makeSessionEvents(input.providerSessionId);
+        const events = yield* survivorHooks.makeSessionEvents(
+          input.providerSessionId,
+          Effect.suspend(() => Ref.get(activeTurns)).pipe(Effect.map(Survivor.startedRootTurns)),
+        );
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
