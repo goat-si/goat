@@ -48,7 +48,7 @@ const (
 	maxAccountAdmitPrev = 8
 	// maxSharedPrev is how many heads a record of a shared mesh names (ADR-0026).
 	maxSharedPrev = 8
-	// maxOwnCards is how many of its found and admit records a first record of a shared mesh names.
+	// maxOwnCards is how many of its signer's found and admit records a record of a shared mesh names.
 	maxOwnCards = 4
 )
 

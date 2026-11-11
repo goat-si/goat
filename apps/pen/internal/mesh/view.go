@@ -228,6 +228,15 @@ func compute(meshID string, recs []*Record, bare map[string]bool, direct bool) *
 					break
 				}
 			}
+			if !inPast && direct && len(byChain[chainKey{b.By, b.N - 1}]) == 0 {
+				// The signer's previous record was dropped from its share; naming its bare hash suffices.
+				for _, p := range b.Prev {
+					if bare[p] {
+						inPast = true
+						break
+					}
+				}
+			}
 			if !inPast {
 				continue
 			}

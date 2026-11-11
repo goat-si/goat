@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
@@ -352,5 +353,56 @@ func TestARevokeSignedOverDroppedRecordsStillReachesItsSubject(t *testing.T) {
 	}
 	if _, ok := s.View().Revoked[pub(h)]; !ok {
 		t.Fatal("an honest revoke signed over dropped filler records had no effect")
+	}
+}
+
+// A member whose latest record was displaced by a lineage-mate's records still signs records that take
+// effect: it names that record's hash, kept bare, as its own previous one.
+func TestARecordAfterItsSignersDroppedPreviousStillTakesEffect(t *testing.T) {
+	f := detID(1)
+	b, found := newMesh(t, f)
+	last := found
+	byLineage := map[int]*ident.Identity{}
+	var x, y *ident.Identity
+	for i := 0; x == nil; i++ {
+		id := detID(byte(10 + i))
+		last = b.admit(f, id, last)
+		l := nonceLineage(last.B.Card.C.Nonce)
+		if other, ok := byLineage[l]; ok {
+			x, y = other, id
+		}
+		byLineage[l] = id
+	}
+	s := sharedStore(b)
+	s.self = pub(x)
+	if _, err := s.Merge(b.recs); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := s.Append(x, TypeName, 1000, Fields{Subject: pub(x), Name: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ay *Record
+	for _, r := range b.recs {
+		if r.B.Type == TypeAdmit && r.B.Card.C.SignPub == pub(y) {
+			ay = r
+		}
+	}
+	tail := ay
+	for i := 0; s.Has(mine.Hash); i++ {
+		if i >= 4*ShareOrdinary {
+			t.Fatal("setup: the lineage-mate's records never displaced x's record")
+		}
+		tail = b.sign(y, TypeName, []*Record{tail}, Fields{Subject: pub(y), Name: fmt.Sprintf("y%d", i)})
+		if _, err := s.Merge([]*Record{tail}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rev, err := s.Append(x, TypeRevoke, 2000, Fields{Subjects: []string{pub(y)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := s.View(); !v.Effective[rev.Hash] {
+		t.Fatal("x's revoke after a lineage-mate displaced its previous record had no effect")
 	}
 }
