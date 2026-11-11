@@ -181,7 +181,7 @@ class PenFetcher {
   }
 
   /** Builds the request before anything is sent; every refusal here sends nothing. */
-  async prepare(input: string | URL | Request, init: RequestInit | undefined): Promise<Prepared> {
+  prepare(input: string | URL | Request, init: RequestInit | undefined): Prepared {
     const request = typeof Request !== "undefined" && input instanceof Request ? input : undefined;
     const target = parseTarget(request?.url ?? String(input));
     if (target === null || target.origin !== this.#bound.origin) {
@@ -189,16 +189,17 @@ class PenFetcher {
     }
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const cap = this.#options.bodyCap ?? HTTP1_LIMITS.body;
-    let body: Uint8Array | undefined;
-    if (init?.body !== undefined && init.body !== null) {
-      body = bodyBytes(init.body);
-    } else if (request?.body !== undefined && request.body !== null) {
-      // A Request's own body: read it whole, refusing past the cap before it is all held.
-      const declared = Number(request.headers.get("content-length") ?? "0");
-      if (declared > cap)
-        throw new PenError("http1/body-too-large", "a request body is at most the body cap");
-      body = new Uint8Array(await request.arrayBuffer());
+    // A Request's own body cannot be read with a bound on every platform (Hermes's fetch has no body stream), so a
+    // Request that may carry one is refused before anything is read; the caller passes init.body instead.
+    if (
+      request !== undefined &&
+      (init?.body === undefined || init.body === null) &&
+      method !== "GET" &&
+      method !== "HEAD"
+    ) {
+      throw new TypeError("a Pen fetch takes a request body only in init.body");
     }
+    const body = init?.body === undefined || init.body === null ? undefined : bodyBytes(init.body);
     if (body !== undefined && body.length > cap) {
       throw new PenError("http1/body-too-large", "a request body is at most the body cap");
     }
@@ -361,7 +362,7 @@ export function makePenFetch(options: PenFetchOptions): PenFetch {
   const fetcher = new PenFetcher(options);
   const cap = options.bodyCap ?? HTTP1_LIMITS.body;
   return async (input, init) => {
-    const prepared = await fetcher.prepare(input, init);
+    const prepared = fetcher.prepare(input, init);
     // One contiguous buffer: the server chooses how the body is split, so storage must not grow per piece.
     const buffer = new ByteBuffer(cap);
     const head = await fetcher.exchange(prepared, cap, (bytes) => {
@@ -386,7 +387,7 @@ export function makePenFetchToSink(options: PenFetchOptions) {
     init: RequestInit | undefined,
     sink: { readonly cap: number; write(bytes: Uint8Array): void | Promise<void> },
   ): Promise<ResponseHead> => {
-    const prepared = await fetcher.prepare(input, init);
+    const prepared = fetcher.prepare(input, init);
     try {
       return await fetcher.exchange(prepared, sink.cap, (bytes) => sink.write(bytes));
     } catch (error) {

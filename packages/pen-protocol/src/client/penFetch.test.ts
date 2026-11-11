@@ -249,12 +249,26 @@ describe("Pen fetch adapter (design 10.2 HTTP rules on the fetch side)", () => {
     expect(pair.server.written()).toHaveLength(0);
   });
 
-  it("a Request's own body is sent", async () => {
+  it("a Request that may carry a body is refused before reading it or sending a byte; init.body is the way", async () => {
     const t = setup();
-    const pending = t.fetch(new Request(ORIGIN + "/echo", { method: "POST", body: "hello" }));
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(1024));
+      },
+    });
+    const streamed = new Request(ORIGIN + "/echo", {
+      method: "POST",
+      body: endless,
+      duplex: "half",
+    } as RequestInit);
+    await expect(t.fetch(streamed)).rejects.toThrow(TypeError);
+    expect(pulled).toBeLessThanOrEqual(1);
+    expect(t.pairs).toHaveLength(0);
+    const pending = t.fetch(new Request(ORIGIN + "/echo", { method: "POST" }), { body: "hello" });
     const server = await t.stream(1);
     const sent = await request(server, 5);
-    expect(sent).toContain("Content-Length: 5\r\n");
     expect(sent.endsWith("\r\n\r\nhello")).toBe(true);
     server.write("HTTP/1.1 204 No Content\r\n\r\n");
     await pending;

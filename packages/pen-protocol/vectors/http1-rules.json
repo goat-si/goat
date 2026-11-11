@@ -128,6 +128,20 @@
       "error": "http1/H07"
     },
     {
+      "id": "H07a",
+      "accepts": true,
+      "text": "a header block of exactly 32 KiB (header lines, their CRLFs and the terminating empty line) accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H07b",
+      "accepts": false,
+      "text": "a header block of 32 KiB + 1, including when the excess is in CRLF bytes",
+      "where": "parser",
+      "error": "http1/H07"
+    },
+    {
       "id": "H08a",
       "accepts": true,
       "text": "64 fields accepted",

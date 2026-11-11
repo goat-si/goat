@@ -197,7 +197,11 @@ export class ResponseParser {
     if (this.#sawCR) {
       if (byte !== 10) throw fail("H11", "CR not followed by LF");
       this.#sawCR = false;
-      if (this.#phase === "headers") this.#headBytes += 2;
+      if (this.#phase === "headers") {
+        // CRLFs count toward the block, the terminating empty line's included.
+        this.#headBytes += 2;
+        if (this.#headBytes > HTTP1_LIMITS.head) throw fail("H07", "response head over 32 KiB");
+      }
       const line = this.#line;
       this.#line = [];
       if (this.#phase === "status") this.#statusLine(line);
