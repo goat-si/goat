@@ -47,7 +47,7 @@ export function subagentRequestAwareness(
     return null;
   const status = thread.activityRunStatus ?? thread.status;
   if (
-    request.kind === "user_input" &&
+    isPendingUserInputRequest(request) &&
     request.blocking === false &&
     (status === "preparing" || status === "starting" || status === "running")
   )
@@ -55,7 +55,7 @@ export function subagentRequestAwareness(
   return {
     childId: thread.id,
     requestId: request.id,
-    phase: request.kind === "user_input" ? "waiting_for_input" : "waiting_for_approval",
+    phase: isPendingApprovalRequest(request) ? "waiting_for_approval" : "waiting_for_input",
     createdAt: request.createdAt,
   };
 }

@@ -43,6 +43,29 @@ describe("projectThreadAwarenessV2", () => {
     ...overrides,
   });
 
+  it("projects a child's approval handoff as an approval, not a question", () => {
+    const request = subagentRequestAwareness({
+      ...v2Thread({
+        lineage: {
+          rootThreadId: "thread-2" as ThreadId,
+          parentThreadId: "thread-2" as ThreadId,
+          relationshipToParent: "subagent",
+        },
+        activityRunStatus: "running",
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make("child-approval"),
+          kind: "user_input",
+          createdAt: updatedAt,
+          blocking: true,
+          handoff: { kind: "approval", title: "Join pen-lidge to the hub" },
+        },
+      }),
+      id: "child" as ThreadId,
+      creationSource: "mcp",
+    });
+    expect(request?.phase).toBe("waiting_for_approval");
+  });
+
   it("projects a child question ahead of a completed parent's silent state", () => {
     const request = subagentRequestAwareness({
       ...v2Thread({
