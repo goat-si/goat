@@ -24,6 +24,8 @@ under its own name and purpose from its next conversation session.
 - An added bot's model can change in its edit dialog or from the model button in its message
   box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
   bot's model again.
+- On web and desktop, with a server that supports it, an added bot can have a color, picked when
+  you create or edit it. Its chat shows your messages and the send button in that color.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
   history. A bot with open tasks can't be deleted until they finish or you stop them.
@@ -65,7 +67,10 @@ bot's tasks, and a task opens in its own view.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
   hours you choose: the bot looks over its tasks and writes only when something needs you. A
-  routine whose last run failed shows **Run now**.
+  routine whose last run failed shows **Run now**. **New routine** starts a routine request in the
+  message box for you to finish and send.
+- **New routine**, **Ask to change** and **Ask to forget** fill only an empty message box. If it
+  already holds your text or files, they stay as they are: send or clear them first.
 - A task that failed or that you stopped shows **Retry** in its task view; each
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not

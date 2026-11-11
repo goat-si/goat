@@ -8,8 +8,8 @@ import {
   type GoatBotGroupPosition,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { useEffect, type ReactNode } from "react";
+import { AccessibilityInfo, Platform, Pressable, Text, View } from "react-native";
 
 import { GoatWordmark } from "../../components/GoatWordmark";
 import { GoatBotProgressFace } from "./GoatBotFace";
@@ -212,6 +212,12 @@ export function GoatBotActivityLine(props: {
   const status = waits
     ? `${props.botName}: ${activity.text}`
     : `${props.botName} is ${face === "reading" ? "reading" : "working"}`;
+  const waitStatus = waits ? status : null;
+  // oxlint-disable-next-line goat/react-effect-budget -- iOS has no live regions; VoiceOver hears each new wait from here.
+  useEffect(() => {
+    if (waitStatus !== null && Platform.OS === "ios")
+      AccessibilityInfo.announceForAccessibility(waitStatus);
+  }, [waitStatus]);
   return (
     <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
       <View accessible accessibilityLiveRegion="polite" accessibilityLabel={status}>

@@ -29,3 +29,16 @@ it("selects Astro components as code for lint and knip", async () => {
   expect(isChangedCode(astro)).toBe(true);
   expect(lintChangedArgs([astro])).toEqual(["lint", "--no-error-on-unmatched-pattern", astro]);
 });
+
+it("checks the agent surface audit and context budget as CI does when code or the audit page changes (#2828)", async () => {
+  const { agentSurfaceCheckSteps } = await import("./check-changed-command.ts");
+  const steps = [
+    { name: "agent surface audit", args: ["run", "agent-surface:check"] },
+    { name: "agent context budget", args: ["run", "agent-surface:context-budget-check"] },
+  ];
+  expect(agentSurfaceCheckSteps(["packages/contracts/src/agentSurface/settingsAccess.ts"])).toEqual(
+    steps,
+  );
+  expect(agentSurfaceCheckSteps(["docs/internals/agent-surface-audit.md"])).toEqual(steps);
+  expect(agentSurfaceCheckSteps(["docs/user/threads.md"])).toEqual([]);
+});

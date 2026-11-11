@@ -44,7 +44,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	}
 	if !*foreground && !*supervise && taskTurnApplies() {
 		// Before ending a pen down or answering from a running daemon: a pen down holding the turn
-		// finishes first, and the task start below runs in this turn.
+		// finishes first, and the service start below runs in this turn.
 		release, err := taskTurn(st, "pen up", stderr)
 		if err != nil {
 			return fail(stderr, err)

@@ -10,7 +10,6 @@ type Connect = (...args: ReadonlyArray<unknown>) => { pid: number };
 interface AgentState {
   _useConptyDll: boolean;
   _innerPid: number;
-  _connectFailed: boolean;
   _pty: number;
   _exitCode?: number;
   _pendingPtyInfo?: { pty: number; commandLine: string; cwd: string; env: ReadonlyArray<string> };
@@ -56,12 +55,19 @@ try {
 function agent(useConptyDll = false): {
   agent: Agent;
   nativeKill: ReturnType<typeof vi.fn<NativeKill>>;
+  close: ReturnType<typeof vi.fn>;
 } {
-  const nativeKill = vi.fn<NativeKill>();
+  const close = vi.fn();
+  let open = true;
+  const nativeKill = vi.fn<NativeKill>(() => {
+    if (open) {
+      open = false;
+      close();
+    }
+  });
   const state: AgentState = {
     _useConptyDll: useConptyDll,
     _innerPid: 0,
-    _connectFailed: false,
     _pty: 1,
     _pendingPtyInfo: { pty: 1, commandLine: "claude.cmd", cwd: ".", env: [] },
     _ptyNative: { kill: nativeKill },
@@ -70,7 +76,11 @@ function agent(useConptyDll = false): {
     _outSocket: { destroy: vi.fn(), readable: true, on: vi.fn() },
     _onError: { fire: vi.fn() },
   };
-  return { agent: Object.assign(Object.create(WindowsPtyAgent.prototype), state), nativeKill };
+  return {
+    agent: Object.assign(Object.create(WindowsPtyAgent.prototype), state),
+    nativeKill,
+    close,
+  };
 }
 
 describe("node-pty native kill on a Windows pty", () => {
@@ -80,24 +90,17 @@ describe("node-pty native kill on a Windows pty", () => {
     };
   };
 
-  // regression: #2785 the native kill after a failed ConPTY connect corrupted the Windows heap
-  it("a failed ConPTY connect tears down without the native kill", () => {
-    failConnect();
-    const { agent: failed, nativeKill } = agent();
-    failed._completePtyConnection();
-    expect(nativeKill).not.toHaveBeenCalled();
-    expect(failed._exitCode).toBe(2);
-    expect(failed._onError.fire).toHaveBeenCalledOnce();
-    expect(failed._conoutSocketWorker.dispose).toHaveBeenCalledOnce();
-  });
-
-  it("kill() after a failed connect still skips the native kill on both kill paths", () => {
+  it("a failed connect closes the pseudoconsole once even if killed again", () => {
     for (const useConptyDll of [false, true]) {
       failConnect();
-      const { agent: failed, nativeKill } = agent(useConptyDll);
+      const { agent: failed, nativeKill, close } = agent(useConptyDll);
       failed._completePtyConnection();
+      expect(nativeKill).toHaveBeenCalledWith(1, useConptyDll);
+      expect(close).toHaveBeenCalledOnce();
+      expect(failed._exitCode).toBe(2);
+      expect(failed._onError.fire).toHaveBeenCalledOnce();
       failed.kill();
-      expect(nativeKill).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
     }
   });
 

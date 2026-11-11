@@ -767,13 +767,21 @@ func TestApproveComparesIssuerAccountAndKeyWithTheBindingAtSigning(t *testing.T)
 		t.Fatalf("approving an entry without issuer and key: %v", err)
 	}
 	fresh := queue()
-	var r map[string]any
 	rebound := &mesh.Account{LoginURL: "https://other-login.example", LoginKey: mesh.LoginKey(f.Key()), Sub: testSub}
-	if err := Call(a.st, Request{Op: "login-bind", Account: rebound}, &r); err != nil {
-		t.Fatal(err)
+	var signedBefore int
+	beforeAccountAdmit = func() {
+		if _, err := a.d.mesh().Append(a.d.id, mesh.TypeAccount, a.d.now().UnixMilli(), mesh.Fields{Bind: rebound}); err != nil {
+			t.Fatal(err)
+		}
+		signedBefore = len(a.d.mesh().Records())
 	}
-	if err := Call(a.st, Request{Op: "approve", Subject: fresh}, &ar); err == nil {
-		t.Fatal("a request queued under another login service was approved")
+	defer func() { beforeAccountAdmit = nil }()
+	_, err := a.d.approve(ctx, fresh)
+	if err == nil || !strings.Contains(err.Error(), "no longer bound") {
+		t.Errorf("approval after binding changed at signing: %v", err)
+	}
+	if got := len(a.d.mesh().Records()); got != signedBefore {
+		t.Errorf("approval signed %d records after the binding changed", got-signedBefore)
 	}
 	if n := len(a.ls(t).Members); n != 1 {
 		t.Fatalf("%d members: something was admitted", n)

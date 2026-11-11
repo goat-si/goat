@@ -27,8 +27,11 @@ import {
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
-  /** Puts a drafted message in the box, keeping staged files; the person still sends it. */
-  replaceText(text: string): void;
+  /**
+   * Puts a drafted message in an empty box for the person to finish and send. A box that holds
+   * their own text or files is left as it is; returns whether the draft went in.
+   */
+  offerDraft(text: string): boolean;
   focus(): void;
   /** The message field, for focus that must land after something else closes. */
   field(): HTMLTextAreaElement | null;
@@ -125,9 +128,11 @@ export function GoatBotComposer({
     addFiles(files) {
       void addFiles(files).then(() => textareaRef.current?.focus());
     },
-    replaceText(next) {
-      setText(next);
+    offerDraft(next) {
+      const empty = text.trim() === "" && attachments.length === 0;
+      if (empty) setText(next);
       textareaRef.current?.focus();
+      return empty;
     },
     focus() {
       textareaRef.current?.focus();
@@ -231,8 +236,9 @@ export function GoatBotComposer({
             type="submit"
             aria-label="Send"
             disabled={!canSubmit}
+            data-accent={canSubmit ? "true" : "false"}
             className={cn(
-              "flex size-7 shrink-0 items-center justify-center rounded-full bg-goat-person-message text-goat-person-message-foreground",
+              "goat-bot-send flex size-7 shrink-0 items-center justify-center rounded-full",
               trimmed.length === 0 && attachments.length === 0 && "invisible",
             )}
           >
