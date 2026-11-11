@@ -205,8 +205,9 @@ as a dev server.
 
 If a Codex process kept from before the restart exits later, the next message starts
 a new one. When GOAT cannot confirm that the old process is gone, the thread names
-its process group so you can stop it; GOAT checks again on the next message, so no
-restart is needed.
+its process group so you can stop it, and GOAT checks again on the next message.
+A few cases, such as a process group id that another program now uses, still need
+a GOAT restart; the thread says so when that applies.
 
 A message you send while such a turn still runs waits for it, and so does one sent
 while Codex runs a turn no message started, such as a goal continuation. The thread

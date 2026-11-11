@@ -874,7 +874,9 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             if ([...failedFences.values(), ...fenced.map((f) => f.threadId)].includes(threadId))
               return Effect.succeed("own" as const);
             if (current === undefined) return Effect.succeed("removed" as const);
-            if (keep || fenced.length > 0) return Effect.succeed("kept" as const);
+            // A fence write that names this record and has not landed lives only in memory.
+            const pending = [...failedFences.keys()].some((k) => JSON.parse(k)[2] === record.name);
+            if (keep || pending || fenced.length > 0) return Effect.succeed("kept" as const);
             return removeRecordUnlocked(current).pipe(Effect.as("removed" as const));
           }),
         ),

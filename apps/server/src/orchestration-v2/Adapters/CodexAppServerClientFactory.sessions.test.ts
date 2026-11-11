@@ -430,3 +430,24 @@ it.effect(
       }).pipe(Effect.scoped);
     }).pipe(Effect.scoped),
 );
+
+it.effect("a fence write for another thread that has not landed keeps the record", () =>
+  Effect.gen(function* () {
+    const kept = recordFixture("codex-555555555555", 1012, sessionA);
+    const { open, detached, launched, gone, recordFiles } = yield* harness([kept]);
+    gone.add(kept.pgid);
+    // A write the record refuses stays pending in memory, as a write racing the removal would.
+    const goal = { threadId: ThreadId.make("thread-pending"), nativeThreadId: "native-pending" };
+    yield* detached
+      .recordGoalBlock(
+        { instanceId: ProviderInstanceId.make("other"), recordName: kept.name },
+        goal,
+      )
+      .pipe(Effect.flip);
+    yield* Effect.gen(function* () {
+      yield* open("thread-other", sessionA);
+      assert.equal(launched.length, 1);
+      assert.include(yield* recordFiles, kept.name + ".json");
+    }).pipe(Effect.scoped);
+  }).pipe(Effect.scoped),
+);
