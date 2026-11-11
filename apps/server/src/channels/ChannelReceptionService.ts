@@ -1669,6 +1669,9 @@ const make = Effect.gen(function* () {
           ? channelEvidenceSentence(task.observed?.result)
           : null;
       const replyTo = turnAnswerReplyTo(task, base.kind);
+      // The attempt the event ended, which a retry since then has moved past.
+      const taskGeneration =
+        "generation" in pending.event.payload ? pending.event.payload.generation : task.generation;
       const told = replyDelivery({
         // The told outcome holds the narration's key, so the work queue waits for the message the
         // person reads; a GOAT outcome's card goes alongside it under its own key.
@@ -1678,6 +1681,7 @@ const make = Effect.gen(function* () {
         text: evidence === null ? worded : worded + "\n\n" + evidence,
         replyTo,
         task,
+        taskGeneration,
         mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
         options: "options" in base ? base.options : undefined,
         questionId: "questionId" in base ? base.questionId : undefined,
@@ -1702,6 +1706,7 @@ const make = Effect.gen(function* () {
             text: worded,
             replyTo,
             task,
+            taskGeneration,
           }),
         );
       }

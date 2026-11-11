@@ -152,6 +152,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     continuationLabel:
       chip.movedFrom === undefined ? null : `Continued from ${chip.movedFrom.host}`,
     attemptLabel: taskAttemptLabel(chip.generation),
+    generation: chip.generation ?? 1,
     // Work that ran on another machine is checked there; the server refuses to rerun it here.
     retryable:
       isRetryableTaskStatus(chip.status) && host === undefined && chip.movedFrom === undefined,
@@ -192,6 +193,7 @@ export const goatBotItemReaders: GoatBotItemReaders = {
       replyToKey: meta.inReplyToInputId ?? null,
       clientKey: meta.clientMessageId ?? (item.type === "user_message" ? item.messageId : null),
       ...(meta.taskId === undefined ? {} : { taskId: meta.taskId }),
+      ...(meta.taskGeneration === undefined ? {} : { taskGeneration: meta.taskGeneration }),
       ...(meta.options === undefined || meta.options.length === 0 ? {} : { options: meta.options }),
       ...(meta.questionId === undefined ? {} : { questionId: meta.questionId }),
     };

@@ -2,7 +2,13 @@ import { MemoryReportReference } from "./memory.ts";
 import * as Schema from "effect/Schema";
 
 import { AuthEnvironmentScopes } from "./auth.ts";
-import { EnvironmentId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 
 /**
@@ -115,6 +121,8 @@ export const ChannelMessageMeta = Schema.Struct({
   clientMessageId: Schema.optional(TrimmedNonEmptyString),
   receptionId: Schema.optional(ChannelReceptionId),
   taskId: Schema.optional(ChannelTaskId),
+  /** The attempt of that task the message speaks for; absent from older servers. */
+  taskGeneration: Schema.optional(PositiveInt),
   inReplyToInputId: Schema.optional(ChannelInputId),
   readAt: Schema.optional(IsoDateTime),
   /** Answers a question offers. The GOAT bot shows them as buttons that send the answer. */

@@ -745,11 +745,15 @@ describe("a conversation-only main chat", () => {
     expect(content(rows).map((row) => row.id)).toEqual(["ask", "ack", "asks", "done"]);
   });
 
-  const outcome = (taskId: string): GoatBotMessagePresentation => ({
+  const outcome = (
+    taskId: string,
+    taskGeneration: number | null = 1,
+  ): GoatBotMessagePresentation => ({
     tone: "result",
     readAt: null,
     requestKey: null,
     taskId,
+    taskGeneration,
   });
   const ended = (key: string, sourceLabel: string | null = null): GoatBotTaskCard => ({
     ...card(key, 2, "Done"),
@@ -798,32 +802,45 @@ describe("a conversation-only main chat", () => {
     expect(view("t1", ["t1"])).toEqual(["card"]);
   });
 
-  it("keeps a retried task's card when only the earlier attempt's ending was told", () => {
-    const rows = buildGoatBotTimeline({
-      visibleTurnItems: rowsOf([
-        notice("first-end", "2026-10-12T12:00:00Z"),
-        bot("first-told", "2026-10-12T12:00:01Z", "It failed."),
-        notice("retry", "2026-10-12T12:01:00Z"),
-        notice("second-end", "2026-10-12T12:02:00Z"),
-      ]),
-      pendingInputs: [],
-      readers: readers(
-        { "first-told": { ...outcome("t1"), tone: "failure" } },
-        {
-          "first-end": { ...ended("t1"), revision: 2 },
-          retry: { ...card("t1", 3, "Working"), ended: false },
-          "second-end": { ...ended("t1"), revision: 4, summary: "Fixed on the second try." },
-        },
-      ),
-      taskId: null,
-      knownTaskIds: ["t1"],
-      conversationOnly: true,
-    });
-    // The card keeps its first place and shows its newest revision.
-    expect(content(rows).map((row) => (row.kind === "task" ? row.card.revision : row.id))).toEqual([
-      4,
-      "first-told",
-    ]);
+  it("keeps a retried task's one card until its own attempt's ending is told", () => {
+    // The server keeps one card per task and updates it in place: after a retry that ended without
+    // a message yet, the card is the second attempt's ending and the failure message the first's.
+    const retried = {
+      ...ended("t1"),
+      revision: 4,
+      generation: 2,
+      summary: "Fixed on the second try.",
+    };
+    const firstFailure = { ...outcome("t1", 1), tone: "failure" as const };
+    const view = (taskId: string | null, told: ReadonlyArray<string>) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: rowsOf([
+            notice("card", "2026-10-12T12:00:00Z"),
+            bot("first-told", "2026-10-12T12:00:01Z", "It failed."),
+            ...told.map((id) => bot(id, "2026-10-12T12:03:00Z", "Fixed.")),
+          ]),
+          pendingInputs: [],
+          readers: readers(
+            {
+              "first-told": firstFailure,
+              "second-told": outcome("t1", 2),
+              "unmarked-told": outcome("t1", null),
+            },
+            { card: retried },
+          ),
+          taskId,
+          knownTaskIds: ["t1"],
+          conversationOnly: true,
+        }),
+      ).map((row) => row.id);
+    expect(view(null, [])).toEqual(["card", "first-told"]);
+    expect(view("t1", [])).toEqual(["card", "first-told"]);
+    // The delayed narration of the second attempt arrives.
+    expect(view(null, ["second-told"])).toEqual(["first-told", "second-told"]);
+    expect(view("t1", ["second-told"])).toEqual(["card", "first-told"]);
+    // A server that does not name the attempt: the card stays, the message too.
+    expect(view(null, ["unmarked-told"])).toEqual(["card", "first-told", "unmarked-told"]);
   });
 
   it("keeps a result that arrives before its task's final card, next to the progress card", () => {

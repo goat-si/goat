@@ -49,6 +49,7 @@ describe("presentTaskChip", () => {
       sourceLabel: null,
       continuationLabel: null,
       attemptLabel: null,
+      generation: 1,
       retryable: false,
       updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
