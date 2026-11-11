@@ -25,7 +25,8 @@ export const MAX_FIRST_MESSAGE = 4096;
 export const MAX_PAYLOAD = 256;
 
 /** The one message 2 plaintext a responder sends; readMessage2 accepts no other. */
-export const MESSAGE2_PAYLOAD = asciiEncode('{"v":1}\n');
+export const MESSAGE2_PAYLOAD_TEXT = '{"v":1}\n';
+const MESSAGE2_PAYLOAD = asciiEncode(MESSAGE2_PAYLOAD_TEXT);
 const EMPTY = new Uint8Array(0);
 
 /** "pen/1" || nodeId || kind. */
