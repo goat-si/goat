@@ -1,4 +1,9 @@
-import type { ChannelTask, ChannelTaskEvent, ChannelTaskStatus } from "@goat/contracts";
+import {
+  CHANNEL_ANSWERED_QUESTIONS_KEPT,
+  type ChannelTask,
+  type ChannelTaskEvent,
+  type ChannelTaskStatus,
+} from "@goat/contracts";
 
 /**
  * The task state machine. Every ledger write that moves a task goes through
@@ -174,6 +179,13 @@ export function applyChannelTaskEvent(
       const openQuestions = task.openQuestions.filter(
         (question) => question.questionId !== event.payload.questionId,
       );
+      const answeredQuestions = [
+        ...(task.answeredQuestions ?? []),
+        {
+          questionId: event.payload.questionId,
+          ...(event.payload.inputId === undefined ? {} : { inputId: event.payload.inputId }),
+        },
+      ].slice(-CHANNEL_ANSWERED_QUESTIONS_KEPT);
       // A dispatcher question (no worker yet) sends the task back to dispatch; a worker question
       // goes back to the running worker, which receives the answer as a follow-up message.
       const status: ChannelTaskStatus =
@@ -182,7 +194,7 @@ export function applyChannelTaskEvent(
           : task.worker === undefined
             ? "received"
             : "running";
-      return { ok: true, task: { ...base, status, openQuestions } };
+      return { ok: true, task: { ...base, status, openQuestions, answeredQuestions } };
     }
     // The worker takes the follow-up; the task keeps running until the run that took it settles.
     case "task.followup.received":

@@ -871,7 +871,7 @@ function AdaptiveWorkspaceLayoutContent(
                 selectedPullRequestKey={props.selectedPullRequestKey ?? null}
               >
                 {botHome.mode === "bot" ? (
-                  <MobileBotList />
+                  <MobileBotList visible={panes.primarySidebarVisible} />
                 ) : (
                   <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
                     <ThreadNavigationSidebar

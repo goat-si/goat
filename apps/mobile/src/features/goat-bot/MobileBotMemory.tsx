@@ -13,6 +13,7 @@ import type { ChannelBotNote, EnvironmentId } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
+import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
@@ -25,8 +26,14 @@ export function MobileBotMemory(props: {
   /** A member bot's sheet, which shows the same notes as the main bot's. */
   readonly member: boolean;
   readonly botName?: string;
-  /** Puts a message in the chat's composer; absent while the chat cannot send. */
-  readonly onDraft?: ((text: string) => void) | undefined;
+  /** Fills the chat's message box; false when it was refused and nothing changed. */
+  readonly onDraft?: ((text: string) => boolean) | undefined;
+  /**
+   * New wordings being written, by the note's text; kept by the home so they outlive the sheet
+   * closing while the person deals with a message already in the box, and a new read of the file.
+   */
+  readonly wordings: ReadonlyMap<string, string>;
+  readonly onWordingChange: (note: string, wording: string | null) => void;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly refreshKey?: string | undefined;
 }) {
@@ -77,6 +84,8 @@ export function MobileBotMemory(props: {
           notes={notes.data.notes}
           truncated={notes.data.truncated}
           onDraft={onDraft}
+          wordings={props.wordings}
+          onWordingChange={props.onWordingChange}
           botName={botName}
         />
       )}
@@ -88,12 +97,22 @@ function MobileNoteList(props: {
   readonly revision: string | null;
   readonly notes: ReadonlyArray<ChannelBotNote>;
   readonly truncated: boolean;
-  readonly onDraft: ((text: string) => void) | undefined;
+  readonly onDraft: ((text: string) => boolean) | undefined;
+  readonly wordings: ReadonlyMap<string, string>;
+  readonly onWordingChange: (note: string, wording: string | null) => void;
   readonly botName: string;
 }) {
   const view = goatBotNotesView({ notes: props.notes, truncated: props.truncated });
   const [showReplaced, setShowReplaced] = useState(false);
   const now = useNowMinuteMs();
+  // A wording follows its note's text across reads; one whose note is gone is shown on its own.
+  const editing = new Set<string>();
+  const lost = [...props.wordings].filter(
+    ([text, wording]) =>
+      !view.current.some((note) => note.text === text) &&
+      wording.trim() !== "" &&
+      wording.trim() !== text.trim(),
+  );
   return (
     <View className="gap-1">
       {props.truncated ? (
@@ -111,16 +130,49 @@ function MobileNoteList(props: {
       ) : view.empty === "no_current" ? (
         <Text className="text-foreground-muted">No current notes.</Text>
       ) : (
-        view.current.map((note) => (
-          // An index is a line's place in this read only, so a new read starts every row over.
-          <MobileNoteRow
-            key={`${props.revision}:${note.index}`}
-            note={note}
-            source={goatBotNoteSourceLabel(note.source, { now })}
-            onDraft={props.onDraft}
-          />
-        ))
+        view.current.map((note) => {
+          // An index is a line's place in this read only, so a new read starts every row over;
+          // the first row with a note's text takes its wording.
+          const first = !editing.has(note.text);
+          editing.add(note.text);
+          return (
+            <MobileNoteRow
+              key={JSON.stringify([props.revision, note.index])}
+              note={note}
+              source={goatBotNoteSourceLabel(note.source, { now })}
+              onDraft={props.onDraft}
+              wording={first ? (props.wordings.get(note.text) ?? null) : null}
+              onWordingChange={(wording) => props.onWordingChange(note.text, wording)}
+            />
+          );
+        })
       )}
+      {lost.map(([text, wording]) => (
+        <View key={text} className="gap-1 border-b border-border py-2">
+          <Text className="text-foreground-muted">
+            “{text}” changed while you wrote. Your new wording:
+          </Text>
+          <Text selectable className="text-foreground">
+            {wording}
+          </Text>
+          <View className="flex-row flex-wrap gap-x-4">
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void tryCopyTextWithHaptic(wording, { target: "new wording" })}
+              className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
+            >
+              <Text className="text-foreground">Copy</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => props.onWordingChange(text, null)}
+              className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
+            >
+              <Text className="text-foreground">Discard</Text>
+            </Pressable>
+          </View>
+        </View>
+      ))}
       {view.replaced.length > 0 ? (
         <Pressable
           accessibilityRole="button"
@@ -159,10 +211,12 @@ function MobileNoteList(props: {
 function MobileNoteRow(props: {
   readonly note: ChannelBotNote;
   readonly source: string | null;
-  readonly onDraft: ((text: string) => void) | undefined;
+  readonly onDraft: ((text: string) => boolean) | undefined;
+  readonly wording: string | null;
+  readonly onWordingChange: (wording: string | null) => void;
 }) {
-  const { note, onDraft } = props;
-  const [wording, setWording] = useState<string | null>(null);
+  const { note, onDraft, wording } = props;
+  const setWording = props.onWordingChange;
   const draft = wording === null ? null : changeNoteDraft(note, wording);
   const canAsk = onDraft !== undefined;
   return (
@@ -211,8 +265,8 @@ function MobileNoteRow(props: {
               disabled={draft === null || !canAsk}
               onPress={() => {
                 if (draft === null) return;
-                onDraft?.(draft);
-                setWording(null);
+                // A refused fill keeps the new wording so the person can try again.
+                if (onDraft?.(draft)) setWording(null);
               }}
               className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
             >

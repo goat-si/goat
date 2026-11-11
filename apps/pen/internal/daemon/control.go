@@ -31,6 +31,9 @@ type Request struct {
 	On      bool          `json:"on,omitempty"`
 	// Relays is the new relay list of op "relays".
 	Relays []string `json:"relays,omitempty"`
+	// Port and Key are a service.register's loopback port and base64url key.
+	Port int    `json:"port,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
 
 // LsMember is a member as ls reports it.
@@ -65,6 +68,8 @@ type LsReply struct {
 	// mesh's records, against the caps.
 	SaveError string `json:"saveError,omitempty"`
 	Records   int    `json:"records"`
+	// HostKeysError names sshd public key files that exist but could not be read, and the fix.
+	HostKeysError string `json:"hostKeysError,omitempty"`
 	// StateDir is this machine's state folder, filled in by the command line for its advice.
 	StateDir string `json:"-"`
 }
@@ -120,21 +125,53 @@ func (d *Daemon) listenControl() (net.Listener, error) {
 	return ln, nil
 }
 
+// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations)
+// included; controlRequestTimeout bounds the wait for a connection's request line, and controlWriteTimeout
+// each write to a client, so one that stops reading frees its slot (variables for tests).
+var (
+	controlConnCap        = 512
+	controlRequestTimeout = 10 * time.Second
+	controlWriteTimeout   = 5 * time.Second
+)
+
+// boundedConn gives every write its own deadline.
+type boundedConn struct{ net.Conn }
+
+func (b boundedConn) Write(p []byte) (int, error) {
+	if err := b.Conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout)); err != nil {
+		return 0, err
+	}
+	return b.Conn.Write(p)
+}
+
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
+	slots := make(chan struct{}, controlConnCap)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		d.spawn(func() { d.handleControl(ctx, c) })
+		select {
+		case slots <- struct{}{}:
+		default:
+			c.Close()
+			continue
+		}
+		d.spawn(func() {
+			defer func() { <-slots }()
+			d.handleControl(ctx, boundedConn{c})
+		})
 	}
 }
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	defer c.Close()
 	r := bufio.NewReader(io.LimitReader(c, 64<<10))
+	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
+		return
+	}
 	line, err := r.ReadBytes('\n')
-	if err != nil {
+	if err != nil || c.SetReadDeadline(time.Time{}) != nil {
 		return
 	}
 	var req Request
@@ -148,6 +185,13 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	switch req.Op {
 	case "watch":
 		d.controlWatch(ctx, c)
+		return
+	// These two run on the control socket only: the dashboard reaches do, never handleControl.
+	case "service.register":
+		d.controlRegister(ctx, c, req, reply, fail)
+		return
+	case "watch.snapshot":
+		d.controlSnapshot(ctx, c, fail)
 		return
 	case "invite":
 		if req.Wait {
@@ -295,6 +339,7 @@ func (d *Daemon) ls() LsReply {
 	if d.saveErr != nil {
 		out.SaveError = d.saveErr.Error()
 	}
+	out.HostKeysError = d.hostKeysErr
 	d.mu.Unlock()
 	for _, f := range d.forgets.refusedList() {
 		u := Unforgotten{NodeID: f.NodeID, LoginURL: f.LoginURL}

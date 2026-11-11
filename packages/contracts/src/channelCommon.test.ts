@@ -75,3 +75,18 @@ describe("memory report metadata", () => {
     ).toThrow();
   });
 });
+
+describe("a person's answer sent from a question card", () => {
+  it("says which question it answered, that it was refused, or nothing, through JSON", () => {
+    const codec = Schema.toCodecJson(ChannelMessageMeta);
+    const base = { conversationId: "conv", originKind: "goat" as const, kind: "inbound" as const };
+    for (const answersQuestionId of ["q1", null]) {
+      const meta = decodeMeta({ ...base, answersQuestionId });
+      expect(Schema.decodeSync(codec)(Schema.encodeSync(codec)(meta)).answersQuestionId).toBe(
+        answersQuestionId,
+      );
+    }
+    expect(decodeMeta(base)).not.toHaveProperty("answersQuestionId");
+    expect(() => decodeMeta({ ...base, answersQuestionId: "" })).toThrow();
+  });
+});

@@ -102,9 +102,6 @@ const make = Effect.gen(function* () {
               kind: "inbound",
               inputId: stored.snapshot.inputId,
               clientMessageId: stored.message.externalMessageId,
-              ...(stored.message.intent === "message" && stored.message.taskId !== undefined
-                ? { taskId: stored.message.taskId }
-                : {}),
               readAt,
             },
           },

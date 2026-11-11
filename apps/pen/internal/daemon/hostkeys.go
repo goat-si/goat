@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -22,13 +24,24 @@ func DefaultKnownHosts() (string, error) {
 	return filepath.Join(h, ".ssh", "pen", "known_hosts"), nil
 }
 
-// ReadHostKeys returns the sshd public keys matching glob as sorted "type base64" lines (at most 8).
-func ReadHostKeys(glob string) []string {
+// ReadHostKeys returns the sshd public keys matching glob as sorted "type base64" lines (at most 8),
+// and, when it could not read the key folder or some key files, what failed and how to fix it.
+func ReadHostKeys(glob string) (keys []string, problem string) {
+	const effect = ": those keys are not published, so ssh pen-<name> from other members can fail host key checking; "
 	paths, _ := filepath.Glob(glob)
-	var keys []string
+	if len(paths) == 0 {
+		// Glob hides a folder it cannot list; a missing folder only means no sshd here.
+		dir := filepath.Dir(glob)
+		if _, err := readDir(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, "cannot list " + dir + " (" + pathCause(err) + ")" + effect + hostKeysDirFix(dir)
+		}
+	}
+	var unreadable, failed []string
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
+			unreadable = append(unreadable, p+" ("+pathCause(err)+")")
+			failed = append(failed, p)
 			continue
 		}
 		f := strings.Fields(string(b))
@@ -41,7 +54,22 @@ func ReadHostKeys(glob string) []string {
 	if len(keys) > 8 {
 		keys = keys[:8]
 	}
-	return keys
+	if len(unreadable) > 0 {
+		problem = "cannot read " + strings.Join(unreadable, "; ") + effect + hostKeysFix(failed)
+	}
+	return keys, problem
+}
+
+// readDir lists the key folder (a variable so tests can refuse it as an ACL-protected folder does).
+var readDir = os.ReadDir
+
+// pathCause is err without the operation and path a *fs.PathError repeats.
+func pathCause(err error) string {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	return err.Error()
 }
 
 func (d *Daemon) hostKeysLoop(ctx context.Context) {
@@ -79,7 +107,8 @@ func localAccountName(account, computer string) string {
 // checkHostKeys signs a hostkeys record when the local sshd keys or the login user differ from the
 // latest one.
 func (d *Daemon) checkHostKeys(ctx context.Context) {
-	keys := ReadHostKeys(d.opt.HostKeyGlob)
+	keys, problem := ReadHostKeys(d.opt.HostKeyGlob)
+	d.noteHostKeys(problem)
 	self, ok := d.view().Members[d.selfKey()]
 	if !ok || slices.Equal(self.HostKeys, keys) && self.User == d.sshUser {
 		return
@@ -90,6 +119,18 @@ func (d *Daemon) checkHostKeys(ctx context.Context) {
 	}
 	d.viewChanged()
 	d.pushAll(ctx)
+}
+
+// noteHostKeys keeps the host key problem for pen ls and logs it when it changes. Pen never asks the
+// local sshd for its keys instead: another local user could answer on that port.
+func (d *Daemon) noteHostKeys(msg string) {
+	d.mu.Lock()
+	changed := msg != d.hostKeysErr
+	d.hostKeysErr = msg
+	d.mu.Unlock()
+	if changed && msg != "" {
+		d.opt.Logf("hostkeys: %s", msg)
+	}
 }
 
 // writeKnownHosts writes pen-<name>,pen-<nodeId> lines for every member's host keys. Writers are

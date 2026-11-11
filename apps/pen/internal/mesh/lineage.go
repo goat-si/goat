@@ -9,16 +9,22 @@ import (
 
 // Shares of ADR-0026. Lineage 0 is the founder alone; each machine the founder admits starts one of
 // lineages 1 to MaxLineages-1, chosen by its invite nonce, and every key admitted below it joins that
-// lineage. Each lineage keeps ShareOrdinary records of other types, ShareLocks lock records and
-// ShareAdmits admits signed by keys other than the founder; the founder's own admits share
-// FounderAdmits places. Revokes are kept per subject and lineage instead (shares.go).
+// lineage. Each lineage keeps ShareOrdinary records of other types, ShareLocks lock records,
+// ShareAdmits admits signed by keys other than the founder and ShareRevokes revoke places (one per
+// subject and compromised flag, shares.go); the founder's own admits share FounderAdmits places.
+// 16 x 248 + 64 + the found record stay within MaxRecords, so a set fits a have line.
 const (
 	MaxLineages   = 16
-	ShareOrdinary = 220
+	ShareOrdinary = 160
 	ShareLocks    = 16
 	ShareAdmits   = 16
+	ShareRevokes  = 56
 	FounderAdmits = 64
 )
+
+// A full shared set (every share, the founder's admits and the found record) fits MaxRecords: the
+// array length is negative, and the build fails, if a share grows past it.
+var _ [MaxRecords - MaxLineages*(ShareOrdinary+ShareLocks+ShareAdmits+ShareRevokes) - FounderAdmits - 1]struct{}
 
 // intro is how a key was introduced: its lineage and admission depth (the founder is 0, 0).
 type intro struct {

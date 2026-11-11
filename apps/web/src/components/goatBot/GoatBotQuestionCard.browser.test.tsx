@@ -21,16 +21,21 @@ const question: Extract<GoatBotRow, { kind: "bot" }> = {
 };
 
 it("sends a lettered choice, or what the person types as something else, to the question's task", async () => {
-  const onPick = vi.fn<(answer: string, taskId?: string) => void>();
+  const onPick = vi.fn<(answer: string, taskId?: string, questionId?: string) => void>();
   await using screen = await render(
-    <GoatBotQuestionCard row={question} body={question.text} onPick={onPick} />,
+    <GoatBotQuestionCard
+      row={{ ...question, answerQuestionId: "question-1" }}
+      body={question.text}
+      onPick={onPick}
+    />,
     { router: false }, // No links inside the card.
   );
   await expect.element(screen.getByRole("button", { name: "A. Short summary" })).toBeVisible();
   await screen.getByRole("button", { name: "B. Detailed summary" }).click();
-  expect(onPick).toHaveBeenLastCalledWith("Detailed summary", "task-1");
+  // The task's own question goes with its id, so the server records which message answered it.
+  expect(onPick).toHaveBeenLastCalledWith("Detailed summary", "task-1", "question-1");
   await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Both{Enter}");
-  expect(onPick).toHaveBeenLastCalledWith("Both", "task-1");
+  expect(onPick).toHaveBeenLastCalledWith("Both", "task-1", "question-1");
   await expect.element(screen.getByRole("textbox", { name: "Something else" })).toHaveValue("");
 });
 

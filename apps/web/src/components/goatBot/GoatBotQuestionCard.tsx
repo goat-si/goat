@@ -18,14 +18,14 @@ export function GoatBotQuestionCard({
   /** The question's text as the timeline renders bot prose. */
   readonly body: ReactNode;
   /** Sends an answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
+  readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
 }) {
   const [other, setOther] = useState("");
   const otherId = useId();
   const choices = row.choices ?? row.options;
   const open = row.options.length > 0;
   const picked = row.answerIndex === undefined ? undefined : choices[row.answerIndex];
-  const send = (answer: string) => onPick?.(answer, row.answerTaskId);
+  const send = (answer: string) => onPick?.(answer, row.answerTaskId, row.answerQuestionId);
   return (
     <div className="goat-bot-card flex w-full max-w-[min(100%,34rem)] min-w-0 flex-col gap-2 py-3">
       <div className={cn("goat-bot-prose min-w-0", !open && "text-muted-foreground")}>{body}</div>
