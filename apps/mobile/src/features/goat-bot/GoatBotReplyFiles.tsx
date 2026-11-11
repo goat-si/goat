@@ -242,8 +242,10 @@ function GoatBotFileCard(props: {
     };
   }, [cached, environmentId, path, generation, key]);
   const preview = cached ?? (read?.key === key ? read.preview : null);
-  const kind = preview?.kind ?? botArtifactViewKind("", path, file.size);
   const slot = botArtifactPreviewSlot(path, file.size);
+  // Before or without a preview, an image name still reads as an image.
+  const kind =
+    preview?.kind ?? (slot === "image" ? "image" : botArtifactViewKind("", path, file.size));
   const opening = files.opening === path;
   const message = files.messages[path];
   return (
