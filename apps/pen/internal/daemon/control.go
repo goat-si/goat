@@ -166,7 +166,8 @@ func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	defer c.Close()
-	r := bufio.NewReader(io.LimitReader(c, 64<<10))
+	lr := &io.LimitedReader{R: c, N: 64 << 10}
+	r := bufio.NewReader(lr)
 	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
 		return
 	}
@@ -188,7 +189,7 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 		return
 	// These two run on the control socket only: the dashboard reaches do, never handleControl.
 	case "service.register":
-		d.controlRegister(ctx, c, req, reply, fail)
+		d.controlRegister(ctx, c, r, lr, req, reply, fail)
 		return
 	case "watch.snapshot":
 		d.controlSnapshot(ctx, c, fail)

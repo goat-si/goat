@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -84,6 +85,12 @@ type serviceReg struct {
 	// ended and conns are guarded by serviceBook.mu: conns are the deliveries committed to it.
 	ended bool
 	conns map[net.Conn]struct{}
+	// gen, clients and invite are the v1.3 ops' state, guarded by serviceBook.mu: the last list generation applied,
+	// the listed client keys (noisePub to client id) and the live service invite. out carries answers and events.
+	gen     uint64
+	clients map[string]string
+	invite  *serviceInvite
+	out     *holderQueue
 }
 
 // serviceBook holds the registrations. Its mutex is a leaf: nothing is called while it is held.
@@ -123,6 +130,7 @@ func (b *serviceBook) endLocked(reg *serviceReg) []net.Conn {
 		return nil
 	}
 	reg.ended = true
+	reg.clients, reg.invite = nil, nil
 	conns := make([]net.Conn, 0, len(reg.conns))
 	for c := range reg.conns {
 		conns = append(conns, c)
@@ -404,8 +412,9 @@ func validID(s string) bool {
 }
 
 // controlRegister runs op service.register on the control socket (never on the dashboard path): the
-// registration lives until c closes, the daemon stops, or a newer registration replaces it.
-func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
+// registration lives until c closes, the daemon stops, or a newer registration replaces it. r continues the
+// connection's reader, so ops sent with the request are not lost, and lr is lifted for the ops that follow.
+func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reader, lr *io.LimitedReader, req Request, reply func(any), fail func(error)) {
 	if !ValidServiceName(req.Name) {
 		fail(errors.New("a service name is 1 to 32 of a-z 0-9 -, starts with a letter, and is not pen"))
 		return
@@ -421,7 +430,8 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, req Request, r
 	}
 	idb := make([]byte, 16)
 	rand.Read(idb)
-	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c}
+	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c,
+		out: newHolderQueue(c)}
 	reg.wmu.Lock()
 	old, conns, err := d.svc.add(reg)
 	if err != nil {
@@ -430,23 +440,22 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, req Request, r
 		return
 	}
 	reply(map[string]any{"t": "registered", "id": reg.id, "name": reg.name, "port": reg.port})
+	d.spawn(reg.out.run)
 	reg.wmu.Unlock()
 	if old != nil {
 		closeAll(conns)
+		// The old holder's lines may still wait in its queue; replaced ends it without waiting for them.
 		old.wmu.Lock()
-		io.WriteString(old.holder, `{"t":"replaced","id":"`+old.id+`"}`+"\n")
 		old.wmu.Unlock()
-		old.holder.Close()
+		old.out.failWith([]byte(`{"t":"replaced","id":"` + old.id + `"}` + "\n"))
 	}
 	defer func() {
+		reg.out.fail()
 		closeAll(d.svc.end(reg))
 		if d.opt.ServiceEnded != nil {
 			d.opt.ServiceEnded(reg.id)
 		}
 	}()
-	select {
-	case <-clientGone(c):
-	case <-ctx.Done():
-	case <-d.stopCh:
-	}
+	liftOpLimit(lr)
+	d.serveOps(ctx, reg, r)
 }

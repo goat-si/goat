@@ -1,0 +1,158 @@
+package daemon
+
+import (
+	"net"
+	"sync"
+)
+
+// holderQueueCap bounds the lines waiting for a registration's holder: an honest holder has at most one answer and two
+// events per invite outstanding, because it sends one op at a time and waits for each answer.
+const holderQueueCap = 16
+
+// holderEntry is one line for a holder, reserved in the order of the change it reports (contract "Ops on the
+// registration"): an answer may be reserved before its text is known and becomes ready later.
+type holderEntry struct {
+	line    []byte
+	ready   chan struct{}
+	written chan struct{}
+	// ok and done are guarded by holderQueue.mu; ok is final once written is closed.
+	ok   bool
+	done bool
+}
+
+// holderQueue writes a registration's answers and events strictly in order, from one goroutine. Once it fails (a write
+// error or deadline, a full queue, or the registration ending) it is terminal: every waiter is released, the rest is
+// dropped, and the holder's connection is closed, which ends the registration.
+type holderQueue struct {
+	conn net.Conn
+	// wmu holds one write at a time, so failWith's line never splits another.
+	wmu     sync.Mutex
+	mu      sync.Mutex
+	entries []*holderEntry
+	failed  bool
+	wake    chan struct{}
+	dead    chan struct{}
+	once    sync.Once
+}
+
+func newHolderQueue(c net.Conn) *holderQueue {
+	return &holderQueue{conn: c, wake: make(chan struct{}, 1), dead: make(chan struct{})}
+}
+
+// reserve appends an entry whose line is set later by fill; ok is false once the queue failed or is full (and then the
+// queue fails).
+func (q *holderQueue) reserve() (*holderEntry, bool) {
+	q.mu.Lock()
+	if q.failed {
+		q.mu.Unlock()
+		return nil, false
+	}
+	if len(q.entries) >= holderQueueCap {
+		q.mu.Unlock()
+		q.fail()
+		return nil, false
+	}
+	e := &holderEntry{ready: make(chan struct{}), written: make(chan struct{})}
+	q.entries = append(q.entries, e)
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+	return e, true
+}
+
+// push appends a ready line.
+func (q *holderQueue) push(line []byte) (*holderEntry, bool) {
+	e, ok := q.reserve()
+	if ok {
+		e.fill(line)
+	}
+	return e, ok
+}
+
+// fill sets a reserved entry's line and lets the writer reach it.
+func (e *holderEntry) fill(line []byte) {
+	e.line = line
+	close(e.ready)
+}
+
+// wait blocks until e was written (true) or the queue failed before writing it (false).
+func (q *holderQueue) wait(e *holderEntry) bool {
+	<-e.written
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return e.ok
+}
+
+func (q *holderQueue) finish(e *holderEntry, ok bool) {
+	if !e.done {
+		e.done, e.ok = true, ok
+		close(e.written)
+	}
+}
+
+// run writes entries in order until the queue fails.
+func (q *holderQueue) run() {
+	for {
+		q.mu.Lock()
+		for len(q.entries) == 0 && !q.failed {
+			q.mu.Unlock()
+			select {
+			case <-q.wake:
+			case <-q.dead:
+			}
+			q.mu.Lock()
+		}
+		if q.failed {
+			q.mu.Unlock()
+			return
+		}
+		e := q.entries[0]
+		q.mu.Unlock()
+		select {
+		case <-e.ready:
+		case <-q.dead:
+			return
+		}
+		q.wmu.Lock()
+		_, err := q.conn.Write(e.line)
+		q.wmu.Unlock()
+		q.mu.Lock()
+		if len(q.entries) > 0 && q.entries[0] == e {
+			q.entries = q.entries[1:]
+		}
+		q.finish(e, err == nil)
+		q.mu.Unlock()
+		if err != nil {
+			q.fail()
+			return
+		}
+	}
+}
+
+// fail makes the queue terminal and closes the holder's connection.
+func (q *holderQueue) fail() {
+	q.failWith(nil)
+}
+
+// failWith makes the queue terminal, writes last (when not nil) after any write in progress and without waiting on
+// unready entries, then closes the holder's connection. Each write is bounded by the control write deadline.
+func (q *holderQueue) failWith(last []byte) {
+	q.once.Do(func() {
+		q.mu.Lock()
+		q.failed = true
+		for _, e := range q.entries {
+			q.finish(e, false)
+		}
+		q.entries = nil
+		q.mu.Unlock()
+		close(q.dead)
+		if last != nil {
+			q.wmu.Lock()
+			q.conn.Write(last)
+			q.wmu.Unlock()
+		}
+		q.conn.Close()
+	})
+}
