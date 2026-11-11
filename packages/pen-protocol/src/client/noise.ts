@@ -24,7 +24,8 @@ export const REKEY_INTERVAL = 2 ** 20;
 export const MAX_FIRST_MESSAGE = 4096;
 export const MAX_PAYLOAD = 256;
 
-const MESSAGE2_PAYLOAD = asciiEncode('{"v":1}\n');
+/** The one message 2 plaintext a responder sends; readMessage2 accepts no other. */
+export const MESSAGE2_PAYLOAD = asciiEncode('{"v":1}\n');
 const EMPTY = new Uint8Array(0);
 
 /** "pen/1" || nodeId || kind. */

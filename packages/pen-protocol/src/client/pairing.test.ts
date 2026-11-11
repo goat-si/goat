@@ -6,7 +6,7 @@ import service from "../../vectors/service.json" with { type: "json" };
 import pair from "../../vectors/servicepair.json" with { type: "json" };
 import { fromBase64Url, fromHex, toBase64Url, toHex } from "./bytes.ts";
 import { x25519PublicKey } from "./crypto.ts";
-import { Kind, startInitiator } from "./noise.ts";
+import { encodePayloadLine, Kind, MESSAGE2_PAYLOAD, prologue, startInitiator } from "./noise.ts";
 import {
   decodePairQr,
   encodePairQr,
@@ -264,10 +264,18 @@ describe("service-pair against vectors/servicepair.json (CONTRACT v1.3 Service i
 
   it("this initiator writes the vector's message 1 byte for byte, kind 0x03 and the service-pair payload included", () => {
     expect(transcript.kind).toBe(Kind.Join);
+    expect(toHex(prologue(pair.node.nodeId, Kind.Join))).toBe(transcript.prologue);
+    expect(
+      new TextDecoder().decode(
+        encodePayloadLine(servicePairPayload(pair.name, serviceInviteId(secret))),
+      ),
+    ).toBe(transcript.payload1);
     expect(toHex(initiate().message1)).toBe(transcript.message1);
   });
 
-  it("the vector's message 2 gives its h, key confirmation and records in both directions", () => {
+  it("the vector's message 2 carries payload2, the one plaintext this client accepts, and gives its h, key confirmation and records", () => {
+    // readMessage2 accepts only MESSAGE2_PAYLOAD, so the message 2 it verifies below carries exactly payload2.
+    expect(new TextDecoder().decode(MESSAGE2_PAYLOAD)).toBe(transcript.payload2);
     const keys = initiate().readMessage2(fromHex(transcript.message2));
     expect(toHex(keys.handshakeHash)).toBe(transcript.handshakeHash);
     expect(toHex(keys.send.seal(new Uint8Array(0)))).toBe(transcript.keyConfirmation);
