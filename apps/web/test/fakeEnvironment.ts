@@ -25,6 +25,7 @@ import {
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ThreadStreamItem,
   type OrchestrationV2TurnItem,
+  type OrchestrationV2Command,
   type TerminalMetadataStreamEvent,
   type VcsStatusStreamEvent,
 } from "@goat/contracts";
@@ -317,6 +318,8 @@ let terminalMetadataSubscriber: Queue.Queue<TerminalMetadataStreamEvent> | null 
 let vcsStatusSubscriber: Queue.Queue<VcsStatusStreamEvent> | null = null;
 let threads: ReadonlyArray<FakeThread> = [];
 let sequence = 1;
+let commandHandler: ((command: OrchestrationV2Command) => Promise<{ sequence: number }>) | null =
+  null;
 
 const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>) => () => void) =>
   Stream.unwrap(
@@ -332,6 +335,11 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
   );
 
 const handlers: Record<string, (input: never) => unknown> = {
+  [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (input: OrchestrationV2Command) =>
+    Effect.suspend(() => {
+      const handler = commandHandler;
+      return handler ? Effect.promise(() => handler(input)) : Effect.never;
+    }),
   [WS_METHODS.subscribeTerminalMetadata]: () =>
     subscribe<TerminalMetadataStreamEvent>([{ type: "snapshot", terminals: [] }], (queue) => {
       terminalMetadataSubscriber = queue;
@@ -434,11 +442,22 @@ const encodedDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor)(
 /** Serves the environment's HTTP API and these threads until disposed. */
 export function installFakeEnvironment(
   fixtures: ReadonlyArray<FakeThread>,
-  options?: { capabilities?: Partial<ServerConfig["environment"]["capabilities"]> },
+  options?: {
+    capabilities?: Partial<ServerConfig["environment"]["capabilities"]>;
+    onCommand?: (command: OrchestrationV2Command) => Promise<{ sequence: number }>;
+    models?: ServerConfig["providers"][number]["models"];
+  },
 ): Disposable {
   threads = fixtures;
+  commandHandler = options?.onCommand ?? null;
   currentServerConfig = {
     ...serverConfig,
+    providers: options?.models
+      ? serverConfig.providers.map((provider) => ({
+          ...provider,
+          models: options.models ?? provider.models,
+        }))
+      : serverConfig.providers,
     environment: {
       ...serverConfig.environment,
       capabilities: { ...serverConfig.environment.capabilities, ...options?.capabilities },
@@ -465,6 +484,7 @@ export function installFakeEnvironment(
     [Symbol.dispose]: () => {
       globalThis.fetch = realFetch;
       threads = [];
+      commandHandler = null;
       currentServerConfig = serverConfig;
     },
   };

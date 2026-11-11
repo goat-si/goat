@@ -1,4 +1,5 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
+import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -684,6 +685,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const activeTasksProgress = shownSyncPhase === null ? props.activeTasksProgress : null;
   const activeTaskSteps = shownSyncPhase === null ? props.activeTaskSteps : null;
   const isEditingQueuedMessage = editingQueuedAttachments !== null;
+  const applyThreadModelPick = useApplyThreadModelPick();
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
   const composerDraftTargetKeyRef = useRef("");
   useLayoutEffect(() => {
@@ -832,6 +834,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     imageIds: [...composerImages, ...composerFiles].map((item) => item.id),
     uploadsByImageId,
     environmentId,
+    uploadsSupported: supportsAttachmentUploads,
     answering:
       !!questionAttachmentTarget || pendingApprovals.some((a) => !heldRequestIds.has(a.requestId)),
   });
@@ -2093,12 +2096,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
   };
 
-  const sendAfterUploads = useSendAfterUploads({
-    draftKey: composerDraftTargetKey,
-    canQueue: uploadGate.plainSend && supportsAttachmentUploads && uploadGate.blockReason !== null,
-    uploadsPending: supportsAttachmentUploads && uploadGate.blockReason !== null,
-    uploadFailed: uploadGate.failed,
-  });
+  const sendAfterUploads = useSendAfterUploads(composerDraftTargetKey, uploadGate);
   const submitComposer = (
     event?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
@@ -2836,8 +2834,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     event.preventDefault();
     event.stopPropagation();
   };
-  // The editor is memoized; fresh closures here re-render it on every parent
-  // render, which during a stream is every delta.
+  // Stable closures keep streaming updates from re-rendering the memoized editor.
   const onComposerPasteStable = useStableCallback(onComposerPaste);
   const insertContextReferencesAtCaret = (
     references: ReadonlyArray<ComposerContextReference>,
@@ -3094,6 +3091,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             model: selectedModel,
             persistSticky: true,
           });
+        void applyThreadModelPick(composerDraftTarget);
         if (change.prompt !== promptRef.current) {
           applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
             expandedCursorAfterReplace: change.cursor,

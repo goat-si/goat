@@ -10,8 +10,7 @@ function Composer(props: {
   readonly uploadFailed: boolean;
   readonly send: () => void;
 }) {
-  const queue = useSendAfterUploads({
-    draftKey: "thread-a",
+  const queue = useSendAfterUploads("thread-a", {
     canQueue: props.uploadsPending,
     uploadsPending: props.uploadsPending,
     uploadFailed: props.uploadFailed,

@@ -13,11 +13,17 @@ export function attachmentUploadGate(input: {
   readonly uploadsByImageId: Readonly<Record<string, AttachmentUploadState>>;
   readonly environmentId: EnvironmentId;
   readonly answering: boolean;
+  readonly uploadsSupported: boolean;
 }) {
+  const blockReason = attachmentUploadBlockReason(input);
+  const uploadsPending = input.uploadsSupported && blockReason !== null;
   return {
-    blockReason: attachmentUploadBlockReason(input),
+    blockReason,
     plainSend: !input.answering,
-    failed: input.imageIds.some((id) => input.uploadsByImageId[id]?.status === "failed"),
+    uploadsPending,
+    /** A plain send with uploads still running queues instead of sending. */
+    canQueue: uploadsPending && !input.answering,
+    uploadFailed: input.imageIds.some((id) => input.uploadsByImageId[id]?.status === "failed"),
   };
 }
 
@@ -47,17 +53,18 @@ export function composerSendWaitNotice(state: {
  * A plain send pressed while attachments upload waits for them. The composer stays locked with the
  * message until the uploads finish and it sends, or one fails and it unlocks with everything intact.
  */
-export function useSendAfterUploads(input: {
-  readonly draftKey: string;
-  /** A plain send with uploads still running, which queues instead of sending. */
-  readonly canQueue: boolean;
-  readonly uploadsPending: boolean;
-  readonly uploadFailed: boolean;
-}) {
+export function useSendAfterUploads(
+  draftKey: string,
+  input: {
+    readonly canQueue: boolean;
+    readonly uploadsPending: boolean;
+    readonly uploadFailed: boolean;
+  },
+) {
   const [queuedKey, setQueuedKey] = useState<string | null>(null);
   const [settled, setSettled] = useState<{ readonly send: boolean } | null>(null);
   const toastId = useRef<string | null>(null);
-  const queued = queuedKey === input.draftKey;
+  const queued = queuedKey === draftKey;
   if (queued && !input.uploadsPending) {
     setQueuedKey(null);
     setSettled({ send: !input.uploadFailed });
@@ -67,7 +74,7 @@ export function useSendAfterUploads(input: {
     toastId.current = null;
   };
   const queue = () => {
-    setQueuedKey(input.draftKey);
+    setQueuedKey(draftKey);
     toastId.current = toastManager.add({
       type: "loading",
       title: "Sending after upload…",
