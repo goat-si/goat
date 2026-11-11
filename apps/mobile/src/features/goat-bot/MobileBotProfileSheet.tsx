@@ -39,6 +39,7 @@ export function MobileBotProfileSheet(props: {
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<TextInputInstance>(null);
   const saveDisabled = busy || !props.canSubmit;
+  const saveLabel = create ? (busy ? "Creating…" : "Create") : busy ? "Saving…" : "Save";
 
   const save = async () => {
     if (saveDisabled) return;
@@ -81,14 +82,14 @@ export function MobileBotProfileSheet(props: {
           </Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={create ? "Create" : "Save"}
+            accessibilityLabel={saveLabel}
             accessibilityState={{ disabled: saveDisabled }}
             disabled={saveDisabled}
             onPress={() => void save()}
             className="min-h-[44px] justify-center px-2"
           >
             <Text className={saveDisabled ? "text-foreground-muted" : "text-foreground"}>
-              {create ? (busy ? "Creating…" : "Create") : busy ? "Saving…" : "Save"}
+              {saveLabel}
             </Text>
           </Pressable>
         </View>
