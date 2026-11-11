@@ -159,80 +159,72 @@ export function useForkThread() {
     if (forksInFlight.has(key)) return;
     forksInFlight.add(key);
     const toastId = toastManager.add({ type: "loading", title: "Forking thread…", timeout: 0 });
-    try {
-      const title = options?.title ?? readThreadShell(threadRef)?.title;
-      const targetThreadRef = scopeThreadRef(threadRef.environmentId, newThreadId());
-      const result = await fork({
-        environmentId: threadRef.environmentId,
-        input: {
-          commandId: CommandId.make(randomUUID()),
-          creationSource: "web",
-          sourceThreadId: threadRef.threadId,
-          targetThreadId: targetThreadRef.threadId,
-          sourcePoint:
-            options?.runId === undefined
-              ? { type: "latest_stable" }
-              : { type: "run", runId: options.runId },
-          ...(title ? { title: `${title} fork` } : {}),
-          workspace,
-          serverForks: readEnvironmentSupportsForkWorkspace(threadRef.environmentId),
-        },
-      });
-      if (result._tag === "Failure") {
-        if (isAtomCommandInterrupted(result)) {
-          toastManager.close(toastId);
-          return;
-        }
-        const error = squashAtomCommandFailure(result);
-        const refusal = isForkRefusal(error) ? error : null;
-        const kept = refusal?.retainedWorktreePath;
-        const withoutChanges =
-          refusal?.reason === "uncommitted_unsupported" && workspace.type === "worktree";
-        toastManager.update(toastId, {
-          type: "error",
-          title: "Could not fork thread",
-          description: [
-            error instanceof Error ? error.message : "The server refused the fork.",
-            ...(kept ? [`The new checkout was kept at ${kept}.`] : []),
-          ].join(" "),
-          timeout: 15_000,
-          ...(withoutChanges
-            ? {
-                actionProps: {
-                  children: "Fork without uncommitted changes",
-                  onClick: () => {
-                    toastManager.close(toastId);
-                    void forkThread(
-                      threadRef,
-                      { ...workspace, includeUncommitted: false },
-                      options,
-                    );
-                  },
+    const title = options?.title ?? readThreadShell(threadRef)?.title;
+    const targetThreadRef = scopeThreadRef(threadRef.environmentId, newThreadId());
+    const result = await fork({
+      environmentId: threadRef.environmentId,
+      input: {
+        commandId: CommandId.make(randomUUID()),
+        creationSource: "web",
+        sourceThreadId: threadRef.threadId,
+        targetThreadId: targetThreadRef.threadId,
+        sourcePoint:
+          options?.runId === undefined
+            ? { type: "latest_stable" }
+            : { type: "run", runId: options.runId },
+        ...(title ? { title: `${title} fork` } : {}),
+        workspace,
+        serverForks: readEnvironmentSupportsForkWorkspace(threadRef.environmentId),
+      },
+    }).finally(() => forksInFlight.delete(key));
+    if (result._tag === "Failure") {
+      if (isAtomCommandInterrupted(result)) {
+        toastManager.close(toastId);
+        return;
+      }
+      const error = squashAtomCommandFailure(result);
+      const refusal = isForkRefusal(error) ? error : null;
+      const kept = refusal?.retainedWorktreePath;
+      const withoutChanges =
+        refusal?.reason === "uncommitted_unsupported" && workspace.type === "worktree";
+      toastManager.update(toastId, {
+        type: "error",
+        title: "Could not fork thread",
+        description: [
+          error instanceof Error ? error.message : "The server refused the fork.",
+          ...(kept ? [`The new checkout was kept at ${kept}.`] : []),
+        ].join(" "),
+        timeout: 15_000,
+        ...(withoutChanges
+          ? {
+              actionProps: {
+                children: "Fork without uncommitted changes",
+                onClick: () => {
+                  toastManager.close(toastId);
+                  void forkThread(threadRef, { ...workspace, includeUncommitted: false }, options);
                 },
-              }
-            : {}),
-        });
-        return;
-      }
-      const worktree = result.value.worktree;
-      if (worktree) toastManager.update(toastId, worktreeOutcome(worktree));
-      else toastManager.close(toastId);
-      if (!(await waitForThreadShell(targetThreadRef))) {
-        toastManager.add({
-          type: "error",
-          title: "Fork created",
-          description:
-            "Its thread data did not reach this client. Reconnect and open it from the sidebar.",
-        });
-        return;
-      }
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(targetThreadRef),
+              },
+            }
+          : {}),
       });
-    } finally {
-      forksInFlight.delete(key);
+      return;
     }
+    const worktree = result.value.worktree;
+    if (worktree) toastManager.update(toastId, worktreeOutcome(worktree));
+    else toastManager.close(toastId);
+    if (!(await waitForThreadShell(targetThreadRef))) {
+      toastManager.add({
+        type: "error",
+        title: "Fork created",
+        description:
+          "Its thread data did not reach this client. Reconnect and open it from the sidebar.",
+      });
+      return;
+    }
+    await navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(targetThreadRef),
+    });
   };
   return forkThread;
 }
@@ -262,7 +254,7 @@ function focusedFormAnchor(): { x: number; y: number } {
   const target =
     focused instanceof Element && focused !== document.body
       ? (focused.closest("form") ?? focused)
-      : null;
+      : document.querySelector('[data-chat-composer-form="true"]');
   if (target === null) return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   const box = target.getBoundingClientRect();
   return { x: box.left, y: box.top };
