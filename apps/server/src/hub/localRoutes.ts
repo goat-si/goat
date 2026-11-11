@@ -160,10 +160,20 @@ export function builtInCodexWiring(input: {
         provider.executionLocation !== "cloud" &&
         !Object.hasOwn(input.instances, provider.instanceId),
     )
-    .map((provider) => ({
-      instanceId: provider.instanceId,
-      driver: provider.driver,
-      status: codexStatus(provider, input.port),
-      reason: CODEX_REASON,
-    }));
+    .map((provider) => {
+      const status = codexStatus(provider, input.port);
+      // A native route here is reported, never "failed": a failed P7 starts repair's unfenced
+      // ocx sync, and dev's parity never listed this instance (follow-up goat-si/goat#3004).
+      return {
+        instanceId: provider.instanceId,
+        driver: provider.driver,
+        status: status === "ok" ? ("ok" as const) : ("unproven" as const),
+        reason:
+          status === "failed"
+            ? "The built-in Codex instance routes outside this device's OpenCodex; run ocx sync on the device when it is idle."
+            : status === "ok"
+              ? CODEX_REASON
+              : "The built-in Codex instance has not reported its effective endpoint.",
+      };
+    });
 }

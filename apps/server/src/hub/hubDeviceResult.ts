@@ -88,14 +88,24 @@ export const withUnproven = (message: string, parity: HubParityResult) => {
  * can cut a turn there.
  */
 export const withRoutingAdvice = (message: string, alias: string, parity: HubParityResult) => {
-  const open = parity.checks
-    .filter(
-      ({ id, status }) => (id === "P6" || id === "P7") && status !== "ok" && status !== "skipped",
-    )
-    .map(({ id }) => id);
-  return open.length === 0
-    ? message
-    : `${message} Parity (${open.join(", ")}) does not show ${alias} routing through this Home. ${goatCallText("hub.device_repair")} runs ocx sync there without waiting for running work: run it when ${alias} is idle, because it can interrupt a turn running there.`;
+  const routing = parity.checks.filter(({ id }) => id === "P6" || id === "P7");
+  const failed = routing.filter(({ status }) => status === "failed");
+  const unproven = routing.filter(({ status }) => status === "unproven");
+  const repair = goatCallText("hub.device_repair");
+  const ids = (checks: typeof routing) => checks.map(({ id }) => id).join(", ");
+  return [
+    message,
+    ...(failed.length === 0
+      ? []
+      : [
+          `Parity (${ids(failed)}) shows ${alias} not routing through this Home. ${repair} runs ocx sync there without waiting for running work: run it when ${alias} is idle, because it can interrupt a turn running there.`,
+        ]),
+    ...(unproven.length === 0
+      ? []
+      : [
+          `Parity (${ids(unproven)}) cannot yet show ${alias} routing through this Home: ${unproven.map(({ reason }) => reason).join(" ")} ${repair} changes nothing for an unproven check; the proof comes from ${alias}'s GOAT (P6: the Home settings digest its OpenCodex applied; P7: each enabled client's effective endpoint on its local OpenCodex port).`,
+        ]),
+  ].join(" ");
 };
 
 export const linkStatusUnreadable = (forbidden: boolean) =>
