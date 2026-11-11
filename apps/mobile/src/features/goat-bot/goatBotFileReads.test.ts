@@ -167,3 +167,31 @@ it("settles an open aborted while it waits without reading, and an open that fai
   expect(read).toBe(false);
   expect(after.started()).toBe(true);
 });
+
+const throwsAtOnce = (): Promise<string> => {
+  throw new Error("thrown before any promise");
+};
+
+it("rejects a read whose callback throws at once when it starts straight away, and the next read still runs", async () => {
+  const env = environment();
+  const failing = openBotFileRead(env, throwsAtOnce);
+  const after = gate();
+  queuePreviewRead(env, chat(), after.run);
+  await expect(failing).rejects.toThrow("thrown before any promise");
+  await settle();
+  expect(after.started()).toBe(true);
+});
+
+it("rejects a waiting read whose callback throws at once when its turn comes, and the next read still runs", async () => {
+  const env = environment();
+  const room = chat();
+  const running = gate();
+  queuePreviewRead(env, room, running.run);
+  const failing = queuePreviewRead(env, room, throwsAtOnce);
+  const after = gate();
+  queuePreviewRead(env, room, after.run);
+  running.resolve("done");
+  await expect(failing.result).rejects.toThrow("thrown before any promise");
+  await settle();
+  expect(after.started()).toBe(true);
+});

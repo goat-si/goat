@@ -47,12 +47,17 @@ function enqueue<T>(
   const entry: Waiting = {
     chatKey,
     start: () => {
-      run()
-        .then(settled.resolve, settled.reject)
-        .finally(() => {
-          owner.busy = false;
-          startNext(environmentId, owner);
-        });
+      // A callback that throws before returning a promise still settles and lets the server go.
+      let answer: Promise<T>;
+      try {
+        answer = run();
+      } catch (error) {
+        answer = Promise.reject(error);
+      }
+      answer.then(settled.resolve, settled.reject).finally(() => {
+        owner.busy = false;
+        startNext(environmentId, owner);
+      });
     },
     drop: () => settled.resolve(null),
   };
@@ -81,8 +86,9 @@ export function openBotFileRead<T>(
 ): Promise<T | null> {
   if (signal?.aborted) return Promise.resolve(null);
   const read = enqueue(environmentId, run, "opened", null);
-  signal?.addEventListener("abort", read.cancel, { once: true });
-  return read.result;
+  if (signal === undefined) return read.result;
+  signal.addEventListener("abort", read.cancel, { once: true });
+  return read.result.finally(() => signal.removeEventListener("abort", read.cancel));
 }
 
 /**
