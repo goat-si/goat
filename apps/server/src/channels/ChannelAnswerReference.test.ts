@@ -67,6 +67,17 @@ const personMessage = (key: string) =>
     ),
   );
 
+/** The person's message as stored now: its verdict, task and read time. */
+const stored = (key: string) =>
+  Effect.map(personMessage(key), (item) => {
+    const channel = item?.type === "user_message" ? item.channel : undefined;
+    return {
+      answersQuestionId: channel?.answersQuestionId,
+      taskId: channel?.taskId,
+      read: channel?.readAt !== undefined,
+    };
+  });
+
 const answer = (
   text: string,
   key: string,
@@ -169,17 +180,6 @@ describe("what the server decided about an answer sent from a card", () => {
       assert.deepStrictEqual(verdict({ message: { ...message, intent: "message" } }), {});
     }).pipe(Effect.provide(harness.layer));
   });
-
-  /** The person's message as stored now: its verdict, task and read time. */
-  const stored = (key: string) =>
-    Effect.map(personMessage(key), (item) => {
-      const channel = item?.type === "user_message" ? item.channel : undefined;
-      return {
-        answersQuestionId: channel?.answersQuestionId,
-        taskId: channel?.taskId,
-        read: channel?.readAt !== undefined,
-      };
-    });
 
   it.effect.each([
     { label: "a pick", typed: false },
@@ -384,6 +384,8 @@ describe("delivering reception's decision about an answer", () => {
         const nextThreadId = ThreadId.make("thread:goat-bot-next");
         if (gone) {
           yield* sql`DELETE FROM channel_runtime_state WHERE key = ${mainBotKey(ownerId)}`;
+          // The replies can no longer be recorded anywhere; they settle at their deadline.
+          yield* TestClock.adjust("61 seconds");
         } else {
           yield* (yield* Orchestrator.OrchestratorV2).dispatch({
             type: "thread.create",

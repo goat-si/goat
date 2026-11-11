@@ -504,6 +504,11 @@ export const ChannelTimelineRecord = Schema.Struct({
       text: Schema.String,
       /** Files the person sent with the message, already stored for the bot thread. */
       attachments: Schema.optional(Schema.Array(ChatAttachment)),
+      /**
+       * Carries reception's committed answer decision: only this record may replace a person's
+       * `answersQuestionId` once one is set.
+       */
+      answerDecided: Schema.optional(Schema.Literal(true)),
       meta: ChannelMessageMeta,
     }),
     Schema.Struct({
