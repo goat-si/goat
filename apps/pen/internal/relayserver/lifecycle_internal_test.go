@@ -335,6 +335,36 @@ func TestAWrappedSessionIDSkipsTheLiveOnes(t *testing.T) {
 	}
 }
 
+func TestPendingEvictsFirstAcrossSessionIDWrap(t *testing.T) {
+	lv := newLive(t, DefaultLimits())
+	id, _ := ident.Generate(rand.Reader)
+	n := lv.uplink(id, true)
+	if n == nil {
+		t.Fatal("uplink refused")
+	}
+	lv.s.mu.Lock()
+	rm := lv.s.rooms[id.NodeID()]
+	lv.s.mu.Unlock()
+	rm.mu.Lock()
+	rm.sid = math.MaxUint32 - 1
+	rm.mu.Unlock()
+	var ids []uint32
+	for range PendingMax + 1 {
+		if lv.dial("/v1/client/"+id.NodeID()) == nil {
+			t.Fatal("client refused")
+		}
+		ids = append(ids, <-n.opened)
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if _, ok := rm.clients[ids[0]]; ok {
+		t.Errorf("first pending session %d remains; session %d was evicted", ids[0], ids[1])
+	}
+	if _, ok := rm.clients[ids[1]]; !ok {
+		t.Errorf("newer pending session %d was evicted", ids[1])
+	}
+}
+
 // prelude drives each exit path once so every seed covers them, whatever its random steps do.
 func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 	ctx := context.Background()

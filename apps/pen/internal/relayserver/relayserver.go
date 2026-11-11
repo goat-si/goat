@@ -500,6 +500,7 @@ type sock struct {
 	challenge []byte
 	// client
 	sid     uint32
+	order   uint64
 	pending bool
 	// pendingSent counts the messages the client sent before the node answered.
 	pendingSent int
@@ -522,7 +523,8 @@ type room struct {
 	clients map[uint32]*sock
 	// sid is the last session id this room handed out. The room outlives its uplink only while
 	// clients remain, so a node never sees ids from before its uplink connection's room.
-	sid uint32
+	sid   uint32
+	order uint64
 }
 
 // nextSid hands out the next session id that is not 0 and not live in this room; past
@@ -589,6 +591,8 @@ func (rm *room) acceptClient(k *sock) bool {
 	k.held = up
 	up.closeWire += closeFrameWire
 	k.sid = rm.nextSid()
+	rm.order++
+	k.order = rm.order
 	k.pending = true
 	rm.makePendingRoom(k.ip)
 	rm.clients[k.sid] = k
@@ -637,7 +641,7 @@ func (rm *room) makePendingRoom(ip string) {
 		}
 		oldest := victims[0]
 		for _, c := range victims {
-			if c.sid < oldest.sid {
+			if c.order < oldest.order {
 				oldest = c
 			}
 		}
