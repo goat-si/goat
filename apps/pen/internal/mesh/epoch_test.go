@@ -151,3 +151,35 @@ func TestAJoinerDropsAPooledRecordOfAnotherVersion(t *testing.T) {
 		t.Fatalf("a pooled version 1 revoke entered the shared mesh (stored %v, o member %v)", j.Has(old.Hash), isMember(j.View(), o))
 	}
 }
+
+// A version 2 record that waited in a joiner's pool before the found record arrived is dropped once the
+// joiner learns the mesh is of version 1.
+func TestAJoinerOfAVersionOneMeshDropsAPooledSharedRecord(t *testing.T) {
+	f, o := detID(1), detID(2)
+	s, err := Found(nil, f, "f", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := MakeCard(o, s.MeshID, f.NodeID(), ident.B64.EncodeToString(make([]byte, 16)), "o")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit, err := s.Append(f, TypeAdmit, 2, Fields{Card: card})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := SignV(EpochShared, f, s.MeshID, TypeRevoke, 3, []string{admit.Hash}, 3, Fields{Subjects: []string{pub(o)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := NewStore(nil, s.MeshID)
+	if _, err := j.Merge([]*Record{shared}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Merge(s.Records()); err != nil {
+		t.Fatal(err)
+	}
+	if j.Has(shared.Hash) || !isMember(j.View(), o) {
+		t.Fatalf("a pooled version 2 revoke entered a version 1 mesh (stored %v, o member %v)", j.Has(shared.Hash), isMember(j.View(), o))
+	}
+}
