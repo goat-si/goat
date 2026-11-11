@@ -70,6 +70,8 @@ export function splitBufferedAssistantText(text: string): { ready: string; rest:
 }
 
 const ASSISTANT_IDLE_FLUSH_MS = 800;
+// Per run; an evicted item loses only its early partial, and its final update still arrives whole.
+const MAX_STREAMING_TRACKS = 256;
 
 type Event = ProviderAdapter.ProviderAdapterV2Event;
 type Track = { text: string; at: number; held: Event | null; dueAt: number };
@@ -103,7 +105,12 @@ export function makeAssistantStreamingFilter(
   let receiptText: string | null = null;
   let nextDueAt: number | null = null;
   const track = (key: string, value: Track) => {
+    tracks.delete(key);
     tracks.set(key, value);
+    if (tracks.size > MAX_STREAMING_TRACKS) {
+      const oldest = tracks.keys().next().value;
+      if (oldest !== undefined) tracks.delete(oldest);
+    }
     if (value.held !== null && (nextDueAt === null || value.dueAt < nextDueAt))
       nextDueAt = value.dueAt;
   };

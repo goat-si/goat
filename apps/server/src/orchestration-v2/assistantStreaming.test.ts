@@ -57,6 +57,20 @@ effectIt.effect("publishes an idle paragraph but waits while its text keeps grow
   }),
 );
 
+it("keeps at most 256 streaming items, dropping the least recently updated", () => {
+  const filter = makeAssistantStreamingFilter("paragraph");
+  const item = (index: number) => {
+    const event = assistantEvent(`Partial ${index}`);
+    if (event.type !== "turn_item.updated") throw new Error("Expected assistant item");
+    return { ...event, turnItem: { ...event.turnItem, id: TurnItemId.make(`item-${index}`) } };
+  };
+  for (let index = 0; index < 300; index++) filter(item(index), 0);
+  const flushed = filter.takeIdleFlushes(800);
+  expect(flushed).toHaveLength(256);
+  expect(flushed.at(-1)).toEqual(item(299));
+  expect(flushed).not.toContainEqual(item(0));
+});
+
 it("never reopens a finalized snapshot when an old idle deadline fires", () => {
   const filter = makeAssistantStreamingFilter("paragraph");
   const pending = assistantEvent("Partial");
