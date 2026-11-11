@@ -51,6 +51,8 @@ export const protocolExecutable = (
     ignoreSigterm?: boolean;
     /** Start one long-running child, as a provider app-server, and record its PID in .test/child-pid. */
     spawnChild?: boolean;
+    /** The spawned child records its parent on SIGTERM and keeps running. */
+    childIgnoresTerm?: boolean;
     /** Advertise `drainRestart` with a per-start instance id and answer the drain endpoint. */
     drain?: boolean;
     /** Build commit time answered by `__ssh-helper commit-time`; unstamped when absent. */
@@ -323,7 +325,7 @@ if (drainCapable) fs.writeFileSync(tokenFile, "fixture-token-" + process.pid + "
 fs.appendFileSync(path.join(test, "pids"), process.pid + "\\n");
 if (${JSON.stringify(signals.spawnChild ?? false)}) {
   // On SIGTERM the child records which process was its parent at that moment.
-  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => { require('node:fs').writeFileSync(process.argv[1], String(process.ppid)); process.exit(0); }); setInterval(() => {}, 1 << 30)", path.join(test, "child-term-ppid")], { stdio: "ignore" });
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => { require('node:fs').writeFileSync(process.argv[1], String(process.ppid)); if (process.argv[2] !== 'stay') process.exit(0); }); setInterval(() => {}, 1 << 30)", path.join(test, "child-term-ppid"), ${JSON.stringify(signals.childIgnoresTerm ? "stay" : "exit")}], { stdio: "ignore" });
   fs.appendFileSync(path.join(test, "pids"), child.pid + "\\n");
   fs.writeFileSync(path.join(test, "child-pid"), String(child.pid));
 }
@@ -359,6 +361,7 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   stopBarrier?: boolean;
   ignoreSigterm?: boolean;
   spawnChild?: boolean;
+  childIgnoresTerm?: boolean;
   contestedPort?: number;
   contestedAttempts?: number;
   homePrefix?: string;

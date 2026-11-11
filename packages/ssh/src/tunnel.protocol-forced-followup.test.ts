@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -14,6 +16,8 @@ import {
   unverified,
   type Fixture,
 } from "./tunnel.protocol-forced.testkit.ts";
+
+const OLDER = "1.2.3-preview.9";
 
 const approved = (f: Fixture) =>
   Effect.gen(function* () {
@@ -136,7 +140,10 @@ exec /bin/sleep "$@"
         });
         assert.isTrue(Result.isFailure(result));
         if (Result.isFailure(result))
-          assert.include(String(result.failure), `stopped the earlier runtime (PID ${f.pid})`);
+          assert.include(
+            String(result.failure),
+            `forced stop of PID ${f.pid}, and no earlier runtime could be started again`,
+          );
         assert.isFalse(isAlive(f.pid));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -153,6 +160,95 @@ exec /bin/sleep "$@"
         assert.equal(
           Number((yield* f.fs.readFileString(`${f.test}/child-term-ppid`)).trim()),
           f.pid,
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement trusts only the SSH user's own records",
+  () => {
+    it.live("a start time in a file other users can write is not evidence", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        yield* foreignCommand(f);
+        const target = yield* approved(f);
+        yield* f.fs.writeFileString(`${f.state}/started`, target.startedAt + "\n");
+        yield* f.fs.chmod(`${f.state}/started`, 0o666);
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: target,
+        });
+        assert.isTrue(Result.isFailure(result));
+        assert.isTrue(isAlive(f.pid));
+        assert.deepEqual(replaceTargetOf(yield* statusProbe(f)), {});
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a launch replaces a started symlink instead of writing through it", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({ ...unverified, live: false });
+        const victim = `${f.test}/victim`;
+        yield* f.fs.writeFileString(victim, "keep\n");
+        yield* f.fs.symlink(victim, `${f.state}/started`);
+        const result = yield* f.run("launch");
+        assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
+        assert.equal(yield* f.fs.readFileString(victim), "keep\n");
+        assert.equal((yield* f.fs.stat(`${f.state}/started`)).type, "File");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH forced replacement hands the start to the detached supervisor",
+  () => {
+    it.live("a failed start after the forced stop of a runtime that answered starts it again", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: OLDER,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+        });
+        yield* f.fs.writeFileString(`${f.test}/fail-start-${ARCHIVE.archiveVersion}`, "1");
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: yield* approved(f),
+        });
+        assert.isFalse(isAlive(f.pid));
+        const pid = Number((yield* f.fs.readFileString(`${f.state}/pid`)).trim());
+        assert.notEqual(pid, f.pid);
+        assert.isTrue(isAlive(pid));
+        if (Result.isFailure(result))
+          assert.include(String(result.failure), `GOAT ${OLDER} was started again`);
+        else assert.equal(result.success.version, OLDER);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a child that ignores SIGTERM is left running and named once its runtime is gone", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          ...unverified,
+          spawnChild: true,
+          childIgnoresTerm: true,
+        });
+        const child = Number((yield* f.fs.readFileString(`${f.test}/child-pid`)).trim());
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 1,
+          forceReplace: yield* approved(f),
+        });
+        assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
+        assert.isTrue(isAlive(child));
+        assert.include(
+          yield* f.fs.readFileString(`${f.state}/server.log`),
+          `child process ${child}`,
         );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );

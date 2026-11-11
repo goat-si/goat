@@ -67,7 +67,12 @@ vi.mock("node:child_process", async (importOriginal) => {
  */
 const superviseFailedReplacement = async (
   target: "trial" | "foreign",
-  options?: { readonly oldPid?: number; readonly exitTimeoutMs?: number },
+  options?: {
+    readonly oldPid?: number;
+    readonly exitTimeoutMs?: number;
+    /** A forced stop of a runtime that cannot be started again leaves nothing to roll back to. */
+    readonly noPrevious?: boolean;
+  },
 ) => {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-supervise-"));
   roots.push(root);
@@ -108,11 +113,11 @@ const superviseFailedReplacement = async (
     baseDir: NodePath.join(root, "home"),
     stateDir,
     runnerFile: runner,
-    previousRunnerFile: previousRunner,
+    previousRunnerFile: options?.noPrevious ? "" : previousRunner,
     targetVersion: "2.0.0",
-    previousVersion: "1.0.0",
+    previousVersion: options?.noPrevious ? "" : "1.0.0",
     identity: "new",
-    previousIdentity: "old",
+    previousIdentity: options?.noPrevious ? "" : "old",
     exitTimeoutMs: options?.exitTimeoutMs ?? 1_000,
     readyTimeoutMs: 5_000,
     logFile: NodePath.join(stateDir, "server.log"),
@@ -164,6 +169,19 @@ it("restores the backup over a failed replacement's own writes", async () => {
     targetVersion: "2.0.0",
     previousVersion: "1.0.0",
   });
+});
+
+it("without a previous runtime, a failed replacement restores the data and starts nothing else", async () => {
+  const { result, database, ran, workingDirectories } = await superviseFailedReplacement("trial", {
+    noPrevious: true,
+  });
+  assert.isTrue(ran, "the replacement ran");
+  assert.deepEqual(result, {
+    status: "failed",
+    reason: "GOAT 2.0.0 did not start, and no earlier runtime could be started again.",
+  });
+  assert.equal(database, "original");
+  assert.deepEqual(workingDirectories, [NodeOS.homedir()]);
 });
 
 it("keeps writes from another server that owned the data since the backup", async () => {
