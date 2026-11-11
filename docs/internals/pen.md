@@ -101,9 +101,12 @@ and every minute, and `pen ls` shows the error until then. Meanwhile the daemon 
 a revoke it holds but could not write still closes that peer's sessions, which errs toward the revoke; a
 restart before a successful save forgets it until a member sends it again.
 
-The record space is shared: no signer has a quota, so one member can fill it with valid records (3840
-ordinary ones, then revokes to 4096), after which no member can record anything, its own revoke included.
-The remedy is a new mesh; issue #2864 tracks a bound that admitted keys cannot multiply.
+A version 1 mesh's record space has no shares: one member can fill it with valid records (3840 ordinary
+ones, then revokes to 4096), after which no member can record anything, its own revoke included. `pen up` and
+`pen login` now found meshes of the shared epoch ([ADR-0026](../../structure/decisions/ADR-0026-pen-record-quotas.md)):
+records have `v` 2, each admission lineage keeps fixed shares chosen from the candidates alone
+(`selectShares`), admission is read from the kept admits rather than a record's past, and a hash a kept
+record names without its record is kept bare. A version 1 mesh keeps the old rules until it is moved.
 
 ## Lock order
 
@@ -121,6 +124,32 @@ the step it guards. The daemon takes them in this order only, never back:
    while it holds it, since an invite burn holds `Store.mu` while it writes `offers.json`.
 
 `Daemon.meshMu` only guards which store and invite book are current and is never held across a call into them.
+`serviceBook.mu` (the registered services) is a leaf: nothing is called while it is held.
+
+## Services
+
+A member's session can reach a program on another member as a service stream (contract "Services"), so the program
+learns, with proof, which member is calling. GOAT will be the first such program; nothing registers one yet.
+
+- **Only the control socket registers.** `service.register` and `watch.snapshot` are handled in `handleControl` before
+  `do`, and the dashboard only ever calls `do`, so a page on the dashboard's port cannot register a service or read
+  the full member list. The control socket is owner-only, which makes "who can register" the same as "who can read
+  the node key": the OS user that runs pen.
+- **A delivery commits under the registry lock.** After the program's answer verifies and before the identity line is
+  written, `serviceBook.commit` checks that the registration is still the current one for its name and records the
+  connection on it. Replacement and removal take the same lock, so nothing commits to a registration that has ended,
+  and they close every connection already committed to it. A delivery that committed just before a replacement can
+  still write its identity line to the old program; the replacement closes that connection right after.
+- **The ready line is for services only.** `pen pipe --node --noise @<service>` prints it; the same exact form with a port
+  (what `pen-<nodeId>` ssh blocks run) does not, because ssh shows a ProxyCommand's stderr to the person and checks the
+  host key itself. `PEN_TRACE` is ignored in the exact form so nothing precedes the ready line.
+- **Exact ssh blocks turn reuse off themselves.** The `pen-*` fallback block sets `ControlMaster auto` and matches every
+  `pen-` alias, so a `pen-<nodeId>` block that did not say `ControlMaster no` and `ControlPath none` would inherit a shared
+  connection that another route may have opened.
+- **Close codes prove nothing about delivery.** A 4404 can be "no program", "the program failed the proof" or an
+  error after the program read bytes (a splice error maps to 4404). Callers classify by the bytes they wrote.
+- **`watch` is frozen.** `pen ls --watch --json` prints its lines verbatim, so the full snapshot with keys and a
+  generation is a separate op instead of new members on `watch`.
 
 ## Dials
 

@@ -17,6 +17,10 @@ import {
 
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
+// Event lines resolve their routine or task against the home's reads, which this test does not load.
+vi.mock("./useGoatBotEventTargets", () => ({
+  useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
+}));
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 vi.mock("./GoatBotFace", async () => {
@@ -718,5 +722,34 @@ describe("a reply with a table", () => {
       bot({ tone: "question", text: ["Which?", "", ...table].join("\n"), options: ["Read"] }),
     );
     expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
+  });
+});
+
+describe("event lines", () => {
+  const event = (
+    subject?: { kind: "routine" | "task"; id: string; name: string },
+    text = "Routine Daily check ran",
+  ): GoatBotRow =>
+    ({
+      kind: "event",
+      id: "event",
+      text,
+      createdAt: "2026-10-12T09:40:00Z",
+      ...(subject ? { subject } : {}),
+    }) as GoatBotRow;
+
+  it("stays plain text when it names nothing, or nothing here can open it", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(h, <GoatBotTimelineRow {...props} row={event()} />);
+    await view.render();
+    expect(view.container.querySelector("button")).toBeNull();
+    await view.rerender(
+      <GoatBotTimelineRow
+        {...props}
+        row={event({ kind: "routine", id: "routine-1", name: "Daily check" })}
+      />,
+    );
+    expect(view.container.querySelector("button")).toBeNull();
+    expect(view.container.textContent).toContain("Routine Daily check ran");
   });
 });

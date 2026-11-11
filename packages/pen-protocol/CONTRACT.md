@@ -1,4 +1,4 @@
-# Pen transport contract v1.1
+# Pen transport contract v1.2
 
 The binding wire contract for every Pen component: the `pen` node (apps/pen, Go), the relay (infra/pen-relay,
 Cloudflare Worker + Durable Objects) and the shared constants and vectors (packages/pen-protocol). It is derived
@@ -137,6 +137,8 @@ unanswered. Kind 0x02 (Doriterm's typed code) is not used.
     been consumed since its last CREDIT, and on FIN. A receiver that gets DATA past the window closes 4408.
 - `mesh` (kind 0x01): mesh sync lines (see "Mesh").
 - `join` (kind 0x03; extra member `"name"`): the join exchange (see "Mesh").
+- `service` (kind 0x01; extra member `"name"`, v1.2): delivered to a local program that registered that name,
+  with `tcp`'s framing (see "Services").
 
 ## Mesh
 
@@ -149,7 +151,7 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   from a known one only by case, or with a duplicate name, is malformed.
 - A record is `{"body":"<base64url of body bytes>","sig":"<base64url Ed25519 sig>"}`; `sig` signs
   `"pen-mesh/1" || SHA-256(body)` with the key `body.by`. Its hash is base64url (no padding) of SHA-256(body).
-- Body: I-JSON object, at most 2048 bytes: `v` (1), `mesh` (mesh id; `"-"` only in `found`), `type`, `by` (signer
+- Body: I-JSON object, at most 2048 bytes: `v` (1, or 2 in a mesh of the shared epoch below), `mesh` (mesh id; `"-"` only in `found`), `type`, `by` (signer
   signPub, base64url), `n` (signer counter, 1 for its first record), `prev` (hashes of the signer's current heads,
   1 to 64; empty only in `found`), `at` (ms since epoch, display only), plus:
   - `found`: `card` (the founder's own card).
@@ -174,9 +176,10 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   stored, so a set full of other records can still revoke and every set fits a 4096-hash `have`. A node reloading its
   own saved set applies no cap. A node that refuses a received record for a cap closes that sync 4508 without its
   `done`, and one that cannot save what it received closes it 4507, so the sender learns the records were not taken.
-  Limit: no signer has a share of the record space, so one member can fill it with valid records (ordinary ones to
-  3840, then revokes to 4096), after which every node refuses every new record, the revoke of that member included;
-  the remedy is a new mesh.
+  Limit (version 1 meshes): no signer has a share of the record space, so one member can fill it with valid records
+  (ordinary ones to 3840, then revokes to 4096), after which every node refuses every new record, the revoke of that
+  member included; the remedy is a mesh of the shared epoch, which `pen` now founds (ADR-0026: in it, the caps and
+  "in its past" checks above are replaced by per-lineage shares and admission read from the kept admits).
 
 ### View
 
@@ -457,13 +460,163 @@ When its assertion has expired by then
 (a slow approval), it stays a member and says registration waits for the next `pen login`. `pen login` on a member whose
 mesh is unbound, or bound to an older login key, offers to bind it again (same question).
 
+## Services (v1.2)
+
+A node can hand a member's session to a local program that registered a name with it, and tell that program, with
+proof, which member is calling. GOAT is the first such program (name `goat`). Nothing here changes `tcp`, `mesh`,
+`join` or `account`: v1.2 adds no record type and no sync message, and nodes keep announcing `"pen":"1.1"`. Until
+a program registers, a node refuses every service stream.
+
+### The service stream
+
+- Kind 0x01, message 1 `{"v":1,"stream":"service","name":N}`. A service name is 1 to 32 characters of `a-z 0-9 -`,
+  starting with a letter; `pen` is reserved. Admission is that of `tcp`: only a current member's key, otherwise 4401
+  unanswered, and a malformed name is refused the same way.
+- After key confirmation the responder counts the session as a live session of that member, exactly as it counts a
+  `tcp` session: a revoke closes it 4401, before and after delivery. It then delivers the session to the program
+  that holds N ("Local delivery"). If no program holds N it sends CLOSE 4404; if 32 deliveries are already in
+  progress it sends CLOSE 4429; a delivery that fails sends CLOSE 4404.
+- Plaintext records use the `tcp` framing (DATA, FIN, CREDIT, the same window). They carry the caller's and the
+  program's bytes only; the local handshake never reaches the caller.
+- A responder older than v1.2 refuses message 1 with 4401 unanswered, the answer a non-member gets. A caller
+  reports it as "has Pen older than 1.2, or does not count this machine as a member".
+- Close codes on a service stream do not, by themselves, tell the caller whether the program processed its bytes.
+  4401, 4404, 4408, 4429, 1000 or a dropped socket can each arrive after the program read some of them. A caller
+  knows its data was not delivered only when it wrote none; once it has written a byte, any failure leaves the
+  outcome unknown, and only operations that are safe to repeat may be retried.
+
+### Registration
+
+A program registers over the control socket, which only the OS user that runs the node can open. There is no other
+way: the local management page (dashboard) cannot register, and neither can a member.
+
+- Request line: `{"op":"service.register","name":N,"port":P,"key":K}`. P is the loopback TCP port the program
+  listens on (1 to 65535). K is 32 random bytes the program created for this run, base64url without padding.
+- Answer: `{"t":"registered","id":R,"name":N,"port":P}`, where R is a fresh registration id. The registration lives
+  exactly as long as this connection. When the connection closes, the node removes registration R and nothing
+  else, so an old holder's exit never removes a newer registration.
+- A new registration for N replaces the current one: the node sends `{"t":"replaced","id":R}` (R the old id) on the
+  old connection, giving that write 5 s like every control write, and closes it, so the old holder learns it lost the name. A node holds at
+  most 8 names; a request for a ninth is refused. The node ignores anything a holder sends after its request.
+- K is exactly 43 base64url characters without padding that decode to 32 bytes and encode back to the same text; N
+  and P follow the rules above; anything else is refused.
+- When a registration ends (its connection closed, or replaced), the node closes every connection it delivered to
+  that registration, and a delivery to it that has not yet passed step 3 below fails.
+- A refusal is `{"error":"..."}` and closes the connection with nothing registered. The node never writes K to disk
+  or to a log, and keeps it only in memory.
+
+`pen service register <name> --port <P>` is the child a program runs to hold its registration. It reads K from stdin
+as one line (43 characters and LF), so K never appears in an argument, the environment or a file. It prints
+`pen-service v1 registered <name> <R>` on stdout once the node answers, then holds the registration until stdin
+ends (exit 0), the node replaces it (exit 3, reason on stderr) or the node closes the connection (exit 1). Any
+other failure, before or at registration, exits 2 with the reason on stderr.
+
+### Local delivery
+
+For each confirmed service stream the node dials `127.0.0.1:P` of N's registration (5 s deadline), and the node and
+the program prove to each other that they hold K before any caller byte moves. Nd and Ng are 32 random bytes each,
+fresh for every connection, written as 43 base64url characters without padding. A MAC is HMAC-SHA256 keyed with K,
+written the same way. `||` concatenates bytes; Nd and Ng enter a MAC as their 32 raw bytes, text as ASCII.
+
+Every line is ASCII and ends in one LF; no line contains CR.
+
+1. Node: `PENSVC/1 ` Nd LF (53 bytes).
+2. Program: Ng SP A LF (88 bytes), with A = HMAC(K, `pen-svc/1 ` || N || Nd || Ng). The node reads at most 128
+   bytes up to the LF, within 5 s of writing line 1, requires exactly this shape with canonical base64url (43
+   characters that decode to 32 bytes and encode back to the same text), and compares A in constant time.
+3. Node: J SP B LF, where B is 43 base64url characters and J is the JSON object, with no whitespace, members in
+   exactly this order and every value a JSON string except `v`:
+   `{"v":1,"mesh":M,"self":S,"caller":{"nodeId":I,"signPub":G,"noisePub":X,"name":C},"stream":N}`.
+   M is the node's mesh id, S its node id, I, G, X and C the calling member as the node's view holds it after the
+   delivery commits and before line 3 is written (a caller that is no longer a member fails the delivery), and
+   `stream` the service name. Every one of these values is drawn from the identifier
+   alphabets in "Identities", so none needs escaping. B = HMAC(K, `pen-svc/1 pen` || Nd || Ng || J), over J's exact
+   bytes. A reader splits line 3 at its last SP. The whole line, LF included, is at most 2,200 bytes.
+4. From then on the connection carries the stream's payload both ways, half-closed like `tcp`.
+
+A delivery commits to the registration it dialed at one point: after step 2 verifies and before the node writes
+line 3, under the lock that replacement and removal take, and only if that registration is still the current one
+for N. A delivery that cannot commit fails. A committed delivery belongs to its registration and is closed when that
+registration ends.
+
+If any step fails (the dial, a deadline, the cap, a malformed line, a wrong A, or a delivery that cannot commit),
+the node closes the socket and sends CLOSE 4404 to the caller. It logs each failure under one of a fixed set of
+causes (dial, deadline, malformed, proof, replaced), at most once a minute per cause. A
+refused delivery passes no caller byte to the program, but the caller still classifies its own data by what it
+wrote (above). At most 32 deliveries are in progress at once, from key confirmation to the end of step 3.
+
+Rules for the program; GOAT implements them:
+
+- Before the proof: at most 16 connections in the handshake at once, the 17th closed at accept; 3 s from accept to a
+  verified line 3; line 1 read with a 128-byte cap up to the LF, line 3 with a 2,200-byte cap. Decoding is exact: the
+  fixed prefix, base64url fields of exactly 43 characters that decode to 32 bytes and encode back to the same text, no
+  CR, line 3 split at its last SP, J strict JSON with no unknown, missing or duplicate members and the value types
+  above. The program compares B in constant time over J's exact bytes, then checks that M and S equal the mesh id and
+  node id it pinned for this machine. Any violation, EOF or timeout closes the socket with no reply.
+- After the proof: at most 32 live connections per calling node id and 128 in total, extras closed at once. A
+  connection is closed as idle only after 120 s with no request open on it and no WebSocket upgraded on it.
+
+K never crosses the wire and both nonces are fresh, so a recorded handshake cannot be replayed or moved to another
+connection. Another OS user can connect to P but cannot produce B, and cannot listen on P while the program holds it.
+A program that exits loses its registration as soon as the node sees its connection close; until then a dial to
+its old port fails the proof, because whoever holds the port has no K. Processes of the same OS user can register a name or read K; they are the owner, outside this boundary.
+
+### Exact dial and the ready line
+
+Programs dial members with `pen pipe --node <nodeId> --noise <noisePub> [--home <dir>] (<port> | @<name>)`:
+
+- `--node` names only the member whose node id is exactly that in the local view; there is no name or prefix
+  fallback. A node id that is not a current member, or a member whose Noise key differs from `--noise`, fails before
+  any dial (exit 255, reason on stderr). The handshake pins that Noise key, so no other machine can answer.
+- `@<name>` opens a service stream. After key confirmation, and before it reads any stdin byte, the pipe writes
+  exactly one line to stderr: `pen-ready v1 <nodeId> <noisePub>` LF (84 bytes). Nothing reaches stdout and nothing
+  else reaches stderr before that line (`PEN_TRACE` is ignored in this form). The line proves only that the
+  responder holds that Noise key; it says nothing about delivery to the program.
+- `<port>` opens a `tcp` stream as `pen pipe <node> <port>` does, without a ready line; ssh checks the host key.
+
+A program that spawns the pipe for a service gives it 25 s from spawn to a verified ready line (Pen's 15 s dial and
+10 s handshake). It writes nothing to the child's stdin before then. It reads stderr up to the first LF with a
+128-byte cap and accepts only exactly `pen-ready v1 <requested nodeId> <pinned noisePub>`. On a longer or different
+line, an exit, the deadline, or any stdout byte it has received before it accepted the line, it kills the child,
+waits until it has exited and sends nothing. Stdout and stderr are separate pipes with no common order, so the
+last rule is fail-closed: a service must not send before the caller's first byte (HTTP never does), or a caller may
+drop the connection. After the line the program keeps reading stderr to its end, holding at most a bounded tail.
+`@goat/pen-protocol/ready` implements this reader. Its tests prove the reader alone; the caller and target together are
+proved in the integrated review before any Pen route is enabled.
+
+### Snapshot watch
+
+Control op `watch.snapshot` (control socket only) answers one line now and one on every change of the view or of a
+member's online state:
+`{"t":"snapshot","gen":G,"mesh":M,"self":S,"members":[{"nodeId","signPub","noisePub","name","user","hostKeys","online"}],"revoked":[{"nodeId","name"}]}`.
+Every line is complete, and `user` and `hostKeys` are always present (empty when the member published none). `online` is
+the member as this node last saw it, and always true for the node itself. G
+rises by exactly 1 for each change the daemon publishes; a new watcher's first line carries the current G without
+raising it, and the state and the subscription are taken together, so each watcher sees consecutive values. A watcher
+that falls 16 lines behind, or whose socket does not take a line within 5 s, is closed; at most 8 watchers run at
+once, and a ninth is refused. A gap in G or a closed watch means the list is stale: drop it and watch again. Nothing
+may authorize from this list. The `watch` op keeps its v1.1 lines.
+
+### SSH config for exact routes
+
+`pen ssh-config` writes a `Host pen-<nodeId>` block for every member whose node id no member uses as a name
+(itself included), after the name blocks and before the `pen-*` block, with
+`ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's known_hosts, and,
+where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's shared connection
+never carries it. The `pen-<name>` blocks and the `pen-*` block are unchanged. A node id that some member uses as a
+name gets no exact block, so that alias keeps its old meaning and is not exact; a program that checks an alias's
+effective route before using it refuses it.
+
 ## Close codes
 
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
 no live invite, refused card); 4402 relay protocol error; 4403 relay auth failed; 4404 node offline or port refused;
 4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps; 4507 a mesh sync whose records the node could not save, or while it holds records it could not save;
-4508 a mesh sync that brought a record the node refused for its record cap (relays never send 45xx). 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
+4508 a mesh sync that brought a record the node refused for its record cap (relays never send 45xx); 4509 a mesh sync
+whose peer did not announce the shared epoch, from a node of a mesh of that epoch. 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
 or card that did not arrive within 10 s.
+On a service stream 4404 also means that no program holds the name or that its local delivery failed, and 4429
+that 32 deliveries are already in progress.
 
 ## Vectors
 
@@ -474,6 +627,8 @@ generated by Go); Noise IK and IKpsk2 transcripts with fixed ephemerals and payl
 a record and its hash; and a canonical-order view case (session.json, mesh.json: generated by Go with flynn/noise,
 verified by Go now and by later TS clients). login.json (generated by TS, verified by Go): the start, poll and forget
 proofs, an assertion body and signature under a fixed login key and its kid, and assertion checks that must fail.
+service.json (generated by Go, verified by Go and TS): a local delivery with a fixed K, name, Nd, Ng and identity line J,
+the three lines on the wire and both MACs.
 
 ## Change log
 
@@ -495,6 +650,11 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
   fill it. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): a mesh whose found record has `v` 2 is of the shared epoch (ADR-0026): all its records have `v` 2, a node of it announces `"pen":"2.0"` in the sync hello and closes 4509 when
+  the peer does not, a record names its signer's previous record directly in `prev` or has no effect, and each
+  admission lineage keeps fixed shares of records (structure/decisions/ADR-0026). Older nodes drop `v` 2 records.
+  A node holding no records yet (joining) may announce anything and is sent the records. `pen up` and `pen login`
+  found meshes of this epoch.
 - v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
   (else 4429), and past 8 pending sessions per node the address holding the most loses its oldest (4429). Go relay
   only; the Worker keeps the node-wide rule. No wire change.
@@ -515,3 +675,7 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   joiner's admits reach a member it counts; a copy whose admits pass a key it revoked, plainly or as compromised,
   still fails. Nodes before this answer the check as an unexpected first line (4401), which
   the joiner counts as the refusal it was. No account-stream messages are in the shared vectors.
+- v1.2 (2026-11-11): "Services": stream `service` delivered to a program that registered its name over the control
+  socket, with a mutual proof on loopback; the exact dial `pen pipe --node --noise` and its ready line; the
+  `watch.snapshot` control op; `pen-<nodeId>` ssh-config blocks. No record or sync change; `tcp` is unchanged. Vectors:
+  service.json.

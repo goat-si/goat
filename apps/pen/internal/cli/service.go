@@ -21,7 +21,7 @@ const launchdLabel = "si.goat.pen"
 // serviceMode picks systemd --user, launchd, a Windows logon task or none (a detached child). A
 // non-default state directory never gets a service, so test and scratch homes cannot replace the real one.
 func serviceMode(noService bool, st *state.Store) string {
-	if noService || os.Getenv("PEN_SERVICE") == "none" || os.Getenv("PEN_HOME") != "" {
+	if serviceOptedOut(noService) {
 		return "none"
 	}
 	switch serviceOS {
@@ -37,6 +37,38 @@ func serviceMode(noService bool, st *state.Store) string {
 		return "task" // schtasks.exe ships with every Windows 10 and 11
 	}
 	return "none"
+}
+
+func serviceOptedOut(noService bool) bool {
+	return noService || os.Getenv("PEN_SERVICE") == "none" || os.Getenv("PEN_HOME") != ""
+}
+
+// startNote is what pen up adds after a start that will not survive on its own: no service manager
+// answered, or systemd stops the user's services at logout because lingering is off.
+func startNote(mode string, noService bool) string {
+	switch {
+	case mode == "none" && !serviceOptedOut(noService) && serviceOS != "windows":
+		exe, err := exePath()
+		if err != nil {
+			exe = "pen"
+		}
+		manager := map[string]string{"linux": "systemctl --user", "darwin": "launchctl"}[serviceOS]
+		if manager == "" {
+			manager = "none supported on " + serviceOS
+		}
+		// Another account's startup script (root's) would start another node from its own home.
+		return "pen: no service manager answered (" + manager + "), so nothing starts Pen again if it stops or this machine restarts. Run " +
+			shellQuote(exe) + " up at startup as this account (uid " + strconv.Itoa(os.Getuid()) + "), with its HOME, for example with the line @reboot " +
+			strings.ReplaceAll(shellQuote(exe), "%", `\%`) + " up in its crontab -e" // cron reads an unescaped % as a newline
+	case mode == "systemd":
+		linger, err := output("loginctl", "show-user", strconv.Itoa(os.Getuid()), "--property=Linger", "--value")
+		if err != nil || strings.TrimSpace(linger) != "no" {
+			return "" // unknown without logind: say nothing rather than guess
+		}
+		// The uid, never a name: without cgo, os/user can fall back to a stale $USER.
+		return "pen: lingering is off, so systemd stops Pen when your last session on this machine ends. Keep it running with: sudo loginctl enable-linger " + strconv.Itoa(os.Getuid())
+	}
+	return ""
 }
 
 // serviceManagerFound reports whether systemd --user or launchctl answers here (a variable for tests).
@@ -153,6 +185,14 @@ var run = func(name string, args ...string) error {
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// output is run for a command whose answer pen reads.
+var output = func(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	return string(out), err
 }
 
 func guiDomain() string { return "gui/" + strconv.Itoa(os.Getuid()) }

@@ -7,7 +7,6 @@ import { BellIcon, PaperclipIcon } from "~/components/solar";
 import { cn } from "~/lib/utils";
 
 import { GoatBotFace } from "./GoatBotFace";
-import { useGoatBotName } from "./goatBotMemberContext";
 
 /** The activity line also names the followed work. */
 export type GoatBotTimelineActivity = GoatBotActivity & {
@@ -97,38 +96,40 @@ function GoatBotSentFile({ name }: { readonly name: string }) {
 
 /**
  * One line for what GOAT Bot is doing: its still face and the step it is on, then the work it
- * follows. Nothing here moves; a new step replaces the text. The line opens to its full text. The
- * live status says only what changes for the person: reading, needing them, or working.
+ * follows. Nothing here moves; a new step replaces the text. The line opens to its full text;
+ * `onToggle` applies the change itself, so the conversation can keep its place around it.
  */
-export function GoatBotActivityLine({ activity }: { readonly activity: GoatBotTimelineActivity }) {
-  const botName = useGoatBotName();
+export function GoatBotActivityLine({
+  activity,
+  onToggle,
+}: {
+  readonly activity: GoatBotTimelineActivity;
+  readonly onToggle?: (toggle: () => void) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const waiting =
-    activity.state === "working" &&
-    (activity.text.startsWith("Waiting") || activity.text.startsWith("Paused"));
+  const waiting = activity.attention !== undefined;
   const title =
     activity.state === "working" && activity.title !== activity.text ? activity.title : undefined;
-  const announcement =
-    activity.state === "reading" || waiting ? activity.text : `${botName} is working`;
   return (
     <div className="flex min-h-8 max-w-[44rem] min-w-0 items-center gap-2 ps-1 text-sm leading-5 text-muted-foreground">
       <GoatBotFace
         state={activity.state === "reading" ? "reading" : waiting ? "waiting" : "working"}
         className="size-5 shrink-0 text-foreground"
       />
-      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-        {announcement}
-      </span>
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          const toggle = () => setOpen((value) => !value);
+          if (onToggle === undefined) toggle();
+          else onToggle(toggle);
+        }}
         className={cn(
           "min-w-0 rounded-sm text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
           open ? "break-words" : "truncate",
         )}
       >
-        {activity.text}
+        {open ? (activity.fullText ?? activity.text) : activity.text}
         {title === undefined ? null : <span className="opacity-70">{" · " + title}</span>}
       </button>
     </div>

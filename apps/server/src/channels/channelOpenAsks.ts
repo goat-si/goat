@@ -116,13 +116,25 @@ export const listOpenAsks = Effect.fn("channel.listOpenAsks")(function* (input: 
   readonly botIds: ReadonlySet<string>;
 }) {
   const { sql } = input;
+  // Only live bots' tasks, newest ask first, so neither deleted bots nor old updates use the limit.
+  const ended = sql`status IN ('completed', 'failed')`;
   const rows = yield* sql<{ readonly bot_id: string; readonly task_json: string }>`
     SELECT bot_id, task_json FROM channel_tasks
-    WHERE owner_id = ${input.ownerId} AND ${waitingTaskCondition(sql)}
-    ORDER BY updated_at DESC LIMIT ${CANDIDATE_LIMIT + 1}`;
+    WHERE owner_id = ${input.ownerId} AND bot_id IN ${sql.in([...input.botIds])}
+      AND ${waitingTaskCondition(sql)}
+    ORDER BY (
+      SELECT MAX(asked_at) FROM (
+        SELECT json_extract(question.value, '$.askedAt') AS asked_at
+        FROM json_each(task_json, '$.openQuestions') AS question WHERE NOT ${ended}
+        UNION ALL
+        SELECT json_extract(need.value, '$.since')
+        FROM json_each(task_json, '$.observed.needsYou') AS need
+        WHERE NOT ${ended} OR json_extract(need.value, '$.kind') = 'approval'
+      )
+    ) DESC, updated_at DESC
+    LIMIT ${CANDIDATE_LIMIT + 1}`;
   const drafts = rows
     .slice(0, CANDIDATE_LIMIT)
-    .filter((row) => input.botIds.has(row.bot_id))
     .flatMap((row) => asksOf(row.bot_id as BotId, decodeTask(row.task_json)))
     .toSorted((a, b) => b.ask.askedAt.localeCompare(a.ask.askedAt));
   const shown = drafts.slice(0, OPEN_ASKS_LIMIT);

@@ -240,7 +240,7 @@ func (d *Daemon) requireV11(ctx context.Context, what string) error {
 	d.mu.Lock()
 	var missing []string
 	for _, m := range v.SortedMembers() {
-		if m.NodeID != d.nodeID && d.versions[m.NoisePub] != mesh.Version {
+		if v := d.versions[m.NoisePub]; m.NodeID != d.nodeID && v != mesh.Version && v != mesh.VersionShared {
 			missing = append(missing, m.Name)
 		}
 	}

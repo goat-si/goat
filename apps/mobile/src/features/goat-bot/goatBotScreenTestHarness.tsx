@@ -18,6 +18,10 @@ const screenSession = vi.hoisted(() => ({
   homeOpen: false,
   chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
 }));
+// Event lines resolve their routine or task against the home's reads, which these tests do not load.
+vi.mock("./useGoatBotEventTargets", () => ({
+  useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
+}));
 vi.mock("./MobileBotWork", () => ({
   MobileBotWork: (props: {
     taskId?: string;

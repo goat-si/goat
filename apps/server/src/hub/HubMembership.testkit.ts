@@ -103,6 +103,8 @@ export interface Fixture {
   readonly releases?: OpenCodexReleaseCatalog;
   /** Home `ocx link status` fails; "forbidden" is OpenCodex's 403 in Hub mode (opencodex#8184). */
   readonly linkStatus?: "forbidden" | "failed";
+  /** Home `ocx link revoke` refuses, so the link stays. */
+  readonly revokeFails?: boolean;
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -138,6 +140,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       return Effect.succeed(json({ linkId: "lnk_fedcba9876543210" }));
     }
     if (command === "revoke") {
+      if (fixture.revokeFails) return Effect.succeed({ code: 1, stdout: "" });
       for (const [name, id] of links) if (id === args[3]) links.delete(name);
       return Effect.succeed(json({ linkId: args[3] }));
     }
@@ -198,6 +201,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     },
     matchesArgs: (handoff, args) =>
       Effect.succeed(handoffs.get(handoff.handoffId)?.args === JSON.stringify(args)),
+    serializeApprovalWake: (effect) => effect,
   });
   const run: OrchestrationV2ThreadProjection = {
     ...idleThreadProjection(liveThreadShell(asking)),
@@ -372,6 +376,14 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     }>`SELECT alias, link_id, adding_since FROM hub_provisioned_links ORDER BY alias`,
     offer: (fingerprint: string) => {
       offered = fingerprint;
+    },
+    /** Someone removes a link on the Home by hand. */
+    unlink: (alias: string) => {
+      links.delete(alias);
+    },
+    /** Someone links the alias again by hand, under a new link id. */
+    replaceLink: (alias: string, id: string) => {
+      links.set(alias, id);
     },
   };
 });
