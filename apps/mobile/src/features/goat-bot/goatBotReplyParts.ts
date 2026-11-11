@@ -77,7 +77,7 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
   const parts: GoatBotReplyPart[] = [];
   // Each part's first and last line, for placing the reply's definitions.
   const spans: Array<readonly [number, number]> = [];
-  let sawDefinition = false;
+  let definitionLines = 0;
   let prose: string[] = [];
   let proseFrom = 0;
   let fence: string | null = null;
@@ -154,7 +154,7 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
         /^(?: {4}|\t)/.test(line) && container === null && (indentedCode || afterBlank);
     }
     if (!indentedCode && DEFINITION_START.test(line)) {
-      sawDefinition = true;
+      definitionLines += 1;
       keep(line, index);
       continue;
     }
@@ -204,9 +204,22 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
   }
   flushProse();
   if (parts.length === 0) return [{ kind: "prose", text }];
-  if (!sawDefinition || parts.length === 1) return sawDefinition ? whole : parts;
+  if (definitionLines === 0) return parts;
+  if (
+    parts.length === 1 ||
+    text.length > MAX_CARRIED_TEXT ||
+    parts.length > MAX_CARRIED_PARTS ||
+    definitionLines > MAX_CARRIED_DEFINITIONS
+  )
+    return whole;
   return carryDefinitions(text, parts, spans) ?? whole;
 }
+
+// Carrying parses the reply and each part on every streamed chunk; past these a reply with
+// definitions stays one bubble, which keeps that under about 10 ms on a desktop.
+const MAX_CARRIED_TEXT = 16_000;
+const MAX_CARRIED_PARTS = 24;
+const MAX_CARRIED_DEFINITIONS = 24;
 
 // The chat's Markdown grammar, so a definition is found where the renderer finds it.
 const parser = unified().use(remarkParse).use(remarkGfm).freeze();
@@ -283,23 +296,25 @@ function carryDefinitions(
       part,
     });
   }
-  const carried = parts.map((part, index) => {
-    const elsewhere = definitions.filter((each) => each.part !== index);
-    if (elsewhere.length === 0) return part;
-    // A reference parses only beside its definition, so read the part with all of them.
-    const own = goatBotReplyPartSource(part);
-    const used = new Set<string>();
-    const collect = (nodes: ReadonlyArray<Nodes>) => {
-      for (const node of nodes) {
-        if (node.type === "linkReference" || node.type === "imageReference")
-          used.add(node.identifier);
-        if (node.type !== "definition" && "children" in node) collect(node.children);
+  // Which part each reference sits in, read from this one parse of the whole reply.
+  const partOf = (line: number) =>
+    spans.findIndex(([from, to]) => from <= line - 1 && line - 1 <= to);
+  const used = parts.map(() => new Set<string>());
+  const collect = (nodes: ReadonlyArray<Nodes>) => {
+    for (const node of nodes) {
+      if (node.type === "definition") continue;
+      if (node.type === "linkReference" || node.type === "imageReference") {
+        const line = node.position?.start.line;
+        if (line !== undefined) used[partOf(line)]?.add(node.identifier);
       }
-    };
-    collect(
-      parser.parse(own + "\n\n" + elsewhere.map((each) => each.source).join("\n\n")).children,
+      if ("children" in node) collect(node.children);
+    }
+  };
+  collect(tree.children);
+  const carried = parts.map((part, index) => {
+    const kept = definitions.filter(
+      (each) => each.part !== index && used[index]?.has(each.identifier) === true,
     );
-    const kept = elsewhere.filter((each) => used.has(each.identifier));
     return kept.length === 0
       ? part
       : { ...part, definitions: kept.map((each) => each.source).join("\n\n") };
@@ -310,15 +325,12 @@ function carryDefinitions(
   );
   if (!sameDestinations(whole, split)) return null;
   // A stretch of nothing but definitions draws nothing, so it gets no card of its own.
-  return carried.filter(
-    (part, index) =>
-      part.kind !== "prose" ||
-      !parser
-        .parse(part.text)
-        .children.every(
-          (node) => node.type === "definition" && definitions.some((each) => each.part === index),
-        ),
-  );
+  const drawn = new Set<number>();
+  for (const node of tree.children) {
+    const line = node.position?.start.line;
+    if (node.type !== "definition" && line !== undefined) drawn.add(partOf(line));
+  }
+  return carried.filter((part, index) => part.kind !== "prose" || drawn.has(index));
 }
 
 /** A key for each part: where it starts in the reply, which stays put while the reply streams on. */

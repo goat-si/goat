@@ -154,6 +154,17 @@ describe("splitGoatBotReply", () => {
     }
   });
 
+  it("keeps a long reply with definitions whole, as a reply too costly to carry them through", () => {
+    const words = "Words to read. ".repeat(1100);
+    const text = [words + "See [the notes][x].", "", ...table, "", "[x]: https://example.com"].join(
+      "\n",
+    );
+    expect(splitGoatBotReply(text)).toEqual(prose(text));
+    // The same reply, short, splits.
+    const short = ["See [the notes][x].", "", ...table, "", "[x]: https://example.com"].join("\n");
+    expect(splitGoatBotReply(short).length).toBeGreaterThan(1);
+  });
+
   it("decides each table from what it has read so far, so a long held run stays prose", () => {
     const pairs = Array.from({ length: 2000 }, () => "| A |\n| - |").join("\n");
     const text = `- item\n${pairs}`;
