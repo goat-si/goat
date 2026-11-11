@@ -455,3 +455,29 @@ it.effect("a fence written after a kept record was released lands in its record"
     );
   }).pipe(Effect.scoped),
 );
+
+it.effect.each([
+  ["written", false],
+  ["whose write has not landed", true],
+] as const)(
+  "a later open of a thread a released record fences (%s) is refused",
+  ([_case, failed]) =>
+    Effect.gen(function* () {
+      const kept = recordFixture("codex-888888888888", 1015, sessionA);
+      const { open, detached, launched, gone } = yield* harness([kept]);
+      gone.add(kept.pgid);
+      yield* open("thread-first", sessionA).pipe(Effect.scoped);
+      const goal = { threadId: ThreadId.make("thread-late"), nativeThreadId: "native-late" };
+      // The instance check refuses the write, which then stays pending for this thread.
+      const instanceId = failed ? ProviderInstanceId.make("other") : codex;
+      const written = yield* detached
+        .recordGoalBlock({ instanceId, recordName: kept.name }, goal)
+        .pipe(Effect.exit);
+      assert.equal(written._tag, failed ? "Failure" : "Success");
+      const result = yield* open(goal.threadId, sessionA).pipe(Effect.scoped, Effect.exit);
+      assert.equal(result._tag, "Failure");
+      assert.equal(launched.length, 1);
+      yield* open("thread-other", sessionA).pipe(Effect.scoped);
+      assert.equal(launched.length, 2);
+    }).pipe(Effect.scoped),
+);

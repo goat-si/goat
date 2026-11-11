@@ -136,3 +136,43 @@ export const settleKeptRecord = Effect.fn("CodexDetachedAppServers.settleKept")(
     return yield* new CodexDetachedAppServerError({ detail: ownTurn(decision.record) });
   return "release" as const;
 });
+
+const fencedThreads = (record: DetachedAppServerRecord | undefined) => [
+  ...(record?.goalBlocks ?? []).map((goal) => goal.threadId),
+  ...(record?.stopObligations ?? []).map((stop) => stop.threadId),
+];
+
+/**
+ * Release bookkeeping, called under the record gate. A thread is guarded by a record's fences or
+ * by a fence write of its own that has not landed (failedFences holds it until it does).
+ */
+export const makeReleases = (state: {
+  readonly fences: ReadonlyMap<string, DetachedAppServerRecord>;
+  readonly failedFences: ReadonlyMap<string, ThreadId>;
+  readonly recoveryRetained: Set<string>;
+  readonly released: Set<string>;
+}) => {
+  const guards = (name: string, threadId: ThreadId) =>
+    [...state.failedFences.values(), ...fencedThreads(state.fences.get(name))].includes(threadId);
+  return {
+    release: (name: string, threadId: ThreadId) => {
+      if (guards(name, threadId)) return "own" as const;
+      state.recoveryRetained.delete(name);
+      state.released.add(name);
+      return "released" as const;
+    },
+    ensureClear: (instanceId: string, session: ProviderSessionId, threadId: ThreadId) => {
+      const record = [...state.released]
+        .map((name) => state.fences.get(name))
+        .find(
+          (value) =>
+            value !== undefined &&
+            servesSession(value, instanceId, session) &&
+            guards(value.name, threadId),
+        );
+      return record === undefined
+        ? Effect.void
+        : Effect.fail(new CodexDetachedAppServerError({ detail: ownTurn(record) }));
+    },
+  };
+};

@@ -221,6 +221,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const launching = new Set<string>();
   const retained = new Set<string>();
   const recoveryRetained = new Set<string>();
+  /** Kept records settleKept released; their fences still refuse the threads they name. */
+  const released = new Set<string>();
   const adoptedClosed = new Set<string>();
   // One gate keeps infrequent record writes and cross-instance fence checks atomic.
   const recordGate = yield* Semaphore.make(1);
@@ -283,6 +285,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         await NodeFSP.rm(files.stderr, { force: true });
         fences.delete(record.name);
         recoveryRetained.delete(record.name);
+        released.delete(record.name);
       }),
     );
 
@@ -870,17 +873,18 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       warn,
       // Under the gate: a fence for this thread written or in flight meanwhile still refuses.
       release: (threadId) =>
-        recordGate.withPermit(
-          Effect.sync(() => {
-            const current = fences.get(input.name);
-            const fenced = [...(current?.goalBlocks ?? []), ...(current?.stopObligations ?? [])];
-            if ([...failedFences.values(), ...fenced.map((f) => f.threadId)].includes(threadId))
-              return "own" as const;
-            recoveryRetained.delete(input.name);
-            return "released" as const;
-          }),
-        ),
+        recordGate.withPermit(Effect.sync(() => releases.release(input.name, threadId))),
     });
+  const releases = KeptRecord.makeReleases({ fences, failedFences, recoveryRetained, released });
+  /** Before a spawn: a released record of this session still refuses a thread it fences. */
+  const ensureReleasedClear = (
+    instanceId: string,
+    session: ProviderSessionId,
+    threadId: ThreadId,
+  ) =>
+    recordGate.withPermit(
+      Effect.suspend(() => releases.ensureClear(instanceId, session, threadId)),
+    );
 
   /**
    * Without a session this is a status probe, whose close never touches the process. A session
@@ -964,6 +968,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     preserveForRecovery,
     listPreservedForSession,
     settleKept,
+    ensureReleasedClear,
     retainOnClose,
     recordStopObligation,
     clearStopObligation,

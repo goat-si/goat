@@ -331,6 +331,11 @@ export const layerAppServerClientFactory: Layer.Layer<
                         .map((binding) => binding.threadId),
                 })
                 .pipe(Effect.mapError(openError));
+        // Read after the list: a record another open released still guards the threads it fences.
+        if (kept !== "connect")
+          yield* detached
+            .ensureReleasedClear(input.instanceId, input.providerSessionId, input.threadId)
+            .pipe(Effect.mapError(openError));
         if (recordName !== undefined && kept === "connect") {
           const existing = yield* detached
             .connectExisting(input.instanceId, recordName, input.providerSessionId)
