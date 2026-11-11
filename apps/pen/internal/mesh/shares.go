@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"bytes"
+	"slices"
 	"sort"
 )
 
@@ -24,8 +25,8 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 		lineage int
 		lock    bool
 	}
-	// A revoke is kept when it is the smallest of some (subject, signer's lineage, compromised): a
-	// lineage spends only its own places, and every lineage can revoke every key once.
+	// A lineage's revoke places hold one revoke per (subject, compromised), the smallest of each, and
+	// of those the ShareRevokes smallest: a lineage spends only its own places.
 	type revokeSlot struct {
 		subject     string
 		lineage     int
@@ -56,8 +57,17 @@ func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
 		key := share{k.lineage, r.B.Type == TypeLock && !r.Opaque}
 		groups[key] = append(groups[key], r)
 	}
-	for _, r := range revokes {
-		kept[r.Hash] = r
+	byLineage := map[int][]*Record{}
+	for slot, r := range revokes {
+		if !slices.Contains(byLineage[slot.lineage], r) {
+			byLineage[slot.lineage] = append(byLineage[slot.lineage], r)
+		}
+	}
+	for _, rs := range byLineage {
+		sortByHash(rs)
+		for _, r := range rs[:min(ShareRevokes, len(rs))] {
+			kept[r.Hash] = r
+		}
 	}
 	for key, rs := range groups {
 		sortByHash(rs)
