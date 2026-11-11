@@ -266,6 +266,26 @@ describe("decision inbox approval handoffs", () => {
     }
   });
 
+  it("keeps a capped feed's approval docked when the thread's loaded history lacks it", () => {
+    const h = harness();
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      // A server that caps the feed but does not retain old handoffs in its snapshots.
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("listed") }],
+        handoffsTotal: 201,
+      });
+      h.set(ref(a), [], "live", null, [handoffItem(approval("loaded"))]);
+      expect(
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
+      ).toEqual(["loaded", "listed"]);
+    } finally {
+      stopDock();
+      h.registry.dispose();
+    }
+  });
+
   it("forgets a remembered approval when it reconnects to a server whose feed cannot list approvals", () => {
     const h = harness();
     const stopSummary = h.registry.mount(h.inbox.summaryAtom);

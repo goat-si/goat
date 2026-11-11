@@ -43,8 +43,8 @@ const PERSON: DecisionRouting = { routedTo: "person" };
 /** What the inbox says about approvals open beyond the ones its capped feed lists. */
 export function unlistedApprovalsNotice(count: number) {
   return count === 1
-    ? "1 older approval is not listed here. It is docked in its thread, marked Approval in the thread list."
-    : `${count} older approvals are not listed here. Each is docked in its thread, marked Approval in the thread list.`;
+    ? "1 older approval is not listed here. It is docked in its thread, which the thread list shows as waiting for you."
+    : `${count} older approvals are not listed here. Each is docked in its thread, which the thread list shows as waiting for you.`;
 }
 
 /**
@@ -441,13 +441,16 @@ export function createDecisionInboxAtoms(input: {
           entry.handoff.requestedBy.threadId === ref.threadId ? [entry.handoff] : [],
         );
       // While the feed is away, the last list it gave stays docked; feedAwayAtom disables it.
-      const next =
-        feed === null
-          ? forThread(known.get(ref.environmentId)?.handoffs ?? [])
-          : feed.handoffs === undefined ||
-              (feed.handoffsTotal ?? feed.handoffs.length) > feed.handoffs.length
-            ? get(input.details.pendingHandoffsAtom(ref))
-            : forThread(feed.handoffs);
+      let next: ReadonlyArray<Handoff>;
+      if (feed === null) next = forThread(known.get(ref.environmentId)?.handoffs ?? []);
+      else if (feed.handoffs === undefined) next = get(input.details.pendingHandoffsAtom(ref));
+      else if ((feed.handoffsTotal ?? feed.handoffs.length) > feed.handoffs.length) {
+        // Capped: the thread's loaded approvals plus the feed's, since a server without snapshot
+        // retention can leave a listed one outside the loaded history.
+        const loaded = get(input.details.pendingHandoffsAtom(ref));
+        const ids = new Set(loaded.map((handoff) => handoff.handoffId));
+        next = [...loaded, ...forThread(feed.handoffs).filter((h) => !ids.has(h.handoffId))];
+      } else next = forThread(feed.handoffs);
       if (!sameHandoffs(value, next)) value = next;
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`decision-inbox-open-approvals:${key}`));
