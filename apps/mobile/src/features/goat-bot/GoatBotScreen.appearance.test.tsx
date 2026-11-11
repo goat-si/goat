@@ -849,3 +849,110 @@ it("shows a task chip in the task header only when one exists", async () => {
   await empty.unmount();
   screenSession.supportsTaskThreads = false;
 });
+
+it("draws the person's messages and Send in a member bot's color, with text that reads on it", async () => {
+  const you: GoatBotRow = {
+    kind: "user",
+    id: "you",
+    text: "Check the disks",
+    createdAt: "2026-11-11T10:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    sendKey: null,
+    requestKey: null,
+    delivery: { state: "sent" },
+    showReceipt: false,
+  } as GoatBotRow;
+  const member = (color: string | undefined) =>
+    ({
+      botId: "scout",
+      name: "Scout",
+      role: "member",
+      environmentId: "env",
+      sessionThreadId: "scout-thread",
+      state: "active",
+      avatar: null,
+      ...(color === undefined ? {} : { color }),
+    }) as unknown as import("@goat/contracts").BotProfile;
+  const colors = async (bot: import("@goat/contracts").BotProfile | undefined) => {
+    screenSession.rows = [you];
+    const view = await render(<GoatBotScreen visible member={bot} />);
+    await typeInto(view.container, "More");
+    const text = [...view.container.querySelectorAll("span")].find(
+      (node) => node.textContent === "Check the disks",
+    );
+    const pill = [...view.container.querySelectorAll("div[data-style]")].find(
+      (node) =>
+        JSON.parse(node.getAttribute("data-style") ?? "null")?.borderRadius === 20 &&
+        node.contains(text ?? null),
+    );
+    const send = view.container.querySelector('[aria-label="Send message"]');
+    const result = {
+      pill: JSON.parse(pill?.getAttribute("data-style") ?? "null")?.backgroundColor,
+      text: JSON.parse(text?.getAttribute("data-style") ?? "null")?.color,
+      send: JSON.parse(send?.querySelector("div")?.getAttribute("data-style") ?? "null")
+        ?.backgroundColor,
+    };
+    await view.unmount();
+    screenSession.rows = [];
+    return result;
+  };
+  expect(await colors(member("#1d3a8a"))).toEqual({
+    pill: "#1D3A8A",
+    text: "#FFFFFF",
+    send: "#1D3A8A",
+  });
+  expect((await colors(member("#D9A21B"))).text).toBe("#000000");
+  // The main bot and a member without a color keep the theme's neutral.
+  expect(await colors(undefined)).toEqual({ pill: undefined, text: undefined, send: undefined });
+  expect(await colors(member(undefined))).toEqual({
+    pill: undefined,
+    text: undefined,
+    send: undefined,
+  });
+});
+
+it("redraws messages already shown when the member's color changes, and keeps attachment labels fully opaque on it", async () => {
+  const you = {
+    kind: "user",
+    id: "you",
+    text: "Here",
+    attachments: [{ id: "a1", type: "file", name: "notes.txt" }],
+    createdAt: "2026-11-11T10:00:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    sendKey: null,
+    requestKey: null,
+    delivery: { state: "sent" },
+    showReceipt: false,
+  } as unknown as GoatBotRow;
+  const member = (color: string) =>
+    ({
+      botId: "scout",
+      name: "Scout",
+      role: "member",
+      environmentId: "env",
+      sessionThreadId: "scout-thread",
+      state: "active",
+      avatar: null,
+      color,
+    }) as unknown as import("@goat/contracts").BotProfile;
+  screenSession.rows = [you];
+  const view = await render(<GoatBotScreen visible member={member("#1D3A8A")} />);
+  try {
+    const first = list.props?.extraData;
+    expect(first).toBeDefined();
+    // A fresh profile object with the same color keeps the rows as they are.
+    await view.rerender(<GoatBotScreen visible member={member("#1d3a8a")} />);
+    expect(list.props?.extraData).toBe(first);
+    await view.rerender(<GoatBotScreen visible member={member("#D9A21B")} />);
+    expect(list.props?.extraData).not.toBe(first);
+    const label = [...view.container.querySelectorAll("span")].find((node) =>
+      node.textContent?.includes("notes.txt"),
+    );
+    expect(JSON.parse(label?.getAttribute("data-style") ?? "{}").opacity ?? 1).toBe(1);
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
