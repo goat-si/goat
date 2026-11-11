@@ -34,7 +34,7 @@ function DockedApproval(props: { environmentId: EnvironmentId; handoff: Handoff 
  * Every open approval of the thread, above the composer until a person answers it. They have no
  * dismiss: an approval leaves when it is answered, expires or is withdrawn.
  */
-export function approvalBannerItems(input: {
+function approvalBannerItems(input: {
   readonly environmentId: EnvironmentId;
   readonly handoffs: ReadonlyArray<Handoff>;
   readonly expanded: boolean;
