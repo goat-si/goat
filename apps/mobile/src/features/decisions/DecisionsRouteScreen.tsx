@@ -10,6 +10,7 @@ import { AppBar } from "../../components/ui/AppBar";
 import { useThreadShell } from "../../state/entities";
 import { useSavedRemoteConnection } from "../../state/use-remote-environment-registry";
 import { PendingApprovalCard } from "../threads/PendingApprovalCard";
+import { HumanHandoffCard } from "../threads/HumanHandoffCard";
 import { PendingUserInputBody } from "../threads/PendingUserInputBody";
 import { Button } from "../../components/ui/Button";
 import { DecisionDurableCard } from "./DecisionDurableCard";
@@ -149,7 +150,13 @@ function FocusedDecisionsContent(props: {
                   {current.routing.escalation.reason}
                 </Text>
               ) : null}
-              {current.kind === "decision" ? (
+              {current.kind === "handoff" ? (
+                <HumanHandoffCard
+                  environmentId={current.ref.environmentId}
+                  handoff={current.handoff}
+                  inherited={false}
+                />
+              ) : current.kind === "decision" ? (
                 <DecisionDurableCard
                   item={current}
                   draft={decisionDraft}
