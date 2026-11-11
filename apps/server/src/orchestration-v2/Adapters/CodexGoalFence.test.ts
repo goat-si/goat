@@ -249,6 +249,7 @@ const resumePersistedFence = (
       request: (method: string, params: { cursor?: string }) =>
         Effect.sync(() => {
           if (method === "thread/goal/get") return { goal: { status: goalStatus } };
+          if (method !== "thread/turns/list") return {};
           reads.push(params.cursor);
           return params.cursor
             ? { data: status === "missing" ? [] : [{ id: "U", status }], nextCursor: null }
@@ -376,4 +377,80 @@ it.effect("resume clears a finished goal turn's fence and paused goal block toge
 );
 it.effect("a goal turn ending while its goal stays active keeps the goal block", () =>
   releaseScenario("active", "live"),
+);
+it.effect(
+  "a goal turn ending before Codex reports its goal paused still frees the thread in one write",
+  () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("goal-release-early");
+      const record = { instanceId: ProviderInstanceId.make("codex"), recordName: "record" };
+      const block = { threadId, nativeThreadId: "native-thread" };
+      let stopped = false;
+      let goalBlocked = true;
+      let goal = "active";
+      const refusedWhileFree: Array<string> = [];
+      const pauseSent = yield* Deferred.make<void>();
+      const pauseAnswered = yield* Deferred.make<void>();
+      const settled = yield* Deferred.make<void>();
+      const service = {
+        getGoalBlocks: () => Effect.sync(() => (goalBlocked ? [{ record, block }] : [])),
+        getStopObligations: () =>
+          Effect.sync(() => (stopped ? [{ record, block: { ...block, nativeTurnId: "U" } }] : [])),
+        recordStopObligation: () =>
+          Effect.sync(() => {
+            stopped = true;
+          }),
+        clearStopObligation: (_key: unknown, _stop: unknown, releaseGoal?: boolean) =>
+          Effect.sync(() => {
+            stopped = false;
+            if (releaseGoal === true) goalBlocked = false;
+            if (goalBlocked) refusedWhileFree.push("goal block outlived the stop fence");
+          }).pipe(Effect.andThen(Deferred.succeed(settled, undefined)), Effect.asVoid),
+      } as unknown as CodexSurvivors.CodexSurvivors["Service"];
+      const client = {
+        request: (method: string) =>
+          method === "thread/goal/set"
+            ? Deferred.succeed(pauseSent, undefined).pipe(
+                Effect.andThen(Deferred.await(pauseAnswered)),
+                Effect.andThen(
+                  Effect.sync(() => {
+                    goal = "paused";
+                    return {};
+                  }),
+                ),
+              )
+            : Effect.sync(() => ({ goal: { status: goal } })),
+        raw: { request: () => Effect.succeed({}) },
+      } as unknown as CodexClient.CodexAppServerClient["Service"];
+      const fences = makeGoalTurnFences({
+        client,
+        service,
+        goals: new Map([[block.nativeThreadId, [{ record, block }]]]),
+        waiting: new Map(),
+        tracked: new Map(),
+        scope: yield* Scope.Scope,
+        onReady: () => Effect.void,
+      });
+      yield* fences.observe(
+        "turn/started",
+        { threadId: block.nativeThreadId, turn: { id: "U" } },
+        true,
+      );
+      yield* Deferred.await(pauseSent);
+      // The fenced turn ends while the pause is still on its way, before any goal notification.
+      yield* fences.observe(
+        "turn/completed",
+        { threadId: block.nativeThreadId, turn: { id: "U", status: "completed" } },
+        true,
+      );
+      assert.isTrue(
+        stopped,
+        "the start guard must keep holding the thread until the goal is known",
+      );
+      yield* Deferred.succeed(pauseAnswered, undefined);
+      yield* Deferred.await(settled);
+      assert.isFalse(stopped);
+      assert.isFalse(goalBlocked);
+      assert.deepEqual(refusedWhileFree, []);
+    }).pipe(Effect.scoped),
 );
