@@ -20,7 +20,7 @@ import {
 } from "../../mcp/toolkits/project/tools.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import { type PlacementAnswer, PlacementAdmission } from "./PlacementAdmission.ts";
-import { placementDigest } from "./PlacementDigest.ts";
+import { placementDigest, readAttachmentExactly } from "./PlacementDigest.ts";
 import { issuedAtMillis, PlacementAdmissionEnabled } from "./PlacementKey.ts";
 
 type LaunchParameters = typeof ThreadLaunchParameters.Type & {
@@ -153,7 +153,7 @@ const make = Effect.gen(function* () {
     const path = resolveAttachmentPath({ attachmentsDir, attachment });
     return path === null
       ? Effect.succeed(null)
-      : fileSystem.readFile(path).pipe(Effect.orElseSucceed(() => null));
+      : readAttachmentExactly(fileSystem, path, attachment);
   };
 
   /** A retry that did not run the launch is answered from the thread as it is now. */

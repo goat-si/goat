@@ -212,6 +212,23 @@ describe("goat_thread_launch with placement on the target", () => {
       }).pipe(Effect.provide(targetLayer())),
   );
 
+  it.effect(
+    "a stored attachment that grew past its declared size is refused as unavailable and launches nothing",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        const { calls, run } = yield* runner;
+        const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+        const attachment = yield* pendingAttachment("tiny");
+        const path = resolveAttachmentPath({ attachmentsDir, attachment });
+        if (path === null) return yield* Effect.die("no attachment path");
+        NodeFS.writeFileSync(path, "tiny".repeat(4096));
+        const refused = yield* failureOf(client(), params({ attachments: [attachment] }), run);
+        assert.strictEqual(refused.classification, "placement_attachment_unavailable");
+        assert.strictEqual((yield* Ref.get(calls)).length, 0);
+      }).pipe(Effect.provide(targetLayer())),
+  );
+
   it.effect("a field the caller adds, such as its own hash, is not part of the digest", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(T0);

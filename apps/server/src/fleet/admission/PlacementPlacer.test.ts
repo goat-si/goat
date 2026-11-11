@@ -350,9 +350,42 @@ describe("the placer's attempt history", () => {
         assert.strictEqual(first.length, 20);
         // Each visited host fails one archive and still has an untried row.
         for (const host of first) {
-          const [row] = yield* attempts.pendingCleanups(host, 1);
+          const [row] = yield* attempts.nextCleanups(host, 1);
           if (row !== undefined)
             yield* attempts.markCleanupTried({ ownerKey: row.ownerKey, attempt: row.attempt });
+        }
+        const missed = hosts.filter((host) => !first.includes(host));
+        const second = yield* attempts.hostsWithCleanups(20);
+        assert.deepStrictEqual(second.slice(0, missed.length), missed);
+      }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
+  );
+
+  it.effect(
+    "cleanup visits every host in turn when archives succeed: a host with rows left after its batch goes behind the rest",
+    () =>
+      Effect.gen(function* () {
+        const attempts = yield* Attempts.PlacementAttempts;
+        const hosts = Array.from(
+          { length: 21 },
+          (_, index) => "h" + String(index).padStart(2, "0"),
+        );
+        for (const host of hosts)
+          for (const n of [0, 1]) {
+            const owner = host + ":" + n;
+            yield* attempts.resolve({
+              ownerKey: owner,
+              targetHost: host,
+              payloadJson: "{}",
+              now: T0,
+            });
+            yield* attempts.recordNotStarted({ ownerKey: owner, attempt: 0, threadId: "idle" });
+          }
+        const first = yield* attempts.hostsWithCleanups(20);
+        // Each visited host archives one batch of one row and still has a row left.
+        for (const host of first) {
+          const [row] = yield* attempts.nextCleanups(host, 1);
+          if (row !== undefined)
+            yield* attempts.clearCleanup({ ownerKey: row.ownerKey, attempt: row.attempt });
         }
         const missed = hosts.filter((host) => !first.includes(host));
         const second = yield* attempts.hostsWithCleanups(20);
@@ -458,7 +491,7 @@ describe("placing on another GOAT", () => {
         fake.answers.push(refused("placement_not_started", { threadId: "idle" }));
         yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
         const pending = yield* Effect.flatMap(Attempts.PlacementAttempts, (attempts) =>
-          attempts.pendingCleanups("box-a", 10),
+          attempts.nextCleanups("box-a", 10),
         ).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
         assert.deepStrictEqual(
           pending.map((row) => row.cleanupThreadId),

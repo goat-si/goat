@@ -56,4 +56,8 @@ export default Effect.gen(function* () {
     gap_rerun_by TEXT,
     gap_rerun_at INTEGER
   )`;
+  yield* sql`CREATE TABLE placement_cleanup_hosts (
+    host TEXT PRIMARY KEY,
+    turn INTEGER NOT NULL
+  )`;
 });

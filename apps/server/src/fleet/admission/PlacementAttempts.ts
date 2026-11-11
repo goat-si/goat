@@ -94,12 +94,15 @@ export interface PlacementAttemptsShape {
     readonly ownerKey: string;
     readonly attempt: number;
   }) => Effect.Effect<void, PlacementAttemptsError>;
-  /** Idle threads left on one host, least recently tried first, at most `limit`. */
-  readonly pendingCleanups: (
+  /**
+   * Takes one host's next batch of idle threads, least recently tried first, and moves the host
+   * behind every other host with cleanups, whatever the archives then do.
+   */
+  readonly nextCleanups: (
     host: string,
     limit: number,
   ) => Effect.Effect<ReadonlyArray<Attempt>, PlacementAttemptsError>;
-  /** Hosts with idle threads left, least recently tried first. */
+  /** Hosts with idle threads left, least recently visited first. */
   readonly hostsWithCleanups: (
     limit: number,
   ) => Effect.Effect<ReadonlyArray<string>, PlacementAttemptsError>;
@@ -282,22 +285,35 @@ const make = Effect.gen(function* () {
         WHERE owner_key = ${input.ownerKey} AND attempt = ${input.attempt}
       `.pipe(failed("clearCleanup"));
     }),
-    pendingCleanups: Effect.fn("PlacementAttempts.pendingCleanups")(function* (
+    nextCleanups: Effect.fn("PlacementAttempts.nextCleanups")(function* (
       host: string,
       limit: number,
     ) {
-      const rows = yield* sql<Row>`
-        SELECT * FROM placement_attempts
-        WHERE cleanup_thread_id IS NOT NULL AND target_host = ${host}
-        ORDER BY COALESCE(cleanup_turn, 0), created_at, owner_key LIMIT ${limit}
-      `.pipe(failed("pendingCleanups"));
-      return rows.map(fromRow);
+      return yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<Row>`
+              SELECT * FROM placement_attempts
+              WHERE cleanup_thread_id IS NOT NULL AND target_host = ${host}
+              ORDER BY COALESCE(cleanup_turn, 0), created_at, owner_key LIMIT ${limit}
+            `;
+            if (rows.length > 0)
+              yield* sql`
+                INSERT INTO placement_cleanup_hosts (host, turn)
+                VALUES (${host}, (SELECT COALESCE(MAX(turn), 0) + 1 FROM placement_cleanup_hosts))
+                ON CONFLICT (host) DO UPDATE SET turn = excluded.turn
+              `;
+            return rows.map(fromRow);
+          }),
+        )
+        .pipe(failed("nextCleanups"));
     }),
     hostsWithCleanups: Effect.fn("PlacementAttempts.hostsWithCleanups")(function* (limit: number) {
       const rows = yield* sql<{ readonly target_host: string }>`
-        SELECT target_host FROM placement_attempts
-        WHERE cleanup_thread_id IS NOT NULL
-        GROUP BY target_host ORDER BY MAX(COALESCE(cleanup_turn, 0)), target_host LIMIT ${limit}
+        SELECT a.target_host FROM placement_attempts a
+        LEFT JOIN placement_cleanup_hosts h ON h.host = a.target_host
+        WHERE a.cleanup_thread_id IS NOT NULL
+        GROUP BY a.target_host ORDER BY COALESCE(MAX(h.turn), 0), a.target_host LIMIT ${limit}
       `.pipe(failed("hostsWithCleanups"));
       return rows.map((row) => row.target_host);
     }),
@@ -367,6 +383,11 @@ const make = Effect.gen(function* () {
               UPDATE placement_attempts SET payload_json = ''
               WHERE state IN ('started', 'not_started') AND cleanup_thread_id IS NULL
                 AND issued_at < ${cutoff} AND payload_json <> ''
+            `;
+            yield* sql`
+              DELETE FROM placement_cleanup_hosts WHERE host NOT IN (
+                SELECT target_host FROM placement_attempts WHERE cleanup_thread_id IS NOT NULL
+              )
             `;
             return deleted.length;
           }),

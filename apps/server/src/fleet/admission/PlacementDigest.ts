@@ -1,6 +1,12 @@
-import type { ChatAttachment } from "@goat/contracts";
+import {
+  type ChatAttachment,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a synchronous digest over bytes already read.
 import * as NodeCrypto from "node:crypto";
 
@@ -78,3 +84,41 @@ export const placementDigest = Effect.fn("PlacementDigest.compute")(function* <E
   fields.principal = input.principal;
   return sha256("goat-placement/1" + encodeJson(canonical(fields)));
 });
+
+/**
+ * The attachment's bytes when the file holds exactly its declared size, which must be within the
+ * attachment limit; null otherwise. Never holds more than one byte past that size in memory.
+ */
+export const readAttachmentExactly = (
+  fileSystem: FileSystem.FileSystem,
+  path: string,
+  attachment: Pick<ChatAttachment, "type" | "sizeBytes">,
+) => {
+  const limit =
+    attachment.type === "image"
+      ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
+      : PROVIDER_SEND_TURN_MAX_FILE_BYTES;
+  const size = attachment.sizeBytes;
+  if (!Number.isInteger(size) || size < 0 || size > limit) return Effect.succeed(null);
+  return fileSystem.stream(path, { bytesToRead: size + 1 }).pipe(
+    Stream.runFold(
+      () => ({ chunks: [] as Array<Uint8Array>, length: 0 }),
+      (read, chunk) => {
+        read.chunks.push(chunk);
+        read.length += chunk.byteLength;
+        return read;
+      },
+    ),
+    Effect.map((read) => {
+      if (read.length !== size) return null;
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of read.chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    }),
+    Effect.orElseSucceed(() => null),
+  );
+};

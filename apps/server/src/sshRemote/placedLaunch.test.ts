@@ -10,7 +10,8 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { attachmentBody, readAttachmentExactly } from "./placedLaunch.ts";
+import { readAttachmentExactly } from "../fleet/admission/PlacementDigest.ts";
+import { attachmentBody } from "./placedLaunch.ts";
 import { launchAgainst } from "./SshRemoteDispatch.lineage.testkit.ts";
 import type { SshRemoteDispatchError } from "./dispatchFailure.ts";
 
@@ -159,9 +160,7 @@ it.effect(
       assert.isNull(yield* readAttachmentExactly(fileSystem, path, attachment));
       assert.isNull(
         yield* readAttachmentExactly(fileSystem, path, {
-          ...attachment,
-          type: "image" as const,
-          mimeType: "image/png",
+          type: "image",
           sizeBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES + 1,
         }),
       );

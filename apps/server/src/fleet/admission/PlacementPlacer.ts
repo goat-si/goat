@@ -17,7 +17,6 @@ import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ThreadLifecycle from "../../orchestration-v2/ThreadLifecycleService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
-import { readAttachmentExactly } from "../../sshRemote/placedLaunch.ts";
 import { type PlacementAnswer, PlacementAdmission } from "./PlacementAdmission.ts";
 import {
   type Attempt,
@@ -25,6 +24,7 @@ import {
   PlacementAttempts,
   PlacementAttemptsError,
 } from "./PlacementAttempts.ts";
+import { readAttachmentExactly } from "./PlacementDigest.ts";
 import { PlacementAdmissionEnabled, type PlacementArgument } from "./PlacementKey.ts";
 
 /** What a placer may conclude about one attempt (design §11). */
@@ -138,7 +138,7 @@ const make = Effect.gen(function* () {
     host: string,
     authorize: Effect.Effect<RuntimeMode, E, R>,
   ) {
-    const pending = yield* attempts.pendingCleanups(host, CLEANUP_BATCH);
+    const pending = yield* attempts.nextCleanups(host, CLEANUP_BATCH);
     for (const row of pending) {
       const threadId = row.cleanupThreadId;
       if (threadId === null) continue;
