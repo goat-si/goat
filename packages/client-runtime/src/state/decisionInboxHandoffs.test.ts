@@ -196,4 +196,41 @@ describe("decision inbox approval handoffs", () => {
       h.registry.dispose();
     }
   });
+  it("keeps the dock's approvals on disconnect when the dock is the only subscriber", () => {
+    const h = harness();
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
+      });
+      expect(h.registry.get(h.inbox.openApprovalsAtom(ref(a)))).toHaveLength(1);
+      h.registry.set(h.feeds(a), null);
+      expect(
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
+      ).toEqual(["one"]);
+    } finally {
+      stopDock();
+      h.registry.dispose();
+    }
+  });
+
+  it("counts a known approval once while its reconnected feed reloads", () => {
+    const h = harness();
+    const stopSummary = h.registry.mount(h.inbox.summaryAtom);
+    try {
+      // The default shells wait on an approval in thread "thread" of each environment.
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
+      });
+      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 1 });
+      h.registry.set(h.feeds(a), null);
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 1 });
+    } finally {
+      stopSummary();
+      h.registry.dispose();
+    }
+  });
 });

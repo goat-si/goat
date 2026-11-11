@@ -244,7 +244,9 @@ export function createDecisionInboxAtoms(input: {
   const summaryAtom = Atom.make((get) => {
     const connected = get(connectedAtom);
     const unique = new Map<string, ScopedThreadRef>();
-    const flagged = new Map<EnvironmentId, number>();
+    const flagged = new Map<EnvironmentId, ScopedThreadRef[]>();
+    // Threads flagged only for an approval; a known approval handoff may already count them.
+    const approvalOnly = new Set<string>();
     for (const thread of get(input.threadShellsAtom)) {
       if (
         !connected.includes(thread.environmentId) ||
@@ -253,16 +255,26 @@ export function createDecisionInboxAtoms(input: {
         continue;
       const ref = { environmentId: thread.environmentId, threadId: thread.id };
       if (!unique.has(threadKey(ref)))
-        flagged.set(thread.environmentId, (flagged.get(thread.environmentId) ?? 0) + 1);
+        flagged.set(thread.environmentId, [...(flagged.get(thread.environmentId) ?? []), ref]);
+      if (!thread.hasPendingUserInput) approvalOnly.add(threadKey(ref));
       unique.set(threadKey(ref), ref);
     }
+    const known = get(knownHandoffsAtom);
     let count = 0;
     let total = 0;
     for (const environmentId of connected) {
       const feed = input.feedAtom === undefined ? null : get(input.feedAtom(environmentId));
       if (feed === null) {
-        count += flagged.get(environmentId) ?? 0;
-        total += flagged.get(environmentId) ?? 0;
+        const handoffThreads = new Set(
+          (known.get(environmentId)?.handoffs ?? []).map((entry) =>
+            threadKey({ environmentId, threadId: entry.handoff.requestedBy.threadId }),
+          ),
+        );
+        const shellOnly = (flagged.get(environmentId) ?? []).filter(
+          (ref) => !(approvalOnly.has(threadKey(ref)) && handoffThreads.has(threadKey(ref))),
+        ).length;
+        count += shellOnly;
+        total += shellOnly;
         continue;
       }
       // A loaded feed is complete, so it alone decides what is counted.
@@ -277,9 +289,9 @@ export function createDecisionInboxAtoms(input: {
       }
     }
     // Approval handoffs always wait on the person, including while their environment is away.
-    for (const known of get(knownHandoffsAtom).values()) {
-      count += known.open;
-      total += known.open;
+    for (const entry of known.values()) {
+      count += entry.open;
+      total += entry.open;
     }
     const refs = [...unique.entries()]
       .sort(([left], [right]) => compareStrings(left, right))
@@ -388,6 +400,8 @@ export function createDecisionInboxAtoms(input: {
     const ref = parseThreadKey(key);
     let value: ReadonlyArray<Handoff> = [];
     return Atom.make((get) => {
+      // Observed even while the feed is loaded, so a dock alone still remembers it.
+      const known = get(knownHandoffsAtom);
       const feed = input.feedAtom === undefined ? null : get(input.feedAtom(ref.environmentId));
       const forThread = (handoffs: ReadonlyArray<DecisionHandoff>) =>
         handoffs.flatMap((entry) =>
@@ -396,7 +410,7 @@ export function createDecisionInboxAtoms(input: {
       // While the feed is away, the last list it gave stays docked; feedAwayAtom disables it.
       const next =
         feed === null
-          ? forThread(get(knownHandoffsAtom).get(ref.environmentId)?.handoffs ?? [])
+          ? forThread(known.get(ref.environmentId)?.handoffs ?? [])
           : feed.handoffs === undefined
             ? get(input.details.pendingHandoffsAtom(ref))
             : forThread(feed.handoffs);
