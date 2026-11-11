@@ -345,7 +345,7 @@ export function GoatBotScreen(props: {
   const renderItem = useCallback(
     ({ item }: { item: GoatBotChatItem }) =>
       item.kind === "unread" ? (
-        <GoatBotUnreadDividerRow />
+        <GoatBotUnreadDividerRow focus={unread.focusDivider} onFocused={unread.dividerFocused} />
       ) : (
         <GoatBotTimelineRow
           row={item}
@@ -361,6 +361,8 @@ export function GoatBotScreen(props: {
         />
       ),
     [
+      unread.focusDivider,
+      unread.dividerFocused,
       session.canSend,
       onAnswer,
       session.onRetryInput,
@@ -442,6 +444,7 @@ export function GoatBotScreen(props: {
           main={props.main ?? null}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
+          workRevision={session.workRevision}
           chatTasks={chatTasks}
           taskCardInfo={taskCard?.card ?? null}
           taskCard={
@@ -564,7 +567,7 @@ export function GoatBotScreen(props: {
             <GoatBotUnreadPill
               count={unread.pill}
               onPress={() => {
-                unread.settle();
+                unread.jump();
                 void listRef.current?.scrollToIndex({
                   index: unread.dividerIndex,
                   viewPosition: 0,
