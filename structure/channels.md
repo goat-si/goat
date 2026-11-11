@@ -103,9 +103,11 @@ holds the cluster home claim. Web screens live in `apps/web/src/components/goatB
 `useGoatBotSession` sends with `kind: "goat"`. Mobile renders `GoatBotScreen` in
 `apps/mobile/src/features/goat-bot/GoatBotScreen.tsx` and keeps a remembered thread-or-bot mode on
 Home. Worker coding stays in the worker threads. The bot transcript is the messenger view.
-Between its rows, `goatBot/activitySteps.ts` counts what the bot did on one collapsed line per
-stretch, read on the client from the session threads of the chat's newest turns (at most two) or
-from a task's own worker, and only on the bot's own server.
+Between its rows, `goatBot/activitySteps.ts` counts what the bot did on one collapsed line. Clients
+read those steps from the bot's own server only, and only from servers that send a thread's newest
+part: the main chat from the session thread of its newest turn, a task's view from the task's own
+worker. A main-chat step belongs to the run that took it and sits above that run's turn's own reply
+or question; a run no visible turn names gets no line.
 
 ### Member bots
 

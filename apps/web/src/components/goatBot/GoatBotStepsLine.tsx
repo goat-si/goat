@@ -34,6 +34,9 @@ function GoatBotStepsLine({
 }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
+  // Collapsed earlier work is not loaded, so a line of it alone has nothing to open.
+  if (line.steps.length === 0)
+    return <p className="ps-1 text-xs leading-5 text-muted-foreground">{line.summary}</p>;
   return (
     <div className="flex max-w-[44rem] min-w-0 flex-col items-start ps-1 text-xs leading-5 text-muted-foreground">
       <button
@@ -48,9 +51,7 @@ function GoatBotStepsLine({
       </button>
       {open ? (
         <ol id={listId} className="mt-1 flex min-w-0 flex-col gap-0.5 border-s border-border ps-3">
-          {line.earlier > 0 ? (
-            <li>{line.earlier + " earlier " + (line.earlier === 1 ? "step" : "steps")}</li>
-          ) : null}
+          {line.earlier ? <li>Earlier work, not listed</li> : null}
           {line.steps.map((step) => (
             <li key={step.id} className="min-w-0 break-words">
               {step.label}

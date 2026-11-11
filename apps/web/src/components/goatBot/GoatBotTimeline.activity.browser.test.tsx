@@ -35,6 +35,7 @@ const rows: ReadonlyArray<GoatBotRow> = Array.from({ length: 30 }, (_, index) =>
 
 const step = (id: string, state: GoatBotActivityStep["state"] = "done"): GoatBotActivityStep => ({
   id,
+  runId: "run-1",
   at: "2026-11-12T03:00:00Z",
   label: "Ran vp test " + id,
   state,
@@ -47,7 +48,7 @@ const line = (steps: ReadonlyArray<GoatBotActivityStep>, summary: string): GoatB
   failedCount: steps.filter((entry) => entry.state === "failed").length,
   live: false,
   steps,
-  earlier: 0,
+  earlier: false,
 });
 
 const before = (rowId: string, value: GoatBotActivityLine): GoatBotActivityPlacement => ({

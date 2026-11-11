@@ -6,6 +6,7 @@ import {
   EnvironmentId,
 } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import type { ReactNode } from "react";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -53,6 +54,10 @@ vi.mock("~/hooks/useResizableWidth", () => ({
   useResizableWidth: () => ({ width: 480, handlers: {} }),
 }));
 vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
+vi.mock("./GoatBotStepsProvider", () => ({
+  GoatBotStepsProvider: ({ children }: { children: ReactNode }) => children,
+  GoatBotStepsReader: ({ children }: { children: ReactNode }) => children,
+}));
 const decodeBotThreadRow = Schema.decodeSync(BotThreadRow);
 // The task's questions keep their real card, so a pick goes through the pane's send.
 vi.mock("./GoatBotTimeline", async () => {

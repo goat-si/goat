@@ -98,11 +98,7 @@ function GoatBotRouteSession() {
     <GoatBotMainProfileContext value={main}>
       <GoatBotMemberContext value={member}>
         <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-          <GoatBotStepsProvider
-            visibleTurnItems={items}
-            rows={session.rows}
-            environmentId={bot?.environmentId ?? null}
-          >
+          <GoatBotStepsProvider visibleTurnItems={items} environmentId={bot?.environmentId ?? null}>
             <GoatBotChatView
               {...session}
               {...(memberResolving && roster.environmentId !== null
@@ -177,7 +173,6 @@ export function GoatBotTaskRoute({
         {!narrow && (
           <GoatBotStepsProvider
             visibleTurnItems={session.visibleTurnItems}
-            rows={session.rows}
             environmentId={memberDeleted ? null : environmentId}
           >
             <GoatBotChatView

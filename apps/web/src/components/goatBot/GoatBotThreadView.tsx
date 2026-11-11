@@ -171,7 +171,6 @@ function GoatBotThreadSession({
       ) : null}
       <GoatBotStepsProvider
         visibleTurnItems={visibleTurnItems}
-        rows={rows}
         environmentId={removal === null ? environmentId : null}
       >
         <GoatBotChatView

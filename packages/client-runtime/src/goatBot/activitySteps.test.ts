@@ -13,6 +13,7 @@ import { EMPTY_THREAD_HISTORY_META, type ThreadHistoryMeta } from "../state/thre
 import {
   createGoatBotActivityStepsAtoms,
   goatBotActivityPlacement,
+  goatBotActivityRowTurns,
   goatBotActivitySources,
   goatBotSourceSteps,
   type GoatBotActivityLine,
@@ -71,14 +72,15 @@ const said = (id: string, second: number) =>
     creationSource: "web",
     channel: { ...meta, kind: "inbound", inputId: "in-" + id, readAt: at(second) },
   });
-const replied = (id: string, second: number) =>
+// A reply or question names the turn it answers for, as the server's receipts do.
+const replied = (id: string, second: number, taskId?: string) =>
   projected({
     ...base("bot", id, second),
     type: "assistant_message",
     messageId: "m-" + id,
     text: "Reply " + id,
     streaming: false,
-    channel: { ...meta, kind: "result" },
+    channel: { ...meta, kind: "result", ...(taskId === undefined ? {} : { taskId }) },
   });
 function chip(
   id: string,
@@ -170,14 +172,29 @@ function place(
 ): GoatBotActivityPlacement {
   return goatBotActivityPlacement({
     rows: options.rows ?? timeline(botItems),
-    sources: goatBotActivitySources({
-      visibleTurnItems: botItems,
-      botEnvironmentId: env,
-      taskId: options.taskId ?? null,
-    }),
+    sources: sourcesOf(botItems, options.taskId ?? null),
     steps,
+    rowTurns: goatBotActivityRowTurns(botItems),
   });
 }
+
+function sourcesOf(
+  botItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  taskId: string | null = null,
+) {
+  return goatBotActivitySources({
+    visibleTurnItems: botItems,
+    botEnvironmentId: env,
+    taskId,
+    boundedSnapshots: true,
+  });
+}
+
+const turn = (taskId: string, second: number, running = false) => ({
+  taskId,
+  since: at(second),
+  running,
+});
 
 function lineBefore(
   placement: GoatBotActivityPlacement,
@@ -189,7 +206,7 @@ function lineBefore(
 
 describe("goatBotActivityPlacement", () => {
   it("shows one counted line above the reply through the real rows builder, without reasoning or report calls", () => {
-    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 20)];
+    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 20, "task-c1")];
     const session = [
       thought("think", 2),
       read("a", 3),
@@ -217,57 +234,101 @@ describe("goatBotActivityPlacement", () => {
     ).toBe("Explored 2 files, 1 search and ran 2 commands");
   });
 
-  it("splits at a question and keeps each line's steps after the chip moves to the answer's run", () => {
+  it("puts a requester's steps above their own reply when another requester's session overlaps it", () => {
+    // B asks after A, works on its own session, and A's reply lands while B still runs.
+    const overlapping = [
+      said("ua", 0),
+      chip("ca", 1, local(sessionA, "run-a")),
+      said("ub", 2),
+      chip("cb", 3, local(sessionB, "run-b"), { status: "running" }),
+      replied("ra", 10, "task-ca"),
+    ];
+    const bSteps = [ran("b1", 5, [], { runId: "run-b" }, sessionB)];
+    const live = place(overlapping, [goatBotSourceSteps(bSteps, false)]);
+    expect(lineBefore(live, "ra")).toBeNull();
+    expect(live.trailing).toMatchObject({
+      kind: "steps",
+      line: { live: true, summary: "Ran 1 command" },
+    });
+
+    const answered = [
+      ...overlapping.slice(0, 3),
+      chip("cb", 3, local(sessionB, "run-b")),
+      replied("ra", 10, "task-ca"),
+      replied("rb", 20, "task-cb"),
+    ];
+    const done = place(answered, [goatBotSourceSteps(bSteps, false)]);
+    expect(lineBefore(done, "ra")).toBeNull();
+    expect(lineBefore(done, "rb")?.steps.map((step) => step.id)).toEqual(["b1"]);
+    expect(done.trailing).toBeNull();
+  });
+
+  it("keeps a queued request's work out of the run before it, across the person's later message", () => {
+    const botItems = [
+      said("u1", 0),
+      chip("c1", 1, local(sessionA, "run-1")),
+      said("u2", 3),
+      chip("c2", 4, local(sessionA, "run-2")),
+      replied("r1", 8, "task-c1"),
+      replied("r2", 12, "task-c2"),
+    ];
+    const session = [ran("x", 2), read("y", 5), ran("z", 9, [], { runId: "run-2" })];
+    const placement = place(botItems, [goatBotSourceSteps(session, false)]);
+    expect(placement.beforeRow.has("u2")).toBe(false);
+    expect(lineBefore(placement, "r1")?.steps.map((step) => step.id)).toEqual(["x", "y"]);
+    expect(lineBefore(placement, "r2")?.steps.map((step) => step.id)).toEqual(["z"]);
+  });
+
+  it("gives no line to a turn's earlier run once its chip names the run after the answer", () => {
     const before = [
       said("u1", 0),
       chip("c1", 1, local(sessionA, "run-1"), { status: "running" }),
-      replied("q1", 10),
+      replied("q1", 10, "task-c1"),
       said("u2", 12),
-      replied("r1", 30),
+      replied("r1", 30, "task-c1"),
     ];
+    const session = [read("a", 3), ran("x", 4), ran("y", 20, [], { runId: "run-2" })];
+    // While the first run is the chip's, its steps sit above the question.
+    expect(lineBefore(place(before, [goatBotSourceSteps(session, false)]), "q1")).toMatchObject({
+      key: "activity:a",
+      summary: "Read 1 file and ran 1 command",
+    });
     // Answering starts a new run and the server rebinds the turn's chip to it.
     const rebound = [
       ...before,
       chip("c1v2", 13, local(sessionA, "run-2"), { version: 2, taskId: "task-c1", createdAt: 1 }),
     ];
-    const session = [read("a", 3), ran("x", 4), ran("y", 20, [], { runId: "run-2" })];
     const placement = place(rebound, [goatBotSourceSteps(session, false)]);
-    expect(lineBefore(placement, "q1")).toMatchObject({
-      key: "activity:a",
-      summary: "Read 1 file and ran 1 command",
-    });
+    expect(lineBefore(placement, "q1")).toBeNull();
     expect(lineBefore(placement, "r1")).toMatchObject({
       key: "activity:y",
       summary: "Ran 1 command",
     });
 
-    const grown = place(rebound, [goatBotSourceSteps([...session, ran("z", 21)], false)]);
+    const grown = place(rebound, [
+      goatBotSourceSteps([...session, ran("z", 21, [], { runId: "run-2" })], false),
+    ]);
     expect(lineBefore(grown, "r1")).toMatchObject({ key: "activity:y", summary: "Ran 2 commands" });
-    expect(lineBefore(grown, "q1")?.key).toBe("activity:a");
   });
 
   it("reads only the newest per-task session, so older turns on other sessions get no line", () => {
     const botItems = [
       said("u0", 0),
       chip("c0", 1, local(sessionC)),
-      replied("r0", 5),
+      replied("r0", 5, "task-c0"),
       said("u1", 10),
       chip("c1", 11, local(sessionA)),
-      replied("r1", 15),
+      replied("r1", 15, "task-c1"),
       said("u2", 20),
       chip("c2", 21, local(sessionB)),
-      replied("r2", 25),
+      replied("r2", 25, "task-c2"),
     ];
-    const sources = goatBotActivitySources({
-      visibleTurnItems: botItems,
-      botEnvironmentId: env,
-      taskId: null,
-    });
-    expect(sources).toEqual([
+    expect(sourcesOf(botItems)).toEqual([
       {
         kind: "local",
         refs: [{ environmentId: env, threadId: ThreadId.make(sessionB) }],
         running: false,
+        runs: new Map([["run-1", turn("task-c2", 21)]]),
       },
     ]);
     const placement = place(botItems, [
@@ -278,6 +339,33 @@ describe("goatBotActivityPlacement", () => {
     expect(lineBefore(placement, "r2")?.summary).toBe("Ran 1 command");
   });
 
+  it("reads nothing from a server that sends a thread's whole history", () => {
+    const botItems = [
+      said("u1", 0),
+      chip("c1", 1, local(sessionA)),
+      chip("c2", 2, { environmentId: "env", threadId: sessionB, host: "mac-studio" }),
+    ];
+    const task = [
+      chip(
+        "t1",
+        1,
+        { environmentId: "env", threadId: "worker-1" },
+        { kind: "work", taskId: "task-1" },
+      ),
+    ];
+    const whole = (items: typeof botItems, taskId: string | null) =>
+      goatBotActivitySources({
+        visibleTurnItems: items,
+        botEnvironmentId: env,
+        taskId,
+        boundedSnapshots: false,
+      });
+    expect(whole(botItems, null)).toEqual([
+      { kind: "elsewhere", host: "mac-studio", at: at(2), turn: turn("task-c2", 2) },
+    ]);
+    expect(whole(task, "task-1")).toEqual([]);
+  });
+
   it("ranks sessions by when their turn started, not when its chip last changed", () => {
     const botItems = [
       chip("c0", 1, local(sessionC)),
@@ -286,11 +374,7 @@ describe("goatBotActivityPlacement", () => {
       // The oldest turn's chip changes last; it stays the oldest.
       chip("c0v2", 30, local(sessionC), { version: 2, taskId: "task-c0", createdAt: 1 }),
     ];
-    const local0 = goatBotActivitySources({
-      visibleTurnItems: botItems,
-      botEnvironmentId: env,
-      taskId: null,
-    })[0];
+    const local0 = sourcesOf(botItems)[0];
     expect(local0?.kind === "local" ? local0.refs.map((ref) => ref.threadId) : null).toEqual([
       sessionB,
     ]);
@@ -314,14 +398,14 @@ describe("goatBotActivityPlacement", () => {
       live.trailing?.kind === "steps" ? live.trailing.line.steps.map((step) => step.state) : null,
     ).toEqual(["done", "running"]);
 
-    const answered = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9)];
+    const answered = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9, "task-c1")];
     const done = place(answered, [goatBotSourceSteps([read("a", 2), ran("x", 4)], false)]);
     expect(done.trailing).toBeNull();
     expect(lineBefore(done, "r1")).toMatchObject({ live: false, failedCount: 0 });
   });
 
   it("counts failed steps", () => {
-    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9)];
+    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9, "task-c1")];
     const line = lineBefore(
       place(botItems, [goatBotSourceSteps([ran("x", 2, [], { exitCode: 1 }), ran("y", 3)], false)]),
       "r1",
@@ -330,75 +414,63 @@ describe("goatBotActivityPlacement", () => {
     expect(line?.steps.map((step) => step.state)).toEqual(["failed", "done"]);
   });
 
-  it("gives no line to a gap the snapshot cut runs through or to steps before the first row", () => {
+  it("gives no line to a stretch that opens before the session's held history", () => {
     const botItems = [
-      said("u1", 10),
-      chip("c1", 11, local(sessionA)),
-      replied("r1", 20),
-      said("u2", 30),
-      replied("r2", 40),
+      said("u1", 20),
+      chip("c1", 22, local(sessionA)),
+      replied("q1", 30, "task-c1"),
+      replied("r1", 40, "task-c1"),
     ];
-    // The server held this session's history from second 25 on.
-    const cut = goatBotSourceSteps([ran("x", 25), ran("y", 35)], true);
+    // The server held this session's history from second 26 on; the turn began at 22.
+    const cut = goatBotSourceSteps([ran("x", 26), ran("y", 35)], true);
     const placement = place(botItems, [cut]);
-    expect(lineBefore(placement, "u2")).toBeNull();
-    expect(lineBefore(placement, "r2")?.summary).toBe("Ran 1 command");
-
-    const early = place(botItems, [goatBotSourceSteps([ran("w", 5), ran("v", 15)], false)]);
-    expect(lineBefore(early, "u1")).toBeNull();
-    expect(lineBefore(early, "r1")?.steps.map((step) => step.id)).toEqual(["v"]);
+    expect(lineBefore(placement, "q1")).toBeNull();
+    expect(lineBefore(placement, "r1")?.steps.map((step) => step.id)).toEqual(["y"]);
   });
 
-  it("counts a collapsed group's steps as earlier steps, even when its anchor is reasoning", () => {
-    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9)];
+  it("names a collapsed group as earlier work without a count, even when its anchor is reasoning", () => {
+    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9, "task-c1")];
+    // The server's count includes reasoning, so 151 thoughts must not read as 151 steps.
     const anchor = thought("anchor", 2, {
-      deferredWork: { cursor: "c", itemCount: 200, lastOrdinal: 199 },
+      deferredWork: { cursor: "c", itemCount: 151, lastOrdinal: 150 },
     });
     const withStep = lineBefore(
       place(botItems, [goatBotSourceSteps([anchor, ran("x", 3)], false)]),
       "r1",
     );
-    expect(withStep).toMatchObject({
-      summary: "Ran 1 command, plus 200 earlier steps",
-      earlier: 200,
-    });
+    expect(withStep).toMatchObject({ summary: "Ran 1 command, plus earlier work", earlier: true });
     const alone = lineBefore(place(botItems, [goatBotSourceSteps([anchor], false)]), "r1");
-    expect(alone).toMatchObject({ summary: "200 earlier steps", earlier: 200, steps: [] });
+    expect(alone).toMatchObject({ summary: "Earlier work", earlier: true, steps: [] });
   });
 
-  it("marks work run on another machine or server in its turn's gap, and loads nothing for it", () => {
+  it("marks work run on another machine or server above its own turn's reply, and loads nothing for it", () => {
     const botItems = [
       said("u1", 0),
       chip("c1", 1, { environmentId: "env", threadId: sessionA, host: "mac-studio" }),
-      replied("r1", 9),
-      said("u2", 10),
-      chip("c2", 11, { environmentId: "other", threadId: sessionB }),
-      replied("r2", 19),
+      said("u2", 5),
+      chip("c2", 6, { environmentId: "other", threadId: sessionB }),
+      replied("r2", 15, "task-c2"),
+      replied("r1", 19, "task-c1"),
     ];
-    const sources = goatBotActivitySources({
-      visibleTurnItems: botItems,
-      botEnvironmentId: env,
-      taskId: null,
-    });
-    expect(sources).toEqual([
-      { kind: "elsewhere", host: "mac-studio", at: at(1) },
-      { kind: "elsewhere", host: null, at: at(11) },
+    expect(sourcesOf(botItems)).toEqual([
+      { kind: "elsewhere", host: "mac-studio", at: at(1), turn: turn("task-c1", 1) },
+      { kind: "elsewhere", host: null, at: at(6), turn: turn("task-c2", 6) },
     ]);
     const placement = place(botItems, []);
     expect(placement.beforeRow.get("r1")).toEqual({ kind: "elsewhere", host: "mac-studio" });
     expect(placement.beforeRow.get("r2")).toEqual({ kind: "elsewhere", host: null });
+    expect(placement.beforeRow.has("u2")).toBe(false);
   });
 
   it("reads a task view from the task's own worker, or marks it trailing once the task moved", () => {
     const dedicated = { environmentId: "env", threadId: "worker-1" };
     const task = [chip("t1", 1, dedicated, { kind: "work", taskId: "task-1", status: "running" })];
-    expect(
-      goatBotActivitySources({ visibleTurnItems: task, botEnvironmentId: env, taskId: "task-1" }),
-    ).toEqual([
+    expect(sourcesOf(task, "task-1")).toEqual([
       {
         kind: "local",
         refs: [{ environmentId: env, threadId: ThreadId.make("worker-1") }],
         running: true,
+        runs: null,
       },
     ]);
     const moved = [
@@ -415,9 +487,9 @@ describe("goatBotActivityPlacement", () => {
         },
       ),
     ];
-    expect(
-      goatBotActivitySources({ visibleTurnItems: moved, botEnvironmentId: env, taskId: "task-1" }),
-    ).toEqual([{ kind: "elsewhere", host: "mac-studio", at: null }]);
+    expect(sourcesOf(moved, "task-1")).toEqual([
+      { kind: "elsewhere", host: "mac-studio", at: null, turn: null },
+    ]);
     expect(place(moved, [], { taskId: "task-1", rows: [] }).trailing).toEqual({
       kind: "elsewhere",
       host: "mac-studio",
@@ -425,7 +497,7 @@ describe("goatBotActivityPlacement", () => {
   });
 
   it("names GOAT tools in expanded steps as coding threads do", () => {
-    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9)];
+    const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9, "task-c1")];
     const steps = goatBotSourceSteps(
       [
         tool("direct", 2, "mcp__goat__goat_thread_read", { threadId: "t-1" }),
@@ -479,5 +551,43 @@ describe("createGoatBotActivityStepsAtoms", () => {
     expect(finished).not.toBe(first);
     expect(finished.steps.map((step) => step.state)).toEqual(["done"]);
     unmount();
+  });
+
+  it("lets go of the source thread once the last reader unmounts", () => {
+    let reading = 0;
+    const items = Atom.make<ReadonlyArray<OrchestrationV2ProjectedTurnItem>>([]);
+    // Stands for the thread's live subscription: it runs only while something reads it.
+    const subscription = Atom.make((get) => {
+      reading += 1;
+      get.addFinalizer(() => {
+        reading -= 1;
+      });
+      return get(items);
+    });
+    const history = Atom.make<ThreadHistoryMeta>(EMPTY_THREAD_HISTORY_META);
+    const atoms = createGoatBotActivityStepsAtoms({
+      quietVisibleTurnItemsAtom: () => subscription,
+      historyAtom: () => history,
+    });
+    const tasks: Array<() => void> = [];
+    const registry = AtomRegistry.make({
+      scheduleTask: (task) => {
+        tasks.push(task);
+        return () => {};
+      },
+    });
+    const settle = () => {
+      for (const task of tasks.splice(0)) task();
+    };
+    const ref: ScopedThreadRef = { environmentId: env, threadId: ThreadId.make(sessionA) };
+    const first = registry.mount(atoms.stepsAtom(ref));
+    const second = registry.mount(atoms.stepsAtom(ref));
+    expect(reading).toBe(1);
+    first();
+    settle();
+    expect(reading).toBe(1);
+    second();
+    settle();
+    expect(reading).toBe(0);
   });
 });

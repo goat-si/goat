@@ -30,6 +30,8 @@ vi.mock("./goatBotHooks", () => ({
 vi.mock("~/state/entities", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/entities")>()),
   useEnvironmentShellsBootstrapped: () => true,
+  useServerConfigs: () =>
+    new Map([["env", { environment: { capabilities: { goatBotOpenAsks: true } } }]]),
   useThreadShell: (ref: { threadId: string } | null) => {
     mocks.shellReads.push(ref?.threadId ?? null);
     return ref?.threadId === "worker-1" ? { source: mocks.workerShell } : null;
@@ -57,7 +59,7 @@ vi.mock("~/state/threads", async (importOriginal) => {
 
 import { appAtomRegistry, AppAtomRegistryProvider } from "~/rpc/atomRegistry";
 import { environmentThreadDetails } from "~/state/threads";
-import { GoatBotStepsProvider } from "./GoatBotStepsProvider";
+import { GoatBotStepsProvider, GoatBotStepsReader } from "./GoatBotStepsProvider";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -156,17 +158,21 @@ function Conversation({ items }: { readonly items: OrchestrationV2ProjectedTurnI
 }
 
 /** The main chat as GoatBotThreadView renders it, with the steps of its turns' sessions. */
-function MainChat({ items }: { readonly items: OrchestrationV2ProjectedTurnItem[] }) {
+function MainChat({
+  items,
+  paused = false,
+}: {
+  readonly items: OrchestrationV2ProjectedTurnItem[];
+  readonly paused?: boolean;
+}) {
   const session = useGoatBotSession(items);
   return (
     <AppAtomRegistryProvider>
       <GoatBotActivityContext value={session.activity}>
-        <GoatBotStepsProvider
-          visibleTurnItems={items}
-          rows={session.rows}
-          environmentId={"env" as never}
-        >
-          <GoatBotTimeline rows={[]} onRetry={() => {}} />
+        <GoatBotStepsProvider visibleTurnItems={items} environmentId={"env" as never}>
+          <GoatBotStepsReader rows={session.rows} paused={paused}>
+            <GoatBotTimeline rows={[]} onRetry={() => {}} />
+          </GoatBotStepsReader>
         </GoatBotStepsProvider>
       </GoatBotActivityContext>
     </AppAtomRegistryProvider>
@@ -258,4 +264,18 @@ it("keeps a turn's session loaded in the main chat, so the live line reads its r
     .element(screen.getByRole("button", { name: /^Waiting for your approval/ }))
     .toBeVisible();
   expect(appAtomRegistry.getNodes().has(detailAtom)).toBe(true);
+});
+
+it("stops reading the turn's session steps while a file covers the main chat, and reads them again after", async () => {
+  setup();
+  appAtomRegistry.set(detailAtom, projection("pending"));
+  const items = conversation({ kind: "turn", worker: turnWorker });
+  // The status line's own listener lets go of the detail within seconds of the last reader.
+  const steps = environmentThreadDetails.quietVisibleTurnItemsAtom(turnWorker);
+  await using screen = await render(<MainChat items={items} />, { router: false });
+  await vi.waitFor(() => expect(appAtomRegistry.getNodes().has(steps)).toBe(true));
+  await screen.rerender(<MainChat items={items} paused />);
+  await vi.waitFor(() => expect(appAtomRegistry.getNodes().has(steps)).toBe(false));
+  await screen.rerender(<MainChat items={items} />);
+  await vi.waitFor(() => expect(appAtomRegistry.getNodes().has(steps)).toBe(true));
 });

@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   restore: vi.fn(async () => true),
   items: [] as Array<unknown>,
   sessionReads: [] as Array<string>,
+  boundedSnapshots: true,
 }));
 vi.mock("../hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("../hooks/useSettings", () => ({ useClientSettings: () => state.beside }));
@@ -28,6 +29,11 @@ vi.mock("../state/entities", () => ({
   },
   resolveThreadDetailRef: () => null,
   useThreadVisibleTurnItems: () => state.items,
+  // Activity lines read a session only from a server that sends a thread's newest part.
+  useServerConfigs: () =>
+    new Map([
+      ["env", { environment: { capabilities: { goatBotOpenAsks: state.boundedSnapshots } } }],
+    ]),
 }));
 // Records which threads' steps a view reads; reading one is what subscribes to it.
 vi.mock("../state/threads", async (importOriginal) => {
@@ -54,22 +60,28 @@ vi.mock("../state/threads", async (importOriginal) => {
     },
   };
 });
-vi.mock("../components/goatBot/GoatBotChatView", () => ({
-  GoatBotChatView: (props: { removal?: string | null; onRestore?: () => void }) => {
-    state.chatSession = props;
-    return (
-      <div>
-        Main chat
-        {props.removal === "deleted" ? <span>Chat removed</span> : null}
-        {props.onRestore ? (
-          <button type="button" onClick={props.onRestore}>
-            Restore
-          </button>
-        ) : null}
-      </div>
-    );
-  },
-}));
+// The real chat reads its steps through GoatBotStepsReader around its conversation.
+vi.mock("../components/goatBot/GoatBotChatView", async () => {
+  const { GoatBotStepsReader } = await import("../components/goatBot/GoatBotStepsProvider");
+  return {
+    GoatBotChatView: (props: { removal?: string | null; onRestore?: () => void }) => {
+      state.chatSession = props;
+      return (
+        <GoatBotStepsReader rows={[]}>
+          <div>
+            Main chat
+            {props.removal === "deleted" ? <span>Chat removed</span> : null}
+            {props.onRestore ? (
+              <button type="button" onClick={props.onRestore}>
+                Restore
+              </button>
+            ) : null}
+          </div>
+        </GoatBotStepsReader>
+      );
+    },
+  };
+});
 vi.mock("../components/goatBot/useBotManage", () => ({
   useBotManage: () => ({ canManage: true, restore: state.restore }),
 }));
@@ -280,12 +292,14 @@ const turnChip = (() => {
 })();
 
 it.each([
-  { narrow: true, reads: [] },
-  { narrow: false, reads: ["goat-bot-session:s1"] },
+  { narrow: true, bounded: true, reads: [] },
+  { narrow: false, bounded: true, reads: ["goat-bot-session:s1"] },
+  { narrow: false, bounded: false, reads: [] },
 ])(
-  "reads the main chat's turn sessions only while that chat shows beside the task %#",
-  async ({ narrow, reads }) => {
+  "reads the main chat's turn sessions only while that chat shows beside the task, from a bounded server %#",
+  async ({ narrow, bounded, reads }) => {
     state.narrow = narrow;
+    state.boundedSnapshots = bounded;
     state.beside = true;
     state.supported = true;
     state.bots = [];
@@ -302,6 +316,7 @@ it.each([
       expect([...new Set(state.sessionReads)]).toEqual(reads);
     } finally {
       state.items = [];
+      state.boundedSnapshots = true;
     }
   },
 );

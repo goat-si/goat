@@ -43,6 +43,7 @@ import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
+import { GoatBotStepsReader } from "./GoatBotStepsProvider";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -364,69 +365,72 @@ export function GoatBotChatView({
               key={botIdentity}
               replyingSince={removed ? null : replyingSince}
             />
-            <GoatBotOpenFileContext value={fileOpening}>
-              {rows.length > 0 ? (
-                // History stays readable while the bot is unavailable; only sending stops.
-                <GoatBotTimeline
-                  rows={rows}
-                  unreadSince={unreadSince}
-                  onReply={
-                    canSend
-                      ? (text) => {
-                          setReplyState({ botIdentity, text });
-                          composerRef.current?.focus();
-                        }
-                      : undefined
-                  }
-                  environmentId={environmentId}
-                  onOpenHome={bot ? () => setPanelOpen(true) : undefined}
-                  taskThreads={supportsTaskThreads}
-                  retryEnvironmentId={supportsTaskRetry ? environmentId : null}
-                  replyingSince={removed ? null : replyingSince}
-                  onRetry={onRetryInput}
-                  onDiscard={onDiscardInput}
-                  onPick={
-                    canSend
-                      ? (answer, taskId, questionId) =>
-                          taskId !== undefined && onSendToTask !== undefined
-                            ? onSendToTask(
-                                ChannelTaskId.make(taskId),
-                                answer,
-                                [],
-                                questionId === undefined
-                                  ? undefined
-                                  : ChannelQuestionId.make(questionId),
-                              )
-                            : onSend(answer)
-                      : undefined
-                  }
-                />
-              ) : removal !== null ? (
-                <GoatBotRemovedNotice
-                  removal={removal}
-                  availability={availability}
-                  onRetryAvailability={onRetryAvailability}
-                  canOpenCurrentBot={canOpenCurrentBot}
-                  onUnarchive={onUnarchive}
-                  onRestore={member ? onRestore : undefined}
-                  memberName={member?.name ?? null}
-                  onCheckAgain={onCheckAgain}
-                />
-              ) : (
-                <GoatBotNotice
-                  availability={availability}
-                  homeMove={homeMove}
-                  onRetryAvailability={onRetryAvailability}
-                  legacyAgentRoute={legacyAgentRoute}
-                  onSelectExample={
-                    canSend
-                      ? (text) =>
-                          setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
-                      : undefined
-                  }
-                />
-              )}
-            </GoatBotOpenFileContext>
+            {/* An open file covers the conversation, so its activity lines stop reading. */}
+            <GoatBotStepsReader rows={rows} paused={shownFile !== null}>
+              <GoatBotOpenFileContext value={fileOpening}>
+                {rows.length > 0 ? (
+                  // History stays readable while the bot is unavailable; only sending stops.
+                  <GoatBotTimeline
+                    rows={rows}
+                    unreadSince={unreadSince}
+                    onReply={
+                      canSend
+                        ? (text) => {
+                            setReplyState({ botIdentity, text });
+                            composerRef.current?.focus();
+                          }
+                        : undefined
+                    }
+                    environmentId={environmentId}
+                    onOpenHome={bot ? () => setPanelOpen(true) : undefined}
+                    taskThreads={supportsTaskThreads}
+                    retryEnvironmentId={supportsTaskRetry ? environmentId : null}
+                    replyingSince={removed ? null : replyingSince}
+                    onRetry={onRetryInput}
+                    onDiscard={onDiscardInput}
+                    onPick={
+                      canSend
+                        ? (answer, taskId, questionId) =>
+                            taskId !== undefined && onSendToTask !== undefined
+                              ? onSendToTask(
+                                  ChannelTaskId.make(taskId),
+                                  answer,
+                                  [],
+                                  questionId === undefined
+                                    ? undefined
+                                    : ChannelQuestionId.make(questionId),
+                                )
+                              : onSend(answer)
+                        : undefined
+                    }
+                  />
+                ) : removal !== null ? (
+                  <GoatBotRemovedNotice
+                    removal={removal}
+                    availability={availability}
+                    onRetryAvailability={onRetryAvailability}
+                    canOpenCurrentBot={canOpenCurrentBot}
+                    onUnarchive={onUnarchive}
+                    onRestore={member ? onRestore : undefined}
+                    memberName={member?.name ?? null}
+                    onCheckAgain={onCheckAgain}
+                  />
+                ) : (
+                  <GoatBotNotice
+                    availability={availability}
+                    homeMove={homeMove}
+                    onRetryAvailability={onRetryAvailability}
+                    legacyAgentRoute={legacyAgentRoute}
+                    onSelectExample={
+                      canSend
+                        ? (text) =>
+                            setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                        : undefined
+                    }
+                  />
+                )}
+              </GoatBotOpenFileContext>
+            </GoatBotStepsReader>
           </div>
           {ready && !canOperate ? (
             <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">
