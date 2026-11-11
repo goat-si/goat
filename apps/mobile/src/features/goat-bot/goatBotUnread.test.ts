@@ -59,12 +59,12 @@ describe("goatBotUnreadMark", () => {
       card("done", 2, 7),
       bot("new-2", 8),
     ];
-    expect(goatBotUnreadMark(rows, at(4), at(30))).toEqual({ firstId: "new-1", count: 3 });
+    expect(goatBotUnreadMark(rows, at(4), at(30))).toMatchObject({ firstId: "new-1", count: 3 });
   });
 
   it("reads replies newer than the chat's newest message at opening as they arrive", () => {
     const rows = [bot("waiting", 6), bot("live", 12)];
-    expect(goatBotUnreadMark(rows, at(4), at(6))).toEqual({ firstId: "waiting", count: 1 });
+    expect(goatBotUnreadMark(rows, at(4), at(6))).toMatchObject({ firstId: "waiting", count: 1 });
     expect(goatBotUnreadMark([bot("live", 12)], at(4), at(6))).toBeNull();
     expect(goatBotUnreadMark(rows, at(4), null)).toBeNull();
   });

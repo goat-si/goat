@@ -172,7 +172,7 @@ const fixture = Effect.gen(function* () {
               `<a id="link" href="${blocked}/blocked">go</a><button id="popup" onclick="window.open('${blocked}/blocked')">popup</button><button id="slowPopup" onclick="window.open('${blocked}/slow')">slow popup</button><button id="popupRedirect" onclick="window.open('${allowed}/redirect')">redirect popup</button><form action="${blocked}/blocked"><button id="form">submit</button></form><button id="script" onclick="location.href='${blocked}/blocked'">script</button><button id="popupBlank" onclick="const p=window.open('about:blank');p.location.href='${blocked}/blocked'">blank popup</button><button id="next">next</button>`,
             );
           });
-          server.listen(0, () => {
+          server.listen(0, "127.0.0.1", () => {
             serverPort = (server.address() as { port: number }).port;
             resolve(server);
           });

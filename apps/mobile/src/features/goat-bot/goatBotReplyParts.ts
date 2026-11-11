@@ -24,8 +24,11 @@ const RAW_HTML: ReadonlyArray<readonly [RegExp, RegExp]> = [
 ];
 // A link reference definition's label, at any indent and inside list items or block quotes (its
 // destination may follow on the next line): its links may sit in another part, so such replies
-// stay whole.
-const REFERENCE_DEFINITION = /^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*\[(?:[^\]\\]|\\.)+\]:/m;
+// stay whole. A label still open at the end of its line may close on the next, so it counts too.
+const DEFINITION_START = /^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*\[(?:[^\]\\]|\\.)*(?:\]:|\\?$)/;
+// A list item or block quote, which can hold an indented table below it.
+const CONTAINER = /^ {0,3}(?:>|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$))/;
+const LEAD = /^ {1,3}(?=\S)/;
 
 /** How many cells a table row has, counting pipes a backslash does not escape. */
 function cellCount(line: string): number {
@@ -43,15 +46,21 @@ function isDelimiterRow(line: string): boolean {
 
 /**
  * Splits a bot reply at its tables so each can stand in its own card: a header row and a delimiter
- * row with as many cells at the left edge, outside any list, quote, HTML or code block, then rows up
- * to a blank line or another block. A reply with link reference definitions stays whole.
+ * row with as many cells, indented at most three spaces and outside any list, quote, HTML or code
+ * block, then rows up to a blank line or another block. A reply with link reference definitions
+ * outside code stays whole. One pass over the lines.
  */
 export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
-  if (!text.includes("|") || REFERENCE_DEFINITION.test(text)) return [{ kind: "prose", text }];
+  const whole = [{ kind: "prose" as const, text }];
+  if (!text.includes("|")) return whole;
   const lines = text.split("\n");
   const parts: GoatBotReplyPart[] = [];
   let prose: string[] = [];
   let fence: string | null = null;
+  // Whether a list item or quote came before, after which an indented line may belong to it.
+  let sawContainer = false;
+  // Whether the lines read last are an indented code block.
+  let indentedCode = false;
   // Whether the paragraph run since the last blank line holds a list item, quote, HTML, code or
   // indented line, which could carry a table below it as a continuation.
   let held = false;
@@ -96,16 +105,26 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
       keep(line, true);
       continue;
     }
+    if (line.trim() !== "") {
+      const afterBlank = index === 0 || (lines[index - 1] ?? "").trim() === "";
+      indentedCode = /^(?: {4}|\t)/.test(line) && !sawContainer && (indentedCode || afterBlank);
+    }
+    if (!indentedCode && DEFINITION_START.test(line)) return whole;
+    if (CONTAINER.test(line)) sawContainer = true;
     const next = lines[index + 1];
-    const columns = line.startsWith("|") || /^[^\s|>#<]/.test(line) ? cellCount(line) : 0;
+    // Up to three spaces before a table, unless a list or quote above could own the indent.
+    const header = sawContainer ? line : line.replace(LEAD, "");
+    const delimiter = next === undefined || sawContainer ? next : next.replace(LEAD, "");
+    const columns = header.startsWith("|") || /^[^\s|>#]/.test(header) ? cellCount(header) : 0;
     if (
-      next === undefined ||
+      delimiter === undefined ||
+      indentedCode ||
       !line.includes("|") ||
       OTHER_BLOCK.test(line) ||
       columns === 0 ||
-      /^\s/.test(next) ||
-      !isDelimiterRow(next) ||
-      cellCount(next) !== columns ||
+      /^\s/.test(delimiter) ||
+      !isDelimiterRow(delimiter) ||
+      cellCount(delimiter) !== columns ||
       held
     ) {
       keep(line);
