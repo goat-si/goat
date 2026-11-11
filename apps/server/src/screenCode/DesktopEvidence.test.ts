@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -6,7 +7,7 @@ import type { ScreenHostCall, ScreenObservation, ScreenTargetRef } from "@goat/c
 import { call, context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { CellWindowTracker, withInputTiming } from "./DesktopWindows.ts";
-import { finishCellTracker } from "./DesktopEvidence.ts";
+import { finishCellTracker, pollHiddenWindow } from "./DesktopEvidence.ts";
 import { terminalFailure } from "../cua/ComputerUseTerminal.ts";
 
 it.effect("a successful window listing with lock-like data completes the evidence read", () =>
@@ -53,6 +54,51 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
       ).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") expect(result.failure.code).toBe(reason);
+    }),
+);
+
+it.effect(
+  "a hidden-window wait keeps the answer of a listing that returns after its deadline",
+  () =>
+    Effect.gen(function* () {
+      const clock = yield* Clock.Clock;
+      let now = 0;
+      const list = () =>
+        Effect.sync(() => {
+          now = 2_005;
+          return {
+            requestId: "request",
+            registrationId: "registration",
+            controlId: "control",
+            connectionGeneration: "driver:one",
+            runId: "r",
+            turnId: "t",
+            callId: 1,
+            status: "settled" as const,
+            result: {
+              isError: false,
+              structuredContent: {
+                windows: [{ pid: 42, window_id: 7, title: "Doc", is_on_screen: false }],
+              },
+            },
+          };
+        });
+      const hidden = yield* pollHiddenWindow({
+        list,
+        pid: 42,
+        windowId: 7,
+        timeoutMs: 2_000,
+        cellDeadlineMillis: 60_000,
+      }).pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          currentTimeMillis: Effect.sync(() => now),
+          // The never-firing sleep stands for a timer that fires late.
+          sleep: () => Effect.never,
+        }),
+      );
+      expect(hidden.value.met).toBe(true);
+      expect(hidden.category).toBe("confirmed");
     }),
 );
 

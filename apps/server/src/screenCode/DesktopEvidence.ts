@@ -616,7 +616,6 @@ export const pollDesktopWait = Effect.fn("DesktopEvidence.pollDesktopWait")(func
       ),
     );
     if (Option.isNone(polled)) break;
-    if (waitCap > 0 && (yield* Clock.currentTimeMillis) > deadline) break;
     value = deps.sample(polled.value);
     if (deps.met(value) || waitCap === 0) break;
     const after = yield* Clock.currentTimeMillis;
