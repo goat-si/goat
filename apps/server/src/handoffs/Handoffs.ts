@@ -57,7 +57,9 @@ import { storeName, matchesArgs } from "./handoffDigest.ts";
 import { decodeAddress, unavailable } from "./handoffDecode.ts";
 import { SshProgressBinding } from "./sshProgressBinding.ts";
 import { heldBy, holdsThread } from "./approvalHold.ts";
+import { makeOpenHandoffEnds } from "./openHandoffEnds.ts";
 import { withdrawComputerUseWake as withdrawWake } from "./approvalWakeWithdraw.ts";
+import { makePendingContinuations } from "./pendingContinuations.ts";
 export { SshProgressBinding } from "./sshProgressBinding.ts";
 export { approvalAskFailure } from "./approvalHold.ts";
 
@@ -109,6 +111,19 @@ export class Handoffs extends Context.Service<
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** The asking thread withdraws its own open approval, which frees it to ask for another. */
     readonly withdraw: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
+    /** Every thread's open handoffs on one path, with what they would continue with. */
+    readonly pendingContinuations: (path: string) => Effect.Effect<
+      ReadonlyArray<{
+        readonly handoff: Handoff;
+        readonly args: Readonly<Record<string, unknown>>;
+      }>,
+      HandoffError
+    >;
+    /** The server ends an open handoff nobody needs any more; the message says why. */
+    readonly cancelPending: (
+      input: HandoffReadInput,
+      resultMessage: string,
+    ) => Effect.Effect<Handoff, HandoffError>;
     readonly endBrowserClaim: (
       input: HandoffReadInput,
       state: "cancelled" | "expired",
@@ -591,13 +606,12 @@ const make = Effect.gen(function* () {
         yield* continuations.supersede(input.requestedBy.threadId, pending, handoff.handoffId);
       return handoffSummary(handoff);
     });
-  const withdraw = (input: HandoffReadInput) =>
-    Effect.gen(function* () {
-      const record = yield* read(input);
-      if (!holdsThread(record)) return yield* new HandoffError({ reason: "invalid_request" });
-      if (!isHandoffPending(record.state)) return yield* new HandoffError({ reason: "conflict" });
-      return yield* transition(input, "cancelled", { type: "agent", threadId: input.threadId });
-    }).pipe(lock.withPermits(1));
+  const ends = makeOpenHandoffEnds({
+    lock,
+    read,
+    end: (input, actor, message) =>
+      transition(input, "cancelled", actor, false, undefined, undefined, message),
+  });
   const create: Handoffs["Service"]["create"] = (input) =>
     withAdmission(createUnlocked(input).pipe(lock.withPermits(1)));
   const standing = makeComputerUseStanding({
@@ -924,7 +938,9 @@ const make = Effect.gen(function* () {
     withComputerUseSettings: standing.withSettings,
     removeComputerUseAllowedApp: standing.removeAllowedApp,
     read,
-    withdraw,
+    withdraw: ends.withdraw,
+    cancelPending: ends.cancelPending,
+    pendingContinuations: makePendingContinuations(sql, loadPrivate),
     endBrowserClaim: makeBrowserClaimEnd({ read, transition, lock }),
     open,
     respond,

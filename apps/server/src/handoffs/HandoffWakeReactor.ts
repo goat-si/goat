@@ -108,7 +108,11 @@ const continuation = (handoff: Handoff, applied: Applied | undefined) => {
         ? "A person stopped it. Do not act on that tab or screen again unless they ask; tell them what you could not finish."
         : "The step may not be done, and after a restart the tab or control may be gone. Observe again before acting, and tell the person what you could not finish.";
   if (handoff.state !== "completed")
-    return "Nothing ran. Ask again only if the user still wants it.";
+    return handoff.state === "cancelled" &&
+      handoff.actor.type === "server" &&
+      handoff.resultMessage !== undefined
+      ? `Nothing ran: ${handoff.resultMessage}`
+      : "Nothing ran. Ask again only if the user still wants it.";
   if (applied !== undefined) return applied.text;
   if (isHubDeviceHandoffPath(handoff.target.path))
     return `Call ${goatCallText(handoff.target.path === "hub.device_join" ? "hub.device_join" : handoff.target.path === "hub.device_leave" ? "hub.device_leave" : "hub.device_repair")} again with decisionId "${handoff.handoffId}" to continue.`;
