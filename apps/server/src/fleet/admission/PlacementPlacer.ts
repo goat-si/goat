@@ -32,7 +32,7 @@ export type PlacedOutcome =
   /** The target answered from its fenced row; the next attempt may go anywhere. */
   | { readonly _tag: "NotStarted"; readonly attempt: Attempt; readonly message: string }
   /** Still unknown: retry this key on this target later; nothing goes elsewhere meanwhile. */
-  | { readonly _tag: "Unknown"; readonly attempt: Attempt; readonly message: string };
+  | { readonly _tag: "Unknown"; readonly attempt: Attempt | null; readonly message: string };
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -117,8 +117,16 @@ const make = Effect.gen(function* () {
         attachmentsDir: config.value.attachmentsDir,
         attachmentId: attachment.id,
       });
-      const bytes =
+      // Size first: only a file of the declared, schema-bounded size is read into memory.
+      const info =
         path === null
+          ? null
+          : yield* fileSystem.value.stat(path).pipe(Effect.orElseSucceed(() => null));
+      const bytes =
+        path === null ||
+        info === null ||
+        info.type !== "File" ||
+        Number(info.size) !== attachment.sizeBytes
           ? null
           : yield* fileSystem.value.readFile(path).pipe(Effect.orElseSucceed(() => null));
       if (bytes === null) return null;
@@ -171,12 +179,18 @@ const make = Effect.gen(function* () {
       const done = yield* Effect.result(archived);
       if (done._tag === "Success")
         yield* attempts.clearCleanup({ ownerKey: row.ownerKey, attempt: row.attempt });
-      else
+      else {
+        yield* attempts.markCleanupTried({
+          ownerKey: row.ownerKey,
+          attempt: row.attempt,
+          now: yield* Clock.currentTimeMillis,
+        });
         yield* Effect.logWarning("placement cleanup will retry", {
           host,
           threadId,
           cause: describe(done.failure),
         });
+      }
     }
   });
 
@@ -210,7 +224,14 @@ const make = Effect.gen(function* () {
     }
     const sent = yield* dispatch
       .launchThread(
-        { ...frozen.launch, host, placement: argumentOf(attempt) },
+        {
+          ...frozen.launch,
+          host,
+          placement: argumentOf(attempt),
+          attachmentDigests: Object.fromEntries(
+            frozen.attachments.map((entry) => [entry.id, entry.sha256]),
+          ),
+        },
         authorize.pipe(Effect.asVoid),
       )
       .pipe(Effect.result);
@@ -325,6 +346,14 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Fail closed: an attempt may have started, and its record is gone.
+  const pruned: PlacedOutcome = {
+    _tag: "Unknown",
+    attempt: null,
+    message:
+      "This work's placement history was pruned before it settled; a person decides whether to run it again.",
+  };
+
   const pinnedElsewhere = (attempt: Attempt): PlacedOutcome => ({
     _tag: "Unknown",
     attempt,
@@ -347,6 +376,7 @@ const make = Effect.gen(function* () {
         launch: input.launch,
         attachments: digests,
       } satisfies FrozenRemote);
+      if (resolved._tag === "Pruned") return pruned;
       if (resolved._tag === "Started") return started(resolved.attempt);
       if (resolved._tag === "PinnedElsewhere") return pinnedElsewhere(resolved.attempt);
       return yield* sendRemote(resolved.attempt, input.authorize);
@@ -356,6 +386,7 @@ const make = Effect.gen(function* () {
   const placeLocal: PlacementPlacerShape["placeLocal"] = Effect.fn("PlacementPlacer.placeLocal")(
     function* (input) {
       const resolved = yield* resolveFor(input.ownerKey, LOCAL_TARGET, input.payload);
+      if (resolved._tag === "Pruned") return pruned;
       if (resolved._tag === "Started") return started(resolved.attempt);
       if (resolved._tag === "PinnedElsewhere") return pinnedElsewhere(resolved.attempt);
       return yield* sendLocal(resolved.attempt, input.launch);
@@ -366,7 +397,10 @@ const make = Effect.gen(function* () {
   const recover: PlacementPlacerShape["recover"] = Effect.fn("PlacementPlacer.recover")(
     function* (input) {
       const latest = yield* attempts.latest(input.ownerKey);
-      if (latest === null) return { _tag: "NotSent" } as const;
+      if (latest === null)
+        return (yield* attempts.everAllocated(input.ownerKey))
+          ? pruned
+          : ({ _tag: "NotSent" } as const);
       if (latest.state === "started") return started(latest);
       if (latest.state === "not_started")
         return {
@@ -397,9 +431,7 @@ const make = Effect.gen(function* () {
   return PlacementPlacer.of({
     recover,
     latestAttempt: attempts.latest,
-    hasAttempt: Effect.fn("PlacementPlacer.hasAttempt")(function* (ownerKey: string) {
-      return (yield* attempts.latest(ownerKey)) !== null;
-    }),
+    hasAttempt: attempts.everAllocated,
     placeRemote,
     placeLocal,
   });

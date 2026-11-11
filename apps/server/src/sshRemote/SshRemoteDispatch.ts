@@ -181,6 +181,7 @@ export type SshLaunchInput = SshDispatchDestination & {
    */
   readonly standingInstructions?: boolean | undefined;
   readonly placement?: PlacedLaunch.PlacementArgument | undefined;
+  readonly attachmentDigests?: Readonly<Record<string, string>> | undefined;
 };
 
 export interface SshLaunchResult {
@@ -941,6 +942,7 @@ const make = Effect.gen(function* () {
       }>,
       preparedIds: string[],
       beforeLaunch: Effect.Effect<void, E, R>,
+      digests?: Readonly<Record<string, string>>,
     ) {
       const uploaded: Array<ChatImageAttachment | ChatFileAttachment> = [];
       for (const { attachment, path } of sources) {
@@ -1010,10 +1012,12 @@ const make = Effect.gen(function* () {
           return yield* failure("remote_refused", "The remote attachment upload URL has expired.");
         }
         const request = HttpClientRequest.post(url.toString()).pipe(
-          HttpClientRequest.bodyStream(fileSystem.stream(path), {
-            contentType: attachment.mimeType,
-            contentLength: attachment.sizeBytes,
-          }),
+          yield* PlacedLaunch.attachmentBody(
+            fileSystem,
+            path,
+            attachment,
+            digests?.[attachment.id],
+          ),
         );
         // HttpClient's automatic span records url.full/url.path, which contain the
         // signed upload capability. Keep this request out of URL-bearing telemetry.
@@ -1520,6 +1524,7 @@ const make = Effect.gen(function* () {
         sources,
         preparedIds,
         beforeLaunch,
+        input.attachmentDigests,
       );
       // Authority may have changed while the last upload completed.
       yield* beforeLaunch;

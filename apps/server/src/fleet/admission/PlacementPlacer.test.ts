@@ -39,9 +39,17 @@ interface Remote {
   readonly archived: Array<string>;
   answers: Array<Answer>;
   archiveFails: boolean;
+  /** Threads whose archive always fails. */
+  readonly archiveFailsFor: Set<string>;
 }
 
-const remote = (): Remote => ({ sent: [], archived: [], answers: [], archiveFails: false });
+const remote = (): Remote => ({
+  sent: [],
+  archived: [],
+  answers: [],
+  archiveFails: false,
+  archiveFailsFor: new Set(),
+});
 
 const dispatchFor = (fake: Remote) =>
   Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
@@ -55,7 +63,10 @@ const dispatchFor = (fake: Remote) =>
       }),
     callHostTool: (call) =>
       Effect.suspend(() => {
-        if (fake.archiveFails)
+        if (
+          fake.archiveFails ||
+          fake.archiveFailsFor.has(String((call.arguments as { threadId: string }).threadId))
+        )
           return Effect.fail(
             new SshRemoteDispatch.SshRemoteDispatchError({
               reason: "host_unavailable",
@@ -136,7 +147,9 @@ describe("the placer's attempt history", () => {
         { concurrency: "unbounded" },
       );
       assert.strictEqual(results.filter((result) => result._tag === "Created").length, 1);
-      assert.isTrue(results.every((result) => result.attempt.attempt === 0));
+      assert.isTrue(
+        results.every((result) => ("attempt" in result ? result.attempt?.attempt : null) === 0),
+      );
       const elsewhere = yield* attempts.resolve({
         ownerKey: "o",
         targetHost: "b",
@@ -160,12 +173,15 @@ describe("the placer's attempt history", () => {
           payloadJson: "{}",
           now: T0,
         });
-        assert.deepStrictEqual([again._tag, again.attempt.attempt], ["Started", 0]);
+        assert.deepStrictEqual(
+          [again._tag, "attempt" in again ? again.attempt?.attempt : null],
+          ["Started", 0],
+        );
       }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
   );
 
   it.effect(
-    "after not started, a rerun or a prune, the next key gets a new attempt number whatever the clock reads",
+    "after not started or a rerun the next key gets a new attempt number whatever the clock reads, and after a prune none is made",
     () =>
       Effect.gen(function* () {
         const attempts = yield* Attempts.PlacementAttempts;
@@ -178,7 +194,10 @@ describe("the placer's attempt history", () => {
           payloadJson: "{}",
           now: T0 - 1000,
         });
-        assert.deepStrictEqual([second._tag, second.attempt.attempt], ["Created", 1]);
+        assert.deepStrictEqual(
+          [second._tag, "attempt" in second ? second.attempt?.attempt : null],
+          ["Created", 1],
+        );
         assert.isTrue(
           yield* attempts.chooseRunAgain({
             ownerKey: "o",
@@ -201,7 +220,10 @@ describe("the placer's attempt history", () => {
           payloadJson: "{}",
           now: T0,
         });
-        assert.deepStrictEqual([third._tag, third.attempt.attempt], ["Created", 2]);
+        assert.deepStrictEqual(
+          [third._tag, "attempt" in third ? third.attempt?.attempt : null],
+          ["Created", 2],
+        );
         // The old attempt stays unknown with the person's choice; a late success is still recorded on it.
         assert.isTrue(
           yield* attempts.recordStarted({
@@ -221,7 +243,8 @@ describe("the placer's attempt history", () => {
           payloadJson: "{}",
           now: T0,
         });
-        assert.strictEqual(fourth.attempt.attempt, 3);
+        // With its whole history pruned, an owner that ever sent gets no new key on its own.
+        assert.strictEqual(fourth._tag, "Pruned");
       }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(freshFile())))),
   );
 
@@ -264,7 +287,11 @@ describe("placing on another GOAT", () => {
         );
         assert.deepStrictEqual(
           retried._tag === "Started"
-            ? [retried.threadId, retried.runId, retried.attempt.attempt]
+            ? [
+                retried.threadId,
+                retried.runId,
+                "attempt" in retried ? retried.attempt?.attempt : null,
+              ]
             : retried._tag,
           ["thread-1", "run-1", 0],
         );
@@ -292,14 +319,17 @@ describe("placing on another GOAT", () => {
         for (let index = 0; index < 3; index += 1) {
           const outcome = yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
           assert.strictEqual(outcome._tag, "Unknown");
-          assert.strictEqual(outcome.attempt.attempt, 0);
+          assert.strictEqual("attempt" in outcome ? outcome.attempt?.attempt : null, 0);
         }
         fake.answers.push(refused("placement_not_started", { threadId: "idle-thread" }));
         const fenced = yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake)));
         assert.strictEqual(fenced._tag, "NotStarted");
         assert.deepStrictEqual(fake.archived, ["idle-thread"]);
         const next = yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake)));
-        assert.deepStrictEqual([next._tag, next.attempt.attempt], ["Started", 1]);
+        assert.deepStrictEqual(
+          [next._tag, "attempt" in next ? next.attempt?.attempt : null],
+          ["Started", 1],
+        );
         assert.notDeepEqual(fake.sent.at(-1)?.placement, fake.sent[0]?.placement);
       });
     },
@@ -347,7 +377,10 @@ describe("placing on another GOAT", () => {
         }),
       ).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
       const rerun = yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake)));
-      assert.deepStrictEqual([rerun._tag, rerun.attempt.attempt], ["Started", 1]);
+      assert.deepStrictEqual(
+        [rerun._tag, "attempt" in rerun ? rerun.attempt?.attempt : null],
+        ["Started", 1],
+      );
       assert.deepStrictEqual(
         fake.sent.map((sent) => sent.host),
         ["box-a", "box-b"],
@@ -414,4 +447,72 @@ describe("attachments of a placed launch", () => {
       });
     },
   );
+});
+
+describe("history and cleanup limits", () => {
+  it.effect(
+    "once an owner's settled history is pruned, it gets no new key: the outcome reads unknown",
+    () => {
+      const file = freshFile();
+      const fake = remote();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        fake.answers.push({ ok: true, threadId: "thread-1", runId: "run-1" });
+        expect((yield* placeOn("box-a").pipe(Effect.provide(placerOn(file, fake))))._tag).toBe(
+          "Started",
+        );
+        // The claim never settled (a crash), and the clock moved past retention before recovery.
+        const pruned = yield* Effect.flatMap(Attempts.PlacementAttempts, (attempts) =>
+          attempts.prune(T0 + RETAIN_MS + 1),
+        ).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
+        expect(pruned).toBe(1);
+        const again = yield* placeOn("box-b").pipe(Effect.provide(placerOn(file, fake)));
+        expect(again._tag).toBe("Unknown");
+        const recovered = yield* Effect.flatMap(Placer.PlacementPlacer, (placer) =>
+          placer.recover({
+            ownerKey: "goal:g:a1",
+            authorize: Effect.succeed("full-access" as const),
+            local: () => Effect.void,
+          }),
+        ).pipe(Effect.provide(placerOn(file, fake)));
+        expect(recovered._tag).toBe("Unknown");
+        expect(fake.sent).toHaveLength(1);
+      });
+    },
+  );
+
+  it.effect("permanently failing archives do not starve the others on that host", () => {
+    const file = freshFile();
+    const fake = remote();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(T0);
+      yield* Effect.gen(function* () {
+        const attempts = yield* Attempts.PlacementAttempts;
+        for (let index = 0; index < 25; index += 1) {
+          const owner = "goal:g:idle-" + index;
+          yield* attempts.resolve({
+            ownerKey: owner,
+            targetHost: "box-a",
+            payloadJson: "{}",
+            now: T0 + index,
+          });
+          yield* attempts.recordNotStarted({
+            ownerKey: owner,
+            attempt: 0,
+            threadId: "idle-" + index,
+          });
+          if (index < 20) fake.archiveFailsFor.add("idle-" + index);
+        }
+      }).pipe(Effect.provide(Layer.provideMerge(Attempts.layer, database(file))));
+      yield* placeOn("box-a", "Work", "goal:g:n1").pipe(Effect.provide(placerOn(file, fake)));
+      yield* placeOn("box-a", "Work", "goal:g:n2").pipe(Effect.provide(placerOn(file, fake)));
+      expect(fake.archived.toSorted()).toEqual([
+        "idle-20",
+        "idle-21",
+        "idle-22",
+        "idle-23",
+        "idle-24",
+      ]);
+    });
+  });
 });

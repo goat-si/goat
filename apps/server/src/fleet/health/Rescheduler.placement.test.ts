@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as FleetHostStates from "./FleetHostStates.ts";
 import * as Rescheduler from "./Rescheduler.ts";
@@ -138,6 +139,42 @@ it.effect(
               }),
             );
             expect(found._tag).toBe("Launched");
+          }),
+        );
+      }),
+    ),
+);
+
+it.effect(
+  "with placement, a launch delivered but not recorded keeps its claim: it reads unknown, never not launched, and the resend settles it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = newWorld();
+        world.reachable.B = true;
+        const filename = yield* databaseFile;
+        yield* placed(
+          world,
+          filename,
+          Effect.gen(function* () {
+            yield* loseA(world);
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`
+            CREATE TRIGGER fail_started BEFORE UPDATE ON placement_attempts
+            WHEN NEW.state = 'started' BEGIN SELECT RAISE(ABORT, 'injected record failure'); END
+          `;
+            expect((yield* reschedule({ targetHost: "B" }))._tag).toBe("Unconfirmed");
+            expect(world.launches.length).toBe(1);
+            const move = yield* Effect.flatMap(Rescheduler.Rescheduler, (service) =>
+              service.findMove({
+                clientRequestId: request().clientRequestId,
+                owner: request().owner,
+              }),
+            );
+            expect(move._tag).toBe("Unknown");
+            yield* sql`DROP TRIGGER fail_started`;
+            expect((yield* reschedule({ targetHost: "B" }))._tag).toBe("Rescheduled");
+            expect(world.launches.length).toBe(1);
           }),
         );
       }),

@@ -42,6 +42,7 @@ export default Effect.gen(function* () {
     rerun_by TEXT,
     rerun_at INTEGER,
     cleanup_thread_id TEXT,
+    cleanup_tried_at INTEGER,
     last_answer TEXT,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (owner_key, attempt)

@@ -524,7 +524,20 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.result);
         if (placed._tag === "Failure") {
-          // Refused before sending: the attempt history still pins any earlier key to its target.
+          // Only a request that never had an attempt is free: after one exists the failure may follow a
+          // delivery (a lost record write, say), so the claim stays and the key is resent.
+          const sent = yield* placer.value
+            .hasAttempt(placedOwner(request))
+            .pipe(Effect.orElseSucceed(() => true));
+          if (sent)
+            return unconfirmed(
+              target,
+              "Launch on " +
+                target +
+                " has an unknown outcome (" +
+                clip(describePlacementFailure(placed.failure)) +
+                ").",
+            );
           yield* claims.release(request.clientRequestId);
           return refused("not_allowed", describePlacementFailure(placed.failure));
         }

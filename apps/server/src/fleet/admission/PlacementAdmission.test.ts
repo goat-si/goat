@@ -362,6 +362,9 @@ describe("the counted transition seen from outside", () => {
     () => {
       const inside = Deferred.makeUnsafe<void>();
       const release = Deferred.makeUnsafe<void>();
+      // Both racers reach the store, where they wait for the held commit, before it is released.
+      const readStarted = Deferred.makeUnsafe<void>();
+      const admitStarted = Deferred.makeUnsafe<void>();
       // Holds markCounted, and with it the commit transaction it runs in.
       const held = Layer.effect(
         Reservations.PlacementReservations,
@@ -369,6 +372,11 @@ describe("the counted transition seen from outside", () => {
           const real = yield* Reservations.PlacementReservations;
           return Reservations.PlacementReservations.of({
             ...real,
+            admit: (input) =>
+              (input.key.ownerKey === "other"
+                ? Deferred.succeed(admitStarted, undefined)
+                : Effect.void
+              ).pipe(Effect.andThen(real.admit(input))),
             markCounted: (input) =>
               Deferred.succeed(inside, undefined).pipe(
                 Effect.andThen(Deferred.await(release)),
@@ -385,6 +393,7 @@ describe("the counted transition seen from outside", () => {
         const first = yield* place(key("held"), launcher).pipe(Effect.forkChild);
         yield* Deferred.await(inside);
         const counts = Effect.gen(function* () {
+          yield* Deferred.succeed(readStarted, undefined);
           const row = yield* store.get(commandId);
           return { reserved: row?.state === "pending" ? 1 : 0, live: yield* runningCount };
         });
@@ -392,6 +401,8 @@ describe("the counted transition seen from outside", () => {
         const during = yield* counts.pipe(Effect.forkChild);
         const other = yield* makeLauncher();
         const raced = yield* place(key("other"), other).pipe(Effect.forkChild);
+        yield* Deferred.await(readStarted);
+        yield* Deferred.await(admitStarted);
         yield* Deferred.succeed(release, undefined);
         assert.strictEqual((yield* Fiber.join(first))._tag, "Started");
         const seen = yield* Fiber.join(during);

@@ -44,7 +44,9 @@ export type Resolved =
   /** Already started: settle the claim, start nothing. */
   | { readonly _tag: "Started"; readonly attempt: Attempt }
   /** Unknown on another target: nothing may go anywhere else. */
-  | { readonly _tag: "PinnedElsewhere"; readonly attempt: Attempt };
+  | { readonly _tag: "PinnedElsewhere"; readonly attempt: Attempt }
+  /** Attempts were sent but their history is pruned: the outcome is unknown, nothing new starts. */
+  | { readonly _tag: "Pruned" };
 
 export interface PlacementAttemptsShape {
   readonly resolve: (input: {
@@ -54,6 +56,14 @@ export interface PlacementAttemptsShape {
     readonly now: number;
   }) => Effect.Effect<Resolved, PlacementAttemptsError>;
   readonly latest: (ownerKey: string) => Effect.Effect<Attempt | null, PlacementAttemptsError>;
+  /** Whether any attempt was ever allocated for this owner; the counter outlives pruned history. */
+  readonly everAllocated: (ownerKey: string) => Effect.Effect<boolean, PlacementAttemptsError>;
+  /** A failed archive goes behind the others, so a permanently failing one cannot starve them. */
+  readonly markCleanupTried: (input: {
+    readonly ownerKey: string;
+    readonly attempt: number;
+    readonly now: number;
+  }) => Effect.Effect<void, PlacementAttemptsError>;
   /** Also records a late success of an attempt a person already chose to run again. */
   readonly recordStarted: (input: {
     readonly ownerKey: string;
@@ -112,6 +122,7 @@ interface Row {
   readonly rerun_by: string | null;
   readonly rerun_at: number | null;
   readonly cleanup_thread_id: string | null;
+  readonly cleanup_tried_at: number | null;
   readonly last_answer: string | null;
   readonly created_at: number;
 }
@@ -145,6 +156,11 @@ const make = Effect.gen(function* () {
       ORDER BY attempt DESC LIMIT 1
     `.pipe(Effect.map((rows) => (rows[0] === undefined ? null : fromRow(rows[0]))));
 
+  const counterOf = (ownerKey: string) =>
+    sql<{ readonly next_attempt: number }>`
+      SELECT next_attempt FROM placement_attempt_counters WHERE owner_key = ${ownerKey}
+    `.pipe(Effect.map((rows) => rows[0]?.next_attempt ?? null));
+
   const resolve = Effect.fn("PlacementAttempts.resolve")(function* (
     input: Parameters<PlacementAttemptsShape["resolve"]>[0],
   ) {
@@ -152,6 +168,8 @@ const make = Effect.gen(function* () {
       .withTransaction(
         Effect.gen(function* () {
           const latest = yield* latestRow(input.ownerKey);
+          if (latest === null && (yield* counterOf(input.ownerKey)) !== null)
+            return { _tag: "Pruned" } as const;
           if (latest !== null && latest.state === "started")
             return { _tag: "Started", attempt: latest } as const;
           if (latest !== null && latest.state === "unknown" && latest.rerunBy === null)
@@ -191,6 +209,15 @@ const make = Effect.gen(function* () {
     latest: Effect.fn("PlacementAttempts.latest")(function* (ownerKey: string) {
       return yield* latestRow(ownerKey).pipe(failed("latest"));
     }),
+    everAllocated: Effect.fn("PlacementAttempts.everAllocated")(function* (ownerKey: string) {
+      return (yield* counterOf(ownerKey).pipe(failed("everAllocated"))) !== null;
+    }),
+    markCleanupTried: Effect.fn("PlacementAttempts.markCleanupTried")(function* (input) {
+      yield* sql`
+        UPDATE placement_attempts SET cleanup_tried_at = ${input.now}
+        WHERE owner_key = ${input.ownerKey} AND attempt = ${input.attempt}
+      `.pipe(failed("markCleanupTried"));
+    }),
     recordStarted: Effect.fn("PlacementAttempts.recordStarted")(function* (input) {
       const rows = yield* sql`
         UPDATE placement_attempts SET state = 'started', thread_id = ${input.threadId}, run_id = ${input.runId}
@@ -227,14 +254,15 @@ const make = Effect.gen(function* () {
       const rows = yield* sql<Row>`
         SELECT * FROM placement_attempts
         WHERE cleanup_thread_id IS NOT NULL AND target_host = ${host}
-        ORDER BY created_at LIMIT ${limit}
+        ORDER BY COALESCE(cleanup_tried_at, 0), created_at LIMIT ${limit}
       `.pipe(failed("pendingCleanups"));
       return rows.map(fromRow);
     }),
     hostsWithCleanups: Effect.fn("PlacementAttempts.hostsWithCleanups")(function* (limit: number) {
       const rows = yield* sql<{ readonly target_host: string }>`
-        SELECT DISTINCT target_host FROM placement_attempts
-        WHERE cleanup_thread_id IS NOT NULL LIMIT ${limit}
+        SELECT target_host FROM placement_attempts
+        WHERE cleanup_thread_id IS NOT NULL
+        GROUP BY target_host ORDER BY MIN(COALESCE(cleanup_tried_at, 0)) LIMIT ${limit}
       `.pipe(failed("hostsWithCleanups"));
       return rows.map((row) => row.target_host);
     }),

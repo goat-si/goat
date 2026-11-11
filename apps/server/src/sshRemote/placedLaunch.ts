@@ -1,8 +1,13 @@
 import { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
+import { HttpClientRequest } from "effect/http";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a synchronous digest of bytes already read.
+import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 
 import type { PlacementArgument } from "../fleet/admission/PlacementKey.ts";
+import type { ChatFileAttachment, ChatImageAttachment } from "@goat/contracts";
 import { PLACEMENT_UNSUPPORTED, SshRemoteDispatchError } from "./dispatchFailure.ts";
 
 export type { PlacementArgument };
@@ -64,3 +69,37 @@ export const decodeLaunched = (
         }),
     ),
   );
+
+/**
+ * The upload body. A placed attempt uploads exactly the bytes its key was frozen with: they are read
+ * once, checked against the frozen digest, and sent from memory, so the file cannot change between.
+ */
+export const attachmentBody = (
+  fileSystem: FileSystem.FileSystem,
+  path: string,
+  attachment: ChatImageAttachment | ChatFileAttachment,
+  expectedSha256: string | undefined,
+) =>
+  expectedSha256 === undefined
+    ? Effect.succeed(
+        HttpClientRequest.bodyStream(fileSystem.stream(path), {
+          contentType: attachment.mimeType,
+          contentLength: attachment.sizeBytes,
+        }),
+      )
+    : fileSystem.readFile(path).pipe(
+        Effect.orElseSucceed(() => null),
+        Effect.flatMap((bytes) =>
+          bytes !== null &&
+          bytes.byteLength === attachment.sizeBytes &&
+          NodeCrypto.createHash("sha256").update(bytes).digest("hex") === expectedSha256
+            ? Effect.succeed(HttpClientRequest.bodyUint8Array(bytes, attachment.mimeType))
+            : Effect.fail(
+                new SshRemoteDispatchError({
+                  reason: "invalid_request",
+                  launchMayHaveStarted: false,
+                  message: `Attachment '${attachment.name}' changed since this placement was made, so nothing was sent.`,
+                }),
+              ),
+        ),
+      );

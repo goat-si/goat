@@ -1,6 +1,16 @@
+// @effect-diagnostics nodeBuiltinImport:off - the upload test writes a scratch file.
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ChatAttachmentId } from "@goat/contracts";
+import * as FileSystem from "effect/FileSystem";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import { attachmentBody } from "./placedLaunch.ts";
 import { launchAgainst } from "./SshRemoteDispatch.lineage.testkit.ts";
 import type { SshRemoteDispatchError } from "./dispatchFailure.ts";
 
@@ -96,4 +106,31 @@ it.effect(
       assert.strictEqual(pending.remoteClassification, "placement_pending");
       assert.isTrue(pending.launchMayHaveStarted);
     }),
+);
+
+it.effect(
+  "a placed upload sends the frozen bytes from memory, and bytes changed since the key was made send nothing",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = NodePath.join(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "placed-upload-")),
+        "a.txt",
+      );
+      const attachment = {
+        type: "file" as const,
+        id: ChatAttachmentId.make("pending-a"),
+        name: "a.txt",
+        mimeType: "text/plain",
+        sizeBytes: 5,
+      };
+      NodeFS.writeFileSync(path, "first");
+      const frozen = NodeCrypto.createHash("sha256").update("first").digest("hex");
+      yield* attachmentBody(fileSystem, path, attachment, frozen);
+      // Same size, other bytes: the upload refuses before anything reaches the remote.
+      NodeFS.writeFileSync(path, "other");
+      const changed = yield* attachmentBody(fileSystem, path, attachment, frozen).pipe(Effect.flip);
+      assert.strictEqual(changed.reason, "invalid_request");
+      assert.isFalse(changed.launchMayHaveStarted);
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
