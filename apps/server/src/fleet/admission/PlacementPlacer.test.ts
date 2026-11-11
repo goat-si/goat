@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - each test gets a scratch database folder.
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
@@ -8,6 +8,9 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { ChatAttachmentId, type ChatAttachment } from "@goat/contracts";
+import { createPendingAttachmentId, resolveAttachmentPath } from "../../attachmentStore.ts";
+import * as ServerConfig from "../../config.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import * as Attempts from "./PlacementAttempts.ts";
@@ -69,6 +72,13 @@ const placerOn = (file: string, fake: Remote) =>
     Layer.provideMerge(Attempts.layer),
     Layer.provide(dispatchFor(fake)),
     Layer.provideMerge(database(file)),
+    Layer.provideMerge(
+      ServerConfig.layerTest(
+        NodePath.dirname(file),
+        NodePath.join(NodePath.dirname(file), "home"),
+      ).pipe(Layer.provide(NodeServices.layer)),
+    ),
+    Layer.provideMerge(NodeServices.layer),
   );
 
 const launch = (title = "Work") => ({
@@ -345,4 +355,64 @@ describe("placing on another GOAT", () => {
       );
     });
   });
+});
+
+describe("attachments of a placed launch", () => {
+  it.effect(
+    "a retry sends only the bytes the key was made for; changed or missing bytes send nothing, also after a restart",
+    () => {
+      const file = freshFile();
+      const fake = remote();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(T0);
+        const { attachment, path } = yield* Effect.gen(function* () {
+          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+          const attachment: ChatAttachment = {
+            type: "file",
+            id: ChatAttachmentId.make(createPendingAttachmentId("txt")),
+            name: "notes.txt",
+            mimeType: "text/plain",
+            sizeBytes: 5,
+          };
+          const path = resolveAttachmentPath({ attachmentsDir, attachment }) ?? "";
+          NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
+          NodeFS.writeFileSync(path, "first");
+          return { attachment, path };
+        }).pipe(Effect.provide(placerOn(file, fake)));
+        const withAttachment = (ownerKey = "goal:g:files") =>
+          Effect.flatMap(Placer.PlacementPlacer, (placer) =>
+            placer.placeRemote({
+              ownerKey,
+              host: "box-a",
+              launch: { ...launch(), attachments: [attachment] },
+              authorize: Effect.succeed("full-access" as const),
+            }),
+          );
+        fake.answers.push(lost());
+        expect((yield* withAttachment().pipe(Effect.provide(placerOn(file, fake))))._tag).toBe(
+          "Unknown",
+        );
+        NodeFS.writeFileSync(path, "other");
+        const changed = yield* withAttachment().pipe(Effect.provide(placerOn(file, fake)));
+        expect([changed._tag, changed.message]).toEqual([
+          "Unknown",
+          "An attachment of this placement is gone or changed here, so nothing was sent.",
+        ]);
+        expect(fake.sent).toHaveLength(1);
+        NodeFS.writeFileSync(path, "first");
+        expect((yield* withAttachment().pipe(Effect.provide(placerOn(file, fake))))._tag).toBe(
+          "Started",
+        );
+        expect(fake.sent).toHaveLength(2);
+        expect(fake.sent[0]?.placement).toEqual(fake.sent[1]?.placement);
+        NodeFS.rmSync(path);
+        const missing = yield* withAttachment("goal:g:other").pipe(
+          Effect.provide(placerOn(file, fake)),
+          Effect.flip,
+        );
+        expect(missing._tag).toBe("PlacementAttemptsError");
+        expect(fake.sent).toHaveLength(2);
+      });
+    },
+  );
 });

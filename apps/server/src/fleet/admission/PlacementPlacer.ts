@@ -3,6 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -10,14 +11,12 @@ import * as Schema from "effect/Schema";
 import * as NodeCrypto from "node:crypto";
 
 import type { RuntimeMode } from "@goat/contracts";
+import { resolveAttachmentPathById } from "../../attachmentStore.ts";
+import * as ServerConfig from "../../config.ts";
 import * as ThreadLifecycle from "../../orchestration-v2/ThreadLifecycleService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import { type PlacementAnswer, PlacementAdmission } from "./PlacementAdmission.ts";
-import {
-  type Attempt,
-  PlacementAttempts,
-  type PlacementAttemptsError,
-} from "./PlacementAttempts.ts";
+import { type Attempt, PlacementAttempts, PlacementAttemptsError } from "./PlacementAttempts.ts";
 import type { PlacementArgument } from "./PlacementKey.ts";
 
 /** What a placer may conclude about one attempt (design §11). */
@@ -45,6 +44,12 @@ const argumentOf = (attempt: Attempt): PlacementArgument => ({
 const describe = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 type RemoteLaunch = Omit<SshRemoteDispatch.SshLaunchInput, "placement" | "host" | "target">;
+
+/** A remote attempt as frozen before its first send: the launch, and each attachment's bytes by digest. */
+interface FrozenRemote {
+  readonly launch: RemoteLaunch;
+  readonly attachments: ReadonlyArray<{ readonly id: string; readonly sha256: string }>;
+}
 
 export type RecoveredOutcome =
   | PlacedOutcome
@@ -92,6 +97,34 @@ const make = Effect.gen(function* () {
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const admission = yield* Effect.serviceOption(PlacementAdmission);
   const lifecycle = yield* Effect.serviceOption(ThreadLifecycle.ThreadLifecycleService);
+  const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const fileSystem = yield* Effect.serviceOption(FileSystem.FileSystem);
+
+  /** Each attachment's current local bytes by digest; null when one cannot be read. */
+  const attachmentDigests = Effect.fn("PlacementPlacer.attachmentDigests")(function* (
+    launch: RemoteLaunch,
+  ) {
+    const requested = launch.attachments ?? [];
+    if (requested.length === 0) return [];
+    if (Option.isNone(config) || Option.isNone(fileSystem)) return null;
+    const digests: Array<{ readonly id: string; readonly sha256: string }> = [];
+    for (const attachment of requested) {
+      const path = resolveAttachmentPathById({
+        attachmentsDir: config.value.attachmentsDir,
+        attachmentId: attachment.id,
+      });
+      const bytes =
+        path === null
+          ? null
+          : yield* fileSystem.value.readFile(path).pipe(Effect.orElseSucceed(() => null));
+      if (bytes === null) return null;
+      digests.push({
+        id: attachment.id,
+        sha256: NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
+      });
+    }
+    return digests;
+  });
 
   /** Archives idle threads that not-started placements left on this host; failures retry later. */
   const cleanUp = Effect.fn("PlacementPlacer.cleanUp")(function* <E, R>(
@@ -158,10 +191,22 @@ const make = Effect.gen(function* () {
     const host = attempt.targetHost;
     yield* cleanUp(host, authorize).pipe(Effect.ignore);
     // The payload as first sent, whatever the caller would build now.
-    const frozen = decodeJson(attempt.payloadJson) as RemoteLaunch;
+    const frozen = decodeJson(attempt.payloadJson) as FrozenRemote;
+    // An upload goes afresh each time; its bytes must still be the ones this key was made for.
+    const current = yield* attachmentDigests(frozen.launch);
+    if (current === null || encodeJson(current) !== encodeJson(frozen.attachments)) {
+      const message =
+        "An attachment of this placement is gone or changed here, so nothing was sent.";
+      yield* attempts.recordAnswer({
+        ownerKey: attempt.ownerKey,
+        attempt: attempt.attempt,
+        answer: message,
+      });
+      return { _tag: "Unknown", attempt, message } satisfies PlacedOutcome;
+    }
     const sent = yield* dispatch
       .launchThread(
-        { ...frozen, host, placement: argumentOf(attempt) },
+        { ...frozen.launch, host, placement: argumentOf(attempt) },
         authorize.pipe(Effect.asVoid),
       )
       .pipe(Effect.result);
@@ -287,7 +332,17 @@ const make = Effect.gen(function* () {
 
   const placeRemote: PlacementPlacerShape["placeRemote"] = Effect.fn("PlacementPlacer.placeRemote")(
     function* (input) {
-      const resolved = yield* resolveFor(input.ownerKey, input.host, input.launch);
+      const digests = yield* attachmentDigests(input.launch);
+      // Unreadable bytes cannot be uploaded either: nothing is sent and no attempt changes.
+      if (digests === null)
+        return yield* new PlacementAttemptsError({
+          operation: "attachments",
+          cause: "An attachment of this launch cannot be read here.",
+        });
+      const resolved = yield* resolveFor(input.ownerKey, input.host, {
+        launch: input.launch,
+        attachments: digests,
+      } satisfies FrozenRemote);
       if (resolved._tag === "Started") return started(resolved.attempt);
       if (resolved._tag === "PinnedElsewhere") return pinnedElsewhere(resolved.attempt);
       return yield* sendRemote(resolved.attempt, input.authorize);
