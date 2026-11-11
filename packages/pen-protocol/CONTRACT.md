@@ -110,7 +110,8 @@ unanswered. Kind 0x02 (Doriterm's typed code) is not used.
 - Handshake payloads are one JSON line (UTF-8 object + LF, at most 256 bytes, `"v":1`). Message 1: `{"v":1,"stream":S,…}`.
   Message 2: always `{"v":1}`. A responder that refuses after message 1 closes without answering; one that refuses
   after confirmation (port refused, invite lost a race) sends CLOSE with the code. Nothing a replayed message 1 can
-  trigger depends on the stream's target.
+  trigger depends on the stream's target, except that a `service-pair` message 1 spends one answer of its invite's
+  budget and takes a phone slot until the session ends ("Service invites").
 - Admission: kind 0x01 admits only an initiator static key that is a current member's noisePub in the responder's
   mesh view (4401 otherwise), and from v1.3 a listed client key for one service stream ("Service clients"). Kind 0x03
   is valid only with `stream:"join"` and an `"invite"` member, or from v1.3 with `stream:"service-pair"` ("Service
@@ -482,7 +483,8 @@ a program registers, a node refuses every service stream.
 
 - Kind 0x01, message 1 `{"v":1,"stream":"service","name":N}`. A service name is 1 to 32 characters of `a-z 0-9 -`,
   starting with a letter; `pen` is reserved. Admission is that of `tcp`: only a current member's key, otherwise 4401
-  unanswered, and a malformed name is refused the same way.
+  unanswered, and a malformed name is refused the same way (v1.3 also admits listed client keys; see "Service
+  clients").
 - After key confirmation the responder counts the session as a live session of that member, exactly as it counts a
   `tcp` session: a revoke closes it 4401, before and after delivery. It then delivers the session to the program
   that holds N ("Local delivery"). If no program holds N it sends CLOSE 4404; if 32 deliveries are already in
@@ -525,7 +527,8 @@ other failure, before or at registration, exits 2 with the reason on stderr. Fro
 further stdin line to the node unchanged and prints every line the node sends after `registered`, except
 `replaced`, on stdout unchanged ("Ops on the registration"). A stdin line longer than 4096 bytes with its LF is not
 forwarded: the child exits 2. Bytes after the last LF when stdin ends are dropped. A v1.2 child forwards nothing, so a
-program that sends ops through it gets no answer.
+program that sends ops through it gets no answer. When stdin ends, a v1.3 child half-closes the connection, prints
+the node's answers to the ops it forwarded, and exits 0.
 
 ### Local delivery
 
@@ -557,10 +560,13 @@ for N. A delivery that cannot commit fails. A committed delivery belongs to its 
 registration ends.
 
 If any step fails (the dial, a deadline, the cap, a malformed line, a wrong A, or a delivery that cannot commit),
-the node closes the socket and sends CLOSE 4404 to the caller. From v1.3, a client or pairing session that a list
-change or the end of its registration closes gets 4401 instead. The node sends that CLOSE before it answers the list
-or finishes ending the registration, and it sends at most one CLOSE per session, so a delivery that then fails adds
-no second code. Close codes are unauthenticated and never tell a caller whether the program read its bytes. It logs each failure under one of a fixed set of
+the node closes the socket and sends CLOSE 4404 to the caller. From v1.3, a list that drops a client's key, or the
+end of a registration, closes the client or pairing session 4401 unless it is already closing: a session whose
+delivery failed keeps 4404, and one the transport closed (4400 decryption failure, 4408 queue overflow) or the peer
+closed keeps that close. The node sends at most one CLOSE per session. Before the list answer, and before the
+registration's end completes, every such session is closed and every connection delivered for it to the program is
+closed by the node; the node writes no identity line for it after that. Close codes are unauthenticated and never tell
+a caller whether the program read its bytes. It logs each failure under one of a fixed set of
 causes (dial, deadline, malformed, proof, replaced), at most once a minute per cause. A
 refused delivery passes no caller byte to the program, but the caller still classifies its own data by what it
 wrote (above). At most 32 deliveries are in progress at once, from key confirmation to the end of step 3.
@@ -679,10 +685,11 @@ name replaces it. When a registration ends, the node closes every client and pai
 - Kind 0x01 from a key that is not a member is admitted only with `{"v":1,"stream":"service","name":N}`, only if the
   registration currently holding N lists the key, and only if a phone slot is free ("Phone slots"). Anything else
   closes 4401 unanswered: `tcp`, `mesh`, another name, a key on no list, a full slot.
-- Membership is checked first: a key that is a member is admitted as a member, whatever a list says. If a later view
-  makes a listed key a member (the mesh admitted it, which only a member can do), the node closes that key's client
-  sessions 4401 at that view change and refuses every later list that names it, so a key never holds a client
-  session beside member rights.
+- Membership is checked first: a key that is a member, or a revoked member, of the node's current view is never a
+  client. Admission, the check after confirmation and the commit refuse it (4401), and lists naming it are refused.
+  When the node applies a view change that makes a listed key a member or a revoked member, it closes that key's
+  client sessions 4401, as it closes a revoked member's sessions; until that change is applied the key may already be
+  admitted as a member, which is the mesh's grant (only a member can admit a key).
 - Kind 0x04 from a key that any registration lists closes 4401 unanswered. Kind 0x03 treats a listed key like any
   other: it needs a live invite of the stream it names.
 - A session is bound to the registration whose list admitted it at message 1. After key confirmation the node checks
@@ -695,8 +702,8 @@ name replaces it. When a registration ends, the node closes every client and pai
 - When a list drops a key, the node closes that key's client sessions 4401, and the connections it delivered for
   them, before it answers the list. From that answer on, no session of that key reaches the program unless a later
   list names it again.
-- A client session is not a member session. A change of the mesh view closes it only when that change makes its key
-  a member (above); no other view change does. It never marks a member
+- A client session is not a member session. A change of the mesh view closes it only as the bullet above says; no
+  other view change does. It never marks a member
   online, never counts as a member, never announces a version, and never appears in `ls`, `watch`, `watch.snapshot`,
   known_hosts or the dashboard. Every reconnect is admitted afresh.
 
@@ -864,3 +871,7 @@ v1.2 member-only reader refuses both valid new forms.
   code change, and `tcp`, `mesh`, `join` and `account` are unchanged except that kind 0x04 refuses a listed key. Only
   `goat` may hold a list or an invite. `service-pair` uses the handshake race; joins and account sessions keep the
   ping race. Vectors: servicepair.json, stream.json, new lines in service.json.
+- v1.3 (2026-11-13): a key that is or was a member is never a client, and the node closes its client sessions when it
+  applies that view; list drops and registration ends close 4401 unless the session is already closing, with every
+  local connection closed before the answer; `pen service register` prints the answers to forwarded ops before it
+  exits at the end of stdin; two v1.2 sentences point to the v1.3 exceptions.

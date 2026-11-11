@@ -337,3 +337,27 @@ func TestAClientSessionMarksNothingOnlineAndAppearsInNoMemberList(t *testing.T) 
 		}
 	}
 }
+
+func TestAListedKeyThatJoinsWhileItsDeliveryWaitsBeforeTheCommitIsNeverDelivered(t *testing.T) {
+	f := newClientFixture(t)
+	f.prog.reached, f.prog.hold = make(chan struct{}, 1), make(chan struct{})
+	st, k := keyOf(t, f.rs, "k")
+	f.h.setList(t, 1, k)
+	sec, err := dialAs(f.ctx, f.rs, k, f.a, goatService())
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-f.prog.reached // waiting for line 2, before the commit
+	if _, err := Join(f.ctx, st, k, f.a.invite(t, time.Minute), "k"); err != nil {
+		t.Fatal(err)
+	}
+	if code := closedWith(f.ctx, sec); code != wire.CodeNotAdmitted {
+		t.Fatalf("closed %d, want 4401 when the key became a member", code)
+	}
+	close(f.prog.hold)
+	select {
+	case j := <-f.prog.identities:
+		t.Fatalf("the program got an identity line after the key became a member: %s", j)
+	case <-f.prog.raw:
+	}
+}
