@@ -8,6 +8,7 @@ import {
 import {
   BotProfile,
   EnvironmentId,
+  ChannelQuestionId,
   ChannelTaskId,
   ProjectId,
   ThreadId,
@@ -130,7 +131,7 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   }),
 }));
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
-import { conversation, detail } from "./useMobileGoatBotSession.fixtures";
+import { conversation, detail, typedAnswer } from "./useMobileGoatBotSession.fixtures";
 import * as botSessions from "./useMobileGoatBotSession";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 import * as fileOwnership from "../../lib/composerAttachmentFiles";
@@ -145,7 +146,7 @@ const registry = Object.assign(AtomRegistry.make(), {
 });
 let root: Root | null = null;
 let session: ReturnType<typeof useMobileGoatBotSession>;
-let taskId: ChannelTaskId | undefined;
+let taskId: ChannelTaskId | null | undefined;
 let member: BotProfile | null = null;
 function Consumer() {
   const value = useMobileGoatBotSession(true, taskId, member);
@@ -871,6 +872,47 @@ it("sends a member's message to the member's own conversation, and stops once it
   await render();
   expect(session.canSend).toBe(false);
   expect(session.onSend("still there?")).toBe(false);
+  await botSessions.disposeMobileGoatBotEnvironment(env);
+});
+
+it("reads answers as the server recorded them, and sends a card's answer with its task and question", async () => {
+  const env = EnvironmentId.make("answer-references");
+  harness.environments = [environment(env)];
+  harness.botRef = bot(env);
+  harness.supportsTaskThreads = true;
+  // The main chat, as the screen opens it.
+  taskId = null;
+  harness.listedTaskIds = ["task-1"];
+  harness.items = typedAnswer("q1");
+  const sent: unknown[] = [];
+  harness.run.mockImplementation(async (_registry, _command, args) => {
+    if (args.input?.text === "Clear") sent.push(args.input);
+    return { _tag: "Success", value: bot(env) };
+  });
+  await render();
+  // The task's card names the typed message as the question's answer.
+  expect(
+    session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
+  ).toMatchObject({
+    answer: "Use the staging cache",
+  });
+  // A refused pick stays what the person said, though it reads as a choice, and the question
+  // keeps its choices.
+  harness.items = typedAnswer(null, "Keep");
+  await render();
+  expect(
+    session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
+  ).toMatchObject({
+    options: ["Keep", "Clear"],
+  });
+  expect(session.rows.some((row) => row.kind === "user" && row.text === "Keep")).toBe(true);
+  await act(async () => {
+    expect(
+      session.onAnswer("Clear", ChannelTaskId.make("task-1"), ChannelQuestionId.make("q1")),
+    ).toBe(true);
+  });
+  await act(async () => {});
+  expect(sent).toMatchObject([{ intent: "answer", taskId: "task-1", questionId: "q1" }]);
   await botSessions.disposeMobileGoatBotEnvironment(env);
 });
 

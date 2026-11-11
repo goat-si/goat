@@ -36,6 +36,7 @@ import {
 import type {
   BotProfile,
   ChannelBotRef,
+  ChannelQuestionId,
   ChannelTaskId,
   EnvironmentId,
   ScopedThreadRef,
@@ -248,7 +249,7 @@ function newSession(environmentId: EnvironmentId): Session {
         sendTarget(current, bot) !== null
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId, questionId }) => {
       const main = sendTarget(sessions.get(environmentId), bot);
       if (!main) throw new Error("GOAT Bot isn't available");
       // Each message goes to the bot it was written to, in the main bot's project.
@@ -311,6 +312,7 @@ function newSession(environmentId: EnvironmentId): Session {
           clientMessageId: clientKey,
           receivedAt,
           ...(taskId === undefined ? {} : { taskId }),
+          ...(questionId === undefined ? {} : { questionId }),
         }),
       });
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
@@ -681,6 +683,8 @@ export function useMobileGoatBotSession(
         ...(taskId === undefined ? {} : { taskId }),
         // Work cards leave the chat only where the bot's work list can open every task.
         conversationOnly: supportsTaskThreads,
+        // A question card sends its answer with the question, so the server's record decides.
+        answerReferences: true,
       }),
     [visibleTurnItems, pendingInputs, taskId, knownTaskIds, supportsTaskThreads],
   );
@@ -752,9 +756,12 @@ export function useMobileGoatBotSession(
     [canSend, sendBot, queue, session, taskId],
   );
   const onAnswer = useCallback(
-    (answer: string, answerTask?: ChannelTaskId) => {
+    (answer: string, answerTask?: ChannelTaskId, questionId?: ChannelQuestionId) => {
       if (!canSend || !sendBot || !queue || !session) return false;
-      session.retain(queue.submit(answer, sendBot, [], answerTask ?? taskId ?? undefined), []);
+      const target = answerTask ?? taskId ?? undefined;
+      // A question id goes only with the task that asked it.
+      const asked = answerTask === undefined ? undefined : questionId;
+      session.retain(queue.submit(answer, sendBot, [], target, asked), []);
       return true;
     },
     [canSend, sendBot, queue, session, taskId],
