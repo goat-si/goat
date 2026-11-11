@@ -4,6 +4,7 @@ import {
   FACE_MOTION_RANK,
   goatBotAvatarEmoji,
   goatBotFaceLabel,
+  goatBotPreviewText,
 } from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
 import {
@@ -24,7 +25,7 @@ import { Button } from "../../components/ui/Button";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
-import { useMobileMemberWaitingCount } from "./useMobileMemberStatus";
+import { useMobileMemberStatus } from "./useMobileMemberStatus";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 
 /** Servers without member bots keep New bot disabled. */
@@ -182,21 +183,13 @@ export function MobileBotRosterView(props: {
           );
         }
         return (
-          <Pressable
+          <MemberRow
             key={key}
-            accessibilityRole="button"
+            bot={bot.profile}
+            selected={selected}
             onPress={() => props.onOpenBot(bot)}
             onLongPress={longPress}
-            accessibilityState={{ selected }}
-            accessibilityLabel={bot.profile.name}
-            className={
-              selected
-                ? "flex-row items-center gap-3 bg-thread-selected px-4 py-3"
-                : "flex-row items-center gap-3 px-4 py-3"
-            }
-          >
-            <MemberRowContent bot={bot.profile} />
-          </Pressable>
+          />
         );
       })}
       {props.members && props.members.hidden.length > 0 ? (
@@ -213,16 +206,13 @@ export function MobileBotRosterView(props: {
           </Pressable>
           {hiddenOpen
             ? props.members.hidden.map((profile) => (
-                <Pressable
+                <MemberRow
                   key={profile.botId}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${profile.name}, hidden`}
+                  bot={profile}
+                  hidden
                   onPress={() => props.onOpenBot({ kind: "member", profile })}
                   onLongPress={() => props.members?.onLongPressBot({ kind: "member", profile })}
-                  className="flex-row items-center gap-3 px-4 py-3"
-                >
-                  <MemberRowContent bot={profile} />
-                </Pressable>
+                />
               ))
             : null}
         </View>
@@ -285,47 +275,89 @@ export function MobileBotRosterView(props: {
   );
 }
 
-/** A member row's text: the name with what waits on the person at the end. */
-function BotRowText(props: { readonly name: string; readonly waitingCount?: number }) {
-  const waiting = props.waitingCount ?? 0;
-  return (
-    <View className="min-w-0 flex-1 flex-row items-center gap-2">
-      <Text numberOfLines={1} className="shrink font-semibold text-foreground">
-        {props.name}
-      </Text>
-      {waiting > 0 ? (
-        <Text
-          accessibilityLabel={`${waiting} waiting for you`}
-          className="text-xs font-semibold text-foreground"
-        >
-          {waiting}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
 /**
- * A member's face from its own conversation shell and waiting count, then its row text; still,
- * since only the main row and headers move.
+ * A member's row: its face (still, since only the main row and headers move), its name with what
+ * waits on the person, and the newest message as one line, or its purpose before it has talked.
+ * The spoken label carries the same state, since the button hides its children from VoiceOver.
  */
-function MemberRowContent({ bot }: { readonly bot: BotProfile }) {
-  const waitingCount = useMobileMemberWaitingCount(bot);
+function MemberRow(props: {
+  readonly bot: BotProfile;
+  readonly selected?: boolean;
+  readonly hidden?: boolean;
+  readonly onPress: () => void;
+  readonly onLongPress: (() => void) | undefined;
+}) {
+  const { bot } = props;
+  const { waitingCount, latest, unread } = useMobileMemberStatus(bot);
   const face = useMobileGoatBotFace(
     null,
     { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
     { waitingCount },
   );
+  const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
+  const line =
+    latestText !== ""
+      ? latest?.author === "person"
+        ? `You: ${latestText}`
+        : latestText
+      : bot.purpose.trim();
+  const label = [
+    bot.name,
+    props.hidden ? "hidden" : null,
+    waitingCount > 0 ? `${waitingCount} waiting for you` : null,
+    unread ? "unread" : null,
+    line || null,
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
   return (
-    <>
+    <Pressable
+      accessibilityRole="button"
+      onPress={props.onPress}
+      onLongPress={props.onLongPress}
+      accessibilityState={{ selected: props.selected === true }}
+      accessibilityLabel={label}
+      className={
+        props.selected
+          ? "min-h-[44px] flex-row items-center gap-3 bg-thread-selected px-4 py-3"
+          : "min-h-[44px] flex-row items-center gap-3 px-4 py-3"
+      }
+    >
       <GoatBotFaceAvatar
         state={face.state}
         size={40}
         motion={null}
         emoji={mobileGoatBotMemberPicture(bot)}
       />
-      <BotRowText name={bot.name} waitingCount={waitingCount} />
-    </>
+      <View className="min-w-0 flex-1 gap-0.5">
+        <View className="min-w-0 flex-row items-center gap-2">
+          <Text numberOfLines={1} className="shrink font-semibold text-foreground">
+            {bot.name}
+          </Text>
+          {waitingCount > 0 ? (
+            <Text
+              accessibilityLabel={`${waitingCount} waiting for you`}
+              className="text-xs font-semibold text-foreground"
+            >
+              {waitingCount}
+            </Text>
+          ) : null}
+        </View>
+        {line ? (
+          <View className="min-w-0 flex-row items-center gap-1">
+            {unread ? (
+              <View
+                accessibilityElementsHidden
+                className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+              />
+            ) : null}
+            <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
+              {line}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </Pressable>
   );
 }
 
