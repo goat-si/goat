@@ -51,3 +51,18 @@ func TestAnUnreadableHostKeyFileIsReportedAndTheReadableKeysArePublished(t *test
 		t.Fatalf("pen ls still reports %q once every key file reads", e)
 	}
 }
+
+// filepath.Glob drops the error of a folder it cannot list, so a key folder this account cannot read
+// would look like a machine without sshd; a missing folder is one.
+func TestAKeyFolderThatCannotBeListedIsReportedAndAMissingOneIsNot(t *testing.T) {
+	notDir := filepath.Join(t.TempDir(), "ssh")
+	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if keys, unreadable := ReadHostKeys(filepath.Join(notDir, "ssh_host_*_key.pub")); len(keys) != 0 || len(unreadable) != 1 || !strings.Contains(unreadable[0], notDir) {
+		t.Fatalf("a key folder that cannot be listed gave keys %q, unreadable %q", keys, unreadable)
+	}
+	if _, unreadable := ReadHostKeys(filepath.Join(t.TempDir(), "absent", "ssh_host_*_key.pub")); len(unreadable) != 0 {
+		t.Fatalf("a missing key folder was reported: %q", unreadable)
+	}
+}

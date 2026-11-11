@@ -25,17 +25,20 @@ func DefaultKnownHosts() (string, error) {
 }
 
 // ReadHostKeys returns the sshd public keys matching glob as sorted "type base64" lines (at most 8),
-// and the read errors of matching files it could not read.
+// and the files, or the folder, it could not read.
 func ReadHostKeys(glob string) (keys, unreadable []string) {
 	paths, _ := filepath.Glob(glob)
+	if len(paths) == 0 {
+		// Glob hides a folder it cannot list; a missing folder only means no sshd here.
+		dir := filepath.Dir(glob)
+		if _, err := os.ReadDir(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			unreadable = append(unreadable, dir+" ("+pathCause(err)+")")
+		}
+	}
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
-			var pe *fs.PathError
-			if errors.As(err, &pe) {
-				err = pe.Err
-			}
-			unreadable = append(unreadable, p+" ("+err.Error()+")")
+			unreadable = append(unreadable, p+" ("+pathCause(err)+")")
 			continue
 		}
 		f := strings.Fields(string(b))
@@ -49,6 +52,15 @@ func ReadHostKeys(glob string) (keys, unreadable []string) {
 		keys = keys[:8]
 	}
 	return keys, unreadable
+}
+
+// pathCause is err without the operation and path a *fs.PathError repeats.
+func pathCause(err error) string {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	return err.Error()
 }
 
 func (d *Daemon) hostKeysLoop(ctx context.Context) {

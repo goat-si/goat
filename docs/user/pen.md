@@ -26,9 +26,9 @@ curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh
 ```
 
 This puts `pen` in `~/.local/bin` and prints what to run next. It does not start or join a mesh. When
-`~/.local/bin` is not on your PATH, it adds one marked line to your login profile (`~/.zprofile` for zsh,
-otherwise `~/.bash_profile` or `~/.profile`), so new terminals find `pen`; `curl ... | PEN_NO_MODIFY_PATH=1 sh`
-leaves the profile alone.
+`~/.local/bin` is not on your PATH, it adds one marked line to your shell's startup files (`~/.zshenv` for zsh,
+`~/.bashrc` and `~/.bash_profile` or `~/.profile` for bash, otherwise `~/.profile`), so new terminals find
+`pen`; `curl ... | PEN_NO_MODIFY_PATH=1 sh` leaves them alone.
 To install and connect in one step, add one of these after `sh -s --`:
 
 | Option           | What it does                                                    |
@@ -240,9 +240,10 @@ You can run your own relay with `pen relay serve` on a machine with a public add
 where they can, so Pen comes back after a restart. With `--no-service`, Pen runs in the background
 until the machine restarts; run `pen up` again afterwards. `pen down` stops it.
 On Linux without a systemd user manager (many containers, or `su` without a login session), `pen up` says that
-nothing will start Pen again and prints the line to add to a script that runs at startup. With systemd but
-lingering off, it prints the `sudo loginctl enable-linger` line: without it, systemd stops Pen when your last
-session on the machine ends.
+nothing will start Pen again and prints the command to run at startup. Run it as the same user, with that user's
+home, for example from that user's `crontab -e`; a startup script that runs as root would start a different
+machine from root's home. With systemd but lingering off, `pen up` prints the `sudo loginctl enable-linger` line:
+without it, systemd stops Pen when your last session on the machine ends.
 Pen writes its log to `~/.pen/daemon.log` (on Linux with a service, to the user journal) and keeps
 it under 4 MiB, with the previous part in `daemon.log.1`.
 

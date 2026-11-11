@@ -87,27 +87,36 @@ case ":$PATH:" in
 *":$HOME/.local/bin:"*) ;;
 *)
 	pen="$HOME/.local/bin/pen"
-	# The login shell's own profile: bash reads the first of these three that exists.
+	# zsh reads ~/.zshenv in every shell; bash reads the first of its three login profiles in a login
+	# shell and ~/.bashrc in other interactive ones (a desktop terminal). Positional parameters keep
+	# paths with spaces whole under set -f.
 	case "${SHELL:-}" in
-	*/zsh) profile="$HOME/.zprofile" ;;
+	*/zsh) set -- "$HOME/.zshenv" ;;
 	*/bash)
-		profile="$HOME/.profile"
+		login="$HOME/.profile"
 		for p in "$HOME/.bash_profile" "$HOME/.bash_login"; do
 			if [ -f "$p" ]; then
-				profile="$p"
+				login="$p"
 				break
 			fi
 		done
+		set -- "$login" "$HOME/.bashrc"
 		;;
-	*) profile="$HOME/.profile" ;;
+	*) set -- "$HOME/.profile" ;;
 	esac
+	# The line checks PATH first, so a shell that reads two of these files lists the folder once.
+	line='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
 	mark="# added by pen install.sh (PEN_NO_MODIFY_PATH=1 skips this)"
 	if [ "${PEN_NO_MODIFY_PATH:-}" = 1 ]; then
 		echo "add $HOME/.local/bin to your PATH to run pen directly"
-	elif grep -qF "$mark" "$profile" 2>/dev/null || printf '\n%s %s\n' 'export PATH="$HOME/.local/bin:$PATH"' "$mark" >>"$profile" 2>/dev/null; then
-		echo "added $HOME/.local/bin to your PATH in $profile (new login shells see it)"
 	else
-		echo "add $HOME/.local/bin to your PATH to run pen directly (could not write $profile)"
+		for profile in "$@"; do
+			if grep -qF "$mark" "$profile" 2>/dev/null || printf '\n%s %s\n' "$line" "$mark" >>"$profile" 2>/dev/null; then
+				echo "added $HOME/.local/bin to your PATH in $profile (new terminals see it)"
+			else
+				echo "could not write $profile: add $HOME/.local/bin to your PATH to run pen directly"
+			fi
+		done
 	fi
 	;;
 esac

@@ -53,19 +53,29 @@ func startNote(mode string, noService bool) string {
 		if err != nil {
 			exe = "pen"
 		}
-		return "pen: no service manager answered (systemctl --user), so nothing starts Pen again if it stops or this machine restarts. Add this line to a script that runs at startup: " + shellQuote(exe) + " up"
-	case mode == "systemd":
-		name := os.Getenv("USER")
-		if u, err := user.Current(); err == nil && name == "" {
-			name = u.Username
+		manager := map[string]string{"linux": "systemctl --user", "darwin": "launchctl"}[serviceOS]
+		if manager == "" {
+			manager = "none supported on " + serviceOS
 		}
+		// Another account's startup script (root's) would start another node from its own home.
+		return "pen: no service manager answered (" + manager + "), so nothing starts Pen again if it stops or this machine restarts. Run " +
+			shellQuote(exe) + " up at startup as " + loginUserName() + ", with that account's HOME, for example with the line @reboot " + shellQuote(exe) + " up in its crontab -e"
+	case mode == "systemd":
 		linger, err := output("loginctl", "show-user", strconv.Itoa(os.Getuid()), "--property=Linger", "--value")
 		if err != nil || strings.TrimSpace(linger) != "no" {
 			return "" // unknown without logind: say nothing rather than guess
 		}
-		return "pen: lingering is off, so systemd stops Pen when your last session on this machine ends. Keep it running with: sudo loginctl enable-linger " + name
+		return "pen: lingering is off, so systemd stops Pen when your last session on this machine ends. Keep it running with: sudo loginctl enable-linger " + loginUserName()
 	}
 	return ""
+}
+
+// loginUserName names this process's uid, never $USER, which su or sudo can leave pointing elsewhere.
+func loginUserName() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return strconv.Itoa(os.Getuid())
 }
 
 // serviceManagerFound reports whether systemd --user or launchctl answers here (a variable for tests).
