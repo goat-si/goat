@@ -16,8 +16,14 @@ vi.mock("react-native", () => ({
   Switch: () => null,
   View: (props: Props) => <div {...forward(props)}>{props.children}</div>,
   ScrollView: (props: Props) => <div {...forward(props)}>{props.children}</div>,
-  Modal: (props: Props & { visible: boolean }) =>
-    props.visible ? <div>{props.children}</div> : null,
+  // The system back (Android's button or gesture) reaches the sheet as onRequestClose.
+  Modal: (props: Props & { visible: boolean; onRequestClose?: () => void }) =>
+    props.visible ? (
+      <div>
+        <button aria-label="System back" onClick={props.onRequestClose} />
+        {props.children}
+      </div>
+    ) : null,
   Alert: { alert: vi.fn() },
   Text: (props: Props) => <span>{props.children}</span>,
   Pressable: (
@@ -146,7 +152,18 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
 vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotMarkdown", () => ({
-  GoatBotMarkdown: (props: { text: string }) => <span>{props.text}</span>,
+  GoatBotMarkdown: (props: {
+    text: string;
+    environmentId: string | null;
+    onSelectThread: (thread: { environmentId: string; id: string }) => void;
+  }) => (
+    <button
+      aria-label={`Link in: ${props.text}`}
+      onClick={() => props.onSelectThread({ environmentId: "env", id: "linked" })}
+    >
+      {props.text}
+    </button>
+  ),
 }));
 vi.mock("../../components/ui/Button", () => ({
   Button: (props: { label: string; onPress: () => void }) => (
@@ -414,4 +431,40 @@ it("keeps the task screen's remote work, subagents and actions", async () => {
   expect(button("Mark done")).toBeDefined();
   await press("Open work thread on mac-mini");
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env-remote", id: "remote-1" });
+});
+
+it("closes the peek first on the system back, then the sheet", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  await open();
+  await press("Check the disks");
+  expect(home()?.getAttribute("aria-hidden")).toBe("true");
+  await press("System back");
+  expect(home()?.getAttribute("aria-hidden")).toBeNull();
+  expect(button("Library")).toBeDefined();
+  await press("System back");
+  expect(button("Library")).toBeUndefined();
+});
+
+it("forgets a peeked task that leaves the list, so it does not reopen when it returns", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  await open();
+  await press("Check the disks");
+  state.rows = [];
+  await open();
+  expect(home()?.getAttribute("aria-hidden")).toBeNull();
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  await open();
+  expect(home()?.getAttribute("aria-hidden")).toBeNull();
+  expect(button("Back to home. Check the disks")).toBeUndefined();
+});
+
+it("opens a thread linked in a peeked message", async () => {
+  state.rows = [task("t1", "Check the disks", "worker-1")];
+  state.messages = [
+    { item: { id: "m1", type: "assistant_message", text: "See [it](goat-thread://v1/linked)" } },
+  ];
+  await open();
+  await press("Check the disks");
+  await press("Link in: See [it](goat-thread://v1/linked)");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "linked" });
 });

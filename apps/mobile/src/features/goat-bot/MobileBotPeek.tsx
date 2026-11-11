@@ -5,7 +5,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Option from "effect/Option";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 
 import { Button } from "../../components/ui/Button";
 import { useThreadDetail, useThreadVisibleTurnItems } from "../../state/use-thread-detail";
@@ -49,65 +49,69 @@ export function MobileBotPeek(props: {
     return coding?.kind === "coding" && coding.title ? coding.title : "Work thread";
   };
   return (
-    <View className="flex-1 gap-3 py-2">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Back to home. ${row.task.title}`}
-        onPress={props.onBack}
-        className="min-h-[44px] flex-row items-center gap-1 self-start rounded-full bg-goat-bot-message px-3"
-      >
-        <Text className="text-foreground">‹</Text>
-        <Text numberOfLines={1} className="shrink font-semibold text-foreground">
-          {row.task.title}
+    <View className="flex-1 py-2">
+      {/* The peek's words and threads scroll; its two ways out stay in reach at the bottom. */}
+      <ScrollView className="flex-1" contentContainerClassName="gap-3 pb-3">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Back to home. ${row.task.title}`}
+          onPress={props.onBack}
+          className="min-h-[44px] flex-row items-center gap-1 self-start rounded-full bg-goat-bot-message px-3"
+        >
+          <Text className="text-foreground">‹</Text>
+          <Text numberOfLines={1} className="shrink font-semibold text-foreground">
+            {row.task.title}
+          </Text>
+        </Pressable>
+        <Text className="text-foreground-muted" style={label}>
+          {[status, attempt, row.unread ? "Unread" : null, row.view.pinnedAt ? "Pinned" : null]
+            .filter(Boolean)
+            .join(" · ")}
         </Text>
-      </Pressable>
-      <Text className="text-foreground-muted" style={label}>
-        {[status, attempt, row.unread ? "Unread" : null, row.view.pinnedAt ? "Pinned" : null]
-          .filter(Boolean)
-          .join(" · ")}
-      </Text>
-      {first !== null ? (
-        <MobileBotPeekMessages
-          key={first.environmentId + ":" + first.threadId}
-          environmentId={first.environmentId}
-          threadId={first.threadId}
-          connected={props.connected}
-          machineLabel={props.machineLabel}
-        />
-      ) : null}
-      {entry.threads.length + entry.remote.length + entry.subagents.length > 0 ? (
-        <View className="gap-1">
-          <Text className="text-xs font-medium text-foreground-muted">Threads</Text>
-          {entry.threads.map((thread) => (
-            <Pressable
-              key={thread.environmentId + ":" + thread.threadId}
-              accessibilityRole="button"
-              accessibilityLabel={`Open ${titleOf(thread)}`}
-              className="min-h-[44px] justify-center"
-              onPress={() =>
-                props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
-              }
-            >
-              <Text numberOfLines={1} className="text-foreground">
-                {titleOf(thread)}
+        {first !== null ? (
+          <MobileBotPeekMessages
+            key={first.environmentId + ":" + first.threadId}
+            environmentId={first.environmentId}
+            threadId={first.threadId}
+            connected={props.connected}
+            machineLabel={props.machineLabel}
+            onOpenThread={props.onOpenThread}
+          />
+        ) : null}
+        {entry.threads.length + entry.remote.length + entry.subagents.length > 0 ? (
+          <View className="gap-1">
+            <Text className="text-xs font-medium text-foreground-muted">Threads</Text>
+            {entry.threads.map((thread) => (
+              <Pressable
+                key={thread.environmentId + ":" + thread.threadId}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${titleOf(thread)}`}
+                className="min-h-[44px] justify-center"
+                onPress={() =>
+                  props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
+                }
+              >
+                <Text numberOfLines={1} className="text-foreground">
+                  {titleOf(thread)}
+                </Text>
+              </Pressable>
+            ))}
+            {entry.remote.map((item) => (
+              <MobileBotRemoteWork
+                key={item.childWorkId}
+                item={item}
+                onOpenThread={props.onOpenThread}
+              />
+            ))}
+            {entry.subagents.map((agent) => (
+              <Text key={agent.childWorkId} className="text-foreground-muted">
+                {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
               </Text>
-            </Pressable>
-          ))}
-          {entry.remote.map((item) => (
-            <MobileBotRemoteWork
-              key={item.childWorkId}
-              item={item}
-              onOpenThread={props.onOpenThread}
-            />
-          ))}
-          {entry.subagents.map((agent) => (
-            <Text key={agent.childWorkId} className="text-foreground-muted">
-              {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
-            </Text>
-          ))}
-        </View>
-      ) : null}
-      <View className="mt-auto gap-2 pb-4">
+            ))}
+          </View>
+        ) : null}
+      </ScrollView>
+      <View className="gap-2 pb-4 pt-2">
         {first !== null ? (
           <Button
             label="Go to thread"
@@ -135,6 +139,7 @@ function MobileBotPeekMessages(props: {
   readonly threadId: ThreadId;
   readonly connected: boolean;
   readonly machineLabel: string;
+  readonly onOpenThread: (thread: ThreadSelection) => void;
 }) {
   const target = { environmentId: props.environmentId, threadId: props.threadId };
   const detail = useThreadDetail(target);
@@ -173,7 +178,9 @@ function MobileBotPeekMessages(props: {
                 <GoatBotMarkdown
                   text={item.text}
                   environmentId={props.environmentId}
-                  onSelectThread={() => {}}
+                  onSelectThread={(thread) =>
+                    props.onOpenThread({ environmentId: thread.environmentId, id: thread.id })
+                  }
                 />
               </View>
             ) : null,

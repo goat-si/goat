@@ -17,8 +17,11 @@ export function MobileBotComputer(props: {
   /** A member bot's sheet lists only its own work. */
   readonly botId: BotId | null;
   readonly botName?: string;
+  /** Changes when the bot's work changes, so the machines are read again while Home stays open. */
+  readonly workKey?: string;
 }) {
   const { environmentId, connected, botId } = props;
+  const workKey = props.workKey ?? "";
   const botName = props.botName ?? "GOAT Bot";
   const readable = environmentId !== null && connected;
   const tasks = useEnvironmentQuery(
@@ -34,10 +37,10 @@ export function MobileBotComputer(props: {
       : null,
   );
   const refresh = tasks.refresh;
-  // oxlint-disable-next-line goat/react-effect-budget -- Work starts and moves between machines on the server; read the list again each time the tab opens.
+  // oxlint-disable-next-line goat/react-effect-budget -- Work starts and moves between machines on the server; read the list again when the tab opens and when the bot's work changes.
   useEffect(() => {
-    if (readable) refresh();
-  }, [readable, refresh]);
+    if (readable && workKey.length >= 0) refresh();
+  }, [readable, refresh, workKey]);
   if (!connected)
     return (
       <Text className="text-foreground-muted">

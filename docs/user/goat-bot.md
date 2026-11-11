@@ -5,11 +5,11 @@ its own task threads, and reports back in the same conversation. Choose **Bots**
 on web and desktop, or the Bots segment on mobile Home. To reach it from Slack or iMessage, see
 [Slack](./slack.md).
 
-On web and desktop, with a GOAT server that lists the bot's work, the conversation holds only what
-you and the bot say: its answers, its questions, a line while it works and how the work ended. The
-tasks it starts open from the bot's home: select the bot's name at the top of its chat. Finished
-work whose ending the chat never told, such as a request made from Slack, keeps its card. Other
-clients and older servers show each task as a card in the conversation.
+With a GOAT server that lists the bot's work, the conversation holds only what you and the bot
+say: its answers, its questions, a line while it works and how the work ended. The tasks it starts
+open from the bot's home: select the bot's name at the top of its chat. Finished work whose ending
+the chat never told, such as a request made from Slack, keeps its card. Older servers show each
+task as a card in the conversation.
 
 ## Bots
 
