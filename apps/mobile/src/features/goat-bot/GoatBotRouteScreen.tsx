@@ -4,6 +4,7 @@ import { goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
+import { useAppForeground } from "../../lib/appState";
 import { useThreadShell } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -12,12 +13,19 @@ import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotMember } from "./useMobileBotRoster";
 import { useMobileBotManage } from "./useMobileBotManage";
 import { GoatBotScreen } from "./GoatBotScreen";
-import { useGoatBotVisitSnapshot } from "./useGoatBotVisitSnapshot";
+import {
+  recordGoatBotLocalRead,
+  useGoatBotLocalRead,
+  useGoatBotVisitSnapshot,
+} from "./useGoatBotVisitSnapshot";
 
 export function GoatBotRouteScreen({
   route,
 }: StaticScreenProps<{ taskId?: string; botId?: string }>) {
   const focused = useIsFocused();
+  const foreground = useAppForeground();
+  // A reply that arrives while the app is in the background has not been seen.
+  const seen = focused && foreground;
   const { botRef } = useMobileGoatBotHomeMode();
   const preview = useMobileBotPreview();
   const botId = route.params?.botId;
@@ -31,21 +39,40 @@ export function GoatBotRouteScreen({
   const shell = useThreadShell(
     environmentId && threadId ? scopeThreadRef(environmentId, threadId) : null,
   );
+  const conversation = environmentId && threadId ? `${environmentId}:${threadId}` : null;
+  const serverTracksVisits = shell?.lastVisitedAt !== undefined;
+  const newestAt = preview?.at ?? null;
+  const localRead = useGoatBotLocalRead(conversation);
   // Where the person had read up to when they opened the chat, taken before the visit moves it.
   const readSnapshot = useGoatBotVisitSnapshot({
-    focused: focused && mainChat,
-    conversation: environmentId && threadId ? `${environmentId}:${threadId}` : null,
+    focused: seen && mainChat,
+    conversation,
     loaded: shell !== null && preview !== null,
-    lastVisitedAt: shell?.lastVisitedAt ?? null,
-    newestAt: preview?.at ?? null,
+    lastVisitedAt: serverTracksVisits ? (shell?.lastVisitedAt ?? null) : localRead,
+    newestAt,
   });
   const visit = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while the main conversation is visible.
   useEffect(() => {
-    if (focused && mainChat && environmentId && threadId && unreadAt && readSnapshot) {
+    if (!seen || !mainChat || !environmentId || !threadId || !readSnapshot) return;
+    if (!serverTracksVisits) {
+      if (conversation !== null && newestAt !== null)
+        recordGoatBotLocalRead(conversation, newestAt);
+    } else if (unreadAt) {
       void visit({ environmentId, input: { threadId, visitedAt: unreadAt } });
     }
-  }, [focused, mainChat, environmentId, threadId, unreadAt, readSnapshot, visit]);
+  }, [
+    seen,
+    mainChat,
+    environmentId,
+    threadId,
+    unreadAt,
+    readSnapshot,
+    visit,
+    serverTracksVisits,
+    conversation,
+    newestAt,
+  ]);
   // A named member never falls back to the main bot's conversation.
   if (botId !== undefined && member === null)
     return (

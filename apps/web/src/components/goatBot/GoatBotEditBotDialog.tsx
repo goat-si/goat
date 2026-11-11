@@ -24,6 +24,7 @@ export function GoatBotEditBotDialog({
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
   const mainName = useGoatBotMainName();
   const modelEditable = useGoatBotMemberModelEditable(bot);
+  const colorEditable = useGoatBotMemberColorEditable(bot);
   const [model, setModel] = useState(bot.defaultModelSelection);
   const modelChanged = modelEditable && !sameModel(model, bot.defaultModelSelection);
   return (
@@ -32,6 +33,7 @@ export function GoatBotEditBotDialog({
       initial={bot}
       canSubmit={canSubmit}
       extraChanged={modelChanged}
+      colorEditable={colorEditable}
       onClose={onClose}
       onSubmit={async (changes) => {
         const result = await update({
@@ -66,6 +68,18 @@ export function useGoatBotMemberModelEditable(bot: BotProfile): boolean {
   return (
     bot.role === "member" &&
     presentation?.serverConfig?.environment.capabilities.goatBotMemberModelEdit === true
+  );
+}
+
+/** A member's color goes only to a server that stores one; older servers drop the key. */
+function useGoatBotMemberColorEditable(bot: {
+  readonly role: BotProfile["role"];
+  readonly environmentId: BotProfile["environmentId"];
+}): boolean {
+  const presentation = useEnvironment(bot.environmentId);
+  return (
+    bot.role === "member" &&
+    presentation?.serverConfig?.environment.capabilities.goatBotProfileColor === true
   );
 }
 
