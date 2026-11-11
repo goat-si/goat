@@ -1,38 +1,15 @@
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import type * as CodexClient from "effect-codex-app-server/client";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
-  CodexStopObligation,
   CodexSurvivors,
 } from "../../provider/CodexSurvivors.ts";
-import {
-  readGoalActivity,
-  type PersistedGoals,
-  type SurvivorWaiting,
-} from "./CodexSurvivorFenceMaintenance.ts";
+import type { PersistedGoals, SurvivorWaiting } from "./CodexSurvivorFenceMaintenance.ts";
 import { isVerifiedCodexProcessLoss } from "./CodexSurvivorSessionLoss.ts";
 
 type Goal = { readonly record: CodexInstanceRecordKey; readonly block: CodexGoalBlock };
-type GoalActivity = "active" | "inactive";
-
-const goalActivityOf = (method: string, payload: object): GoalActivity | undefined => {
-  if (method === "thread/goal/cleared") return "inactive";
-  if (
-    method !== "thread/goal/updated" ||
-    !("goal" in payload) ||
-    typeof payload.goal !== "object" ||
-    payload.goal === null ||
-    !("status" in payload.goal)
-  )
-    return undefined;
-  return payload.goal.status === "paused" || payload.goal.status === "complete"
-    ? "inactive"
-    : "active";
-};
 
 export const makeGoalTurnFences = (input: {
   readonly client: CodexClient.CodexAppServerClient["Service"];
@@ -49,68 +26,6 @@ export const makeGoalTurnFences = (input: {
   const terminals = new Map<string, Set<string>>();
   const overflow = new Set<string>();
   const writing = new Map<string, Map<string, { count: number; completed: boolean }>>();
-  // The goal state Codex last reported per native thread; reading it inside a notification
-  // handler would wait on the connection that delivers the answer.
-  const goalActivity = new Map<string, GoalActivity>();
-  /**
-   * Clears a goal turn's stop fence. When it is the thread's last fence, its goal is inactive and
-   * its goal block is this record's alone, the block goes in the same write: between two writes
-   * the start guard frees the thread while admission still refuses its start.
-   */
-  const releaseStop = Effect.fn("CodexGoalTurnFences.releaseStop")(function* (
-    service: CodexSurvivors["Service"],
-    record: CodexInstanceRecordKey,
-    stop: CodexStopObligation,
-    inactive: boolean,
-  ) {
-    const sameRecord = (other: CodexInstanceRecordKey) =>
-      other.instanceId === record.instanceId && other.recordName === record.recordName;
-    const release =
-      inactive &&
-      (yield* service.getStopObligations(stop.threadId)).every(
-        (other) => sameRecord(other.record) && other.block.nativeTurnId === stop.nativeTurnId,
-      ) &&
-      (yield* service.getGoalBlocks(stop.threadId)).every(
-        (other) => sameRecord(other.record) && other.block.nativeThreadId === stop.nativeThreadId,
-      );
-    yield* service.clearStopObligation(record, stop, release);
-  });
-  // The goal/set each fence sends, so a turn ending before Codex reports the pause waits for it.
-  const pausing = new Map<string, Fiber.Fiber<void>>();
-  /**
-   * A fenced turn can end before Codex reports its goal paused. The fence stays, so the start guard
-   * keeps holding the thread, until the pause answers and the goal is read off the notification path.
-   */
-  const settleOnceGoalKnown = Effect.fn("CodexGoalTurnFences.settleOnceGoalKnown")(
-    function* (
-      service: CodexSurvivors["Service"],
-      record: CodexInstanceRecordKey,
-      stop: CodexStopObligation,
-    ) {
-      const pause = pausing.get(stop.nativeThreadId);
-      if (pause !== undefined) yield* Fiber.await(pause);
-      const inactive =
-        goalActivity.get(stop.nativeThreadId) === "inactive" ||
-        Option.contains(yield* readGoalActivity(input.client, stop.nativeThreadId), "inactive");
-      yield* releaseStop(service, record, stop, inactive);
-    },
-    (effect, service, record, stop) =>
-      effect.pipe(
-        Effect.catch(() => service.clearStopObligation(record, stop)),
-        Effect.catch((cause) =>
-          Effect.logWarning("Could not clear a Codex goal turn fence", { cause }),
-        ),
-      ),
-  );
-  const releaseOnceGoalKnown = (
-    service: CodexSurvivors["Service"],
-    record: CodexInstanceRecordKey,
-    stop: CodexStopObligation,
-  ) =>
-    settleOnceGoalKnown(service, record, stop).pipe(
-      Effect.forkIn(input.scope, { startImmediately: true }),
-      Effect.asVoid,
-    );
   const blocksFor = Effect.fn("CodexGoalTurnFences.blocks")(function* (nativeThreadId: string) {
     if (input.service === undefined) return [] as Goal[];
     const candidates = [...(input.goals.get(nativeThreadId) ?? [])];
@@ -155,9 +70,7 @@ export const makeGoalTurnFences = (input: {
           stop.block.nativeThreadId === nativeThreadId &&
           stop.block.nativeTurnId === turnId
         )
-          yield* goalActivity.get(nativeThreadId) === "inactive"
-            ? releaseStop(service, stop.record, stop.block, true)
-            : releaseOnceGoalKnown(service, stop.record, stop.block);
+          yield* service.clearStopObligation(stop.record, stop.block);
     }
   });
   const fence = Effect.fn("CodexGoalTurnFences.fence")(function* (
@@ -186,21 +99,17 @@ export const makeGoalTurnFences = (input: {
     // Without a pause Codex keeps continuing the goal with turns no run owns, and each holds the
     // thread's admission. The fenced turn itself still finishes.
     if (result._tag === "Success" && result.success)
-      pausing.set(
-        nativeThreadId,
-        yield* input.client
-          .request("thread/goal/set", { threadId: nativeThreadId, status: "paused" })
-          .pipe(
-            Effect.asVoid,
-            Effect.catch((cause) =>
-              Effect.logWarning("Could not pause a Codex goal that started an unowned turn", {
-                nativeThreadId,
-                cause,
-              }),
-            ),
-            Effect.forkIn(input.scope, { startImmediately: true }),
+      yield* input.client
+        .request("thread/goal/set", { threadId: nativeThreadId, status: "paused" })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not pause a Codex goal that started an unowned turn", {
+              nativeThreadId,
+              cause,
+            }),
           ),
-      );
+          Effect.forkIn(input.scope),
+        );
     state.count--;
     if (result._tag === "Failure") overflow.add(nativeThreadId);
     if (state.count === 0) {
@@ -229,8 +138,6 @@ export const makeGoalTurnFences = (input: {
       return;
     const nativeThreadId = payload.threadId;
     if (!input.goals.has(nativeThreadId) && !input.tracked.has(nativeThreadId)) return;
-    const activity = goalActivityOf(method, payload);
-    if (activity !== undefined) goalActivity.set(nativeThreadId, activity);
     if (
       pending.has(nativeThreadId) &&
       (method === "thread/goal/updated" ||
@@ -294,7 +201,6 @@ export const makeGoalTurnFences = (input: {
               )).flat();
         const unresolved = new Set(obligations.map(({ block }) => block.nativeTurnId));
         const seen = new Set<string>();
-        let inactive: boolean | undefined;
         let cursor: string | undefined;
         for (let page = 0; page < 1000; page++) {
           const turns = yield* input.client.request("thread/turns/list", {
@@ -318,19 +224,9 @@ export const makeGoalTurnFences = (input: {
             if (input.waiting.get(nativeThreadId)?.nativeTurnId === turn.id) continue;
             const activeWrite = writing.get(nativeThreadId)?.get(turn.id);
             if (activeWrite !== undefined) activeWrite.completed = true;
-            inactive ??=
-              goalActivity.get(nativeThreadId) === "inactive" ||
-              Option.contains(
-                // Resume as a whole gets 10 seconds; an unanswered read keeps the goal block.
-                yield* readGoalActivity(input.client, nativeThreadId).pipe(
-                  Effect.timeoutOption("2 seconds"),
-                  Effect.map(Option.flatten),
-                ),
-                "inactive",
-              );
             for (const stop of obligations)
               if (stop.block.nativeTurnId === turn.id)
-                yield* releaseStop(service, stop.record, stop.block, inactive);
+                yield* service.clearStopObligation(stop.record, stop.block);
           }
           if (unresolved.size === 0 || !turns.nextCursor || seen.has(turns.nextCursor)) break;
           seen.add(turns.nextCursor);
@@ -370,12 +266,7 @@ export const makeGoalTurnFences = (input: {
           stop.record.recordName === record.recordName &&
           stop.block.nativeThreadId === block.nativeThreadId
         )
-          yield* releaseStop(
-            input.service,
-            stop.record,
-            stop.block,
-            goalActivity.get(block.nativeThreadId) === "inactive",
-          );
+          yield* input.service.clearStopObligation(stop.record, stop.block);
     }
   });
   const fenced = Effect.fn("CodexGoalTurnFences.fenced")(function* () {

@@ -251,8 +251,6 @@ export class CodexSurvivors extends Context.Service<
     readonly clearStopObligation: (
       record: CodexInstanceRecordKey,
       obligation: CodexStopObligation,
-      /** Drops the goal block of the obligation's native thread in the same record write. */
-      releaseGoal?: boolean,
     ) => Effect.Effect<void, CodexDetachedAppServerError>;
     readonly recordGoalBlock: (
       record: CodexInstanceRecordKey,
@@ -285,7 +283,7 @@ export const layer = Layer.effect(
     const wake = Effect.suspend(() =>
       Effect.all([wakeStarts, ...fenceListeners], { discard: true }),
     );
-    return CodexSurvivors.of({
+    const service: CodexSurvivors["Service"] = CodexSurvivors.of({
       startBlockedThreads: Effect.gen(function* () {
         const current = yield* Ref.get(bindings);
         const fenced = yield* detached.stopFencedThreads;
@@ -458,9 +456,8 @@ export const layer = Layer.effect(
       recordStopObligation: Effect.fn("CodexSurvivors.recordStopObligation")((key, stop) =>
         detached.recordStopObligation(key, stop).pipe(Effect.ensuring(wake)),
       ),
-      clearStopObligation: Effect.fn("CodexSurvivors.clearStopObligation")(
-        (key, stop, releaseGoal) =>
-          detached.clearStopObligation(key, stop, releaseGoal).pipe(Effect.ensuring(wake)),
+      clearStopObligation: Effect.fn("CodexSurvivors.clearStopObligation")((key, stop) =>
+        detached.clearStopObligation(key, stop).pipe(Effect.ensuring(wake)),
       ),
       recordGoalBlock: detached.recordGoalBlock,
       clearGoalBlock: detached.clearGoalBlock,
@@ -479,13 +476,52 @@ export const layer = Layer.effect(
             survival,
           ) &&
           !(yield* Ref.get(bindings)).some((binding) => binding.threadId === threadId);
-        yield* detached.ensureAdmission(threadId, {
+        yield* admitPastStaleGoalBlocks({
+          detached,
+          readGoal: (record, nativeThreadId) =>
+            service.readExistingGoal?.(record, nativeThreadId) ?? Effect.succeed("goal" as const),
+          threadId,
           allowGoalControl: options?.allowGoalControl === true,
           stdio,
         });
       }),
     });
+    return service;
   }),
+);
+
+/**
+ * A goal block outlives the stop fence that clears with its turn until fence maintenance reads the
+ * goal, so the start guard can free a start that admission would then refuse. Before refusing on a
+ * goal block alone, admission reads the goal itself and drops a block whose goal Codex no longer
+ * runs; an active goal, or one it cannot read, still refuses.
+ */
+export const admitPastStaleGoalBlocks = Effect.fn("CodexSurvivors.admitPastStaleGoalBlocks")(
+  function* (input: {
+    readonly detached: Pick<
+      Detached.CodexDetachedAppServers["Service"],
+      "getStopObligations" | "getGoalBlocks" | "clearGoalBlock" | "ensureAdmission"
+    >;
+    readonly readGoal: (
+      record: CodexInstanceRecordKey,
+      nativeThreadId: string,
+    ) => Effect.Effect<"none" | "disabled" | "goal", CodexDetachedAppServerError>;
+    readonly threadId: ThreadId;
+    readonly allowGoalControl: boolean;
+    readonly stdio: boolean;
+  }) {
+    const { detached, threadId } = input;
+    if (!input.allowGoalControl && (yield* detached.getStopObligations(threadId)).length === 0)
+      for (const { record, block } of yield* detached.getGoalBlocks(threadId)) {
+        const goal = yield* input.readGoal(record, block.nativeThreadId).pipe(Effect.option);
+        if (Option.isSome(goal) && goal.value !== "goal")
+          yield* detached.clearGoalBlock(record, block).pipe(Effect.ignore);
+      }
+    yield* detached.ensureAdmission(threadId, {
+      allowGoalControl: input.allowGoalControl,
+      stdio: input.stdio,
+    });
+  },
 );
 
 /** Protection is recorded with each retention, so an interrupted pass leaves the two consistent. */
