@@ -46,17 +46,18 @@
   without an introducer is not introduced. A record is admissible when its signer is introduced; a
   `revoke`'s subjects need not be, since it spends only its signer's lineage places. The view still
   decides what a record does at its turn; this only replaces the storage check "introduced in its past".
-  That check moves into the view for revokes: a revoke reaches only subjects whose found or admit is in
-  its own past, so no revoke can stop a later admission. A node signing a revoke names each subject's
-  found or admit in `prev`, which keeps that link when records between them were dropped, and names at
-  most 8 heads besides, so dropped records cannot push a body past 2048 bytes.
+  A revoke ordered before its subject's admit still blocks it, as in the view of version 1; before the
+  admit is public only the joiner and its admitter know the key, and after it any member may revoke it.
 - **Depth.** The founder's depth is 0; a key's depth is its introducer's signer's depth plus 1. A key
   admitting itself, or admitted again deeper, keeps its shallowest introduction.
 - **Lineage.** The founder alone is lineage 0. A key the founder admits is in lineage
   1 + (SHA-256 of its invite nonce) mod 15: the founder chose the nonce, and no other record changes it.
   Any other key is in the lineage of its introducer's signer. A record is charged to its signer's lineage.
 - **Own chain.** A record with `n > 1` names its signer's record `n - 1` directly in `prev`, or has no
-  effect. Its effect then depends on nothing another signer's records do.
+  effect. Its effect then depends on nothing another signer's records do. A node's first record names
+  the found or admit records that introduced it (every admit naming a key carries a card that key signed),
+  so replay orders it after its signer's admission even when records between them were dropped. A record
+  names at most 8 heads besides: dropped records leave many, and 64 would pass the 2048-byte body.
 - **Shares.** Per lineage: 160 records of other types, 16 `lock` records, 16 `admit` records signed by
   keys other than the founder, and 56 revoke places. The founder's own admits share 64 places, kept by
   the founder's counter `n` then raw hash, so a later admit never displaces an earlier one. A revoke place

@@ -687,8 +687,10 @@ func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields)
 		// Under shares a record names its own previous one directly (ADR-0026 "Own chain").
 		prev = append([]string{own}, prev[:min(len(prev), limit-1)]...)
 	}
-	if s.shares && typ == TypeRevoke {
-		prev = s.withSubjectCards(prev, f.Subjects)
+	if s.shares && own == "" {
+		// A first record names what introduced its signer, so replay puts it after the admission
+		// even when records between them were dropped (ADR-0026 "Own chain").
+		prev = s.withOwnCards(prev, by)
 	}
 	r, err := SignV(max(s.version, 1), id, s.MeshID, typ, n, prev, at, f)
 	if err != nil {
