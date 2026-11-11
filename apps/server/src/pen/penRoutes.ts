@@ -155,6 +155,8 @@ export const admitPenRequest = (input: {
   readonly url: string;
   readonly upgrade: boolean;
   readonly headers: { readonly [name: string]: string | ReadonlyArray<string> | undefined };
+  /** The header lines as received; Node keeps only the first of duplicate Authorization lines. */
+  readonly rawHeaders: ReadonlyArray<string>;
 }): PenAdmission => {
   const queryAt = input.url.indexOf("?");
   const rawPath = queryAt === -1 ? input.url : input.url.slice(0, queryAt);
@@ -168,6 +170,10 @@ export const admitPenRequest = (input: {
   );
   if (route === undefined || !queryAdmits(route.query, query)) return REFUSED;
   if (input.headers["cookie"] !== undefined || input.headers["dpop"] !== undefined) return REFUSED;
+  const authorizationLines = input.rawHeaders.filter(
+    (value, index) => index % 2 === 0 && value.toLowerCase() === "authorization",
+  ).length;
+  if (authorizationLines > 1) return REFUSED;
   const authorization = input.headers["authorization"];
   if (route.grants.every((grant) => grant.credential === "none"))
     return authorization === undefined ? { kind: "admit", grants: route.grants } : REFUSED;

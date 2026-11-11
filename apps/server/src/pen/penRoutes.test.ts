@@ -8,7 +8,14 @@ const admit = (
   url: string,
   headers: Record<string, string> = {},
   upgrade = false,
-) => admitPenRequest({ method, url, upgrade, headers });
+) =>
+  admitPenRequest({
+    method,
+    url,
+    upgrade,
+    headers,
+    rawHeaders: Object.entries(headers).flatMap(([name, value]) => [name, value]),
+  });
 const kind = (admission: ReturnType<typeof admit>) =>
   admission.kind === "admit" ? "admit" : admission.status;
 
@@ -84,6 +91,17 @@ describe("Pen route table, default deny (mesh link design §5)", () => {
     expect(kind(admit("POST", "/mcp", { authorization: "Bearer a, Bearer b" }))).toBe(401);
     expect(kind(admit("POST", "/mcp", { ...bearer, cookie: "session=x" }))).toBe(404);
     expect(kind(admit("POST", "/mcp", { ...bearer, dpop: "proof" }))).toBe(404);
+    expect(
+      kind(
+        admitPenRequest({
+          method: "POST",
+          url: "/mcp",
+          upgrade: false,
+          headers: bearer,
+          rawHeaders: ["Authorization", "Bearer token-1", "authorization", "Bearer token-2"],
+        }),
+      ),
+    ).toBe(404);
     expect(kind(admit("POST", "/api/pen/session", bearer))).toBe(404);
     expect(kind(admit("GET", "/ws", bearer, false))).toBe(404);
     expect(kind(admit("POST", "/mcp", { ...bearer, upgrade: "websocket" }, true))).toBe(404);

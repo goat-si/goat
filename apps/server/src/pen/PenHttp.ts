@@ -26,6 +26,18 @@ const grantAdmits = (grant: PenRouteGrant, session: SessionStore.VerifiedSession
     : grant.credential === "proxy" && session.principalKind === "proxied_person";
 };
 
+/** The received header lines of a Node request; a request without them cannot carry a duplicate. */
+const rawHeadersOf = (request: HttpServerRequest.HttpServerRequest): ReadonlyArray<string> => {
+  const source: unknown = request.source;
+  const raw =
+    typeof source === "object" && source !== null
+      ? (source as { readonly rawHeaders?: unknown }).rawHeaders
+      : undefined;
+  return Array.isArray(raw)
+    ? raw.filter((value): value is string => typeof value === "string")
+    : [];
+};
+
 const admitPen = Effect.fn("PenHttp.admitPen")(function* (
   sessions: SessionStore.SessionStore["Service"],
   request: HttpServerRequest.HttpServerRequest,
@@ -36,6 +48,7 @@ const admitPen = Effect.fn("PenHttp.admitPen")(function* (
     url: request.url,
     upgrade: isUpgrade(request.headers),
     headers: request.headers,
+    rawHeaders: rawHeadersOf(request),
   });
   if (admission.kind === "refuse") return Option.some(empty(admission.status));
   if (admission.grants.every((grant) => grant.credential === "none")) return Option.none();

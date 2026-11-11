@@ -181,6 +181,8 @@ it.effect(
         get("http://pen/api/projects"),
         get("/api/projects", "Cookie: goat_session=x\r\n"),
         get("/api/projects", "Connection: Upgrade\r\nUpgrade: websocket\r\n"),
+        get("/api/projects", "authorization: Bearer y\r\n"),
+        get("/ws", "Authorization: Bearer y\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"),
       ]) {
         const client = yield* prove(port, member("a"), { after: raw });
         expect(yield* client.line(), raw).toBe("HTTP/1.1 404 Not Found\r");

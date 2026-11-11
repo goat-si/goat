@@ -92,6 +92,7 @@ export const make = Effect.fn("PenListener.make")(function* (options: PenListene
       url: request.url ?? "",
       upgrade: false,
       headers: request.headers,
+      rawHeaders: request.rawHeaders,
     });
     if (admission.kind === "refuse") {
       response.writeHead(admission.status, { connection: "close", "content-length": "0" }).end();
@@ -114,6 +115,7 @@ export const make = Effect.fn("PenListener.make")(function* (options: PenListene
       url: request.url ?? "",
       upgrade: isUpgrade(request),
       headers: request.headers,
+      rawHeaders: request.rawHeaders,
     });
     if (admission.kind === "refuse") return refuseUpgrade(socket, admission.status);
     note(activity.get(request.socket), (current) => {
