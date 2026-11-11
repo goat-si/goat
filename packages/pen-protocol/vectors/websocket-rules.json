@@ -1,0 +1,357 @@
+{
+  "description": "Atomic rules of design 014 section 10.2 (WebSocket client side), written before the decoder. 'where': decoder (cases in websocket-malformed.json) or the WebSocket adapter (a test titled with the id in websocket.test.ts or penWebSocket.test.ts).",
+  "rules": [
+    {
+      "id": "W01",
+      "accepts": true,
+      "text": "outbound frames are masked",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W02a",
+      "accepts": true,
+      "text": "a fresh CSPRNG mask per frame",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W02b",
+      "accepts": false,
+      "text": "a Random failure sends nothing",
+      "where": "adapter",
+      "error": "random-unavailable",
+      "closeCode": null
+    },
+    {
+      "id": "W03",
+      "accepts": false,
+      "text": "a masked inbound frame",
+      "where": "decoder",
+      "error": "ws/W03",
+      "closeCode": 1002
+    },
+    {
+      "id": "W04a",
+      "accepts": false,
+      "text": "RSV1 set",
+      "where": "decoder",
+      "error": "ws/W04",
+      "closeCode": 1002
+    },
+    {
+      "id": "W04b",
+      "accepts": false,
+      "text": "RSV2 set",
+      "where": "decoder",
+      "error": "ws/W04",
+      "closeCode": 1002
+    },
+    {
+      "id": "W04c",
+      "accepts": false,
+      "text": "RSV3 set",
+      "where": "decoder",
+      "error": "ws/W04",
+      "closeCode": 1002
+    },
+    {
+      "id": "W05a",
+      "accepts": false,
+      "text": "opcodes 3 to 7",
+      "where": "decoder",
+      "error": "ws/W05",
+      "closeCode": 1002
+    },
+    {
+      "id": "W05b",
+      "accepts": false,
+      "text": "opcodes 11 to 15",
+      "where": "decoder",
+      "error": "ws/W05",
+      "closeCode": 1002
+    },
+    {
+      "id": "W06a",
+      "accepts": false,
+      "text": "16-bit length form for a length of 125 or less",
+      "where": "decoder",
+      "error": "ws/W06",
+      "closeCode": 1002
+    },
+    {
+      "id": "W06b",
+      "accepts": false,
+      "text": "64-bit length form for a length of 65,535 or less",
+      "where": "decoder",
+      "error": "ws/W06",
+      "closeCode": 1002
+    },
+    {
+      "id": "W07",
+      "accepts": false,
+      "text": "64-bit length with the high bit set",
+      "where": "decoder",
+      "error": "ws/W07",
+      "closeCode": 1002
+    },
+    {
+      "id": "W08a",
+      "accepts": true,
+      "text": "control payload of 125 bytes accepted",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W08b",
+      "accepts": false,
+      "text": "control payload of 126 bytes",
+      "where": "decoder",
+      "error": "ws/W08",
+      "closeCode": 1002
+    },
+    {
+      "id": "W09",
+      "accepts": false,
+      "text": "fragmented control frame",
+      "where": "decoder",
+      "error": "ws/W09",
+      "closeCode": 1002
+    },
+    {
+      "id": "W10",
+      "accepts": true,
+      "text": "control frames between fragments accepted",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W11",
+      "accepts": false,
+      "text": "continuation with no message",
+      "where": "decoder",
+      "error": "ws/W11",
+      "closeCode": 1002
+    },
+    {
+      "id": "W12",
+      "accepts": false,
+      "text": "data frame inside a fragmented message",
+      "where": "decoder",
+      "error": "ws/W12",
+      "closeCode": 1002
+    },
+    {
+      "id": "W13a",
+      "accepts": true,
+      "text": "1,024 fragments accepted",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W13b",
+      "accepts": false,
+      "text": "1,025 fragments, refused before allocation",
+      "where": "decoder",
+      "error": "ws/W13",
+      "closeCode": 1009
+    },
+    {
+      "id": "W14a",
+      "accepts": true,
+      "text": "16 MiB message accepted",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W14b",
+      "accepts": false,
+      "text": "declared frame length over 16 MiB, refused before allocation",
+      "where": "decoder",
+      "error": "ws/W14",
+      "closeCode": 1009
+    },
+    {
+      "id": "W14c",
+      "accepts": false,
+      "text": "fragments adding up to over 16 MiB",
+      "where": "decoder",
+      "error": "ws/W14",
+      "closeCode": 1009
+    },
+    {
+      "id": "W15a",
+      "accepts": true,
+      "text": "a code point split across fragments accepted",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W15b",
+      "accepts": false,
+      "text": "overlong UTF-8",
+      "where": "decoder",
+      "error": "ws/W15",
+      "closeCode": 1007
+    },
+    {
+      "id": "W15c",
+      "accepts": false,
+      "text": "UTF-16 surrogate in UTF-8",
+      "where": "decoder",
+      "error": "ws/W15",
+      "closeCode": 1007
+    },
+    {
+      "id": "W15d",
+      "accepts": false,
+      "text": "code point above U+10FFFF",
+      "where": "decoder",
+      "error": "ws/W15",
+      "closeCode": 1007
+    },
+    {
+      "id": "W15e",
+      "accepts": false,
+      "text": "text truncated inside a code point at the final fragment",
+      "where": "decoder",
+      "error": "ws/W15",
+      "closeCode": 1007
+    },
+    {
+      "id": "W16a",
+      "accepts": true,
+      "text": "close codes 1000-1003, 1007-1011, 3000 and 4999 accepted",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W16b",
+      "accepts": false,
+      "text": "close codes 999, 1004, 1005, 1006, 1012, 2999, 5000",
+      "where": "decoder",
+      "error": "ws/W16",
+      "closeCode": 1002
+    },
+    {
+      "id": "W17",
+      "accepts": false,
+      "text": "one-byte close payload",
+      "where": "decoder",
+      "error": "ws/W17",
+      "closeCode": 1002
+    },
+    {
+      "id": "W18",
+      "accepts": false,
+      "text": "close reason that is not UTF-8",
+      "where": "decoder",
+      "error": "ws/W18",
+      "closeCode": 1007
+    },
+    {
+      "id": "W19",
+      "accepts": true,
+      "text": "bytes after a close frame are discarded, never delivered (RFC 6455 section 5.5.1)",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W20",
+      "accepts": true,
+      "text": "a ping is answered with a pong carrying the same payload",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W21",
+      "accepts": true,
+      "text": "an unsolicited pong is ignored",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W22",
+      "accepts": true,
+      "text": "inbound holds at most one message",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W23",
+      "accepts": true,
+      "text": "the reader pulls, so stream credit is the backpressure",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W24",
+      "accepts": true,
+      "text": "101 and the first frame in one chunk",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W25",
+      "accepts": false,
+      "text": "EOF inside a frame",
+      "where": "decoder",
+      "error": "ws/W25",
+      "closeCode": 1006
+    },
+    {
+      "id": "W26",
+      "accepts": true,
+      "text": "empty close payload reported as 1005 and echoed without a code",
+      "where": "decoder",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W27a",
+      "accepts": true,
+      "text": "handshake asks for version 13",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W27b",
+      "accepts": true,
+      "text": "handshake key is 16 CSPRNG bytes",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W27c",
+      "accepts": true,
+      "text": "handshake offers no extension",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    },
+    {
+      "id": "W27d",
+      "accepts": true,
+      "text": "handshake names at most the requested subprotocol",
+      "where": "adapter",
+      "error": null,
+      "closeCode": null
+    }
+  ]
+}

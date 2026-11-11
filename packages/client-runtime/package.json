@@ -780,6 +780,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@goat/pen-protocol": "workspace:*",
     "@types/three": "0.180.0",
     "vite-plus": "catalog:"
   }
