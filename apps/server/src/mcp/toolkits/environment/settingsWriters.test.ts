@@ -29,7 +29,7 @@ const SETTINGS_WRITERS: Readonly<Record<string, string>> = {
   "speech/SpeechManagement.ts":
     "Selects a catalog speech model while holding the lock that downloads and transcription share.",
   "pen/PenRuntime.ts":
-    "Stores the Pen trust root only from a person's confirmation, after fencing the live generation and withdrawing every member session.",
+    "Stores the Pen trust root only from a person's confirmation, after fencing the live generation; it withdraws every member session and keeps Pen off while a withdrawal fails.",
 };
 
 const isTestSource = (file: string) =>
