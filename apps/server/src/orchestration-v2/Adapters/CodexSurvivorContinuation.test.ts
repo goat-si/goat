@@ -1,8 +1,11 @@
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type * as CodexClient from "effect-codex-app-server/client";
+import * as CodexErrors from "effect-codex-app-server/errors";
 import { ProviderInstanceId, ProviderSessionId, RunId, ThreadId } from "@goat/contracts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
 import type { CodexSurvivors } from "../../provider/CodexSurvivors.ts";
@@ -180,4 +183,70 @@ it.effect("a session tracks only its own process's survivor and resumes only its
     blocks.splice(0, 1);
     assert.deepEqual(yield* notifications.fencedGoalThreads, Option.some([]));
   }).pipe(Effect.scoped),
+);
+const droppedConnection = (goalBlocked: boolean) =>
+  Effect.gen(function* () {
+    const instanceId = ProviderInstanceId.make("codex");
+    const session = ProviderSessionId.make("shared");
+    const record = { instanceId, recordName: "codex-kept", providerSessionId: session };
+    const dropped = yield* Deferred.make<CodexErrors.CodexAppServerError>();
+    const held: Array<unknown> = [];
+    const survivors = {
+      list: Effect.succeed([]),
+      listGoalBlocksByInstance: () =>
+        Effect.succeed(
+          goalBlocked
+            ? [
+                {
+                  record,
+                  block: { threadId: ThreadId.make("goal"), nativeThreadId: "goal-native" },
+                },
+              ]
+            : [],
+        ),
+      classifyRecord: () => Effect.succeed({ type: "unverifiable" as const }),
+      getStopObligations: () => Effect.succeed([]),
+      holdLostConnectionTurn: (key: unknown, stop: unknown) =>
+        Effect.sync(() => {
+          held.push({ key, stop });
+          return true;
+        }),
+    } as unknown as CodexSurvivors["Service"];
+    const client = {
+      setRequestGuard: () => Effect.void,
+      handleServerNotification: () => Effect.void,
+      terminated: Deferred.await(dropped),
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const hooks = yield* makeSurvivorNotifications({
+      client,
+      survivors: Option.some(survivors),
+      instanceId,
+      providerSessionId: session,
+      scope: yield* Scope.Scope,
+    });
+    const turn = {
+      threadId: ThreadId.make("chase"),
+      nativeThreadId: "chase-native",
+      nativeTurnId: "running-turn",
+    };
+    const events = yield* hooks.makeSessionEvents(session, Effect.succeed([turn]));
+    yield* Deferred.succeed(dropped, new CodexErrors.CodexAppServerProcessExitedError({}));
+    const failure = yield* Queue.take(events).pipe(Effect.flip);
+    assert.equal(failure.source, "provider_process_exit");
+    return { held, record, turn };
+  }).pipe(Effect.scoped);
+
+it.effect(
+  "a dropped connection to a process a goal block keeps holds the turn still running there",
+  () =>
+    Effect.gen(function* () {
+      const { held, record, turn } = yield* droppedConnection(true);
+      assert.deepEqual(held, [{ key: record, stop: turn }]);
+    }),
+);
+
+it.effect("a dropped connection to a process that stops with the session holds nothing", () =>
+  Effect.gen(function* () {
+    assert.deepEqual((yield* droppedConnection(false)).held, []);
+  }),
 );

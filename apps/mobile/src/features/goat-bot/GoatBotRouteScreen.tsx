@@ -4,7 +4,7 @@ import { goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
-import { useAppForeground } from "../../lib/appState";
+import { useAppActive, useAppForeground } from "../../lib/appState";
 import { useThreadShell } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -23,9 +23,12 @@ export function GoatBotRouteScreen({
   route,
 }: StaticScreenProps<{ taskId?: string; botId?: string }>) {
   const focused = useIsFocused();
+  const active = useAppActive();
   const foreground = useAppForeground();
-  // A reply that arrives while the app is in the background has not been seen.
-  const seen = focused && foreground;
+  // A reply that arrives while the app is inactive (the app switcher, Control Center) or in the
+  // background has not been seen, and no visit is written then. Only the background ends the
+  // visit: a moment of inactivity keeps its unread boundary.
+  const seen = focused && active;
   const { botRef } = useMobileGoatBotHomeMode();
   const preview = useMobileBotPreview();
   const botId = route.params?.botId;
@@ -45,7 +48,8 @@ export function GoatBotRouteScreen({
   const localRead = useGoatBotLocalRead(conversation);
   // Where the person had read up to when they opened the chat, taken before the visit moves it.
   const readSnapshot = useGoatBotVisitSnapshot({
-    focused: seen && mainChat,
+    focused: focused && foreground && mainChat,
+    reading: seen,
     conversation,
     loaded: shell !== null && preview !== null,
     lastVisitedAt: serverTracksVisits ? (shell?.lastVisitedAt ?? null) : localRead,

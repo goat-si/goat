@@ -236,7 +236,11 @@ export const makeTaskRetry = Effect.gen(function* () {
           Effect.catchIf(restarts, () => Effect.succeedNone),
         );
         if (Option.isNone(result)) continue;
-        if (result.value.status === "started") yield* wake.wake;
+        if (result.value.status === "started") {
+          // The retry wrote inside its own transaction, which has committed by now.
+          yield* ledger.announceTaskChanges([owner.ownerId]);
+          yield* wake.wake;
+        }
         return result.value;
       }
       return {
