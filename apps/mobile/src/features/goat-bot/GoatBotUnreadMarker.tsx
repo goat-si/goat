@@ -1,6 +1,13 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { useCallback, useMemo, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AccessibilityInfo,
+  Pressable,
+  Text,
+  View,
+  findNodeHandle,
+  type ViewInstance,
+} from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -16,6 +23,7 @@ export interface GoatBotUnreadDivider {
 export type GoatBotChatItem = GoatBotRow | GoatBotUnreadDivider;
 
 const newMessages = (count: number) => `${count} new message${count === 1 ? "" : "s"}`;
+const NONE: ReadonlySet<string> = new Set();
 
 /**
  * The conversation with the "New" divider before what the bot said since the person last read it,
@@ -29,13 +37,23 @@ export function useGoatBotUnread(
   const [cleared, setCleared] = useState<string | null>(null);
   const [settled, setSettled] = useState<string | null>(null);
   const [above, setAbove] = useState(false);
+  const [focusDivider, setFocusDivider] = useState(false);
+  // Rows marked in this visit, so a card that changes again stays marked where it was.
+  const [kept, setKept] = useState<{ visit: string | null; ids: ReadonlySet<string> }>({
+    visit: null,
+    ids: NONE,
+  });
+  const keptIds = kept.visit === visit ? kept.ids : NONE;
   const mark = useMemo(
     () =>
       snapshot && cleared !== visit
-        ? goatBotUnreadMark(rows, snapshot.readUpTo, snapshot.newestAtOpen)
+        ? goatBotUnreadMark(rows, snapshot.readUpTo, snapshot.newestAtOpen, keptIds)
         : null,
-    [rows, snapshot, cleared, visit],
+    [rows, snapshot, cleared, visit, keptIds],
   );
+  if (mark !== null && mark.ids.some((id) => !keptIds.has(id))) {
+    setKept({ visit, ids: new Set([...keptIds, ...mark.ids]) });
+  }
   const items = useMemo((): ReadonlyArray<GoatBotChatItem> => {
     const at = mark === null ? -1 : rows.findIndex((row) => row.id === mark.firstId);
     if (mark === null || at < 0) return rows;
@@ -60,6 +78,12 @@ export function useGoatBotUnread(
   );
   /** The pill was used or dismissed: it stays away this visit. */
   const settle = useCallback(() => setSettled(visit), [visit]);
+  /** The pill was used: the list scrolls to the divider and VoiceOver follows it there. */
+  const jump = useCallback(() => {
+    setSettled(visit);
+    setFocusDivider(true);
+  }, [visit]);
+  const dividerFocused = useCallback(() => setFocusDivider(false), []);
   /** The person sent a message: they have caught up. */
   const clear = useCallback(() => setCleared(visit), [visit]);
   return {
@@ -69,14 +93,36 @@ export function useGoatBotUnread(
     pill: mark !== null && above && settled !== visit ? mark.count : null,
     onViewable,
     settle,
+    jump,
+    /** The divider takes accessibility focus once it is on screen after a jump. */
+    focusDivider,
+    dividerFocused,
     clear,
   };
 }
 
-export function GoatBotUnreadDividerRow() {
+export function GoatBotUnreadDividerRow(props: {
+  readonly focus?: boolean;
+  readonly onFocused?: () => void;
+}) {
   const label = useScaledTextRole("label");
+  const ref = useRef<ViewInstance>(null);
+  const { focus, onFocused } = props;
+  // oxlint-disable-next-line goat/react-effect-budget -- Move the screen reader to the divider once the list has rendered it after a jump.
+  useEffect(() => {
+    if (!focus) return;
+    const node = findNodeHandle(ref.current);
+    if (node === null || node === undefined) return;
+    AccessibilityInfo.setAccessibilityFocus(node);
+    onFocused?.();
+  }, [focus, onFocused]);
   return (
-    <View accessible accessibilityLabel="New messages" className="my-3 flex-row items-center gap-2">
+    <View
+      ref={ref}
+      accessible
+      accessibilityLabel="New messages"
+      className="my-3 flex-row items-center gap-2"
+    >
       <View className="h-px flex-1 bg-border" />
       <Text className="text-foreground-muted" style={label}>
         New
