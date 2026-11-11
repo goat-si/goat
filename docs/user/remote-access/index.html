@@ -172,6 +172,9 @@ On mobile, an IP address entered without a scheme uses HTTP, so include
 <code>user@example.com</code>. GOAT starts or reuses a server there and opens the port
 forward for you. Projects, provider credentials, and agent work stay on the
 remote machine.</p>
+<p>To reach machines that accept no incoming connections, such as a laptop behind
+NAT or a cloud box, join them with <a href="/goat/docs/user/pen/">Pen</a> and pick their <code>pen-&lt;name&gt;</code>
+hosts here.</p>
 <p>Before it installs anything, GOAT checks the host and shows one line per check:
 whether it answers (including Tailscale), its host key, sign-in with your SSH key,
 the operating system, free disk space, and whether a GOAT runtime is available for

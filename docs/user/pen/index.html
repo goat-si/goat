@@ -1,0 +1,218 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Pen | GOAT user guides</title><meta name="description" content="Pen: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/pen/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/pen/"><meta property="og:title" content="Pen | GOAT user guides"><meta property="og:description" content="Pen: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Pen | GOAT user guides"><meta name="twitter:description" content="Pen: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="pen">Pen</h1>
+<p>Pen joins your machines into a private mesh. Each machine gets a name, and any member can reach a
+local port on any other member through an end-to-end encrypted pipe, even when neither machine
+accepts incoming connections. GOAT uses this to reach a machine over SSH as <code>pen-&lt;name&gt;</code>, so a
+laptop, a home server and a cloud box can work together without a VPN, port forwarding or a public
+address.</p>
+<p>Pen runs as a small command-line program and background service on each machine. Traffic passes
+through relays, which forward it without being able to read it.</p>
+<h2 id="before-you-start">Before you start</h2>
+<ul>
+<li>Pen runs on macOS and Linux (x86-64 and ARM). Windows machines cannot join a mesh.</li>
+<li>Every member trusts every other member fully: a member can open any port that listens on
+<code>127.0.0.1</code> of another member, as if it were local. Add only machines you control, and remove a
+machine you no longer trust (see <a href="#remove-a-machine">Remove a machine</a>).</li>
+<li>Installing downloads Pen from the relay that serves it and checks the download against the
+checksums the same relay publishes. That proves the file arrived intact; it does not protect you
+from the relay’s operator.</li>
+</ul>
+<h2 id="install-pen">Install Pen</h2>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">curl</span><span style="color:#79B8FF"> -fsSL</span><span style="color:#9ECBFF"> https://pen-relay.pos090001.workers.dev/install.sh</span><span style="color:#F97583"> |</span><span style="color:#B392F0"> sh</span></span></code></pre>
+<p>This puts <code>pen</code> in <code>~/.local/bin</code> and prints what to run next. It does not start or join a mesh.
+To install and connect in one step, add one of these after <code>sh -s --</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--login</code></td>
+<td>Sign in with Google and join your account’s mesh, or start one.</td>
+</tr>
+<tr>
+<td><code>--join &lt;token&gt;</code></td>
+<td>Join the mesh an invite token comes from.</td>
+</tr>
+<tr>
+<td><code>--up</code></td>
+<td>Start a new mesh with this machine as its first member.</td>
+</tr>
+<tr>
+<td><code>--name &lt;name&gt;</code></td>
+<td>Name this machine (with any of the three above).</td>
+</tr>
+</tbody>
+</table>
+<p>For example: <code>curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --login</code>.</p>
+<h2 id="sign-in-with-google">Sign in with Google</h2>
+<p><code>pen login</code> (or <code>install.sh --login</code>) prints a short code and an address. Open the address in any
+browser, type the code, and sign in with Google. The page shows the machine’s name and fingerprint;
+check them against the terminal before you add it.</p>
+<p>The first machine you sign in starts a mesh for your Google account. Each later machine you sign in
+with the same account joins that mesh: Pen shows the account’s mesh and members and asks you to
+confirm (<code>--yes</code> skips the question). A member must be online to admit the new machine; if none is,
+<code>pen login</code> says so and retries every 5 seconds until the sign-in expires after 10 minutes. With
+the mesh locked, it waits up to 30 minutes for approval.</p>
+<p><code>pen logout</code> removes this machine from your account’s machine list. It stays in the mesh.
+<code>pen account unbind</code>, on any member, turns Google sign-in off for the mesh; invites keep working.</p>
+<p>The account’s machine list is kept by the sign-in service, and it only decides which mesh a new
+machine is offered. Anyone who signs in to your Google account, even once, can add a machine to that
+list or remove the others from it, so new machines might be offered the wrong mesh; machines already
+in your mesh and invites are not affected. If that may have happened, turn on <code>pen lock on</code> so new
+machines need your approval, change your Google password, clear the list from the reset link on the
+sign-in page, and run <code>pen login</code> on one of your machines to register your mesh again.</p>
+<h2 id="require-approval-for-new-machines">Require approval for new machines</h2>
+<p><code>pen lock on</code> makes every newly signed-in machine wait for approval. Its <code>pen login</code> names the
+member that holds the request and prints the new machine’s fingerprint. On that member, run
+<code>pen approve</code> to list requests, and <code>pen approve '&lt;fingerprint&gt;'</code> with the full fingerprint you
+read on the new machine to admit it. <code>pen deny &lt;id&gt;</code> refuses a request for 24 hours. <code>pen lock off</code>
+returns to automatic admission.</p>
+<p>Lock the mesh if someone else might be able to sign in to your Google account, or as soon as a
+signed-in machine is lost.</p>
+<h2 id="join-with-an-invite">Join with an invite</h2>
+<p>Invites work with or without Google sign-in. On a member, <code>pen invite --auto</code> prints a token that
+works once within 10 minutes. On the new machine:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">curl</span><span style="color:#79B8FF"> -fsSL</span><span style="color:#9ECBFF"> https://pen-relay.pos090001.workers.dev/install.sh</span><span style="color:#F97583"> |</span><span style="color:#B392F0"> sh</span><span style="color:#79B8FF"> -s</span><span style="color:#79B8FF"> --</span><span style="color:#79B8FF"> --join</span><span style="color:#F97583"> &lt;</span><span style="color:#9ECBFF">toke</span><span style="color:#E1E4E8">n</span><span style="color:#F97583">&gt;</span></span></code></pre>
+<p>The token is a secret until it is used: anyone holding it can join in its place.</p>
+<h2 id="use-your-machines-from-goat">Use your machines from GOAT</h2>
+<p>Run <code>pen ssh-config --install</code> on the machine where GOAT runs. It adds an SSH host
+<code>pen-&lt;name&gt;</code> for every member, with the member’s login user and host keys, and keeps the list
+current as machines join or leave. GOAT finds these hosts like any other SSH host, so you can
+<a href="/goat/docs/user/remote-access/#desktop-managed-ssh">open projects and start work</a> on a member by choosing
+<code>pen-&lt;name&gt;</code>. <code>pen ssh-config --uninstall</code> removes them.</p>
+<p>An SSH connection stays open for 10 minutes after you close it, so the next <code>ssh pen-&lt;name&gt;</code> starts
+almost at once. <code>ssh -o ControlPath=none pen-&lt;name&gt;</code> opens a separate connection.</p>
+<p>To reach another port, <code>pen forward 8080 &lt;member&gt;:8080</code> listens on this machine’s port 8080 and
+connects each connection to port 8080 on the member.</p>
+<h2 id="dashboard">Dashboard</h2>
+<p><code>pen dashboard</code> opens a page in your browser, served by Pen on this machine, that shows the mesh:
+members with their status and how each joined, relays and their health, pending approvals, and
+recent changes. You can approve or deny requests, remove members, lock the mesh, change relays
+and create invites from it. It is in Korean and English.</p>
+<p>The link works once and only on this machine. Run <code>pen dashboard</code> again for a new one, for example
+after Pen restarts. <code>pen dashboard --stop</code> closes the page and signs out every open tab.</p>
+<h2 id="remove-a-machine">Remove a machine</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Use it when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pen leave</code></td>
+<td>You are retiring this machine. It leaves the mesh and deletes its keys.</td>
+</tr>
+<tr>
+<td><code>pen revoke &lt;member&gt;</code></td>
+<td>A machine should no longer be a member. Every member refuses it from then on.</td>
+</tr>
+<tr>
+<td><code>pen revoke &lt;member&gt; --compromised</code></td>
+<td>A machine was lost or stolen, even if it already left. Also removes every machine it admitted, and its unlocks and account changes stop counting. It prints which machine it revokes; when a machine that left and a current one share the name, it stops and prints a command naming each by its fingerprint. A name, a node id (or its first 4 or more characters) and a fingerprint (or its first 8 or more digits) all work, as long as only one machine matches.</td>
+</tr>
+</tbody>
+</table>
+<p>A removed machine that is still running shows it in <code>pen ls</code>: “this machine is not a member of
+mesh …”. To use it again, run <code>pen down</code> there, delete the state folder <code>pen ls</code> names (usually
+<code>~/.pen</code>), and join again with an invite or <code>pen login</code>. A member that has not heard of the removal
+yet still lists the machine until it syncs with one that has; <code>pen revoke &lt;name&gt;</code> on that member
+removes it there at once.</p>
+<p>After <code>--compromised</code> on a mesh with Google sign-in, Pen tells you what else to do: turn on
+<code>pen lock on</code>, change your Google password, and clear your account’s machine list from the reset
+link on the sign-in page. A reset ends every sign-in for the account that started before it, so after it
+only a new Google sign-in registers a machine.</p>
+<p>When a member cannot keep a change another machine sends it, the command that made the change
+(<code>pen revoke</code>, <code>pen lock</code>, <code>pen approve</code> and the like) lists that member as “not taken”, and <code>pen ls</code>
+on that member says why:</p>
+<ul>
+<li>“the relay is busy (4429)”: the relay refused the connection for a moment. Nothing is wrong with the member; the
+change reaches it at the next sync (within 10 minutes).</li>
+<li>“it cannot write its state folder (4507)”: the member’s state folder is full or not writable. Free disk space or
+fix the folder’s permissions; the member retries on its own every minute and at each sync, and takes no change
+until it can save.</li>
+<li>“its mesh is full (4508)”: the mesh holds 3840 records, the most Pen keeps for new members, names, locks and
+sign-in changes (removals still fit up to 4096). Start over in a new mesh, below.</li>
+</ul>
+<h3 id="start-over-in-a-new-mesh">Start over in a new mesh</h3>
+<p>Use this when a mesh is full, or to split from a mesh you no longer trust. Each machine keeps its keys and name;
+only its mesh is dropped, and that step needs no other machine, so it works on a machine that cannot reach any
+member.</p>
+<ol>
+<li>On every machine: <code>pen down</code>, then delete these files from the state folder (<code>~/.pen</code>, or <code>PEN_HOME</code>):
+<code>mesh.json</code>, <code>offers.json</code>, <code>pending.json</code>, <code>forgets.json</code>, <code>versions.json</code>, <code>joined.json</code> and <code>login.json</code>.
+(<code>pen up</code> on a machine that still has <code>mesh.json</code> starts its old mesh again; it does not found a new one.)</li>
+<li>On the first machine: <code>pen up</code>. It founds a new mesh with this machine as its only member.</li>
+<li>On each other machine: <code>pen join &lt;token&gt;</code> with a token from <code>pen invite</code> on a machine already in the new mesh.
+Joining replaces the machine’s relay list with the inviting machine’s. A machine that used other relays on
+purpose puts them back with <code>pen relay add &lt;url&gt;</code> (and <code>pen relay rm &lt;url&gt;</code> for one it does not want); <code>pen relay ls</code> then lists them with their uplink state.</li>
+<li>If the old mesh used Google sign-in: the new mesh is not bound to the account, and the account is still registered
+with the old mesh. Reset the account’s machine list at the reset link on the sign-in page, then run <code>pen login</code>
+on one machine of the new mesh and answer yes to binding it; after that, new machines join it with <code>pen login</code>.</li>
+</ol>
+<p><code>pen-&lt;name&gt;</code> SSH hosts keep working: each machine rewrites <code>~/.ssh/pen/known_hosts</code> from the new mesh when it starts,
+and the names stay the same. Machines you did not move stay in the old mesh, which keeps listing the moved ones as
+members; they are not reachable from the new one.</p>
+<h2 id="relays">Relays</h2>
+<p>Each machine keeps a connection to every relay in its list and uses whichever answers first, so one
+relay going down does not cut the mesh. An install gets the relays the release lists, and invites
+carry the inviting machine’s list: <code>pen join</code> replaces the joining machine’s list with it, whether Pen is running
+or not. <code>pen up --relay &lt;url&gt;</code> replaces the list, also on a running machine. <code>pen login --relay &lt;url&gt;</code> saves that list for this machine before
+the sign-in starts, and Pen uses it afterwards whether it was running or not, with one exception: a machine where
+Pen runs in a mesh of its own and that joins the account’s mesh keeps the relays it was using and saves them back.
+If the sign-in does not finish, the saved list takes effect the next time Pen starts or <code>pen up</code> runs. In every case, check
+<code>pen relay ls</code> after signing in and use <code>pen relay add</code> or <code>pen relay rm</code> to match the mesh, so the other machines
+can reach this one. <code>pen relay ls</code> shows the list; <code>pen relay add &lt;url&gt;</code> and
+<code>pen relay rm &lt;url&gt;</code> change it. Relays must use <code>https</code>.</p>
+<p>A relay run with <code>pen relay serve</code> keeps at most 16 MiB of undelivered data for each internet
+address, so machines behind one home or office connection share it: about four sessions whose
+receiving side has stopped reading fill it, and until those read again or are cut off (after 10
+seconds without progress), new data for that connection’s other sessions is refused. A relay that
+cannot hold a message ends only the session that sent it, with code 4408; it never drops other
+sessions or a machine’s own relay connection to make room. Open the session again, and Pen picks a
+relay again; the machine stays reachable through its other relays.</p>
+<p>Two other causes of 4408 on such a relay: all sessions to one machine share a 4 MiB window, so
+while that machine reads slowly (a busy or slow connection) and one session fills it, data on its
+other sessions is refused; and a flood from many addresses can fill the whole relay for everyone for
+a while. In both cases open the session again later; the machine’s other relays are not affected. A
+new connection refused with 4429 means the machine is taking too many new sessions at once through
+that relay; retry, or it goes through another relay.</p>
+<p>You can run your own relay with <code>pen relay serve</code> on a machine with a public address; see
+<code>pen help</code>.</p>
+<h2 id="running-pen-in-the-background">Running Pen in the background</h2>
+<p><code>pen login</code>, <code>pen join</code> and <code>pen up</code> install a user service (systemd on Linux, launchd on macOS)
+where they can, so Pen comes back after a restart. With <code>--no-service</code>, Pen runs in the background
+until the machine restarts; run <code>pen up</code> again afterwards. <code>pen down</code> stops it.
+Pen writes its log to <code>~/.pen/daemon.log</code> (on Linux with a service, to the user journal) and keeps
+it under 4 MiB, with the previous part in <code>daemon.log.1</code>.</p>
+<h2 id="cloud-boxes-and-images">Cloud boxes and images</h2>
+<p>Install and join each box on its first boot with <code>--login --yes</code> or <code>--join</code>. Never copy <code>~/.pen</code>
+into an image or template: every box made from it would share one identity, and they would keep
+pushing each other off the relays.</p>
+<p>On a box that already belongs to a mesh, run <code>sudo loginctl enable-linger $USER</code> so Pen’s user
+service keeps running without a login. If your platform runs a startup script when a box starts or
+wakes (on boxes.dev, the project’s startup script), this one brings Pen back and never starts a new
+mesh:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#6A737D">#!/bin/sh</span></span>
+<span class="line"><span style="color:#E1E4E8">[ </span><span style="color:#F97583">-f</span><span style="color:#9ECBFF"> "</span><span style="color:#E1E4E8">$HOME</span><span style="color:#9ECBFF">/.pen/mesh.json"</span><span style="color:#E1E4E8"> ] &amp;&amp; [ </span><span style="color:#F97583">-x</span><span style="color:#9ECBFF"> "</span><span style="color:#E1E4E8">$HOME</span><span style="color:#9ECBFF">/.local/bin/pen"</span><span style="color:#E1E4E8"> ] </span><span style="color:#F97583">||</span><span style="color:#79B8FF"> exit</span><span style="color:#79B8FF"> 0</span></span>
+<span class="line"><span style="color:#F97583">export</span><span style="color:#E1E4E8"> XDG_RUNTIME_DIR</span><span style="color:#F97583">=</span><span style="color:#9ECBFF">"${</span><span style="color:#E1E4E8">XDG_RUNTIME_DIR</span><span style="color:#F97583">:-/</span><span style="color:#E1E4E8">run</span><span style="color:#F97583">/</span><span style="color:#E1E4E8">user</span><span style="color:#F97583">/</span><span style="color:#9ECBFF">$(</span><span style="color:#E1E4E8">id</span><span style="color:#E1E4E8"> -u</span><span style="color:#9ECBFF">)}"</span></span>
+<span class="line"><span style="color:#B392F0">systemctl</span><span style="color:#79B8FF"> --user</span><span style="color:#9ECBFF"> start</span><span style="color:#9ECBFF"> pen</span><span style="color:#F97583"> ||</span><span style="color:#B392F0"> "</span><span style="color:#E1E4E8">$HOME</span><span style="color:#B392F0">/.local/bin/pen"</span><span style="color:#9ECBFF"> up</span></span></code></pre>
+<p>Do not take a template snapshot of a box after it joined. Platforms such as boxes.dev copy the whole
+machine, including <code>/etc/machine-id</code>, so a box made from that snapshot starts as the same Pen machine
+and the two push each other off the relays. If that happens, on the copy run <code>pen down</code>, delete
+<code>~/.pen</code> and join again; <code>pen leave</code> there would remove the original machine too, since both hold
+the same keys.</p>
+<h2 id="not-supported">Not supported</h2>
+<ul>
+<li>Direct connections between machines: all traffic goes through a relay.</li>
+<li>Windows machines as members.</li>
+<li>Managing Pen from GOAT’s settings; use the <code>pen</code> command or its dashboard.</li>
+<li>Signing in with a Google account the Pen sign-in service does not allow yet. While the service is
+in testing, only listed accounts can sign in; invites work for everyone.</li>
+</ul>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#before-you-start">Before you start</a></li><li><a href="#install-pen">Install Pen</a></li><li><a href="#sign-in-with-google">Sign in with Google</a></li><li><a href="#require-approval-for-new-machines">Require approval for new machines</a></li><li><a href="#join-with-an-invite">Join with an invite</a></li><li><a href="#use-your-machines-from-goat">Use your machines from GOAT</a></li><li><a href="#dashboard">Dashboard</a></li><li><a href="#remove-a-machine">Remove a machine</a></li><li><a href="#relays">Relays</a></li><li><a href="#running-pen-in-the-background">Running Pen in the background</a></li><li><a href="#cloud-boxes-and-images">Cloud boxes and images</a></li><li><a href="#not-supported">Not supported</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
