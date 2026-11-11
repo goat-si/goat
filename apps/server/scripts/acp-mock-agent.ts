@@ -130,6 +130,7 @@ const supportsAcpMcp = process.env.GOAT_ACP_MCP_ACP === "1";
 const supportsV2Management = process.env.GOAT_ACP_V2_MANAGEMENT === "1";
 const omitSessionListHandler = process.env.GOAT_ACP_OMIT_SESSION_LIST_HANDLER === "1";
 const advertisedAuthMethodId = process.env.GOAT_ACP_AUTH_METHOD_ID?.trim();
+const failDeleteSession = process.env.GOAT_ACP_FAIL_DELETE_SESSION === "1";
 const initializeAuthMethodId =
   advertisedAuthMethodId ?? (supportsSessionLifecycle ? "test" : undefined);
 const requiresAuthentication = process.env.GOAT_ACP_REQUIRE_AUTH === "1";
@@ -840,6 +841,9 @@ const program = Effect.gen(function* () {
   yield* agent.handleDeleteSession(() =>
     Effect.gen(function* () {
       yield* requireAuthentication();
+      if (failDeleteSession) {
+        return yield* AcpError.AcpRequestError.internalError("delete failed");
+      }
       return {};
     }),
   );
