@@ -53,31 +53,68 @@ export function createThreadNotificationGate<Key>(
   };
 }
 
-// Enough for a long session; the oldest are forgotten first.
+// Closed approvals remembered for a long session; open ones are always kept.
 const SEEN_APPROVAL_LIMIT = 1000;
 
 /**
- * One notification per approval. The first list announces only what opened after watching began
- * (announceOnFirst); every later list, including the first after an outage, announces each id never
- * seen before. Seen ids, including ones the shell announced, are kept after they leave.
+ * One notification per approval. Until the first shell snapshot sets the baseline (server time), a
+ * feed list waits. The first list announces only approvals created after the baseline; every later
+ * list, including the first after an outage, announces each id never seen before. Seen ids,
+ * including ones the shell announced, are kept after they leave.
  */
 export function createApprovalNotificationGate<Id>(notify: (id: Id) => void) {
   const seen = new Set<Id>();
+  let baseline: number | null = null;
   let seeded = false;
+  let waiting: ReadonlyArray<{ readonly id: Id; readonly createdAt: number }> | null = null;
   const remember = (id: Id) => {
     seen.add(id);
-    if (seen.size > SEEN_APPROVAL_LIMIT) seen.delete(seen.values().next().value as Id);
+  };
+  const process = (items: ReadonlyArray<{ readonly id: Id; readonly createdAt: number }>) => {
+    const since = seeded ? null : baseline;
+    seeded = true;
+    for (const item of items) {
+      if (seen.has(item.id)) continue;
+      remember(item.id);
+      if (since === null || item.createdAt > since) notify(item.id);
+    }
+    const open = new Set(items.map((item) => item.id));
+    for (const id of seen) {
+      if (seen.size <= SEEN_APPROVAL_LIMIT) break;
+      if (!open.has(id)) seen.delete(id);
+    }
   };
   return {
-    observe(ids: ReadonlyArray<Id>, announceOnFirst: (id: Id) => boolean = () => false): void {
-      const fresh = ids.filter((id) => !seen.has(id));
-      for (const id of fresh) remember(id);
-      const first = !seeded;
-      seeded = true;
-      for (const id of fresh) if (!first || announceOnFirst(id)) notify(id);
+    observe(items: ReadonlyArray<{ readonly id: Id; readonly createdAt: number }>): void {
+      if (baseline === null && !seeded) waiting = items;
+      else process(items);
+    },
+    setBaseline(ms: number): void {
+      if (baseline !== null) return;
+      baseline = ms;
+      if (waiting !== null) process(waiting);
+      waiting = null;
     },
     remember,
   };
+}
+
+const NOTIFYING_STATUSES: ReadonlySet<string> = new Set([
+  "input",
+  "request",
+  "approval",
+  "failed",
+  "limited",
+]);
+
+/** The run and status a thread notifies for; an approval the feed announces is left to it. */
+export function notificationAttention(
+  status: string,
+  runId: string,
+  feedOwned: boolean,
+): string | null {
+  if (!NOTIFYING_STATUSES.has(status) || (feedOwned && status === "approval")) return null;
+  return `${runId}:${status}`;
 }
 
 const NO_THREADS: ReadonlySet<ThreadId> = new Set();

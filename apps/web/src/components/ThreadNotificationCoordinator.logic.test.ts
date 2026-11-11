@@ -6,6 +6,7 @@ import {
   approvalHandoffShownBy,
   createApprovalNotificationGate,
   feedOwnedApprovalThreads,
+  notificationAttention,
   createThreadNotificationGate,
   type ThreadNotificationObservation,
 } from "./ThreadNotificationCoordinator.logic";
@@ -118,25 +119,38 @@ describe("createThreadNotificationGate", () => {
 });
 
 describe("approval notifications", () => {
-  it("announces approvals that opened before the feed first loaded, unless the shell already did", () => {
+  const open = (...ids: ReadonlyArray<readonly [string, number]>) =>
+    ids.map(([id, createdAt]) => ({ id, createdAt }));
+
+  it("announces approvals that opened after the first shell snapshot, unless the shell already did", () => {
     const notify = vi.fn();
     const gate = createApprovalNotificationGate<string>(notify);
+    gate.setBaseline(10);
     gate.remember("announced-by-shell");
     gate.observe(
-      ["open-before-watching", "announced-by-shell", "opened-while-loading"],
-      (id) => id !== "open-before-watching",
+      open(["open-before-watching", 5], ["announced-by-shell", 11], ["opened-while-loading", 12]),
     );
+    expect(notify.mock.calls).toEqual([["opened-while-loading"]]);
+  });
+
+  it("holds a feed that arrives before the first shell snapshot until that snapshot sets the baseline", () => {
+    const notify = vi.fn();
+    const gate = createApprovalNotificationGate<string>(notify);
+    gate.observe(open(["open-before-watching", 5], ["opened-while-loading", 12]));
+    expect(notify).not.toHaveBeenCalled();
+    gate.setBaseline(10);
     expect(notify.mock.calls).toEqual([["opened-while-loading"]]);
   });
 
   it("notifies every new approval once, including two at once and a second in the same run", () => {
     const notify = vi.fn();
     const gate = createApprovalNotificationGate<string>(notify);
-    gate.observe(["open-before"]);
+    gate.setBaseline(10);
+    gate.observe(open(["open-before", 1]));
     expect(notify).not.toHaveBeenCalled();
-    gate.observe(["open-before", "first", "second"]);
+    gate.observe(open(["open-before", 1], ["first", 20], ["second", 20]));
     expect(notify.mock.calls).toEqual([["first"], ["second"]]);
-    gate.observe(["open-before", "first", "second", "third"]);
+    gate.observe(open(["open-before", 1], ["first", 20], ["second", 20], ["third", 30]));
     expect(notify.mock.calls.at(-1)).toEqual(["third"]);
     expect(notify).toHaveBeenCalledTimes(3);
   });
@@ -144,14 +158,37 @@ describe("approval notifications", () => {
   it("never notifies again for an approval that left and came back, or across a feed outage", () => {
     const notify = vi.fn();
     const gate = createApprovalNotificationGate<string>(notify);
+    gate.setBaseline(10);
     gate.observe([]);
-    gate.observe(["one"]);
+    gate.observe(open(["one", 20]));
     gate.observe([]);
-    gate.observe(["one"]);
+    gate.observe(open(["one", 20]));
     expect(notify.mock.calls).toEqual([["one"]]);
     // Created while the feed was away: the first list after it returns still announces it.
-    gate.observe(["one", "two"]);
+    gate.observe(open(["one", 20], ["two", 30]));
     expect(notify.mock.calls).toEqual([["one"], ["two"]]);
+  });
+
+  it("never announces a still open approval again, however many are open", () => {
+    const notify = vi.fn();
+    const gate = createApprovalNotificationGate<string>(notify);
+    gate.setBaseline(0);
+    gate.observe([]);
+    const many = Array.from({ length: 1500 }, (_, index) => ({ id: `a${index}`, createdAt: 1 }));
+    gate.observe(many);
+    gate.observe([...many, { id: "new", createdAt: 2 }]);
+    expect(notify).toHaveBeenCalledTimes(1501);
+    expect(notify.mock.calls.at(-1)).toEqual(["new"]);
+  });
+});
+
+describe("notification attention", () => {
+  it("leaves an approval the feed announces to the feed, but still raises a failure or limit", () => {
+    expect(notificationAttention("approval", "run", true)).toBeNull();
+    expect(notificationAttention("approval", "run", false)).toBe("run:approval");
+    expect(notificationAttention("failed", "run", true)).toBe("run:failed");
+    expect(notificationAttention("limited", "run", true)).toBe("run:limited");
+    expect(notificationAttention("ready", "run", false)).toBeNull();
   });
 });
 
@@ -225,7 +262,11 @@ describe("which approvals the decision feed announces", () => {
     const gate = createApprovalNotificationGate<string>(notify);
     // The shell's one notification for root stands for one approval, the newest.
     for (const id of approvalHandoffShownBy(threads, ThreadId.make("root"))) gate.remember(id);
-    gate.observe(["one-a", "two-a"], () => true);
+    gate.setBaseline(0);
+    gate.observe([
+      { id: "one-a", createdAt: 1 },
+      { id: "two-a", createdAt: 2 },
+    ]);
     expect(notify.mock.calls).toEqual([["one-a"]]);
   });
 

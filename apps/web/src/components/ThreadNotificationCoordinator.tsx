@@ -50,6 +50,7 @@ import {
   approvalHandoffShownBy,
   createApprovalNotificationGate,
   feedOwnedApprovalThreads,
+  notificationAttention,
   createThreadNotificationGate,
   type ThreadNotificationKind,
   type ThreadNotificationObservation,
@@ -422,10 +423,13 @@ export function startThreadNotifications(
     // Approval handoffs notify from the decision feed, one per approval; the shell stays quiet.
     entry.threads = threads;
     const feedOwned = feedOwnedApprovalThreads(threads, entry.feedReady);
-    entry.baselineMs ??= threads.reduce(
-      (latest, raw) => Math.max(latest, DateTime.toEpochMillis(raw.updatedAt)),
-      0,
-    );
+    if (entry.baselineMs === null) {
+      entry.baselineMs = threads.reduce(
+        (latest, raw) => Math.max(latest, DateTime.toEpochMillis(raw.updatedAt)),
+        0,
+      );
+      entry.approvals.setBaseline(entry.baselineMs);
+    }
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
       // Subagents report through their parent; a side chat answers in its open panel; a GOAT
@@ -450,15 +454,11 @@ export function startThreadNotifications(
       const thread = presentThreadShell(environmentId, rawThread, subagentRequest);
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
-      const attention =
-        !feedOwned.has(rawThread.id) &&
-        (status === "input" ||
-          status === "request" ||
-          status === "approval" ||
-          status === "failed" ||
-          status === "limited")
-          ? `${thread.latestRun?.runId ?? ""}:${status}`
-          : null;
+      const attention = notificationAttention(
+        status,
+        thread.latestRun?.runId ?? "",
+        feedOwned.has(rawThread.id),
+      );
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       const settled = status === "ready" && thread.latestRun?.status === "completed";
       const state = {
@@ -517,12 +517,13 @@ export function startThreadNotifications(
         if (feed?.handoffs === undefined) return;
         entry.feedReady = true;
         handoffs = new Map(feed.handoffs.map((item) => [item.handoff.handoffId, item]));
-        // On the first list, only approvals newer than the first shell snapshot opened unseen.
-        const since = entry.baselineMs;
-        entry.approvals.observe([...handoffs.keys()], (id) => {
-          const created = handoffs.get(id)?.handoff.createdAt;
-          return since !== null && created !== undefined && DateTime.toEpochMillis(created) > since;
-        });
+        // The gate holds its first list until the first shell snapshot gives it a server time.
+        entry.approvals.observe(
+          feed.handoffs.map((item) => ({
+            id: String(item.handoff.handoffId),
+            createdAt: DateTime.toEpochMillis(item.handoff.createdAt),
+          })),
+        );
       },
       { immediate: true },
     );
