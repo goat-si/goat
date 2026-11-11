@@ -30,7 +30,7 @@ import {
   useComposerDraftSelection,
   setComposerDraftContext,
 } from "../../state/use-composer-drafts";
-import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
+import { isUsageLimitsCommand, USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   detectComposerTrigger,
   replaceTextRange,
@@ -105,6 +105,7 @@ export function buildComposerSlashCommandItems(input: {
   readonly hasCompactableConversation?: boolean;
   readonly offersUsageLimits?: boolean;
   readonly offersSideChat?: boolean;
+  readonly offersFork?: boolean;
   readonly allowInteractionMode: boolean;
   readonly selectedProviderStatus: Pick<
     ServerProvider,
@@ -156,6 +157,14 @@ export function buildComposerSlashCommandItems(input: {
         });
     }
   }
+  if (input.offersFork && "fork".includes(query))
+    items.push({
+      id: "cmd:fork",
+      type: "slash-command",
+      command: "fork",
+      label: "/fork",
+      description: "Fork this thread",
+    });
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
@@ -189,8 +198,17 @@ export function resolveComposerCommandSelection(input: {
   readonly text: string;
   readonly cursor: number;
   readonly interactionMode: ProviderInteractionMode | null;
+  /** The composer should start a fork; the token is already gone. */
+  readonly fork?: true;
 } {
   const { draftMessage, trigger, item } = input;
+  if (item.type === "slash-command" && item.command === "fork") {
+    return {
+      ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, ""),
+      interactionMode: null,
+      fork: true,
+    };
+  }
   if (
     input.allowInteractionMode &&
     item.type === "slash-command" &&
@@ -218,6 +236,21 @@ export function resolveComposerCommandSelection(input: {
   };
 }
 
+/** A typed GOAT command that send runs locally instead of sending to the provider. */
+export function resolveComposerSendIntercept(input: {
+  readonly text: string;
+  readonly attachmentCount: number;
+  readonly usageLimitsOffered: boolean;
+  readonly offersFork: boolean;
+}): "usage-limits" | "fork" | null {
+  if (input.usageLimitsOffered && isUsageLimitsCommand(input.text) && input.attachmentCount === 0) {
+    return "usage-limits";
+  }
+  // Attachments stay in the draft for the next message.
+  if (input.offersFork && input.text.trim().toLowerCase() === "/fork") return "fork";
+  return null;
+}
+
 export function useComposerCommandMenu({
   draftMessage,
   ownerKey,
@@ -233,10 +266,12 @@ export function useComposerCommandMenu({
   hasCompactableConversation,
   offersUsageLimits = false,
   offersSideChat = false,
+  offersFork = false,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
   onUsageLimits,
+  onFork,
 }: {
   readonly draftMessage: string;
   readonly ownerKey: string | null;
@@ -268,10 +303,13 @@ export function useComposerCommandMenu({
   readonly hasCompactableConversation: boolean;
   readonly offersUsageLimits?: boolean;
   readonly offersSideChat?: boolean;
+  /** The thread can be forked; the caller decides availability. */
+  readonly offersFork?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
+  readonly onFork?: () => void;
 }) {
   const navigation = useNavigation();
   const currentThreadId = thread?.id ?? null;
@@ -412,6 +450,7 @@ export function useComposerCommandMenu({
           thread?.sideChatOf == null &&
           thread?.lineage?.relationshipToParent !== "subagent",
         offersUsageLimits,
+        offersFork: offersFork && hasThread && onFork !== undefined,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus
           ? {
@@ -690,6 +729,7 @@ export function useComposerCommandMenu({
     if (result.interactionMode !== null) {
       onUpdateInteractionMode?.(result.interactionMode);
     }
+    if (result.fork) onFork?.();
   };
 
   return {

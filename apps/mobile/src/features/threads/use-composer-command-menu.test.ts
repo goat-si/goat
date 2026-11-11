@@ -53,6 +53,7 @@ import {
   buildComposerSlashCommandItems,
   resolveComposerCommandSelection,
   resolveComposerMenuSelection,
+  resolveComposerSendIntercept,
 } from "./use-composer-command-menu";
 
 describe("resolveComposerMenuSelection", () => {
@@ -153,5 +154,50 @@ describe("mobile slash commands", () => {
         allowInteractionMode: false,
       }),
     ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
+  });
+});
+
+describe("mobile /fork command", () => {
+  const forkItems = (input: { readonly offersFork: boolean; readonly atMessageStart?: boolean }) =>
+    buildComposerSlashCommandItems({
+      query: "fo",
+      atMessageStart: input.atMessageStart ?? true,
+      hasThread: true,
+      offersFork: input.offersFork,
+      allowInteractionMode: true,
+      selectedProviderStatus: null,
+    }).filter((item) => item.id === "cmd:fork");
+
+  it("is offered only for a forkable thread at the start of the message", () => {
+    expect(forkItems({ offersFork: true })).toEqual([
+      expect.objectContaining({ type: "slash-command", command: "fork", label: "/fork" }),
+    ]);
+    expect(forkItems({ offersFork: false })).toEqual([]);
+    expect(forkItems({ offersFork: true, atMessageStart: false })).toEqual([]);
+  });
+
+  it("removes only its own token and asks the composer to fork", () => {
+    const [item] = forkItems({ offersFork: true });
+    if (!item) throw new Error("expected /fork");
+    expect(
+      resolveComposerCommandSelection({
+        draftMessage: "/fo keep this",
+        trigger: { rangeStart: 0, rangeEnd: 3 },
+        item,
+        allowInteractionMode: true,
+      }),
+    ).toEqual({ text: " keep this", cursor: 0, interactionMode: null, fork: true });
+  });
+
+  it("catches a typed standalone /fork on send whatever is attached", () => {
+    const intercept = (text: string, attachmentCount = 0, offersFork = true) =>
+      resolveComposerSendIntercept({ text, attachmentCount, usageLimitsOffered: true, offersFork });
+    expect(intercept(" /fork ")).toBe("fork");
+    expect(intercept("/FORK", 2)).toBe("fork");
+    expect(intercept("/fork", 0, false)).toBeNull();
+    expect(intercept("/fork this please")).toBeNull();
+    expect(intercept("/usage-limits")).toBe("usage-limits");
+    expect(intercept("/usage-limits", 1)).toBeNull();
+    expect(intercept("hello")).toBeNull();
   });
 });
