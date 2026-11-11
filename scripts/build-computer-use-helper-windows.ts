@@ -192,10 +192,7 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
       requireReleaseCommand(input.runner ?? runReleaseCommand, program, args);
     if ((yield* HostProcess.Platform) !== "win32")
       return yield* fail("The Windows helper builds on Windows only.");
-    const signing = windowsSigningPlan({
-      ...input,
-      allowAnyParent: input.allowAnyParent,
-    });
+    const signing = windowsSigningPlan(input);
     if ("error" in signing) return yield* fail(signing.error);
 
     const release = cuaDriverRelease("win32", input.arch);
