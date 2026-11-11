@@ -128,6 +128,46 @@ describe("CodexTurnStartGuard admission", () => {
         assert.equal((steered[0] as { expectedTurnId: string }).expectedTurnId, "survivor-turn");
       }),
   );
+  it.effect("a run that takes the listed turn while the list is in flight keeps it", () =>
+    Effect.gen(function* () {
+      const statuses = makeCodexThreadStatuses();
+      statuses.record("thread", "active");
+      const listing = yield* Deferred.make<void>();
+      const answer = yield* Deferred.make<void>();
+      const steered: Array<unknown> = [];
+      const active = new Map<string, Turn>();
+      const client = {
+        request: (method: string, params: unknown) => {
+          if (method === "thread/turns/list")
+            return Deferred.succeed(listing, undefined).pipe(
+              Effect.andThen(Deferred.await(answer)),
+              Effect.as({ data: [{ id: "taken-turn", status: "inProgress" }] }),
+            );
+          steered.push(params);
+          return Effect.die(`unexpected Codex request ${method}`);
+        },
+      } as never;
+      const guard = guardFor(active, statuses, client);
+      const dispatching = yield* guard
+        .dispatch({
+          threadId: "thread",
+          codexInput: [],
+          additionalContext: undefined,
+          steer: true,
+          reserve: () => ({ failed: () => {}, answered: () => {} }),
+          adopt: (nativeTurnId) => root(nativeTurnId),
+        })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(listing);
+      // A run of this thread takes the turn before Codex answers the list.
+      const owner = yield* root("taken-turn");
+      active.set(owner.nativeTurnId, owner);
+      statuses.turnStarted("thread", "taken-turn");
+      yield* Deferred.succeed(answer, undefined);
+      assert.equal((yield* Fiber.join(dispatching)).type, "start");
+      assert.deepEqual(steered, []);
+    }).pipe(Effect.scoped),
+  );
 
   it.effect("refuses while Codex is busy again with a turn it has not reported starting", () =>
     Effect.gen(function* () {

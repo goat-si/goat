@@ -77,14 +77,18 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
   // against its owner. Any other running turn is judged on its own, tracked roots or not.
   const classify = Effect.fnUntraced(function* (threadId: string) {
     if (!deps.statuses.working(threadId, deps.abandoned)) return undefined;
+    let running = deps.statuses.runningTurn(threadId);
+    if (running === undefined && !deps.statuses.startPending(threadId)) {
+      const listed = yield* listedRunningTurn(threadId);
+      // Codex can report the turn, or a run can take it, while the list is in flight: judge it
+      // against the state after the answer.
+      if (!deps.statuses.working(threadId, deps.abandoned)) return undefined;
+      running = deps.statuses.runningTurn(threadId) ?? listed;
+    }
     const roots = Array.from((yield* deps.activeTurns).values()).filter(
       (context) =>
         context.subagent === null && context.providerThread.nativeThreadRef?.nativeId === threadId,
     );
-    const reported = deps.statuses.runningTurn(threadId);
-    if (reported === undefined && roots.length > 0 && deps.statuses.startPending(threadId))
-      return undefined;
-    const running = reported ?? (yield* listedRunningTurn(threadId));
     if (
       roots.length > 0 &&
       (running === undefined
