@@ -76,7 +76,7 @@ const WINDOWS_SUITES = [
 const WINDOWS_TRIGGERS = [
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
-  "patches/node-pty@1.2.0-beta.15.patch",
+  "patches/node-pty@",
 ];
 const WINDOWS_TASK = "test-windows";
 /** Every workspace package suite no other task owns, listed by packageSuites. */
