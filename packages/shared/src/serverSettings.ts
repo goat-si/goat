@@ -74,13 +74,17 @@ export function resolveProjectAutoPull(
   );
 }
 
+// Settings from an older server, or partial test settings, may lack textGenerators.
+function textGenerator(settings: ServerSettings, instanceId: ModelSelection["instanceId"]) {
+  const generators = settings.textGenerators ?? {};
+  return Object.hasOwn(generators, instanceId) ? generators[instanceId] : undefined;
+}
+
 export function isModelSelectionProviderEnabled(
   settings: ServerSettings,
   selection: ModelSelection,
 ): boolean {
-  const generator = Object.hasOwn(settings.textGenerators, selection.instanceId)
-    ? settings.textGenerators[selection.instanceId]
-    : undefined;
+  const generator = textGenerator(settings, selection.instanceId);
   if (generator !== undefined) return generator.enabled;
   const instanceConfig = Object.hasOwn(settings.providerInstances, selection.instanceId)
     ? settings.providerInstances[selection.instanceId]
@@ -151,9 +155,10 @@ export function resolveSourceControlWriterModelSelection(
   projectId: ProjectId | null,
 ): ModelSelection {
   const selection = settings.sourceControlWriterModelSelection;
-  if (selection && Object.hasOwn(settings.textGenerators, selection.instanceId))
-    return settings.textGenerators[selection.instanceId]?.enabled === true
-      ? selection
+  const generator = selection ? textGenerator(settings, selection.instanceId) : undefined;
+  if (generator !== undefined)
+    return generator.enabled
+      ? (selection ?? settings.textGenerationModelSelection)
       : settings.textGenerationModelSelection;
   if (
     !selection ||
@@ -196,12 +201,14 @@ function agentOnlySelection(
   selection: ModelSelection,
   investigate: boolean,
 ): ModelSelection {
-  if (!Object.hasOwn(settings.textGenerators, selection.instanceId)) return selection;
+  const instanceId = selection?.instanceId;
+  if (instanceId === undefined || textGenerator(settings, instanceId) === undefined)
+    return selection;
   return (
     fallbackTextGenerationModelSelection(
       settings.providerInstances,
       (id, driver) => {
-        if (Object.hasOwn(settings.textGenerators, id)) return false;
+        if (textGenerator(settings, id) !== undefined) return false;
         if (investigate && driver !== "codex" && driver !== "claudeAgent") return false;
         if (!resolveProjectProviderInstanceEnabled(settings, projectId, id)) return false;
         if (providers === undefined) return true;
@@ -225,7 +232,7 @@ export function resolveReviewGuideModelSelection(
   const selection = settings.reviewGuideModelSelection;
   if (
     selection &&
-    !Object.hasOwn(settings.textGenerators, selection.instanceId) &&
+    textGenerator(settings, selection.instanceId) === undefined &&
     resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
   ) {
     const provider = providers?.find((candidate) => candidate.instanceId === selection.instanceId);
