@@ -41,6 +41,7 @@ import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
+import type { MobileNoteWording, MobileNoteWordings } from "./mobileNoteWordings";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskList";
@@ -53,7 +54,7 @@ import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 const STICKY_TABS_CLEARANCE = 56;
 /** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
 const SCROLL_RETRIES = 3;
-const NO_WORDINGS: ReadonlyMap<string, string> = new Map();
+const NO_WORDINGS: MobileNoteWordings = new Map();
 type HomeScroll = {
   readonly index: number;
   readonly viewPosition: number;
@@ -226,10 +227,10 @@ export function MobileBotWork(props: {
   // already in the box; it goes on a successful fill or Cancel. Notes belong to the machine.
   const [noteWordings, setNoteWordings] = useState<{
     readonly environmentId: EnvironmentId | null;
-    readonly byNote: ReadonlyMap<string, string>;
+    readonly byNote: MobileNoteWordings;
   }>({ environmentId, byNote: new Map() });
   const wordings = noteWordings.environmentId === environmentId ? noteWordings.byNote : NO_WORDINGS;
-  const setWording = (note: string, wording: string | null) =>
+  const setWording = (note: string, wording: MobileNoteWording | null) =>
     setNoteWordings((current) => {
       const byNote = new Map(current.environmentId === environmentId ? current.byNote : []);
       if (wording === null) byNote.delete(note);

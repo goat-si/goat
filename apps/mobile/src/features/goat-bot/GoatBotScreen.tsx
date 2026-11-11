@@ -254,6 +254,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         <GoatBotQuestionCard
           row={row}
           canAnswer={props.canSend}
+          accent={props.accent}
           onPick={(answer) =>
             props.onSend(
               answer,
@@ -409,11 +410,8 @@ export function GoatBotScreen(props: {
       hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
     [hidesTaskCards, session.rows],
   );
-  // The "New" line and its pill belong to the main chat, whose visits the route records.
-  const unread = useGoatBotUnread(
-    visibleRows,
-    taskId !== undefined || member !== null ? null : props.readSnapshot,
-  );
+  // The "New" line and its pill belong to a bot's chat, whose visits the route records.
+  const unread = useGoatBotUnread(visibleRows, taskId !== undefined ? null : props.readSnapshot);
   const listRef = useRef<LegendListRef>(null);
   const { clear: clearUnread } = unread;
   const { onAnswer: answer } = session;
