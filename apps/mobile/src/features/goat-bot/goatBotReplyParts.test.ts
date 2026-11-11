@@ -1,6 +1,33 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { splitGoatBotReply } from "./goatBotReplyParts";
+import type { Nodes } from "mdast";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
+
+import { goatBotReplyPartSource, splitGoatBotReply } from "./goatBotReplyParts";
+
+const parser = unified().use(remarkParse).use(remarkGfm);
+/** Where each link and reference in Markdown leads, in order, as the renderer's parser reads it. */
+function resolved(markdown: string): Array<{ url: string; title: string | null } | null> {
+  const tree = parser.parse(markdown);
+  const defined = new Map<string, { url: string; title: string | null }>();
+  const found: Array<{ url: string; title: string | null } | string> = [];
+  const walk = (nodes: ReadonlyArray<Nodes>) => {
+    for (const node of nodes) {
+      if (node.type === "definition") {
+        if (!defined.has(node.identifier))
+          defined.set(node.identifier, { url: node.url, title: node.title ?? null });
+        continue;
+      }
+      if (node.type === "link") found.push({ url: node.url, title: node.title ?? null });
+      if (node.type === "linkReference") found.push(node.identifier);
+      if ("children" in node) walk(node.children);
+    }
+  };
+  walk(tree.children);
+  return found.map((each) => (typeof each === "string" ? (defined.get(each) ?? null) : each));
+}
 
 const table = ["| Step | Tool | Result |", "| --- | :---: | ---: |", "| Read | `read` | 1 file |"];
 const prose = (text: string) => [{ kind: "prose", text }];
@@ -70,13 +97,56 @@ describe("splitGoatBotReply", () => {
     expect(splitGoatBotReply(text)).toEqual(prose(text));
   });
 
-  it("keeps a reply with link reference definitions whole, so its links resolve", () => {
-    for (const definition of [
-      ["[x]: https://example.com"],
-      ["[x]:", "  https://example.com"],
-      ["[a\\]b]: https://example.com"],
+  it("carries a definition into each card that refers to it, so every link resolves where the whole reply sends it", () => {
+    const shapes = [
+      ["See [the notes][x].", "[x]: https://example.com/notes"],
+      ["See [the notes][x].", '[x]: https://example.com/notes "The notes"'],
+      ["See [the notes][x].", "[x]: <https://example.com/a b>"],
+      ["See [the  Notes][].", "[the notes]: https://example.com/notes"],
+      ["See [x].", "[x]:", "  https://example.com/notes"],
+      ["See [a b][a b].", "[a", "b]: https://example.com/notes"],
+    ];
+    for (const [words = "", ...definition] of shapes) {
+      // The table refers to it as well, and the definition is written after the table.
+      const cells = ["| Step | Link |", "| --- | --- |", "| Read | " + words + " |"];
+      const text = [words, "", ...cells, "", ...definition].join("\n");
+      const parts = splitGoatBotReply(text);
+      expect(parts.map((part) => part.kind)).toEqual(["prose", "table", "prose"]);
+      expect(parts.flatMap((part) => resolved(goatBotReplyPartSource(part)))).toEqual(
+        resolved(text),
+      );
+      expect(resolved(text).every((destination) => destination !== null)).toBe(true);
+      // A card carries a definition from elsewhere once, and the one that holds it adds none.
+      expect(parts[2]?.definitions).toBeUndefined();
+      expect(parts[0]?.definitions).toBe(definition.join("\n"));
+    }
+  });
+
+  it("carries only the definitions a card uses", () => {
+    const text = [
+      "Read [one][a].",
+      "",
+      ...table,
+      "",
+      "[a]: https://example.com/a",
+      "[b]: https://example.com/b",
+      "Then [two][b].",
+    ].join("\n");
+    const parts = splitGoatBotReply(text);
+    expect(parts[0]?.definitions).toBe("[a]: https://example.com/a");
+    expect(parts[1]?.definitions).toBeUndefined();
+    expect(parts.flatMap((part) => resolved(goatBotReplyPartSource(part)))).toEqual(resolved(text));
+  });
+
+  it("keeps a reply whole when a definition cannot be carried exactly", () => {
+    for (const shape of [
+      // Inside a list item or quote, written twice, or a footnote.
+      ["See [x].", "", ...table, "", "- [x]: https://example.com"],
+      ["See [x].", "", ...table, "", "> [x]: https://example.com"],
+      ["See [x].", "", ...table, "", "[x]: https://example.com/1", "[x]: https://example.com/2"],
+      ["See [^1].", "", ...table, "", "[^1]: A footnote."],
     ]) {
-      const text = ["See [the notes][x].", "", ...table, "", ...definition].join("\n");
+      const text = shape.join("\n");
       expect(splitGoatBotReply(text)).toEqual(prose(text));
     }
   });
@@ -126,17 +196,14 @@ describe("splitGoatBotReply", () => {
       ["    [x]: https://example.com"],
     ]) {
       const text = ["Intro", "", ...table, "", ...code].join("\n");
+      // It stays where it was written, and no card carries it.
       expect(splitGoatBotReply(text)).toEqual([
         { kind: "prose", text: "Intro" },
         { kind: "table", markdown: table.join("\n"), columns: 3 },
         { kind: "prose", text: code.join("\n") },
       ]);
+      expect(splitGoatBotReply(text).some((part) => part.definitions !== undefined)).toBe(false);
     }
-  });
-
-  it("keeps a reply whole when a definition's label runs onto the next line", () => {
-    const text = ["See [a b][a b].", "", ...table, "", "[a", "b]: https://example.com"].join("\n");
-    expect(splitGoatBotReply(text)).toEqual(prose(text));
   });
 
   it("lets a list or quote end at an unindented paragraph, so what follows splits as usual", () => {

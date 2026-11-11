@@ -5,7 +5,11 @@ import { View } from "react-native";
 import { goatBotChangeRequestContext } from "./goatBotChangeRequestText";
 import { GoatBotCard } from "./GoatBotMessageParts";
 import { GoatBotTableCard } from "./GoatBotTableCard";
-import { goatBotReplyPartKeys, splitGoatBotReply } from "./goatBotReplyParts";
+import {
+  goatBotReplyPartKeys,
+  goatBotReplyPartSource,
+  splitGoatBotReply,
+} from "./goatBotReplyParts";
 
 /**
  * A bot reply as cards: its words, then each table in a card of its own, then the words after it.
@@ -39,11 +43,11 @@ export function GoatBotReplyCards(props: {
         const last = index === parts.length - 1;
         return part.kind === "table" ? (
           <GoatBotTableCard key={keys[index]} columns={part.columns} markdown={part.markdown}>
-            {props.renderText(part.markdown, repository)}
+            {props.renderText(goatBotReplyPartSource(part), repository)}
           </GoatBotTableCard>
         ) : (
           <GoatBotCard key={keys[index]}>
-            {props.renderText(part.text, repository)}
+            {props.renderText(goatBotReplyPartSource(part), repository)}
             {last ? props.footer : null}
           </GoatBotCard>
         );
