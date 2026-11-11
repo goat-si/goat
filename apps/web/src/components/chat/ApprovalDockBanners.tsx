@@ -97,3 +97,11 @@ export function useApprovalBanners(ref: ScopedThreadRef | null) {
     onToggle: () => setExpanded((value) => !value),
   });
 }
+
+/** The newest open approval of the thread, which the timeline names while it waits. */
+export function useNewestApprovalId(ref: ScopedThreadRef | null) {
+  return (
+    useAtomValue(ref === null ? NO_APPROVALS : decisionInbox.openApprovalsAtom(ref)).at(-1)
+      ?.handoffId ?? null
+  );
+}

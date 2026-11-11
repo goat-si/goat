@@ -1,3 +1,9 @@
+import {
+  isPendingApprovalRequest,
+  type OrchestrationV2ThreadShell,
+  type ThreadId,
+} from "@goat/contracts";
+
 export type ThreadNotificationKind = "input" | "completion";
 
 export interface ThreadNotificationObservation {
@@ -72,4 +78,41 @@ export function createApprovalNotificationGate<Id>(notify: (id: Id) => void) {
       for (const id of fresh) notify(id);
     },
   };
+}
+
+const NO_THREADS: ReadonlySet<ThreadId> = new Set();
+
+/**
+ * Threads whose approval the decision feed announces, so their shell status stays quiet: a thread
+ * waiting on its own approval handoff, and each subagent ancestor that shows only such handoffs.
+ * Until the feed has listed approvals once, the shell announces them all.
+ */
+export function feedOwnedApprovalThreads(
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  feedReady: boolean,
+): ReadonlySet<ThreadId> {
+  if (!feedReady) return NO_THREADS;
+  const byId = new Map(threads.map((thread) => [thread.id, thread] as const));
+  const owned = new Set<ThreadId>();
+  const viaHandoff = new Set<ThreadId>();
+  const viaProvider = new Set<ThreadId>();
+  for (const thread of threads) {
+    const request = thread.pendingRuntimeRequest;
+    if (!isPendingApprovalRequest(request)) continue;
+    const handoff = request?.handoff !== undefined;
+    if (handoff) owned.add(thread.id);
+    // The same walk that raises a subagent's approval on its ancestors.
+    const seen = new Set<ThreadId>([thread.id]);
+    let current: OrchestrationV2ThreadShell | undefined = thread;
+    while (current?.lineage.relationshipToParent === "subagent") {
+      const parentId: ThreadId | null = current.lineage.parentThreadId;
+      if (parentId === null || seen.has(parentId)) break;
+      seen.add(parentId);
+      (handoff ? viaHandoff : viaProvider).add(parentId);
+      current = byId.get(parentId);
+    }
+  }
+  for (const id of viaHandoff)
+    if (!viaProvider.has(id) && byId.get(id)?.pendingRuntimeRequest === null) owned.add(id);
+  return owned;
 }

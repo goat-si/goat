@@ -1,7 +1,10 @@
+import { type OrchestrationV2ThreadShell, RuntimeRequestId, ThreadId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   createApprovalNotificationGate,
+  feedOwnedApprovalThreads,
   createThreadNotificationGate,
   type ThreadNotificationObservation,
 } from "./ThreadNotificationCoordinator.logic";
@@ -137,5 +140,59 @@ describe("approval notifications", () => {
     // Created while the feed was away: the first list after it returns still announces it.
     gate.observe(["one", "two"]);
     expect(notify.mock.calls).toEqual([["one"], ["two"]]);
+  });
+});
+
+describe("which approvals the decision feed announces", () => {
+  const shell = (
+    id: string,
+    request: OrchestrationV2ThreadShell["pendingRuntimeRequest"],
+    parent: string | null = null,
+  ) =>
+    ({
+      id: ThreadId.make(id),
+      lineage: {
+        rootThreadId: ThreadId.make(parent ?? id),
+        parentThreadId: parent === null ? null : ThreadId.make(parent),
+        relationshipToParent: parent === null ? null : "subagent",
+      },
+      pendingRuntimeRequest: request,
+    }) as OrchestrationV2ThreadShell;
+  const createdAt = DateTime.makeUnsafe(0);
+  const handoff = (id: string) => ({
+    id: RuntimeRequestId.make(id),
+    kind: "user_input" as const,
+    createdAt,
+    handoff: { kind: "approval" as const, title: "Join pen-lidge to the hub" },
+  });
+  const provider = (id: string) => ({
+    id: RuntimeRequestId.make(id),
+    kind: "command" as const,
+    createdAt,
+  });
+
+  it("leaves every approval to the shell until the feed has listed approvals once", () => {
+    expect(feedOwnedApprovalThreads([shell("t", handoff("a"))], false).size).toBe(0);
+    expect([...feedOwnedApprovalThreads([shell("t", handoff("a"))], true)]).toEqual(["t"]);
+  });
+
+  it("owns a nested subagent's approval handoff for every ancestor that shows it", () => {
+    const owned = feedOwnedApprovalThreads(
+      [shell("root", null), shell("mid", null, "root"), shell("leaf", handoff("a"), "mid")],
+      true,
+    );
+    expect([...owned].sort()).toEqual(["leaf", "mid", "root"]);
+  });
+
+  it("keeps the shell notification of a parent whose other child waits on a provider approval", () => {
+    const owned = feedOwnedApprovalThreads(
+      [
+        shell("parent", null),
+        shell("one", handoff("a"), "parent"),
+        shell("two", provider("b"), "parent"),
+      ],
+      true,
+    );
+    expect([...owned]).toEqual(["one"]);
   });
 });

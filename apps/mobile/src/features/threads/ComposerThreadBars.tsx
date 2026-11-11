@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { useState } from "react";
-import { View } from "react-native";
+import { ScrollView, useWindowDimensions, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
@@ -16,6 +16,8 @@ import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
 function OpenApprovalsDock(props: { readonly threadRef: ScopedThreadRef }) {
   const handoffs = useAtomValue(decisionInbox.openApprovalsAtom(props.threadRef));
   const [expanded, setExpanded] = useState(false);
+  // The composer stays on screen however long the cards are; the cards scroll instead.
+  const maxHeight = Math.round(useWindowDimensions().height * 0.4);
   if (handoffs.length === 0) return null;
   const cards = handoffs.map((handoff) => (
     <HumanHandoffCard
@@ -25,7 +27,12 @@ function OpenApprovalsDock(props: { readonly threadRef: ScopedThreadRef }) {
       inherited={false}
     />
   ));
-  if (handoffs.length === 1) return <View className="shrink-0 px-4 pb-3">{cards}</View>;
+  const scrolling = (
+    <ScrollView style={{ maxHeight }} contentContainerClassName="gap-3">
+      {cards}
+    </ScrollView>
+  );
+  if (handoffs.length === 1) return <View className="shrink-0 px-4 pb-3">{scrolling}</View>;
   return (
     <View className="shrink-0 gap-3 px-4 pb-3">
       <View className="flex-row items-center justify-between gap-3 rounded-[20px] border border-border bg-card-alt px-4 py-3">
@@ -38,7 +45,7 @@ function OpenApprovalsDock(props: { readonly threadRef: ScopedThreadRef }) {
           onPress={() => setExpanded((value) => !value)}
         />
       </View>
-      {expanded ? cards : null}
+      {expanded ? scrolling : null}
     </View>
   );
 }

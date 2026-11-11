@@ -47,6 +47,7 @@ import {
 } from "./Sidebar.logic";
 import {
   createApprovalNotificationGate,
+  feedOwnedApprovalThreads,
   createThreadNotificationGate,
   type ThreadNotificationKind,
   type ThreadNotificationObservation,
@@ -64,6 +65,8 @@ interface WatchedEnvironment {
   unsubscribe: () => void;
   previous: Map<ThreadId, NotificationState>;
   reconnecting: boolean;
+  /** Set once the decision feed has listed approvals; from then on it announces them. */
+  feedReady: boolean;
   readonly gate: ReturnType<typeof createThreadNotificationGate<ThreadId>>;
   readonly approvals: ReturnType<typeof createApprovalNotificationGate<string>>;
 }
@@ -411,15 +414,7 @@ export function startThreadNotifications(
     const next = new Map<ThreadId, NotificationState>();
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     // Approval handoffs notify from the decision feed, one per approval; the shell stays quiet.
-    const handoffParents = new Set(
-      threads.flatMap((raw) =>
-        raw.lineage.relationshipToParent === "subagent" &&
-        raw.pendingRuntimeRequest?.handoff?.kind === "approval" &&
-        raw.lineage.parentThreadId !== null
-          ? [raw.lineage.parentThreadId]
-          : [],
-      ),
-    );
+    const feedOwned = feedOwnedApprovalThreads(threads, entry.feedReady);
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
       // Subagents report through their parent; a side chat answers in its open panel; a GOAT
@@ -443,13 +438,8 @@ export function startThreadNotifications(
       const thread = presentThreadShell(environmentId, rawThread, subagentRequest);
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
-      const feedOwned =
-        rawThread.pendingRuntimeRequest?.handoff?.kind === "approval" ||
-        (rawThread.pendingRuntimeRequest === null &&
-          subagentRequest === "approval" &&
-          handoffParents.has(rawThread.id));
       const attention =
-        !feedOwned &&
+        !feedOwned.has(rawThread.id) &&
         (status === "input" ||
           status === "request" ||
           status === "approval" ||
@@ -490,6 +480,7 @@ export function startThreadNotifications(
     const entry: WatchedEnvironment = {
       previous: new Map(),
       reconnecting: false,
+      feedReady: false,
       unsubscribe: () => {},
       gate: createThreadNotificationGate<ThreadId>((threadId, kind) => {
         const state = entry.previous.get(threadId);
@@ -505,6 +496,7 @@ export function startThreadNotifications(
       serverEnvironment.decisionFeed(environmentId),
       (feed: DecisionFeed | null) => {
         if (feed?.handoffs === undefined) return;
+        entry.feedReady = true;
         handoffs = new Map(feed.handoffs.map((item) => [item.handoff.handoffId, item]));
         entry.approvals.observe([...handoffs.keys()]);
       },
