@@ -57,11 +57,10 @@
   effect. Its effect then depends on nothing another signer's records do. When no record `n - 1` is
   held, naming a bare hash suffices; a node remembers its last record's hash for this. Nothing can tell a
   dropped record's hash from an invented one, so a signer can skip its own counters this way, which gains
-  it nothing it could not sign with a proper chain. Every
-  record also names the found or admit records that introduced its signer (every admit naming a key
-  carries a card that key signed), so replay orders it after its signer's admission even when records
-  between them were dropped. A record names at most 8 heads besides: dropped records leave many, and 64
-  would pass the 2048-byte body.
+  it nothing it could not sign with a proper chain. Every record also names the found or admit that made
+  its signer a member in the signing node's view, so replay orders it after that admission even when
+  records between them were dropped. A record names at most 8 heads besides: dropped records leave many,
+  and 64 would pass the 2048-byte body.
 - **Shares.** Per lineage: 160 records of other types, 16 `lock` records, 16 `admit` records signed by
   keys other than the founder, and 56 revoke places. The founder's own admits share 64 places, kept by
   the founder's counter `n` then raw hash, so a later admit never displaces an earlier one. A revoke place
