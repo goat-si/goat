@@ -74,7 +74,7 @@ func buildStreamVectors() streamFile {
 			{Why: "CREDIT of 3 bytes", Records: []string{"02000001"}, Code: wire.CodeCrypto},
 			{Why: "CREDIT of 5 bytes", Records: []string{"020000010000"}, Code: wire.CodeCrypto},
 			{Why: "CREDIT for more than was sent", Records: []string{h(credit(1))}, Code: wire.CodeCrypto},
-			{Why: "DATA past the window", Fill: 9, FillSize: stream.MaxData, Code: wire.CodeTimeout},
+			{Why: "DATA past the window", Records: []string{}, Fill: 9, FillSize: stream.MaxData, Code: wire.CodeTimeout},
 		},
 	}
 }

@@ -64,7 +64,7 @@
     },
     {
       "why": "DATA past the window",
-      "records": null,
+      "records": [],
       "fill": 9,
       "fillSize": 65518,
       "code": 4408

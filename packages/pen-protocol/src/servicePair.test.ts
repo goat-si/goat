@@ -249,6 +249,7 @@ describe("tcp framing vectors (CONTRACT Streams)", () => {
 
   it("every refused sequence names 4400, or 4408 for data past the window", () => {
     for (const reject of framing.reject) {
+      expect(Array.isArray(reject.records), reject.why).toBe(true);
       const overrun = (reject.fill ?? 0) * (reject.fillSize ?? 0) > framing.window;
       expect(reject.code, reject.why).toBe(overrun ? 4408 : 4400);
     }
