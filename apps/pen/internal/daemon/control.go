@@ -527,11 +527,11 @@ func CallWithin(st *state.Store, req Request, v any, d time.Duration) error {
 	}
 	cl := &Client{c: c, dec: json.NewDecoder(c)}
 	defer cl.Close()
-	if err := c.SetWriteDeadline(time.Now().Add(dialTimeout)); err != nil {
+	if err := c.SetWriteDeadline(time.Now().Add(sendTimeout)); err != nil {
 		return err
 	}
 	if err := cl.Send(req); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
 	if err := c.SetDeadline(time.Now().Add(d)); err != nil {
 		return err
@@ -541,3 +541,10 @@ func CallWithin(st *state.Store, req Request, v any, d time.Duration) error {
 
 // dialTimeout bounds connecting to the control socket and writing a request to it.
 const dialTimeout = 2 * time.Second
+
+// sendTimeout bounds writing a request (a variable for tests).
+var sendTimeout = dialTimeout
+
+// ErrNotSent wraps a CallWithin failure that came before the request was fully written: the daemon
+// did not get it.
+var ErrNotSent = errors.New("the request did not reach the daemon")

@@ -860,7 +860,7 @@ func TestAStartWhoseDaemonNeverAnswersReleasesTheTurn(t *testing.T) {
 func TestDownGivesUpOnATurnThatIsNeverReleasedAndNamesItsHolder(t *testing.T) {
 	st, _ := windowsHome(t, func(string, []string) error { return nil })
 	fakeTaskClock(t)
-	release, err := taskTurn(st, "pen up")
+	release, err := taskTurn(st, "pen up", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -868,6 +868,10 @@ func TestDownGivesUpOnATurnThatIsNeverReleasedAndNamesItsHolder(t *testing.T) {
 	var errOut bytes.Buffer
 	if code := RunDown(nil, io.Discard, &errOut); code == 0 || !strings.Contains(errOut.String(), fmt.Sprintf("pen up (pid %d)", os.Getpid())) {
 		t.Fatalf("pen down exit %d: %q, want a failure naming the holder", code, errOut.String())
+	}
+	// It said so when it began to wait, not only when it gave up.
+	if first, _, _ := strings.Cut(errOut.String(), "\n"); !strings.Contains(first, "waiting for pen up") {
+		t.Fatalf("pen down's first line %q does not say it waits for pen up", first)
 	}
 }
 
@@ -956,7 +960,7 @@ func TestUpWaitsForAPenDownThatHoldsTheTurn(t *testing.T) {
 	}
 	t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
 	fakeTaskClock(t)
-	release, err := taskTurn(st, "pen down")
+	release, err := taskTurn(st, "pen down", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,5 +995,62 @@ func TestUpWaitsForAPenDownThatHoldsTheTurn(t *testing.T) {
 	}
 	if _, err := os.Stat(st.Path(downMarker)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("pen up ran last but the down record stays: %v", err)
+	}
+}
+
+// A leave whose deletion of identity.json failed (here a folder in its place) left the left marker
+// behind; once the daemon is gone, pen leave must not trust the marker: it deletes what is left, under
+// the state lock, and succeeds only when the identity is gone; until then it names the file and keeps
+// the service.
+func TestAResumedLeaveDeletesWhatTheLeaveCouldNot(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st, calls := windowsHome(t, func(string, []string) error { return nil })
+	deleted := func() bool {
+		return slices.ContainsFunc(*calls, func(c string) bool { return strings.Contains(c, "/Delete") })
+	}
+	soloNode(t, st, rs.URL)
+	if err := startDetached(st); err != nil {
+		t.Fatal(err)
+	}
+	var s daemon.Status
+	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+	// The obstruction: identity.json becomes a folder that is not empty, so removing it fails.
+	idPath := st.Path("identity.json")
+	if err := os.Remove(idPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(idPath, "held"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := RunLeave(nil, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "identity.json") || deleted() {
+		t.Fatalf("leave with an undeletable identity: exit %d, %q, task deleted %v", code, errOut.String(), deleted())
+	}
+	if _, err := os.Stat(st.Path(daemon.LeftMarker)); err != nil {
+		t.Fatalf("the leave did not get as far as the left marker: %v", err)
+	}
+	daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
+	if !waitExit(s.PID, downWait) {
+		t.Fatal("the daemon did not stop")
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := RunLeave(nil, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "identity.json") || deleted() {
+		t.Fatalf("resumed leave while the identity stays: exit %d, %q %q, task deleted %v", code, out.String(), errOut.String(), deleted())
+	}
+	if err := os.Remove(filepath.Join(idPath, "held")); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := RunLeave(nil, &out, &errOut); code != 0 || !deleted() {
+		t.Fatalf("resumed leave: exit %d, %q %q, task deleted %v", code, out.String(), errOut.String(), deleted())
+	}
+	if _, err := os.Stat(idPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pen leave succeeded but identity.json stays: %v", err)
 	}
 }

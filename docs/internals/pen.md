@@ -193,9 +193,15 @@ the same daemon operation as the CLI.
     free, and `pen leave` looks for the task with `schtasks /Query` (or the unit file) before it removes it.
   - `pen leave` waits 1 min for the daemon's leave. The daemon finishes a leave it has begun even when its client
     stopped waiting (the revoke may already be signed and pushed), and refuses a second leave meanwhile; so a
-    `pen leave` that runs out says the leave is still in progress and keeps the service, and a later `pen leave`
-    that finds the node gone (the `left` marker, or no identity) and no daemon removes the task or unit and
-    succeeds. This holds on macOS and Linux too.
+    `pen leave` that runs out says the leave is still in progress and keeps the service. A request that never
+    reached the daemon (its write timed out) is reported as such: nothing changed. The daemon writes the `left`
+    marker before it deletes `identity.json`, `mesh.json` and `offers.json`; a delete that fails (a reader
+    holding the file on Windows) is reported by name and the service is kept. A later `pen leave` that finds the
+    marker and no daemon deletes what is left (`FinishLeave`, under the state lock, the code the daemon uses)
+    and removes the task or unit only once those files are gone. A `pen leave` that finds no Pen identity and no
+    marker removes only the task or unit, no state files, and says "no Pen identity in <folder>", so a folder
+    that is missing or not mounted is not taken for a node that left. This holds on macOS and Linux too.
+  - A command that has to wait for the turn says so at once, naming the holder from `start.holder`.
   - With `PEN_HOME` set there is no task and no turn (Pen runs detached), so a `pen down` that overlaps a
     `pen up` can find nothing to stop while the start completes; run `pen down` again.
 - **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so

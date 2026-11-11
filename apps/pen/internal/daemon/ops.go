@@ -39,6 +39,10 @@ func (d *Daemon) revoke(ctx context.Context, subject string, compromised bool) (
 // leave revokes this node's own key, pushes the revoke to the members it had, and deletes its keys.
 // The caller stops the daemon after replying.
 func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
+	// A leave that wrote the left marker but could not delete every file only deletes what is left.
+	if _, err := os.Stat(d.st.Path(LeftMarker)); err == nil {
+		return nil, FinishLeave(d.st)
+	}
 	v := d.view()
 	before := v.SortedMembers()
 	// A retried leave finds its own revoke already signed and only pushes it again.
@@ -81,12 +85,29 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 	if err := d.st.WriteAtomic(LeftMarker, nil, 0o600); err != nil {
 		return res, err
 	}
+	return res, removeNodeFiles(d.st)
+}
+
+// FinishLeave deletes, under the state lock, what a leave that wrote the left marker could not: the
+// node's keys, its mesh and its invites. pen leave runs it when it finds the marker and no daemon.
+func FinishLeave(st *state.Store) error {
+	unlock, err := st.Lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return removeNodeFiles(st)
+}
+
+// removeNodeFiles deletes the node's files; the caller holds the state lock. An error names the file:
+// the leave is done in the mesh, but this machine still holds it.
+func removeNodeFiles(st *state.Store) error {
 	for _, f := range []string{"identity.json", "mesh.json", "offers.json"} {
-		if err := os.Remove(d.st.Path(f)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return res, err
+		if err := os.Remove(st.Path(f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("this node left its mesh, but %s could not be deleted (%v); run pen leave again", st.Path(f), err)
 		}
 	}
-	return res, nil
+	return nil
 }
 
 // join replaces a solo mesh with the one tok invites to.

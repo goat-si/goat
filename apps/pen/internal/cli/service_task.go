@@ -92,7 +92,7 @@ func utf16File(s string) []byte {
 
 // startTask registers (or replaces) the logon task and starts it now.
 func startTask(st *state.Store) error {
-	release, err := taskTurn(st, "pen up")
+	release, err := taskTurn(st, "pen up", io.Discard)
 	if err != nil {
 		return err
 	}
@@ -191,10 +191,11 @@ func taskTurnApplies() bool { return serviceOS == "windows" && os.Getenv("PEN_HO
 // Every step taken while holding it is bounded (probeTimeout, commandTimeout, readyTimeout, downWait,
 // opTimeout), so a start holds it at most about 1 min, a pen down 1.5 min and a pen leave 3 min. A
 // command that waits longer than turnWait for it fails and names the holder.
-func taskTurn(st *state.Store, who string) (func(), error) {
+func taskTurn(st *state.Store, who string, w io.Writer) (func(), error) {
 	path := st.Path(startLock)
 	release, err := state.TryLock(path)
 	if errors.Is(err, state.ErrLocked) {
+		fmt.Fprintf(w, "pen: waiting for %s, which holds %s\n", turnHolderName(st), path)
 		if startLockWaits != nil {
 			startLockWaits()
 		}
@@ -204,11 +205,7 @@ func taskTurn(st *state.Store, who string) (func(), error) {
 			release, err = state.TryLock(path)
 		}
 		if errors.Is(err, state.ErrLocked) {
-			holder := strings.TrimSpace(readFile(st.Path(turnHolder)))
-			if holder == "" {
-				holder = "another pen command"
-			}
-			return nil, fmt.Errorf("%s waited %v for %s, which holds %s; try again once it has finished", who, turnWait, holder, path)
+			return nil, fmt.Errorf("%s waited %v for %s, which holds %s; try again once it has finished", who, turnWait, turnHolderName(st), path)
 		}
 	}
 	if err != nil {
@@ -228,9 +225,13 @@ var turnWait = 3*time.Minute + 10*time.Second
 // turnHolder names the command holding the task turn.
 const turnHolder = "start.holder"
 
-func readFile(p string) string {
-	b, _ := os.ReadFile(p)
-	return string(b)
+// turnHolderName is the command holding the task turn, as start.holder names it.
+func turnHolderName(st *state.Store) string {
+	b, _ := os.ReadFile(st.Path(turnHolder))
+	if h := strings.TrimSpace(string(b)); h != "" {
+		return h
+	}
+	return "another pen command"
 }
 
 // startRequestOf is the start the supervisor was run for: the id pen up wrote last ("" for none).
@@ -274,7 +275,7 @@ var supervisorWait = downWait
 // supervisor has ended; schtasks /End is the fallback for one that does not. A daemon a supervisor
 // started just before it saw the record is stopped last. The task stays registered.
 func stopTask(st *state.Store) error {
-	release, err := taskTurn(st, "pen down")
+	release, err := taskTurn(st, "pen down", io.Discard)
 	if err != nil {
 		return err
 	}
@@ -341,7 +342,7 @@ func lockFree(path string, d time.Duration) bool {
 }
 
 func removeTask(st *state.Store) error {
-	release, err := taskTurn(st, "pen leave")
+	release, err := taskTurn(st, "pen leave", io.Discard)
 	if err != nil {
 		return err
 	}

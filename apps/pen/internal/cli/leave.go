@@ -22,7 +22,7 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	}
 	if taskTurnApplies() {
 		// As pen down: take the turn before looking for the task, so a start in flight finishes first.
-		release, err := taskTurn(st, "pen leave")
+		release, err := taskTurn(st, "pen leave", stderr)
 		if err != nil {
 			return fail(stderr, err)
 		}
@@ -32,19 +32,30 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	var res struct{ Results []daemon.PushResult }
 	err = daemon.CallWithin(st, daemon.Request{Op: "leave"}, &res, leaveTimeout)
 	if errors.Is(err, daemon.ErrNotRunning) {
-		if gone, why := nodeGone(st); gone {
-			// An earlier leave finished in the daemon after its pen leave stopped waiting (or nothing
-			// was ever founded here): what is left is the service.
+		if why, ok := leftOrEmpty(st); ok {
+			// A leave that finished in the daemon after its pen leave stopped waiting, or one that could
+			// not delete every file: delete what is left first, and only then the service. With no
+			// identity and no left marker nothing of a node is here: only the task or unit goes.
+			if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
+				if err := daemon.FinishLeave(st); err != nil {
+					fmt.Fprintf(stderr, "pen: %v; the %s service is kept\n", err, mode)
+					return 1
+				}
+			}
 			if mode != "none" {
 				if err := removeService(mode, st); err != nil {
 					return fail(stderr, fmt.Errorf("%s, but removing the %s service failed: %w", why, mode, err))
 				}
-				fmt.Fprintf(stdout, "%s; removed the %s service\n", why, mode)
+				fmt.Fprintf(stdout, "%s; removed the background service (%s)\n", why, mode)
 				return 0
 			}
-			fmt.Fprintln(stdout, why)
+			fmt.Fprintf(stdout, "%s; nothing else to remove\n", why)
 			return 0
 		}
+	}
+	if errors.Is(err, daemon.ErrNotSent) {
+		fmt.Fprintf(stderr, "pen: the daemon did not take the leave request (%v); nothing changed and the %s service is kept. Run pen leave again.\n", err, mode)
+		return 1
 	}
 	var timeout net.Error
 	if errors.As(err, &timeout) && timeout.Timeout() {
@@ -54,7 +65,7 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	}
 	if err != nil {
 		if mode != "none" {
-			fmt.Fprintf(stderr, "pen: leave failed, the %s service is kept: %v\n", mode, err)
+			fmt.Fprintf(stderr, "pen: leave did not finish, the %s service is kept: %v\n", mode, err)
 			return 1
 		}
 		return fail(stderr, err)
@@ -71,13 +82,15 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// nodeGone reports whether no node is left in st: it left (the left marker) or none was ever made.
-func nodeGone(st *state.Store) (bool, string) {
+// leftOrEmpty reports why no running node is left in st: it left (the left marker, though files may
+// remain for FinishLeave), or no Pen identity is in the folder at all (never made, or the folder is not
+// what it was, such as storage that is not mounted).
+func leftOrEmpty(st *state.Store) (string, bool) {
 	if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
-		return true, "this node has already left its mesh"
+		return "this node has already left its mesh", true
 	}
 	if _, err := st.LoadIdentity(); errors.Is(err, os.ErrNotExist) {
-		return true, "there is no node on this machine"
+		return "no Pen identity in " + st.Dir, true
 	}
-	return false, ""
+	return "", false
 }
