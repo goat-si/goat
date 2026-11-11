@@ -37,6 +37,7 @@ import * as EventSink from "./EventSink.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as Retirement from "./ProviderSessionRetirement.ts";
 import {
   layerTestEventSink,
   layerTestStores,
@@ -497,12 +498,25 @@ it.effect("restoring the settings does not wait for Codex to confirm a goal", ()
 );
 const addedModel = "combo/deepseek-flash-pool";
 
+/** A turn on the thread that ran and finished, so its open no longer counts as a start in flight. */
+const finishTurn = <E>(
+  fixture: Fixture,
+  runTurn: (threadId: ThreadId) => Effect.Effect<void, E>,
+  threadId: ThreadId,
+) =>
+  Effect.gen(function* () {
+    const turn = yield* runTurn(threadId).pipe(Effect.exit, Effect.forkChild);
+    yield* Deferred.await(fixture.turnStarted);
+    yield* Deferred.succeed(fixture.endTurn, undefined);
+    yield* Fiber.join(turn);
+  });
+
 it.effect("a turn on a model added after Codex started opens a fresh process when it is idle", () =>
   Effect.gen(function* () {
     const fixture = yield* makeFixture;
     yield* Effect.gen(function* () {
-      const { manager, open, providerSessionId } = yield* sharedSession;
-      yield* open(threadA);
+      const { manager, open, runTurn, providerSessionId } = yield* sharedSession;
+      yield* finishTurn(fixture, runTurn, threadA);
       fixture.catalog.push(addedModel);
       yield* open(threadB, addedModel);
       assert.strictEqual(yield* Ref.get(fixture.opens), 2);
@@ -557,8 +571,8 @@ it.effect("running commands keep a process a newer model needs; only that turn i
   Effect.gen(function* () {
     const fixture = yield* makeFixture;
     yield* Effect.gen(function* () {
-      const { open } = yield* sharedSession;
-      yield* open(threadA);
+      const { open, runTurn } = yield* sharedSession;
+      yield* finishTurn(fixture, runTurn, threadA);
       fixture.backgroundWork = true;
       fixture.catalog.push(addedModel);
       const refused = yield* open(threadB, addedModel).pipe(Effect.exit);
@@ -621,8 +635,8 @@ it.effect("activity seen while the background check runs keeps a process a newer
   Effect.gen(function* () {
     const fixture = yield* makeFixture;
     yield* Effect.gen(function* () {
-      const { manager, open, providerSessionId } = yield* sharedSession;
-      yield* open(threadA);
+      const { manager, open, runTurn, providerSessionId } = yield* sharedSession;
+      yield* finishTurn(fixture, runTurn, threadA);
       fixture.catalog.push(addedModel);
       // The session's activity moves after the probe found nothing running and before removal.
       fixture.duringBackgroundProbe = manager.get(providerSessionId).pipe(Effect.ignore);
@@ -630,6 +644,42 @@ it.effect("activity seen while the background check runs keeps a process a newer
       assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
       assert.strictEqual(yield* Queue.size(fixture.closed), 0);
       assert.isTrue(yield* manager.isLive(providerSessionId));
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect(
+  "a turn still starting on the process keeps it; only the newer model's turn is refused",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      yield* Effect.gen(function* () {
+        const { open, runTurn } = yield* sharedSession;
+        // Thread A's turn-start open returned and it is loading its thread, not busy yet.
+        yield* open(threadA);
+        fixture.catalog.push(addedModel);
+        const refused = yield* open(threadB, addedModel).pipe(Effect.exit);
+        assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), addedModel);
+        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+
+        yield* finishTurn(fixture, runTurn, threadA);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+        yield* open(threadB, addedModel);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+      }).pipe(Effect.provide(layer(fixture)));
+    }),
+);
+
+it.effect("a start that never registers stops holding the process once it expires", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open } = yield* sharedSession;
+      yield* open(threadA);
+      fixture.catalog.push(addedModel);
+      yield* TestClock.adjust(Retirement.TURN_OPEN_TTL_MS);
+      yield* open(threadB, addedModel);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
     }).pipe(Effect.provide(layer(fixture)));
   }),
 );

@@ -299,7 +299,7 @@ function parseCodexSkillsListResponse(
   });
 }
 
-export const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
+const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   client: CodexClient.CodexAppServerClient["Service"],
 ) {
   const models: ServerProviderModel[] = [];

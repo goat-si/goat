@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
-import { makeCodexModelArrivals } from "./CodexModelArrivals.ts";
+import { listCodexModelSlugs, makeCodexModelArrivals } from "./CodexModelArrivals.ts";
 
 const model = (slug: string, isCustom = false): ServerProviderModel => ({
   slug,
@@ -148,5 +148,23 @@ it.effect("a process that does not answer its model list is unconfirmed", () =>
     const answer = yield* modelStatus(added).pipe(Effect.forkChild);
     yield* TestClock.adjust("10 seconds");
     assert.strictEqual(yield* Fiber.join(answer), "unconfirmed");
+  }),
+);
+
+it.effect("a hidden model the serving process still runs is ready", () =>
+  Effect.gen(function* () {
+    const hidden = "gpt-hidden-but-usable";
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      // model/list leaves hidden models out unless asked, as the picker's list does.
+      listServed: listCodexModelSlugs((params) =>
+        Effect.succeed({
+          data: params.includeHidden ? [{ model: known }, { model: hidden }] : [{ model: known }],
+          nextCursor: null,
+        }),
+      ),
+    });
+    assert.strictEqual(yield* modelStatus(hidden), "ready");
   }),
 );

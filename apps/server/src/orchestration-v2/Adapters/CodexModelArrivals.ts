@@ -35,6 +35,31 @@ export const reconnectsKeptProcess = Effect.fn("CodexModelArrivals.reconnectsKep
   },
 );
 
+/** Every slug the serving process can run, hidden ones included: the picker hides them, Codex does not. */
+export const listCodexModelSlugs = Effect.fn("CodexModelArrivals.listCodexModelSlugs")(function* <
+  E,
+>(
+  request: (params: { readonly includeHidden: true; readonly cursor?: string }) => Effect.Effect<
+    {
+      readonly data: ReadonlyArray<{ readonly model: string }>;
+      readonly nextCursor?: string | null;
+    },
+    E
+  >,
+) {
+  const slugs: Array<string> = [];
+  let cursor: string | null | undefined;
+  do {
+    const page: {
+      readonly data: ReadonlyArray<{ readonly model: string }>;
+      readonly nextCursor?: string | null;
+    } = yield* request(cursor ? { includeHidden: true, cursor } : { includeHidden: true });
+    for (const listed of page.data) slugs.push(listed.model);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return slugs;
+});
+
 /**
  * Codex's app-server reads its catalog only at startup and runs a model it cannot resolve with every
  * MCP tool inline. Otherwise a model is predated (offered only after the process started), missing

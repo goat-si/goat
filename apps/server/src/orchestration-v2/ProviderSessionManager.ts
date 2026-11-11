@@ -317,6 +317,7 @@ interface LiveSessionEntry {
   readonly idleGeneration: number;
   readonly busyTurns: ReadonlySet<string>;
   readonly busyTurnByThread: ReadonlyMap<ThreadId, string>;
+  readonly turnOpensAtMs: ReadonlyMap<ThreadId, number>;
   readonly lastActivityAtMs: number;
   readonly idleFiber: Fiber.Fiber<void, never> | null;
   readonly pinnedSinceMs: number | null;
@@ -1817,6 +1818,7 @@ export const layerWithOptions = (
                 ...entry,
                 busyTurns: new Set(entry.busyTurns).add(turnKey),
                 busyTurnByThread: new Map(entry.busyTurnByThread).set(threadId, turnKey),
+                turnOpensAtMs: Retirement.withoutTurnOpen(entry.turnOpensAtMs, threadId),
                 idleFiber: null,
                 lastActivityAtMs: now,
                 pinnedSinceMs: null,
@@ -2626,7 +2628,9 @@ export const layerWithOptions = (
                   );
                   let settled = yield* settle;
                   if (Option.getOrUndefined(settled) !== undefined) {
-                    const retired = yield* retirement.retireIfStale(input.providerSessionId, model);
+                    const turn =
+                      model === undefined ? undefined : { model, threadId: input.threadId };
+                    const retired = yield* retirement.retireIfStale(input.providerSessionId, turn);
                     const latest = (yield* Ref.get(sessions)).get(key);
                     // The idle probe may release a retiring session before this read.
                     if (retired === "released" || latest === undefined) settled = yield* settle;
@@ -2777,6 +2781,7 @@ export const layerWithOptions = (
                       idleGeneration: 0,
                       busyTurns: new Set(),
                       busyTurnByThread: new Map(),
+                      turnOpensAtMs: new Map(model === undefined ? [] : [[input.threadId, now]]),
                       lastActivityAtMs: now,
                       idleFiber: null,
                       pinnedSinceMs: null,

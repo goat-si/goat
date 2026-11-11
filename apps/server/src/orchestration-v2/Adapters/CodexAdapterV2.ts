@@ -43,7 +43,6 @@ import { withCodexManagedFailure, failureResetAt } from "../../provider/CodexMan
 import {
   buildCodexInitializeParams,
   codexDefaultReasoningEffortOverride,
-  requestAllCodexModels,
 } from "../../provider/CodexProvider.ts";
 import {
   codexRateLimitsToUpdate,
@@ -69,7 +68,11 @@ import {
 import { CodexAppServerClientFactory } from "./CodexAppServerClientFactory.ts";
 import type { CodexAdapterV2Hooks, CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
 export type { CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
-import { makeCodexModelArrivals, reconnectsKeptProcess } from "./CodexModelArrivals.ts";
+import {
+  listCodexModelSlugs,
+  makeCodexModelArrivals,
+  reconnectsKeptProcess,
+} from "./CodexModelArrivals.ts";
 export {
   CodexAppServerClientFactory,
   layerAppServerClientFactory,
@@ -7287,8 +7290,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   atStart: offeredAtStart,
                   offered: offeredModels,
                   listServed: ensureInitialized.pipe(
-                    Effect.andThen(requestAllCodexModels(client)),
-                    Effect.map((models) => models.map((model) => model.slug)),
+                    Effect.andThen(
+                      listCodexModelSlugs((params) => client.request("model/list", params)),
+                    ),
                   ),
                 }),
               }),
