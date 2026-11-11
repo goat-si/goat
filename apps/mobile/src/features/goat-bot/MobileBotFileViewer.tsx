@@ -28,6 +28,8 @@ export function useBotFileOpener(
   readonly opening: string | null;
   readonly messages: Readonly<Record<string, string>>;
   readonly viewer: ReactNode;
+  /** An image is shown over the screen that owns this opener. */
+  readonly covered: boolean;
 } {
   // Each is kept with the scope it belongs to and shows only while that scope is current.
   const [openingIn, setOpening] = useState<Scoped<string> | null>(null);
@@ -138,5 +140,5 @@ export function useBotFileOpener(
       </View>
     </Modal>
   );
-  return { open, opening, messages, viewer };
+  return { open, opening, messages, viewer, covered: preview !== null };
 }

@@ -217,6 +217,8 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
+// GOAT Bot's steps are read from the thread state, which loads the environment runtime.
+vi.mock("../../state/threads", () => ({ environmentThreadDetails: {} }));
 vi.mock("./useMobileGoatBotSession", () => ({
   // Like the real session, a deleted member's chat cannot send.
   useMobileGoatBotSession: (
@@ -234,6 +236,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
     activity: null,
     supportsTaskThreads: true,
     streamingReplyIds: new Set<string>(),
+    visibleTurnItems: [],
+    boundedSnapshots: false,
   }),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));

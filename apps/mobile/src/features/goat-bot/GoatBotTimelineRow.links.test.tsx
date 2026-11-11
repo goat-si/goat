@@ -17,7 +17,9 @@ vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 vi.mock("./GoatBotReplyFiles", () => ({
   GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
   GoatBotReplyFiles: () => null,
+  chatFilesScope: () => "chat",
 }));
+vi.mock("./openBotLibraryFile", () => ({ openBotLibraryFile: async () => null }));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));

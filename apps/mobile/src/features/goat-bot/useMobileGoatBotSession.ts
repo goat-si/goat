@@ -794,6 +794,12 @@ export function useMobileGoatBotSession(
   }, [environmentId, homeKey, settingsSnapshot]);
   return {
     rows,
+    /** The conversation's items the rows were built from; empty while the chat is hidden. */
+    visibleTurnItems,
+    /** The history's server sends a thread's newest part, so GOAT Bot's steps may be read. */
+    boundedSnapshots:
+      (target ? configs.get(target.environmentId) : undefined)?.environment.capabilities
+        .goatBotOpenAsks === true,
     supportsTaskThreads,
     /** Changes when a task record in the conversation changes; null while the chat is hidden. */
     workRevision,

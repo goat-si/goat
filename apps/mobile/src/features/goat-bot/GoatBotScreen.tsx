@@ -78,7 +78,10 @@ import { GoatBotModelPill } from "./GoatBotModelPill";
 import { goatBotModelPillMenu } from "./goatBotModelPillMenu";
 import { GoatBotReplyCards } from "./GoatBotReplyCards";
 import { useMobileBotEditing } from "./MobileNewBotNameRow";
-import { GoatBotFilesProvider, GoatBotReplyFiles } from "./GoatBotReplyFiles";
+import { chatFilesScope, GoatBotFilesProvider, GoatBotReplyFiles } from "./GoatBotReplyFiles";
+import { useBotFileOpener } from "./MobileBotFileViewer";
+import { GoatBotStepsAbove, GoatBotStepsMark } from "./GoatBotStepsMark";
+import { useGoatBotActivityMarks } from "./useGoatBotActivityMarks";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { useMobileGoatBotModelMenu } from "./useMobileGoatBotModel";
 import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
@@ -448,6 +451,25 @@ export function GoatBotScreen(props: {
   );
   // The "New" line and its pill belong to a bot's chat, whose visits the route records.
   const unread = useGoatBotUnread(visibleRows, taskId !== undefined ? null : props.readSnapshot);
+  // The chat owns its file opener, so an image shown over it also pauses reading the steps.
+  const opener = useBotFileOpener(
+    session.historyEnvironmentId,
+    title,
+    chatFilesScope(session.historyEnvironmentId, session.threadId),
+  );
+  const {
+    placement,
+    opened,
+    toggle: toggleSteps,
+  } = useGoatBotActivityMarks({
+    visibleTurnItems: session.visibleTurnItems,
+    environmentId: session.historyEnvironmentId,
+    taskId: taskId ?? null,
+    boundedSnapshots: session.boundedSnapshots,
+    rows: visibleRows,
+    reading: props.visible && !opener.covered,
+    scope: JSON.stringify([session.historyEnvironmentId, session.threadId, taskId ?? null]),
+  });
   const listRef = useRef<LegendListRef>(null);
   const { clear: clearUnread } = unread;
   const { onAnswer: answer } = session;
@@ -479,33 +501,45 @@ export function GoatBotScreen(props: {
   const eventsKey = events.key;
   const focusDivider = unread.focusDivider;
   const listExtraData = useMemo(
-    () => ({ accent, eventsKey, focusDivider }),
-    [accent, eventsKey, focusDivider],
+    () => ({ accent, eventsKey, focusDivider, placement, opened }),
+    [accent, eventsKey, focusDivider, placement, opened],
   );
   const renderItem = useCallback(
-    ({ item }: { item: GoatBotChatItem }) =>
-      item.kind === "unread" ? (
-        <GoatBotUnreadDividerRow focus={unread.focusDivider} onFocused={unread.dividerFocused} />
-      ) : (
-        <GoatBotTimelineRow
-          row={item}
-          canSend={session.canSend}
-          onSend={onAnswer}
-          onSomethingElse={onSomethingElse}
-          onRetry={session.onRetryInput}
-          onDiscard={session.onDiscardInput}
-          onSelectThread={onSelectThread}
-          onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
-          onOpenEvent={onOpenEvent}
-          environmentId={session.historyEnvironmentId}
-          botName={title}
-          botEmoji={botEmoji}
-          accent={accent}
-        />
-      ),
+    ({ item }: { item: GoatBotChatItem }) => {
+      if (item.kind === "unread")
+        return (
+          <GoatBotUnreadDividerRow focus={unread.focusDivider} onFocused={unread.dividerFocused} />
+        );
+      return (
+        <GoatBotStepsAbove
+          mark={placement.beforeRow.get(item.id)}
+          opened={opened}
+          onToggle={toggleSteps}
+        >
+          <GoatBotTimelineRow
+            row={item}
+            canSend={session.canSend}
+            onSend={onAnswer}
+            onSomethingElse={onSomethingElse}
+            onRetry={session.onRetryInput}
+            onDiscard={session.onDiscardInput}
+            onSelectThread={onSelectThread}
+            onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
+            onOpenEvent={onOpenEvent}
+            environmentId={session.historyEnvironmentId}
+            botName={title}
+            botEmoji={botEmoji}
+            accent={accent}
+          />
+        </GoatBotStepsAbove>
+      );
+    },
     [
       unread.focusDivider,
       unread.dividerFocused,
+      placement,
+      opened,
+      toggleSteps,
       session.canSend,
       onAnswer,
       onSomethingElse,
@@ -618,8 +652,8 @@ export function GoatBotScreen(props: {
     <GoatBotFilesProvider
       environmentId={session.historyEnvironmentId}
       threadId={session.threadId}
-      botName={title}
       replies={fileReplies}
+      opener={opener}
     >
       <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
         {Platform.OS === "ios" ? (
@@ -798,20 +832,32 @@ export function GoatBotScreen(props: {
               </Text>
             }
             ListFooterComponent={
-              !taskId && session.activity ? (
-                <View
-                  testID="goat-bot-progress-line"
-                  onLayout={(event) =>
-                    measureList({ footerHeight: event.nativeEvent.layout.height })
-                  }
-                >
-                  <GoatBotActivityLine
-                    activity={session.activity}
-                    botName={title}
-                    emoji={botEmoji}
-                    accent={accent}
-                    inView={footerInView}
-                  />
+              placement.trailing || (!taskId && session.activity) ? (
+                <View>
+                  {placement.trailing ? (
+                    <GoatBotStepsMark
+                      mark={placement.trailing}
+                      opened={opened}
+                      onToggle={toggleSteps}
+                    />
+                  ) : null}
+                  {!taskId && session.activity ? (
+                    // Only the progress line is measured: its motion runs while it shows.
+                    <View
+                      testID="goat-bot-progress-line"
+                      onLayout={(event) =>
+                        measureList({ footerHeight: event.nativeEvent.layout.height })
+                      }
+                    >
+                      <GoatBotActivityLine
+                        activity={session.activity}
+                        botName={title}
+                        emoji={botEmoji}
+                        accent={accent}
+                        inView={footerInView}
+                      />
+                    </View>
+                  ) : null}
                 </View>
               ) : null
             }
