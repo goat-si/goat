@@ -391,3 +391,41 @@ it("never starts a waiting preview read once its card has left", async () => {
   await settle();
   expect(files.previews.map((entry) => entry.relativePath)).toEqual(["a.md"]);
 });
+
+it("reads the listing again for a later mention of a listed file, so a rewritten file previews again", async () => {
+  files.listing = listed("report.md");
+  await show([bot("b1", "See `report.md`.")]);
+  await act(async () =>
+    files.previews[0]?.answer(chunk("report.md", "text/markdown", "Old words")),
+  );
+  expect(card("report.md")?.textContent).toContain("Old words");
+  const before = files.reads;
+  const previewsBefore = files.previews.length;
+  // The bot rewrote the file and names it again; a new listing answer moves the generation.
+  await view.rerender(chat([bot("b1", "See `report.md`."), bot("b2", "Updated `report.md`.")]));
+  await settle();
+  expect(files.reads).toBe(before + 1);
+  files.listing = listed("report.md");
+  await view.rerender(chat([bot("b1", "See `report.md`."), bot("b2", "Updated `report.md`.")]));
+  await settle();
+  expect(files.previews.length).toBeGreaterThan(previewsBefore);
+  await act(async () => {
+    for (const entry of files.previews.slice(previewsBefore))
+      entry.answer(chunk("report.md", "text/markdown", "New words"));
+  });
+  await settle();
+  expect(view.container.textContent).toContain("New words");
+  expect(view.container.textContent).not.toContain("Old words");
+});
+
+it("counts the same file named again later in a streamed reply as a new mention", async () => {
+  files.listing = listed();
+  await show([bot("b1", "Saving `report.md` now.")]);
+  const before = files.reads;
+  files.pending = false;
+  files.listing = listed("report.md");
+  await view.rerender(chat([bot("b1", "Saving `report.md` now. Saved `report.md`.")]));
+  await settle();
+  expect(files.reads).toBe(before + 1);
+  expect(card("report.md")).not.toBeNull();
+});
