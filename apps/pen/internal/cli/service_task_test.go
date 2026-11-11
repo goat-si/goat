@@ -801,6 +801,70 @@ func TestDownDuringAFirstTaskStartLeavesTheNodeDown(t *testing.T) {
 	}
 }
 
+func TestDownDuringServiceStartLeavesTheNodeDown(t *testing.T) {
+	for _, osName := range []string{"linux", "darwin"} {
+		t.Run(osName, func(t *testing.T) {
+			rs := relaytest.New()
+			defer rs.Close()
+			st, _ := windowsHome(t, func(string, []string) error { return nil })
+			serviceOS = osName
+			oldFound := serviceManagerFound
+			t.Cleanup(func() { serviceManagerFound = oldFound })
+			serviceManagerFound = func(string) bool { return true }
+			soloNode(t, st, rs.URL)
+			fakeTaskClock(t)
+			paused, resume := make(chan struct{}), make(chan struct{})
+			waiting, finished := make(chan struct{}), make(chan struct{})
+			oldWait := startLockWaits
+			t.Cleanup(func() { startLockWaits = oldWait })
+			startLockWaits = func() { close(waiting); <-finished }
+			var running atomic.Bool
+			run = func(_ string, args ...string) error {
+				cmd := strings.Join(args, " ")
+				if cmd == "--user daemon-reload" || strings.HasPrefix(cmd, "enable gui/") {
+					close(paused)
+					<-resume
+				}
+				if strings.HasPrefix(cmd, "--user enable --now") || strings.HasPrefix(cmd, "bootstrap ") {
+					if err := startDetached(st); err != nil {
+						return err
+					}
+					running.Store(true)
+				}
+				if cmd == "--user stop pen.service" || strings.HasPrefix(cmd, "bootout ") {
+					if running.Swap(false) {
+						return daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{})
+					}
+				}
+				return nil
+			}
+			t.Cleanup(func() { daemon.Call(st, daemon.Request{Op: "stop"}, &map[string]bool{}) })
+			up := make(chan int, 1)
+			go func() { up <- RunUp(nil, io.Discard, io.Discard) }()
+			<-paused
+			down := make(chan int, 1)
+			go func() { down <- RunDown(nil, io.Discard, io.Discard) }()
+			code := -1
+			select {
+			case <-waiting:
+			case code = <-down:
+			}
+			close(resume)
+			upCode := <-up
+			close(finished)
+			if code == -1 {
+				code = <-down
+			}
+			if upCode != 0 || code != 0 {
+				t.Fatalf("up exit %d, down exit %d", upCode, code)
+			}
+			if running.Load() {
+				t.Fatal("pen down reported success but the service runs after the overlapping start")
+			}
+		})
+	}
+}
+
 // A starting daemon that takes the control connection but never answers cannot keep the turn: the
 // readiness probe has a deadline, so the start fails within its bound and a pen down waiting for the
 // turn then runs. The probe's deadline is now (the request still goes out, and the listener has it
