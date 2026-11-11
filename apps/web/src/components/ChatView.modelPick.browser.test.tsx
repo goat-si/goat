@@ -81,4 +81,10 @@ it("sends the picked model while its thread selection save is pending", async ()
   expect(commands.find((command) => command.type === "message.dispatch")).toMatchObject({
     modelSelection: { instanceId: "codex", model: "gpt-5.5" },
   });
+  // Unmount only once the sent message renders, so no import the send started is still
+  // loading through the mocked driver's route when the next file takes the page.
+  await expect.element(page.getByText("Send immediately").first()).toBeVisible();
+  await expect
+    .element(page.getByTestId("composer-editor"))
+    .not.toHaveTextContent("Send immediately");
 });
