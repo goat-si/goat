@@ -1,12 +1,6 @@
 package daemon
 
 import (
-	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"testing"
-
 	"golang.org/x/sys/windows"
 
 	"github.com/goat-si/goat/apps/pen/internal/state"
@@ -15,34 +9,6 @@ import (
 // denyCreate makes dir refuse new files, so a save into it fails. Mode bits do nothing to a folder on
 // Windows, so it puts an ACE first in the folder's DACL that denies this user adding files or folders.
 func denyCreate(dir string) error {
-	const addFile, addSubdirectory = 0x2, 0x4 // FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY
-	return denyFirst(dir, addFile|addSubdirectory)
-}
-
-// unlistableDir is a key folder this user may not list (access denied, as an ACL-protected
-// %ProgramData%\ssh gives); a file in place of a folder reads as missing on Windows.
-func unlistableDir(t *testing.T) string {
-	p := filepath.Join(t.TempDir(), "ssh")
-	if err := os.Mkdir(p, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	const listDirectory = 0x1 // FILE_LIST_DIRECTORY
-	if err := denyFirst(p, listDirectory); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { // before TempDir's cleanup, which must list it
-		if err := state.RestrictDir(p); err != nil {
-			t.Error(err)
-		}
-	})
-	if _, err := os.ReadDir(p); !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("listing the denied folder gave %v, want access denied", err)
-	}
-	return p
-}
-
-// denyFirst puts an ACE first in dir's DACL that denies this user mask.
-func denyFirst(dir string, mask windows.ACCESS_MASK) error {
 	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
@@ -55,8 +21,9 @@ func denyFirst(dir string, mask windows.ACCESS_MASK) error {
 	if err != nil {
 		return err
 	}
+	const addFile, addSubdirectory = 0x2, 0x4 // FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY
 	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
-		AccessPermissions: mask,
+		AccessPermissions: addFile | addSubdirectory,
 		AccessMode:        windows.DENY_ACCESS,
 		Inheritance:       windows.NO_INHERITANCE,
 		Trustee: windows.TRUSTEE{

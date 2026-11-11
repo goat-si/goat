@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -53,16 +54,23 @@ func TestAnUnreadableHostKeyFileIsReportedAndTheReadableKeysArePublished(t *test
 }
 
 // filepath.Glob drops the error of a folder it cannot list, so a key folder this account cannot read
-// would look like a machine without sshd; a missing folder is one.
+// would look like a machine without sshd; a missing folder is one. The listing fails through readDir:
+// an elevated CI account reads past a deny ACE, and root past mode bits.
 func TestAKeyFolderThatCannotBeListedIsReportedAndAMissingOneIsNot(t *testing.T) {
-	notDir := unlistableDir(t)
+	old := readDir
+	t.Cleanup(func() { readDir = old })
+	notDir := filepath.Join(t.TempDir(), "ssh")
+	readDir = func(dir string) ([]os.DirEntry, error) {
+		return nil, &fs.PathError{Op: "open", Path: dir, Err: fs.ErrPermission}
+	}
 	glob := filepath.Join(notDir, "ssh_host_*_key.pub")
 	// The folder needs its own fix: opening up the .pub files does not make the folder listable.
 	if keys, problem := ReadHostKeys(glob); len(keys) != 0 || !strings.Contains(problem, notDir) ||
 		!strings.Contains(problem, hostKeysDirFix(notDir)) || strings.Contains(problem, "chmod a+r") || strings.Contains(problem, ":(R)'") {
 		t.Fatalf("a key folder that cannot be listed gave keys %q, problem %q", keys, problem)
 	}
-	if _, problem := ReadHostKeys(filepath.Join(t.TempDir(), "absent", "ssh_host_*_key.pub")); problem != "" {
+	readDir = old
+	if _, problem := ReadHostKeys(glob); problem != "" {
 		t.Fatalf("a missing key folder was reported: %q", problem)
 	}
 }

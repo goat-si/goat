@@ -32,7 +32,7 @@ func ReadHostKeys(glob string) (keys []string, problem string) {
 	if len(paths) == 0 {
 		// Glob hides a folder it cannot list; a missing folder only means no sshd here.
 		dir := filepath.Dir(glob)
-		if _, err := os.ReadDir(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if _, err := readDir(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, "cannot list " + dir + " (" + pathCause(err) + ")" + effect + hostKeysDirFix(dir)
 		}
 	}
@@ -59,6 +59,9 @@ func ReadHostKeys(glob string) (keys []string, problem string) {
 	}
 	return keys, problem
 }
+
+// readDir lists the key folder (a variable so tests can refuse it as an ACL-protected folder does).
+var readDir = os.ReadDir
 
 // pathCause is err without the operation and path a *fs.PathError repeats.
 func pathCause(err error) string {
