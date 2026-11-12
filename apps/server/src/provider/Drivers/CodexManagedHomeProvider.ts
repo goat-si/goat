@@ -6,6 +6,7 @@ import type {
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
+import { withoutLocalCli } from "@goat/provider-core/server/snapshotProbe";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -126,8 +127,8 @@ export const makeManagedHomeCodexProvider = Effect.fn("makeManagedHomeCodexProvi
     getSettings: host.settings.get,
     streamSettings: host.settings.changes,
     haveSettingsChanged: () => false,
-    initialSnapshot: () => pending,
-    checkProvider: check,
+    initialSnapshot: () => pending.pipe(Effect.map(withoutLocalCli)),
+    checkProvider: check.pipe(Effect.map(withoutLocalCli)),
   }).pipe(
     Effect.mapError(
       (cause) =>

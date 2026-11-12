@@ -24,6 +24,7 @@ import {
   probeCodexSkillsForCwd,
 } from "../CodexProvider.ts";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
+import { withoutLocalCli } from "@goat/provider-core/server/snapshotProbe";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import {
   type ProviderDriverCreateInput,
@@ -228,8 +229,8 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     getSettings: host.settings.get,
     streamSettings: host.settings.changes,
     haveSettingsChanged: () => false,
-    initialSnapshot: () => pending,
-    checkProvider: check,
+    initialSnapshot: () => pending.pipe(Effect.map(withoutLocalCli)),
+    checkProvider: check.pipe(Effect.map(withoutLocalCli)),
   }).pipe(
     Effect.mapError(
       (cause) =>

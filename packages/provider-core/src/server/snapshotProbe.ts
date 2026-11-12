@@ -334,6 +334,13 @@ export function buildServerProvider(input: {
   };
 }
 
+/** For an instance that runs no CLI from PATH (a managed release, a remote server). */
+export const withoutLocalCli = <Draft extends { readonly checkedAt: string }>(draft: Draft) => ({
+  ...draft,
+  cli: "none" as const,
+  cliCheckedAt: draft.checkedAt,
+});
+
 class ProcessOutputLimitError extends Schema.TaggedError<ProcessOutputLimitError>()(
   "ProcessOutputLimitError",
   { maxBytes: Schema.Number },
