@@ -27,10 +27,12 @@ import {
   MAIN_BOT_ID,
 } from "@goat/contracts";
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
+import { goatBotPreviewText } from "@goat/shared/goatBotPreviewText";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -42,7 +44,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { channelOwnerIdFor } from "./channelOwner.ts";
-import { botFullAccessCommandIdFor, botLaunchIdsFor } from "./channelIds.ts";
+import { botFullAccessCommandIdFor, botLaunchIdsFor, timelineIdsFor } from "./channelIds.ts";
 
 const GOAT_BOT_TITLE = "GOAT bot";
 
@@ -51,6 +53,30 @@ const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 /** A roster row shows one line; the rest of the message stays in the chat. */
 const LATEST_TEXT_LIMIT = 200;
+/** Enough of a message to fill that line once its Markdown is gone. */
+const LATEST_SOURCE_LIMIT = 4000;
+/** How far back the preview looks past messages the main chat hides, a page at a time. */
+const LATEST_PAGE = 20;
+const LATEST_PAGES = 5;
+/** What a task tells the main chat even when the task's own messages stay in its view. */
+const TOLD_IN_MAIN_CHAT = new Set(["result", "failure", "question"]);
+/** The names a message's files carry; a file type this build does not know may have none. */
+const decodeAttachmentNames = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.NullOr(Schema.String))),
+);
+
+interface LatestCandidate {
+  readonly message_id: string;
+  readonly role: string;
+  readonly created_at: string;
+  readonly text: string;
+  readonly attachment_names: string;
+  readonly task_id: string | null;
+  readonly kind: string | null;
+  readonly option_count: number;
+  readonly answers_question: number;
+  readonly reply_to: string | null;
+}
 
 export class ChannelBotRegistry extends Context.Service<
   ChannelBotRegistry,
@@ -245,27 +271,68 @@ const make = Effect.gen(function* () {
       return visitedAt === null ? undefined : DateTime.formatIso(visitedAt);
     }).pipe(Effect.orElseSucceed(() => undefined));
 
-  /** The newest finished message in the bot's conversation, from its projection. */
+  /**
+   * The newest finished message the bot's main chat shows, as one plain line. The main chat
+   * (buildGoatBotTimeline with conversationOnly) keeps a task's own messages in the task's view
+   * unless they tell its outcome, ask, offer answers, pick an answer, or reply to a message sent
+   * in the main chat; a message of only files reads as their names.
+   */
   const latestMessage = (bot: ChannelBotRef | null) =>
     Effect.gen(function* () {
       if (bot === null || bot.environmentId !== (yield* environment.getEnvironmentId))
         return undefined;
-      const [row] = yield* sql<{
-        readonly role: string;
-        readonly created_at: string;
-        readonly text: string;
-      }>`SELECT role, created_at, json_extract(payload_json, '$.text') AS text
-        FROM orchestration_v2_projection_messages
-        WHERE thread_id = ${bot.threadId} AND streaming = 0 AND role IN ('user', 'assistant')
-          AND length(trim(coalesce(json_extract(payload_json, '$.text'), ''))) > 0
-        ORDER BY created_at DESC, message_id DESC
-        LIMIT 1`;
-      if (row === undefined) return undefined;
-      return {
-        text: row.text.trim().slice(0, LATEST_TEXT_LIMIT),
-        at: row.created_at,
-        author: row.role === "user" ? ("person" as const) : ("bot" as const),
-      };
+      const threadId = bot.threadId;
+      const sentInMainChat = (inputId: string) =>
+        sql<{ readonly task_id: string | null }>`
+          SELECT json_extract(payload_json, '$.channel.taskId') AS task_id
+          FROM orchestration_v2_projection_messages
+          WHERE message_id = ${timelineIdsFor(threadId, "input:" + inputId, "").messageId}
+            AND thread_id = ${threadId} AND role = 'user'`.pipe(
+          Effect.map(([row]) => row !== undefined && row.task_id === null),
+        );
+      const lineOf = (row: LatestCandidate) =>
+        Effect.gen(function* () {
+          const plain = goatBotPreviewText(row.text);
+          if (row.role === "user") {
+            if (row.task_id !== null && row.answers_question === 0) return "";
+            if (plain !== "") return plain;
+            const names = yield* decodeAttachmentNames(row.attachment_names);
+            return names.filter((name) => name !== null).join(", ");
+          }
+          if (plain === "" || row.task_id === null) return plain;
+          if (TOLD_IN_MAIN_CHAT.has(row.kind ?? "") || row.option_count > 0) return plain;
+          return row.reply_to !== null && (yield* sentInMainChat(row.reply_to)) ? plain : "";
+        });
+      let before: LatestCandidate | undefined;
+      for (let page = 0; page < LATEST_PAGES; page++) {
+        const rows = yield* sql<LatestCandidate>`
+          SELECT message_id, role, created_at,
+            substr(coalesce(json_extract(payload_json, '$.text'), ''), 1, ${LATEST_SOURCE_LIMIT}) AS text,
+            (SELECT json_group_array(json_extract(file.value, '$.name'))
+              FROM json_each(payload_json, '$.attachments') AS file) AS attachment_names,
+            json_extract(payload_json, '$.channel.taskId') AS task_id,
+            json_extract(payload_json, '$.channel.kind') AS kind,
+            coalesce(json_array_length(payload_json, '$.channel.options'), 0) AS option_count,
+            json_type(payload_json, '$.channel.answersQuestionId') IS NOT NULL AS answers_question,
+            json_extract(payload_json, '$.channel.inReplyToInputId') AS reply_to
+          FROM orchestration_v2_projection_messages
+          WHERE thread_id = ${threadId} AND streaming = 0 AND role IN ('user', 'assistant')
+            ${before === undefined ? sql`` : sql`AND (created_at, message_id) < (${before.created_at}, ${before.message_id})`}
+          ORDER BY created_at DESC, message_id DESC
+          LIMIT ${LATEST_PAGE}`;
+        for (const row of rows) {
+          const line = yield* lineOf(row);
+          if (line === "") continue;
+          return {
+            text: Array.from(line).slice(0, LATEST_TEXT_LIMIT).join("").trimEnd(),
+            at: row.created_at,
+            author: row.role === "user" ? ("person" as const) : ("bot" as const),
+          };
+        }
+        if (rows.length < LATEST_PAGE) return undefined;
+        before = rows.at(-1);
+      }
+      return undefined;
     }).pipe(Effect.orElseSucceed(() => undefined));
 
   const status: ChannelBotRegistry["Service"]["status"] = (

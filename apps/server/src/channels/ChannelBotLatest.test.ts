@@ -191,7 +191,13 @@ describe("a bot's status previews the newest message its chat shows", () => {
           role: "user",
           text: "",
           attachments: [
-            { type: "image", id: "shot-1", name: "build.png", mimeType: "image/png", sizeBytes: 10 },
+            {
+              type: "image",
+              id: "shot-1",
+              name: "build.png",
+              mimeType: "image/png",
+              sizeBytes: 10,
+            },
             { type: "file", id: "log-1", name: "ci.log", mimeType: "text/plain", sizeBytes: 10 },
           ],
           meta: { kind: "inbound", inputId: ChannelInputId.make("photos") },
@@ -216,7 +222,11 @@ describe("a bot's status previews the newest message its chat shows", () => {
         "long-reply",
         {
           role: "assistant",
-          text: "**Main is green.** See [the run](https://example.com/" + "x".repeat(300) + ") " + words,
+          text:
+            "**Main is green.** See [the run](https://example.com/" +
+            "x".repeat(300) +
+            ") " +
+            words,
           meta: { kind: "inbound", inReplyToInputId: ChannelInputId.make("status") },
         },
         conversationId,
@@ -227,4 +237,3 @@ describe("a bot's status previews the newest message its chat shows", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 });
-
