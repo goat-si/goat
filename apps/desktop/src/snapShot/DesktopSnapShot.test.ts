@@ -991,18 +991,16 @@ it.effect("captures and reads Windows windows in physical pixels on a scaled dis
     owner: { name: "Editor", processId: 123 },
     bounds: { x: 10, y: 20, width: 800, height: 600 },
   } as const;
+  const save = {
+    role: "button",
+    name: "Save",
+    bounds: { x: 210, y: 220, width: 200, height: 100 },
+  };
   const window = (name: string, value: string) => ({
     role: "window",
     name,
     bounds: active.bounds,
-    children: async () => [
-      {
-        role: "button",
-        name: "Save",
-        bounds: { x: 210, y: 220, width: 200, height: 100 },
-        children: async () => [],
-      },
-    ],
+    children: async () => [{ ...save, children: async () => [] }],
     tree: async () => ({ name, value, children: [] }),
   });
   activeWindowMock.mockReset().mockResolvedValue(active);
