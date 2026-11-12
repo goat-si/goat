@@ -1,4 +1,5 @@
 import { RegistryContext, scheduleTask } from "@effect/atom-react";
+import type { EnvironmentRegistry } from "@goat/client-runtime/connection";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { EnvironmentId } from "@goat/contracts";
 import { AtomRegistry } from "effect/reactivity";
@@ -127,17 +128,20 @@ vi.mock("~/state/channels", async (original) => {
       disconnect: Effect.void,
       retryNow: Effect.void,
     };
+    type Service = EnvironmentRegistry.EnvironmentRegistry["Service"];
+    const run: Service["run"] = (environmentId, effect) =>
+      environmentId === target.environmentId
+        ? Effect.provideService(effect, Supervisor, supervisor as never)
+        : Effect.die(unknown(environmentId));
+    const followStream: Service["followStream"] = (environmentId, stream) =>
+      environmentId === target.environmentId
+        ? Stream.provideService(stream, Supervisor, supervisor as never)
+        : Stream.die(unknown(environmentId));
     return {
-      run: (environmentId: unknown, effect: Effect.Effect<unknown, unknown, never>) =>
-        environmentId === target.environmentId
-          ? Effect.provideService(effect, Supervisor, supervisor as never)
-          : Effect.die(unknown(environmentId)),
-      followStream: (environmentId: unknown, stream: Stream.Stream<unknown, unknown, never>) =>
-        environmentId === target.environmentId
-          ? Stream.provideService(stream, Supervisor, supervisor as never)
-          : Stream.die(unknown(environmentId)),
+      run,
+      followStream,
       stateChanges: () => SubscriptionRef.changes(supervisor.state),
-    } as never;
+    } as unknown as Service;
   });
   // A signed-in browser with the standard grants, which reading the Library needs.
   const fetchSession: typeof fetch = async (input) =>
