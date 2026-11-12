@@ -46,7 +46,7 @@ export const pendingApprovals = Effect.fn("channel.pendingApprovals")(function* 
 
 /**
  * Each open request as its card said it, headed by its code, with that card's two words. A
- * request whose details can't be read now (a failed read, another machine's) gets no words.
+ * request it can't show (no prompt, a failed read, another machine's) gets no words.
  */
 export const askForApprovalCode = Effect.fn("channel.askForApprovalCode")(function* (input: {
   readonly ledger: ChannelLedger.ChannelLedger["Service"];
@@ -64,7 +64,7 @@ export const askForApprovalCode = Effect.fn("channel.askForApprovalCode")(functi
         requestId: card.approval.requestId,
         now,
       });
-      if (detail.kind === undefined && detail.prompt === undefined) {
+      if (detail.prompt === undefined || detail.prompt.trim() === "") {
         const unreadable = card.task.title + ": " + CHANNEL_COPY.approvalDetailUnreadable;
         return { text: code + ": " + unreadable, options: [] };
       }

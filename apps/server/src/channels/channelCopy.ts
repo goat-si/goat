@@ -47,7 +47,7 @@ export const CHANNEL_COPY = {
     "While an approval is waiting, a number doesn't answer anything. Reply with the words below, or with a question's choice.",
   approvalNeedsCode: "Which approval? Reply with its code, so I answer the one you mean.",
   approvalDetailUnreadable:
-    "I can't read what it asks right now, so open its thread in GOAT to answer it.",
+    "I can't show what it asks here, so open its thread in GOAT to answer it.",
   approvalsMoreWaiting: " more waiting. They show here once these are answered, or open GOAT.",
   approvalFailed:
     "I couldn't pass that approval on. Open the work's thread in GOAT to answer it there.",

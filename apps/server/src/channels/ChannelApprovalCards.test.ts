@@ -177,6 +177,8 @@ describe("GOAT Bot approval cards", () => {
       const deps = tasks.find((task) => task.title === "bump deps")!;
       harness.world.runtimeRequests.set(login.worker!.threadId, [approval("login")]);
       harness.world.runtimeRequests.set(deps.worker!.threadId, [approval("deps")]);
+      harness.world.approvalPrompts.set("approval:login", "npm test");
+      harness.world.approvalPrompts.set("approval:deps", "pnpm up");
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
 

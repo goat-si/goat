@@ -349,32 +349,36 @@ describe("decision cards", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("offers no words for a request whose details can't be read now", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const sent = yield* imessageChat();
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
-      yield* runtime.drain;
-      const worker = (yield* onlyTask).worker!.threadId;
-      const request = approval("ship");
-      harness.world.runtimeRequests.set(worker, [request]);
-      harness.world.approvalPrompts.set(request.id, "make release");
-      yield* reports.reconcile(runtime.ownerToken);
-      yield* runtime.drain;
+  // Prompts are optional, and a read can fail or miss the run that asked: a kind alone
+  // ("wants to run a command") does not say what would be approved.
+  it.effect.each(["the thread can't be read", "the request has no prompt"])(
+    "offers no words for a request it can't show: %s",
+    (why) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const sent = yield* imessageChat();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
+        yield* runtime.drain;
+        const worker = (yield* onlyTask).worker!.threadId;
+        const request = approval("ship");
+        harness.world.runtimeRequests.set(worker, [request]);
+        if (why === "the thread can't be read") harness.world.approvalPrompts.set(request.id, "x");
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
 
-      // The thread can't be read now, so the repeat cannot say what the request is.
-      harness.world.recordFailures.add(worker);
-      yield* gateway.ingest(imessageInput("approve", "row-2"), imessageContext);
-      yield* runtime.drain;
-      assert.deepStrictEqual(responses(harness), []);
-      const asked = sent.at(-1)?.text ?? "";
-      assert.include(asked, "A1: ship the build: " + CHANNEL_COPY.approvalDetailUnreadable);
-      assert.notInclude(asked, "Approve A1");
-    }).pipe(Effect.provide(harness.layer));
-  });
+        if (why === "the thread can't be read") harness.world.recordFailures.add(worker);
+        yield* gateway.ingest(imessageInput("approve", "row-2"), imessageContext);
+        yield* runtime.drain;
+        assert.deepStrictEqual(responses(harness), []);
+        const asked = sent.at(-1)?.text ?? "";
+        assert.include(asked, "A1: ship the build: " + CHANNEL_COPY.approvalDetailUnreadable);
+        assert.notInclude(asked, "Approve A1");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   // A card sent before this change listed "1. Approve A1 / 2. Deny A1"; a number typed for it
   // must not land on a question asked since.
