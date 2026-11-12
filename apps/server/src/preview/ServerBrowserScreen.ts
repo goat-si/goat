@@ -459,9 +459,11 @@ export const screenTree = (
   },
 ) => {
   const { generation } = input;
+  // Whole lines only: a raw /…/ name cut after attributes the page wrote into it reads as complete.
+  const end = text.length <= input.limit ? text.length : text.lastIndexOf("\n", input.limit);
   return {
     accessibilityTree: text
-      .slice(0, input.limit)
+      .slice(0, Math.max(0, end))
       .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
         const ref = `t3-${generation}-${nativeRef}`;
         input.refs.set(ref, nativeRef);
