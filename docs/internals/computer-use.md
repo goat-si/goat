@@ -560,9 +560,16 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   keyboard fallback. Each step turns to success from the helper's own readiness, checked in a
   fresh helper process because TCC answers are cached per process (#1226); when macOS needs the
   helper restarted, the step says so and offers to quit and reopen it.
-- **Troubleshooting** covers stale or duplicate entries from old builds or paths, the wrong app
-  toggled (GOAT.app or Terminal instead of the helper), and development builds that need a new
-  grant after each rebuild. `tccutil reset` appears only as text a person can run; GOAT never runs
+  A read the helper does not answer (it did not start, stopped, took too long or refused its
+  parent) says nothing about the grant. It reaches setup and the readiness check as that reason,
+  never as a grant that is off, and after `CUA_UNANSWERED_AFTER` such reads in a row setup shows
+  it in place of the steps. Each kind of read logs one line when what it found changes
+  (`apps/desktop/src/cua/cuaGrantReadLog.ts`).
+- **Troubleshooting** covers entries that belong to another copy, the wrong app toggled
+  (GOAT.app or Terminal instead of the helper), and development builds that need a new grant
+  after each rebuild. Stable and nightly helpers share one display name and differ in bundle id
+  (ADR-0023), so no advice may name a row as stale or tell a person to remove every row with
+  that name. `tccutil reset` appears only as text a person can run; GOAT never runs
   it and never edits the TCC database. The panel follows light and dark, is accessible, and does
   not animate continuously. Windows and Linux use the same step structure in the shared
   onboarding component (WS8, #1136).
