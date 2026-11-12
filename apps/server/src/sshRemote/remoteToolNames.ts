@@ -4,6 +4,8 @@ import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentS
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as Schema from "effect/Schema";
 
+import { quoteRemote } from "./remoteText.ts";
+
 /**
  * The last version some of whose builds answer only to shipped tool names: canonical names became
  * callable (#906) and then listed (#781) within it. Every later version answers to both.
@@ -111,7 +113,7 @@ export const refusalMessage = (
     driver === undefined
       ? ""
       : ` From here: ${goatCallText("provider.sync", JSON.stringify({ driver, hosts: [alias], login: false }))}.`;
-  return `On ${alias}, GOAT there says: ${JSON.stringify(own)}${sync}`;
+  return quoteRemote(`On ${alias}, GOAT there says: `, own, 1_400) + sync;
 };
 
 /** The message and facts of a remote refusal, as failure(reason, message, facts) takes them. */

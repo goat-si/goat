@@ -5,6 +5,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
+interface Slot {
+  attempts: number;
+  creating: number;
+  ended: number;
+  idle: Deferred.Deferred<void>;
+}
+
 /** The launch attempt a CLI check belongs to. */
 class LaunchAttempt extends Context.Service<LaunchAttempt, { passed: boolean }>()(
   "goat/orchestration-v2/goat/launchCommandSlots/LaunchAttempt",
@@ -31,17 +38,24 @@ export const makeLaunchCommandSlots = Effect.gen(function* () {
       next.delete(commandId);
       return next;
     });
-  // Per command, the attempts that passed the CLI check and may still create its thread.
-  const creating = new Map<CommandId, { count: number; readonly idle: Deferred.Deferred<void> }>();
+  // Per command while any attempt runs: attempts in flight, those past the CLI check that may still
+  // create its thread, and how many of those have ended.
+  const slots = new Map<CommandId, Slot>();
+  const slotOf = (commandId: CommandId) => {
+    const existing = slots.get(commandId);
+    if (existing !== undefined) return existing;
+    const slot: Slot = { attempts: 0, creating: 0, ended: 0, idle: Deferred.makeUnsafe<void>() };
+    slots.set(commandId, slot);
+    return slot;
+  };
   /** Runs a CLI check; once it passes, this attempt counts until it ends. */
   const passCli = <E, R>(commandId: CommandId, check: Effect.Effect<void, E, R>) =>
     Effect.tap(check, () =>
       Effect.map(Effect.serviceOption(LaunchAttempt), (attempt) => {
-        if (Option.isNone(attempt) || attempt.value.passed) return;
+        const slot = slots.get(commandId);
+        if (Option.isNone(attempt) || attempt.value.passed || slot === undefined) return;
         attempt.value.passed = true;
-        const entry = creating.get(commandId) ?? { count: 0, idle: Deferred.makeUnsafe<void>() };
-        entry.count += 1;
-        creating.set(commandId, entry);
+        slot.creating += 1;
       }),
     );
   const settleCliRaces =
@@ -51,28 +65,32 @@ export const makeLaunchCommandSlots = Effect.gen(function* () {
     (input: I): Effect.Effect<A, E, R> =>
       Effect.suspend(() => {
         const id = input.commandId;
+        const slot = slotOf(id);
+        slot.attempts += 1;
+        const seen = slot.ended;
         const attempt = { passed: false };
         const end = Effect.suspend(() => {
-          const entry = creating.get(id);
-          if (!attempt.passed || entry === undefined) return Effect.void;
-          entry.count -= 1;
-          if (entry.count > 0) return Effect.void;
-          creating.delete(id);
-          return Deferred.succeed(entry.idle, undefined);
+          slot.attempts -= 1;
+          if (slot.attempts === 0 && slots.get(id) === slot) slots.delete(id);
+          if (!attempt.passed) return Effect.void;
+          slot.creating -= 1;
+          slot.ended += 1;
+          if (slot.creating > 0) return Effect.void;
+          const idle = slot.idle;
+          slot.idle = Deferred.makeUnsafe<void>();
+          return Deferred.succeed(idle, undefined);
         });
         return launch(input).pipe(
           Effect.provideService(LaunchAttempt, attempt),
           Effect.ensuring(end),
+          // Another attempt of this command may create, or may have created, its thread: wait it
+          // out, then try again as a counted attempt, which replays a created thread's receipt.
           Effect.catchIf(
-            (error) => isCliMissing(error) && creating.has(id),
-            (refused) => {
-              const entry = creating.get(id);
-              // Wait out every attempt that may create the thread, then try again as a counted
-              // attempt: a created thread replays from its receipt, otherwise this refuses anew.
-              return entry === undefined
-                ? Effect.fail(refused)
-                : Deferred.await(entry.idle).pipe(Effect.andThen(settleCliRaces(launch)(input)));
-            },
+            (error) => isCliMissing(error) && (slot.creating > 0 || slot.ended !== seen),
+            () =>
+              (slot.creating > 0 ? Deferred.await(slot.idle) : Effect.void).pipe(
+                Effect.andThen(settleCliRaces(launch)(input)),
+              ),
           ),
         );
       });

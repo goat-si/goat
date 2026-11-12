@@ -285,3 +285,29 @@ export function relayableBrowserUrl(
   }
   return url.toString();
 }
+
+/**
+ * A sign-in instruction another machine reported, as this machine relays it: a vendor page or
+ * device code only on the vendor's own hosts, otherwise the recipe's own words for that driver.
+ */
+export function trustedLogin(
+  driver: ProviderHostSyncDriver,
+  host: string,
+  login: ProviderSyncLogin,
+): ProviderSyncLogin {
+  const recipe = RECIPES[driver];
+  const terminal = { type: "terminal", command: recipe.terminalLogin } as const;
+  if (login.type === "device_code") {
+    const url = safeUrl(login.url);
+    const vendor = url !== null && (recipe.deviceLogin?.hosts ?? []).includes(url.hostname);
+    return vendor && /^[A-Z0-9]{4,5}-[A-Z0-9]{4,6}$/u.test(login.userCode) ? login : terminal;
+  }
+  if (login.type === "browser")
+    return relayableBrowserUrl(driver, login.url, false) === null ? terminal : login;
+  if (login.type === "open_host")
+    return {
+      type: "open_host",
+      instruction: `Finish ${recipe.displayName} sign-in in GOAT on ${host}: Settings, Providers, ${recipe.displayName}.`,
+    };
+  return terminal;
+}

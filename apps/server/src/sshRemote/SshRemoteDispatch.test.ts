@@ -1912,6 +1912,28 @@ it.effect.each([
         }),
     ),
 );
+it.effect(
+  "regression F5-5: a long remote missing-CLI refusal keeps GOAT's own advice after it",
+  () =>
+    withLaunchRemote(
+      {
+        refusal: true,
+        launchReply: {
+          code: "provider_unavailable",
+          classification: "provider_cli_missing",
+          driver: "codex",
+          message: "x".repeat(2_000),
+        },
+      },
+      () =>
+        Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const error = yield* dispatch.launchThread(launchInput, Effect.void).pipe(Effect.flip);
+          expect(error.message.length).toBeLessThanOrEqual(2_000);
+          expect(error.message).toMatch(/…" From here: goat_call \{path:"provider\.sync"/u);
+        }),
+    ),
+);
 it.effect("regression F2R-1: a missing-CLI refusal that may have started stays unknown", () =>
   withLaunchRemote(
     {

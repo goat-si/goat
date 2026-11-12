@@ -17,7 +17,8 @@ import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { describeInstall, installCommand } from "./ProviderHostSyncRecipes.ts";
+import { quoteRemote } from "../sshRemote/remoteText.ts";
+import { describeInstall, installCommand, trustedLogin } from "./ProviderHostSyncRecipes.ts";
 import type { SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
 
 export type Failure = ProviderHostSyncError | EnvironmentAuthorizationError;
@@ -65,8 +66,9 @@ const describe = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailu
     return { status: "update_runtime", message };
   if (error.reason === "host_unavailable" && message.includes("goat_ssh_host_prepare"))
     return { status: "not_ready", message };
-  if (error.reason === "remote_refused" || error.reason === "caller_changed")
-    return { status: "refused", message };
+  if (error.reason === "remote_refused")
+    return { status: "refused", message: quoteRemote("The host answered: ", message, 1_000) };
+  if (error.reason === "caller_changed") return { status: "refused", message };
   return { status: "unreachable", message };
 };
 
@@ -290,7 +292,7 @@ export const remoteHostState = (
   remote: ProviderSyncHostState,
   host: string,
 ) => {
-  const { ran, message, ...rest } = remote;
+  const { ran, message, login, ...rest } = remote;
   const recipe = (["darwin", "linux", "win32"] as const).some((platform) => {
     const command = installCommand(request.driver, platform, request.version);
     return command !== null && describeInstall(command) === ran;
@@ -300,6 +302,7 @@ export const remoteHostState = (
     host,
     ...(ran !== undefined && recipe ? { ran } : {}),
     // Another machine's words, quoted under its name so they never read as GOAT's own.
-    ...(message === undefined ? {} : { message: `${host} reports: ${JSON.stringify(message)}` }),
+    ...(message === undefined ? {} : { message: quoteRemote(`${host} reports: `, message, 1_024) }),
+    ...(login === undefined ? {} : { login: trustedLogin(request.driver, host, login) }),
   };
 };

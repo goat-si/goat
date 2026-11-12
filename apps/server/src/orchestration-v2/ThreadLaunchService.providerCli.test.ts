@@ -170,3 +170,62 @@ it.effect.each([2, 3])(
       }).pipe(Effect.provide(harness.layer));
     }),
 );
+
+it.effect(
+  "regression F5-1: a refusal that lands after the attempt that created the thread finished replays it",
+  () =>
+    Effect.gen(function* () {
+      const passed = yield* Deferred.make<void>();
+      const releaseFirst = yield* Deferred.make<void>();
+      const checking = yield* Deferred.make<void>();
+      const releaseSecond = yield* Deferred.make<void>();
+      const calls = yield* Ref.make(0);
+      const gate = Layer.succeed(
+        Gate.ProviderCliGate,
+        Gate.ProviderCliGate.of({
+          require: () =>
+            Ref.updateAndGet(calls, (count) => count + 1).pipe(
+              Effect.flatMap((count) =>
+                count === 1
+                  ? Effect.void
+                  : count === 2
+                    ? Deferred.succeed(checking, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseSecond)),
+                        Effect.andThen(Effect.fail(missing)),
+                      )
+                    : Effect.fail(missing),
+              ),
+            ),
+          probe: () => Effect.die("launches only require"),
+          missing: () => Effect.die("launches only require"),
+        }),
+      );
+      const harness = makeHarness({
+        providerCliGate: gate,
+        managedFolders: heldAfterCheck(passed, releaseFirst),
+      });
+      const { threadId: _serverAllocates, ...input } = launchInput({
+        command: "command:cli-race-finished",
+        thread: "unused",
+        message: "Only once",
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const first = yield* launches
+          .launch(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(passed);
+        const second = yield* launches
+          .launch(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(checking);
+        // The first attempt creates its thread and returns while the second still checks.
+        yield* Deferred.succeed(releaseFirst, undefined);
+        const created = yield* Fiber.join(first);
+        yield* Deferred.succeed(releaseSecond, undefined);
+        const replayed = yield* Fiber.join(second);
+        assert.equal(replayed.threadId, created.threadId);
+        assert.isTrue(replayed.resumed);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
