@@ -316,11 +316,14 @@ account always stays with you.
 
 Provider CLIs must be on the server's `PATH`. On macOS and Linux GOAT also looks,
 after your `PATH`, in the folders the usual installers use: `~/.local/bin`,
-`~/.bun/bin`, Homebrew's `bin` folder and `/usr/local/bin`. If GOAT cannot find a
-CLI, set its **Binary path** in provider settings, especially when using a version manager.
+`~/.bun/bin`, Homebrew's default location (`/opt/homebrew/bin` on macOS,
+`/home/linuxbrew/.linuxbrew/bin` on Linux) and `/usr/local/bin`. If GOAT cannot find a
+CLI, set its **Binary path** in provider settings, especially when using a version manager
+or a Homebrew installed somewhere else.
 The desktop app reads `PATH` from your login shell. When that shell is slow to start,
-GOAT tries again over the next few minutes, and a missing provider's status says
-that GOAT may not have your shell's current `PATH` yet. If a provider still reads
+GOAT tries again over the next few minutes, and the status of a missing Claude, Codex,
+Grok, OpenCode, Pi, OmO, fx or Muse Code CLI says that GOAT may not have your shell's
+current `PATH` yet. If a provider still reads
 as not found after your shell has answered, restart GOAT: Claude, OpenCode, Muse Code,
 and any other provider instance with its own environment variables, keep the
 `PATH` they started with.

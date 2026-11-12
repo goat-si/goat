@@ -39,6 +39,7 @@ export function wellKnownCliDirs(
  * Adds the well-known folders after everything already on PATH, so they never reorder or shadow
  * what the person's shell chose. They are added whether or not they exist yet: an installer run
  * later creates them. A missing PATH stays missing, since naming only these would hide /usr/bin.
+ * The existing value is never rewritten: an empty component means the working directory.
  */
 export function appendWellKnownCliDirs<Value extends string | null | undefined>(
   pathValue: Value,
@@ -49,7 +50,7 @@ export function appendWellKnownCliDirs<Value extends string | null | undefined>(
   const present = new Set(pathValue.split(POSIX_PATH_DELIMITER).map(withoutTrailingSlash));
   const missing = wellKnownCliDirs(platform, home).filter((directory) => !present.has(directory));
   if (missing.length === 0) return pathValue;
-  return [pathValue.replace(/:+$/u, ""), ...missing].join(POSIX_PATH_DELIMITER);
+  return [pathValue, ...missing].join(POSIX_PATH_DELIMITER);
 }
 
 export const loginShellPathUnread = (env: NodeJS.ProcessEnv): boolean =>

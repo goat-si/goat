@@ -10,6 +10,30 @@ import * as HostProcess from "./HostProcess.ts";
 import { resolveCommandPath } from "./shell.ts";
 
 describe("well-known CLI folders", () => {
+  // An empty PATH component means the working directory; dropping one would change what runs.
+  it.each([
+    ["a trailing delimiter", "/usr/bin:"],
+    ["a leading delimiter", ":/usr/bin"],
+    ["an empty component in the middle", "/usr/bin::/bin"],
+    ["only empty components", ":"],
+    ["spaces around an entry", " /usr/bin :/bin"],
+  ])("appends to the PATH exactly as it is, with %s", (_case, original) => {
+    const appended = appendWellKnownCliDirs(original, "darwin", "/Users/me");
+    expect(appended).toBe(
+      original + ":/Users/me/.local/bin:/Users/me/.bun/bin:/opt/homebrew/bin:/usr/local/bin",
+    );
+    expect(appended.startsWith(original + ":")).toBe(true);
+  });
+
+  it("keeps the PATH byte for byte when a folder is already on it, empty components included", () => {
+    const original = ":/opt/homebrew/bin::/Users/me/.local/bin:";
+    expect(appendWellKnownCliDirs(original, "darwin", "/Users/me")).toBe(
+      original + ":/Users/me/.bun/bin:/usr/local/bin",
+    );
+    const complete = "/Users/me/.local/bin:/Users/me/.bun/bin:/opt/homebrew/bin:/usr/local/bin:";
+    expect(appendWellKnownCliDirs(complete, "darwin", "/Users/me")).toBe(complete);
+  });
+
   it("adds the folders last without reordering or repeating what PATH already has", () => {
     expect(
       appendWellKnownCliDirs("/shell/bin:/Users/me/.local/bin/:/usr/bin", "darwin", "/Users/me/"),
@@ -22,6 +46,7 @@ describe("well-known CLI folders", () => {
   });
 
   it("names absolute folders only and leaves Windows and a missing PATH alone", () => {
+    expect(appendWellKnownCliDirs(undefined, "darwin", "/Users/me")).toBeUndefined();
     // A home holding the PATH delimiter would split into a relative entry such as ./.local/bin.
     for (const home of [undefined, "", "relative/home", "~", "/", "//", "/Users/alice:."]) {
       expect(wellKnownCliDirs("linux", home)).toEqual([

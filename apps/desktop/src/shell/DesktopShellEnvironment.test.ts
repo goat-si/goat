@@ -649,7 +649,7 @@ describe("DesktopShellEnvironment", () => {
   );
 
   it.effect(
-    "probes again after a login shell that did not answer and publishes the recovered PATH",
+    "probes again once a timed-out login shell is gone, and publishes the recovered PATH",
     () =>
       Effect.gen(function* () {
         const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
@@ -666,7 +666,11 @@ describe("DesktopShellEnvironment", () => {
             return shellProbes === 1
               ? Deferred.succeed(firstProbe, undefined).pipe(
                   Effect.andThen(
-                    Effect.acquireRelease(Effect.succeed(makeHungProcess()), () => Effect.never),
+                    // Killed at the 10 s timeout, the shell takes 20 s more to exit: late, but
+                    // before the next probe is due at 40 s.
+                    Effect.acquireRelease(Effect.succeed(makeHungProcess()), () =>
+                      Effect.sleep("20 seconds"),
+                    ),
                   ),
                 )
               : Effect.succeed(makeProcess(envOutput({ PATH: "/recovered/bin" })));
@@ -710,6 +714,49 @@ describe("DesktopShellEnvironment", () => {
   );
 
   it.effect(
+    "never starts another probe while a timed-out login shell is not known to be gone",
+    () =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+        const firstProbe = yield* Deferred.make<void>();
+        let shellProbes = 0;
+        yield* runShellEnvironment({
+          env,
+          platform: "darwin",
+          handler: () => "",
+          processSpawner: ChildProcessSpawner.make((command) => {
+            if (command._tag !== "StandardCommand" || command.command !== "/bin/zsh")
+              return Effect.succeed(makeProcess(""));
+            shellProbes++;
+            return shellProbes === 1
+              ? Deferred.succeed(firstProbe, undefined).pipe(
+                  Effect.andThen(
+                    // The kill never confirms the shell's exit.
+                    Effect.acquireRelease(Effect.succeed(makeHungProcess()), () => Effect.never),
+                  ),
+                )
+              : Effect.succeed(makeProcess(envOutput({ PATH: "/recovered/bin" })));
+          }),
+          use: (service) =>
+            Effect.gen(function* () {
+              yield* service.installIntoProcess;
+              yield* Deferred.await(firstProbe);
+              yield* TestClock.adjust("10 seconds");
+              assert.isFalse(yield* service.awaitDiscovery);
+              yield* TestClock.adjust("30 seconds");
+              assert.equal(shellProbes, 1);
+              yield* TestClock.adjust("1 day");
+              assert.equal(shellProbes, 1);
+              const latest = Option.getOrUndefined(yield* Stream.runHead(service.updates));
+              assert.isFalse(latest?.discovered);
+              assert.equal(env.PATH, `/usr/bin:${DARWIN_CLI_DIRS}`);
+              return true;
+            }),
+        }).pipe(Effect.provide(Logger.layer([])));
+      }),
+  );
+
+  it.effect(
     "uses a fallback shell's PATH without ending discovery, then finishes when the person's shell answers",
     () =>
       Effect.gen(function* () {
@@ -735,7 +782,10 @@ describe("DesktopShellEnvironment", () => {
             return ownShellProbes === 1
               ? Deferred.succeed(firstProbe, undefined).pipe(
                   Effect.andThen(
-                    Effect.acquireRelease(Effect.succeed(makeHungProcess()), () => Effect.never),
+                    // Gone 20 s after the kill, before the retry is due.
+                    Effect.acquireRelease(Effect.succeed(makeHungProcess()), () =>
+                      Effect.sleep("20 seconds"),
+                    ),
                   ),
                 )
               : Effect.succeed(makeProcess(envOutput({ PATH: "/own/bin" })));

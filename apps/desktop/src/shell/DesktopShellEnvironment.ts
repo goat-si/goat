@@ -24,7 +24,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { discoverWithRetries } from "./loginShellRetry.ts";
+import { discoverWithRetries, LiveShellProbes, makeLiveShellProbes } from "./loginShellRetry.ts";
 import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 type EnvironmentPatch = Record<string, string>;
@@ -264,6 +264,7 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
   readonly shell?: boolean;
 }): Effect.fn.Return<string, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const probes = yield* LiveShellProbes;
   const fiber = yield* Effect.scoped(
     Effect.gen(function* () {
       const child = yield* spawner.spawn(
@@ -307,6 +308,7 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
       DesktopShellEnvironmentCommandError: (error) =>
         logShellEnvironmentCommandError(error).pipe(Effect.as("")),
     }),
+    probes.track,
     Effect.forkDetach,
   );
   const output = yield* Fiber.join(fiber).pipe(
@@ -592,6 +594,7 @@ export const make = Effect.gen(function* () {
   const changes = yield* PubSub.sliding<DesktopShellEnvironmentSnapshot>(1);
   const latest = yield* Ref.make<Option.Option<DesktopShellEnvironmentSnapshot>>(Option.none());
   const discovered = yield* Deferred.make<boolean>();
+  const probes = yield* makeLiveShellProbes;
   const publish = Effect.fn("desktop.shellEnvironment.publish")(function* (
     shellPatch: ShellEnvironmentPatch,
     discovered = false,
@@ -637,6 +640,7 @@ export const make = Effect.gen(function* () {
   }).pipe(
     Effect.provideService(FileSystem.FileSystem, fileSystem),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    Effect.provideService(LiveShellProbes, probes),
     Effect.withSpan("desktop.shellEnvironment.refresh"),
     Effect.onExit((exit) => Deferred.done(discovered, exit)),
   );
@@ -682,7 +686,8 @@ export const make = Effect.gen(function* () {
           ),
         );
       }
-      yield* Effect.forkIn(discoverWithRetries(refresh, environment.platform), scope);
+      const retried = discoverWithRetries(refresh, environment.platform, probes.allGone);
+      yield* Effect.forkIn(retried, scope);
       return true;
     }).pipe(Effect.withSpan("desktop.shellEnvironment.installIntoProcess")),
   );
