@@ -32,7 +32,11 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
-import { launchesStatement, readHistoryPage } from "./channelBotThreadHistory.ts";
+import {
+  decodeHistoryCursor,
+  launchesStatement,
+  readHistoryPage,
+} from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 
@@ -50,6 +54,10 @@ interface ChildRow {
   readonly project_id: string | null;
   readonly work_kind: unknown;
 }
+/** clients read a row's main-message count only against 10 (taskVisibility.botRowRetiresAt). */
+const HISTORY_QUIET_MESSAGES_CAP = 10;
+/** The inbox entries after a task went quiet that a history row's count reads. */
+const HISTORY_QUIET_MESSAGES_WINDOW = 50;
 
 export class ChannelBotThreads extends Context.Service<
   ChannelBotThreads,
@@ -98,7 +106,9 @@ const make = Effect.gen(function* () {
           .at(-1),
       })),
     );
-    const countsByTask = yield* sql<{ readonly task_id: string; readonly count: number }>`SELECT
+    const countsByTask = yield* (
+      options.launchLimit === undefined
+        ? sql<{ readonly task_id: string; readonly count: number }>`SELECT
       json_extract(target.value, '$.taskId') AS task_id, count(i.input_id) AS count
       FROM json_each(${countInputs}) target LEFT JOIN channel_inbox i
         ON i.owner_id = ${owner.ownerId}
@@ -107,7 +117,20 @@ const make = Effect.gen(function* () {
         AND json_extract(i.message_json, '$.intent') = 'message'
         AND json_extract(i.message_json, '$.taskId') IS NULL
         AND json_extract(i.message_json, '$.actor.senderThreadId') IS NULL
-      GROUP BY json_extract(target.value, '$.taskId')`.pipe(Effect.mapError(failed));
+      GROUP BY json_extract(target.value, '$.taskId')`
+        : // History reads a fixed window of each task's chat, so an old task costs no more than a new one.
+          sql<{ readonly task_id: string; readonly count: number }>`SELECT
+      json_extract(target.value, '$.taskId') AS task_id, min(${HISTORY_QUIET_MESSAGES_CAP}, (
+        SELECT count(*) FROM (SELECT i.owner_id, i.state, i.message_json FROM channel_inbox i
+          WHERE i.conversation_id = json_extract(target.value, '$.conversationId')
+            AND i.accepted_at > json_extract(target.value, '$.quiet')
+          ORDER BY i.accepted_at LIMIT ${HISTORY_QUIET_MESSAGES_WINDOW}) w
+        WHERE w.owner_id = ${owner.ownerId} AND w.state != 'rejected'
+          AND json_extract(w.message_json, '$.intent') = 'message'
+          AND json_extract(w.message_json, '$.taskId') IS NULL
+          AND json_extract(w.message_json, '$.actor.senderThreadId') IS NULL)) AS count
+      FROM json_each(${countInputs}) target`
+    ).pipe(Effect.mapError(failed));
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
     const launchLimit = options.launchLimit;
@@ -138,15 +161,26 @@ const make = Effect.gen(function* () {
           ))
             .flat()
             .toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-    const children = yield* Effect.try(() =>
-      childRows.map((item) => ({
-        child: decodeChild(item.value_json),
-        rank: item.rank ?? 0,
-        title: item.title,
-        projectId: item.project_id,
-        recordedKind: isWorkKind(item.work_kind) ? item.work_kind : undefined,
-      })),
-    ).pipe(Effect.mapError(failed));
+    const decodeRow = (item: ChildRow) => ({
+      child: decodeChild(item.value_json),
+      rank: item.rank ?? 0,
+      title: item.title,
+      projectId: item.project_id,
+      recordedKind: isWorkKind(item.work_kind) ? item.work_kind : undefined,
+    });
+    const children =
+      launchLimit === undefined
+        ? yield* Effect.try(() => childRows.map(decodeRow)).pipe(Effect.mapError(failed))
+        : // History leaves out a record it cannot read rather than failing the page for everyone.
+          (yield* Effect.forEach(childRows, (item) =>
+            Effect.try(() => [decodeRow(item)]).pipe(
+              Effect.catch(() =>
+                Effect.logWarning("GOAT Bot task history skips a launch it cannot read", {
+                  key: item.key,
+                }).pipe(Effect.as([])),
+              ),
+            ),
+          )).flat();
     // Launches from before work kinds were recorded: one in Scratch was a chore.
     const folders = yield* Effect.serviceOption(ManagedProjectFolders.ManagedProjectFolders);
     const workKindOf = (projectId: string | null, recorded: GoatBotWorkKind | undefined) =>
@@ -341,7 +375,8 @@ const make = Effect.gen(function* () {
     });
     return {
       rows: built.rows,
-      mainMessageCount: yield* mainMessageCount(owner, botId),
+      // The bot's count belongs to the current list, which a walk always reads first.
+      mainMessageCount: 0,
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
       history: {
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
@@ -358,6 +393,9 @@ const make = Effect.gen(function* () {
     history?: { readonly cursor?: string },
   ) {
     yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
+    // A cursor is checked before anything else, so a missing bot cannot vouch for a foreign one.
+    if (history?.cursor !== undefined)
+      yield* decodeHistoryCursor({ ownerId: owner.ownerId, botId }, history.cursor);
     const bot = yield* ledger.getBotById(owner.ownerId, botId).pipe(Effect.mapError(failed));
     if (bot === undefined)
       return { rows: [], mainMessageCount: 0, ...(history === undefined ? {} : { history: {} }) };

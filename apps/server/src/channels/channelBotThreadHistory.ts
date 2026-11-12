@@ -20,6 +20,12 @@ const encodeBody = Schema.encodeSync(CursorBody);
 const decodeBody = Schema.decodeUnknownEffect(CursorBody);
 const MAX_CREATED_AT = 64;
 const MAX_TASK_ID = 200;
+/**
+ * The most tasks one history request examines, listed or not, so a bot with a long chat of turns
+ * that launched nothing cannot make one page read its whole history. Small enough to cost a few
+ * thousand index steps, large enough that most pages fill.
+ */
+export const CHANNEL_BOT_THREADS_HISTORY_EXAMINED = 500;
 const invalid = () => new ChannelGatewayError({ reason: "invalid_input" });
 
 interface HistoryKey {
@@ -103,9 +109,10 @@ export const launchesStatement = (
     LIMIT ${input.limit}`;
 
 /**
- * A bot's tasks by creation, newest first; created_at and task_id never change, so a task keeps its
- * place between pages. A turn joins once a launch has a thread, and never leaves. The terms
- * keep channel_tasks the outer loop on its index; the redundant "<=" makes the cursor a seek.
+ * A bot's tasks by creation, newest first, one row per task examined; created_at and task_id never
+ * change, so a task keeps its place between pages. task_json is set only for a task history lists:
+ * a turn joins once a launch has a thread, and never leaves. The redundant "<=" makes the cursor a
+ * seek.
  */
 export const historyStatement = (
   sql: SqlClient.SqlClient,
@@ -117,18 +124,21 @@ export const historyStatement = (
       : sql`AND t.created_at <= ${input.after.createdAt}
         AND (t.created_at < ${input.after.createdAt} OR t.task_id < ${input.after.taskId})`;
   return sql<{
-    readonly task_json: string;
     readonly task_id: string;
     readonly created_at: string;
-  }>`SELECT t.task_json, t.task_id, t.created_at FROM channel_tasks t
-    WHERE t.owner_id = ${input.ownerId} AND t.bot_id = ${input.botId}
-      AND EXISTS (SELECT 1 FROM channel_conversations c WHERE c.conversation_id = t.conversation_id
-        AND c.owner_id = ${input.ownerId} AND c.kind = 'goat')
-      AND (COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' OR EXISTS (
-        SELECT 1 FROM channel_runtime_state s INDEXED BY channel_child_work_launches
+    readonly task_json: string | null;
+  }>`SELECT t.task_id, t.created_at, CASE
+      WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c
+        WHERE c.conversation_id = t.conversation_id AND c.owner_id = ${input.ownerId}
+          AND c.kind = 'goat') THEN NULL
+      WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' THEN t.task_json
+      WHEN EXISTS (SELECT 1 FROM channel_runtime_state s INDEXED BY channel_child_work_launches
         -- "+" drops task_id's TEXT affinity, which would keep SQLite from seeking the index.
-        WHERE json_extract(s.value_json, '$.taskId') = +t.task_id AND ${openableLaunch(sql)}))
-      ${after}
+        WHERE json_extract(s.value_json, '$.taskId') = +t.task_id AND ${openableLaunch(sql)})
+        THEN t.task_json
+    END AS task_json
+    FROM channel_tasks t INDEXED BY channel_tasks_owner_bot_created
+    WHERE t.owner_id = ${input.ownerId} AND t.bot_id = ${input.botId} ${after}
     ORDER BY t.created_at DESC, t.task_id DESC LIMIT ${input.limit}`;
 };
 
@@ -141,17 +151,35 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
   const rows = yield* historyStatement(sql, {
     ...scope,
     after,
-    limit: CHANNEL_BOT_THREADS_HISTORY_LIMIT + 1,
+    limit: CHANNEL_BOT_THREADS_HISTORY_EXAMINED + 1,
   }).pipe(Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })));
-  const page = rows.slice(0, CHANNEL_BOT_THREADS_HISTORY_LIMIT);
-  const tasks = yield* Effect.try(() => page.map((row) => decodeTask(row.task_json))).pipe(
-    Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
-  );
-  const last = page.at(-1);
+  // The page ends at its 50th listed task or its last examined one; the cursor names that task
+  // either way, so a page can be short or empty and still go on.
+  const listed: Array<{ readonly taskId: string; readonly json: string }> = [];
+  let examined = 0;
+  for (const row of rows.slice(0, CHANNEL_BOT_THREADS_HISTORY_EXAMINED)) {
+    examined += 1;
+    if (row.task_json === null) continue;
+    listed.push({ taskId: row.task_id, json: row.task_json });
+    if (listed.length === CHANNEL_BOT_THREADS_HISTORY_LIMIT) break;
+  }
+  const last = rows[examined - 1];
   const next =
-    rows.length > page.length && last !== undefined
+    examined < rows.length && last !== undefined
       ? encodeHistoryCursor(scope, { createdAt: last.created_at, taskId: last.task_id })
       : undefined;
+  const tasks: Array<ChannelTask> = [];
+  for (const row of listed) {
+    // One unreadable task is left out with a warning rather than failing every page that holds it.
+    const task = yield* Effect.try(() => decodeTask(row.json)).pipe(
+      Effect.catch(() =>
+        Effect.logWarning("GOAT Bot task history skips a task it cannot read", {
+          taskId: row.taskId,
+        }).pipe(Effect.as(undefined)),
+      ),
+    );
+    if (task !== undefined) tasks.push(task);
+  }
   // Ids GOAT generates are short digests; a cursor the decoder would refuse is never issued.
   const endedEarly =
     next !== undefined &&

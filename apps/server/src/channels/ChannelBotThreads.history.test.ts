@@ -16,6 +16,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import {
+  CHANNEL_BOT_THREADS_HISTORY_EXAMINED,
   decodeHistoryCursor,
   encodeHistoryCursor,
   historyStatement,
@@ -444,7 +445,12 @@ describe("ChannelBotThreads history", () => {
           });
         const sql = yield* SqlClient.SqlClient;
         for (const after of [undefined, { createdAt: at(1500), taskId: name(1500) }]) {
-          const statement = historyStatement(sql, { ownerId, botId: "main", after, limit: 51 });
+          const statement = historyStatement(sql, {
+            ownerId,
+            botId: "main",
+            after,
+            limit: CHANNEL_BOT_THREADS_HISTORY_EXAMINED + 1,
+          });
           const plan = (yield* sql<{
             readonly detail: string;
           }>`EXPLAIN QUERY PLAN ${statement}`).map((row) => row.detail);
@@ -501,10 +507,10 @@ describe("ChannelBotThreads history", () => {
           after: undefined,
           limit: 51,
         });
-        assert.deepStrictEqual(listed.map((row) => row.task_id).toSorted(), [
-          "bound",
-          "remote-released",
-        ]);
+        assert.deepStrictEqual(
+          listed.flatMap((row) => (row.task_json === null ? [] : [row.task_id])).toSorted(),
+          ["bound", "remote-released"],
+        );
       }),
     ),
   );
@@ -652,7 +658,9 @@ describe("ChannelBotThreads history", () => {
         yield* move("in-flight", "reserved", "launched", { threadId: "thread:in-flight" });
         const listedTurns = () =>
           historyStatement(sql, { ownerId, botId: "main", after: undefined, limit: 51 }).pipe(
-            Effect.map((rows) => rows.map((row) => row.task_id).toSorted()),
+            Effect.map((rows) =>
+              rows.flatMap((row) => (row.task_json === null ? [] : [row.task_id])).toSorted(),
+            ),
           );
         assert.deepStrictEqual(yield* listedTurns(), ["created", "remote-created", "work-refused"]);
         const page = yield* history();
@@ -709,7 +717,12 @@ describe("ChannelBotThreads history", () => {
           );
         for (const after of [undefined, { createdAt: at(3000), taskId: "task-3000" }]) {
           const plan = yield* planOf(
-            historyStatement(sql, { ownerId, botId: "main", after, limit: 51 }),
+            historyStatement(sql, {
+              ownerId,
+              botId: "main",
+              after,
+              limit: CHANNEL_BOT_THREADS_HISTORY_EXAMINED + 1,
+            }),
           );
           const text = plan.join("\n");
           assert.match(text, /SEARCH t USING INDEX channel_tasks_owner_bot_created/, text);
@@ -725,6 +738,168 @@ describe("ChannelBotThreads history", () => {
         }
       }),
     ),
+  );
+
+  it.effect("examines a bounded number of tasks per page and walks on to an older task once", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const sql = yield* SqlClient.SqlClient;
+        // More chat turns without a launch than one page examines, all newer than one task.
+        yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n
+            WHERE i < ${CHANNEL_BOT_THREADS_HISTORY_EXAMINED + 9})
+          INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
+            generation, task_json, created_at, updated_at, bot_id)
+          SELECT printf('turn-%04d', i), ${ownerId}, 'conv:bot', 'completed', 1, 1,
+            json_object('kind', 'turn'),
+            strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-12', printf('-%d seconds', i)),
+            strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-12', printf('-%d seconds', i)), 'main' FROM n`;
+        yield* insertTask("older", { status: "completed", createdAt: at(1000) });
+        const first = yield* history();
+        assert.deepStrictEqual(first.rows, []);
+        assert.isString(first.history?.nextCursor);
+        const pages = yield* walk();
+        assert.lengthOf(pages, 2);
+        assert.deepStrictEqual(taskIds(pages), ["older"]);
+        assert.isUndefined(pages.at(-1)?.history?.nextCursor);
+      }),
+    ),
+  );
+
+  it.effect("breaks ties in creation time by task id at the examined-task boundary", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const sql = yield* SqlClient.SqlClient;
+        const last = CHANNEL_BOT_THREADS_HISTORY_EXAMINED + 1;
+        // Same creation time throughout; newest first is tie-<last> down to tie-0000.
+        yield* sql`WITH RECURSIVE n(i) AS (SELECT 3 UNION ALL SELECT i + 1 FROM n WHERE i < ${last})
+          INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
+            generation, task_json, created_at, updated_at, bot_id)
+          SELECT printf('tie-%04d', i), ${ownerId}, 'conv:bot', 'completed', 1, 1,
+            json_object('kind', 'turn'), ${at(5)}, ${at(5)}, 'main' FROM n`;
+        // The last task the first page examines, and the two just past it.
+        for (const id of ["tie-0002", "tie-0001", "tie-0000"])
+          yield* insertTask(id, { status: "completed", createdAt: at(5) });
+        const pages = yield* walk();
+        assert.deepStrictEqual(taskIds(pages.slice(0, 1)), ["tie-0002"]);
+        assert.deepStrictEqual(taskIds(pages), ["tie-0002", "tie-0001", "tie-0000"]);
+        assert.lengthOf(pages, 2);
+      }),
+    ),
+  );
+
+  it.effect("checks a cursor before answering for a bot that does not exist", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const nobody = BotId.make("nobody");
+        const error = yield* Effect.flip(service.list(owner, nobody, { cursor: "v1.@@@" }));
+        assert.strictEqual(error.reason, "invalid_input");
+        const foreign = encodeHistoryCursor(
+          { ownerId, botId: "main" },
+          { createdAt: at(0), taskId: "task-000" },
+        );
+        assert.strictEqual(
+          (yield* Effect.flip(service.list(owner, nobody, { cursor: foreign }))).reason,
+          "invalid_input",
+        );
+        const own = encodeHistoryCursor(
+          { ownerId, botId: "nobody" },
+          { createdAt: at(0), taskId: "task-000" },
+        );
+        assert.deepStrictEqual(yield* service.list(owner, nobody, { cursor: own }), {
+          rows: [],
+          mainMessageCount: 0,
+          history: {},
+        });
+      }),
+    ),
+  );
+
+  it.effect("skips a stored task or launch it cannot read and lists the rest", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const sql = yield* SqlClient.SqlClient;
+        yield* insertTask("work", { status: "running", createdAt: at(1) });
+        yield* launch("work", "good", "thread_launch", 5);
+        // Valid JSON the child-work schema refuses: it has no childWorkId or callerThreadId.
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (
+          'child-work:work:bad', ${JSON.stringify({
+            ownerId,
+            taskId: "work",
+            surface: "thread_launch",
+            state: "completed",
+            createdAt: at(1),
+            destination: { threadId: "thread:bad" },
+          })}, ${at(1)})`;
+        yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
+            generation, task_json, created_at, updated_at, bot_id)
+          VALUES ('broken', ${ownerId}, 'conv:bot', 'running', 1, 1, '{"kind":"work"}', ${at(2)},
+            ${at(2)}, 'main')`;
+        const page = yield* history();
+        assert.deepStrictEqual(
+          page.rows.map((row) =>
+            row.kind === "coding" ? String(row.threadId) : String(row.task.taskId),
+          ),
+          ["work", "thread:good"],
+        );
+      }),
+    ),
+  );
+
+  it.effect("answers a typed failure when the launch index is missing", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const sql = yield* SqlClient.SqlClient;
+        yield* insertTask("work", { status: "running", createdAt: at(1) });
+        yield* sql`DROP INDEX channel_child_work_launches`;
+        const error = yield* Effect.flip(history());
+        assert.strictEqual(error.reason, "persistence_failed");
+      }),
+    ),
+  );
+
+  it.effect(
+    "caps a history row's main-message count and leaves the bot count to the current list",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          const sql = yield* SqlClient.SqlClient;
+          yield* insertTask("quiet", { status: "completed", createdAt: at(100) });
+          yield* insertTask("buried", { status: "completed", createdAt: at(300) });
+          yield* sql`INSERT INTO channel_bindings (binding_id, conversation_id, connection_id,
+            reply_address_json, last_activity_at)
+          VALUES ('binding:1', 'conv:bot', 'goat', '{}', ${at(0)})`;
+          const input = (id: string, acceptedAt: string, taskId?: string) =>
+            sql`INSERT INTO channel_inbox (input_id, owner_id, kind, connection_id,
+              idempotency_key, content_hash, conversation_id, binding_id, message_json, state,
+              accepted_at)
+            VALUES (${id}, ${ownerId}, 'goat', 'goat', ${id}, 'hash', 'conv:bot', 'binding:1',
+              ${JSON.stringify({ intent: "message", ...(taskId === undefined ? {} : { taskId }) })},
+              'accepted', ${acceptedAt})`;
+          // "buried" went quiet, then its own task chatter filled the window before main messages.
+          for (let index = 0; index < 60; index++)
+            yield* input(`task-msg-${index}`, at(250 - index), "buried");
+          for (let index = 0; index < 12; index++) yield* input(`main-${index}`, at(50 - index));
+          const service = yield* BotThreads.ChannelBotThreads;
+          const count = (page: ChannelListBotThreadsResult, taskId: string) =>
+            page.rows.flatMap((row) =>
+              row.kind === "task" && row.task.taskId === taskId ? [row.mainMessagesSinceQuiet] : [],
+            );
+          const current = yield* service.list(owner);
+          const page = yield* history();
+          assert.deepStrictEqual(count(current, "quiet"), [12]);
+          assert.deepStrictEqual(count(page, "quiet"), [10]);
+          assert.deepStrictEqual(count(page, "buried"), [0]);
+          assert.strictEqual(current.mainMessageCount, 12);
+          assert.strictEqual(page.mainMessageCount, 0);
+        }),
+      ),
   );
 
   it.effect("keeps a task retried through the retry service in its place between pages", () => {

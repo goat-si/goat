@@ -524,13 +524,21 @@ export const ChannelListBotThreadsInput = Schema.Struct({
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
+  /** History pages carry 0: the bot's count belongs to the current list. */
   mainMessageCount: NonNegativeInt,
   /** Absent from servers before it; clients read that as none. */
   remoteWork: Schema.optional(Schema.Array(BotRemoteWork)),
-  /** Present when the input asked for history. */
+  /**
+   * Present when the input asked for history; an answer without it came from a server that does
+   * not walk history. A history row's mainMessagesSinceQuiet stops counting at 10.
+   */
   history: Schema.optionalKey(
     Schema.Struct({
-      /** The next page's start; absent once the walk reached the bot's oldest task. */
+      /**
+       * The next page's start; absent once the walk reached the bot's oldest task. One request
+       * examines a bounded number of tasks, so a page can be short or empty and still carry it:
+       * keep reading until it is absent.
+       */
       nextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
       /** Tasks that launched more threads than this page lists; the rest stay in Threads. */
       launchesTruncated: Schema.optionalKey(Schema.Array(ChannelTaskId)),

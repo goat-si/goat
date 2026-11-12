@@ -28,23 +28,17 @@ export function botThreadsHistoryInput(
 }
 
 /**
- * The current list with the history pages read after it, each row once and the current list's
- * copy first. A walk goes on while the last page has a nextCursor, even past a page with no rows,
- * and starts again from its first page whenever the current list is read again, since tasks
- * created since then sort above where it began.
+ * The current list with the history pages read after it, each row once, the current copy first.
+ * A walk goes on while nextCursor comes back, even past an empty page, and restarts whenever the
+ * current list is reread. An answer without the history marker came from a server that does not
+ * walk history, so the merge reports that instead of a finished walk.
  */
 export function mergeBotThreadHistory(
   current: ChannelListBotThreadsResult,
   pages: ReadonlyArray<ChannelListBotThreadsResult>,
-): {
-  readonly rows: ReadonlyArray<BotThreadRow>;
-  readonly remoteWork: ReadonlyArray<BotRemoteWork>;
-  readonly mainMessageCount: number;
-  /** Tasks whose launches the history lists only in part; the rest stay in Threads. */
-  readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
-  /** The walk stopped at a task the server could not name in a cursor; older tasks are unlisted. */
-  readonly endedEarly: boolean;
-} {
+): BotThreadHistoryMerge {
+  if (pages.some((page) => page.history === undefined)) return { supported: false };
+  const nextCursor = pages.at(-1)?.history?.nextCursor;
   const seen = new Set<string>();
   const rows: BotThreadRow[] = [];
   for (const row of [current, ...pages].flatMap((page) => page.rows)) {
@@ -60,19 +54,32 @@ export function mergeBotThreadHistory(
     remoteIds.add(item.childWorkId);
     remoteWork.push(item);
   }
-  // The current list carries every launch of the tasks it lists.
-  const complete = new Set(
-    current.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
-  );
   return {
+    supported: true,
     rows,
     remoteWork,
     mainMessageCount: current.mainMessageCount,
-    launchesTruncated: new Set(
-      pages
-        .flatMap((page) => page.history?.launchesTruncated ?? [])
-        .filter((taskId) => !complete.has(taskId)),
-    ),
+    // Kept even for a task the current list has: it leaves out released remote launches, and
+    // launches can bind between the two reads, so its copy does not prove the set complete.
+    launchesTruncated: new Set(pages.flatMap((page) => page.history?.launchesTruncated ?? [])),
     endedEarly: pages.some((page) => page.history?.endedEarly === true),
+    ...(nextCursor === undefined ? {} : { nextCursor }),
   };
 }
+
+export type BotThreadHistoryMerge =
+  /** A page lacked the history marker: the server answered its current list instead. */
+  | { readonly supported: false }
+  | {
+      readonly supported: true;
+      readonly rows: ReadonlyArray<BotThreadRow>;
+      readonly remoteWork: ReadonlyArray<BotRemoteWork>;
+      /** The current list's; history pages do not count the bot's main messages. */
+      readonly mainMessageCount: number;
+      /** Tasks whose launches the history lists only in part; the rest stay in Threads. */
+      readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
+      /** The walk stopped at a task the server could not name in a cursor. */
+      readonly endedEarly: boolean;
+      /** The last page's cursor; the walk is finished only when it is absent. */
+      readonly nextCursor?: string;
+    };
