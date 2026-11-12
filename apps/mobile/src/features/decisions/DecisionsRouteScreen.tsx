@@ -1,11 +1,12 @@
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
-import { ScrollView, View } from "react-native";
+import { View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { AppBar } from "../../components/ui/AppBar";
 import { useThreadShell } from "../../state/entities";
 import { useSavedRemoteConnection } from "../../state/use-remote-environment-registry";
@@ -71,7 +72,7 @@ function FocusedDecisionsContent(props: {
   return (
     <ScreenContent>
       <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
-        <ScrollView
+        <ScreenScrollView
           className="flex-1"
           contentContainerClassName="gap-4 px-4 pt-4"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 24) }}
@@ -244,7 +245,7 @@ function FocusedDecisionsContent(props: {
               </Text>
             </View>
           ) : null}
-        </ScrollView>
+        </ScreenScrollView>
       </KeyboardAvoidingView>
     </ScreenContent>
   );

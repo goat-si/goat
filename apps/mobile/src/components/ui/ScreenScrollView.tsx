@@ -15,6 +15,7 @@ export function ScreenScrollView(props: ComponentProps<typeof ScrollView>) {
   const surface = use(ScreenScrollViewSurface);
   return (
     <ScrollView
+      contentInsetAdjustmentBehavior="automatic"
       {...props}
       className={Platform.OS === "ios" && surface ? cn(surface, props.className) : props.className}
       contentInset={

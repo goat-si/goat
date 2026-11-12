@@ -11,6 +11,7 @@ import { AppBar } from "../../components/ui/AppBar";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
 import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText.types";
 import { useNoteImageSource, useOpenNoteLink } from "./useNoteFiles";
@@ -54,6 +55,8 @@ function NoteContent(props: NoteParams) {
   const environmentId = EnvironmentId.make(props.environmentId);
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const columnMetrics = useNativeColumnLayoutMetrics();
+  const headerInset = Platform.OS === "ios" ? (columnMetrics?.safeArea.top ?? insets.top) : 0;
   const feed = useNotesFeed(environmentId);
   const rows = useNotesOutbox();
   const row = rows.find(
@@ -518,7 +521,11 @@ function NoteContent(props: NoteParams) {
         />
         <KeyboardAvoidingView behavior="padding" className="flex-1">
           {editorFocused ? (
-            <View className="gap-1 border-b border-border px-4 py-2">
+            // Not a scroll view, so it cannot take UIKit's automatic inset under the header.
+            <View
+              className="gap-1 border-b border-border px-4 pb-2"
+              style={{ paddingTop: headerInset + 8 }}
+            >
               <Text accessibilityLiveRegion="polite" className="text-xs text-foreground-muted">
                 {syncText}
               </Text>
@@ -530,6 +537,7 @@ function NoteContent(props: NoteParams) {
             </View>
           ) : (
             <NativeScrollView
+              contentInsetAdjustmentBehavior="automatic"
               style={{ flexGrow: 0, maxHeight: "45%" }}
               keyboardShouldPersistTaps="handled"
               contentContainerClassName="gap-3 p-4"
