@@ -236,4 +236,84 @@ describe("a bot's status previews the newest message its chat shows", () => {
       assert.strictEqual(text, plain);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("past 100 hidden task messages the preview falls back to the newest message", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* TestClock.adjust("1 second");
+      yield* send("run the long migration", "long-task");
+      const { conversationId } = yield* sentInput("run the long migration");
+      for (let step = 1; step <= 101; step++) {
+        yield* record(
+          "progress-" + step,
+          {
+            role: "assistant",
+            text: "Step " + step + " done.",
+            meta: { kind: "status", taskId: TASK },
+          },
+          conversationId,
+        );
+      }
+      const latest = yield* latestOf;
+      assert.deepStrictEqual([latest?.author, latest?.text], ["bot", "Step 101 done."]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("an unreadable file entry in a message costs only that message's names", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* TestClock.adjust("1 second");
+      yield* send("hello", "hello");
+      const { conversationId } = yield* sentInput("hello");
+      const sql = yield* SqlClient.SqlClient;
+      const corrupt = (key: string, attachments: ReadonlyArray<unknown>) =>
+        sql`UPDATE orchestration_v2_projection_messages
+          SET payload_json = json_set(payload_json, '$.attachments', json(${JSON.stringify(attachments)}))
+          WHERE thread_id = ${botThreadId} AND json_extract(payload_json, '$.channel.inputId') = ${key}`;
+      const shot = {
+        type: "image",
+        id: "shot-1",
+        name: "build.png",
+        mimeType: "image/png",
+        sizeBytes: 10,
+      } as const;
+      yield* record(
+        "input:older",
+        {
+          role: "user",
+          text: "",
+          attachments: [shot],
+          meta: { kind: "inbound", inputId: ChannelInputId.make("older") },
+        },
+        conversationId,
+      );
+      yield* corrupt("older", ["oops", { name: 5 }]);
+      yield* record(
+        "reply",
+        {
+          role: "assistant",
+          text: "All good.",
+          meta: { kind: "inbound", inReplyToInputId: ChannelInputId.make("older") },
+        },
+        conversationId,
+      );
+      assert.strictEqual((yield* latestOf)?.text, "All good.");
+
+      yield* record(
+        "input:files",
+        {
+          role: "user",
+          text: "",
+          attachments: [shot],
+          meta: { kind: "inbound", inputId: ChannelInputId.make("files") },
+        },
+        conversationId,
+      );
+      yield* corrupt("files", ["oops", shot, { type: "file", id: "x", name: 7 }]);
+      const latest = yield* latestOf;
+      assert.deepStrictEqual([latest?.author, latest?.text], ["person", "build.png"]);
+    }).pipe(Effect.provide(harness.layer));
+  });
 });

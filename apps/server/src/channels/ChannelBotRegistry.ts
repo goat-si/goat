@@ -32,7 +32,6 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -55,22 +54,20 @@ const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running
 const LATEST_TEXT_LIMIT = 200;
 /** Enough of a message to fill that line once its Markdown is gone. */
 const LATEST_SOURCE_LIMIT = 4000;
-/** How far back the preview looks past messages the main chat hides, a page at a time. */
-const LATEST_PAGE = 20;
-const LATEST_PAGES = 5;
+/**
+ * How far back the preview looks past messages the main chat hides: the newest message alone
+ * (usually it shows), then pages of 20, 101 messages in all.
+ */
+const LATEST_PAGE_SIZES = [1, 20, 20, 20, 20, 20] as const;
 /** What a task tells the main chat even when the task's own messages stay in its view. */
 const TOLD_IN_MAIN_CHAT = new Set(["result", "failure", "question"]);
-/** The names a message's files carry; a file type this build does not know may have none. */
-const decodeAttachmentNames = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Array(Schema.NullOr(Schema.String))),
-);
 
 interface LatestCandidate {
   readonly message_id: string;
   readonly role: string;
   readonly created_at: string;
   readonly text: string;
-  readonly attachment_names: string;
+  readonly attachment_count: number;
   readonly task_id: string | null;
   readonly kind: string | null;
   readonly option_count: number;
@@ -290,26 +287,42 @@ const make = Effect.gen(function* () {
             AND thread_id = ${threadId} AND role = 'user'`.pipe(
           Effect.map(([row]) => row !== undefined && row.task_id === null),
         );
-      const lineOf = (row: LatestCandidate) =>
+      // Read for the one message a preview takes, so an unreadable file entry elsewhere costs
+      // nothing; an entry that is not an object, or a name that is not text, is no name.
+      const attachmentNames = (messageId: string) =>
+        sql<{ readonly name: string }>`
+          SELECT CASE WHEN file.type = 'object' THEN json_extract(file.value, '$.name') END AS name
+          FROM orchestration_v2_projection_messages AS message,
+            json_each(message.payload_json, '$.attachments') AS file
+          WHERE message.message_id = ${messageId}
+            AND CASE WHEN file.type = 'object' THEN json_type(file.value, '$.name') END = 'text'
+          ORDER BY file.key`.pipe(Effect.map((rows) => rows.map((row) => row.name).join(", ")));
+      const contentOf = (row: LatestCandidate) =>
         Effect.gen(function* () {
           const plain = goatBotPreviewText(row.text);
-          if (row.role === "user") {
-            if (row.task_id !== null && row.answers_question === 0) return "";
-            if (plain !== "") return plain;
-            const names = yield* decodeAttachmentNames(row.attachment_names);
-            return names.filter((name) => name !== null).join(", ");
-          }
-          if (plain === "" || row.task_id === null) return plain;
-          if (TOLD_IN_MAIN_CHAT.has(row.kind ?? "") || row.option_count > 0) return plain;
-          return row.reply_to !== null && (yield* sentInMainChat(row.reply_to)) ? plain : "";
+          if (plain !== "" || row.role !== "user" || row.attachment_count === 0) return plain;
+          return yield* attachmentNames(row.message_id);
         });
+      const shownInMainChat = (row: LatestCandidate) =>
+        Effect.gen(function* () {
+          if (row.task_id === null) return true;
+          if (row.role === "user") return row.answers_question === 1;
+          if (TOLD_IN_MAIN_CHAT.has(row.kind ?? "") || row.option_count > 0) return true;
+          return row.reply_to !== null && (yield* sentInMainChat(row.reply_to));
+        });
+      const latestOf = (row: LatestCandidate, line: string) => ({
+        text: Array.from(line).slice(0, LATEST_TEXT_LIMIT).join("").trimEnd(),
+        at: row.created_at,
+        author: row.role === "user" ? ("person" as const) : ("bot" as const),
+      });
+      // Past the bound, the newest message with words or files, as before the main chat's rule.
+      let fallback: { readonly row: LatestCandidate; readonly line: string } | undefined;
       let before: LatestCandidate | undefined;
-      for (let page = 0; page < LATEST_PAGES; page++) {
+      for (const pageSize of LATEST_PAGE_SIZES) {
         const rows = yield* sql<LatestCandidate>`
           SELECT message_id, role, created_at,
             substr(coalesce(json_extract(payload_json, '$.text'), ''), 1, ${LATEST_SOURCE_LIMIT}) AS text,
-            (SELECT json_group_array(json_extract(file.value, '$.name'))
-              FROM json_each(payload_json, '$.attachments') AS file) AS attachment_names,
+            coalesce(json_array_length(payload_json, '$.attachments'), 0) AS attachment_count,
             json_extract(payload_json, '$.channel.taskId') AS task_id,
             json_extract(payload_json, '$.channel.kind') AS kind,
             coalesce(json_array_length(payload_json, '$.channel.options'), 0) AS option_count,
@@ -319,20 +332,17 @@ const make = Effect.gen(function* () {
           WHERE thread_id = ${threadId} AND streaming = 0 AND role IN ('user', 'assistant')
             ${before === undefined ? sql`` : sql`AND (created_at, message_id) < (${before.created_at}, ${before.message_id})`}
           ORDER BY created_at DESC, message_id DESC
-          LIMIT ${LATEST_PAGE}`;
+          LIMIT ${pageSize}`;
         for (const row of rows) {
-          const line = yield* lineOf(row);
+          const line = yield* contentOf(row);
           if (line === "") continue;
-          return {
-            text: Array.from(line).slice(0, LATEST_TEXT_LIMIT).join("").trimEnd(),
-            at: row.created_at,
-            author: row.role === "user" ? ("person" as const) : ("bot" as const),
-          };
+          if (yield* shownInMainChat(row)) return latestOf(row, line);
+          fallback ??= { row, line };
         }
-        if (rows.length < LATEST_PAGE) return undefined;
+        if (rows.length < pageSize) return undefined;
         before = rows.at(-1);
       }
-      return undefined;
+      return fallback === undefined ? undefined : latestOf(fallback.row, fallback.line);
     }).pipe(Effect.orElseSucceed(() => undefined));
 
   const status: ChannelBotRegistry["Service"]["status"] = (
