@@ -991,6 +991,8 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
       SELECTED_VERSION="$supervise_version" ;;
     old-alive)
       printf 'The drained GOAT %s server on the remote host did not exit, so it was left running and not replaced. Reconnect after it stops; see %s.\\n' "$UPGRADE_VERSION" "$LOG_FILE" >&2; exit 1 ;;
+    stuck)
+      printf 'GOAT %s, started as PID %s on the remote host, did not become ready and did not exit after SIGKILL; it was left running and nothing more was started. Check it on the host. See %s.\\n' "$supervise_version" "$supervise_pid" "$LOG_FILE" >&2; exit 1 ;;
     *)
       if [ "$supervise_status" = absent ] && [ "$DRAIN_FORCED" = 1 ]; then
         printf 'GOAT stopped PID %s on the remote host for the approved forced update, but the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now. Check the host and %s; if nothing runs, update again (no approval is needed).\\n' "$UPGRADE_PID" "$LOG_FILE" >&2; exit 1
