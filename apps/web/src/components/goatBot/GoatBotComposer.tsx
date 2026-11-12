@@ -24,6 +24,7 @@ import {
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
+import { HoldsNewBotOpen } from "./newBotOpenHolds";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
@@ -95,7 +96,8 @@ export function GoatBotComposer({
     };
   }, [draftRef]);
   const trimmed = text.trim();
-  const canSubmit = !disabled && (trimmed.length > 0 || attachments.length > 0);
+  const drafted = trimmed.length > 0 || attachments.length > 0;
+  const canSubmit = !disabled && drafted;
   const submit = () => {
     if (!canSubmit) return;
     if (onSend(trimmed, attachments) === false) return;
@@ -167,6 +169,8 @@ export function GoatBotComposer({
 
   return (
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
+      {/* Leaving the chat would drop the draft, focused or not. */}
+      {drafted ? <HoldsNewBotOpen /> : null}
       <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
         {replyTo !== null ? (
           <div className="mx-2 mt-1 flex min-w-0 items-center gap-1 rounded-md border border-border ps-2 text-xs text-muted-foreground">
@@ -239,7 +243,7 @@ export function GoatBotComposer({
             data-accent={canSubmit ? "true" : "false"}
             className={cn(
               "goat-bot-send flex size-7 shrink-0 items-center justify-center rounded-full",
-              trimmed.length === 0 && attachments.length === 0 && "invisible",
+              !drafted && "invisible",
             )}
           >
             <ArrowUpIcon className="size-4" />

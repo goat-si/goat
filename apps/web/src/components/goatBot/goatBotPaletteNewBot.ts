@@ -77,12 +77,12 @@ function startPaletteNewBot(
     return failure;
   };
   // The chat opens only if, when the create answers, GOAT Bot is still on the same environment, the
-  // page is the one the command ran on, and no bot menu and nothing modal, the palette included,
-  // is open.
+  // page is the one the command ran on, and nothing holds the page and nothing modal, the palette
+  // included, is open. Otherwise no roster may be showing the new bot, so a toast says it is ready.
   const open = (bot: BotProfile, sentTo: EnvironmentId) => {
-    if (readGoatBotEnvironmentId() !== sentTo || router.state.location.href !== ranAt) return;
-    if (newBotOpenBlocked()) return;
-    openNewBotChat(router, bot);
+    const stillHere = readGoatBotEnvironmentId() === sentTo && router.state.location.href === ranAt;
+    if (stillHere && !newBotOpenBlocked()) openNewBotChat(router, bot);
+    else toastManager.add(stackedThreadToast({ type: "success", title: `${bot.name} is ready` }));
   };
   settleListedNewBots(environmentId, new Set(listed.map((bot) => bot.botId)));
   startNewBot(environmentId, listed, create, open, paletteOwner, randomUUID);

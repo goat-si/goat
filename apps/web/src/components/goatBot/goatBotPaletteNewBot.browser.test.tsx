@@ -11,7 +11,7 @@ import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { ToastProvider } from "../ui/toast";
 import { disposeGoatBotEnvironment } from "./goatBotEnvironmentLifecycle";
 import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
-import { resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
+import { HoldsNewBotOpen, resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
 
 const decode = Schema.decodeSync(BotProfile);
 const profile = (botId: string, role: "main" | "member", name: string) =>
@@ -72,10 +72,18 @@ function setup() {
   return { send, answer, later };
 }
 
-function App({ dialog = false }: { readonly dialog?: boolean }) {
+function App({
+  dialog = false,
+  held = false,
+}: {
+  readonly dialog?: boolean;
+  readonly held?: boolean;
+}) {
   return (
     <ToastProvider>
       <CommandPalette>{null}</CommandPalette>
+      {/* Like a bot chat's message box with an unsent draft. */}
+      {held ? <HoldsNewBotOpen /> : null}
       {/* Like the pull request checkout dialog: unrelated to bots, with a field being edited. */}
       <Dialog open={dialog}>
         <DialogPopup>
@@ -162,20 +170,25 @@ it.each<[string, (screen: Screen) => Promise<void>]>([
         .toBeVisible();
     },
   ],
-])("nothing opens when, before the answer, %s", async (_case, move) => {
-  const { answer } = setup();
-  await using screen = await renderPalette();
-  const router = screen.router;
-  if (!router) throw new Error("the palette renders under a router");
-  await runNewBot();
-  await move(screen);
-  const before = router.state.location.href;
-  using navigate = vi.spyOn(router, "navigate");
-  answer.resolve({ _tag: "Success", value: { bot: made } });
-  await createdInStore();
-  expect(navigate).not.toHaveBeenCalled();
-  expect(router.state.location.href).toBe(before);
-});
+  ["a draft holds the open", (screen) => screen.rerender(<App held />)],
+])(
+  "nothing opens when, before the answer, %s, and a toast says the bot is ready",
+  async (_case, move) => {
+    const { answer } = setup();
+    await using screen = await renderPalette();
+    const router = screen.router;
+    if (!router) throw new Error("the palette renders under a router");
+    await runNewBot();
+    await move(screen);
+    const before = router.state.location.href;
+    using navigate = vi.spyOn(router, "navigate");
+    answer.resolve({ _tag: "Success", value: { bot: made } });
+    await createdInStore();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(router.state.location.href).toBe(before);
+    await expect.element(page.getByText("New bot 2 is ready")).toBeVisible();
+  },
+);
 
 it("a failed palette create shows a toast, and the item says to retry from Bots", async () => {
   const { answer } = setup();

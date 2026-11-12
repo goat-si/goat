@@ -130,6 +130,7 @@ vi.mock("./useBotRoster", async () => {
 });
 
 import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
+import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
@@ -205,6 +206,13 @@ function Roster({ overlay = null }: { readonly overlay?: Overlay }) {
         <GoatBotMemberContext value={ada}>
           <GoatBotEditBotButton />
           <OpenFile />
+          <GoatBotComposer
+            disabled={false}
+            botName="Ada"
+            placeholder="Message Ada"
+            attachmentSupport={{ maxUploadBytes: 1024 * 1024 }}
+            onSend={() => {}}
+          />
         </GoatBotMemberContext>
       </div>
       <CommandDialog open={overlay === "palette"}>
@@ -385,6 +393,49 @@ it.each<[string, Exclude<Overlay, null>, string]>([
     await screen.rerender(<Roster />);
     await expect.element(screen.getByRole("link", { name: "New bot", exact: true })).toBeVisible();
     expect(router.state.location.pathname).toBe("/bot");
+  },
+);
+
+/** Stages a file in the chat's message box, as pasting one does. */
+function pasteFile(field: Element) {
+  const data = new DataTransfer();
+  data.items.add(new File(["draft notes"], "notes.txt", { type: "text/plain" }));
+  field.dispatchEvent(
+    new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+  );
+}
+
+it.each([
+  ["the roster", "text typed while it waits", "New bot"],
+  ["the roster", "a file staged before the click", "New bot"],
+  ["the palette", "text typed while it waits", "Palette New bot"],
+  ["the palette", "a file staged before the click", "Palette New bot"],
+])(
+  "a create from %s answering while the chat's message box holds %s: nothing opens, the draft stays, and the created row shows",
+  async (_from, draft, trigger) => {
+    const { answer } = setup();
+    await using screen = await render(<Roster />, { router: "/bot" });
+    await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+    const field = screen.getByRole("textbox", { name: "Message Ada" });
+    const staged = screen.getByRole("list", { name: "Attachments" }).getByText("notes.txt");
+    const typed = draft.startsWith("text");
+    if (!typed) {
+      await act(() => pasteFile(field.element()));
+      await expect.element(staged).toBeVisible();
+    }
+    await userEvent.click(screen.getByRole("button", { name: trigger, exact: true }));
+    await expect.element(screen.getByRole("status").getByText("Creating…")).toBeVisible();
+    if (typed) await userEvent.fill(field, "half a thought");
+    const router = screen.router;
+    if (!router) throw new Error("the roster renders under a router");
+    using navigate = vi.spyOn(router, "navigate");
+    answer();
+    await createdInStore();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe("/bot");
+    await expect.element(field).toHaveValue(typed ? "half a thought" : "");
+    if (!typed) await expect.element(staged).toBeVisible();
+    await expect.element(screen.getByRole("link", { name: "New bot", exact: true })).toBeVisible();
   },
 );
 
