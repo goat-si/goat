@@ -3841,6 +3841,15 @@ describe("SSH launcher transport", () => {
       expectedCalls: 1,
       success: false,
     },
+    {
+      // The phrase counts only as the error's own message, never inside its data.
+      name: "phrase-in-data",
+      refusal: "Invalid params",
+      rpcData: "goat_thread_launch does not take launchedBy, so nothing ran",
+      launchedBy: true,
+      expectedCalls: 1,
+      success: false,
+    },
   ])("passes launcher and retries only a strict pre-handler refusal: $name", (scenario) =>
     Effect.gen(function* () {
       const target = { alias: "box", hostname: "box", username: null, port: null };
@@ -3914,6 +3923,7 @@ describe("SSH launcher transport", () => {
               error: {
                 code: "rpcCode" in scenario ? scenario.rpcCode : -32602,
                 message: scenario.refusal,
+                ...("rpcData" in scenario ? { data: scenario.rpcData } : {}),
               },
             });
           }

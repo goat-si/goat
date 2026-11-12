@@ -854,7 +854,7 @@ const make = Effect.gen(function* () {
               ? "host_unavailable"
               : "ssh_failed",
           message: `Calling ${input.tool} on ${input.target.alias} failed: ${describe(error)}`,
-          ...(isLaunchedByRefusal(input.tool, { rpcCode: error.rpcCode, message: describe(error) })
+          ...(isLaunchedByRefusal(input.tool, { rpcCode: error.rpcCode, message: error.rpcMessage })
             ? { launchedByRefused: true }
             : input.tool === "goat_thread_launch"
               ? { launchMayHaveStarted: true }

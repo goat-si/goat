@@ -51,14 +51,14 @@ export const memoryRefusal = (message: string) =>
 export const isLaunchedByRefusal = (
   tool: string,
   said: {
-    readonly message: string;
+    readonly message: string | undefined;
     readonly rpcCode?: number | undefined;
     readonly plainText?: true | undefined;
   },
 ) =>
   tool === "goat_thread_launch" &&
   (said.rpcCode === -32602 || said.plainText === true) &&
-  said.message.includes("goat_thread_launch does not take launchedBy, so nothing ran");
+  said.message?.includes("goat_thread_launch does not take launchedBy, so nothing ran") === true;
 
 export const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
   new SshRemoteDispatchError({ reason, message, ...facts });
