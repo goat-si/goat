@@ -47,6 +47,10 @@
       "types": "./src/boundedLines.ts",
       "import": "./src/boundedLines.ts"
     },
+    "./goatBotPreviewText": {
+      "types": "./src/goatBotPreviewText.ts",
+      "import": "./src/goatBotPreviewText.ts"
+    },
     "./opencodexRelease": {
       "types": "./src/opencodexRelease.ts",
       "import": "./src/opencodexRelease.ts"

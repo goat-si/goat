@@ -316,8 +316,10 @@ export const ChannelGetBotStatusResult = Schema.Struct({
   bot: Schema.NullOr(ChannelBotRef),
   waitingCount: NonNegativeInt,
   /**
-   * The newest message in the bot's conversation, shortened, for a roster row. Absent from
-   * servers before it existed and while the conversation is empty.
+   * The newest message the bot's main chat shows, as one plain line, for a roster row: a task's
+   * own messages stay out as they stay in its view, and a message of only files reads as their
+   * names. Older servers sent the raw text of any message. Absent from servers before it existed
+   * and while the conversation is empty.
    */
   latest: Schema.optionalKey(
     Schema.Struct({

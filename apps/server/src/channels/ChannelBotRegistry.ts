@@ -27,6 +27,7 @@ import {
   MAIN_BOT_ID,
 } from "@goat/contracts";
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
+import { goatBotPreviewText } from "@goat/shared/goatBotPreviewText";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -42,7 +43,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { channelOwnerIdFor } from "./channelOwner.ts";
-import { botFullAccessCommandIdFor, botLaunchIdsFor } from "./channelIds.ts";
+import { botFullAccessCommandIdFor, botLaunchIdsFor, timelineIdsFor } from "./channelIds.ts";
 
 const GOAT_BOT_TITLE = "GOAT bot";
 
@@ -51,6 +52,28 @@ const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 /** A roster row shows one line; the rest of the message stays in the chat. */
 const LATEST_TEXT_LIMIT = 200;
+/** Enough of a message to fill that line once its Markdown is gone. */
+const LATEST_SOURCE_LIMIT = 4000;
+/**
+ * How far back the preview looks past messages the main chat hides: the newest message alone
+ * (usually it shows), then pages of 20, 101 messages in all.
+ */
+const LATEST_PAGE_SIZES = [1, 20, 20, 20, 20, 20] as const;
+/** What a task tells the main chat even when the task's own messages stay in its view. */
+const TOLD_IN_MAIN_CHAT = new Set(["result", "failure", "question"]);
+
+interface LatestCandidate {
+  readonly message_id: string;
+  readonly role: string;
+  readonly created_at: string;
+  readonly text: string;
+  readonly attachment_count: number;
+  readonly task_id: string | null;
+  readonly kind: string | null;
+  readonly option_count: number;
+  readonly answers_question: number;
+  readonly reply_to: string | null;
+}
 
 export class ChannelBotRegistry extends Context.Service<
   ChannelBotRegistry,
@@ -245,27 +268,81 @@ const make = Effect.gen(function* () {
       return visitedAt === null ? undefined : DateTime.formatIso(visitedAt);
     }).pipe(Effect.orElseSucceed(() => undefined));
 
-  /** The newest finished message in the bot's conversation, from its projection. */
+  /**
+   * The newest finished message the bot's main chat shows, as one plain line. The main chat
+   * (buildGoatBotTimeline with conversationOnly) keeps a task's own messages in the task's view
+   * unless they tell its outcome, ask, offer answers, pick an answer, or reply to a message sent
+   * in the main chat; a message of only files reads as their names.
+   */
   const latestMessage = (bot: ChannelBotRef | null) =>
     Effect.gen(function* () {
       if (bot === null || bot.environmentId !== (yield* environment.getEnvironmentId))
         return undefined;
-      const [row] = yield* sql<{
-        readonly role: string;
-        readonly created_at: string;
-        readonly text: string;
-      }>`SELECT role, created_at, json_extract(payload_json, '$.text') AS text
-        FROM orchestration_v2_projection_messages
-        WHERE thread_id = ${bot.threadId} AND streaming = 0 AND role IN ('user', 'assistant')
-          AND length(trim(coalesce(json_extract(payload_json, '$.text'), ''))) > 0
-        ORDER BY created_at DESC, message_id DESC
-        LIMIT 1`;
-      if (row === undefined) return undefined;
-      return {
-        text: row.text.trim().slice(0, LATEST_TEXT_LIMIT),
+      const threadId = bot.threadId;
+      const sentInMainChat = (inputId: string) =>
+        sql<{ readonly task_id: string | null }>`
+          SELECT json_extract(payload_json, '$.channel.taskId') AS task_id
+          FROM orchestration_v2_projection_messages
+          WHERE message_id = ${timelineIdsFor(threadId, "input:" + inputId, "").messageId}
+            AND thread_id = ${threadId} AND role = 'user'`.pipe(
+          Effect.map(([row]) => row !== undefined && row.task_id === null),
+        );
+      // Read for the one message a preview takes, so an unreadable file entry elsewhere costs
+      // nothing; an entry that is not an object, or a name that is not text, is no name.
+      const attachmentNames = (messageId: string) =>
+        sql<{ readonly name: string }>`
+          SELECT CASE WHEN file.type = 'object' THEN json_extract(file.value, '$.name') END AS name
+          FROM orchestration_v2_projection_messages AS message,
+            json_each(message.payload_json, '$.attachments') AS file
+          WHERE message.message_id = ${messageId}
+            AND CASE WHEN file.type = 'object' THEN json_type(file.value, '$.name') END = 'text'
+          ORDER BY file.key`.pipe(Effect.map((rows) => rows.map((row) => row.name).join(", ")));
+      const contentOf = (row: LatestCandidate) =>
+        Effect.gen(function* () {
+          const plain = goatBotPreviewText(row.text);
+          if (plain !== "" || row.role !== "user" || row.attachment_count === 0) return plain;
+          return yield* attachmentNames(row.message_id);
+        });
+      const shownInMainChat = (row: LatestCandidate) =>
+        Effect.gen(function* () {
+          if (row.task_id === null) return true;
+          if (row.role === "user") return row.answers_question === 1;
+          if (TOLD_IN_MAIN_CHAT.has(row.kind ?? "") || row.option_count > 0) return true;
+          return row.reply_to !== null && (yield* sentInMainChat(row.reply_to));
+        });
+      const latestOf = (row: LatestCandidate, line: string) => ({
+        text: Array.from(line).slice(0, LATEST_TEXT_LIMIT).join("").trimEnd(),
         at: row.created_at,
         author: row.role === "user" ? ("person" as const) : ("bot" as const),
-      };
+      });
+      // Past the bound, the newest message with words or files, as before the main chat's rule.
+      let fallback: { readonly row: LatestCandidate; readonly line: string } | undefined;
+      let before: LatestCandidate | undefined;
+      for (const pageSize of LATEST_PAGE_SIZES) {
+        const rows = yield* sql<LatestCandidate>`
+          SELECT message_id, role, created_at,
+            substr(coalesce(json_extract(payload_json, '$.text'), ''), 1, ${LATEST_SOURCE_LIMIT}) AS text,
+            coalesce(json_array_length(payload_json, '$.attachments'), 0) AS attachment_count,
+            json_extract(payload_json, '$.channel.taskId') AS task_id,
+            json_extract(payload_json, '$.channel.kind') AS kind,
+            coalesce(json_array_length(payload_json, '$.channel.options'), 0) AS option_count,
+            json_type(payload_json, '$.channel.answersQuestionId') IS NOT NULL AS answers_question,
+            json_extract(payload_json, '$.channel.inReplyToInputId') AS reply_to
+          FROM orchestration_v2_projection_messages
+          WHERE thread_id = ${threadId} AND streaming = 0 AND role IN ('user', 'assistant')
+            ${before === undefined ? sql`` : sql`AND (created_at, message_id) < (${before.created_at}, ${before.message_id})`}
+          ORDER BY created_at DESC, message_id DESC
+          LIMIT ${pageSize}`;
+        for (const row of rows) {
+          const line = yield* contentOf(row);
+          if (line === "") continue;
+          if (yield* shownInMainChat(row)) return latestOf(row, line);
+          fallback ??= { row, line };
+        }
+        if (rows.length < pageSize) return undefined;
+        before = rows.at(-1);
+      }
+      return fallback === undefined ? undefined : latestOf(fallback.row, fallback.line);
     }).pipe(Effect.orElseSucceed(() => undefined));
 
   const status: ChannelBotRegistry["Service"]["status"] = (
