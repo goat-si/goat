@@ -34,14 +34,16 @@ type intro struct {
 // introductions works out, from the found and admit records of recs, which keys are introduced and in
 // which lineage (ADR-0026 "Introducer", "Depth", "Lineage"). It reads no record's past, and a key's
 // lineage depends only on its introducing admit and the lineage of that admit's signer. With limit set
-// it also applies the founder-admit and per-lineage admit shares and returns the admits it kept.
-func introductions(recs []*Record, limit bool) (map[string]intro, []*Record) {
+// it also applies the founder-admit and per-lineage admit shares and returns the admits it kept. The
+// founder is the signer of meshID's own found record; any other found record is ignored.
+func introductions(meshID string, recs []*Record, limit bool) (map[string]intro, []*Record) {
 	var founder string
 	var kept []*Record
 	for _, r := range recs {
-		if r.B.Type == TypeFound && r.B.Card != nil && r.B.Card.C.SignPub == r.B.By {
+		if r.B.Type == TypeFound && r.B.Card != nil && r.B.Card.C.SignPub == r.B.By && MeshIDOf(r) == meshID {
 			founder = r.B.By
 			kept = append(kept, r)
+			break
 		}
 	}
 	keys := map[string]intro{}
@@ -121,9 +123,9 @@ func nonceLineage(nonce string) int {
 	return 1 + int(binary.BigEndian.Uint16(sum[:2])%(MaxLineages-1))
 }
 
-// Lineages gives each record of recs whose signer is introduced the lineage it is charged to.
-func Lineages(recs []*Record) map[string]int {
-	keys, _ := introductions(recs, false)
+// Lineages gives each record of recs whose signer is introduced in meshID the lineage it is charged to.
+func Lineages(meshID string, recs []*Record) map[string]int {
+	keys, _ := introductions(meshID, recs, false)
 	out := map[string]int{}
 	for _, r := range recs {
 		if k, ok := keys[r.B.By]; ok {

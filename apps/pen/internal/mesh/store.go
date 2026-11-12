@@ -497,7 +497,7 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 	}
 	if f.Shares {
 		// Another process may have written records this store has not seen: keep the shares of both.
-		kept, _ := selectShares(recs)
+		kept, _ := selectShares(s.MeshID, recs)
 		recs = recs[:0]
 		for _, r := range kept {
 			recs = append(recs, r)
