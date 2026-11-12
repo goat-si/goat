@@ -44,6 +44,10 @@ const BORROWED = `<button>Card <input value="4111111111111111"></button>
 <a href="#">Card <div role="textbox" contenteditable="true" placeholder="hint">draft note</div></a>
 <div role="button" tabindex="0">Card <div role="textbox" contenteditable="true" placeholder="hint">draft note</div></div>
 <button>Card <div role="textbox" contenteditable="true">draft note<img alt="x"></div></button>
+<button>Card <div role="textbox" contenteditable="true" aria-owns="owned">draft note</div></button>
+<div id="owned" role="option">Owned</div>
+<button>Card <div role="textbox" contenteditable="true">draft note <ul role="listbox"><li role="option" aria-label="Inner"></li></ul></div></button>
+<button>Card <div role="textbox" contenteditable="true">draft note <input aria-label="Inner" placeholder="hint" value="typed"></div></button>
 <button>Card <select><option>Visa</option></select></button>
 <button aria-label="Pay now">Card <input value="4111111111111111"></button>
 <ul role="listbox" aria-label="Fruits"><li role="option">Apple</li></ul>`;
@@ -159,12 +163,12 @@ it("a button, link or labelled box is never named after what a field or editor u
       const names = interactiveElements
         .filter((element) => ["button", "link", "generic"].includes(element.role ?? ""))
         .map((element) => element.name);
-      expect(names).toEqual([...Array.from({ length: 15 }, () => "Card"), "Pay now"]);
+      expect(names).toEqual([...Array.from({ length: 18 }, () => "Card"), "Pay now"]);
     }
     const lines = String(narrow.accessibilityTree)
       .split("\n")
       .filter((line) => /^- (?:button|link|generic) /.test(line));
-    expect(lines).toHaveLength(16);
+    expect(lines).toHaveLength(19);
     for (const line of lines)
       expect(line).toMatch(/^- (?:button|link|generic) "(?:Card|Pay now)" \[ref=/);
   }));
@@ -182,7 +186,9 @@ it("a name the page wrote stays when nothing under the element shows it", () =>
     expect(String(narrow.accessibilityTree)).toMatch(/^- button "Pay now" \[ref=/m);
     expect(String(narrow.accessibilityTree)).toMatch(/^- listbox "Fruits" \[ref=/m);
     const { interactiveElements } = await take(page, cdp);
-    expect(interactiveElements.find((element) => element.role === "listbox")?.name).toBe("Fruits");
+    expect(interactiveElements).toContainEqual(
+      expect.objectContaining({ role: "listbox", name: "Fruits" }),
+    );
   }));
 
 it("refs, boxes and pointer cursors written in page text never stand in for an element's own", () =>
