@@ -1,4 +1,5 @@
 // @effect-diagnostics globalTimers:off -- Poll TCC only while the native permission helper is open.
+import { CUA_UNANSWERED_AFTER } from "@goat/contracts";
 import * as Electron from "electron";
 import { MAC_PERMISSION_HELPER_CHANNEL } from "../ipc/channels.ts";
 
@@ -49,6 +50,9 @@ export interface MacPermissionTarget {
 function helperHtml(permission: MacPermission, icon: string, name: string) {
   const title = MAC_PERMISSION_TITLES[permission];
   const label = escapeHtml(name);
+  const waiting = `Drag ${label} into the list, then turn it on`;
+  // The page runs no script: the preload swaps the header between these two lines.
+  const unanswered = `${label} is not answering. See GOAT for why.`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
 <title>Set up ${title}</title><style>
@@ -69,7 +73,7 @@ button:focus-visible { outline: 2px solid #007aff; outline-offset: -2px; }
 img { width: 32px; height: 32px; pointer-events: none; }
 </style></head><body><main id="panel">
 <button id="close" aria-label="Close permission helper">×</button>
-<header>Drag ${label} into the list, then turn it on</header>
+<header id="status" data-waiting="${waiting}" data-unanswered="${unanswered}">${waiting}</header>
 <button id="app" draggable="true" aria-label="Drag ${label} to System Settings, or click to reveal in Finder"><img src="${escapeHtml(icon)}" alt="" draggable="false">${label}<span>Click to show in Finder</span></button>
 </main></body></html>`;
 }
@@ -107,7 +111,15 @@ export class MacPermissionHelper {
   ) {
     this.close();
     const generation = this.generation;
-    if (await isGranted()) return;
+    // A read that fails is not a grant that is off: the panel opens and counts it.
+    let failures = 0;
+    const alreadyGranted = await Promise.resolve()
+      .then(isGranted)
+      .catch(() => {
+        failures = 1;
+        return false;
+      });
+    if (alreadyGranted) return;
     if (generation !== this.generation) return;
     const bundle = target?.bundlePath ?? macAppBundlePath(Electron.app.getPath("exe"));
     if (!bundle) return;
@@ -149,12 +161,23 @@ export class MacPermissionHelper {
       }
     };
     let checking = false;
+    let unanswered = false;
+    const say = (state: "waiting" | "unanswered") => {
+      unanswered = state === "unanswered";
+      if (!window.isDestroyed()) window.webContents.send(MAC_PERMISSION_HELPER_CHANNEL, state);
+    };
     const check = async () => {
       if (checking || window.isDestroyed()) return;
       checking = true;
       try {
-        if ((await isGranted()) && !window.isDestroyed()) finish();
+        const granted = await isGranted();
+        failures = 0;
+        if (window.isDestroyed()) return;
+        if (granted) finish();
+        else if (unanswered) say("waiting");
       } catch {
+        failures += 1;
+        if (failures >= CUA_UNANSWERED_AFTER && !unanswered) say("unanswered");
       } finally {
         checking = false;
       }

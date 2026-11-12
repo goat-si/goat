@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { computerUseReady } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { afterEach, vi } from "vite-plus/test";
+import { ComputerUseHelperError } from "./ComputerUseHelper.ts";
 import {
   fixture,
   helperTools,
@@ -199,6 +200,36 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         ]);
       }),
     ),
+  );
+
+  it.effect(
+    "a check whose helper does not answer about its grants says so, and keeps the grants it last read",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          assert.isTrue((yield* test.verify).verified);
+
+          yield* test.answerAsHelper({
+            granted: true,
+            fails: new ComputerUseHelperError("timeout", "GOAT Computer Use did not answer."),
+          });
+          const detail =
+            "GOAT Computer Use did not answer: it took too long. Its permissions could not be read, so this is not a missing permission. Try again.";
+          assert.deepEqual((yield* test.verify).steps, [{ id: "grants", ok: false, detail }]);
+          // Nothing started without an answer, and no grant macOS gave reads as taken away.
+          assert.lengthOf(test.helperLaunches, 1);
+          const after = test.readiness.at(-1)?.readiness;
+          assert.deepEqual(after?.grants, { accessibility: "granted", screenCapture: "granted" });
+          assert.equal(after?.capture, "pending");
+          assert.include(after?.reasons ?? [], detail);
+          assert.notInclude(after?.reasons.join(" ") ?? "", "not on for");
+        }),
+      ),
   );
 
   it.effect(
