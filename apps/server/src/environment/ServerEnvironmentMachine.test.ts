@@ -28,6 +28,7 @@ function disk(
     readonly nonce?: string;
     readonly createdByAnotherServer?: string | undefined;
     readonly linkDenied?: boolean;
+    readonly readDenied?: boolean;
   } = {},
 ) {
   const files = new Map([["/etc/machine-id", IMAGE_MACHINE_ID + "\n"]]);
@@ -35,6 +36,9 @@ function disk(
   let racing = options.createdByAnotherServer;
   const fileSystem = FileSystem.makeNoop({
     readFileString: (path) => {
+      if (path === NONCE && options.readDenied) {
+        return Effect.fail(failure("PermissionDenied", "readFile"));
+      }
       // Another server creates the file between this server's first read and its own create.
       if (path === NONCE && racing !== undefined) {
         files.set(NONCE, racing);
@@ -131,14 +135,25 @@ it.layer(layer)("detectServerMachineIdentity", (it) => {
     }),
   );
 
-  it.effect("an unusable nonce leaves the server grouped by its machine id alone", () =>
+  it.effect("an unusable nonce is reported and leaves the server grouped by machine id", () =>
     Effect.gen(function* () {
       const expected = yield* startServerOn(disk().fileSystem);
-      const corrupt = yield* startServerOn(disk({ nonce: "not a nonce\n" }).fileSystem);
-      const denied = yield* startServerOn(disk({ linkDenied: true }).fileSystem);
+      const cases = [
+        [{ nonce: "" }, "is empty"],
+        [{ nonce: "not a nonce\n" }, "is not a GOAT nonce"],
+        [{ readDenied: true }, "cannot be read"],
+        [{ linkDenied: true }, "could not be created"],
+        // The racing server that won wrote nothing usable.
+        [{ createdByAnotherServer: "" }, "is empty"],
+      ] as const;
 
-      for (const identity of [corrupt, denied]) {
-        expect(identity).toEqual({ ...expected, machineInstallId: null });
+      for (const [options, problem] of cases) {
+        const { fileSystem } = disk(options);
+        const reported = yield* ensureServerMachineNonce(HOME + "/.goat").pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+        );
+        expect(reported).toContain(problem);
+        expect(yield* startServerOn(fileSystem)).toEqual({ ...expected, machineInstallId: null });
       }
     }),
   );

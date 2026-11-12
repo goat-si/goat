@@ -214,15 +214,27 @@ const nonceFile = Effect.fn("machineNonceFile")(function* (directory: string) {
   return path.join(directory, MACHINE_NONCE_FILE);
 });
 
-const nonceWarning = (file: string, problem: string) =>
-  Effect.logWarning(
-    `${file} ${problem}; this server cannot tell machines cloned from one image apart.`,
+/** The nonce, `null` when no file exists yet, or what makes the file unusable. */
+const readMachineNonce = Effect.fn("readMachineNonce")(function* (file: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  return yield* fileSystem.readFileString(file).pipe(
+    Effect.map((text): { readonly nonce: string } | { readonly problem: string } => {
+      const nonce = text.trim();
+      if (MACHINE_NONCE_PATTERN.test(nonce)) return { nonce };
+      return { problem: nonce === "" ? "is empty" : "is not a GOAT nonce" };
+    }),
+    Effect.catch((error) =>
+      Effect.succeed(
+        error.reason._tag === "NotFound" ? null : { problem: "cannot be read: " + error.message },
+      ),
+    ),
   );
+});
 
 /**
  * A random value in the nonce directory shared by this account's servers. Images and VM forks
  * copy the OS machine identifier and often the boot id, but a clone gets its own nonce unless the
- * directory was in the image. Only the server command creates it, so tests never write.
+ * directory was in the image. Returns why it is unusable, which is also logged, or null.
  */
 export const ensureServerMachineNonce = Effect.fn("ensureServerMachineNonce")(function* (
   directory: string,
@@ -230,13 +242,8 @@ export const ensureServerMachineNonce = Effect.fn("ensureServerMachineNonce")(fu
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
   const file = yield* nonceFile(directory);
-  const existing = yield* readOptionalFile(file);
-  if (existing !== null) {
-    if (!MACHINE_NONCE_PATTERN.test(existing)) yield* nonceWarning(file, "is not a GOAT nonce");
-    return;
-  }
   // Link a complete file into place so a racing server sees nothing or the winner's nonce.
-  yield* Effect.gen(function* () {
+  const create = Effect.gen(function* () {
     const fresh = Hex.encode(yield* crypto.randomBytes(16));
     const staged = file + "." + fresh;
     yield* fileSystem.makeDirectory(directory, { recursive: true });
@@ -248,7 +255,16 @@ export const ensureServerMachineNonce = Effect.fn("ensureServerMachineNonce")(fu
       ),
       Effect.ensuring(fileSystem.remove(staged).pipe(Effect.ignore)),
     );
-  }).pipe(Effect.catch((error) => nonceWarning(file, "could not be created: " + error.message)));
+    return (yield* readMachineNonce(file)) ?? { problem: "was not created" };
+  }).pipe(
+    Effect.catch((error) => Effect.succeed({ problem: "could not be created: " + error.message })),
+  );
+  const result = (yield* readMachineNonce(file)) ?? (yield* create);
+  if (!("problem" in result)) return null;
+  yield* Effect.logWarning(
+    `${file} ${result.problem}; this server cannot tell machines cloned from one image apart.`,
+  );
+  return result.problem;
 });
 
 /**
@@ -262,13 +278,13 @@ export const detectServerMachineIdentity = Effect.fn("detectServerMachineIdentit
   const identifier = (yield* readOsMachineIdentifier())?.toLowerCase() ?? null;
   if (identifier === null) return { machineId: null, machineUserId: null, machineInstallId: null };
   const home = yield* HostProcess.HomeDirectory;
-  const nonce = yield* readOptionalFile(yield* nonceFile(nonceDirectory));
+  const nonce = yield* readMachineNonce(yield* nonceFile(nonceDirectory));
   return {
     machineId: yield* hashIdentity("goat-machine-id:v1:" + identifier),
     machineUserId: yield* hashIdentity("goat-machine-user:v1:" + identifier + "\u0000" + home),
     machineInstallId:
-      nonce !== null && MACHINE_NONCE_PATTERN.test(nonce)
-        ? yield* hashIdentity("goat-machine-install:v1:" + nonce)
+      nonce !== null && "nonce" in nonce
+        ? yield* hashIdentity("goat-machine-install:v1:" + nonce.nonce)
         : null,
   };
 });
