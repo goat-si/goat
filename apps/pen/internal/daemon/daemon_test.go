@@ -377,6 +377,45 @@ func TestTCPStreamCarriesBytesToALocalPortAndRefusedPortCloses4404(t *testing.T)
 	}
 }
 
+func TestATCPStreamTheRelayCutsResetsTheLocalServiceInsteadOfEndingItCleanly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	ended := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			ended <- err
+			return
+		}
+		defer c.Close()
+		c.Write([]byte("partial"))
+		_, err = c.Read(make([]byte, 1))
+		ended <- err
+	}()
+	sec, err := OpenTCP(ctx, []string{rs.URL}, b.id, memberNamed(t, b, "a"), ln.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sec.Recv(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !rs.DropUplink(a.id.NodeID()) {
+		t.Fatal("a has no uplink to drop")
+	}
+	if err := <-ended; err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("the service read %v after the relay cut its stream; want a reset, not the end of the stream", err)
+	}
+}
+
 // gate holds a link's second send (the key confirmation) until release is closed.
 type gate struct {
 	relay.Conn

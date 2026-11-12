@@ -15,6 +15,7 @@ import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotOpenFileContext } from "./GoatBotReplyFiles";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
+import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
@@ -146,6 +147,7 @@ export function GoatBotChatView({
   const avatar = useGoatBotAvatar();
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const bot = availability.kind === "ready" ? availability.bot : null;
+  const routineLanding = useGoatBotRoutineLanding(bot, panelOpen, () => setPanelOpen(true));
   const removed = removal !== null;
   const ready = availability.kind === "ready" && !removed;
   const canSend = !removed && canSendToGoatBot(availability, canOperate);
@@ -382,7 +384,7 @@ export function GoatBotChatView({
                         : undefined
                     }
                     environmentId={environmentId}
-                    onOpenHome={bot ? () => setPanelOpen(true) : undefined}
+                    onOpenRoutine={routineLanding.openRoutine}
                     taskThreads={supportsTaskThreads}
                     retryEnvironmentId={supportsTaskRetry ? environmentId : null}
                     replyingSince={removed ? null : replyingSince}
@@ -476,6 +478,7 @@ export function GoatBotChatView({
             onRetryInput={onRetryInput}
             openFile={shownFile?.file.relativePath ?? null}
             onOpenFile={openFile}
+            routineLanding={routineLanding.landing}
           />
         </aside>
       )}
@@ -493,6 +496,7 @@ export function GoatBotChatView({
               onRetryInput={onRetryInput}
               openFile={shownFile?.file.relativePath ?? null}
               onOpenFile={openFile}
+              routineLanding={routineLanding.landing}
             />
           </SheetPopup>
         </Sheet>

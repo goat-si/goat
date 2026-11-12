@@ -37,6 +37,21 @@ type Link interface {
 
 var errProtocol = &relay.CloseError{Code: wire.CodeCrypto}
 
+// deliveredError is a Splice error that came after the peer's whole stream had reached w.
+type deliveredError struct{ err error }
+
+func (e *deliveredError) Error() string { return e.err.Error() }
+func (e *deliveredError) Unwrap() error { return e.err }
+
+// Delivered reports whether err is from a Splice that had already written everything the peer sent, up to its FIN,
+// to w, so only the other direction was cut. A write still in progress when the error arrived counts as not
+// delivered: Splice cannot wait on a reader that may never read. The decision is conservative: a caller that resets
+// may drop bytes w had accepted but its reader had not read, and never ends a short stream cleanly.
+func Delivered(err error) bool {
+	var d *deliveredError
+	return errors.As(err, &d)
+}
+
 // Splice copies r into the session and the session into w. It ends cleanly (nil) when both sides
 // sent FIN and the peer's data reached w; closeWrite (may be nil) half-closes w at the peer's FIN.
 // On error it closes the link and returns at once; the caller closes r and w to release the copy.
@@ -59,6 +74,9 @@ func Splice(ctx context.Context, link Link, r io.Reader, w io.Writer, closeWrite
 				code = wire.CodeOffline
 			}
 			link.Close(code)
+			if s.delivered() {
+				return &deliveredError{err}
+			}
 			return err
 		}
 	}
@@ -78,6 +96,15 @@ type splice struct {
 	queue    [][]byte
 	peerFin  bool
 	sentFin  bool
+	writing  bool // the writer holds DATA taken from queue that w has not yet returned from
+}
+
+// delivered reports whether the peer sent FIN and every DATA before it has been written to w. It reads the state
+// itself, not the writer's progress, so a writer still busy after its last write (a CREDIT) does not hide it.
+func (s *splice) delivered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerFin && len(s.queue) == 0 && !s.writing
 }
 
 func (s *splice) fail(err error) {
@@ -230,10 +257,14 @@ func (s *splice) writer(w io.Writer, closeWrite func() error) error {
 		p := s.queue[0]
 		s.queue[0] = nil
 		s.queue = s.queue[1:]
+		s.writing = true
 		s.mu.Unlock()
 		if _, err := w.Write(p); err != nil {
 			return err
 		}
+		s.mu.Lock()
+		s.writing = false
+		s.mu.Unlock()
 		consumed += len(p)
 		if consumed >= CreditEvery {
 			// Best effort: a peer that finished may close before our CREDIT; a dead link surfaces
