@@ -1,7 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ChannelOutboundMessage } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
@@ -9,9 +11,15 @@ import { claimDueStatement } from "./channelDeliveryLedger.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { progressStatements } from "./channelProgressMessages.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
-import { makeProgressHarness, startSlackTask } from "./testkit/slackProgressHarness.ts";
+import {
+  makeProgressHarness,
+  startSlackTask,
+  type OutboxRow,
+} from "./testkit/slackProgressHarness.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
+const textOf = (row: OutboxRow) => decode(row.message_json).text;
 
 describe("progress writes across a restart", () => {
   it.effect(
@@ -38,7 +46,7 @@ describe("progress writes across a restart", () => {
         const copies = yield* t.sql<{ readonly n: number }>`SELECT COUNT(*) AS n FROM channel_outbox
           WHERE cause_key LIKE 'undelivered:%'`;
         assert.strictEqual(copies[0]?.n, 0);
-        yield* t.finish("");
+        yield* t.finishSilently();
         assert.deepStrictEqual(h.calls.at(-1), {
           operation: "edit",
           ts: t.ack.ts!,
@@ -85,9 +93,17 @@ describe("progress writes across a restart", () => {
           owner: t.runtime.ownerToken,
           now: yield* nowIso,
         });
-        yield* t.report("Done pruning.");
+        yield* t.milestone("Done pruning.");
         const edits = yield* t.ofOperation("edit");
-        assert.strictEqual(edits[1]?.state, "superseded");
+        assert.deepStrictEqual(
+          edits.map((row) => [textOf(row), row.state]),
+          [
+            ["Checking images.", "delivered"],
+            ["Pruning images.", "superseded"],
+            ["Done pruning.", "delivered"],
+          ],
+        );
+        assert.strictEqual(h.calls.at(-1)?.text, t.ack.text + "\n\nDone pruning.");
       }).pipe(Effect.provide(h.layer));
     },
   );
@@ -196,10 +212,15 @@ describe("progress writes across a restart", () => {
       const claimed = yield* ledger.claimDue({
         owner: t.runtime.ownerToken,
         now: yield* nowIso,
-        limit: 1,
+        limit: 10,
         receiptsOnly: false,
       });
-      assert.strictEqual(claimed.deliveries[0]?.progress?.operation, "delete");
+      assert.deepStrictEqual(
+        claimed.deliveries.flatMap((delivery) =>
+          delivery.progress === undefined ? [] : [delivery.progress.operation],
+        ),
+        ["delete"],
+      );
       yield* ledger.settleInterruptedDeliveries({
         owner: t.runtime.ownerToken,
         now: yield* nowIso,
@@ -257,7 +278,8 @@ describe("one Slack write per progress message at a time", () => {
       yield* worker.deliverDue(t.runtime.ownerToken);
       yield* Deferred.await(held.reached);
       yield* t.report("Step two.");
-      yield* worker.deliverDue(t.runtime.ownerToken);
+      // A pass narrates the milestone and claims it, without waiting on the held edit.
+      yield* t.runtime.runPass;
       yield* TestClock.adjust("15 seconds");
       // drain would wait on the held edit, so the worker is driven directly.
       yield* worker.deliverDue(t.runtime.ownerToken);
@@ -358,22 +380,29 @@ describe("progress queries read the outbox through its indexes", () => {
         }),
       };
       for (const [name, statement] of Object.entries(statements)) {
-        const plan = (yield* t.sql<{
+        const plan = yield* t.sql<{
+          readonly id: number;
+          readonly parent: number;
           readonly detail: string;
-        }>`EXPLAIN QUERY PLAN ${statement}`).map((row) => row.detail);
-        const lines = name + "\n" + plan.join("\n");
+        }>`EXPLAIN QUERY PLAN ${statement}`;
+        const details = plan.map((row) => row.detail);
+        const lines = name + "\n" + details.join("\n");
         assert.isTrue(
-          plan.some(
-            (detail) => detail.includes("channel_outbox") || /^SEARCH \w+ USING/.test(detail),
-          ),
+          details.some((detail) => /^SEARCH \w+ USING/.test(detail)),
           lines,
         );
         assert.isFalse(
-          plan.some((detail) => detail.startsWith("SCAN") && detail !== "SCAN CONSTANT ROW"),
+          details.some((detail) => detail.startsWith("SCAN") && detail !== "SCAN CONSTANT ROW"),
           lines,
         );
-        assert.isFalse(
-          plan.some((detail) => detail.includes("TEMP B-TREE")),
+        // Only the claim sorts, and only its own due rows, oldest first, as it did before.
+        const dueSelection = plan
+          .filter((row) => name.startsWith("claim") && row.detail.startsWith("LIST SUBQUERY"))
+          .map((row) => row.id);
+        assert.isTrue(
+          plan
+            .filter((row) => row.detail.includes("TEMP B-TREE"))
+            .every((row) => dueSelection.includes(row.parent)),
           lines,
         );
       }

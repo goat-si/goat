@@ -12,6 +12,7 @@ import type {
   ChannelGatewayError,
   ChannelKind,
   ChannelOutboundMessage,
+  ChannelReplyAddress,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -19,6 +20,17 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
+
+/**
+ * How a channel took an edit or removal of a message GOAT already sent. None of these says
+ * anything about the connection: a refusal only ends that one message's progress.
+ */
+export type ChannelProgressResult =
+  | { readonly _tag: "done" }
+  | { readonly _tag: "refused" }
+  | { readonly _tag: "rate_limited"; readonly retryAfterSeconds: number }
+  | { readonly _tag: "unknown" }
+  | { readonly _tag: "skipped" };
 
 export interface ChannelTransport {
   readonly kind: ChannelKind;
@@ -29,6 +41,16 @@ export interface ChannelTransport {
   readonly send: (
     message: ChannelOutboundMessage,
   ) => Effect.Effect<ChannelDeliveryReceipt, ChannelGatewayError>;
+  /** Replaces the text of a message this transport sent. Channels that cannot edit omit it. */
+  readonly edit?: (input: {
+    readonly message: ChannelOutboundMessage;
+    readonly externalMessageId: string;
+  }) => Effect.Effect<ChannelProgressResult>;
+  /** Deletes a message this transport sent. Channels that cannot delete omit it. */
+  readonly remove?: (input: {
+    readonly destination: ChannelReplyAddress;
+    readonly externalMessageId: string;
+  }) => Effect.Effect<ChannelProgressResult>;
 }
 
 export class ChannelTransportRegistry extends Context.Service<

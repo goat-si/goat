@@ -2,22 +2,25 @@
  * A Slack turn over the real ledger and worker, with a fake Slack transport that returns a ts for
  * every post and records each edit and removal of a message GOAT already sent.
  */
-import type {
-  ChannelGatewayError,
+import {
   ChannelOutboundMessage,
-  ChannelReceptionInput,
+  ProviderInstanceId,
+  type ChannelGatewayError,
+  type ChannelReceptionInput,
 } from "@goat/contracts";
-import { ProviderInstanceId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ChannelGateway from "../ChannelGateway.ts";
+import * as ChannelLedger from "../ChannelLedger.ts";
 import * as ChannelRuntime from "../ChannelRuntime.ts";
 import * as ChannelTransport from "../ChannelTransport.ts";
 import * as ChannelWorkerReports from "../ChannelWorkerReports.ts";
+import { commitTransition } from "../channelTaskWrites.ts";
 import { receptionDecisionChannels } from "./channelReceptionHarness.ts";
 import {
   defaultScript,
@@ -72,16 +75,15 @@ export const makeProgressHarness = () => {
   const postFailures: Array<ChannelGatewayError> = [];
   const holds: Array<Hold> = [];
   let count = 0;
-  const progress = (call: ProgressCall) =>
-    Effect.gen(function* () {
-      calls.push(call);
-      const hold = holds.shift();
-      if (hold !== undefined) {
-        yield* Deferred.succeed(hold.reached, undefined);
-        yield* Deferred.await(hold.open);
-      }
-      return results.shift() ?? { _tag: "done" as const };
-    });
+  const progress = Effect.fn("fakeSlack.progress")(function* (call: ProgressCall) {
+    calls.push(call);
+    const hold = holds.shift();
+    if (hold !== undefined) {
+      yield* Deferred.succeed(hold.reached, undefined);
+      yield* Deferred.await(hold.open);
+    }
+    return results.shift() ?? { _tag: "done" as const };
+  });
   const transport = Layer.effectDiscard(
     Effect.gen(function* () {
       const registry = yield* ChannelTransport.ChannelTransportRegistry;
@@ -142,93 +144,106 @@ export interface OutboxRow {
   readonly next_attempt_at: string;
 }
 
+const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
+
 /** A Slack request whose acknowledgement reached the person, ready for milestones. */
-export const startSlackTask = (
+export const startSlackTask = Effect.fn("startSlackTask")(function* (
   h: ProgressHarness,
   key: string,
   text = "look: why is the disk full?",
-) =>
-  Effect.gen(function* () {
-    yield* setupBot;
-    yield* linkSlackUser();
-    const gateway = yield* ChannelGateway.ChannelGateway;
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-    const sql = yield* SqlClient.SqlClient;
-    yield* gateway.ingest(slackInput(text, key), slackContext);
-    yield* runtime.drain;
-    yield* reports.reconcile(runtime.ownerToken);
-    const task = yield* onlyTask;
-    const workerThreadId = task.worker?.threadId;
-    if (workerThreadId === undefined) return yield* Effect.die(new Error("the task has no worker"));
-    const ackKey = "reply:" + task.originInputId;
-    const [ack] = yield* sql<{
-      readonly delivery_id: string;
-      readonly message_json: string;
-      readonly external_message_id: string | null;
-      readonly state: string;
-    }>`SELECT delivery_id, message_json, external_message_id, state FROM channel_outbox
-      WHERE cause_key = ${ackKey}`;
-    if (ack === undefined) return yield* Effect.die(new Error("no acknowledgement row"));
-    let milestones = 0;
-    /** Reports a milestone without running the channel loop. */
-    const report = (summary: string) =>
-      reports.report(
-        {
-          taskId: task.taskId,
-          generation: task.generation,
-          eventId: (key + "-m" + ++milestones) as never,
-          status: "running",
-          summary,
-        },
-        workerThreadId,
-      );
-    /** Reports a milestone and lets the channel loop run. */
-    const milestone = (summary: string) => report(summary).pipe(Effect.andThen(runtime.drain));
-    /** Ends the worker's run with this summary and lets the channel loop run. */
-    const finish = (summary: string, status: "completed" | "failed" = "completed") =>
-      Effect.gen(function* () {
-        h.harness.world.setStatus(workerThreadId, 1, status, summary);
-        yield* reports.reconcile(runtime.ownerToken);
-        yield* runtime.drain;
-      });
-    const rows = sql<OutboxRow>`SELECT delivery_id, cause_key, operation, target_delivery_id, state,
-      kind, input_id, task_id, destination_kind, message_json, last_error_code, next_attempt_at
-      FROM channel_outbox WHERE task_id = ${task.taskId} AND destination_kind = 'slack'
-      ORDER BY rowid`;
-    const ofOperation = (operation: string) =>
-      Effect.map(rows, (all) => all.filter((row) => row.operation === operation));
-    /** Records how the person's request was acknowledged, as session-first reception does. */
-    const acknowledgedBy = (source: "session" | "fallback" | "fixed") =>
-      sql`INSERT INTO channel_session_receipts (input_id, task_id, source, text, committed_at)
-        VALUES (${task.originInputId}, ${task.taskId}, ${source},
-          ${JSON.parse(ack.message_json).text}, '1970-01-01T00:00:00.000Z')`;
-    /** Another task of the same request, such as a sibling or a skill proposal. */
-    const copyTask = (taskId: string) =>
-      Effect.gen(function* () {
-        yield* sql`CREATE TEMP TABLE task_copy AS SELECT * FROM channel_tasks WHERE task_id = ${task.taskId}`;
-        yield* sql`UPDATE task_copy SET task_id = ${taskId}, worker_thread_id = NULL, status = 'running',
-          task_json = json_set(task_json, '$.taskId', ${taskId})`;
-        yield* sql`INSERT INTO channel_tasks SELECT * FROM task_copy`;
-        yield* sql`DROP TABLE task_copy`;
-      });
-    return {
-      workerThreadId,
-      copyTask,
-      runtime,
-      reports,
-      sql,
-      task,
-      ack: {
-        ...ack,
-        ts: ack.external_message_id,
-        text: JSON.parse(ack.message_json).text as string,
+) {
+  yield* setupBot;
+  yield* linkSlackUser();
+  const gateway = yield* ChannelGateway.ChannelGateway;
+  const runtime = yield* ChannelRuntime.ChannelRuntime;
+  const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+  const sql = yield* SqlClient.SqlClient;
+  yield* gateway.ingest(slackInput(text, key), slackContext);
+  yield* runtime.drain;
+  yield* reports.reconcile(runtime.ownerToken);
+  const task = yield* onlyTask;
+  const workerThreadId = task.worker?.threadId;
+  if (workerThreadId === undefined) return yield* Effect.die(new Error("the task has no worker"));
+  const [ack] = yield* sql<{
+    readonly delivery_id: string;
+    readonly message_json: string;
+    readonly external_message_id: string | null;
+    readonly state: string;
+  }>`SELECT delivery_id, message_json, external_message_id, state FROM channel_outbox
+    WHERE cause_key = ${"reply:" + task.originInputId}`;
+  if (ack === undefined) return yield* Effect.die(new Error("no acknowledgement row"));
+  const ackText = decodeOutbound(ack.message_json).text;
+  let milestones = 0;
+  /** Reports a milestone without running the channel loop. */
+  const report = (summary: string) =>
+    reports.report(
+      {
+        taskId: task.taskId,
+        generation: task.generation,
+        eventId: (key + "-m" + ++milestones) as never,
+        status: "running",
+        summary,
       },
-      report,
-      milestone,
-      finish,
-      rows,
-      ofOperation,
-      acknowledgedBy,
-    };
+      workerThreadId,
+    );
+  /** Reports a milestone and lets the channel loop run. */
+  const milestone = (summary: string) => report(summary).pipe(Effect.andThen(runtime.drain));
+  /** Ends the worker's run with this summary and lets the channel loop run. */
+  const finish = Effect.fn("finish")(function* (
+    summary: string,
+    status: "completed" | "failed" = "completed",
+  ) {
+    h.harness.world.setStatus(workerThreadId, 1, status, summary);
+    yield* reports.reconcile(runtime.ownerToken);
+    yield* runtime.drain;
   });
+  /** Completes a turn whose answer was its acknowledgement: an empty summary narrates nothing. */
+  const finishSilently = Effect.fn("finishSilently")(function* () {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const stored = yield* ledger.getTask(task.taskId);
+    if (stored === undefined) return yield* Effect.die(new Error("the task is gone"));
+    yield* commitTransition(
+      ledger,
+      stored,
+      { type: "task.completed", payload: { generation: task.generation, summary: "" } },
+      { owner: runtime.ownerToken, narrate: true },
+    );
+    yield* runtime.drain;
+  });
+  const rows = sql<OutboxRow>`SELECT delivery_id, cause_key, operation, target_delivery_id, state,
+    kind, input_id, task_id, destination_kind, message_json, last_error_code, next_attempt_at
+    FROM channel_outbox WHERE task_id = ${task.taskId} AND destination_kind = 'slack'
+    ORDER BY rowid`;
+  const ofOperation = (operation: string) =>
+    Effect.map(rows, (all) => all.filter((row) => row.operation === operation));
+  /** Records how the person's request was acknowledged, as session-first reception does. */
+  const acknowledgedBy = (source: "session" | "fallback" | "fixed") =>
+    sql`INSERT INTO channel_session_receipts (input_id, task_id, source, text, committed_at)
+      VALUES (${task.originInputId}, ${task.taskId}, ${source}, ${ackText},
+        '1970-01-01T00:00:00.000Z')`;
+  /** Another task of the same request, such as a sibling or a skill proposal. */
+  const copyTask = Effect.fn("copyTask")(function* (taskId: string) {
+    yield* sql`CREATE TEMP TABLE task_copy AS SELECT * FROM channel_tasks
+      WHERE task_id = ${task.taskId}`;
+    yield* sql`UPDATE task_copy SET task_id = ${taskId}, worker_thread_id = NULL,
+      status = 'running', task_json = json_set(task_json, '$.taskId', ${taskId})`;
+    yield* sql`INSERT INTO channel_tasks SELECT * FROM task_copy`;
+    yield* sql`DROP TABLE task_copy`;
+  });
+  return {
+    workerThreadId,
+    copyTask,
+    runtime,
+    reports,
+    sql,
+    task,
+    ack: { ...ack, ts: ack.external_message_id, text: ackText },
+    report,
+    milestone,
+    finish,
+    finishSilently,
+    rows,
+    ofOperation,
+    acknowledgedBy,
+  };
+});

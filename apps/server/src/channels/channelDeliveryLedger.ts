@@ -12,6 +12,13 @@ import {
   type UndeliveredSourceRow,
 } from "./channelUndeliveredReplies.ts";
 import { interimAlreadyHeard, isInterimMessage } from "./channelInterimMessages.ts";
+import {
+  claimEdit,
+  claimEnd,
+  convertToEdit,
+  editOvertaken,
+  type ProgressClaimRow,
+} from "./channelProgressMessages.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
@@ -61,6 +68,62 @@ export const unsentDeliveryQueries = (
     remaining: sql`SELECT EXISTS (SELECT 1 FROM channel_outbox WHERE ${unsent}) AS waiting`,
   };
 };
+
+interface ClaimRow extends ProgressClaimRow {
+  readonly cause_key: string;
+  readonly input_id: string | null;
+  readonly kind: string;
+  readonly operation: string;
+}
+
+/**
+ * Marks the oldest due rows delivering. Edit and end rows never hold a post back, and only one
+ * write to a sent message is in flight at a time. An end row also waits while the task's latest
+ * outcome is not yet narrated or its message is still going out, so it reads the newest answer.
+ */
+export const claimDueStatement = (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly now: string;
+    readonly limit: number;
+    readonly receiptsOnly?: boolean | undefined;
+  },
+) => sql<ClaimRow>`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
+  send_started_at = NULL, updated_at = ${input.now}
+  WHERE delivery_id IN (
+    SELECT due.delivery_id FROM channel_outbox due
+    WHERE due.state IN ('pending', 'delivering') AND due.state = 'pending'
+      AND due.next_attempt_at <= ${input.now}
+      AND (${input.receiptsOnly === undefined ? 1 : 0} = 1
+        OR (${input.receiptsOnly === true ? 1 : 0} = 1 AND due.cause_key = 'reply:' || due.input_id)
+        OR (${input.receiptsOnly === false ? 1 : 0} = 1 AND due.cause_key != 'reply:' || COALESCE(due.input_id, '')))
+      AND (due.cause_key = 'reply:' || due.input_id OR (
+        ((due.task_id IS NULL AND (due.input_id IS NULL OR EXISTS (
+          SELECT 1 FROM channel_inbox rejected WHERE rejected.input_id = due.input_id
+            AND rejected.state = 'rejected'))) OR EXISTS (
+          SELECT 1 FROM channel_outbox receipt WHERE receipt.cause_key = 'reply:' ||
+            COALESCE(due.input_id, (SELECT json_extract(t.task_json, '$.originInputId')
+              FROM channel_tasks t WHERE t.task_id = due.task_id))
+            AND receipt.state IN ('delivered', 'failed', 'ambiguous')))
+        AND NOT EXISTS (SELECT 1 FROM channel_outbox earlier
+          WHERE earlier.task_id = due.task_id AND earlier.destination_kind = due.destination_kind
+            AND earlier.state IN ('pending', 'delivering') AND earlier.rowid < due.rowid
+            AND earlier.operation = 'post')))
+      AND (due.operation = 'post' OR NOT EXISTS (SELECT 1 FROM channel_outbox busy
+        WHERE busy.target_delivery_id = due.target_delivery_id AND busy.state = 'delivering'))
+      AND (due.operation != 'end' OR (NOT EXISTS (SELECT 1 FROM channel_task_events told
+          WHERE told.task_id = due.task_id AND told.narration_state = 'pending'
+            AND told.type IN ('task.completed', 'task.failed', 'task.cancelled'))
+        AND NOT EXISTS (SELECT 1 FROM channel_outbox answer
+          WHERE answer.cause_key = 'narration:' || (SELECT latest.event_id
+              FROM channel_task_events latest WHERE latest.task_id = due.task_id
+                AND latest.type IN ('task.completed', 'task.failed', 'task.cancelled')
+              ORDER BY latest.task_version DESC LIMIT 1) || ':origin'
+            AND answer.state IN ('pending', 'delivering'))))
+    ORDER BY CASE WHEN due.cause_key = 'reply:' || due.input_id THEN 0 ELSE 1 END,
+      due.created_at, due.rowid LIMIT ${input.limit})
+  RETURNING rowid AS row_order, delivery_id, message_json, attempts, cause_key, input_id,
+    task_id, kind, destination_kind, operation, target_delivery_id`;
 
 /** The outbox operations: claiming due rows, recording how their sends went, and recovery. */
 export interface ChannelDeliveryLedgerOps extends UnsentDeliveryRelease {
@@ -136,7 +199,7 @@ export const deliveryLedger = (
       SELECT 1 FROM channel_inbox i WHERE channel_outbox.cause_key = 'reply:' || i.input_id
         AND i.accepted_at <= ${DateTime.formatIso(DateTime.makeUnsafe(Date.parse(now) - RECEIPT_DEADLINE_MS))})
     RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
-      last_error_code, state`;
+      last_error_code, state, operation`;
     yield* Effect.forEach(
       rows,
       (row) =>
@@ -183,40 +246,11 @@ export const deliveryLedger = (
               const claimRound = Effect.fn("channelDeliveryLedger.claimRound")(function* (
                 limit: number,
               ) {
-                const rows = yield* sql<{
-                  readonly row_order: number;
-                  readonly delivery_id: ChannelDeliveryId;
-                  readonly message_json: string;
-                  readonly attempts: number;
-                  readonly cause_key: string;
-                  readonly input_id: string | null;
-                  readonly task_id: string | null;
-                  readonly kind: string;
-                  readonly destination_kind: string;
-                }>`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
-        send_started_at = NULL, updated_at = ${input.now}
-        WHERE delivery_id IN (
-          SELECT due.delivery_id FROM channel_outbox due
-          WHERE due.state IN ('pending', 'delivering') AND due.state = 'pending'
-            AND due.next_attempt_at <= ${input.now}
-            AND (${input.receiptsOnly === undefined ? 1 : 0} = 1
-              OR (${input.receiptsOnly === true ? 1 : 0} = 1 AND due.cause_key = 'reply:' || due.input_id)
-              OR (${input.receiptsOnly === false ? 1 : 0} = 1 AND due.cause_key != 'reply:' || COALESCE(due.input_id, '')))
-            AND (due.cause_key = 'reply:' || due.input_id OR (
-              ((due.task_id IS NULL AND (due.input_id IS NULL OR EXISTS (
-                SELECT 1 FROM channel_inbox rejected WHERE rejected.input_id = due.input_id
-                  AND rejected.state = 'rejected'))) OR EXISTS (
-                SELECT 1 FROM channel_outbox receipt WHERE receipt.cause_key = 'reply:' ||
-                  COALESCE(due.input_id, (SELECT json_extract(t.task_json, '$.originInputId')
-                    FROM channel_tasks t WHERE t.task_id = due.task_id))
-                  AND receipt.state IN ('delivered', 'failed', 'ambiguous')))
-              AND NOT EXISTS (SELECT 1 FROM channel_outbox earlier
-                WHERE earlier.task_id = due.task_id AND earlier.destination_kind = due.destination_kind
-                  AND earlier.state IN ('pending', 'delivering') AND earlier.rowid < due.rowid)))
-          ORDER BY CASE WHEN due.cause_key = 'reply:' || due.input_id THEN 0 ELSE 1 END,
-            due.created_at, due.rowid LIMIT ${limit})
-        RETURNING rowid AS row_order, delivery_id, message_json, attempts, cause_key, input_id,
-          task_id, kind, destination_kind`;
+                const rows = yield* claimDueStatement(sql, {
+                  now: input.now,
+                  limit,
+                  receiptsOnly: input.receiptsOnly,
+                });
                 const claimed = yield* Effect.forEach(
                   rows.toSorted((a, b) => {
                     const aReceipt = a.cause_key === "reply:" + a.input_id;
@@ -225,13 +259,18 @@ export const deliveryLedger = (
                   }),
                   (row) =>
                     Effect.gen(function* () {
+                      if (row.operation === "edit") return yield* claimEdit(sql, row, input.now);
+                      if (row.operation === "end") return yield* claimEnd(sql, row, input.now);
                       const message = decodeOutbound(row.message_json);
                       if (
                         (yield* isInterimMessage(sql, row, message)) &&
                         (yield* interimAlreadyHeard(sql, row))
                       ) {
-                        yield* sql`UPDATE channel_outbox SET state = 'superseded',
-                        updated_at = ${input.now} WHERE delivery_id = ${row.delivery_id}`;
+                        // Slack edits the message the person heard instead; elsewhere the row is set aside.
+                        if (!(yield* convertToEdit(sql, row, message, input.now))) {
+                          yield* sql`UPDATE channel_outbox SET state = 'superseded',
+                          updated_at = ${input.now} WHERE delivery_id = ${row.delivery_id}`;
+                        }
                         return null;
                       }
                       const receipt =
@@ -240,7 +279,7 @@ export const deliveryLedger = (
                         ? yield* sql<{ readonly accepted_at: string }>`
           SELECT accepted_at FROM channel_inbox WHERE input_id = ${row.input_id}`
                         : [];
-                      return {
+                      const delivery: ChannelStoredDelivery = {
                         deliveryId: row.delivery_id,
                         message,
                         attempts: row.attempts,
@@ -251,6 +290,7 @@ export const deliveryLedger = (
                                 Date.parse(inbox[0].accepted_at) + RECEIPT_DEADLINE_MS,
                             }),
                       };
+                      return delivery;
                     }),
                 );
                 return claimed;
@@ -282,10 +322,25 @@ export const deliveryLedger = (
           Effect.gen(function* () {
             yield* fence(input.owner);
             const handOverNow = DateTime.formatIso(yield* DateTime.now);
-            const [row] = yield* sql<{ readonly cause_key: string }>`SELECT cause_key
+            const [row] = yield* sql<{
+              readonly cause_key: string;
+              readonly operation: string;
+              readonly task_id: string | null;
+              readonly destination_kind: string;
+              readonly row_order: number;
+              readonly target_delivery_id: string | null;
+            }>`SELECT cause_key, operation, task_id, destination_kind, rowid AS row_order,
+                target_delivery_id
               FROM channel_outbox WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
                 AND attempts = ${input.attempt}`;
             if (row === undefined) return false;
+            // An edit something newer replaced since its claim is dropped instead of sent.
+            if (row.operation === "edit" && (yield* editOvertaken(sql, row))) {
+              yield* sql`UPDATE channel_outbox SET state = 'superseded', updated_at = ${handOverNow}
+                WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
+                  AND attempts = ${input.attempt}`;
+              return false;
+            }
             // Only a reply receipt has a deadline. Its cause key names the input, as in expireRows;
             // the nullable input_id column does not.
             if (row.cause_key.startsWith(RECEIPT_CAUSE)) {
@@ -323,7 +378,7 @@ export const deliveryLedger = (
                 updated_at = ${input.now}
               WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
               RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
-                last_error_code
+                last_error_code, operation
             `;
             yield* copyUndeliveredReplies(sql, interrupted, "ambiguous", input.now);
           }),
@@ -369,7 +424,8 @@ export const deliveryLedger = (
         updated_at = ${input.now}
         WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
           AND (${input.attempt ?? null} IS NULL OR attempts = ${input.attempt ?? null})
-        RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json, last_error_code`;
+        RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json, last_error_code,
+          operation`;
               const recorded = updated[0];
               if (
                 recorded !== undefined &&

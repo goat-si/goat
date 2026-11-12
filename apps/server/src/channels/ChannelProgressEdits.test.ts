@@ -5,7 +5,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
-import { CHANNEL_COPY } from "./channelCopy.ts";
 import { skillProposalTaskIdFor, taskIdFor } from "./channelIds.ts";
 import { interimAlreadyHeard, isInterimMessage } from "./channelInterimMessages.ts";
 import * as ChannelBotThreads from "./ChannelBotThreads.ts";
@@ -122,9 +121,8 @@ describe("Slack keeps one progress message and edits it", () => {
         const [edit] = yield* t.ofOperation("edit");
         assert.strictEqual(edit?.state, "pending");
         yield* t.finish("Docker images take 41 GB.");
-        assert.include(
-          h.posts.map((message) => message.text),
-          "Docker images take 41 GB.",
+        assert.isTrue(
+          h.posts.some((message) => message.text.startsWith("Docker images take 41 GB.")),
         );
         assert.strictEqual((yield* t.ofOperation("edit"))[0]?.state, "superseded");
         yield* TestClock.adjust("60 seconds");
@@ -193,9 +191,8 @@ describe("a refused or failed write ends the progress message quietly", () => {
         yield* t.runtime.drain;
         assert.lengthOf(h.calls, 1);
         assert.deepStrictEqual(yield* t.ofOperation("end"), []);
-        assert.include(
-          h.posts.map((message) => message.text),
-          "Docker images take 41 GB.",
+        assert.isTrue(
+          h.posts.some((message) => message.text.startsWith("Docker images take 41 GB.")),
         );
       }).pipe(Effect.provide(h.layer));
     },
@@ -300,7 +297,7 @@ describe("the progress message after the answer", () => {
       yield* t.milestone("Checking images.");
       yield* TestClock.adjust("15 seconds");
       yield* t.runtime.drain;
-      yield* t.finish("");
+      yield* t.finishSilently();
       assert.deepStrictEqual(h.calls, [
         { operation: "edit", ts: t.ack.ts!, text: t.ack.text + "\n\nChecking images." },
         { operation: "edit", ts: t.ack.ts!, text: t.ack.text },
@@ -320,7 +317,7 @@ describe("the progress message after the answer", () => {
           yield* TestClock.adjust("15 seconds");
           yield* t.runtime.drain;
         }
-        yield* t.finish("");
+        yield* t.finishSilently();
         assert.isFalse(h.calls.some((call) => call.operation === "remove"));
         assert.deepStrictEqual(
           h.calls.slice(variant === "edited" ? 1 : 0),
@@ -408,8 +405,9 @@ describe("the progress message after the answer", () => {
         const threads = yield* ChannelBotThreads.ChannelBotThreads;
         yield* threads.retry({ taskId: t.task.taskId, clientRequestId: "tap-1" }, owner);
         yield* t.runtime.drain;
-        const retried = h.harness.world.launches[1]!.threadId;
-        h.harness.world.setStatus(retried, 1, "completed", "Tidied.");
+        const retried = h.harness.world.launches[1]?.threadId;
+        assert.isDefined(retried);
+        h.harness.world.setStatus(retried!, 1, "completed", "Tidied.");
         yield* t.reports.reconcile(t.runtime.ownerToken);
         // The completion is recorded but not narrated yet; the end row must not read the failure.
         yield* TestClock.adjust("30 seconds");
@@ -568,7 +566,7 @@ describe("what an edit or end row looks like", () => {
           ["answer", "result", "Docker images take 41 GB.", undefined],
           ["question", "question", "Delete the old images?", undefined],
           ["approval:r1", "question", "Approve rm -rf images?", ["Approve", "Deny"]],
-          ["sign-in", "failure", CHANNEL_COPY.auth, undefined],
+          ["sign-in", "failure", "The model provider needs you to sign in again.", undefined],
           ["failure", "failure", "Couldn't finish: Look into it: disk", undefined],
           [
             "refusal",

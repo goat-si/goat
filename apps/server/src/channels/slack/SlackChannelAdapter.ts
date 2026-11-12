@@ -14,6 +14,7 @@
 import {
   ChannelGatewayError,
   type ChannelDeliveryErrorCode,
+  type ChannelReplyAddress,
   type RuntimeMode,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -69,6 +70,9 @@ export interface SlackEnvelopeOutcome {
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const DONE = { _tag: "done" } as const;
+const REFUSED = { _tag: "refused" } as const;
+const SKIPPED = { _tag: "skipped" } as const;
 
 /** Only a storage failure leaves the envelope for Slack to redeliver. */
 const shouldRedeliver = (exit: Exit.Exit<unknown, ChannelGatewayError>) =>
@@ -238,6 +242,30 @@ export function slackDeliveryError(failure: SlackSdkFailure): ChannelGatewayErro
   }
 }
 
+/**
+ * How an edit or removal went. Any Slack refusal, including missing_scope and invalid_auth,
+ * only ends that message's progress; it never says anything about the connection.
+ */
+export function slackProgressResult(
+  failure: SlackSdkFailure,
+): ChannelTransport.ChannelProgressResult {
+  switch (failure.category) {
+    case "rate_limited":
+      return {
+        _tag: "rate_limited",
+        retryAfterSeconds: Math.max(1, Math.ceil(failure.retryAfterSeconds ?? 1)),
+      };
+    case "network":
+    case "timeout":
+    case "http":
+    case "unconfirmed":
+    case "unknown":
+      return { _tag: "unknown" };
+    default:
+      return { _tag: "refused" };
+  }
+}
+
 const deliveryFailed = (
   deliveryOutcome: "not_sent" | "unknown",
   deliveryErrorCode: ChannelDeliveryErrorCode,
@@ -265,8 +293,40 @@ export function makeSlackChannelTransport(input: {
     report: SlackDeliveryFailureReport,
   ) => Effect.Effect<void>;
 }): ChannelTransport.ChannelTransport {
+  /** Runs one write to a sent message on the destination's live session; never reports failure. */
+  const progressWrite = Effect.fn("SlackChannelTransport.progressWrite")(function* (
+    destination: ChannelReplyAddress,
+    write: (
+      active: SlackActiveSession,
+      channel: string,
+    ) => Effect.Effect<ChannelTransport.ChannelProgressResult, SlackSdkFailure>,
+  ) {
+    if (destination.kind !== "slack") return SKIPPED;
+    const session = yield* input.activeSession(destination.connectionId);
+    if (Option.isNone(session) || session.value.teamId !== destination.teamId) return SKIPPED;
+    return yield* write(session.value, destination.channelId).pipe(
+      Effect.catch((failure) => Effect.succeed(slackProgressResult(failure))),
+    );
+  });
   return {
     kind: "slack",
+    edit: ({ message, externalMessageId }) =>
+      progressWrite(message.destination, (active, channel) => {
+        const [text, ...rest] = formatSlackOutboundMessages({
+          text: message.text,
+          mentionUserId: message.mentionActorId,
+        });
+        if (text === undefined || rest.length > 0) return Effect.succeed(REFUSED);
+        return slackCall("chat.update", () =>
+          active.botApi.updateMessage({ channel, ts: externalMessageId, text }),
+        ).pipe(Effect.as(DONE));
+      }),
+    remove: ({ destination, externalMessageId }) =>
+      progressWrite(destination, (active, channel) =>
+        slackCall("chat.delete", () =>
+          active.botApi.deleteMessage({ channel, ts: externalMessageId }),
+        ).pipe(Effect.as(DONE)),
+      ),
     send: (message) =>
       Effect.gen(function* () {
         const destination = message.destination;

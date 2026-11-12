@@ -23,6 +23,8 @@ import * as Queue from "effect/Queue";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { PROGRESS_REFUSED, PROGRESS_SKIPPED } from "./channelProgressMessages.ts";
+import type { ChannelProgressResult } from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 
 /** With exponential backoff capped at five minutes, ten attempts span about thirteen minutes. */
@@ -78,6 +80,37 @@ export const deliveryOutcomeFor = (
     at: DateTime.formatIso(DateTime.addDuration(now, Duration.seconds(waitSeconds))),
     errorCode: code,
   };
+};
+
+/**
+ * What to record for an edit or removal of a sent message. A 429 waits out Retry-After like a post;
+ * any other failure ends that message's progress and is never retried.
+ */
+export const progressOutcomeFor = (
+  result: ChannelProgressResult,
+  attempts: number,
+  now: DateTime.Utc,
+): ChannelLedger.ChannelDeliveryOutcome => {
+  switch (result._tag) {
+    case "done":
+      return { type: "delivered" };
+    case "skipped":
+      return { type: "failed", errorCode: PROGRESS_SKIPPED };
+    case "refused":
+      return { type: "failed", errorCode: PROGRESS_REFUSED };
+    case "unknown":
+      return { type: "ambiguous", errorCode: PROGRESS_REFUSED };
+    case "rate_limited":
+      return attempts >= MAX_ATTEMPTS
+        ? { type: "failed", errorCode: "rate_limited" }
+        : {
+            type: "retry",
+            at: DateTime.formatIso(
+              DateTime.addDuration(now, Duration.seconds(result.retryAfterSeconds)),
+            ),
+            errorCode: "rate_limited",
+          };
+  }
 };
 
 export class ChannelDeliveryWorker extends Context.Service<
@@ -305,6 +338,50 @@ const make = Effect.gen(function* () {
     if (Option.isNone(result)) yield* Fiber.interrupt(send).pipe(Effect.forkIn(scope));
   });
 
+  const sendProgress = Effect.fn("ChannelDeliveryWorker.sendProgress")(function* (
+    delivery: ChannelLedger.ChannelStoredDelivery,
+    progress: NonNullable<ChannelLedger.ChannelStoredDelivery["progress"]>,
+    owner: string,
+  ) {
+    if (!(yield* handOver(delivery, owner))) return;
+    const externalMessageId = progress.externalMessageId;
+    const result = yield* progress.operation === "delete"
+      ? gateway.remove({ destination: delivery.message.destination, externalMessageId })
+      : gateway.edit({ message: delivery.message, externalMessageId });
+    const now = yield* DateTime.now;
+    yield* ledger.recordDelivery({
+      owner,
+      deliveryId: delivery.deliveryId,
+      attempt: delivery.attempts,
+      now: DateTime.formatIso(now),
+      outcome: progressOutcomeFor(result, delivery.attempts, now),
+    });
+    // The message's next write waited on this one.
+    yield* wake.wake;
+  });
+
+  /** Runs a write on its own fiber, which settleReceipts and so drain wait for. */
+  const forkTracked = <E>(
+    deliveryId: ChannelLedger.ChannelStoredDelivery["deliveryId"],
+    work: Effect.Effect<void, E>,
+    failure: string,
+  ) =>
+    Effect.gen(function* () {
+      let fiber: Fiber.Fiber<void, unknown> | undefined;
+      fiber = yield* work.pipe(
+        Effect.tapCause((cause) => Effect.logWarning(failure, { cause })),
+        Effect.ignore,
+        Effect.ensuring(
+          Effect.sync(() => {
+            inFlight.delete(deliveryId);
+            if (fiber !== undefined) receipts.delete(fiber);
+          }),
+        ),
+        Effect.forkIn(scope),
+      );
+      receipts.add(fiber);
+    });
+
   const deliverReceipts = Effect.fn("ChannelDeliveryWorker.deliverReceipts")(function* (
     owner: string,
   ) {
@@ -318,19 +395,7 @@ const make = Effect.gen(function* () {
       });
       if (row === undefined) break;
       inFlight.add(row.deliveryId);
-      let fiber: Fiber.Fiber<void, unknown> | undefined;
-      fiber = yield* sendReceipt(row, owner).pipe(
-        Effect.tapCause((cause) => Effect.logWarning("channel receipt send failed", { cause })),
-        Effect.ignore,
-        Effect.ensuring(
-          Effect.sync(() => {
-            inFlight.delete(row.deliveryId);
-            if (fiber !== undefined) receipts.delete(fiber);
-          }),
-        ),
-        Effect.forkIn(scope),
-      );
-      receipts.add(fiber);
+      yield* forkTracked(row.deliveryId, sendReceipt(row, owner), "channel receipt send failed");
       handled += 1;
     }
     return handled;
@@ -387,10 +452,19 @@ const make = Effect.gen(function* () {
         break;
       }
       inFlight.add(delivery.deliveryId);
+      handled += 1;
+      // A write to a sent message may take Slack's full timeout; it never stalls this loop.
+      if (delivery.progress !== undefined) {
+        yield* forkTracked(
+          delivery.deliveryId,
+          sendProgress(delivery, delivery.progress, owner),
+          "channel progress write failed",
+        );
+        continue;
+      }
       yield* send(delivery, owner).pipe(
         Effect.ensuring(Effect.sync(() => inFlight.delete(delivery.deliveryId))),
       );
-      handled += 1;
     }
     return handled;
   });

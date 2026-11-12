@@ -18,16 +18,32 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 // added CodexUsageNativeTurnIndex, RepairClientSettlementTimestamps and WebhookDedupe, at 68
 // before the one that added ShellStopRequestIndex, and at 69 before the one that added
 // ThreadMessageSearch.
+const manifestIds = new Set(migrationEntries.map(([id]) => id));
+const manifestIdOf = new Map(migrationEntries.map(([id, name]) => [name, id]));
+/** Ids the manifest leaves free below a migration, such as one an unmerged change holds. */
+const freeIdsBelow = (name: string | undefined) => {
+  let free = 0;
+  for (let id = 1; id < (manifestIdOf.get(name ?? "") ?? 0); id += 1) {
+    if (!manifestIds.has(id)) free += 1;
+  }
+  return free;
+};
+
 const seedGoatLedger = (names: ReadonlyArray<string>, firstGoatId = 61) =>
   Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: firstGoatId - 1 });
     const byName = new Map<string, (typeof migrationEntries)[number][2]>(
       migrationEntries.map(([, name, migration]) => [name, migration]),
     );
+    // A released ledger recorded every GOAT migration at one offset, keeping the manifest's gaps.
+    const offset = firstGoatId - freeIdsBelow(names[0]);
     yield* Migrator.make({})({
       loader: Migrator.fromRecord(
         Object.fromEntries(
-          names.map((name, index) => [`${firstGoatId + index}_${name}`, byName.get(name)!]),
+          names.map((name, index) => [
+            `${offset + index + freeIdsBelow(name)}_${name}`,
+            byName.get(name)!,
+          ]),
         ),
       ),
     });

@@ -379,6 +379,8 @@ describe("makeSlackChannelTransport", () => {
       botUserId: "U0BOT",
       botApi: {
         authTest: () => Promise.reject(new Error("not used")),
+        updateMessage: () => Promise.reject(new Error("not used")),
+        deleteMessage: () => Promise.reject(new Error("not used")),
         postMessage: (input) => {
           posts.push(input);
           return postMessage(input);
