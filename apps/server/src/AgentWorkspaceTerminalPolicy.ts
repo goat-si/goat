@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import * as SessionStore from "./auth/SessionStore.ts";
 import { MCP_CLIENT_SUBJECT } from "./auth/mcpClientSubject.ts";
+import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
 const isSettingsError = Schema.is(ServerSettingsError);
 export class AgentWorkspaceTerminalPolicyThreadLookup extends Context.Service<
   AgentWorkspaceTerminalPolicyThreadLookup,
@@ -162,7 +163,7 @@ export const agentWorkspaceTerminalSettingsMethods = (
       const actor = active.find((session) => session.sessionId === actorSessionId);
       if (
         actor === undefined ||
-        actor.subject === MCP_CLIENT_SUBJECT ||
+        !canResolveHumanStep(sessionResolver(actor), "person_only") ||
         actor.client.deviceType === "bot"
       ) {
         return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });

@@ -1,0 +1,350 @@
+import { describe, expect, it } from "vite-plus/test";
+import vector from "../../vectors/session.json" with { type: "json" };
+import framing from "../../vectors/stream.json" with { type: "json" };
+import { fromHex, toHex } from "./bytes.ts";
+import { generateX25519, x25519PublicKey } from "./crypto.ts";
+import { Kind } from "./noise.ts";
+import { openSession } from "./race.ts";
+import { openStream, STREAM_LIMITS } from "./stream.ts";
+import { fakeFactory } from "./testing/fakeRelay.ts";
+import { ManualClock } from "./testing/manualClock.ts";
+import { respond } from "./testing/noiseResponder.ts";
+
+const NODE = vector.responder.nodeId;
+const RELAY = "wss://relay-a.example";
+const KiB = 1024;
+const serverPriv = fromHex(vector.responder.noisePriv);
+const serverKey = { privateKey: serverPriv, publicKey: x25519PublicKey(serverPriv) };
+let seed = 1;
+const random = (n: number) => new Uint8Array(n).fill(seed++ & 255);
+
+const u32le = (n: number) => {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, n, true);
+  return out;
+};
+const record = (type: number, body: Uint8Array = new Uint8Array(0)) => Uint8Array.of(type, ...body);
+const data = (bytes: Uint8Array) => {
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes, 1);
+  return out;
+};
+
+/** A stream over a real Noise session; the test plays the Pen node on the other side. */
+async function connected(
+  options: {
+    readonly beforeStream?: ReadonlyArray<Uint8Array>;
+    readonly closeBefore?: number;
+    readonly closeLocallyBefore?: number;
+  } = {},
+) {
+  const clock = new ManualClock();
+  const fake = fakeFactory();
+  const pending = openSession({
+    relays: [RELAY],
+    nodeId: NODE,
+    serverNoisePub: serverKey.publicKey,
+    kind: Kind.Session,
+    payload: { v: 1, stream: "service", name: "goat" },
+    localStatic: generateX25519(random),
+    factory: fake.factory,
+    clock,
+    random,
+  });
+  const socket = fake.socketFor(RELAY);
+  socket.open();
+  await socket.whenSent(1);
+  const reply = respond({
+    kind: Kind.Session,
+    nodeId: NODE,
+    localStatic: serverKey,
+    message1: socket.binarySent()[0] ?? new Uint8Array(),
+    psk: () => undefined,
+    random,
+  });
+  socket.receive(reply.message2);
+  const { session } = await pending;
+  // Records the node sends before the stream takes the session are held by the session.
+  for (const plaintext of options.beforeStream ?? []) socket.receive(reply.send.seal(plaintext));
+  if (options.closeBefore !== undefined) socket.remoteClose(options.closeBefore);
+  if (options.closeLocallyBefore !== undefined) session.close(options.closeLocallyBefore);
+  const stream = openStream(session);
+  let read = 2; // message 1 and the key confirmation
+  reply.recv.open(socket.binarySent()[1] ?? new Uint8Array());
+  return {
+    clock,
+    socket,
+    stream,
+    /** The node sends one stream record. */
+    send: (plaintext: Uint8Array) => socket.receive(reply.send.seal(plaintext)),
+    /** Records the client sent since the last call, decrypted. */
+    received: () => {
+      const out = socket
+        .binarySent()
+        .slice(read)
+        .map((sealed) => reply.recv.open(sealed));
+      read = socket.binarySent().length;
+      return out;
+    },
+  };
+}
+
+describe("Pen stream framing (CONTRACT Streams: DATA, FIN, CREDIT)", () => {
+  it.each([
+    ["65,518-byte records", [65_518]],
+    ["1-byte and 65,518-byte records", [1, 65_518]],
+    ["alternating 1-byte, 4 KiB and 65,518-byte records", [1, 4 * KiB, 65_518]],
+  ])(
+    "accepts the whole 512 KiB window in %s and never buffers more than 512 KiB",
+    async (_name, sizes) => {
+      const c = await connected();
+      let sent = 0;
+      for (let i = 0; sent < STREAM_LIMITS.window; i++) {
+        const size = Math.min(sizes[i % sizes.length] ?? 1, STREAM_LIMITS.window - sent);
+        c.send(data(new Uint8Array(size).fill(i & 255)));
+        sent += size;
+        expect(c.stream.stats().buffered).toBeLessThanOrEqual(STREAM_LIMITS.window);
+      }
+      expect(c.socket.closedWith).toBeUndefined();
+      expect(c.stream.stats().capacity).toBe(STREAM_LIMITS.window);
+      c.send(data(new Uint8Array(1)));
+      expect(c.socket.closedWith).toBe(4408);
+    },
+  );
+
+  it("partial reads between arrivals keep the ring within its capacity and return every byte in order", async () => {
+    const c = await connected();
+    const expected: Array<number> = [];
+    let got: Array<number> = [];
+    for (let i = 0; i < 40; i++) {
+      const bytes = new Uint8Array(i % 3 === 0 ? 1 : i % 3 === 1 ? 4 * KiB : 30_000).fill(i);
+      expected.push(...bytes);
+      c.send(data(bytes));
+      if (i % 4 === 3) got = got.concat([...((await c.stream.read()) ?? [])]);
+    }
+    c.send(record(1));
+    for (;;) {
+      const chunk = await c.stream.read();
+      if (chunk === null) break;
+      got = got.concat([...chunk]);
+    }
+    expect(got).toEqual(expected);
+  });
+
+  it("CREDIT the node returns while the DATA send is still on the stack is accepted", async () => {
+    const c = await connected();
+    const send = c.socket.send.bind(c.socket);
+    let credited = false;
+    c.socket.send = (data) => {
+      send(data);
+      if (!credited && typeof data !== "string") {
+        credited = true;
+        c.send(record(2, u32le(1)));
+      }
+    };
+    await c.stream.write(Uint8Array.of(7));
+    expect(c.socket.closedWith).toBeUndefined();
+    expect(c.stream.stats().inflight).toBe(0);
+  });
+
+  it("CREDIT goes out once 64 KiB has been read, not before, and for the remainder after the node's FIN", async () => {
+    const c = await connected();
+    c.send(data(new Uint8Array(40 * KiB)));
+    expect((await c.stream.read())?.length).toBe(40 * KiB);
+    expect(c.received()).toEqual([]);
+    c.send(data(new Uint8Array(40 * KiB)));
+    expect((await c.stream.read())?.length).toBe(40 * KiB);
+    expect(c.received()).toEqual([record(2, u32le(80 * KiB))]);
+    c.send(data(new Uint8Array(10)));
+    c.send(record(1));
+    expect((await c.stream.read())?.length).toBe(10);
+    expect(await c.stream.read()).toBeNull();
+    expect(c.received()).toEqual([record(2, u32le(10))]);
+  });
+
+  it("DATA the node sends in answer to a CREDIT, while that CREDIT's send is on the stack, fits the new window", async () => {
+    const c = await connected();
+    for (let sent = 0; sent < STREAM_LIMITS.window; sent += 32 * KiB)
+      c.send(data(new Uint8Array(32 * KiB)));
+    const send = c.socket.send.bind(c.socket);
+    let answered = false;
+    c.socket.send = (bytes) => {
+      send(bytes);
+      if (!answered && typeof bytes !== "string") {
+        answered = true;
+        c.send(data(Uint8Array.of(9)));
+      }
+    };
+    expect((await c.stream.read())?.length).toBe(64 * KiB);
+    expect(c.socket.closedWith).toBeUndefined();
+    expect(c.stream.stats().uncredited).toBe(STREAM_LIMITS.window - 64 * KiB + 1);
+  });
+
+  it("a CREDIT the socket refuses is not counted as sent, and the stream ends with the link", async () => {
+    const c = await connected();
+    c.send(data(new Uint8Array(48 * KiB)));
+    c.send(data(new Uint8Array(16 * KiB)));
+    c.socket.send = () => {
+      throw new Error("socket gone");
+    };
+    expect((await c.stream.read())?.length).toBe(64 * KiB);
+    expect(c.stream.stats().uncredited).toBe(64 * KiB);
+    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
+    expect(await c.stream.closed).toBe(1006);
+  });
+
+  it("DATA and FIN that arrived before the session closed are still read when the stream opens after the close", async () => {
+    for (const close of [{ closeBefore: 1000 }, { closeLocallyBefore: 1000 }]) {
+      const c = await connected({
+        beforeStream: [data(Uint8Array.of(1, 2, 3)), record(1)],
+        ...close,
+      });
+      expect(await c.stream.read()).toEqual(Uint8Array.of(1, 2, 3));
+      expect(await c.stream.read()).toBeNull();
+    }
+  });
+
+  it("after an earlier close too, a bad held record stops the drain: DATA after it is never read", async () => {
+    const c = await connected({
+      beforeStream: [Uint8Array.of(9), data(Uint8Array.of(42))],
+      closeBefore: 1000,
+    });
+    expect(c.stream.stats().buffered).toBe(0);
+    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
+  });
+
+  it("records held before the stream opens stop at a bad one: DATA after it is never read", async () => {
+    const c = await connected({ beforeStream: [Uint8Array.of(9), data(Uint8Array.of(1, 2, 3))] });
+    expect(c.socket.closedWith).toBe(4400);
+    expect(c.stream.stats().buffered).toBe(0);
+    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed" });
+  });
+
+  it("a writer waits at the 512 KiB window and resumes when CREDIT arrives", async () => {
+    const c = await connected();
+    await c.stream.write(new Uint8Array(512 * KiB));
+    const sentData = c.received();
+    expect(sentData.reduce((sum, r) => sum + r.length - 1, 0)).toBe(512 * KiB);
+    expect(sentData.every((r) => r.length - 1 <= STREAM_LIMITS.maxData)).toBe(true);
+    let done = false;
+    const next = c.stream.write(new Uint8Array(1)).then(() => (done = true));
+    await Promise.resolve();
+    expect(done).toBe(false);
+    expect(c.received()).toEqual([]);
+    c.send(record(2, u32le(64 * KiB)));
+    await next;
+    expect(c.received()).toEqual([data(new Uint8Array(1))]);
+  });
+
+  it("end() during a write blocked at the window sends FIN only after that write's DATA", async () => {
+    const c = await connected();
+    await c.stream.write(new Uint8Array(512 * KiB));
+    c.received();
+    const blocked = c.stream.write(Uint8Array.of(9));
+    c.stream.end();
+    expect(c.received()).toEqual([]);
+    c.send(record(2, u32le(64 * KiB)));
+    await blocked;
+    expect(c.received()).toEqual([data(Uint8Array.of(9)), record(1)]);
+  });
+
+  it("refuses a second write while one is pending and a single write over 1 MiB", async () => {
+    const c = await connected();
+    await expect(c.stream.write(new Uint8Array(STREAM_LIMITS.maxWrite + 1))).rejects.toMatchObject({
+      code: "write-too-large",
+    });
+    void c.stream.write(new Uint8Array(600 * KiB));
+    await expect(c.stream.write(new Uint8Array(1))).rejects.toMatchObject({
+      code: "write-pending",
+    });
+  });
+
+  it.each(framing.reject)(
+    "stream.json reject: $why closes $code (Go-generated vector)",
+    async ({ records, fill, fillSize, code }) => {
+      const c = await connected();
+      for (let i = 0; i < (fill ?? 0); i++) c.send(data(new Uint8Array(fillSize ?? 0)));
+      for (const hex of records) c.send(fromHex(hex));
+      expect(c.socket.closedWith).toBe(code);
+      expect(await c.stream.closed).toBe(code);
+      if (records[0] === "01") {
+        // The node's FIN came first: everything it sent arrived whole, so the reader still sees end of stream.
+        expect(await c.stream.read()).toBeNull();
+      } else if (code === 4400) {
+        await expect(c.stream.read()).rejects.toMatchObject({
+          code: "stream-closed",
+          closeCode: 4400,
+        });
+      }
+    },
+  );
+
+  it("stream.json records: the limits match, and this client sends and reads DATA, empty DATA, FIN and CREDIT as those bytes", async () => {
+    expect(STREAM_LIMITS.maxData).toBe(framing.maxData);
+    expect(STREAM_LIMITS.window).toBe(framing.window);
+    expect(STREAM_LIMITS.creditEvery).toBe(framing.creditEvery);
+    const [hello, empty, fin, credit] = framing.records.map((entry) => entry.hex);
+    const c = await connected();
+    await c.stream.write(new TextEncoder().encode("hello"));
+    c.stream.end();
+    expect(c.received().map(toHex)).toEqual([hello, fin]);
+    // The node's: empty DATA is accepted and carries nothing, then 64 KiB, which this client credits as one CREDIT.
+    c.send(fromHex(empty ?? ""));
+    c.send(fromHex(hello ?? ""));
+    c.send(data(new Uint8Array(framing.maxData)));
+    c.send(data(new Uint8Array(framing.creditEvery - 5 - framing.maxData)));
+    const chunks: Array<Uint8Array> = [];
+    let read = 0;
+    while (read < framing.creditEvery) {
+      const chunk = (await c.stream.read()) ?? new Uint8Array();
+      chunks.push(chunk);
+      read += chunk.length;
+    }
+    expect(new TextDecoder().decode(chunks[0]?.subarray(0, 5))).toBe("hello");
+    expect(c.received().map(toHex)).toEqual([credit]);
+    // The node's FIN, alone: end of stream, and with both FINs read the session closes 1000.
+    c.send(fromHex(fin ?? ""));
+    expect(await c.stream.read()).toBeNull();
+    expect(await c.stream.closed).toBe(1000);
+  });
+
+  it("stream.json CREDIT 65536 from the node returns that much DATA in flight", async () => {
+    const c = await connected();
+    await c.stream.write(new Uint8Array(framing.creditEvery));
+    expect(c.stream.stats().inflight).toBe(framing.creditEvery);
+    c.send(fromHex(framing.records[3]?.hex ?? ""));
+    expect(c.stream.stats().inflight).toBe(0);
+    expect(c.socket.closedWith).toBeUndefined();
+  });
+
+  it("DATA, DATA and FIN arriving before any read are all read, then end of stream, then close 1000 after our FIN", async () => {
+    const c = await connected();
+    c.send(data(Uint8Array.of(1, 2)));
+    c.send(data(Uint8Array.of(3)));
+    c.send(record(1));
+    c.stream.end();
+    expect(c.socket.closedWith).toBeUndefined();
+    expect(await c.stream.read()).toEqual(Uint8Array.of(1, 2, 3));
+    expect(await c.stream.read()).toBeNull();
+    expect(c.received()).toEqual([record(1), record(2, u32le(3))]);
+    expect(c.socket.closedWith).toBe(1000);
+    expect(await c.stream.closed).toBe(1000);
+  });
+
+  it("data that arrived before the node's FIN stays readable after the session closes normally", async () => {
+    const c = await connected();
+    c.send(data(Uint8Array.of(7)));
+    c.send(record(1));
+    c.socket.remoteClose(1000);
+    expect(await c.stream.read()).toEqual(Uint8Array.of(7));
+    expect(await c.stream.read()).toBeNull();
+  });
+
+  it("a session that closes before FIN fails reads after the buffered bytes", async () => {
+    const c = await connected();
+    c.send(data(Uint8Array.of(7)));
+    c.socket.remoteClose(4404);
+    expect(await c.stream.read()).toEqual(Uint8Array.of(7));
+    await expect(c.stream.read()).rejects.toMatchObject({ code: "stream-closed", closeCode: 4404 });
+  });
+});

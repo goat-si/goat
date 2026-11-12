@@ -3,6 +3,7 @@ import {
   botArtifactPreviewSlot,
   botArtifactViewKind,
   goatBotReplyFiles,
+  goatBotReplyMayNameFile,
 } from "@goat/client-runtime/goatBot";
 import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import type { ChannelBotArtifact, EnvironmentId, ThreadId } from "@goat/contracts";
@@ -35,7 +36,7 @@ import {
   type GoatBotFilePreview,
   type GoatBotPreviewBlock,
 } from "./goatBotFilePreview";
-import { useBotFileOpener } from "./MobileBotFileViewer";
+import type { useBotFileOpener } from "./MobileBotFileViewer";
 
 interface GoatBotFiles {
   readonly environmentId: EnvironmentId;
@@ -60,14 +61,6 @@ export interface GoatBotFilesReply {
 }
 
 const GoatBotFilesContext = createContext<GoatBotFiles | null>(null);
-
-const INLINE_CODE = /`([^`\n]+)`/g;
-
-/** A reply's inline-code spans, each a possible file name; the listing decides which are. */
-function namesSomething(text: string): boolean {
-  for (const match of text.matchAll(INLINE_CODE)) if ((match[1] ?? "").trim() !== "") return true;
-  return false;
-}
 
 interface ListingReads {
   readonly chatKey: string;
@@ -95,19 +88,26 @@ const freshReads = (chatKey: string): ListingReads => ({
   latestFinished: null,
 });
 
+export type GoatBotFileOpener = ReturnType<typeof useBotFileOpener>;
+
+/** What a chat's file opener and previews belong to: its environment and conversation thread. */
+export const chatFilesScope = (environmentId: EnvironmentId | null, threadId: ThreadId | null) =>
+  JSON.stringify([environmentId, threadId]);
+
 /**
  * The chat's Library: its listing, read once a finished reply names something (one read for every
  * reply that finishes while none runs, one follow-up for those that finish during a read), and the
- * one viewer its file cards open. No cards on a server without the Library or offline.
+ * viewer of the opener its owner passes in. No cards on a server without the Library or offline.
  */
 export function GoatBotFilesProvider(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: ThreadId | null;
-  readonly botName: string;
   readonly replies: ReadonlyArray<GoatBotFilesReply>;
+  /** The chat's opener, scoped to `chatFilesScope` of this environment and thread. */
+  readonly opener: GoatBotFileOpener;
   readonly children: ReactNode;
 }) {
-  const { environmentId, replies } = props;
+  const { environmentId, replies, opener } = props;
   const { presentationById } = useEnvironments();
   const presentation = environmentId === null ? undefined : presentationById.get(environmentId);
   const readable =
@@ -117,8 +117,7 @@ export function GoatBotFilesProvider(props: {
   const listing = useEnvironmentQuery(
     readable ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null,
   );
-  const chatKey = JSON.stringify([environmentId, props.threadId]);
-  const opener = useBotFileOpener(environmentId, props.botName, chatKey);
+  const chatKey = chatFilesScope(environmentId, props.threadId);
   const refresh = listing.refresh;
   const pending = listing.isPending;
   // What a read settles to: an answer or a failure, never the answer it started from.
@@ -156,7 +155,7 @@ export function GoatBotFilesProvider(props: {
       const older = state.coveredUpTo !== null && reply.createdAt <= state.coveredUpTo;
       if (state.latestFinished === null || reply.createdAt > state.latestFinished)
         state.latestFinished = reply.createdAt;
-      if (!namesSomething(reply.text)) continue;
+      if (!goatBotReplyMayNameFile(reply.text)) continue;
       // History older than a reply a read already started after: that read saw its files.
       if (older && !state.streamed.has(reply.id)) continue;
       owed = true;

@@ -8,6 +8,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 const layerServerConfig = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =>
   Layer.effect(
     ServerConfig.ServerConfig,
@@ -69,6 +70,7 @@ it.effect(
         const exchange = (credential: string) =>
           auth.exchangeBootstrapCredentialForAccessToken(
             credential,
+            MAIN_LISTENER,
             ["terminal:read"],
             requestMetadata,
           );

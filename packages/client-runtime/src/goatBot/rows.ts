@@ -9,7 +9,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 
 import { parseGoatBotQuote } from "./quote.ts";
-import { goatBotPreviewText } from "./previewText.ts";
+import { goatBotPreviewText } from "@goat/shared/goatBotPreviewText";
 import {
   answerReferenceOf,
   decidedAnswerInputs,

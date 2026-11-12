@@ -10,6 +10,22 @@ const texts = (text: string) => parts(text).map((part) => part.text);
 const sources = (text: string) => parts(text).map((part) => part.source);
 
 describe("goatBotReplySplit", () => {
+  it("keeps every reply a long chat shows, so drawing it again parses none of them", () => {
+    const replies = Array.from({ length: 100 }, (_, index) => `Reply ${index}:\n\n${table}`);
+    const first = replies.map((text) => goatBotReplySplit(text, replies.length));
+    const parsedAgain = replies.filter(
+      (text, index) => goatBotReplySplit(text, replies.length) !== first[index],
+    );
+    expect(parsedAgain).toHaveLength(0);
+  });
+
+  it("holds no more than 500 drawn replies, so a longer chat reparses instead of growing", () => {
+    const replies = Array.from({ length: 600 }, (_, index) => `Long ${index}:\n\n${table}`);
+    const first = replies.map((text) => goatBotReplySplit(text, replies.length));
+    expect(goatBotReplySplit(replies[0] ?? "", replies.length)).not.toBe(first[0]);
+    expect(goatBotReplySplit(replies[599] ?? "", replies.length)).toBe(first[599]);
+  });
+
   it("splits an answer into its opening text, the table and the closing text", () => {
     expect(texts(`Here are the plans:\n\n${table}\n\nPro adds sync.`)).toEqual([
       "Here are the plans:",

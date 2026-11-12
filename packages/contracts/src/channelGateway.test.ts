@@ -5,6 +5,7 @@ import {
   BotProfile,
   ChannelGatewayError,
   ChannelCreateBotInput,
+  ChannelGetBotStatusResult,
   ChannelIdentityLinkConsumeInput,
   ChannelIngestInput,
   ChannelIngestResult,
@@ -103,6 +104,20 @@ describe("channel.updateBot input", () => {
     expect(older(profile)._tag).toBe("Success");
     const { color: _stored, ...legacy } = profile;
     expect(decodeProfile(legacy)._tag).toBe("Success");
+  });
+
+  it("keeps a bot status with tasks readable by a client that predates tasks, and the reverse", () => {
+    const { tasks: _tasks, ...olderFields } = ChannelGetBotStatusResult.fields;
+    const older = Schema.decodeUnknownExit(Schema.Struct(olderFields));
+    const current = Schema.decodeUnknownExit(ChannelGetBotStatusResult);
+    const status = { bot: null, waitingCount: 0, tasks: { active: true } };
+    expect(older(status)._tag).toBe("Success");
+    const decoded = current(status);
+    expect(decoded._tag === "Success" ? decoded.value.tasks : undefined).toEqual({ active: true });
+    const { tasks: _sent, ...fromOlderServer } = status;
+    const withoutTasks = current(fromOlderServer);
+    expect(withoutTasks._tag).toBe("Success");
+    expect(withoutTasks._tag === "Success" ? withoutTasks.value : null).not.toHaveProperty("tasks");
   });
 });
 

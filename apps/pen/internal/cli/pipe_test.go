@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -201,5 +203,22 @@ func TestPipeHomeFlagPicksTheStateDirectoryOverPEN_HOME(t *testing.T) {
 	}
 	if out.String() != "SSH-2.0-test\r\n" {
 		t.Fatalf("pipe output %q", out.String())
+	}
+}
+
+// Win32-OpenSSH puts the host name into ProxyCommand's command line unquoted and starts it without
+// a shell, so a name with spaces arrives as several arguments after the node.
+func TestPipeReadsNoFlagAfterTheNodeSoAHostNameCannotNameAStateDirectory(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
+	var out, errOut bytes.Buffer
+	if code := RunPipe([]string{"pen-a", "--home", elsewhere, "22"}, &out, &errOut); code != 255 {
+		t.Fatalf("pipe exit %d, want 255: %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "usage: pen pipe") {
+		t.Fatalf("pipe said %q, want its usage", errOut.String())
+	}
+	if _, err := os.Stat(elsewhere); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pipe opened %s as its state directory (stat: %v)", elsewhere, err)
 	}
 }

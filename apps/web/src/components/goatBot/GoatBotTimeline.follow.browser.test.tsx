@@ -35,6 +35,24 @@ const scroller = (container: HTMLElement) => {
 const distanceFromBottom = (element: HTMLElement) =>
   element.scrollHeight - element.scrollTop - element.clientHeight;
 
+/** Runs `change` and resolves once the element's resize reached the timeline's own observer. */
+async function afterResize(element: Element, change: () => Promise<void>) {
+  const waiting: Array<() => void> = [];
+  const next = () => new Promise<void>((resolve) => waiting.push(resolve));
+  // Created after the timeline's observer, so its callback runs after the timeline's.
+  const observer = new ResizeObserver(() => waiting.shift()?.());
+  try {
+    const observed = next();
+    observer.observe(element);
+    await observed;
+    const resized = next();
+    await change();
+    await resized;
+  } finally {
+    observer.disconnect();
+  }
+}
+
 it("stays on the newest message when a message grows after it rendered", async () => {
   const host = document.createElement("div");
   host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
@@ -75,10 +93,14 @@ it("keeps following when a scroll event from its own move arrives after a messag
   // Scrolling up by hand still stops the following.
   element.scrollTop = 0;
   element.dispatchEvent(new Event("scroll"));
-  await act(() => {
-    const last = screen.container.querySelector<HTMLElement>("li:last-child");
-    if (last) last.style.paddingBottom = "600px";
-  });
-  await vi.waitFor(() => expect(element.scrollTop).toBe(0));
+  const list = element.querySelector("ol");
+  if (list === null) throw new Error("expected the conversation list");
+  await afterResize(list, () =>
+    act(() => {
+      const last = screen.container.querySelector<HTMLElement>("li:last-child");
+      if (last) last.style.paddingBottom = "600px";
+    }),
+  );
+  expect(element.scrollTop).toBe(0);
   host.remove();
 });

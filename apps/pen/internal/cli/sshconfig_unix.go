@@ -12,6 +12,15 @@ func proxyPrefix(exe, home string) string {
 	return cmd
 }
 
+// The pen-* block's Host patterns and its ProxyCommand's node argument. ssh hands ProxyCommand to a
+// shell with %n replaced by the host name as typed, and before OpenSSH 9.6 it accepts any name. In
+// single quotes a name reaches pen as one word unless it holds a quote, and such a name matches
+// the negated pattern, so the block does not apply to it.
+const (
+	fallbackHost = `pen-* "!*'*"`
+	fallbackNode = "'%n'"
+)
+
 // connectionReuse: OpenSSH on unix has ControlMaster.
 const connectionReuse = true
 

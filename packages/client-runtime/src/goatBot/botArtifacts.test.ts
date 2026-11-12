@@ -412,6 +412,46 @@ describe("files a reply names", () => {
     expect(goatBotReplyMayNameFile("Open `reports\\summary.md`.")).toBe(false);
     expect(goatBotReplyMayNameFile("No code here: summary.md")).toBe(false);
   });
+
+  const listed = (text: string) =>
+    goatBotReplyFiles(text, files, root).map((file) => file.relativePath);
+
+  it("a path inside a top-level fenced code block names nothing, with backticks or tildes", () => {
+    const fenced = "Ran:\n\n```sh\ncat `reports/summary.md`\n```\n\nThen `chart.png`.";
+    expect(listed(fenced)).toEqual(["chart.png"]);
+    expect(listed("~~~\n`notes.txt`\n~~~")).toEqual([]);
+    expect(listed("   ```\n`notes.txt`\n   ```\nSaved `chart.png`.")).toEqual(["chart.png"]);
+    // A fence closes only on a run of its own character at least as long as the one that opened it.
+    expect(listed("````\n```\n`notes.txt`\n````\nSaved `chart.png`.")).toEqual(["chart.png"]);
+    expect(listed("~~~\n```\n`notes.txt`\n~~~\nSaved `chart.png`.")).toEqual(["chart.png"]);
+    // An unclosed fence runs to the end of the reply.
+    expect(listed("```\n`notes.txt`")).toEqual([]);
+    expect(goatBotReplyMayNameFile("```\n`notes.txt`\n```")).toBe(false);
+  });
+
+  it("only a fence CommonMark is certain of hides paths; an indented code line opens nothing", () => {
+    // Four spaces make indented code, not a fence, so the card after it stays.
+    expect(listed("    ```\n\nSaved `chart.png`")).toEqual(["chart.png"]);
+    // A backtick in the info string means this is not a fence, so its line is ordinary text.
+    expect(listed("```js `\nSaved `chart.png`.")).toEqual(["chart.png"]);
+    // A fence inside a list item ends with the list, so the code after it is real.
+    expect(listed("- item\n  ```\n`chart.png`")).toEqual(["chart.png"]);
+    // After a list, an indented fence may be top level instead; the rest is read as it is.
+    expect(listed("1. `chart.png`\n  ```\n```\n   `notes.txt`")).toEqual([
+      "chart.png",
+      "notes.txt",
+    ]);
+    // A fence marker inside an HTML block is HTML, so the code after the block is real.
+    expect(listed("<div>\n```\n</div>\n\nSaved `chart.png`")).toEqual(["chart.png"]);
+  });
+
+  it("a reply of hundreds of thousands of lines is read without failing", () => {
+    const long = "- item\n  ```\n" + "\n".repeat(300_000) + "Saved `chart.png`.";
+    expect(goatBotReplyMayNameFile(long)).toBe(true);
+    expect(listed(long)).toEqual(["chart.png"]);
+    const fenced = "```\n" + "`notes.txt`\n".repeat(300_000) + "```\nSaved `chart.png`.";
+    expect(listed(fenced)).toEqual(["chart.png"]);
+  });
 });
 
 describe("botArtifactPreview", () => {

@@ -64,6 +64,8 @@ export const CHANNEL_COPY = {
     "I removed that note, but it came back because something else wrote my notes at the same time. Please check the Memory tab.",
   noteUnverified:
     "I removed that note, but couldn't check my notes file afterwards. Please check the Memory tab.",
+  noteForgetWouldRebind:
+    "Forgetting that note would change which note another one replaces, so nothing changed.",
 } as const;
 
 /** Sent when GOAT put back a note it had refused to forget while another notes change ran. */
@@ -71,6 +73,24 @@ export const noteKeptNotice = (note: string) =>
   "I kept this note: " +
   JSON.stringify(note) +
   ". You asked me to forget it while another change to my notes was running, so that request changed nothing. Ask again if you still want it gone.";
+
+const notesRead = (note: string, count: number) =>
+  (count === 2 ? "Two notes read “" : count + " notes read “") + note + "”";
+
+// A request in the person's own words reaches a turn that may edit the notes file by hand.
+const TIDY_NOTES = " To clean them up, ask me in your own words which one to remove.";
+
+/** The answer to a Memory tab change or forget whose words more than one current note reads. */
+export const notesAlikeAnswer = (note: string, count: number) =>
+  notesRead(note, count) +
+  (count === 2 ? ", so I left them both." : ", so I left them all.") +
+  TIDY_NOTES;
+
+/** The reply to a correction whose words more than one current note reads: nothing was saved. */
+export const notesAlikeNotSaved = (note: string, count: number) =>
+  notesRead(note, count) +
+  ", so I didn't save that change: I can't tell which one it replaces." +
+  TIDY_NOTES;
 
 /** What a model reads for a person's message: its text, then the names of the files sent with it. */
 export const inboundTextWithFiles = (message: {

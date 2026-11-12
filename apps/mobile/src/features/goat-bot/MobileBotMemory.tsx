@@ -5,7 +5,10 @@ import {
   GOAT_BOT_NOTES_COPY,
   GOAT_BOT_NOTES_SHARED_COPY,
   GOAT_BOT_NOTES_TRUNCATED_COPY,
+  type GoatBotNoteHeldBack,
+  goatBotNoteHeldBackCopy,
   goatBotNoteSourceLabel,
+  goatBotNotesHeldBack,
   goatBotNotesView,
   noteDateLabel,
 } from "@goat/client-runtime/goatBot";
@@ -113,9 +116,7 @@ function MobileNoteList(props: {
   const now = useNowMinuteMs();
   const places = mobileNotePlaces(view.current);
   const { attached, apart } = placeMobileNoteWordings(places, props.revision, props.wordings);
-  // A change request names a note by its text, so a text two notes share cannot pick one of them.
-  const texts = new Map<string, number>();
-  for (const note of view.current) texts.set(note.text, (texts.get(note.text) ?? 0) + 1);
+  const heldBack = goatBotNotesHeldBack({ notes: props.notes, truncated: props.truncated });
   return (
     <View className="gap-1">
       {props.truncated ? (
@@ -142,7 +143,8 @@ function MobileNoteList(props: {
               // An index is a line's place in this read only, so a new read starts every row over.
               key={JSON.stringify([props.revision, note.index])}
               note={note}
-              sharedText={(texts.get(note.text) ?? 0) > 1}
+              heldBack={heldBack.get(note.index) ?? null}
+              botName={props.botName}
               source={goatBotNoteSourceLabel(note.source, { now })}
               onDraft={props.onDraft}
               wording={held?.kept.wording ?? null}
@@ -223,8 +225,9 @@ function MobileNoteList(props: {
 
 function MobileNoteRow(props: {
   readonly note: ChannelBotNote;
-  /** Another current note reads the same, so asking to change this one could change the other. */
-  readonly sharedText: boolean;
+  /** Why a change or forget request naming this note by its words could act on another note. */
+  readonly heldBack: GoatBotNoteHeldBack | null;
+  readonly botName: string;
   readonly source: string | null;
   readonly onDraft: ((text: string) => boolean) | undefined;
   readonly wording: string | null;
@@ -234,7 +237,7 @@ function MobileNoteRow(props: {
   const setWording = props.onWordingChange;
   const draft = wording === null ? null : changeNoteDraft(note, wording);
   const canAsk = onDraft !== undefined;
-  // A forget request names its note by text too, so a shared text gets the same notice.
+  // A forget request names its note by its words too, so it is held back the same way.
   const [forgetting, setForgetting] = useState(false);
   return (
     <View className="gap-1 border-b border-border py-2">
@@ -244,9 +247,9 @@ function MobileNoteRow(props: {
       {note.replaces !== undefined ? (
         <Text className="text-foreground-muted">Replaces: “{note.replaces}”</Text>
       ) : null}
-      {wording === null && forgetting ? (
+      {wording === null && forgetting && props.heldBack !== null ? (
         <MobileSharedNoteNotice
-          text={note.text}
+          message={goatBotNoteHeldBackCopy(props.heldBack, note.text, props.botName)}
           copy={note.text}
           copyTarget="note"
           onDiscard={() => setForgetting(false)}
@@ -267,7 +270,7 @@ function MobileNoteRow(props: {
             accessibilityRole="button"
             disabled={!canAsk}
             onPress={() =>
-              props.sharedText ? setForgetting(true) : onDraft?.(forgetNoteDraft(note))
+              props.heldBack !== null ? setForgetting(true) : onDraft?.(forgetNoteDraft(note))
             }
             className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
           >
@@ -285,9 +288,9 @@ function MobileNoteRow(props: {
             multiline
             className="min-h-[44px] rounded-md border border-border px-3 py-2 text-foreground"
           />
-          {props.sharedText ? (
+          {props.heldBack !== null ? (
             <MobileSharedNoteNotice
-              text={note.text}
+              message={goatBotNoteHeldBackCopy(props.heldBack, note.text, props.botName)}
               copy={wording}
               copyTarget="new wording"
               onDiscard={() => setWording(null)}
@@ -323,18 +326,16 @@ function MobileNoteRow(props: {
   );
 }
 
-/** Two notes read the same, so a request naming one by its text cannot pick it; keep it by hand. */
+/** A request naming this note by its words cannot pick it out; keep the words by hand. */
 function MobileSharedNoteNotice(props: {
-  readonly text: string;
+  readonly message: string;
   readonly copy: string;
   readonly copyTarget: string;
   readonly onDiscard: () => void;
 }) {
   return (
     <View className="gap-1">
-      <Text className="text-foreground-muted">
-        Two notes read “{props.text}”, so GOAT Bot can't tell which one you mean.
-      </Text>
+      <Text className="text-foreground-muted">{props.message}</Text>
       <View className="flex-row flex-wrap gap-x-4">
         <Pressable
           accessibilityRole="button"

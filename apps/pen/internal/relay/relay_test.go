@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
@@ -497,4 +500,102 @@ func TestAQuietUplinkWhoseRelayAnswersPingsStaysUp(t *testing.T) {
 		t.Fatalf("a quiet uplink whose relay answers every ping changed state (up=%v)", up)
 	default:
 	}
+}
+
+// scriptedRelay admits any uplink and sends it only the frames a test hands over, so it can do
+// what a relay that ignores the contract's session caps does.
+type scriptedRelay struct {
+	url  string
+	send chan wire.Frame
+	recv chan wire.Frame
+}
+
+func newScriptedRelay(t *testing.T, ctx context.Context) *scriptedRelay {
+	t.Helper()
+	s := &scriptedRelay{send: make(chan wire.Frame), recv: make(chan wire.Frame, 16)}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		if ws.Write(ctx, websocket.MessageBinary, make([]byte, 32)) != nil {
+			return
+		}
+		if _, _, err := ws.Read(ctx); err != nil {
+			return
+		}
+		go func() {
+			for {
+				typ, p, err := ws.Read(ctx)
+				if err != nil {
+					return
+				}
+				if typ != websocket.MessageBinary {
+					continue // the node's pings and acks
+				}
+				if f, err := wire.DecodeFrame(p); err == nil {
+					select {
+					case s.recv <- f:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+		for {
+			select {
+			case f := <-s.send:
+				if ws.Write(ctx, websocket.MessageBinary, f.Encode()) != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	s.url = srv.URL
+	return s
+}
+
+func TestAnUplinkRefusesAnOpenPastItsSessionCap4429AndTakesOneAgainWhenASessionEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rs := newScriptedRelay(t, ctx)
+	t.Cleanup(cancel) // before the relay's Close, which waits for its handler
+	u := relay.NewUplink(rs.url, newID(t))
+	go u.Run(ctx)
+	open := func(sid uint32) { rs.send <- wire.Frame{Type: wire.FrameOpen, SID: sid} }
+	var conns []relay.Conn
+	for sid := uint32(1); sid <= relay.MaxSessions; sid++ {
+		open(sid)
+		c, err := u.Accept(ctx)
+		if err != nil {
+			t.Fatalf("session %d: %v", sid, err)
+		}
+		conns = append(conns, c)
+	}
+
+	accepted := make(chan relay.Conn, 1)
+	go func() {
+		if c, err := u.Accept(ctx); err == nil {
+			accepted <- c
+		}
+	}()
+	open(relay.MaxSessions + 1)
+	select {
+	case f := <-rs.recv:
+		if f.Type != wire.FrameClose || f.SID != relay.MaxSessions+1 || f.CloseCode() != wire.CodeCaps {
+			t.Fatalf("the node answered the OPEN past its cap with %+v, want CLOSE 4429 for that session", f)
+		}
+	case <-accepted:
+		t.Fatal("the uplink took a session past its cap")
+	}
+
+	conns[0].Close(wire.CodeNormal)
+	if f := <-rs.recv; f.Type != wire.FrameClose || f.SID != 1 {
+		t.Fatalf("got %+v, want the CLOSE of session 1", f)
+	}
+	open(relay.MaxSessions + 2)
+	<-accepted
 }

@@ -305,6 +305,32 @@ it("leaves focus in the composer when a peeked task leaves the list", async () =
   await expect.element(composer).toHaveValue("still typing");
 });
 
+it("leaves focus where it was when a peeked task leaves the list after a click on chat text", async () => {
+  setup([], [], [runningTask]);
+  const panel = () => (
+    <>
+      <p>Here is what I found</p>
+      <GoatBotWorkPanel
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        peekRows={() => []}
+        onOpenFile={() => {}}
+      />
+    </>
+  );
+  await using screen = await render(panel());
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await expect.element(screen.getByRole("button", { name: /Back to Home from/ })).toHaveFocus();
+  // Text takes no focus, so the click leaves it on the page body, outside the peek.
+  await userEvent.click(screen.getByText("Here is what I found"));
+  expect(document.activeElement).toBe(document.body);
+  setup([]);
+  await screen.rerender(panel());
+  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(screen.getByRole("tab", { name: "Home" })).not.toHaveFocus();
+  expect(document.activeElement).toBe(document.body);
+});
+
 it("says the task list is loading, not empty, before the first read answers", async () => {
   setup([]);
   mocks.threads = { loaded: false, failed: false };

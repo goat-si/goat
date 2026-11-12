@@ -20,7 +20,6 @@ import * as Path from "effect/Path";
 import {
   collapseNoteText,
   NOTES_HEADER,
-  notesTail,
   noteNamedBy,
   parseChannelBotNoteLines,
   replacesMarker,
@@ -34,8 +33,6 @@ import {
 } from "./channelBotNotesRecall.ts";
 import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
 
-/** How far back a correction looks for the note it replaces, in characters. */
-const CORRECTION_READ_CHARS = 64 * 1024;
 const NOTE_MAX_CHARS = 500;
 const SKILLS_LIMIT = 20;
 const SKILL_SUMMARY_CHARS = 200;
@@ -91,8 +88,13 @@ export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
   );
 
 export interface ChannelBotNoteSaved {
-  /** Set when the note was a correction: whether it replaced the note it named. */
-  readonly correction?: "replaced" | "unmatched";
+  /**
+   * Set when the note was a correction: whether it replaced the note it named, named none, or
+   * named words that several current notes read, so nothing was saved.
+   */
+  readonly correction?: "replaced" | "unmatched" | "alike";
+  /** How many current notes read the words, for an "alike" correction. */
+  readonly alike?: number;
   /** True only when this call appended a line. A repeat for the same input did not. */
   readonly wrote: boolean;
 }
@@ -140,6 +142,7 @@ export const appendPrefix = (exists: boolean, text: string) =>
  * for an input already named in the file is not added again, so a repeated pass is harmless and
  * reports what the first pass saved. A correction names the note it replaces; the line records
  * that only when the note is found, otherwise the note is kept plainly and reported unmatched.
+ * A correction whose words several current notes read saves nothing.
  */
 export const appendChannelBotNote = (
   fs: FileSystem.FileSystem,
@@ -165,10 +168,13 @@ export const appendChannelBotNote = (
       const first = parseChannelBotNoteLines(text).find((earlier) => earlier.raw.includes(source));
       return saved(first?.replaces !== undefined, false);
     }
-    const target =
-      replaces === undefined
-        ? undefined
-        : noteNamedBy(parseChannelBotNoteLines(notesTail(text, CORRECTION_READ_CHARS)), replaces);
+    const named =
+      replaces === undefined ? undefined : noteNamedBy(parseChannelBotNoteLines(text), replaces);
+    if (named !== undefined && named.alike !== undefined && named.alike > 1) {
+      const alike: ChannelBotNoteSaved = { correction: "alike", alike: named.alike, wrote: false };
+      return alike;
+    }
+    const target = named?.line;
     yield* fs.writeFileString(
       files.notes,
       appendPrefix(exists, text) +

@@ -1,5 +1,5 @@
 export * from "./rows.ts";
-export * from "./previewText.ts";
+export { goatBotPreviewText } from "@goat/shared/goatBotPreviewText";
 export * from "./labels.ts";
 export * from "./readers.ts";
 export * from "./activity.ts";
@@ -25,3 +25,4 @@ export * from "./botColor.ts";
 export * from "./unread.ts";
 export * from "./changeRequestLinks.ts";
 export * from "./quote.ts";
+export * from "./eventSubject.ts";

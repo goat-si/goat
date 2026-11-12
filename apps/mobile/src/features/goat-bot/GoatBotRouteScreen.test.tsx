@@ -16,6 +16,9 @@ const route = vi.hoisted(() => ({
   member: null as null | { botId: string; environmentId: string; sessionThreadId: string },
   memberPreview: null as null | { unread: boolean; at: string },
   previewRefs: [] as unknown[],
+  screenForeground: undefined as boolean | undefined,
+  screenTask: undefined as string | undefined,
+  screenMember: undefined as string | null | undefined,
 }));
 vi.mock("react-native", () => ({
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
@@ -55,8 +58,16 @@ vi.mock("./useMobileBotRoster", () => ({
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => ({ canManage: false }) }));
 vi.mock("./GoatBotScreen", () => ({
-  GoatBotScreen: (props: { readSnapshot?: GoatBotVisitSnapshot | null }) => {
+  GoatBotScreen: (props: {
+    readSnapshot?: GoatBotVisitSnapshot | null;
+    foreground?: boolean;
+    taskId?: string;
+    member?: { botId: string } | null;
+  }) => {
     route.snapshot = props.readSnapshot;
+    route.screenForeground = props.foreground;
+    route.screenTask = props.taskId;
+    route.screenMember = props.member === undefined ? undefined : (props.member?.botId ?? null);
     return null;
   },
 }));
@@ -197,4 +208,32 @@ it("records a member chat's visit against the member's own conversation while it
   await act(async () => root.unmount());
   route.member = null;
   route.memberPreview = null;
+});
+
+it("tells the chat when the app is in the background, so it stops reading GOAT Bot's steps", async () => {
+  Object.assign(route, { focused: true, foreground: true, active: true, threadId: "fg-thread" });
+  const view = await mount();
+  expect(route.screenForeground).toBe(true);
+  route.foreground = false;
+  await view.show();
+  expect(route.screenForeground).toBe(false);
+  route.foreground = true;
+  await view.show();
+  expect(route.screenForeground).toBe(true);
+  await view.unmount();
+});
+
+it("opens the task an ask names in its own bot's chat, whether or not the work list still has it", async () => {
+  Object.assign(route, { focused: true, foreground: true, active: true, threadId: "ask-thread" });
+  route.member = { botId: "scout", environmentId: "env", sessionThreadId: "scout-thread" };
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement("div"));
+  const asked = {
+    route: { params: { botId: "scout", taskId: "task-s" } },
+  } as unknown as RouteProps;
+  await act(async () => root.render(<GoatBotRouteScreen {...asked} />));
+  expect(route.screenTask).toBe("task-s");
+  expect(route.screenMember).toBe("scout");
+  await act(async () => root.unmount());
+  route.member = null;
 });

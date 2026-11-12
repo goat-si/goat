@@ -7,16 +7,42 @@
     "./identity": "./src/identity.ts",
     "./login": "./src/login.ts",
     "./service": "./src/service.ts",
-    "./ready": "./src/ready.ts"
+    "./ready": "./src/ready.ts",
+    "./client/errors": "./src/client/errors.ts",
+    "./client/runtime": "./src/client/runtime.ts",
+    "./client/bytes": "./src/client/bytes.ts",
+    "./client/crypto": "./src/client/crypto.ts",
+    "./client/noise": "./src/client/noise.ts",
+    "./client/pairing": "./src/client/pairing.ts",
+    "./client/pairing-flow": "./src/client/pairingFlow.ts",
+    "./client/relay-client": "./src/client/relayClient.ts",
+    "./client/race": "./src/client/race.ts",
+    "./client/stream": "./src/client/stream.ts",
+    "./client/http1": "./src/client/http1.ts",
+    "./client/websocket": "./src/client/websocket.ts",
+    "./client/pen-fetch": "./src/client/penFetch.ts",
+    "./client/pen-websocket": "./src/client/penWebSocket.ts",
+    "./testing/loopback-node": "./src/client/testing/loopbackNode.ts",
+    "./vectors/service.json": "./vectors/service.json"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",
     "typecheck": "tsc --noEmit",
-    "vectors": "node scripts/vectors.ts"
+    "vectors": "node scripts/vectors.ts",
+    "bench:noise": "node scripts/bench-noise.ts",
+    "hermes-check": "node scripts/hermes-check.ts"
+  },
+  "dependencies": {
+    "@noble/ciphers": "catalog:",
+    "@noble/curves": "catalog:",
+    "@noble/hashes": "catalog:"
   },
   "devDependencies": {
+    "@goat/shared": "workspace:*",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "typescript": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "ws": "catalog:"
   }
 }

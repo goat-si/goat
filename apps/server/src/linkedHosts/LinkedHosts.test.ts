@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { onMainListener } from "../auth/connectionContext.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthStandardClientScopes, EnvironmentHttpApi } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
@@ -584,10 +585,12 @@ describe("LinkedHosts", () => {
           const found = yield* links.find("build-box");
           const token = Option.getOrThrow(found).token;
           const session = yield* hostAuth.authenticateMcpClient(
-            HttpServerRequest.fromWeb(
-              new Request(`http://127.0.0.1/mcp`, {
-                headers: { host: HOST, authorization: `Bearer ${token}` },
-              }),
+            onMainListener(
+              HttpServerRequest.fromWeb(
+                new Request(`http://127.0.0.1/mcp`, {
+                  headers: { host: HOST, authorization: `Bearer ${token}` },
+                }),
+              ),
             ),
           );
           return { linked, listed: yield* links.list, session, names: yield* links.names };

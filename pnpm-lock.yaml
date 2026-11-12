@@ -201,6 +201,9 @@ catalogs:
     '@effect/sql-sqlite-do':
       specifier: 4.0.5
       version: 4.0.5
+    '@noble/ciphers':
+      specifier: 1.3.0
+      version: 1.3.0
     '@noble/curves':
       specifier: 1.9.1
       version: 1.9.1
@@ -919,6 +922,9 @@ importers:
       '@ff-labs/fff-node':
         specifier: 0.11.0
         version: 0.11.0(patch_hash=cc71fcec015f4d39bc96ae2e2bf6b0ca678124c722c66a7841efce9d34b5983c)
+      '@goat/pen-protocol':
+        specifier: workspace:*
+        version: link:../../packages/pen-protocol
       '@goat/provider-acp':
         specifier: workspace:*
         version: link:../../packages/provider-acp
@@ -1064,9 +1070,6 @@ importers:
       '@goat/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@goat/pen-protocol':
-        specifier: workspace:*
-        version: link:../../packages/pen-protocol
       '@goat/provider-testing':
         specifier: workspace:*
         version: link:../../packages/provider-testing
@@ -1652,6 +1655,9 @@ importers:
       '@effect/vitest':
         specifier: 4.0.5
         version: 4.0.5(patch_hash=2731c9c3761c595f25ddc625a7d61ca376b389d5b3049ecb837c8940f21cfa02)(@astrojs/compiler-rs@0.5.1)(@tsc-rs/typescript@0.8.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(@volar/typescript@2.4.28(@tsc-rs/typescript@0.8.0))(bufferutil@4.1.0)(effect@4.0.5)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.0(@noble/hashes@1.8.0))(playwright@1.60.0)(terser@5.48.0)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
+      '@goat/pen-protocol':
+        specifier: workspace:*
+        version: link:../pen-protocol
       '@types/three':
         specifier: 0.180.0
         version: 0.180.0
@@ -1717,16 +1723,35 @@ importers:
         version: 1.4.0(@astrojs/compiler-rs@0.5.1)(@tsc-rs/typescript@0.8.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(@volar/typescript@2.4.28(@tsc-rs/typescript@0.8.0))(bufferutil@4.1.0)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.0(@noble/hashes@1.8.0))(playwright@1.60.0)(terser@5.48.0)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
 
   packages/pen-protocol:
+    dependencies:
+      '@noble/ciphers':
+        specifier: 'catalog:'
+        version: 1.3.0
+      '@noble/curves':
+        specifier: 'catalog:'
+        version: 1.9.1
+      '@noble/hashes':
+        specifier: 'catalog:'
+        version: 1.8.0
     devDependencies:
+      '@goat/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.2
       typescript:
         specifier: 'catalog:'
         version: '@tsc-rs/typescript@0.8.0'
       vite-plus:
         specifier: 1.4.0
         version: 1.4.0(@astrojs/compiler-rs@0.5.1)(@tsc-rs/typescript@0.8.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(@volar/typescript@2.4.28(@tsc-rs/typescript@0.8.0))(bufferutil@4.1.0)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.0(@noble/hashes@1.8.0))(playwright@1.60.0)(terser@5.48.0)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
+      ws:
+        specifier: 'catalog:'
+        version: 8.22.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
 
   packages/provider-acp:
     dependencies:
@@ -5451,6 +5476,10 @@ packages:
     peerDependenciesMeta:
       hono:
         optional: true
+
+  '@noble/ciphers@1.3.0':
+    resolution: {integrity: sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==}
+    engines: {node: ^14.21.3 || >=16}
 
   '@noble/curves@1.9.1':
     resolution: {integrity: sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA==}
@@ -16434,6 +16463,8 @@ snapshots:
   '@neon/functions@0.11.0(hono@4.13.7)':
     optionalDependencies:
       hono: 4.13.7
+
+  '@noble/ciphers@1.3.0': {}
 
   '@noble/curves@1.9.1':
     dependencies:

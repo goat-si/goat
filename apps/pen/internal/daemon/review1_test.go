@@ -165,7 +165,7 @@ func TestAListDropClosesTheProgramsConnectionForThatKey(t *testing.T) {
 	f := newClientFixture(t)
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
-	prog.ended = make(chan struct{}, 4)
+	prog.finished = make(chan struct{}, 4)
 	prog.serve()
 	f.h = register(t, f.a, "goat", prog.port(), key)
 	p := phone(t)
@@ -178,7 +178,7 @@ func TestAListDropClosesTheProgramsConnectionForThatKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.h.setList(t, 2)
-	<-prog.ended // the node closed the program's connection; the program read EOF
+	<-prog.finished // the node closed the program's connection; the program read EOF
 	if code := closedWith(f.ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("closed %d, want 4401", code)
 	}

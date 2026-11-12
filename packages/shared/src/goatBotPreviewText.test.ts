@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { goatBotPreviewText } from "./previewText.ts";
+import { goatBotPreviewText } from "./goatBotPreviewText.ts";
 
 describe("goatBotPreviewText reads a message as one plain line", () => {
   it.each([

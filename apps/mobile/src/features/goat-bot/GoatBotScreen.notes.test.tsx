@@ -40,6 +40,7 @@ const box = vi.hoisted(() => ({
   platform: { OS: "ios" as "ios" | "android" },
   setSelection: vi.fn(),
   pick: null as null | ((value: { attachments: object[]; error?: string }) => void),
+  fail: null as null | ((cause: Error) => void),
 }));
 // Editing a member from its chat reads secure storage and bot permissions; these tests do not.
 vi.mock("./MobileNewBotNameRow", () => ({
@@ -47,8 +48,9 @@ vi.mock("./MobileNewBotNameRow", () => ({
 }));
 vi.mock("../../lib/composerImages", () => ({
   pickComposerMedia: () =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
       box.pick = resolve;
+      box.fail = reject;
     }),
   pickComposerFiles: async () => ({ files: [] }),
 }));
@@ -206,6 +208,8 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
+// GOAT Bot's steps are read from the thread state, which loads the environment runtime.
+vi.mock("../../state/threads", () => ({ environmentThreadDetails: {} }));
 vi.mock("./useMobileGoatBotSession", () => ({
   // Like the real session, a deleted member's chat cannot send.
   useMobileGoatBotSession: (
@@ -223,6 +227,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
     activity: null,
     supportsTaskThreads: true,
     streamingReplyIds: new Set<string>(),
+    visibleTurnItems: [],
+    boundedSnapshots: false,
   }),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
@@ -585,6 +591,25 @@ it("a photo the picker is still reading counts as a message in the box", async (
   await press(view.container, "New routine");
   expect(composer(view.container).value).toBe("Set up a routine: ");
   await view.unmount();
+});
+
+it("a photo the picker could not read, or that failed outright, frees the box again", async () => {
+  for (const settle of [
+    () => box.pick?.({ attachments: [], error: "That file is too large." }),
+    () => box.fail?.(new Error("The picker closed unexpectedly.")),
+  ]) {
+    setup();
+    session.attachments = true;
+    const view = await render();
+    await press(view.container, "Photo Library");
+    await press(view.container, "Open GOAT Bot home");
+    await press(view.container, "New routine");
+    expect(composer(view.container).value).toBe("");
+    await act(async () => settle());
+    await press(view.container, "New routine");
+    expect(composer(view.container).value).toBe("Set up a routine: ");
+    await view.unmount();
+  }
 });
 
 it("an accepted request focuses the message box once the sheet has gone, caret at the end", async () => {

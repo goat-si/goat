@@ -105,10 +105,12 @@ type program struct {
 	// ended without a verified line 3.
 	identities chan []byte
 	raw        chan []byte
+	// ended, when set, receives how the payload copy of a verified connection ended: nil at the caller's FIN.
+	ended chan error
 	// accepts counts every connection the node made to the program.
 	accepts atomic.Int64
-	// ended, when set, receives a value as each connection's handler returns (the node closed it or it failed).
-	ended chan struct{}
+	// finished, when set, receives a value as each connection's handler returns (the node closed it or it failed).
+	finished chan struct{}
 }
 
 func newProgram(t *testing.T, name string, key []byte) *program {
@@ -138,8 +140,8 @@ func (p *program) serve() {
 }
 
 func (p *program) handle(c net.Conn) {
-	if p.ended != nil {
-		defer func() { p.ended <- struct{}{} }()
+	if p.finished != nil {
+		defer func() { p.finished <- struct{}{} }()
 	}
 	defer c.Close()
 	var seen bytes.Buffer
@@ -185,7 +187,10 @@ func (p *program) handle(c net.Conn) {
 		return
 	}
 	p.identities <- append([]byte(nil), j...)
-	io.Copy(c, r) // echo the payload
+	_, err = io.Copy(c, r) // echo the payload
+	if p.ended != nil {
+		p.ended <- err
+	}
 	c.(*net.TCPConn).CloseWrite()
 }
 
@@ -404,6 +409,36 @@ func TestAHolderThatExitsClosesTheConnectionsDeliveredToIt(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+func TestAServiceStreamTheRelayCutsResetsTheProgramInsteadOfEndingItCleanly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	key := newKey(t)
+	p := newProgram(t, "goat", key)
+	p.ended = make(chan error, 1)
+	p.serve()
+	register(t, a, "goat", p.port(), key)
+	sec, err := openService(t, ctx, []string{rs.URL}, b, memberNamed(t, b, "a"), "goat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sec.Send(append([]byte{stream.TypeData}, "partial"...)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sec.Recv(ctx); err != nil { // the program's echo: it holds the stream
+		t.Fatal(err)
+	}
+	if !rs.DropUplink(a.id.NodeID()) {
+		t.Fatal("a has no uplink to drop")
+	}
+	if err := <-p.ended; err == nil {
+		t.Fatal("the program read the end of the stream after the relay cut it; want a reset")
 	}
 }
 

@@ -16,6 +16,8 @@ import {
 } from "effect/http";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as Lifetime from "./SessionSocketLifetime.ts";
+
+export { layerFor as rpcAuthorization } from "./proxiedCallPolicy.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./http.ts";
 
 export const layer = <E, R>(

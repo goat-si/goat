@@ -275,7 +275,10 @@ func (d *Daemon) serveService(ctx context.Context, sec *session.Secure) {
 	defer conn.Close()
 	defer d.svc.uncommit(reg, conn)
 	releaseSlot()
-	stream.Splice(ctx, sec, conn, conn, conn.CloseWrite)
+	if err := stream.Splice(ctx, sec, conn, conn, conn.CloseWrite); err != nil && !stream.Delivered(err) {
+		// As in serveTCP: the program reads a reset, not a clean end, when the caller's stream stopped short of its FIN.
+		conn.SetLinger(0)
+	}
 }
 
 // logDelivery logs a failed delivery under its cause, at most once a minute per cause.

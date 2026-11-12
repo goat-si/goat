@@ -169,6 +169,13 @@ import {
   WS_RPC_SERVER_OPTIONS,
 } from "./ws.ts";
 import { withLateEditorConfig } from "./serverConfigUpdates.ts";
+const CONFIG_TEST_SESSION = {
+  sessionId: AuthSessionId.make("config-test"),
+  subject: "config-test",
+  method: "browser-session-cookie",
+  scopes: [],
+  principalKind: "person",
+} as const;
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
 const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
@@ -1028,12 +1035,7 @@ it.effect(
       ).pipe(
         Effect.provide(
           layerWsRpc(
-            {
-              sessionId: AuthSessionId.make("config-test"),
-              subject: "config-test",
-              method: "browser-session-cookie",
-              scopes: [],
-            },
+            CONFIG_TEST_SESSION,
             {
               hasHost: Effect.succeed(false),
               attach: () => Stream.die("unused connection catalog"),
@@ -1201,12 +1203,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
     ).pipe(
       Effect.provide(
         layerWsRpc(
-          {
-            sessionId: AuthSessionId.make("config-test"),
-            subject: "config-test",
-            method: "browser-session-cookie",
-            scopes: [],
-          },
+          CONFIG_TEST_SESSION,
           {
             hasHost: Effect.succeed(false),
             attach: () => Stream.die("unused connection catalog"),

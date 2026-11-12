@@ -41,6 +41,7 @@ it.effect("does not delegate unheld permissions or allow a paired client to gran
       subject: "one-time-token",
       method: "bearer-access-token",
       scopes: [AuthAccessWriteScope, AuthOrchestrationReadScope],
+      principalKind: "person",
     };
     const rpc = yield* make(session).pipe(
       Effect.provideService(EnvironmentAuth.EnvironmentAuth, {
@@ -77,6 +78,7 @@ it.effect("uses the authenticated client as the revocation owner", () =>
       subject: "one-time-token",
       method: "bearer-access-token",
       scopes: [AuthAccessWriteScope],
+      principalKind: "person",
     };
     const rpc = yield* make(session).pipe(
       Effect.provideService(EnvironmentAuth.EnvironmentAuth, {
@@ -113,6 +115,7 @@ it.effect("preserves the existing owner and enabled-hub requirements for hub del
       subject: "administrative-bootstrap",
       method: "bearer-access-token",
       scopes: [AuthAccessWriteScope, "environment:maintain"],
+      principalKind: "person",
     };
     const rpc = yield* make(session).pipe(
       Effect.provideService(EnvironmentAuth.EnvironmentAuth, {

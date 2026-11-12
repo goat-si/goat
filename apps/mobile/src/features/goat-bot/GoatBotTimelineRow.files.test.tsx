@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
@@ -244,7 +244,8 @@ async function standInOpen(relativePath: string) {
 }
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
-import { GoatBotFilesProvider } from "./GoatBotReplyFiles";
+import { chatFilesScope, GoatBotFilesProvider } from "./GoatBotReplyFiles";
+import { useBotFileOpener } from "./MobileBotFileViewer";
 
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -314,15 +315,34 @@ function chat(
   shown: ReturnType<typeof bot>[] = rows,
 ) {
   return (
-    <GoatBotFilesProvider
-      environmentId={EnvironmentId.make("env")}
-      threadId={ThreadId.make(threadId)}
-      botName="GOAT Bot"
-      replies={repliesOf(rows, streaming)}
-    >
+    <Chat threadId={threadId} replies={repliesOf(rows, streaming)}>
       {shown.map((row) => (
         <GoatBotTimelineRow key={row.id} {...props} row={row} />
       ))}
+    </Chat>
+  );
+}
+// The screen owns the chat's opener and hands it to the provider; this does the same.
+function Chat(props: {
+  threadId: string;
+  replies: ReturnType<typeof repliesOf>;
+  children: ReactNode;
+}) {
+  const environmentId = EnvironmentId.make("env");
+  const threadId = ThreadId.make(props.threadId);
+  const opener = useBotFileOpener(
+    environmentId,
+    "GOAT Bot",
+    chatFilesScope(environmentId, threadId),
+  );
+  return (
+    <GoatBotFilesProvider
+      environmentId={environmentId}
+      threadId={threadId}
+      replies={props.replies}
+      opener={opener}
+    >
+      {props.children}
     </GoatBotFilesProvider>
   );
 }
@@ -407,6 +427,17 @@ it("shows no card for a file the listing lacks, plain inline code, an older serv
   await show([bot("b1", "Saved it to `reports/report.md`.")]);
   expect(card("report.md")).toBeNull();
   expect(files.reads).toBe(0);
+});
+
+it("reads no listing for inline code the Library cannot list, and reads one for a bare name like README", async () => {
+  files.listing = listed("README");
+  const odd = bot("b1", "Open `https://example.com/a.md`, `.env` or `../up.md`; run `a:b`.");
+  await show([odd]);
+  expect(files.reads).toBe(0);
+  await view.rerender(chat([odd, later(bot("b2", "See `README`."))]));
+  await settle();
+  expect(files.reads).toBe(1);
+  expect(card("README")).not.toBeNull();
 });
 
 it("matches names with spaces and full artifact paths, and shows the card under a question too", async () => {
@@ -604,6 +635,8 @@ function screenFor(threadId: string, rows: ReturnType<typeof bot>[]) {
     historyEnvironmentId: EnvironmentId.make("env"),
     threadId: ThreadId.make(threadId),
     streamingReplyIds: new Set<string>(),
+    visibleTurnItems: [],
+    boundedSnapshots: false,
   };
   return <GoatBotScreen visible />;
 }

@@ -11,6 +11,7 @@ import {
   changeNoteDraft,
   forgetNoteDraft,
   GOAT_BOT_NOTES_TRUNCATED_COPY,
+  goatBotNotesHeldBack,
   goatBotNoteSourceLabel,
   goatBotNotesRefreshKey,
   goatBotNotesView,
@@ -229,5 +230,45 @@ describe("goatBotNotesView", () => {
     expect(GOAT_BOT_NOTES_TRUNCATED_COPY).toBe(
       "memory.md is larger than 64 KB, so this list shows only complete notes from its newest 64 KB. The rest of the file is unchanged.",
     );
+  });
+});
+
+describe("goatBotNotesHeldBack", () => {
+  const note = (index: number, text: string, more: { replacedBy?: number } = {}) => ({
+    index,
+    date: null,
+    text,
+    ...more,
+  });
+
+  it("holds back current notes whose words another current note shares, spacing collapsed", () => {
+    const notes = [
+      note(3, "Use pnpm"),
+      note(2, "Use vp"),
+      note(1, " Use  pnpm"),
+      note(0, "Use pnpm", { replacedBy: 2 }),
+    ];
+    expect([...goatBotNotesHeldBack({ notes, truncated: false })]).toEqual([
+      [3, "alike"],
+      [1, "alike"],
+    ]);
+  });
+
+  it("a note whose same words were replaced is the one current note to ask about", () => {
+    const notes = [note(1, "Use pnpm"), note(0, "Use pnpm", { replacedBy: 1 })];
+    expect(goatBotNotesHeldBack({ notes, truncated: false }).size).toBe(0);
+  });
+
+  it("holds back every current note of a list cut to the newest part of the file", () => {
+    const notes = [note(2, "Use vp"), note(1, "Use pnpm"), note(0, "Use  pnpm", { replacedBy: 2 })];
+    expect([...goatBotNotesHeldBack({ notes, truncated: true })]).toEqual([
+      [2, "truncated"],
+      [1, "truncated"],
+    ]);
+    const alike = [note(1, "Use pnpm"), note(0, "Use pnpm")];
+    expect([...goatBotNotesHeldBack({ notes: alike, truncated: true }).values()]).toEqual([
+      "alike",
+      "alike",
+    ]);
   });
 });

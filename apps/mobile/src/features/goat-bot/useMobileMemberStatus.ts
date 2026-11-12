@@ -1,4 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { GoatBotRowStatus } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelGetBotStatusResult } from "@goat/contracts";
 import { useEffect } from "react";
 
@@ -10,12 +11,14 @@ import { useEnvironmentQuery } from "../../state/query";
 /**
  * How many of a member's tasks wait on a person, its conversation's newest message, and whether
  * that message is the bot's and arrived after the last visit. One cached read per member, read
- * again only when that member's conversation changes or is visited.
+ * again only when that member's conversation changes or is visited. \`status\` is what its row face
+ * reads, null until the server has answered.
  */
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
+  readonly status: GoatBotRowStatus | null;
 } {
   const { presentationById } = useEnvironments();
   const presentation = presentationById.get(bot.environmentId);
@@ -46,5 +49,18 @@ export function useMobileMemberStatus(bot: BotProfile): {
     tracksVisits &&
     latest?.author === "bot" &&
     (lastVisitedAt === null || Date.parse(latest.at) > Date.parse(lastVisitedAt));
-  return { waitingCount: status.data?.waitingCount ?? 0, latest, unread };
+  const data = status.data ?? null;
+  return {
+    waitingCount: data?.waitingCount ?? 0,
+    latest,
+    unread,
+    status:
+      data === null
+        ? null
+        : {
+            waitingCount: data.waitingCount,
+            latest: data.latest,
+            ...(data.tasks === undefined ? {} : { tasks: data.tasks }),
+          },
+  };
 }

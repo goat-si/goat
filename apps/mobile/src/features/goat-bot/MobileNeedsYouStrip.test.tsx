@@ -95,7 +95,42 @@ vi.mock("../../lib/appState", () => ({
   useAppActive: () => app.active,
   useReduceMotionEnabled: () => false,
 }));
-vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
+// The phone's bot list around the roster: where a tap takes the person, and the roster's own reads.
+const phone = vi.hoisted(() => ({
+  selected: [] as Array<{ name: string; params?: object }>,
+  bots: [] as ReadonlyArray<object>,
+  hidden: [] as ReadonlyArray<object>,
+}));
+const homeRoute = { index: 0, routes: [{ key: "home", name: "Home" }] };
+vi.mock("@react-navigation/native", () => ({
+  useIsFocused: () => true,
+  useNavigation: () => ({ getState: () => homeRoute, getParent: () => undefined }),
+  useNavigationState: (select: (state: typeof homeRoute) => unknown) => select(homeRoute),
+}));
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => (detail: { name: string; params?: object }) =>
+    phone.selected.push(detail),
+}));
+vi.mock("./useMobileBotRoster", () => ({
+  useMobileBotRoster: () => ({
+    bots: phone.bots,
+    groups: { main: null, members: [], hidden: phone.hidden, deleted: [] },
+    supportsMembers: true,
+    environmentId: "env",
+    slackEnabled: false,
+    listedBots: [],
+    refreshBots: () => {},
+    retryBots: () => {},
+    error: null,
+  }),
+}));
+vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
+vi.mock("./useMobileBotManage", () => ({
+  useMobileBotManage: () => ({ canCreate: false, canManage: false, canEdit: false }),
+}));
+vi.mock("./MobileBotEditSheet", () => ({ MobileBotEditSheet: () => null }));
+vi.mock("./MobileNewBotStatus", () => ({ MobileNewBotStatus: () => null }));
+vi.mock("../../lib/uuid", () => ({ uuidv4: () => "request" }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => <span /> }));
 const face = vi.hoisted(() => ({ items: [] as ReadonlyArray<object> }));
 vi.mock("./GoatBotFace", () => ({
@@ -178,6 +213,7 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 
+import { MobileBotList } from "./MobileBotList";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 
 const at = "2026-11-11T10:00:00.000Z";
@@ -413,4 +449,38 @@ it("says a partial read is partial: none found before the server stopped, and fe
   await act(async () => {});
   await act(async () => stripButton()?.click());
   expect(container.textContent).toContain("Showing the newest 1 of 3.");
+});
+
+it("on the phone's bot list, an ask opens the GoatBot screen of its bot on that task, a hidden bot's too", async () => {
+  registry = AtomRegistry.make();
+  phone.selected.length = 0;
+  phone.bots = [
+    { kind: "main", profile: null },
+    { kind: "member", profile: scout },
+  ];
+  phone.hidden = [quiet];
+  root ??= createRoot(container);
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <MobileBotList />
+      </RegistryContext>,
+    ),
+  );
+  serve(
+    read([
+      ask("quiet", "task-q", "Approve the deploy?", "2026-11-11T10:05:00.000Z"),
+      ask("main", "task-m", "Which project?", "2026-11-11T09:40:00.000Z"),
+    ]),
+  );
+  await act(async () => {});
+  await act(async () => stripButton()?.click());
+  const row = (label: string) =>
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  await act(async () => row("Quiet, 10:05: Approve the deploy?")?.click());
+  await act(async () => row("GOAT Bot, 09:40: Which project?")?.click());
+  expect(phone.selected).toEqual([
+    { name: "GoatBot", params: { botId: "quiet", taskId: "task-q" } },
+    { name: "GoatBot", params: { taskId: "task-m" } },
+  ]);
 });

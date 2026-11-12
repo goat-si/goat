@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -20,6 +21,8 @@ type forwardFixture struct {
 	connDone chan struct{}
 	stderr   bytes.Buffer
 	stop     func() int
+	// cut drops a's uplink, which ends its sessions the way a relay can: with no FIN.
+	cut func()
 }
 
 func startForward(t *testing.T, svc net.Listener) *forwardFixture {
@@ -63,6 +66,11 @@ func startForward(t *testing.T, svc net.Listener) *forwardFixture {
 		t.Fatal(err)
 	}
 	f := &forwardFixture{addr: ln.Addr().String(), connDone: make(chan struct{}, 1)}
+	f.cut = func() {
+		if !rs.DropUplink(aid.NodeID()) {
+			t.Error("a has no uplink to drop")
+		}
+	}
 	fctx, fcancel := context.WithCancel(ctx)
 	code := make(chan int, 1)
 	go func() {
@@ -159,4 +167,32 @@ func TestForwardIsQuietWhenTheServiceClosesAfterTheLocalClientIsGone(t *testing.
 	resetClose(t, c)
 	close(closeNow)
 	assertQuiet(t, f)
+}
+
+func TestForwardResetsTheLocalClientWhenTheRelayCutsTheStream(t *testing.T) {
+	svc, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	go func() {
+		c, err := svc.Accept()
+		if err != nil {
+			return
+		}
+		c.Write([]byte("partial"))
+		io.Copy(io.Discard, c)
+		c.Close()
+	}()
+	f := startForward(t, svc)
+
+	c := dialTCP(t, f.addr)
+	defer c.Close()
+	if _, err := io.ReadFull(c, make([]byte, len("partial"))); err != nil {
+		t.Fatal(err)
+	}
+	f.cut()
+	if _, err := c.Read(make([]byte, 1)); err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("the local client read %v after the relay cut its stream; want a reset, not the end of the stream", err)
+	}
 }

@@ -96,6 +96,46 @@ export const botArtifactName = (relativePath: string) =>
 
 const INLINE_CODE = /`([^`\n]+)`/g;
 
+// Fences CommonMark is certain of without tracking containers: 3+ backticks (none in the info
+// string) or tildes, unindented, or indented up to 3 spaces before any list item or quote. After
+// an indented fence that follows one, or a line that may open an HTML block, the rest of the reply
+// is read as it is: such a fence may close with its container, and a marker in HTML is HTML.
+const FENCE_OPEN = /^( {0,3})(`{3,}(?=[^`]*$)|~{3,})/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+const CONTAINER_START = /^ {0,3}(?:>|[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$))/;
+const HTML_START = /^ {0,3}</;
+
+/** The reply without the lines of its top-level fenced code blocks; an unclosed one runs to the end. */
+function outsideFences(text: string): string {
+  const kept: Array<string> = [];
+  let fence: { readonly char: string; readonly length: number } | null = null;
+  let containerSeen = false;
+  const lines = text.split(/\r?\n/);
+  // The rest of the reply from `index` on, as it is; joined, never spread, so a long reply is fine.
+  const readAsIs = (index: number) => [...kept, lines.slice(index).join("\n")].join("\n");
+  for (const [index, line] of lines.entries()) {
+    if (fence !== null) {
+      const close = FENCE_CLOSE.exec(line)?.[1];
+      if (close !== undefined && close[0] === fence.char && close.length >= fence.length)
+        fence = null;
+      kept.push("");
+      continue;
+    }
+    const opening = FENCE_OPEN.exec(line);
+    const open = opening?.[2];
+    if (HTML_START.test(line) || (open !== undefined && opening?.[1] !== "" && containerSeen))
+      return readAsIs(index);
+    if (open === undefined) {
+      if (CONTAINER_START.test(line)) containerSeen = true;
+      kept.push(line);
+    } else {
+      fence = { char: open[0] ?? "`", length: open.length };
+      kept.push("");
+    }
+  }
+  return kept.join("\n");
+}
+
 const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/;
 // The names the server lists (plainName in ChannelBotArtifacts): no leading dot, colon, backslash or edge spaces.
 const listableName = (name: string) =>
@@ -139,7 +179,7 @@ export function goatBotReplyFiles<File extends { readonly relativePath: string }
   const windows = root !== undefined && (root.includes("\\") || /^[A-Za-z]:/.test(root));
   const folder = root === undefined ? null : normalizedAbsolute(root, windows);
   const named: Array<File> = [];
-  for (const match of text.matchAll(INLINE_CODE)) {
+  for (const match of outsideFences(text).matchAll(INLINE_CODE)) {
     const code = (match[1] ?? "").trim();
     const absolute = folder === null ? null : normalizedAbsolute(code, windows);
     const file = files.find((candidate) =>
@@ -160,7 +200,7 @@ export function goatBotReplyFiles<File extends { readonly relativePath: string }
  * reading: a relative path of listable names, or an absolute path ending in one.
  */
 export function goatBotReplyMayNameFile(text: string): boolean {
-  for (const match of text.matchAll(INLINE_CODE)) {
+  for (const match of outsideFences(text).matchAll(INLINE_CODE)) {
     const code = (match[1] ?? "").trim();
     if (code.startsWith("/") || WINDOWS_ABSOLUTE.test(code)) {
       if (listableName(code.split(/[\\/]/).at(-1) ?? "")) return true;

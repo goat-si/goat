@@ -23,7 +23,7 @@ import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import { assertLiveCaller, readCaller, reauthorizationFailure } from "../mcp/threadAccess.ts";
-import { canResolveHumanStep, mcpResolver, PERSON } from "../handoffs/HumanStepAuthority.ts";
+import { canResolveHumanStep, mcpResolver } from "../handoffs/HumanStepAuthority.ts";
 import { withHostFanOutDeadline } from "../mcp/hostFanOutDeadline.ts";
 
 const HOST_LIMIT = 16;
@@ -148,7 +148,7 @@ const make = Effect.gen(function* () {
       );
     if (item !== undefined) {
       if (item.status !== "open") return yield* invalid("This decision is no longer open.");
-      const resolver = caller.kind === "client" ? PERSON : mcpResolver(scope);
+      const resolver = caller.kind === "client" ? caller.resolver : mcpResolver(scope);
       if (item.humanRequired && (!approval || !canResolveHumanStep(resolver, "runtime_approval")))
         return yield* denied(
           "This item cannot be answered over this transport; forward it to the user in its asking thread.",

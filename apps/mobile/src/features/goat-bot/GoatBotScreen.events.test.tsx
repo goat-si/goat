@@ -107,7 +107,9 @@ vi.mock("react-native", () => ({
     visible ? <section aria-label="Work sheet">{children}</section> : null,
   Alert: { alert: vi.fn() },
   Switch: () => null,
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({ children, className }: { children?: ReactNode; className?: string }) => (
+    <span className={className}>{children}</span>
+  ),
   Pressable: ({
     children,
     onPress,
@@ -217,6 +219,8 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
+// GOAT Bot's steps are read from the thread state, which loads the environment runtime.
+vi.mock("../../state/threads", () => ({ environmentThreadDetails: {} }));
 vi.mock("./useMobileGoatBotSession", () => ({
   // Like the real session, a deleted member's chat cannot send.
   useMobileGoatBotSession: (
@@ -234,6 +238,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
     activity: null,
     supportsTaskThreads: true,
     streamingReplyIds: new Set<string>(),
+    visibleTurnItems: [],
+    boundedSnapshots: false,
   }),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
@@ -397,6 +403,41 @@ it("a routine's event line opens Home with that routine scrolled into view, even
   const [scroll] = session.scrollToIndex.mock.calls[0] ?? [];
   expect(session.homeKeys[scroll?.index ?? -1]).toBe("routines");
   expect(scroll).toMatchObject({ viewPosition: 0, viewOffset: 56 - 240 });
+  await view.unmount();
+});
+
+it("a routine named Routine chips its name, and a shortened name still opens its routine by id", async () => {
+  const long =
+    "Weekly release notes for the mobile and web clients, gathered from every merged pull request";
+  session.routines = [routine("r-1", "Routine"), routine("r-2", long)];
+  session.tasks = [];
+  // The server shortens a long routine name in both the line and its subject.
+  const shortened = long.slice(0, 40) + "…";
+  const view = await render([
+    {
+      kind: "event",
+      id: "event-r-1",
+      text: "Routine Routine paused",
+      createdAt: at,
+      subject: { kind: "routine", id: "r-1", name: "Routine" },
+    } as GoatBotRow,
+    {
+      kind: "event",
+      id: "event-r-2",
+      text: `Routine ${shortened} paused`,
+      createdAt: at,
+      subject: { kind: "routine", id: "r-2", name: shortened },
+    } as GoatBotRow,
+  ]);
+  const chips = [...view.container.querySelectorAll("span.underline")];
+  expect(chips.map((chip) => chip.textContent)).toEqual(["Routine", shortened]);
+  // The routine's own name is underlined, not the line's leading kind word.
+  expect(chips[0]?.previousSibling?.textContent).toBe("Routine ");
+  expect(chips[0]?.nextSibling?.textContent).toBe(" paused");
+  await press(view.button(`Routine ${shortened} paused. Open routine ${shortened}`));
+  expect(view.sheet()?.textContent).toContain(long);
+  const [scroll] = session.scrollToIndex.mock.calls[0] ?? [];
+  expect(session.homeKeys[scroll?.index ?? -1]).toBe("routines");
   await view.unmount();
 });
 

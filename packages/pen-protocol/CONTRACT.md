@@ -636,7 +636,10 @@ may authorize from this list. The `watch` op keeps its v1.1 lines.
 (itself included), after the name blocks and before the `pen-*` block, with
 `ProxyCommand <pen> pipe --node <nodeId> --noise <noisePub> 22`, `StrictHostKeyChecking yes`, Pen's known_hosts, and,
 where ssh has connection reuse, `ControlMaster no` and `ControlPath none`, so the `pen-*` block's shared connection
-never carries it. The `pen-<name>` blocks and the `pen-*` block are unchanged. A node id that some member uses as a
+never carries it. The `pen-<name>` blocks are unchanged. On Unix, where ssh runs ProxyCommand in a shell with `%n`
+as typed, the `pen-*` block is `Host pen-* "!*'*"` with `ProxyCommand <pen> pipe '%n' 22`, so a typed name reaches
+pen as one word and a name holding a quote matches no block; on Windows, where ssh starts it without a shell, it keeps
+`pen-*` and a bare `%n`, and `pen pipe` reads flags only before the node. A node id that some member uses as a
 name gets no exact block, so that alias keeps its old meaning and is not exact; a program that checks an alias's
 effective route before using it refuses it.
 
@@ -869,6 +872,10 @@ v1.2 member-only reader refuses both valid new forms.
   socket, with a mutual proof on loopback; the exact dial `pen pipe --node --noise` and its ready line; the
   `watch.snapshot` control op; `pen-<nodeId>` ssh-config blocks. No record or sync change; `tcp` is unchanged. Vectors:
   service.json.
+- v1.3 (2026-11-12): node side only, no wire change: a node keeps at most 64 sessions per uplink and answers an
+  OPEN past them with CLOSE 4429; a stream cut before the peer's FIN and all its DATA reached the local socket resets
+  that TCP connection instead of closing it; `pen pipe` reads flags only before the node; the Unix `pen-*` ssh block
+  quotes `%n` ("SSH config for exact routes").
 - v1.3 (2026-11-12): "Service clients": ops on a service registration set a list of client keys and a service
   invite, each answered so an older node fails closed; a listed key reaches only `service` of the name that lists it,
   under phone slots counted before message 2; `service-pair` handshakes (kind 0x03) with a budget of 4 and an atomic

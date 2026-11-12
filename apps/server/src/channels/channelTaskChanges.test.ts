@@ -13,6 +13,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as Runtime from "../auth/ConnectHubRuntime.testkit.ts";
 import * as Authorization from "../auth/RpcAuthorization.ts";
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import {
@@ -242,7 +243,7 @@ describe("the open asks and their change stream over RPC", () => {
       const runtime = yield* Runtime.open();
       const session = yield* runtime.sessions
         .issue({ scopes: ["providers:manage"] })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       let reads = 0;
       const service = {
         openAsks: () =>

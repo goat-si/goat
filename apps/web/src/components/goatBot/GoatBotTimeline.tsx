@@ -1,11 +1,11 @@
 import {
   GOAT_BOT_READING_LIMIT_MS,
   goatBotActivity,
-  goatBotFirstUnread,
   goatBotPreviewText,
   goatBotStampParts,
   goatBotReceiptLabel,
   goatBotRejectionText,
+  goatBotUnreadIds,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
@@ -66,6 +66,9 @@ interface UnreadDivider {
 }
 const UNREAD_DIVIDER: UnreadDivider = { kind: "unread", id: "unread", firstInGroup: true };
 const UNREAD_JUMP_MARGIN_PX = 24;
+/** A row the server sent; a message still being sent can show before the history has loaded. */
+const isHistoryRow = (row: GoatBotRow) =>
+  row.kind !== "day" && !(row.kind === "user" && row.sendKey !== null);
 
 export function GoatBotTimeline({
   rows,
@@ -75,7 +78,7 @@ export function GoatBotTimeline({
   onRetry,
   onDiscard,
   onPick,
-  onOpenHome,
+  onOpenRoutine,
   onReply,
   taskDetails = false,
   taskThreads = false,
@@ -94,8 +97,8 @@ export function GoatBotTimeline({
   readonly replyingSince?: string | null;
   readonly onReply?: ((text: string) => void) | undefined;
   readonly onRetry: (clientKey: string) => void;
-  /** Opens the bot's home, where a routine an event line names lives. */
-  readonly onOpenHome?: (() => void) | undefined;
+  /** How to open, by id, a routine an event line names; undefined when it no longer exists. */
+  readonly onOpenRoutine?: ((routineId: string) => (() => void) | undefined) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
@@ -147,8 +150,8 @@ export function GoatBotTimeline({
     ? goatBotActivity({ reading: true, task: null, worker: null })
     : working;
   const activityText = activity?.text ?? null;
-  // The transcript's height right after the activity line opened or closed in place; the one
-  // resize that reaches it is that toggle's own and does not follow the newest message.
+  // The transcript's height right after a line opened or closed in place and resized the list;
+  // the one resize that reaches it is that toggle's own and does not follow the newest message.
   const toggledHeight = useRef<number | null>(null);
   const updateEdges = useStableCallback(() => {
     const scroll = scrollRef.current;
@@ -204,11 +207,18 @@ export function GoatBotTimeline({
     updateEdges();
   }, [rows, activityText, updateEdges]);
 
-  // The divider's place is decided once, from the first rows and the visit before this open.
-  const [unread, setUnread] = useState<ReturnType<typeof goatBotFirstUnread> | undefined>();
-  if (unread === undefined && unreadSince !== undefined && rows.length > 0) {
-    setUnread(goatBotFirstUnread(rows, unreadSince));
+  // Which rows are new is decided once, from the first history and the visit before this open.
+  // The divider sits above the first of them still shown, and the pill counts those shown.
+  const [unreadIds, setUnreadIds] = useState<ReadonlySet<string> | undefined>();
+  if (unreadIds === undefined && unreadSince !== undefined && rows.some(isHistoryRow)) {
+    setUnreadIds(goatBotUnreadIds(rows, unreadSince));
   }
+  const unreadRows =
+    unreadIds === undefined || unreadIds.size === 0
+      ? []
+      : rows.filter((row) => unreadIds.has(row.id));
+  const firstUnread = unreadRows[0];
+  const firstUnreadId = firstUnread?.id;
   const dividerRef = useRef<HTMLLIElement>(null);
   const [dividerAbove, setDividerAbove] = useState(false);
   const [pillDismissed, setPillDismissed] = useState(false);
@@ -216,7 +226,7 @@ export function GoatBotTimeline({
   useEffect(() => {
     const divider = dividerRef.current;
     const root = scrollRef.current;
-    if (!unread || divider === null || root === null) return;
+    if (firstUnreadId === undefined || divider === null || root === null) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry === undefined) return;
@@ -228,15 +238,17 @@ export function GoatBotTimeline({
     );
     observer.observe(divider);
     return () => observer.disconnect();
-  }, [unread]);
-  const unreadAt = unread ? rows.findIndex((row) => row.id === unread.rowId) : -1;
+  }, [firstUnreadId]);
+  const unreadAt = firstUnread === undefined ? -1 : rows.indexOf(firstUnread);
   // Scrolls the transcript alone; scrollIntoView would also shift the page and hide the header.
+  // Focus follows, since the pill that held it goes away once the divider is in view.
   const jumpToUnread = () => {
     const divider = dividerRef.current;
     const root = scrollRef.current;
     if (divider === null || root === null) return;
     const offset = divider.getBoundingClientRect().top - root.getBoundingClientRect().top;
     root.scrollTo({ top: root.scrollTop + offset - UNREAD_JUMP_MARGIN_PX });
+    divider.focus({ preventScroll: true });
   };
   const shownRows: ReadonlyArray<GoatBotRow | UnreadDivider> =
     unreadAt < 0 ? rows : [...rows.slice(0, unreadAt), UNREAD_DIVIDER, ...rows.slice(unreadAt)];
@@ -246,24 +258,28 @@ export function GoatBotTimeline({
   const keepPlace = (toggle: () => void) => {
     const scroll = scrollRef.current;
     const top = scroll?.scrollTop;
+    const listHeight = listRef.current?.getBoundingClientRect().height;
     flushSync(toggle);
     if (scroll === null || top === undefined) return;
     scroll.scrollTop = top;
     lastScrollTopRef.current = scroll.scrollTop;
-    toggledHeight.current = scroll.scrollHeight;
+    // A toggle that left the list's height alone gets no resize to absorb.
+    toggledHeight.current =
+      listRef.current?.getBoundingClientRect().height === listHeight ? null : scroll.scrollHeight;
   };
   const trailingMark = steps?.trailing ?? null;
   const renderRow = (row: GoatBotRow | UnreadDivider, index: number) => {
     const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-4" : "mt-1.5");
     switch (row.kind) {
       case "unread":
+        // A list item, so it can take focus; a focusable separator would be announced as a splitter.
         return (
           <li
             key={row.id}
             ref={dividerRef}
-            role="separator"
+            tabIndex={-1}
             aria-label="New messages"
-            className="mt-4 flex items-center gap-3 text-xs leading-4 text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border"
+            className="mt-4 flex items-center gap-3 rounded-sm text-xs leading-4 text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
           >
             New
           </li>
@@ -287,7 +303,7 @@ export function GoatBotTimeline({
             role="note"
             className="my-3 text-center text-xs leading-4 text-muted-foreground"
           >
-            <GoatBotEventText row={row} onOpenHome={onOpenHome} />
+            <GoatBotEventText row={row} onOpenRoutine={onOpenRoutine} />
           </li>
         );
       case "user": {
@@ -430,7 +446,7 @@ export function GoatBotTimeline({
         );
         // An answer with a table reads as cards: its text, each table, and the rest.
         // The splitter caches by text, so only a row whose text changed is parsed.
-        const reply = toneIcon === null ? goatBotReplySplit(row.text) : null;
+        const reply = toneIcon === null ? goatBotReplySplit(row.text, rows.length) : null;
         const card = (
           <div className="flex w-full min-w-0 items-end gap-2">
             {reply !== null && reply.parts.some((part) => part.kind === "table") ? (
@@ -620,10 +636,10 @@ export function GoatBotTimeline({
           ) : null}
         </ol>
       </div>
-      {unread && dividerAbove && !pillDismissed ? (
+      {unreadAt >= 0 && dividerAbove && !pillDismissed ? (
         <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm ring-2 ring-background">
           <Button size="sm" onClick={jumpToUnread}>
-            {unread.count === 1 ? "1 new message" : `${unread.count} new messages`}
+            {unreadRows.length === 1 ? "1 new message" : `${unreadRows.length} new messages`}
           </Button>
           <Button
             size="icon-sm"

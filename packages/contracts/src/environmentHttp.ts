@@ -46,6 +46,7 @@ import {
   AuthWebSocketTicketParams,
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
+  type SessionPrincipalKind,
 } from "./auth.ts";
 import {
   ExecutionEnvironmentDescriptor,
@@ -412,6 +413,13 @@ export interface EnvironmentSessionPrincipalShape {
   readonly scopes: ReadonlySet<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt?: DateTime.DateTime;
+  readonly principalKind?: SessionPrincipalKind;
+  readonly penBinding?: {
+    readonly meshId: string;
+    readonly nodeId: string;
+    readonly signPub: string;
+    readonly noisePub: string;
+  };
 }
 
 export class EnvironmentAuthenticatedPrincipal extends Context.Service<
