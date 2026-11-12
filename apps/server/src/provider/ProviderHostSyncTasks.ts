@@ -1,6 +1,7 @@
 import {
   type EnvironmentAuthorizationError,
   type HandoffError,
+  type ProviderHostRow,
   type ProviderHostSyncDriver,
   ProviderHostSyncError,
   type ProviderSyncHostState,
@@ -99,8 +100,6 @@ export interface SyncOperation {
   readonly hosts: Array<HostTask>;
   /** Callers who may cancel and see sign-in codes: requester, approver, outside client. */
   readonly owners: Set<string>;
-  /** Who started it; a direct install's thread cancels remotely under the check it started with. */
-  readonly launchedBy: SshHostCaller;
   fibers: Array<Fiber.Fiber<unknown, unknown>>;
   /** Done once every host finished and the settlers ran, cancels included. */
   readonly allFinished: Deferred.Deferred<void>;
@@ -287,6 +286,30 @@ export const cancelsSettled = (operation: SyncOperation): Effect.Effect<void> =>
  * and `message` is quoted under the host's name.
  */
 type RemoteRequest = { readonly driver: ProviderHostSyncDriver; readonly version: string | null };
+
+/**
+ * Why GOAT will not ask `host` to install `driver`, read from that host's own matrix row. A host
+ * that does not say its installs are verified may pipe a vendor script into a shell, unless the
+ * recipe it reports for this driver is npm, which every GOAT release runs at the given version.
+ */
+export const unverifiedRemote = (
+  row: ProviderHostRow,
+  driver: ProviderHostSyncDriver,
+  name: string,
+): Pick<ProviderSyncHostState, "phase" | "message"> | undefined => {
+  const host = row.host ?? "that machine";
+  if (row.status !== "ok")
+    return {
+      phase: row.status === "update_runtime" ? "update_runtime" : "failed",
+      message: row.message ?? `GOAT could not read what ${host} installs with.`,
+    };
+  const reported = row.providers.find((provider) => provider.driver === driver);
+  if (row.installs === "verified" || reported?.installMethod === "npm") return undefined;
+  return {
+    phase: "update_runtime",
+    message: `GOAT on ${host} predates pinned, verified installs, so nothing was installed there. Update GOAT on ${host}, or install ${name} there by hand.`,
+  };
+};
 
 export const remoteHostState = (
   request: RemoteRequest,

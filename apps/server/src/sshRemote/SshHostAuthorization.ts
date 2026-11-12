@@ -9,12 +9,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 
 export type SshHostCaller =
   | { readonly kind: "client"; readonly sessionId: AuthSessionId }
-  | {
-      readonly kind: "mcp";
-      readonly scope: McpInvocationScope;
-      /** A thread allowed to install a provider CLI without a card; checked again before each send. */
-      readonly directInstall?: Effect.Effect<void, EnvironmentAuthorizationError> | undefined;
-    };
+  | { readonly kind: "mcp"; readonly scope: McpInvocationScope };
 
 /** Reload authority immediately before each SSH or local configuration mutation. */
 export const authorizeSshHost = (

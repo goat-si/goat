@@ -374,11 +374,15 @@ For Antigravity's Google callback on a remote host, see
 Open **Settings → Connections → Providers on your machines** to compare installed
 provider versions and sign-in status on this machine and connected SSH hosts.
 Choose **Sync to other hosts…** for a provider and select your destination
-machines. GOAT uses the vendor's official npm package or installer for each
-operating system, matching this machine's version by default, or installing the
-latest if it is absent here. Codex installs with OpenAI's installer and needs no
-Node.js. Cursor's installer, and Codex's on Windows, always install the latest.
-Each host reports the installer command it ran and the version it then found.
+machines. GOAT installs each CLI from the vendor's npm package, matching this
+machine's version by default, or installing the latest if it is absent here, so
+the host needs Node.js and npm. Cursor has no npm package: on macOS and Linux GOAT
+downloads the Cursor release it pins and checks its SHA-256 before unpacking it,
+and stops without installing anything if the download does not match. Install
+Cursor on Windows yourself. GOAT never pipes a vendor's install script into a
+shell. A host whose GOAT is too old to promise this is not asked to install
+Codex, Claude or Cursor; update GOAT there first. Each host reports what it
+installed and the version it then found.
 Choose **Update runtime** for a host whose GOAT is too old, or **Prepare host**
 if its runtime is stopped, then retry.
 
@@ -394,10 +398,8 @@ or vendor sign-in page, or finish in GOAT on that host. If a terminal step is
 needed, run it on the destination: `claude auth login`, `agent login` (Cursor),
 `grok login`, `opencode auth login`, or `pi` followed by `/login`. Codex uses
 `codex login --device-auth`. An agent can request a sync; approve the request in
-its thread before installation starts. An agent thread running with full access
-can install a CLI without asking, only on machines saved in **Settings →
-Connections** and without signing in; with permission profiles on, its profile
-must also allow remote launches there. Signing in always stays with you.
+its thread before installation starts. This holds for every agent thread, full
+access included. Signing in always stays with you.
 Cancelling stops unfinished work; a
 completed installation stays installed.
 

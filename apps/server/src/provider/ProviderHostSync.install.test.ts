@@ -1,9 +1,12 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentAuthorizationError, ProviderSyncHostState } from "@goat/contracts";
+import { ProviderSyncHostState } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
@@ -32,17 +35,48 @@ const finished = {
   },
 };
 
-const direct = (check: Effect.Effect<void, EnvironmentAuthorizationError>) =>
-  ({ kind: "mcp", scope: threadScope, directInstall: check }) as const;
+const person = { kind: "client", sessionId: "person" as never } as const;
 
-it.effect("a thread allowed to install directly starts the sync without an approval card", () =>
+it.effect.each([{ where: "a saved machine", hosts: ["box"] }, { where: "this machine" }] as const)(
+  "an install-only sync from a full-access thread on $where asks a person and runs nothing until then",
+  ({ hosts }) =>
+    Effect.gen(function* () {
+      const { state, layer } = harness({
+        answer: () => Effect.succeed(finished),
+        providers: [pending],
+        snapshot: () =>
+          Effect.succeed({
+            projection: {
+              thread: { runtimeMode: "full-access", interactionMode: "default" },
+              runs: [{ id: "run-1", rootNodeId: "node-1" }],
+            },
+          } as never),
+      });
+      const result = yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        return yield* sync.sync(
+          { driver: "codex", ...(hosts === undefined ? {} : { hosts }), login: false },
+          { kind: "mcp", scope: threadScope },
+        );
+      }).pipe(Effect.provide(layer));
+      expect(result.kind).toBe("needs_human");
+      expect(state.handoffs).toMatchObject([
+        { kind: "approval", title: expect.stringMatching(/^Install Codex on /) },
+      ]);
+      expect(state.calls).toEqual([]);
+      expect(state.spawned).toEqual([]);
+      expect(state.downloads).toEqual([]);
+    }),
+);
+
+it.effect("a person's sync reaches the saved machine with their providers:manage grant", () =>
   Effect.gen(function* () {
     const { state, layer } = harness({ answer: () => Effect.succeed(finished) });
     const result = yield* Effect.gen(function* () {
       const sync = yield* HostSync.ProviderHostSync;
       const started = yield* sync.sync(
         { driver: "opencode", hosts: ["box"], login: false },
-        direct(Effect.void),
+        person,
       );
       if (started.kind === "started") yield* sync.awaitDone(started.sync.syncId);
       return started;
@@ -58,36 +92,42 @@ it.effect("a thread allowed to install directly starts the sync without an appro
   }),
 );
 
-it.effect("a direct install whose check fails before the send sends nothing", () =>
-  Effect.gen(function* () {
-    const checks = yield* Ref.make(0);
-    const check = Ref.updateAndGet(checks, (count) => count + 1).pipe(
-      Effect.flatMap((count) =>
-        count === 1
-          ? Effect.void
-          : Effect.fail(
-              new EnvironmentAuthorizationError({
-                requiredScope: "providers:manage",
-                message: "The thread dropped to approvals.",
-              }),
-            ),
-      ),
-    );
-    const { state, layer } = harness({ answer: () => Effect.succeed(finished) });
-    const done = yield* Effect.gen(function* () {
-      const sync = yield* HostSync.ProviderHostSync;
-      const started = yield* sync.sync(
-        { driver: "opencode", hosts: ["box"], login: false },
-        direct(check),
-      );
-      return started.kind === "started" ? yield* sync.awaitDone(started.sync.syncId) : undefined;
-    }).pipe(Effect.provide(layer));
-    expect(state.calls).toEqual([]);
-    expect(done?.hosts[0]).toMatchObject({
-      phase: "failed",
-      message: "The thread dropped to approvals.",
-    });
-  }),
+it.effect(
+  "a Cursor release whose download fails its pinned SHA-256 leaves the host failed and unpacks nothing",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-sync-home-" });
+        const { state, layer } = harness({ download: new TextEncoder().encode("tampered") });
+        const host = yield* Effect.gen(function* () {
+          const sync = yield* HostSync.ProviderHostSync;
+          // A pinned request installs even where some `agent` is already on PATH.
+          const started = yield* sync.sync(
+            { driver: "cursor", version: "2026.11.11-b912975", login: false },
+            person,
+          );
+          if (started.kind !== "started") return expect.unreachable();
+          return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
+        }).pipe(
+          Effect.provide(layer),
+          Effect.provideService(HostProcess.HomeDirectory, home),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Architecture, "x64"),
+        );
+        expect(state.downloads).toEqual([
+          "https://downloads.cursor.com/lab/2026.11.11-b912975/linux/x64/agent-cli-package.tar.gz",
+        ]);
+        expect(host).toMatchObject({
+          host: null,
+          phase: "failed",
+          message:
+            "The Cursor download did not match GOAT's pinned SHA-256 for 2026.11.11-b912975. Nothing was installed.",
+        });
+        expect(state.spawned).toEqual([]);
+        expect(yield* fs.readDirectory(`${home}/.local/share/cursor-agent/versions`)).toEqual([]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
 );
 
 /** Each probe answers the next entry; a fresh probe is recorded. */
@@ -165,24 +205,13 @@ it.effect(
     }),
 );
 
-it.effect.each([{ who: "thread" }, { who: "person" }] as const)(
-  "regression S1-1: an install whose $who loses authority while it waits spawns nothing",
-  ({ who }) =>
+it.effect(
+  "regression S1-1: an install whose person loses authority while it waits spawns nothing",
+  () =>
     Effect.gen(function* () {
-      const revoked = yield* Ref.make(false);
       const probing = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       let personRevoked = false;
-      const check = Effect.flatMap(Ref.get(revoked), (gone) =>
-        gone
-          ? Effect.fail(
-              new EnvironmentAuthorizationError({
-                requiredScope: "providers:manage",
-                message: "The thread dropped to approvals.",
-              }),
-            )
-          : Effect.void,
-      );
       const { state, layer } = harness({
         providers: [pending],
         instances: [{ instanceId: opencode, driverKind: "opencode" }],
@@ -196,18 +225,16 @@ it.effect.each([{ who: "thread" }, { who: "person" }] as const)(
         const sync = yield* HostSync.ProviderHostSync;
         const started = yield* sync.sync(
           { driver: "opencode", version: "1.2.3", login: false },
-          who === "thread" ? direct(check) : { kind: "client", sessionId: "person" as never },
+          person,
         );
         if (started.kind !== "started") return expect.unreachable();
         yield* Deferred.await(probing);
-        yield* Ref.set(revoked, true);
         personRevoked = true;
         yield* Deferred.succeed(release, undefined);
         return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
       }).pipe(Effect.provide(layer));
       expect(state.spawned).toEqual([]);
       expect(host).toMatchObject({ host: null, phase: "failed" });
-      if (who === "thread") expect(host?.message).toBe("The thread dropped to approvals.");
     }),
 );
 
@@ -251,7 +278,7 @@ it.effect.each([
     host: { phase: "failed", message: 'box reports: "npm exited 1."' },
   },
 ] as const)(
-  "regression S1-2/S2-3: cancelling a direct remote install that $remote reads what the remote confirmed",
+  "regression S1-2/S2-3: cancelling a remote install that $remote reads what the remote confirmed",
   ({ reply, host }) =>
     Effect.gen(function* () {
       const accepted = yield* Deferred.make<void>();
@@ -267,15 +294,11 @@ it.effect.each([
         const sync = yield* HostSync.ProviderHostSync;
         const started = yield* sync.sync(
           { driver: "opencode", hosts: ["box"], login: false },
-          direct(Effect.void),
+          person,
         );
         if (started.kind !== "started") return expect.unreachable();
         yield* Deferred.await(accepted);
-        // The cancel handler builds its own caller, which carries no install check.
-        const cancelled = yield* sync.cancel(
-          { syncId: started.sync.syncId },
-          { kind: "mcp", scope: threadScope },
-        );
+        const cancelled = yield* sync.cancel({ syncId: started.sync.syncId }, person);
         expect(state.calls.map(({ call }) => call.tool)).toEqual([
           "goat_provider_sync",
           "goat_provider_sync_cancel",
@@ -344,12 +367,12 @@ it.effect.each([
         const sync = yield* HostSync.ProviderHostSync;
         const started = yield* sync.sync(
           { driver: "opencode", hosts: ["box"], login: false },
-          direct(Effect.void),
+          person,
         );
         if (started.kind !== "started") return expect.unreachable();
         yield* Deferred.await(calling);
         const stopping = yield* sync
-          .cancel({ syncId: started.sync.syncId }, { kind: "mcp", scope: threadScope })
+          .cancel({ syncId: started.sync.syncId }, person)
           .pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.succeed(release, undefined);
         const cancelled = yield* Fiber.join(stopping);
@@ -382,12 +405,12 @@ it.effect(
         const sync = yield* HostSync.ProviderHostSync;
         const started = yield* sync.sync(
           { driver: "opencode", hosts: ["box"], login: false },
-          direct(Effect.void),
+          person,
         );
         if (started.kind !== "started") return expect.unreachable();
         yield* Deferred.await(accepted);
         const stopping = yield* sync
-          .cancel({ syncId: started.sync.syncId }, { kind: "mcp", scope: threadScope })
+          .cancel({ syncId: started.sync.syncId }, person)
           .pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.await(cancelling);
         const waiting = yield* sync
@@ -465,14 +488,11 @@ it.effect("regression S4-2: two cancels of one sync share one remote cancel and 
       const sync = yield* HostSync.ProviderHostSync;
       const started = yield* sync.sync(
         { driver: "opencode", hosts: ["box"], login: false },
-        direct(Effect.void),
+        person,
       );
       if (started.kind !== "started") return expect.unreachable();
       yield* Deferred.await(accepted);
-      const cancel = sync.cancel(
-        { syncId: started.sync.syncId },
-        { kind: "mcp", scope: threadScope },
-      );
+      const cancel = sync.cancel({ syncId: started.sync.syncId }, person);
       const first = yield* cancel.pipe(Effect.forkChild({ startImmediately: true }));
       yield* Deferred.await(cancelling);
       const second = yield* cancel.pipe(Effect.forkChild({ startImmediately: true }));
@@ -502,7 +522,7 @@ it.effect("regression S6-1: a remote install Home lost track of can still be can
       const sync = yield* HostSync.ProviderHostSync;
       const started = yield* sync.sync(
         { driver: "opencode", hosts: ["box"], login: false },
-        direct(Effect.void),
+        person,
       );
       if (started.kind !== "started") return expect.unreachable();
       yield* TestClock.adjust("1 minute");
@@ -543,7 +563,7 @@ it.effect(
         const sync = yield* HostSync.ProviderHostSync;
         const started = yield* sync.sync(
           { driver: "opencode", hosts: ["box"], login: false },
-          direct(Effect.void),
+          person,
         );
         if (started.kind !== "started") return expect.unreachable();
         yield* TestClock.adjust("1 minute");
@@ -574,7 +594,7 @@ it.effect(
         const sync = yield* HostSync.ProviderHostSync;
         const started = yield* sync.sync(
           { driver: "opencode", hosts: ["box"], login: false },
-          direct(Effect.void),
+          person,
         );
         if (started.kind !== "started") return expect.unreachable();
         const lost = yield* sync.awaitDone(started.sync.syncId);
@@ -647,7 +667,7 @@ it.effect(
           const sync = yield* HostSync.ProviderHostSync;
           const started = yield* sync.sync(
             { driver: "opencode", hosts: ["box"], login: false },
-            direct(Effect.void),
+            person,
           );
           if (started.kind !== "started") return expect.unreachable();
           return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
@@ -675,7 +695,7 @@ it.effect("regression F4-1: a remote's own message is quoted as that machine's w
       const sync = yield* HostSync.ProviderHostSync;
       const started = yield* sync.sync(
         { driver: "opencode", hosts: ["box"], login: false },
-        direct(Effect.void),
+        person,
       );
       if (started.kind !== "started") return expect.unreachable();
       return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
@@ -703,14 +723,11 @@ it.effect(
         const sync = yield* HostSync.ProviderHostSync;
         const started = yield* sync.sync(
           { driver: "opencode", hosts: ["box"], login: false },
-          direct(Effect.void),
+          person,
         );
         if (started.kind !== "started") return expect.unreachable();
         yield* Deferred.await(accepted);
-        const cancelled = yield* sync.cancel(
-          { syncId: started.sync.syncId },
-          { kind: "mcp", scope: threadScope },
-        );
+        const cancelled = yield* sync.cancel({ syncId: started.sync.syncId }, person);
         expect(cancelled.hosts[0]).toMatchObject({ host: "box", phase: "installed" });
         expect(cancelled.hosts[0]).not.toHaveProperty("ran");
       }).pipe(Effect.provide(layer));
@@ -747,10 +764,7 @@ const remoteSays = (host: Record<string, unknown>) =>
 const syncedOnBox = (layer: ReturnType<typeof harness>["layer"]) =>
   Effect.gen(function* () {
     const sync = yield* HostSync.ProviderHostSync;
-    const started = yield* sync.sync(
-      { driver: "opencode", hosts: ["box"], login: false },
-      direct(Effect.void),
-    );
+    const started = yield* sync.sync({ driver: "opencode", hosts: ["box"], login: false }, person);
     if (started.kind !== "started") return expect.unreachable();
     return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
   }).pipe(Effect.provide(layer));
@@ -882,4 +896,91 @@ it.effect(
       expect(host?.phase).toBe("failed");
       expect(host?.message?.startsWith("The host answered: " + JSON.stringify(said))).toBe(true);
     }),
+);
+
+const olderHost = (driver: string, installMethod: "npm" | "script") => ({
+  host: null,
+  status: "ok",
+  goatVersion: "0.1.8",
+  providers: [
+    {
+      driver,
+      displayName: driver,
+      installed: false,
+      version: null,
+      auth: "unknown",
+      installMethod,
+      loginMethod: "terminal",
+    },
+  ],
+});
+
+it.effect.each([
+  { driver: "codex", name: "Codex" },
+  { driver: "claudeAgent", name: "Claude" },
+  { driver: "cursor", name: "Cursor" },
+] as const)(
+  "an approved $name install on a GOAT that predates verified installs runs nothing there",
+  ({ driver, name }) =>
+    Effect.gen(function* () {
+      const { state, layer } = harness({
+        answer: () => Effect.succeed(finished),
+        remoteRow: olderHost(driver, "script"),
+      });
+      const host = yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync({ driver, hosts: ["box"], login: false }, person);
+        if (started.kind !== "started") return expect.unreachable();
+        return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
+      }).pipe(Effect.provide(layer));
+      expect(state.preflights).toEqual(["box"]);
+      expect(state.calls).toEqual([]);
+      expect(host).toMatchObject({
+        host: "box",
+        phase: "update_runtime",
+        message: `GOAT on box predates pinned, verified installs, so nothing was installed there. Update GOAT on box, or install ${name} there by hand.`,
+      });
+    }),
+);
+
+it.effect("an older GOAT that installs this CLI from npm at the version still gets the sync", () =>
+  Effect.gen(function* () {
+    const { state, layer } = harness({
+      answer: () => Effect.succeed(finished),
+      remoteRow: olderHost("opencode", "npm"),
+    });
+    yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", hosts: ["box"], login: false },
+        person,
+      );
+      if (started.kind === "started") yield* sync.awaitDone(started.sync.syncId);
+    }).pipe(Effect.provide(layer));
+    expect(state.calls.map(({ call }) => call.tool)).toEqual(["goat_provider_sync"]);
+  }),
+);
+
+it.effect.each([
+  { row: "an older runtime", status: "update_runtime", phase: "update_runtime" },
+  { row: "an unreachable host", status: "unreachable", phase: "failed" },
+] as const)("a preflight read that reports $row sends no install there", ({ status, phase }) =>
+  Effect.gen(function* () {
+    const { state, layer } = harness({
+      answer: () => Effect.succeed(finished),
+      remoteRow: { host: null, status, message: "GOAT on box could not be read.", providers: [] },
+    });
+    const host = yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", hosts: ["box"], login: false },
+        person,
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
+    }).pipe(Effect.provide(layer));
+    expect(state.preflights).toEqual(["box"]);
+    expect(state.calls).toEqual([]);
+    expect(host).toMatchObject({ host: "box", phase });
+  }),
 );

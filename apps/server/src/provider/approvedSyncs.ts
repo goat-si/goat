@@ -62,7 +62,7 @@ export const syncApprovalCard = (
 ): CardInput => ({
   kind: "approval",
   title: `Install ${name} on ${where}?`,
-  reason: `An agent asked to install ${name}${input.version && input.version !== "latest" ? ` ${input.version}` : ""} with its official installer${input.login === false ? "" : " and start its sign-in"}.`,
+  reason: `An agent asked to install ${name}${input.version && input.version !== "latest" ? ` ${input.version}` : ""} from its npm package or a vendor release checked against GOAT's pinned SHA-256${input.login === false ? "" : " and start its sign-in"}.`,
   requestedBy: { ...at.requestedBy, path: HOST_SYNC_PATH },
   target: { environmentId: at.environmentId, path: HOST_SYNC_PATH },
   runId: at.runId,
