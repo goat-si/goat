@@ -212,9 +212,10 @@ const make = Effect.gen(function* () {
     effect.pipe(Effect.mapError((cause) => new RemoteDispatchError({ stage: "storage", cause })));
   const rows = <E>(statement: Effect.Effect<ReadonlyArray<unknown>, E>) =>
     statement.pipe(Effect.flatMap(decodeRows), db);
+  // The owner is read once the lock is held: a dismissal or resume may change it while waiting.
   const owned = <A, E, R>(id: string, owner: number, effect: Effect.Effect<A, E, R>) =>
     gate(locks, id, 1).withPermits(1)(
-      owners.get(id) === owner ? Effect.asSome(effect) : Effect.succeedNone,
+      Effect.suspend(() => (owners.get(id) === owner ? Effect.asSome(effect) : Effect.succeedNone)),
     );
   const taskOrigin = (host: string, threadId: string) =>
     rows(
@@ -810,7 +811,8 @@ const make = Effect.gen(function* () {
             return true;
           }
           hostFailures = 0;
-          if (r.host_unavailable_since != null) yield* taskEffect(clearUnreachable(id));
+          if (r.host_unavailable_since != null)
+            yield* owned(id, owner, taskEffect(clearUnreachable(id)));
           if (yield* grace.retry) return true;
           if (r.kind === "task") {
             const gone =
@@ -857,7 +859,8 @@ const make = Effect.gen(function* () {
           return false;
         }
         hostFailures = 0;
-        if (r.host_unavailable_since != null) yield* taskEffect(clearUnreachable(id));
+        if (r.host_unavailable_since != null)
+          yield* owned(id, owner, taskEffect(clearUnreachable(id)));
         const missingRun = answer.success.observedRun === null && r.launched_run_id === null;
         const waitingForRun = missingRun && (yield* Clock.currentTimeMillis) < runDeadline;
         const imported = yield* importBatch(
