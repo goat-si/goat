@@ -17,6 +17,8 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   readonly message: string;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;
+  /** An older remote's answer that goat_thread_launch takes no launchedBy: nothing ran there. */
+  readonly launchedByRefused?: true | undefined;
   /** A placement answer's classification (placement_not_started, placement_full, ...). */
   readonly remoteClassification?: string | undefined;
   /** The idle thread a not-started placement left on the remote. */
@@ -40,6 +42,23 @@ export const memoryRefusal = (message: string) =>
     message,
     remoteCode: MEMORY_CEILING_UNSUPPORTED,
   });
+
+/**
+ * An older remote's answer that goat_thread_launch takes no launchedBy, so nothing ran: its
+ * schema refuses invalid params before the handler, or it says so in bare text. A structured
+ * refusal or any other RPC or transport failure may follow a create, so none of those count.
+ */
+export const isLaunchedByRefusal = (
+  tool: string,
+  said: {
+    readonly message: string;
+    readonly rpcCode?: number | undefined;
+    readonly plainText?: true | undefined;
+  },
+) =>
+  tool === "goat_thread_launch" &&
+  (said.rpcCode === -32602 || said.plainText === true) &&
+  said.message.includes("goat_thread_launch does not take launchedBy, so nothing ran");
 
 export const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
   new SshRemoteDispatchError({ reason, message, ...facts });

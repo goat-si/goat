@@ -80,6 +80,7 @@ import { remoteModelOffer } from "./remoteModelOffer.ts";
 import {
   describe,
   failure,
+  isLaunchedByRefusal,
   memoryRefusal,
   type RuntimeServices,
   SshRemoteDispatchError,
@@ -853,7 +854,11 @@ const make = Effect.gen(function* () {
               ? "host_unavailable"
               : "ssh_failed",
           message: `Calling ${input.tool} on ${input.target.alias} failed: ${describe(error)}`,
-          ...(input.tool === "goat_thread_launch" ? { launchMayHaveStarted: true } : {}),
+          ...(isLaunchedByRefusal(input.tool, { rpcCode: error.rpcCode, message: describe(error) })
+            ? { launchedByRefused: true }
+            : input.tool === "goat_thread_launch"
+              ? { launchMayHaveStarted: true }
+              : {}),
         });
       }),
     );
@@ -1565,11 +1570,7 @@ const make = Effect.gen(function* () {
         Effect.catch((error) =>
           error instanceof SshRemoteDispatchError &&
           forwardLaunchedBy &&
-          (error.reason === "remote_refused" || error.reason === "ssh_failed") &&
-          // An older remote answers in plain text; a structured refusal is its own answer.
-          error.remoteCode === undefined &&
-          error.remoteClassification === undefined &&
-          error.message.includes("goat_thread_launch does not take launchedBy, so nothing ran")
+          error.launchedByRefused === true
             ? Effect.gen(function* () {
                 const retryAdmission = yield* launchAdmission();
                 const result = yield* launch(false, retryAdmission.memoryArguments);

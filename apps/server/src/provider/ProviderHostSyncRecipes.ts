@@ -136,12 +136,13 @@ export function describeInstallFailure(exitCode: number | null, output: string):
 
 /** `codex-cli 0.42.0` and `0.42.0 (Claude Code)` both pin to 0.42.0. */
 export function versionCore(version: string): string | null {
-  return (
-    // A whole version or none: an identifier that runs on past a pin's bounds is not cut short.
-    /(?<![0-9A-Za-z.-])\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?(?![0-9A-Za-z-]|\.[0-9A-Za-z])/u.exec(
+  // A whole version or none: an identifier that runs on past a pin's bounds is not cut short,
+  // and a build-tagged version is no pin, since a pin cannot name build metadata.
+  const match =
+    /(?<![0-9A-Za-z_.+-])\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?(\+[0-9A-Za-z.-]*)?(?![0-9A-Za-z_+-]|\.[0-9A-Za-z])/u.exec(
       version,
-    )?.[0] ?? null
-  );
+    );
+  return match === null || match[1] !== undefined ? null : match[0];
 }
 
 export const hostPlatform = (platform: string): HostPlatform =>

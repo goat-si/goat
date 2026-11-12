@@ -170,6 +170,10 @@ describe("pinned prerelease versions", () => {
     // A version starts where a token starts, never inside a longer one.
     expect(versionCore("1234567.2.3")).toBeNull();
     expect(versionCore("1.2.3-beta.1.2.3.4.5")).toBeNull();
+    // A pin cannot name build metadata, so a build-tagged version never equals one.
+    expect(versionCore("1.2.3+build.4")).toBeNull();
+    expect(versionCore("build_1.2.3")).toBeNull();
+    expect(versionCore("1.2.3_artifact")).toBeNull();
     expect(installCommand("opencode", "linux", "1.2.3-beta-2")?.args).toEqual([
       "install",
       "-g",

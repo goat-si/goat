@@ -4,6 +4,7 @@ import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentS
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as Schema from "effect/Schema";
 
+import { isLaunchedByRefusal } from "./dispatchFailure.ts";
 import { quoteRemote } from "./remoteText.ts";
 
 /**
@@ -58,6 +59,8 @@ export const toolRefusal = (
     readonly mayHaveStarted?: boolean | undefined;
     readonly threadId?: string | undefined;
     readonly driver?: string | undefined;
+    readonly message?: string | undefined;
+    readonly plainText?: true | undefined;
   },
 ) => {
   // The destination refused before creating anything because the provider's CLI is missing there.
@@ -77,6 +80,8 @@ export const toolRefusal = (
       ...(result.threadId === undefined ? {} : { remoteThreadId: result.threadId }),
       launchMayHaveStarted: result.mayHaveStarted !== false,
     };
+  if (isLaunchedByRefusal(tool, { message: result.message ?? "", plainText: result.plainText }))
+    return { launchedByRefused: true as const };
   return {
     ...(result.code === undefined ? {} : { remoteCode: result.code }),
     ...(tool === "goat_thread_launch" &&

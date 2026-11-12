@@ -851,6 +851,22 @@ it.effect("regression F7-1: a pin of 1.2.3-beta is not satisfied by 1.2.3-beta-2
   }),
 );
 
+it.effect("regression F9-1: a pin of 1.2.3 is not satisfied by the build 1.2.3+build.7", () =>
+  Effect.gen(function* () {
+    const tagged = {
+      kind: "present",
+      provider: { ...pending, cli: "present", version: "1.2.3+build.7" },
+    } as const;
+    const { state, host } = yield* installLocally(yield* gate([tagged, tagged], []), "1.2.3");
+    // The installer runs instead of the build being taken as the pin, and it does not confirm.
+    expect(state.spawned).toHaveLength(1);
+    expect(host).toMatchObject({
+      phase: "failed",
+      message: "The installer finished, but OpenCode is still 1.2.3+build.7, not 1.2.3.",
+    });
+  }),
+);
+
 it.effect(
   "regression F7-2: a remote refusal that says it lacks a tool is still quoted as the host's words",
   () =>

@@ -325,6 +325,14 @@ describe("parseGenericCliVersion", () => {
 
   it("ignores versions glued to other word characters", () => {
     expect(parseGenericCliVersion("build2.0.3artifact")).toBeNull();
+    // An underscore joins a token too; the real version later in the output is the one read.
+    expect(parseGenericCliVersion("build_1.2.3 pi 1.2.4")).toBe("1.2.4");
+    expect(parseGenericCliVersion("1.2.3_artifact pi 1.2.4")).toBe("1.2.4");
+  });
+
+  it("keeps build metadata so an exact pin can tell the builds apart", () => {
+    expect(parseGenericCliVersion("pi 1.2.3+build.4")).toBe("1.2.3+build.4");
+    expect(parseGenericCliVersion("pi 1.2.3-beta+build.4 (linux)")).toBe("1.2.3-beta+build.4");
   });
 });
 

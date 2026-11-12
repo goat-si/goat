@@ -436,13 +436,18 @@ describe("readRemoteToolResult", () => {
         isError: true,
         content: [{ type: "text", text: "operation scope required" }],
       }),
-    ).toEqual({ ok: false, message: "The remote thread_create refused: operation scope required" });
+    ).toEqual({
+      ok: false,
+      message: "The remote thread_create refused: operation scope required",
+      plainText: true,
+    });
   });
 
   it("gives a useful refusal when the remote returns no details", () => {
     expect(readRemoteToolResult("tool", { isError: true })).toEqual({
       ok: false,
       message: "The remote tool refused: no details",
+      plainText: true,
     });
   });
 });
@@ -1953,6 +1958,25 @@ it.effect(
         },
       }).pipe(Effect.result);
       // A retry lists the remote's tools again before its second launch.
+      expect(lists).toBe(1);
+      expect(result._tag).toBe("Failure");
+    }),
+);
+it.effect(
+  "regression F9-2: a structured refusal without code that may have started launches only once",
+  () =>
+    Effect.gen(function* () {
+      let lists = 0;
+      const result = yield* launchAgainst({
+        declaresLaunchedBy: true,
+        launchRefusal: {
+          mayHaveStarted: true,
+          message: "goat_thread_launch does not take launchedBy, so nothing ran",
+        },
+        onList: () => {
+          lists += 1;
+        },
+      }).pipe(Effect.result);
       expect(lists).toBe(1);
       expect(result._tag).toBe("Failure");
     }),
@@ -3808,6 +3832,15 @@ describe("SSH launcher transport", () => {
       expectedCalls: 2,
       success: false,
     },
+    {
+      // Only invalid params is the old remote's schema refusal; another RPC error may follow a create.
+      name: "internal-error",
+      refusal: "goat_thread_launch does not take launchedBy, so nothing ran",
+      rpcCode: -32603,
+      launchedBy: true,
+      expectedCalls: 1,
+      success: false,
+    },
   ])("passes launcher and retries only a strict pre-handler refusal: $name", (scenario) =>
     Effect.gen(function* () {
       const target = { alias: "box", hostname: "box", username: null, port: null };
@@ -3878,7 +3911,10 @@ describe("SSH launcher transport", () => {
             return Response.json({
               jsonrpc: "2.0",
               id: request.id,
-              error: { code: -32602, message: scenario.refusal },
+              error: {
+                code: "rpcCode" in scenario ? scenario.rpcCode : -32602,
+                message: scenario.refusal,
+              },
             });
           }
           creates += 1;
