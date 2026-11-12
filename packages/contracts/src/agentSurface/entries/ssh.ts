@@ -51,7 +51,7 @@ export const sshEntries = {
     description:
       "Forget the managed alias and its pinned key, and cancel any setup in progress. stopRuntime if_idle stops only an owned idle runtime; no keeps it running. Remote projects and files are kept.",
     guide:
-      "Needs settings:write, checked again after the runtime is stopped and before the local SSH files are removed. A host this machine does not know reports state untrusted.",
+      "Needs settings:write, checked again after the runtime is stopped and before the local SSH files are removed. A host this machine does not know reports state untrusted. Threads launched on the host stay tracked: once it stops answering they leave Fleet, and they can be dismissed in Settings → Connections → Remote launches or by their launcher with goat_thread_unwatch.",
     effect: "destructive",
     capability: "hub.manage",
     hostRoutable: false,

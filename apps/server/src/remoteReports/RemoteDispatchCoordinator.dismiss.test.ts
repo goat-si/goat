@@ -6,6 +6,8 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Random from "effect/Random";
 import * as TestClock from "effect/testing/TestClock";
+import type * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
+import { unwatchLaunch } from "../mcp/unwatchLaunch.ts";
 import * as Ssh from "../sshRemote/SshRemoteDispatch.ts";
 import * as Coordinator from "./RemoteDispatchCoordinator.ts";
 import {
@@ -115,4 +117,39 @@ it.effect("a send after a dismissal follows the thread again with a fresh drain"
       assert.equal((yield* c.get(launched.correlationId))!.reportCursor, 1);
     }).pipe(Effect.provide(f.layer), steadyRandom);
   }).pipe(Effect.provide(database)),
+);
+
+it.effect(
+  "goat_thread_unwatch stops only the calling thread's own reports from an unreachable host",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const coordinator = yield* Coordinator.RemoteDispatchCoordinator;
+        const launched = yield* f.launch(coordinator, "next_turn");
+        yield* Queue.take(f.calls);
+        const launchWatches = {
+          unwatch: () => Effect.succeed(true),
+        } as unknown as LaunchWatchService.LaunchWatchServiceShape;
+        const unwatch = (launcherThreadId: ThreadId) =>
+          unwatchLaunch({
+            launchWatches,
+            coordinator,
+            launcherThreadId,
+            target: { host: "box", threadId: remote },
+          });
+        // Its host still answers: reports keep arriving.
+        assert.equal((yield* unwatch(origin)).reportsStopped, false);
+        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(0)}`;
+        assert.equal((yield* unwatch(ThreadId.make("another-thread"))).reportsStopped, false);
+        assert.equal((yield* coordinator.get(launched.correlationId))!.state, "running");
+        assert.deepEqual(yield* unwatch(origin), {
+          host: "box",
+          threadId: remote,
+          removed: true,
+          reportsStopped: true,
+        });
+        assert.equal((yield* coordinator.get(launched.correlationId))!.endReason, "dismissed");
+      }).pipe(Effect.provide(f.layer), steadyRandom);
+    }).pipe(Effect.provide(database)),
 );

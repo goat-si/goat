@@ -964,6 +964,8 @@ export const OrchestratorMcpThreadUnwatchResult = Schema.Struct({
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
   removed: Schema.Boolean,
+  /** With host: whether this thread's own report tracking of an unreachable host stopped too. */
+  reportsStopped: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestratorMcpThreadUnwatchResult = typeof OrchestratorMcpThreadUnwatchResult.Type;
 

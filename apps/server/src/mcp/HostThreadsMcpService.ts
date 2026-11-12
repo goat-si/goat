@@ -69,6 +69,7 @@ import {
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostToolAuthorization from "./HostToolAuthorization.ts";
 import { remoteSenderFor } from "./remoteSender.ts";
+import { unwatchLaunch } from "./unwatchLaunch.ts";
 import {
   assertLiveCaller,
   readCaller,
@@ -972,17 +973,11 @@ const make = Effect.gen(function* () {
       ),
     watchThread,
     unwatchThread: (scope, input) =>
-      Effect.gen(function* () {
-        const launcherThreadId = yield* watcherOf(scope);
-        const removed = yield* launchWatches
-          .unwatch({ launcherThreadId, host: input.host, threadId: input.threadId })
-          .pipe(Effect.mapError(storeFailure));
-        return {
-          ...(input.host === undefined ? {} : { host: input.host }),
-          threadId: input.threadId,
-          removed,
-        } satisfies OrchestratorMcpThreadUnwatchResult;
-      }),
+      watcherOf(scope).pipe(
+        Effect.flatMap((launcherThreadId) =>
+          unwatchLaunch({ launchWatches, coordinator, launcherThreadId, target: input }),
+        ),
+      ),
     listWatches: (scope) =>
       Effect.gen(function* () {
         const launcherThreadId = yield* watcherOf(scope);
