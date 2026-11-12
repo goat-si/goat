@@ -139,7 +139,6 @@
   const groups = (fp) => fp.split(" ");
   const shortFP = (fp) => groups(fp).slice(0, 2).join(" ");
   const hostOf = (u) => u.replace(/^[a-z]+:\/\//, "");
-  // bytes writes n in SI units with three significant digits, as pen ls does.
   function bytes(n) {
     let i = 0;
     for (; n >= 999.5 && i < 5; i++) n /= 1000;
@@ -386,6 +385,7 @@
           s.saveError,
       );
     }
+    if (s.revoked24h) foot.push("제거된 멤버 · Removed members, 24 h: " + inOut(s.revoked24h));
     if (offline) {
       foot.unshift(
         "오프라인 멤버: 릴레이는 아무것도 보관하지 않습니다. 기기가 돌아오면 다시 동기화합니다. · Offline members: the relay holds nothing; a member rejoins and syncs when it comes back.",

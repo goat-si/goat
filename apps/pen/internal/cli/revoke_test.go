@@ -87,7 +87,7 @@ func TestRevokeCompromisedTakesAFingerprintPrefixAndSuggestsCommandsThatWork(t *
 	key := func(b byte) string { return ident.B64.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
 	cur := mesh.Member{Name: "b", NodeID: "currentnodeidaaaaaaaaaaaaa", NoisePub: key(1), SignPub: key(3)}
 	old := mesh.Member{Name: "b", NodeID: "departednodeidaaaaaaaaaaaa", NoisePub: key(2), SignPub: key(4)}
-	ls := daemon.LsReply{Members: []daemon.LsMember{{Member: cur}}, Revoked: []mesh.Member{old}}
+	ls := daemon.LsReply{Members: []daemon.LsMember{{Member: cur}}, Revoked: []daemon.LsRevoked{{Member: old}}}
 	_, err := resolveCompromised(ls, "b")
 	if err == nil {
 		t.Fatal("two machines named b resolved to one")

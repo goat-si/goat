@@ -50,14 +50,20 @@ type LsMember struct {
 	Traffic24h *MemberTraffic `json:"traffic24h,omitempty"`
 }
 
+// LsRevoked is a revoked key as ls reports it, with the bytes it carried in the last 24 hours (absent when none).
+type LsRevoked struct {
+	mesh.Member
+	Traffic24h *MemberTraffic `json:"traffic24h,omitempty"`
+}
+
 // LsReply is the ls answer.
 type LsReply struct {
-	Self    string        `json:"self"`
-	MeshID  string        `json:"meshId"`
-	Relay   string        `json:"relay"`
-	Uplink  string        `json:"uplink"`
-	Members []LsMember    `json:"members"`
-	Revoked []mesh.Member `json:"revoked"`
+	Self    string      `json:"self"`
+	MeshID  string      `json:"meshId"`
+	Relay   string      `json:"relay"`
+	Uplink  string      `json:"uplink"`
+	Members []LsMember  `json:"members"`
+	Revoked []LsRevoked `json:"revoked"`
 	// Account is the mesh's Google account binding (nil when unbound); Locked is lock mode;
 	// Pending counts requests waiting for this node's approval.
 	Account *mesh.Account `json:"account,omitempty"`
@@ -346,7 +352,7 @@ func (d *Daemon) status() Status {
 func (d *Daemon) ls() LsReply {
 	v := d.view()
 	s := d.uplinkState()
-	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked(),
+	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s,
 		Account: v.Account, Locked: v.Locked, Pending: len(d.pending.all(d.now())), Records: d.mesh().Len()}
 	d.mu.Lock()
 	if d.saveErr != nil {
@@ -356,6 +362,10 @@ func (d *Daemon) ls() LsReply {
 	d.mu.Unlock()
 	perMember, relays, since := d.trafficTotals()
 	out.Relays24h, out.TrafficSince = relays, since
+	out.Revoked = make([]LsRevoked, 0, len(v.Revoked))
+	for _, m := range v.SortedRevoked() {
+		out.Revoked = append(out.Revoked, LsRevoked{Member: m, Traffic24h: perMember[m.NodeID]})
+	}
 	for _, f := range d.forgets.refusedList() {
 		u := Unforgotten{NodeID: f.NodeID, LoginURL: f.LoginURL}
 		if m, ok := v.RevokedByNodeID(f.NodeID); ok {

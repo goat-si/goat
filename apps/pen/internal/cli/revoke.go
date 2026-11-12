@@ -67,7 +67,7 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 // departed and a current machine carry is refused, since a replacement may join under the old
 // name; the node id or fingerprint (or a start of either) then picks one.
 func resolveCompromised(ls daemon.LsReply, arg string) (mesh.Member, error) {
-	all := append(lsMembers(ls), ls.Revoked...)
+	all := append(lsMembers(ls), revokedMembers(ls)...)
 	q := strings.ToLower(strings.TrimPrefix(arg, "pen-"))
 	full := strings.ToLower(arg)
 	fp := normalFingerprint(arg)

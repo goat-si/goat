@@ -43,6 +43,10 @@ type MemberTraffic struct {
 	Relays []RelayTraffic `json:"relays"`
 }
 
+func (t *MemberTraffic) add(in, out uint64) {
+	t.In, t.Out = traffic.AddSat(t.In, in), traffic.AddSat(t.Out, out)
+}
+
 var errBadTraffic = errors.New("bad traffic report")
 
 // trafficWindow lets daemon.go hold the window without importing traffic.

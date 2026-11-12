@@ -56,7 +56,7 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\trelay\t%s\t%s\t%s\t%s\n", name, short(m.NodeID), m.Fingerprint, seen, via(m.Member), by, inOut(m.Traffic24h))
 	}
 	for _, m := range ls.Revoked {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t%s\t-\t-\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub), via(m))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t%s\t-\t%s\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub), via(m.Member), inOut(m.Traffic24h))
 	}
 	tw.Flush()
 	printTraffic(w, ls)
@@ -235,7 +235,7 @@ func RunLs(args []string, stdout, stderr io.Writer) int {
 	}
 	target := ""
 	if *until != "" {
-		all := append(lsMembers(ls), ls.Revoked...)
+		all := append(lsMembers(ls), revokedMembers(ls)...)
 		m, err := Resolve(all, *until)
 		if err != nil {
 			return fail(stderr, err)
@@ -282,6 +282,14 @@ func refNames(rs []daemon.NameRef) string {
 	return strings.Join(out, ", ")
 }
 
+func revokedMembers(ls daemon.LsReply) []mesh.Member {
+	out := make([]mesh.Member, 0, len(ls.Revoked))
+	for _, m := range ls.Revoked {
+		out = append(out, m.Member)
+	}
+	return out
+}
+
 func lsMembers(ls daemon.LsReply) []mesh.Member {
 	out := make([]mesh.Member, 0, len(ls.Members))
 	for _, m := range ls.Members {
@@ -291,7 +299,10 @@ func lsMembers(ls daemon.LsReply) []mesh.Member {
 }
 
 func offlineLs(v *mesh.View, id *ident.Identity) daemon.LsReply {
-	ls := daemon.LsReply{MeshID: v.MeshID, Uplink: "daemon not running", Revoked: v.SortedRevoked(), Account: v.Account, Locked: v.Locked}
+	ls := daemon.LsReply{MeshID: v.MeshID, Uplink: "daemon not running", Revoked: []daemon.LsRevoked{}, Account: v.Account, Locked: v.Locked}
+	for _, m := range v.SortedRevoked() {
+		ls.Revoked = append(ls.Revoked, daemon.LsRevoked{Member: m})
+	}
 	if id != nil {
 		ls.Self = id.NodeID()
 	}

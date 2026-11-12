@@ -548,9 +548,11 @@ type DashState struct {
 	// ApproveQuestion is the warning pen approve asks before approving by request id.
 	ApproveQuestion string `json:"approveQuestion"`
 	Now             int64  `json:"now"`
-	// Relays24h and TrafficSince are pen ls's (each member's own totals are in Members).
+	// Relays24h and TrafficSince are pen ls's (each member's own totals are in Members); Revoked24h sums the bytes of
+	// revoked members, which the page does not list.
 	Relays24h    []RelayTraffic `json:"relays24h"`
 	TrafficSince int64          `json:"trafficSince,omitempty"`
+	Revoked24h   *MemberTraffic `json:"revoked24h,omitempty"`
 }
 
 func (ds *dashboard) handleState(w http.ResponseWriter, r *http.Request) {
@@ -567,6 +569,14 @@ func (d *Daemon) dashState() DashState {
 		Relays24h: ls.Relays24h, TrafficSince: ls.TrafficSince}
 	if s.Relays24h == nil {
 		s.Relays24h = []RelayTraffic{}
+	}
+	for _, r := range ls.Revoked {
+		if t := r.Traffic24h; t != nil {
+			if s.Revoked24h == nil {
+				s.Revoked24h = &MemberTraffic{Relays: []RelayTraffic{}}
+			}
+			s.Revoked24h.add(t.In, t.Out)
+		}
 	}
 	if s.Unforgotten == nil {
 		s.Unforgotten = []Unforgotten{}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
@@ -139,5 +140,39 @@ func TestTrafficOverARelayNoLongerListedShowsAsOther(t *testing.T) {
 	want := []RelayTraffic{{URL: "", In: 15, Out: 3}}
 	if tr := ls.Members[0].Traffic24h; tr == nil || fmt.Sprint(tr.Relays) != fmt.Sprint(want) || fmt.Sprint(ls.Relays24h) != fmt.Sprint(want) {
 		t.Fatalf("member %+v, relays %+v; want everything under other relays %+v", tr, ls.Relays24h, want)
+	}
+}
+
+// A member revoked after it carried traffic keeps its bytes in pen ls (and the dashboard), not only in the relay total.
+func TestARevokedMemberKeepsItsTrafficInLs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	bm := memberNamed(t, a, "b")
+	if h := rawControl(t, a, trafficLine(bm.NodeID, rs.URL, 10, 20)); h.reply["t"] != "counted" {
+		t.Fatalf("report answered %v", h.reply)
+	}
+	var res struct{ Results []PushResult }
+	if err := Call(a.st, Request{Op: "revoke", Subject: bm.SignPub}, &res); err != nil {
+		t.Fatal(err)
+	}
+	_ = b
+	var raw map[string]any
+	if err := Call(a.st, Request{Op: "ls"}, &raw); err != nil {
+		t.Fatal(err)
+	}
+	revoked, _ := raw["revoked"].([]any)
+	if len(revoked) != 1 {
+		t.Fatalf("revoked %v, want b", raw["revoked"])
+	}
+	tr, _ := revoked[0].(map[string]any)["traffic24h"].(map[string]any)
+	if tr == nil || tr["in"] != float64(10) || tr["out"] != float64(20) {
+		t.Fatalf("revoked b shows traffic %v, want in 10 out 20", tr)
+	}
+	if bs, _ := json.Marshal(a.d.dashState()); !strings.Contains(string(bs), `"revoked24h":{"in":10,"out":20`) {
+		t.Fatalf("dashboard state %s has no revoked24h with b's bytes", bs)
 	}
 }
