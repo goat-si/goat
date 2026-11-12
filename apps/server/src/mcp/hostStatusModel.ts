@@ -369,7 +369,7 @@ export function quotaRefreshDue(
 const CLI_ANSWER_FRESH_MS = 15 * 60_000;
 
 const cliOf = (
-  provider: Pick<ServerProvider, "cli" | "cliCheckedAt" | "version">,
+  provider: Partial<Pick<ServerProvider, "cli" | "cliCheckedAt" | "version">>,
   now: number,
 ): Pick<HostStatusProvider, "cli" | "version" | "cliCheckedAt"> => {
   const checkedAt = provider.cliCheckedAt;
