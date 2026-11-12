@@ -311,8 +311,19 @@ account always stays with you.</p>
 </tr>
 </tbody>
 </table>
-<p>Provider CLIs must be on the server’s <code>PATH</code>. If GOAT cannot find one, set its
-<strong>Binary path</strong> in provider settings, especially when using a version manager.
+<p>Provider CLIs must be on the server’s <code>PATH</code>. On macOS and Linux GOAT also looks,
+after your <code>PATH</code>, in the folders the usual installers use: <code>~/.local/bin</code>,
+<code>~/.bun/bin</code>, Homebrew’s default location (<code>/opt/homebrew/bin</code> on macOS,
+<code>/home/linuxbrew/.linuxbrew/bin</code> on Linux) and <code>/usr/local/bin</code>. If GOAT cannot find a
+CLI, set its <strong>Binary path</strong> in provider settings, especially when using a version manager
+or a Homebrew installed somewhere else.
+The desktop app reads <code>PATH</code> from your login shell. When that shell is slow to start,
+GOAT tries again over the next few minutes, and the status of a missing Claude, Codex,
+Grok, OpenCode, Pi, OmO, fx or Muse Code CLI says that GOAT may not have your shell’s
+current <code>PATH</code> yet. If a provider still reads
+as not found after your shell has answered, restart GOAT: Claude, OpenCode, Muse Code,
+and any other provider instance with its own environment variables, keep the
+<code>PATH</code> they started with.
 Cursor’s executable is <code>cursor-agent</code>, although its login command is
 <code>agent login</code>. Codex connected through ChatGPT and Antigravity can use their
 managed runtimes without a <code>PATH</code> entry.</p>
