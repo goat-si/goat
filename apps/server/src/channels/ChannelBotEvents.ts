@@ -19,6 +19,8 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 export const BOT_EVENT_LIMITS = { perBot: 32, bots: 64, total: 256, attempts: 5 } as const;
 /** An event line's length cap, which a subject's name shares. */
 export const MAX_TEXT = 200;
+/** The kind prefix of a profile edit's line ("Renamed to Ada", "Purpose updated"). */
+export const PROFILE_LINE_PREFIX = "profile-";
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -60,8 +62,8 @@ export class ChannelBotEvents extends Context.Service<
     readonly emit: (event: BotEvent) => Effect.Effect<void>;
     /** Resolves once every queued line has been recorded or given up on. */
     readonly flush: Effect.Effect<void>;
-    /** Whether this bot has a line queued or being recorded, which may still land later. */
-    readonly pending: (ownerId: string, botId: BotId) => Effect.Effect<boolean>;
+    /** Whether this bot has a profile line queued or being recorded, which may still land later. */
+    readonly profileLinePending: (ownerId: string, botId: BotId) => Effect.Effect<boolean>;
   }
 >()("goat/channels/ChannelBotEvents") {}
 
@@ -77,10 +79,14 @@ export interface BotEventsDeps {
 const recordKeyFor = (event: QueuedEvent) =>
   "event:" + event.kind + ":" + event.id + ":" + event.changeId;
 const queueKeyFor = (ownerId: string, botId: BotId) => ownerId + "\u0000" + botId;
+const isProfileLine = (event: BotEvent | undefined) =>
+  event?.kind.startsWith(PROFILE_LINE_PREFIX) === true;
 
 export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotEventsDeps) {
   const scope: Scope.Scope = yield* Effect.scope;
   const queues = new Map<string, Array<QueuedEvent>>();
+  /** Each bot's line its worker took last, which is being recorded until the next take. */
+  const recording = new Map<string, QueuedEvent>();
   let total = 0;
   let emitted = 0;
   let idle: Array<Deferred.Deferred<void>> = [];
@@ -122,9 +128,11 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
       const next = queue?.shift();
       if (next !== undefined) {
         total -= 1;
+        recording.set(key, next);
         return next;
       }
       queues.delete(key);
+      recording.delete(key);
       if (queues.size === 0) {
         const waiting = idle;
         idle = [];
@@ -202,11 +210,13 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
     if (!ready) yield* Deferred.await(waiter);
   });
 
-  // A bot's queue lives until its worker finds it empty, so a line being recorded counts.
-  const pending = (ownerId: string, botId: BotId) =>
-    Effect.sync(() => queues.has(queueKeyFor(ownerId, botId)));
+  const profileLinePending = (ownerId: string, botId: BotId) =>
+    Effect.sync(() => {
+      const key = queueKeyFor(ownerId, botId);
+      return isProfileLine(recording.get(key)) || (queues.get(key)?.some(isProfileLine) ?? false);
+    });
 
-  return ChannelBotEvents.of({ emit, flush, pending });
+  return ChannelBotEvents.of({ emit, flush, profileLinePending });
 });
 
 export const layer = Layer.effect(

@@ -462,8 +462,10 @@ const make = Effect.gen(function* () {
     function* (ownerId: string, bot: BotProfile) {
       const found = yield* ledger.getBotById(ownerId, bot.botId);
       if (found === undefined) return "launching" as const;
-      // A line still queued would land after the new greeting and contradict it.
-      if (yield* events.pending(ownerId, bot.botId)) return false;
+      // An older "Renamed to" would land under the new greeting and contradict it. Profile lines
+      // are queued only under this lock, so none can appear before the record; other lines may
+      // land on either side of the greeting without contradicting it.
+      if (yield* events.profileLinePending(ownerId, bot.botId)) return false;
       const threadId = found.bot.threadId;
       const sequence = yield* eventSink.latestSequence({ threadId });
       return yield* recordMemberGreeting(timeline.recordChanged, {
@@ -495,7 +497,7 @@ const make = Effect.gen(function* () {
             yield* events.emit({
               ownerId: owner.ownerId,
               botId: bot.botId,
-              kind: "profile-" + field,
+              kind: ChannelBotEvents.PROFILE_LINE_PREFIX + field,
               id: bot.botId,
               text: field === "name" ? "Renamed to " + bot.name : "Purpose updated",
             });
