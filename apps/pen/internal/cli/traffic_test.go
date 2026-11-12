@@ -645,3 +645,67 @@ func TestPipeShutdownEndsAtOneDeadlineWhenTheDaemonHoldsTheLastReport(t *testing
 		t.Fatalf("pipe exit %d, %d bytes out, stderr %q; want 0, the echo and nothing", c, out.Len(), errOut.String())
 	}
 }
+
+// Held bytes age by the refused report that carried them: when an old batch is dropped, a newer one still in its
+// bucket is counted.
+func TestPipeKeepsNewerRefusedBytesWhenAnOlderBatchExpires(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	var mu sync.Mutex
+	var reports []daemon.TrafficReport
+	fakeDaemonFunc(t, b, func(line []byte) string {
+		var r daemon.TrafficReport
+		json.Unmarshal(line, &r)
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, r)
+		if len(reports) <= 2 {
+			return `{"error":"unknown op \"traffic.report\""}`
+		}
+		return `{"t":"counted"}`
+	})
+	var now atomic.Int64
+	start := time.Unix(1_800_000_000, 0)
+	now.Store(start.UnixNano())
+	oldNow := trafficNow
+	t.Cleanup(func() { trafficNow = oldNow })
+	trafficNow = func() time.Time { return time.Unix(0, now.Load()) }
+	ticks := make(chan time.Time)
+	reported := make(chan error, 8)
+	setTrafficHooks(t, ticks, func(err error) { reported <- err })
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	in, inW := io.Pipe()
+	defer inW.Close()
+	Stdin = in
+	defer func() { Stdin = os.Stdin }()
+	out := newSignalWriter()
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
+	inW.Write(make([]byte, 100))
+	out.wait(100)
+	now.Store(start.Add(2 * time.Minute).UnixNano())
+	ticks <- time.Now()
+	<-reported // refused: 100 bytes from the start
+	inW.Write(make([]byte, 50))
+	out.wait(150)
+	now.Store(start.Add(14 * time.Minute).UnixNano())
+	ticks <- time.Now()
+	<-reported // refused: 150, of which 50 from +2 min
+	now.Store(start.Add(16 * time.Minute).UnixNano())
+	ticks <- time.Now() // the daemon is back; the batch from the start is a bucket old
+	inW.Close()
+	if c := <-code; c != 0 {
+		t.Fatalf("pipe exit %d, stderr %q", c, errOut.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reports) != 3 || reports[2].In != 50 || reports[2].Out != 50 {
+		t.Fatalf("reports %+v; want a third report counting the 50 bytes each way from +2 min", reports)
+	}
+}

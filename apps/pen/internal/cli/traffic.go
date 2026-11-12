@@ -55,12 +55,23 @@ type sessionTraffic struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	// Touched by report only, one call at a time: sentIn and sentOut are settled (counted, possibly counted, or
-	// dropped); heldIn and heldOut are what a refused or unsent report carried, from heldSince on; lastTry is when
-	// the last report was due, where bytes not yet in a report begin.
-	sentIn, sentOut, heldIn, heldOut uint64
-	heldSince, lastTry               time.Time
-	stop, done                       chan struct{}
+	// dropped); held are the bytes refused or unsent reports added, oldest first; lastTry is when the last report was
+	// due, where bytes not yet in a report begin.
+	sentIn, sentOut uint64
+	held            []heldBatch
+	lastTry         time.Time
+	stop, done      chan struct{}
 }
+
+// heldBatch is what one refused or unsent report added: bytes that crossed the relay from since on.
+type heldBatch struct {
+	in, out uint64
+	since   time.Time
+}
+
+// maxHeld bounds the batches held at once. A batch is dropped a bucket after it began and reports come every
+// trafficEvery, so more are held only when the clock goes back.
+const maxHeld = int(traffic.Span/trafficEvery) + 2
 
 func startTraffic(st *state.Store, node, relay string) *sessionTraffic {
 	s := &sessionTraffic{st: st, node: node, relay: relay, lastTry: trafficNow(), stop: make(chan struct{}), done: make(chan struct{})}
@@ -112,9 +123,9 @@ func (s *sessionTraffic) finish() {
 
 func (s *sessionTraffic) report(ctx context.Context) {
 	now := trafficNow()
-	if (s.heldIn != 0 || s.heldOut != 0) && now.Sub(s.heldSince) >= traffic.Span {
+	for len(s.held) > 0 && (now.Sub(s.held[0].since) >= traffic.Span || len(s.held) >= maxHeld) {
 		// Dropped: counted now, they would land in a later bucket than the one they crossed the relay in.
-		s.sentIn, s.sentOut, s.heldIn, s.heldOut = s.sentIn+s.heldIn, s.sentOut+s.heldOut, 0, 0
+		s.sentIn, s.sentOut, s.held = s.sentIn+s.held[0].in, s.sentOut+s.held[0].out, s.held[1:]
 	}
 	in, out := min(s.in.Load()-s.sentIn, daemon.MaxTrafficCount), min(s.out.Load()-s.sentOut, daemon.MaxTrafficCount)
 	since := s.lastTry
@@ -124,12 +135,15 @@ func (s *sessionTraffic) report(ctx context.Context) {
 	}
 	kept, err := sendReport(ctx, s.st, daemon.TrafficReport{Op: "traffic.report", Node: s.node, Relay: s.relay, In: in, Out: out})
 	if kept {
-		if s.heldIn == 0 && s.heldOut == 0 {
-			s.heldSince = since
+		var heldIn, heldOut uint64
+		for _, b := range s.held {
+			heldIn, heldOut = heldIn+b.in, heldOut+b.out
 		}
-		s.heldIn, s.heldOut = in, out
+		if b := (heldBatch{in: in - min(in, heldIn), out: out - min(out, heldOut), since: since}); b.in != 0 || b.out != 0 {
+			s.held = append(s.held, b)
+		}
 	} else {
-		s.sentIn, s.sentOut, s.heldIn, s.heldOut = s.sentIn+in, s.sentOut+out, 0, 0
+		s.sentIn, s.sentOut, s.held = s.sentIn+in, s.sentOut+out, nil
 	}
 	if trafficReported != nil {
 		trafficReported(err)
