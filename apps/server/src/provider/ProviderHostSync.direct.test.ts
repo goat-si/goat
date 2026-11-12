@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as Gate from "./ProviderCliGate.ts";
@@ -482,6 +483,40 @@ it.effect("regression S4-2: two cancels of one sync share one remote cancel and 
       ).toHaveLength(1);
       for (const answer of [...answers, settled])
         expect(answer.hosts).toEqual([{ host: "box", phase: "cancelled", version: null }]);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("regression S6-1: a remote install Home lost track of can still be cancelled there", () =>
+  Effect.gen(function* () {
+    const { state, layer } = harness({
+      answer: (call) =>
+        call.tool === "goat_provider_sync"
+          ? Effect.succeed({ kind: "started", sync: remoteSync(false, { phase: "installing" }) })
+          : call.tool === "goat_provider_sync_status"
+            ? Effect.fail(dropped)
+            : Effect.succeed(remoteSync(true, { phase: "cancelled" })),
+    });
+    yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", hosts: ["box"], login: false },
+        direct(Effect.void),
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      yield* TestClock.adjust("1 minute");
+      const lost = yield* sync.awaitDone(started.sync.syncId);
+      expect(lost.hosts[0]).toMatchObject({ host: "box", phase: "failed" });
+      expect(lost.hosts[0]?.message).toContain("may still be running");
+      const cancelled = yield* sync.cancel(
+        { syncId: started.sync.syncId },
+        { kind: "client", sessionId: "person" as never },
+      );
+      expect(state.calls.at(-1)?.call).toMatchObject({
+        tool: "goat_provider_sync_cancel",
+        arguments: { syncId: "remote-sync" },
+      });
+      expect(cancelled.hosts[0]).toEqual({ host: "box", phase: "cancelled", version: null });
     }).pipe(Effect.provide(layer));
   }),
 );

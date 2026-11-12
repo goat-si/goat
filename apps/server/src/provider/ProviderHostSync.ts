@@ -98,6 +98,7 @@ import {
   type Failure,
   fail,
   type HostTask,
+  lostTrack,
   ownerSession,
   type RemoteFailure,
   type SyncOperation,
@@ -839,11 +840,7 @@ const make = Effect.gen(function* () {
         if (remote !== undefined) yield* update(task, { ...remote, host });
         if (current.done) return yield* update(task, {}, true);
         if ((yield* Clock.currentTimeMillis) > deadline)
-          return yield* update(
-            task,
-            { phase: "failed", message: `${host} did not finish within 30 minutes.` },
-            true,
-          );
+          return yield* lostTrack(task, `${host} did not finish within 30 minutes.`);
         yield* Effect.sleep(REMOTE_POLL);
         current = yield* callRemote(caller, {
           host,
@@ -861,23 +858,19 @@ const make = Effect.gen(function* () {
       Effect.catch((failure: RemoteFailure) =>
         task.cancelling
           ? Effect.void
-          : update(
+          : lostTrack(
               task,
-              {
-                phase: failure.status === "update_runtime" ? "update_runtime" : "failed",
-                message:
-                  failure.status === "update_runtime"
-                    ? `Update GOAT on ${host} to sync providers there. ${failure.message}`
-                    : failure.message,
-              },
-              true,
+              failure.status === "update_runtime"
+                ? `Update GOAT on ${host} to sync providers there. ${failure.message}`
+                : failure.message,
+              failure.status === "update_runtime" ? "update_runtime" : "failed",
             ),
       ),
       // An interrupted start call means this process is stopping; the restart path records that.
       Effect.catchCause((cause) =>
         task.finished || task.cancelling || Cause.hasInterruptsOnly(cause)
           ? Effect.void
-          : update(task, { phase: "failed", message: `Lost track of ${host}.` }, true),
+          : lostTrack(task, `Lost track of ${host}.`),
       ),
     );
 
