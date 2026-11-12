@@ -143,13 +143,30 @@ export function GoatBotFace(props: {
 
 /**
  * The waiting dot keeps clear of the head's ear in a small circle: web's share of the circle, 6 to
- * 10 px, and a pixel out on the corner below 32 px, where the ear nearly reaches the edge.
+ * 10 px, and a pixel out on the corner below 32 px, where the ear nearly reaches the edge. Its ring,
+ * in the colour behind the avatar, is drawn outside that fill so it parts the dot from any accent.
  */
 function waitingDotStyle(circle: number) {
   const size = Math.min(10, Math.max(6, Math.round(circle * 0.28)));
   const out = circle < 32 ? -1 : 0;
-  return { width: size, height: size, top: out, right: out };
+  const ring = circle < 32 ? 1 : 1.5;
+  return {
+    width: size + ring * 2,
+    height: size + ring * 2,
+    borderWidth: ring,
+    top: out - ring,
+    right: out - ring,
+  };
 }
+
+/** What the avatar sits on, so the waiting dot's ring matches it. */
+export type GoatBotAvatarSurface = "screen" | "selected" | "chip";
+
+const DOT_RING: Record<GoatBotAvatarSurface, string> = {
+  screen: "border-screen",
+  selected: "border-thread-selected",
+  chip: "border-goat-bot-message",
+};
 
 const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
   active: "border-primary",
@@ -169,6 +186,8 @@ export function GoatBotFaceAvatar(props: {
   readonly emoji?: string | null | undefined;
   /** A member's color fills its circle, with text that reads on it. */
   readonly accent?: GoatBotAccent | null | undefined;
+  /** The surface behind the avatar; the screen when absent. */
+  readonly surface?: GoatBotAvatarSurface;
 }) {
   const picture = goatBotAvatarEmoji(props.emoji);
   const signal = goatBotAvatarSignal(props.state, picture !== null);
@@ -206,7 +225,10 @@ export function GoatBotFaceAvatar(props: {
         <GoatBotFace state={props.state} size={props.size * 0.86} motion={props.motion ?? null} />
       )}
       {signal.waitingDot ? (
-        <View className="absolute rounded-full bg-warning" style={waitingDotStyle(props.size)} />
+        <View
+          className={`absolute rounded-full bg-warning-foreground ${DOT_RING[props.surface ?? "screen"]}`}
+          style={waitingDotStyle(props.size)}
+        />
       ) : null}
     </View>
   );
@@ -294,6 +316,7 @@ function GoatBotHeaderTitle(props: {
               motion={props.motion}
               emoji={props.emoji}
               accent={props.accent}
+              surface="chip"
             />
           </View>
           <Text key={accessibilityLabel} className="text-base font-semibold text-foreground">
@@ -341,7 +364,13 @@ export function GoatBotChipFace(props: {
 }) {
   const face = useMobileGoatBotFace(props.activity, props.conversation);
   return (
-    <GoatBotFaceAvatar state={face.state} size={24} emoji={props.emoji} accent={props.accent} />
+    <GoatBotFaceAvatar
+      state={face.state}
+      size={24}
+      emoji={props.emoji}
+      accent={props.accent}
+      surface="chip"
+    />
   );
 }
 
