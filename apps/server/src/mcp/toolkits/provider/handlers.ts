@@ -14,6 +14,7 @@ import * as HostSync from "../../../provider/ProviderHostSync.ts";
 import * as Onboarding from "../../../provider/ProviderOnboarding.ts";
 import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import { dispatchFacts } from "../../hostFailure.ts";
+import { directInstallCheck } from "../../providerDirectInstall.ts";
 import * as McpInvocation from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { settled } from "../settled.ts";
@@ -142,7 +143,9 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
     (input) => withHostSync((service, caller) => service.matrix(input, caller)),
   ),
   goat_provider_sync: McpToolAccess.writes((input) =>
-    withHostSync((service, caller) => service.sync(input, caller)),
+    Effect.flatMap(directInstallCheck(input), (directInstall) =>
+      withHostSync((service, caller) => service.sync(input, { ...caller, directInstall })),
+    ),
   ),
   goat_provider_sync_status: McpToolAccess.reads((input) =>
     withHostSync((service, caller) => service.status(input, caller)),

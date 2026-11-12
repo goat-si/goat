@@ -48,13 +48,13 @@ export const providerSurfaceEntries = {
     operation: "provider_sync",
     summary: "Install and sign in to a provider CLI on other machines",
     description:
-      "Install a provider CLI and start sign-in on selected machines. Cursor installs latest despite a requested version. Follow goat_provider_sync_read; after approval check goat_provider_host_matrix. Retry with the same clientRequestId.",
+      "Install a provider CLI and start sign-in on selected machines. Cursor installs latest despite a requested version. A launch refused for a missing CLI names this call. Follow goat_provider_sync_read; after approval check goat_provider_host_matrix. Retry with the same clientRequestId.",
     guide:
-      "Installation uses fixed vendor npm packages or OS-specific installer scripts. With no hosts, setup runs on this machine. The default version comes from this machine's installed version when parseable, otherwise latest. Sign-in is enabled by default and is skipped when the CLI is already signed in. A thread agent receives needs_human; a person approves and the sync runs under that person's session. A client with providers:manage can start directly and receives a sync ID. Each machine runs its own sign-in: show the person a device code or relayable vendor page, or ask them to finish in GOAT on that host or run the terminal instruction there. Ask the person to use their own account; do not sign in for them or transfer credential files. Results expose parsed login instructions and fixed failure messages, not tokens or raw installer output. After approval, goat_provider_sync_read can also resolve the operation by its handoff ID. A finished sync may still carry a terminal sign-in instruction for a person to complete.",
+      "Installation uses fixed vendor npm packages or OS-specific installer scripts (Codex: OpenAI's install.sh, or install.ps1 on Windows, which installs latest). With no hosts, setup runs on this machine. The default version comes from this machine's installed version when parseable, otherwise latest. Sign-in is enabled by default and is skipped when the CLI is already signed in. A live full-access thread in default mode starts an install-only sync (login:false) directly, without approval, on machines saved in this server's connections and, with goatclaw on, only when its profile allows threads.launch and threads.remote for each host at full access; the check runs again before every send. Any other thread agent receives needs_human; a person approves and the sync runs under that person's session. A client with providers:manage can start directly and receives a sync ID. Each host reports the installer command it ran. Each machine runs its own sign-in: show the person a device code or relayable vendor page, or ask them to finish in GOAT on that host or run the terminal instruction there. Ask the person to use their own account; do not sign in for them or transfer credential files. Results expose parsed login instructions and fixed failure messages, not tokens or raw installer output; another machine's message is quoted after its name. After approval, goat_provider_sync_read can also resolve the operation by its handoff ID. A finished sync may still carry a terminal sign-in instruction for a person to complete.",
     effect: "write",
     capability: "none",
     capabilityReason:
-      "A thread agent only gets a person's approval request; an outside client needs providers:manage.",
+      "An install-only sync from a live full-access thread on saved machines runs directly under the same profile checks as a remote launch; any other thread gets a person's approval request; an outside client needs providers:manage.",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
@@ -87,9 +87,9 @@ export const providerSurfaceEntries = {
     toolkit: "provider",
     summary: "Stop a provider sync",
     description:
-      "Interrupt a provider sync and its local worker processes. Installed CLIs remain installed. Remote setup and GOAT-managed sign-ins can continue after cancellation; check their state with goat_provider_host_matrix.",
+      "Stop a provider sync: its local installers and sign-ins, and the syncs it started on other machines. Installed CLIs remain installed. A host reads cancelled only when its machine confirms it.",
     guide:
-      "The requester can stop its own sync with live authorization; stopping someone else's sync needs providers:manage. The current implementation interrupts workers before choosing remote operations to cancel. Interrupted remote workers mark their tasks finished and can therefore be skipped by that selection. A GOAT-managed local sign-in is a separate auth flow; stopping the sync's subscription does not cancel that flow. Treat the returned sync state as worker state, not proof that all host-side work stopped. A finished install stays installed; remove it with the provider's own uninstaller if needed.",
+      "The requester can stop its own sync with live authorization; stopping someone else's sync needs providers:manage. A cancel claims every unfinished host and sends a cancel to each remote sync. A host reads cancelled only when its machine confirms it; otherwise it says its installer may still be running, and cancelling again retries it. A remote start whose reply was lost has no sync id to cancel, so check that machine with goat_provider_host_matrix. A GOAT-managed local sign-in stops with the sync. A finished install stays installed; remove it with the provider's own uninstaller if needed.",
     effect: "write",
     capability: "none",
     capabilityReason: "Stops a sync the caller asked for; any other sync needs providers:manage.",

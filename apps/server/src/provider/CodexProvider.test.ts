@@ -25,6 +25,7 @@ it.effect("reports a deleted process cwd as a Codex working directory failure", 
       Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service),
     );
     assert.isTrue(snapshot.installed);
+    assert.isUndefined(snapshot.cli);
     assert.equal(snapshot.status, "error");
     assert.include(snapshot.message ?? "", "working directory");
   }).pipe(Effect.provide(NodeServices.layer)),
@@ -49,6 +50,8 @@ it.effect.each([
       {},
     ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
     assert.equal(snapshot.installed, installed);
+    // Only a command that was not found says the CLI is missing; a cwd or permission failure cannot tell.
+    assert.equal(snapshot.cli, installed ? undefined : "missing");
     assert.equal(snapshot.status, "error");
     if (installed) {
       const checks = snapshotChecks({
@@ -92,6 +95,34 @@ it.effect("reports an unsearchable Codex spawn directory as a probe error", () =
       assert.include(snapshot.message ?? "", cwd);
       assert.include(snapshot.message ?? "", "cannot enter");
       assert.notInclude(snapshot.message ?? "", "Binary path");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  ),
+);
+
+it.effect("regression F2D-1: a Codex whose version probe cannot run is not reported missing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const fixture = yield* routeFixture({ role: "home" });
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-interpreter-" });
+      // The file exists; its interpreter does not, so running it fails as "not found".
+      const binary = directory + "/codex";
+      yield* fs.writeFileString(binary, "#!/goat-test-missing-interpreter\n");
+      yield* fs.chmod(binary, 0o755);
+      using _cwd = vi.spyOn(process, "cwd").mockReturnValue(directory);
+      const snapshot = yield* checkCodexProviderStatus(
+        { ...fixture.input.settings, binaryPath: binary },
+        () =>
+          Effect.fail(
+            new CodexErrors.CodexAppServerSpawnError({
+              command: "codex",
+              cause: { code: "EPIPE" },
+            }),
+          ),
+        {},
+      ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+      assert.notEqual(snapshot.cli, "missing");
+      assert.isTrue(snapshot.installed);
     }).pipe(Effect.provide(NodeServices.layer)),
   ),
 );
@@ -285,6 +316,8 @@ it.effect.each(["missing", "changed"])(
       ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
       assert.equal(snapshot.codexRoute?.state, "home");
       assert.equal(snapshot.codexRoute?.effectiveBaseUrl, fixture.input.settings.opencodexBaseUrl);
+      assert.equal(snapshot.cli, "present");
+      assert.equal(snapshot.cliCheckedAt, snapshot.checkedAt);
       const account = yield* fs.readFileString(`${fixture.input.execution.home}/account-observed`);
       assert.include(account, fixture.catalog);
       assert.include(account, fixture.input.settings.opencodexBaseUrl);

@@ -178,6 +178,7 @@ describe("PiProvider", () => {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
       assert.equal(snapshot.installed, true);
+      assert.isUndefined(snapshot.cli);
       assert.include(snapshot.message ?? "", "working directory");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -189,6 +190,7 @@ describe("PiProvider", () => {
         NodeFS.writeFileSync(binaryPath, "#!/nonexistent/interpreter\n", { mode: 0o755 });
         const snapshot = yield* checkPiProviderStatus({ ...settings, binaryPath });
         assert.equal(snapshot.installed, true);
+        assert.isUndefined(snapshot.cli);
         assert.include(snapshot.message ?? "", "could not be started");
       } finally {
         NodeFS.rmSync(dir, { recursive: true });
@@ -224,6 +226,7 @@ describe("PiProvider", () => {
       );
       assert.equal(snapshot.status, "error");
       assert.equal(snapshot.version, "0.80.3");
+      assert.equal(snapshot.cli, "present");
       assert.include(snapshot.message ?? "", `Pi ${MINIMUM_PI_VERSION} or newer`);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -235,6 +238,7 @@ describe("PiProvider", () => {
       );
       assert.equal(snapshot.status, "ready");
       assert.equal(snapshot.auth.status, "unknown");
+      assert.equal(snapshot.cli, "present");
       assert.deepEqual(
         snapshot.models.map((model) => model.slug),
         ["default"],

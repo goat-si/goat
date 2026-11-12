@@ -72,6 +72,7 @@ export * from "./checkpointDiff.ts";
 export * from "./model.ts";
 export * from "./keybindings.ts";
 export * from "./server.ts";
+export * from "./serverProviderState.ts";
 export * from "./automationHold.ts";
 export * from "./settings.ts";
 export * from "./worktreeRetention.ts";

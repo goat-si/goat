@@ -94,6 +94,8 @@ export interface FailureClass {
   readonly code: AgentSurfaceErrorCode;
   /** The failure proves nothing ran, so even a write without a key may be repeated. */
   readonly nothingRan?: true;
+  /** Nothing ran and the caller can fix the cause, so the same key may run once it is fixed. */
+  readonly releasesKey?: true;
 }
 const c = (code: AgentSurfaceErrorCode): FailureClass => ({ code });
 const before = (code: AgentSurfaceErrorCode): FailureClass => ({ code, nothingRan: true });
@@ -121,6 +123,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   not_home: before("conflict"),
   conflict: before("conflict"),
   provider_unavailable: before("unavailable"),
+  // A launch refused because the provider's CLI is missing there; install it, then retry.
+  provider_cli_missing: { code: "failed_precondition", nothingRan: true, releasesKey: true },
   session_receipt_pending: before("unavailable"),
   model_unavailable: before("unavailable"),
   // A routed call may have reached the remote before it stopped answering.
@@ -394,7 +398,7 @@ export const settlementOf = (
     c(result.error.code);
   if (result.error.code === "unknown_outcome" || failure.code === "unknown_outcome")
     return "unknown";
-  if (!TRANSIENT.has(failure.code)) return "completed";
+  if (!TRANSIENT.has(failure.code)) return failure.releasesKey === true ? "released" : "completed";
   return failure.nothingRan === true ? "released" : "unknown";
 };
 
@@ -469,11 +473,15 @@ export const fromFailure = (fields: Fields, context: CallContext): AgentSurfaceR
     tag ??
     "unknown";
   const remoteCode = stringOf(fields, "remoteCode");
+  // A classification the caller fixes, like a missing CLI, outranks a remote's legacy code.
+  const fixable = declared === undefined ? undefined : FAILURE_CLASSES[declared];
   const failure =
     fields.mayHaveStarted === true
       ? c("unknown_outcome")
-      : ((remoteCode === undefined ? undefined : FAILURE_CLASSES[remoteCode]) ??
-        classifyFailure(reason, tag));
+      : fixable?.releasesKey === true
+        ? fixable
+        : ((remoteCode === undefined ? undefined : FAILURE_CLASSES[remoteCode]) ??
+          classifyFailure(reason, tag));
   // Tagged errors often compute their message, so the encoded form may carry none.
   const message =
     stringOf(fields, "message") ?? stringOf(fields, "detail") ?? `The call failed: ${reason}.`;

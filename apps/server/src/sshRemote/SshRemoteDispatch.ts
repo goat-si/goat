@@ -1,6 +1,6 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
-import { advertisesMemoryTools, remoteToolName, toolRefusal } from "./remoteToolNames.ts";
+import { advertisesMemoryTools, refusedBy, remoteToolName } from "./remoteToolNames.ts";
 export { refusedByRemote } from "./remoteRefusal.ts";
 import {
   AttachmentCreateUploadUrlInput,
@@ -80,6 +80,7 @@ import { remoteModelOffer } from "./remoteModelOffer.ts";
 import {
   describe,
   failure,
+  rpcLaunchFacts,
   memoryRefusal,
   type RuntimeServices,
   SshRemoteDispatchError,
@@ -834,7 +835,7 @@ const make = Effect.gen(function* () {
             `GOAT on ${input.target.alias} ${REMOTE_THREAD_STATUS_UNSUPPORTED}.`,
           );
         }
-        if (describe(error).includes("HTTP 401")) {
+        if (error.kind === "http" && error.status === 401) {
           if (linkedAliases.has(input.target.alias)) return linkExpired(input.target.alias);
           // Revoked or expired on the remote: forget it so the next call issues a fresh one.
           invalidateSession(
@@ -853,13 +854,13 @@ const make = Effect.gen(function* () {
               ? "host_unavailable"
               : "ssh_failed",
           message: `Calling ${input.tool} on ${input.target.alias} failed: ${describe(error)}`,
-          ...(input.tool === "goat_thread_launch" ? { launchMayHaveStarted: true } : {}),
+          ...rpcLaunchFacts(input.tool, error),
         });
       }),
     );
     const result = readRemoteToolResult(input.tool, raw);
     if (!result.ok)
-      return yield* failure("remote_refused", result.message, toolRefusal(input.tool, result));
+      return yield* failure("remote_refused", ...refusedBy(input.tool, input.target.alias, result));
     return result.value;
   });
 
@@ -1565,8 +1566,7 @@ const make = Effect.gen(function* () {
         Effect.catch((error) =>
           error instanceof SshRemoteDispatchError &&
           forwardLaunchedBy &&
-          (error.reason === "remote_refused" || error.reason === "ssh_failed") &&
-          error.message.includes("goat_thread_launch does not take launchedBy, so nothing ran")
+          error.undeclaredArguments?.includes("launchedBy") === true
             ? Effect.gen(function* () {
                 const retryAdmission = yield* launchAdmission();
                 const result = yield* launch(false, retryAdmission.memoryArguments);

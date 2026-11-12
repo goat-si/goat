@@ -232,6 +232,35 @@ it("lists every configured provider, including one that reports no quota", () =>
   ]);
 });
 
+it("reports each CLI's presence, version and check time, and an old or absent answer as unknown", () => {
+  const base = {
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: ProviderDriverKind.make("codex"),
+    enabled: true,
+    version: "0.133.0",
+  };
+  const now = Date.parse("2026-11-12T00:20:00.000Z");
+  expect(
+    hostStatusProviders(
+      [
+        { ...base, cli: "present", cliCheckedAt: "2026-11-12T00:15:00.000Z" },
+        { ...base, cli: "missing", cliCheckedAt: "2026-11-12T00:15:00.000Z", version: null },
+        // A failed refresh keeps an old answer; past 15 minutes it no longer counts.
+        { ...base, cli: "missing", cliCheckedAt: "2026-11-12T00:00:00.000Z" },
+        { ...base, cli: "none", cliCheckedAt: "2026-11-12T00:00:00.000Z" },
+        base,
+      ],
+      now,
+    ).map(({ cli, version, cliCheckedAt }) => ({ cli, version, cliCheckedAt })),
+  ).toEqual([
+    { cli: "present", version: "0.133.0", cliCheckedAt: "2026-11-12T00:15:00.000Z" },
+    { cli: "missing", version: undefined, cliCheckedAt: "2026-11-12T00:15:00.000Z" },
+    { cli: "unknown", version: undefined, cliCheckedAt: "2026-11-12T00:00:00.000Z" },
+    { cli: "none", version: undefined, cliCheckedAt: "2026-11-12T00:00:00.000Z" },
+    { cli: "unknown", version: undefined, cliCheckedAt: undefined },
+  ]);
+});
+
 describe("markHostCompatibility", () => {
   const speaks = ownRuntimeProtocolRanges(1001);
   const VERSIONS = {

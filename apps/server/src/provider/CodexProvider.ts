@@ -49,7 +49,6 @@ import {
 import {
   buildServerProvider,
   classifySpawnFailure,
-  isCommandMissingCause,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   providerModelsFromSettings,
@@ -94,8 +93,10 @@ const CODEX_CLIENT_NAME = "T3 Code";
 const CODEX_AUTH_PROBE_TIMEOUT_MS = 20_000;
 const CODEX_DISCOVERY_MARGIN_MS = 250;
 // `codex-cli 0.159.0`, `codex-cli 0.160.0-alpha.1` or the npm CLI's bare `0.1.4161006`.
-// Keep a prerelease suffix so compatibility stays unknown for it, as it does for `initialize`.
-const CODEX_CLI_VERSION_PATTERN = /(?:^|\s)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=\s|$)/u;
+// Keep a prerelease suffix so compatibility stays unknown for it, as it does for `initialize`,
+// and a build suffix so an exact pin can tell the builds apart.
+const CODEX_CLI_VERSION_PATTERN =
+  /(?:^|\s)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?=\s|$)/u;
 
 const CODEX_PRESENTATION = {
   displayName: "Codex",
@@ -635,11 +636,20 @@ const probeCodexCliVersion = Effect.fn("probeCodexCliVersion")(
   },
   Effect.timeoutOption(Duration.millis(DEFAULT_TIMEOUT_MS)),
   Effect.map(Option.getOrNull),
-  Effect.catch((cause) =>
-    Effect.logDebug("Codex --version fallback failed.", { cause }).pipe(
-      Effect.as(isCommandMissingCause(cause) ? ("missing" as const) : null),
+  // "Not found" is also what a vanished cwd or a missing interpreter gives; only a missing command counts.
+  (effect, input) =>
+    Effect.catch(effect, (cause) =>
+      Effect.logDebug("Codex --version fallback failed.", { cause }).pipe(
+        Effect.as(
+          classifySpawnFailure(cause, input.cwd, undefined, {
+            binary: input.binaryPath,
+            env: { ...process.env, ...input.environment },
+          }) === "missing"
+            ? ("missing" as const)
+            : null,
+        ),
+      ),
     ),
-  ),
 );
 
 export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(function* (input: {
@@ -850,6 +860,8 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         : null;
     const installed = maybeInstalled && versionProbe !== "missing";
     const version = versionProbe === "missing" ? null : versionProbe;
+    // Missing only when the command was not found; a version answer proves it is there.
+    const cli = !installed ? "missing" : typeof versionProbe === "string" ? "present" : undefined;
     return buildStatus({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,
@@ -858,6 +870,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       skills: [],
       probe: {
         installed,
+        ...(cli === undefined ? {} : { cli }),
         version,
         status: "error",
         auth: { status: "unknown" },
@@ -950,6 +963,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       },
     ],
     probe: {
+      cli: "present",
       installed: true,
       version: snapshot.version ?? null,
       status: snapshot.models === undefined ? "warning" : accountStatus.status,

@@ -176,6 +176,74 @@ describe("hubDeviceList", () => {
     ]);
   });
 
+  it("names the provider CLIs a machine's GOAT found missing on that machine's row", () => {
+    const withProviders = (alias: string, providers: ReadonlyArray<Record<string, unknown>>) =>
+      ({ ...host(alias), metrics: { providers } }) as unknown as HostStatusEntry;
+    const rows = hubDeviceList({
+      nodes: [node("n1", "VM 1", [ssh("pen-vm1")]), node("n2", "VM 2", [ssh("pen-vm2")])],
+      snapshot: null,
+      hosts: [
+        withProviders("pen-vm1", [
+          {
+            instanceId: "codex",
+            driver: "codex",
+            displayName: "Codex",
+            enabled: true,
+            cli: "missing",
+          },
+          {
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
+            displayName: "Claude",
+            enabled: true,
+            cli: "missing",
+          },
+          { instanceId: "grok", driver: "grok", enabled: false, cli: "missing" },
+        ]),
+        withProviders("pen-vm2", [
+          {
+            instanceId: "codex",
+            driver: "codex",
+            displayName: "Codex",
+            enabled: true,
+            cli: "present",
+          },
+        ]),
+      ],
+    });
+    expect(rows.map((row) => [row.key, row.missingClis])).toEqual([
+      ["node:n1", "Codex and Claude CLIs missing"],
+      ["node:n2", null],
+    ]);
+  });
+
+  it("names no missing CLI from a status it could not read now", () => {
+    const missing = {
+      ...host("pen-vm1"),
+      metrics: {
+        providers: [
+          {
+            instanceId: "codex",
+            driver: "codex",
+            displayName: "Codex",
+            enabled: true,
+            cli: "missing",
+          },
+        ],
+      },
+    } as unknown as HostStatusEntry;
+    const nodes = [node("n1", "VM 1", [ssh("pen-vm1")])];
+    const stale = { ...missing, reachability: "unreachable", lastKnown: true } as HostStatusEntry;
+    expect(hubDeviceList({ nodes, snapshot: null, hosts: [stale] })[0]?.missingClis).toBeNull();
+    expect(
+      hubDeviceList({ nodes, snapshot: null, hosts: [missing], statusCurrent: false })[0]
+        ?.missingClis,
+    ).toBeNull();
+    expect(hubDeviceList({ nodes, snapshot: null, hosts: [missing] })[0]?.missingClis).toBe(
+      "Codex CLI missing",
+    );
+  });
+
   it("puts each machine's setup on one row only, the one whose route names it", () => {
     const rows = hubDeviceList({
       nodes: [node("n1", "boat-2", [cloud("boat-1")]), node("n2", "second", [cloud("boat-2")])],

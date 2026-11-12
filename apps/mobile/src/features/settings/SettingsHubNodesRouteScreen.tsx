@@ -126,6 +126,7 @@ function HubNodesSelection({
 
 /** Web's host-status period: each read samples CPU and asks every SSH host. */
 const SETUP_REFRESH_MS = 15_000;
+const STATUS_REFRESH_MS = 60_000;
 
 /** The hub's machines with their OpenCodex link, as Settings → Hub shows them on desktop and web. */
 function HubDevicesList({
@@ -151,12 +152,12 @@ function HubDevicesList({
     hosts,
     statusCurrent: status.isSuccess,
   });
-  // Host status is a one-shot read; reread it only while a setup, or its verification, is moving.
+  // Host status is a one-shot read; reread it while shown, so a CLI that appears or vanishes shows,
+  // and faster while a setup, or its verification, is moving.
   const settingUp = rows.some((row) => row.childSetup?.tone === "progress");
   const refreshStatus = status.refresh;
   useEffect(() => {
-    if (!settingUp) return;
-    const timer = setInterval(refreshStatus, SETUP_REFRESH_MS);
+    const timer = setInterval(refreshStatus, settingUp ? SETUP_REFRESH_MS : STATUS_REFRESH_MS);
     return () => clearInterval(timer);
   }, [settingUp, refreshStatus]);
   const canCheck = useAtomValue(serverEnvironment.checkHubNodes.permissionAtom(environmentId));
@@ -312,7 +313,7 @@ function HubDevicesList({
           {listed.data === null && !listed.error ? "Loading devices…" : "No devices added yet."}
         </Text>
       ) : null}
-      {rows.map(({ key, label: rowLabel, node, device, childSetup, childOptIn }) => {
+      {rows.map(({ key, label: rowLabel, node, device, childSetup, childOptIn, missingClis }) => {
         const link =
           device !== null
             ? HUB_TRANSPORT_LABEL[device.transport]
@@ -351,6 +352,12 @@ function HubDevicesList({
             {device === null ? null : (
               <Text className="text-sm text-foreground-muted">
                 {hubDeviceFacts(device).join(" · ")}
+              </Text>
+            )}
+            {missingClis === null ? null : (
+              <Text className="text-sm text-warning-foreground">
+                {missingClis}. Install from the hub's Settings → Connections → Providers on your
+                machines.
               </Text>
             )}
             {childSetup === null ? null : (

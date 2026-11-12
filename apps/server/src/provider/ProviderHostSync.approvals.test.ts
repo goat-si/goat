@@ -22,6 +22,9 @@ import {
   type Call,
   environmentId,
   harness,
+  heldGate,
+  openCodeInstance,
+  pendingOpenCode,
   person,
   session,
   threadScope,
@@ -90,6 +93,8 @@ const makeServers = (orchestrator: Orchestrator.OrchestratorV2["Service"]) =>
         readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
         readonly wrap?: Wrap;
         readonly providersBroken?: boolean;
+        /** A local install's probe, provider snapshot and instances. */
+        readonly local?: Pick<Parameters<typeof harness>[0], "cliGate" | "providers" | "instances">;
       },
       run: (sync: Service, handoffs: Handoffs.Handoffs["Service"]) => Effect.Effect<B, F>,
     ) =>
@@ -101,6 +106,7 @@ const makeServers = (orchestrator: Orchestrator.OrchestratorV2["Service"]) =>
           answer: (call) => Effect.suspend(() => ((calls += 1), answer(call))),
           handoffs,
           ...(options.providersBroken === true ? { providersBroken: true } : {}),
+          ...options.local,
           personScopes: () => personScopes,
           snapshot: (id) =>
             orchestrator
@@ -333,6 +339,43 @@ it.effect("keeps a finished sync's per-host result after a restart, without sign
       expect(JSON.stringify(after)).not.toContain("auth login");
     }),
   ),
+);
+
+it.effect(
+  "regression S3-2: an approved install here cancelled while it runs records cancelled",
+  () =>
+    servers(({ boot }) =>
+      Effect.gen(function* () {
+        const probing = yield* Deferred.make<void>();
+        const never = yield* Deferred.make<void>();
+        const local = {
+          cliGate: heldGate(probing, never),
+          providers: [pendingOpenCode],
+          instances: [{ instanceId: openCodeInstance, driverKind: "opencode" }],
+        };
+        const cancelledHere = [{ host: null, phase: "cancelled", version: null }];
+        const address = yield* boot({ local }, (sync) =>
+          Effect.gen(function* () {
+            const asked = yield* sync.sync(
+              { driver: "opencode", version: "1.2.3", login: false },
+              agent,
+            );
+            if (asked.kind !== "needs_human") return expect.unreachable();
+            const address = { threadId, handoffId: asked.handoff.handoffId };
+            yield* approve(sync, address);
+            yield* Deferred.await(probing);
+            const { syncId } = yield* statusOf(sync, address);
+            const cancelled = yield* sync.cancel({ syncId }, { kind: "client", sessionId: person });
+            expect(cancelled.hosts).toEqual(cancelledHere);
+            return address;
+          }),
+        );
+        const after = yield* boot({}, (sync) =>
+          sync.resumeApprovals.pipe(Effect.andThen(statusOf(sync, address))),
+        );
+        expect(after.hosts).toEqual(cancelledHere);
+      }),
+    ),
 );
 
 it.effect("records the result for every approval that joins one running sync", () =>

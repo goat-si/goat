@@ -216,6 +216,20 @@ export interface HubDeviceRow {
    * hub does not offer it for the host: a cloud machine, a host GOAT did not set up, or an older hub.
    */
   readonly childOptIn: ChildOptIn | null;
+  /** "Codex CLI missing": the provider CLIs that machine's GOAT found missing; null when none. */
+  readonly missingClis: string | null;
+}
+
+/** The CLIs a machine's own provider probes found missing, as one line; null when none or stale. */
+function missingCliLabel(entry: HostStatusEntry, current: boolean): string | null {
+  if (!current || entry.reachability !== "ok" || entry.lastKnown === true) return null;
+  const names = (entry.metrics?.providers ?? [])
+    .filter((provider) => provider.enabled && provider.cli === "missing")
+    .map((provider) => provider.displayName ?? provider.driver);
+  const unique = [...new Set(names)];
+  if (unique.length === 0) return null;
+  if (unique.length === 1) return unique[0] + " CLI missing";
+  return unique.slice(0, -1).join(", ") + " and " + unique.at(-1) + " CLIs missing";
 }
 
 function routeNames(node: HubNode): ReadonlyArray<string> {
@@ -271,6 +285,7 @@ export function hubDeviceList(input: {
     device: deviceOf.get(node) ?? null,
     childSetup: null,
     childOptIn: null,
+    missingClis: null,
   }));
   for (const device of devices) {
     if (!placed.has(device))
@@ -281,6 +296,7 @@ export function hubDeviceList(input: {
         device,
         childSetup: null,
         childOptIn: null,
+        missingClis: null,
       });
   }
 
@@ -301,7 +317,8 @@ export function hubDeviceList(input: {
       entry.opencodexChildOptIn === undefined
         ? null
         : { host: entry.host, enabled: entry.opencodexChildOptIn };
-    if (childSetup === null && childOptIn === null) continue;
+    const missingClis = missingCliLabel(entry, input.statusCurrent ?? true);
+    if (childSetup === null && childOptIn === null && missingClis === null) continue;
     const index = rowOf(entry.host);
     const row = rows[index];
     if (index === -1)
@@ -312,12 +329,14 @@ export function hubDeviceList(input: {
         device: null,
         childSetup,
         childOptIn,
+        missingClis,
       });
     else if (row !== undefined)
       rows[index] = {
         ...row,
         childSetup: row.childSetup ?? childSetup,
         childOptIn: row.childOptIn ?? childOptIn,
+        missingClis: row.missingClis ?? missingClis,
       };
   }
   return rows;

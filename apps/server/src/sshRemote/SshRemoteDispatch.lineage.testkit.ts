@@ -94,7 +94,8 @@ export const launchAgainst = (remote: {
   /** Launch twice; only the second carries placement. */
   readonly placementOnSecondLaunch?: import("../fleet/admission/PlacementKey.ts").PlacementArgument;
   /** goat_thread_launch refuses with this payload, as a remote GOAT encodes a failure. */
-  readonly launchRefusal?: Record<string, unknown>;
+  /** A structured refusal, or bare text sent as the error's only content. */
+  readonly launchRefusal?: Record<string, unknown> | string;
   /** Merged into goat_thread_launch's answer. */
   readonly launchAnswer?: Record<string, unknown>;
 }) =>
@@ -249,7 +250,13 @@ export const launchAgainst = (remote: {
                 content: [
                   {
                     type: "text",
-                    text: "goat_thread_launch does not take launchedBy, so nothing ran",
+                    // What GOAT's admission answers for an undeclared argument.
+                    text: JSON.stringify({
+                      _tag: "OrchestratorMcpFailure",
+                      code: "invalid_request",
+                      message:
+                        "goat_thread_launch does not take launchedBy, so nothing ran. It takes projectId, title.",
+                    }),
                   },
                 ],
               },
@@ -261,7 +268,15 @@ export const launchAgainst = (remote: {
               id: request.id,
               result: {
                 isError: true,
-                content: [{ type: "text", text: JSON.stringify(remote.launchRefusal) }],
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      typeof remote.launchRefusal === "string"
+                        ? remote.launchRefusal
+                        : JSON.stringify(remote.launchRefusal),
+                  },
+                ],
               },
             });
           const report = request.params?.arguments?.report as
@@ -277,7 +292,11 @@ export const launchAgainst = (remote: {
                 content: [
                   {
                     type: "text",
-                    text: "goat_thread_launch does not take report, so nothing ran.",
+                    text: JSON.stringify({
+                      _tag: "OrchestratorMcpFailure",
+                      code: "invalid_request",
+                      message: "goat_thread_launch does not take report, so nothing ran.",
+                    }),
                   },
                 ],
               },

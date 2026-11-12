@@ -121,6 +121,7 @@ import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as ProviderInstallation from "./provider/providerInstallation.ts";
+import * as ProviderCliGate from "./provider/ProviderCliGate.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
@@ -886,7 +887,14 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice, SiteNotes.layer)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Keybindings.layer,
+      EnvironmentTheme.layer,
+      // Above the provider registries it reads, below the thread launches that capture it.
+      ProviderCliGate.layer.pipe(Layer.provide(layerServerSettings)),
+    ),
+  ),
   Layer.provideMerge(
     Layer.merge(
       ProviderRegistry.layer.pipe(Layer.provide(layerServerSettings)),

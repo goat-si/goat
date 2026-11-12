@@ -260,6 +260,11 @@ function HubDeviceListRow({
             .join(" · ")}
         </p>
       )}
+      {row.missingClis === null ? null : (
+        <p className="text-xs text-warning-foreground">
+          {row.missingClis}. Install from Settings → Connections → Providers on your machines.
+        </p>
+      )}
       {row.childSetup === null ? null : (
         <HubChildSetup
           environmentId={environmentId}

@@ -20,6 +20,7 @@ import {
   type HostPressureSettings,
   type HostStatusEntry,
   type OrchestrationV2ThreadShell,
+  PROVIDER_DISPLAY_NAMES,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
@@ -657,6 +658,42 @@ const ELEVATED_PENALTY = 200;
  * provider's busiest quota window counts as in choosePlacement, and an elevated host pays a flat
  * penalty. A critical host is skipped.
  */
+/**
+ * The CLI the lane needs on a host, from its enabled matching instances: missing only when every
+ * one of them reports missing, unchecked when none is present and some could not be checked.
+ */
+function cliVerdict(
+  providers: ReadonlyArray<{
+    readonly instanceId: string;
+    readonly driver: string;
+    readonly enabled: boolean;
+    readonly displayName?: string | undefined;
+    readonly cli?: string | undefined;
+  }>,
+  requirements: HostPlacementRequirements,
+) {
+  if (requirements.driver === undefined && requirements.providerInstanceId === undefined)
+    return undefined;
+  const matching = providers.filter(
+    (provider) =>
+      provider.enabled &&
+      (requirements.providerInstanceId === undefined
+        ? provider.driver === requirements.driver
+        : provider.instanceId === requirements.providerInstanceId),
+  );
+  const reported = matching.filter((provider) => provider.cli !== undefined);
+  if (reported.length === 0) return undefined;
+  const driver = reported[0]?.driver ?? "provider";
+  const name = PROVIDER_DISPLAY_NAMES[driver as never] ?? JSON.stringify(driver.slice(0, 40));
+  return {
+    name,
+    missing: matching.every((provider) => provider.cli === "missing"),
+    unchecked:
+      !matching.some((provider) => provider.cli === "present" || provider.cli === "none") &&
+      matching.some((provider) => provider.cli === "unknown"),
+  };
+}
+
 export function rankHosts(
   entries: ReadonlyArray<HostStatusEntry>,
   requirements: HostPlacementRequirements,
@@ -690,6 +727,8 @@ export function rankHosts(
       !providers.some((provider) => provider.enabled && provider.driver === requirements.driver)
     )
       return skip("has no enabled " + requirements.driver + " provider");
+    const cli = cliVerdict(providers, requirements);
+    if (cli?.missing === true) return skip(cli.name + " CLI is not installed there");
     const reasons: Array<string> = [];
     let quotaScore = 0;
     if (requirements.providerInstanceId !== undefined) {
@@ -736,6 +775,7 @@ export function rankHosts(
         " running or queued",
     );
     if (pressure === "elevated") reasons.push("elevated pressure");
+    if (cli?.unchecked === true) reasons.push(cli.name + " CLI not checked");
     return {
       host: entry.host,
       eligible: true,

@@ -222,7 +222,7 @@ const make = Effect.gen(function* () {
     const quotaPool = yield* usageSources.quotaPool;
     return {
       quotas: hostStatusQuotas(projected),
-      providers: hostStatusProviders(providers),
+      providers: hostStatusProviders(providers, now),
       ...(quotaPool === undefined ? {} : { quotaPool }),
       // Routed quotas carry markers here, so a reader never infers routing for this host.
       quotaRouteMarkers: true,

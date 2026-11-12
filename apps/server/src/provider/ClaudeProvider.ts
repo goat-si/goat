@@ -579,6 +579,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       models: allModels,
       probe: {
         installed: failure !== "missing",
+        ...(failure === "missing" ? { cli: "missing" as const } : {}),
         version: null,
         status: "error",
         auth: { status: "unknown" },
@@ -625,6 +626,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       checkedAt,
       models: allModels,
       probe: {
+        cli: "present",
         installed: true,
         version: parsedVersion,
         status: "error",
@@ -665,6 +667,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       slashCommands: dedupedSlashCommands,
       skills,
       probe: {
+        cli: "present",
         installed: true,
         version: parsedVersion,
         status: "warning",
@@ -698,6 +701,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       slashCommands: dedupedSlashCommands,
       skills,
       probe: {
+        cli: "present",
         installed: true,
         version: parsedVersion,
         status: "error",
@@ -743,6 +747,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     slashCommands: dedupedSlashCommands,
     skills,
     probe: {
+      cli: "present",
       installed: true,
       version: parsedVersion,
       status: "ready",

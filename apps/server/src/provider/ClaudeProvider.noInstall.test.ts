@@ -34,6 +34,7 @@ it.live("reports a missing Claude mise shim without installing or reporting mise
       );
       assert.isFalse(yield* fs.exists(marker));
       assert.isFalse(status.installed);
+      assert.equal(status.cli, "missing");
       assert.isNull(status.version);
     }).pipe(Effect.provide(NodeServices.layer)),
   ),
