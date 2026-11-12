@@ -13152,6 +13152,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "secret_request.record" ||
           command.type === "delegated_task.remote.progress" ||
           command.type === "delegated_task.remote.result" ||
+          command.type === "channel.timeline.record" ||
           command.type === "thread.background-work.settle" ||
           command.type === "thread.interrupt.unresponsive" ||
           command.type === "thread.stop" ||
