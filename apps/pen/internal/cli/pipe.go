@@ -217,10 +217,14 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 
 // revokedNodeErr names who left: the member at the other end, or this node itself.
 func revokedNodeErr(m mesh.Member, self bool) error {
+	return errors.New(revokedWho(m, self) + "; session closed")
+}
+
+func revokedWho(m mesh.Member, self bool) string {
 	if self {
-		return errors.New("this node left the mesh or was revoked; session closed")
+		return "this node left the mesh or was revoked"
 	}
-	return fmt.Errorf("%s (%s) was revoked from the mesh; session closed", m.Name, short(m.NodeID))
+	return fmt.Sprintf("%s (%s) was revoked from the mesh", m.Name, short(m.NodeID))
 }
 
 // watchRevoked watches m and this node. With no daemon to watch (pen down, or never started) it
@@ -229,8 +233,18 @@ func revokedNodeErr(m mesh.Member, self bool) error {
 func watchRevoked(st *state.Store, p *peer, m mesh.Member) (<-chan string, func(), error) {
 	self := p.id.NodeID()
 	revoked, stop, err := daemon.WatchRevoked(st, m.NodeID, self)
-	if err != nil || revoked != nil {
-		return revoked, stop, err
+	if err != nil {
+		return nil, stop, err
+	}
+	if revoked != nil {
+		// A revoke already in the daemon's view comes with the watch's first line: start nothing.
+		select {
+		case who := <-revoked:
+			stop()
+			return nil, func() {}, errors.New(revokedWho(m, who == self) + "; nothing was opened")
+		default:
+			return revoked, stop, nil
+		}
 	}
 	id, err := st.LoadIdentity()
 	if errors.Is(err, os.ErrNotExist) || err == nil && id.NodeID() != self {

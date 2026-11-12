@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -328,5 +331,87 @@ func TestForwardResetsTheLocalClientWhenTheRelayCutsTheStream(t *testing.T) {
 	f.cut()
 	if _, err := c.Read(make([]byte, 1)); err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("the local client read %v after the relay cut its stream; want a reset, not the end of the stream", err)
+	}
+}
+
+// A daemon that still runs after this node was revoked (a leave no member took leaves it so) sends
+// the revoke in the watch's first line; a forward then announces nothing and a pipe opens nothing.
+func TestForwardAndPipeDoNotStartForANodeAlreadyRevoked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := meshOfTwo(t, ctx, rs)
+	revokedHere := tmpStore(t) // b's identity and mesh, behind a daemon whose view revokes b
+	files, err := filepath.Glob(filepath.Join(b.Dir, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(revokedHere.Dir, filepath.Base(f)), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := loadPeer(revokedHere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := json.Marshal(daemon.WatchLine{T: "view", Revoked: []daemon.NameRef{{NodeID: p.id.NodeID(), Name: "b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctl, err := net.Listen("unix", daemon.SocketPath(revokedHere))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	go func() {
+		for {
+			c, err := ctl.Accept()
+			if err != nil {
+				return
+			}
+			bufio.NewReader(c).ReadString('\n')
+			c.Write(append(first, '\n'))
+			defer c.Close()
+		}
+	}()
+	m, err := Resolve(p.view.SortedMembers(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	out, outW := io.Pipe()
+	go func() {
+		code <- runForward(ctx, ln, revokedHere, p, m, 9, outW, &errOut, nil)
+		outW.Close()
+	}()
+	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "" {
+		t.Fatalf("a revoked node announced a forward: %q", line)
+	}
+	if got := <-code; got == 0 || !strings.Contains(errOut.String(), "nothing was opened") {
+		t.Fatalf("forward exit %d, stderr %q; want a refusal before it serves", got, errOut.String())
+	}
+	if c, err := net.Dial("tcp", ln.Addr().String()); err == nil {
+		c.Close()
+		t.Fatal("the forward that did not start still holds its port")
+	}
+
+	t.Setenv("PEN_HOME", revokedHere.Dir)
+	Stdin = strings.NewReader("")
+	defer func() { Stdin = os.Stdin }()
+	errOut.Reset()
+	if got := RunPipe([]string{"a", "9"}, io.Discard, &errOut); got == 0 || !strings.Contains(errOut.String(), "nothing was opened") {
+		t.Fatalf("pipe exit %d, stderr %q; want a refusal before any open", got, errOut.String())
 	}
 }
