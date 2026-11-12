@@ -67,17 +67,19 @@ export function useBotFileOpener(
     const life = lifetime.current;
     const signal = life?.scope === scope ? life.controller.signal : undefined;
     if (environmentId === null || signal === undefined || signal.aborted) return;
-    setOpening({ scope, value: file.relativePath });
+    // Each open clears only its own mark, so one stopped by a chat change leaves nothing behind.
+    const mark = { scope, value: file.relativePath };
+    setOpening(mark);
     setMessages((current) => ({
       scope,
       value: withoutKey(current?.scope === scope ? current.value : NO_MESSAGES, file.relativePath),
     }));
     const result = await openBotLibraryFile(environmentId, file.relativePath, signal, botName);
+    setOpening((current) => (current === mark ? null : current));
     if (signal.aborted) {
       if (result.kind === "image") result.preview.file.dispose();
       return;
     }
-    setOpening(null);
     if (result.kind === "image") show(result.preview);
     else if (result.kind === "message")
       setMessages((current) => ({
