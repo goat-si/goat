@@ -91,6 +91,7 @@ export const makeTestRelay = Effect.fnUntraced(function* (
     readonly readShell?: (threadId: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null>;
     readonly domainEvents?: Stream.Stream<OrchestrationV2DomainEvent>;
     readonly activeSubagents?: ReadonlyArray<ThreadId>;
+    readonly maxPublishedThreads?: number;
   } = {},
 ) {
   const values = new Map<string, Uint8Array>(
@@ -228,6 +229,9 @@ export const makeTestRelay = Effect.fnUntraced(function* (
   );
   const relay = yield* AgentAwarenessRelay.makeWith({
     publishedStateByThread: publishedStates,
+    ...(options.maxPublishedThreads === undefined
+      ? {}
+      : { maxPublishedThreads: options.maxPublishedThreads }),
   }).pipe(
     Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
     Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
