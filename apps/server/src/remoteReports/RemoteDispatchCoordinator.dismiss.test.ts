@@ -140,12 +140,19 @@ it.effect(
           });
         // Its host still answers: reports keep arriving.
         assert.equal((yield* unwatch(origin)).reportsStopped, false);
-        // A minute-long blip: an agent that unwatches then only meant to drop its wakes.
         const nowMs = yield* Clock.currentTimeMillis;
-        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(nowMs - 60_000)}`;
+        // A minute-long blip: an agent that unwatches then only meant to drop its wakes.
+        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(nowMs - 60_000)},
+          host_last_failed_at = ${iso(nowMs)}`;
         assert.equal((yield* unwatch(origin)).reportsStopped, false);
         assert.equal((yield* coordinator.get(launched.correlationId))!.state, "running");
-        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(nowMs - 15 * 60_000)}`;
+        // An old outage start whose last failed contact is an hour old: this machine was away
+        // since, so nothing shows the host is still silent.
+        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(nowMs - 2 * 60 * 60_000)},
+          host_last_failed_at = ${iso(nowMs - 60 * 60_000)}`;
+        assert.equal((yield* unwatch(origin)).reportsStopped, false);
+        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(nowMs - 15 * 60_000)},
+          host_last_failed_at = ${iso(nowMs)}`;
         assert.equal((yield* unwatch(ThreadId.make("another-thread"))).reportsStopped, false);
         assert.equal((yield* coordinator.get(launched.correlationId))!.state, "running");
         assert.deepEqual(yield* unwatch(origin), {

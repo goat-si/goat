@@ -358,3 +358,31 @@ it.effect("a task whose early outage notice keeps failing still ends after 24 ho
     }).pipe(Effect.provide(f.layer), steadyRandom);
   }).pipe(Effect.provide(database)),
 );
+
+it.effect(
+  "an outage that had already run a day before this machine went away ends at the next failure",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const c = yield* Coordinator.RemoteDispatchCoordinator;
+        const launched = yield* launchTask(c);
+        yield* Queue.take(f.notifications);
+        const read = yield* Queue.take(f.calls);
+        // A day of failures, the outage result committed, then a crash and a day away.
+        const nowMs = yield* Clock.currentTimeMillis;
+        const sinceMs = nowMs - 2 * DAY;
+        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(sinceMs)},
+          host_last_failed_at = ${iso(nowMs - DAY)} WHERE correlation_id = ${launched.correlationId}`;
+        f.recordedTasks.push(
+          subagent("task-A", "failed", `box has not answered since ${iso(sinceMs)}.`),
+        );
+        yield* Queue.offer(read.reply, unreachable());
+        yield* TestClock.adjust("1 second");
+        const row = (yield* c.get(launched.correlationId))!;
+        assert.equal(row.state, "lost");
+        assert.equal(row.endReason, "host_unreachable");
+        assert.equal(row.hostUnavailableSince, iso(sinceMs));
+      }).pipe(Effect.provide(f.layer), steadyRandom);
+    }).pipe(Effect.provide(database)),
+);

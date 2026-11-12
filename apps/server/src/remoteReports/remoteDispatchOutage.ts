@@ -28,7 +28,7 @@ const OUTAGE_LOST_AFTER_MS = 24 * 60 * 60_000;
  * call of up to 6 minutes, with room to spare. A longer gap means this machine was asleep or
  * stopped, so that time is not the host's silence and the outage clock starts again.
  */
-const CONTACT_GAP_MS = 30 * 60_000;
+export const CONTACT_GAP_MS = 30 * 60_000;
 
 const UNREACHABLE = new Set(["host_unavailable", "ssh_failed", "host_unknown"]);
 
@@ -115,18 +115,28 @@ export const recordUnreachable = Effect.fn("remoteReports.recordUnreachable")(fu
   record: RemoteDispatchRecord,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const nowDate = yield* DateTime.now;
-  const at = DateTime.formatIso(nowDate);
-  const gapStart = DateTime.formatIso(DateTime.subtract(nowDate, { milliseconds: CONTACT_GAP_MS }));
-  const since = sql`CASE WHEN host_unavailable_since IS NULL OR host_last_failed_at < ${gapStart}
-    THEN ${at} ELSE host_unavailable_since END`;
-  const marked = yield* sql<{ readonly since: string }>`UPDATE remote_dispatches SET
-    host_unavailable_since = ${since}, host_last_failed_at = ${at},
-    last_error = 'Host unavailable since ' || ${since} || '.'
+  const at = DateTime.formatIso(yield* DateTime.now);
+  const atMs = Date.parse(at);
+  const [current] = yield* sql<{ readonly since: string | null; readonly last: string | null }>`
+    SELECT host_unavailable_since AS since, host_last_failed_at AS last FROM remote_dispatches
+    WHERE correlation_id = ${record.correlationId} AND state = 'running'`.pipe(
+    Effect.mapError(storage),
+  );
+  if (current === undefined) return true;
+  // A gap restarts the clock, unless the outage had already run its course before the gap:
+  // then tracking should have ended, and only a crash kept the row running.
+  const began =
+    current.since === null ||
+    (current.last !== null &&
+      atMs - Date.parse(current.last) > CONTACT_GAP_MS &&
+      Date.parse(current.last) - Date.parse(current.since) < OUTAGE_LOST_AFTER_MS)
+      ? at
+      : current.since;
+  const marked = yield* sql`UPDATE remote_dispatches SET host_unavailable_since = ${began},
+    host_last_failed_at = ${at}, last_error = ${`Host unavailable since ${began}.`}
     WHERE correlation_id = ${record.correlationId} AND state = 'running'
-    RETURNING host_unavailable_since AS since`.pipe(Effect.mapError(storage));
-  const began = marked[0]?.since;
-  if (began === undefined) return true;
+    RETURNING correlation_id`.pipe(Effect.mapError(storage));
+  if (marked.length === 0) return true;
   if (Date.parse(at) - Date.parse(began) < OUTAGE_LOST_AFTER_MS) return false;
   return record.task === null
     ? yield* endThread(record, began, at)

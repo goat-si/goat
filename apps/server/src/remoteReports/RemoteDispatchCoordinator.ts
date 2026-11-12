@@ -54,7 +54,12 @@ import {
   resolveLostThreadLaunches,
 } from "./remoteDispatchRecovery.ts";
 import { recoverUncertainTasks as recoverUncertainTaskDispatches } from "./remoteTaskRecovery.ts";
-import { type DismissSelector, dismissRow, selectDismissable } from "./remoteDispatchDismiss.ts";
+import {
+  type DismissSelector,
+  dismissCutoff,
+  dismissRow,
+  selectDismissable,
+} from "./remoteDispatchDismiss.ts";
 import { makeDeleteClaims } from "./remoteDispatchDeleteClaims.ts";
 import {
   REPORTING_NOTE,
@@ -1148,13 +1153,7 @@ const make = Effect.gen(function* () {
     selector: DismissSelector,
   ) {
     const dismissed: Array<RemoteDispatchRecord> = [];
-    const nowDate = yield* DateTime.now;
-    const cutoff =
-      selector.unreachableForMs === undefined
-        ? null
-        : DateTime.formatIso(
-            DateTime.subtract(nowDate, { milliseconds: selector.unreachableForMs }),
-          );
+    const cutoff = dismissCutoff(yield* DateTime.now, selector.unreachableForMs);
     for (const r of yield* rows(selectDismissable(sql, selector, cutoff))) {
       const id = r.correlation_id;
       // The drain is detached under the lock and interrupted outside it, so nothing waits on the
