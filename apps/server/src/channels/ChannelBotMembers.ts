@@ -22,10 +22,13 @@ import {
   MAIN_BOT_ID,
 } from "@goat/contracts";
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -101,6 +104,11 @@ const newBotId = () =>
 const PROFILE_PREFIX = "bot-profile:";
 /** At most this many active members per owner, and member records of any state. */
 export const MEMBER_LIMIT = 50;
+/**
+ * How long an edit waits for its greeting re-record before writing its lines instead. The record
+ * is one local command that takes milliseconds; every bot's edits share the lock it holds.
+ */
+export const GREETING_RERECORD_BOUND_MS = 5_000;
 const MEMBER_RECORD_LIMIT = 500;
 /** Unfinished members one reconcile pass takes; the next list or ownership takes the rest. */
 const RECONCILE_BATCH = 100;
@@ -456,10 +464,14 @@ const make = Effect.gen(function* () {
   /**
    * Writes a member's greeting again for its new name or purpose; runs under the profile lock.
    * Says whether it wrote, or "launching" before the member has a thread: launch then greets
-   * from the stored profile.
+   * from the stored profile. `restore` makes only the bounded wait for the record interruptible.
    */
   const regreet = Effect.fn("ChannelBotMembers.regreet")(
-    function* (ownerId: string, bot: BotProfile) {
+    function* (
+      ownerId: string,
+      bot: BotProfile,
+      restore: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>,
+    ) {
       const found = yield* ledger.getBotById(ownerId, bot.botId);
       if (found === undefined) return "launching" as const;
       // An older "Renamed to" would land under the new greeting and contradict it. Profile lines
@@ -467,16 +479,36 @@ const make = Effect.gen(function* () {
       // land on either side of the greeting without contradicting it.
       if (yield* events.profileLinePending(ownerId, bot.botId)) return false;
       const threadId = found.bot.threadId;
-      const sequence = yield* eventSink.latestSequence({ threadId });
-      return yield* recordMemberGreeting(timeline.recordChanged, {
-        ownerId,
-        threadId,
-        bot,
-        revision: (text) => "profile:" + sequence + ":" + text,
+      const record = Effect.gen(function* () {
+        const sequence = yield* eventSink.latestSequence({ threadId });
+        return yield* recordMemberGreeting(timeline.recordChanged, {
+          ownerId,
+          threadId,
+          bot,
+          revision: (text) => "profile:" + sequence + ":" + text,
+        });
       });
+      // A record not confirmed by the bound counts as not written, so the lines follow. If it
+      // commits later, the chat shows the new greeting with the line under it.
+      const work = yield* record.pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("member greeting not re-recorded", { cause }).pipe(Effect.as(false)),
+        ),
+        Effect.forkDetach,
+      );
+      const joined = yield* restore(
+        Fiber.join(work).pipe(Effect.timeoutOption(GREETING_RERECORD_BOUND_MS)),
+      ).pipe(Effect.onInterrupt(() => Effect.sync(() => work.interruptUnsafe())));
+      if (Option.isNone(joined)) work.interruptUnsafe();
+      return Option.getOrElse(joined, () => false);
     },
     Effect.catchCause((cause) =>
-      Effect.logWarning("member greeting not re-recorded", { cause }).pipe(Effect.as(false)),
+      (Cause.hasInterruptsOnly(cause)
+        ? Effect.void
+        : Effect.logWarning("member greeting not re-recorded", { cause })
+      ).pipe(Effect.as(false)),
     ),
   );
 
@@ -486,12 +518,14 @@ const make = Effect.gen(function* () {
    */
   const update: ChannelBotMembers["Service"]["update"] = (input, owner) =>
     profileEdits.withPermits(1)(
-      // Waiting for the lock stays interruptible; once saved, the greeting or lines always follow.
-      Effect.uninterruptible(
+      // Waiting for the lock and for the bounded greeting record stays interruptible; once the
+      // profile is saved, the greeting or the lines always follow.
+      Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const { bot, changed } = yield* profiles.updateWithChanges(input, owner);
           if (changed.length === 0) return bot;
-          const greeted = bot.botId === MAIN_BOT_ID ? false : yield* regreet(owner.ownerId, bot);
+          const greeted =
+            bot.botId === MAIN_BOT_ID ? false : yield* regreet(owner.ownerId, bot, restore);
           if (greeted !== false) return bot;
           for (const field of changed)
             yield* events.emit({
