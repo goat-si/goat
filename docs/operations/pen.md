@@ -245,12 +245,18 @@ journalctl -u pen-relay -o cat --since today | grep '^{"event":"session"' |
 
 **Worker.** It logs nothing: Workers Logs would keep request URLs, which hold the full node id. List your nodes with
 `pnpm exec wrangler secret put TRAFFIC_NODES` in `infra/pen-relay` (full ids, comma-separated); a secret keeps the ids
-out of the repository and survives deploys. With no list no Room keeps a row. Each listed node's Durable Object keeps
-one row in a `traffic` table (`to_node`, `from_node`, `sessions`, `unanswered`, and `since` and `at` in ms since the
-epoch). Read it in the dashboard under Workers & Pages, Durable Objects, the `Room` namespace of `pen-relay`, Data
+out of the repository and survives deploys. Each listed node's Durable Object keeps one row in a `traffic` table
+(`to_node`, `from_node`, `sessions`, `unanswered`, and `since` and `at` in ms since the epoch). Read it in the
+dashboard under Workers & Pages, Durable Objects, the `Room` namespace of `pen-relay`, Data
 Studio: enter the full node id and run `SELECT * FROM traffic`. Anyone on the Cloudflare account whose role can edit
 this Worker can read the row there, and those queries are billed as Durable Object use. The row stays as long as the
 object, across deploys and rollbacks.
+
+Taking a node off the list, or unsetting the secret, stops counting new traffic for it; rows already written stay. To
+remove one, take the node off the list first (a secret change deploys a new version, so a Room still holding the old
+totals in memory cannot write them back), then run `DROP TABLE traffic` in Data Studio for that node's object. Data
+Studio needs Editor access to the Worker and records every query in the account's audit log. There is no other way to
+remove a row.
 
 The Room writes the row at most once a minute; Cloudflare may run the alarm that writes it up to a minute late during
 maintenance or failover, so the row can trail by about two minutes. Bytes not written yet ride on the node's uplink
