@@ -39,8 +39,13 @@ const nextCall = (f: Fixture) =>
     yield* TestClock.adjust("300 seconds");
     return yield* Queue.take(f.calls);
   });
+/** An outage that began at sinceMs and whose latest failed contact was just now. */
 const setSince = (f: Fixture, id: string, sinceMs: number) =>
-  f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(sinceMs)} WHERE correlation_id = ${id}`;
+  Effect.gen(function* () {
+    const lastMs = yield* Clock.currentTimeMillis;
+    yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(sinceMs)},
+      host_last_failed_at = ${iso(lastMs)} WHERE correlation_id = ${id}`;
+  });
 
 it.effect(
   "an unreachable host records when the outage began and never bumps the ordering time",
@@ -141,7 +146,7 @@ it.effect(
 );
 
 it.effect(
-  "a stored outage start counts after a restart: the first unreachable answer ends tracking",
+  "a day this machine was away does not count as the host's silence: the outage clock restarts",
   () =>
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -149,11 +154,16 @@ it.effect(
         const c = yield* Coordinator.RemoteDispatchCoordinator;
         const launched = yield* f.launch(c, "notify_only");
         const read = yield* Queue.take(f.calls);
-        yield* setSince(f, launched.correlationId, (yield* Clock.currentTimeMillis) - 2 * DAY);
+        // The host stopped answering, then this machine slept for two days without asking.
+        const nowMs = yield* Clock.currentTimeMillis;
+        yield* f.sql`UPDATE remote_dispatches SET host_unavailable_since = ${iso(nowMs - 2 * DAY)},
+          host_last_failed_at = ${iso(nowMs - 2 * DAY)} WHERE correlation_id = ${launched.correlationId}`;
         yield* Queue.offer(read.reply, unreachable());
-        yield* TestClock.adjust("1 hour");
-        assert.equal((yield* Queue.clear(f.notifications)).length, 1);
-        assert.equal((yield* c.get(launched.correlationId))!.state, "lost");
+        yield* TestClock.adjust("1 second");
+        assert.equal((yield* Queue.clear(f.notifications)).length, 0);
+        const row = (yield* c.get(launched.correlationId))!;
+        assert.equal(row.state, "running");
+        assert.equal(row.hostUnavailableSince, iso(nowMs));
       }).pipe(Effect.provide(f.layer), steadyRandom);
     }).pipe(Effect.provide(database)),
 );

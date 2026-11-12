@@ -23,6 +23,13 @@ import { dispatchMonitorMessage } from "./remoteMonitorMessage.ts";
  */
 const OUTAGE_LOST_AFTER_MS = 24 * 60 * 60_000;
 
+/**
+ * The longest wait between two failed contacts of one continuous watch: a 300 s backoff plus a
+ * call of up to 6 minutes, with room to spare. A longer gap means this machine was asleep or
+ * stopped, so that time is not the host's silence and the outage clock starts again.
+ */
+const CONTACT_GAP_MS = 30 * 60_000;
+
 const UNREACHABLE = new Set(["host_unavailable", "ssh_failed", "host_unknown"]);
 
 /** No answer came back: the host was not reached, or this machine no longer knows how to reach it. */
@@ -108,18 +115,22 @@ export const recordUnreachable = Effect.fn("remoteReports.recordUnreachable")(fu
   record: RemoteDispatchRecord,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const at = DateTime.formatIso(yield* DateTime.now);
+  const nowDate = yield* DateTime.now;
+  const at = DateTime.formatIso(nowDate);
+  const gapStart = DateTime.formatIso(DateTime.subtract(nowDate, { milliseconds: CONTACT_GAP_MS }));
+  const since = sql`CASE WHEN host_unavailable_since IS NULL OR host_last_failed_at < ${gapStart}
+    THEN ${at} ELSE host_unavailable_since END`;
   const marked = yield* sql<{ readonly since: string }>`UPDATE remote_dispatches SET
-    host_unavailable_since = COALESCE(host_unavailable_since, ${at}),
-    last_error = 'Host unavailable since ' || COALESCE(host_unavailable_since, ${at}) || '.'
+    host_unavailable_since = ${since}, host_last_failed_at = ${at},
+    last_error = 'Host unavailable since ' || ${since} || '.'
     WHERE correlation_id = ${record.correlationId} AND state = 'running'
     RETURNING host_unavailable_since AS since`.pipe(Effect.mapError(storage));
-  const since = marked[0]?.since;
-  if (since === undefined) return true;
-  if (Date.parse(at) - Date.parse(since) < OUTAGE_LOST_AFTER_MS) return false;
+  const began = marked[0]?.since;
+  if (began === undefined) return true;
+  if (Date.parse(at) - Date.parse(began) < OUTAGE_LOST_AFTER_MS) return false;
   return record.task === null
-    ? yield* endThread(record, since, at)
-    : yield* endTask({ ...record, task: record.task }, since, at);
+    ? yield* endThread(record, began, at)
+    : yield* endTask({ ...record, task: record.task }, began, at);
 });
 
 /**
@@ -145,7 +156,7 @@ export const clearUnreachable = Effect.fn("remoteReports.clearUnreachable")(func
       return true;
     }
   }
-  yield* sql`UPDATE remote_dispatches SET host_unavailable_since = NULL
+  yield* sql`UPDATE remote_dispatches SET host_unavailable_since = NULL, host_last_failed_at = NULL
     WHERE correlation_id = ${record.correlationId} AND state = 'running'
       AND host_unavailable_since IS NOT NULL`.pipe(Effect.mapError(storage));
   return false;

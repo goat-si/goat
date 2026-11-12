@@ -562,11 +562,13 @@ not as proof of who sent it.
 
 When the machine a thread runs on stops answering, the thread leaves Fleet and
 Remote launches shows how long its host has been unreachable. GOAT keeps trying,
-and after a day without an answer it stops following the thread, tells the agent
+and after a day of trying without an answer it stops following the thread (time
+this machine spends asleep or off does not count), tells the agent
 that started it, and frees the capacity it held; the thread may still be running
 there, and GOAT follows it again if the host answers. **Dismiss** next to such a
 thread stops following it at once, without the host. The agent that started it
-can do the same with `goat_thread_unwatch` and the host. Forgetting the host
+can do the same with `goat_thread_unwatch` and the host once the host has not
+answered for 15 minutes. Forgetting the host
 does not dismiss its threads. Sending to a dismissed thread follows it again.
 A delegated task on such a host fails after that day instead, and stays failed
 if the host answers later.

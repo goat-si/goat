@@ -140,16 +140,18 @@ export const reopenUnreachable = Effect.fn("remoteReports.reopenUnreachable")(fu
   const sql = yield* SqlClient.SqlClient;
   const at = DateTime.formatIso(yield* DateTime.now);
   const reopened = yield* sql`UPDATE remote_dispatches SET state = 'running', end_reason = NULL,
-      ended_at = NULL, host_unavailable_since = NULL, last_error = NULL, updated_at = ${at}
+      ended_at = NULL, host_unavailable_since = NULL, host_last_failed_at = NULL, last_error = NULL,
+      updated_at = ${at}
       WHERE correlation_id = ${id} AND state = 'lost' AND end_reason = 'host_unreachable'
       RETURNING correlation_id`;
   return reopened.length > 0;
 });
 
 /**
- * One pass over threads lost to an unreachable host. A read-only report wait with timeoutMs 0
- * returns at once on every destination that served the dispatch; an answer or a refusal from the
- * remote GOAT proves the host answers, and the drain then handles that answer as it always does.
+ * One pass over threads lost to an unreachable host, one call per host. A read-only report wait
+ * with timeoutMs 0 returns at once on every destination that served the dispatch; an answer or a
+ * refusal from the remote GOAT proves the host answers, and every thread lost there returns to a
+ * drain, which reads its own reports as it always does.
  */
 export const probeUnreachableThreads = Effect.fn("remoteReports.probeUnreachableThreads")(
   function* <E>(input: {
@@ -164,10 +166,13 @@ export const probeUnreachableThreads = Effect.fn("remoteReports.probeUnreachable
       AND state = 'lost' AND end_reason = 'host_unreachable'`.pipe(
       Effect.flatMap(decodeRemoteDispatchRows),
     );
-    for (const row of lost) {
-      const id = row.correlation_id;
-      if ((input.retryAt.get(id) ?? 0) > nowMs) continue;
-      input.retryAt.set(id, nowMs + (yield* retryDelayMs(PROBE_RETRY_MS)));
+    const byHost = new Map<string, Array<(typeof lost)[number]>>();
+    for (const row of lost) byHost.set(row.host, [...(byHost.get(row.host) ?? []), row]);
+    for (const hostRows of byHost.values()) {
+      const row = hostRows.find((r) => (input.retryAt.get(r.correlation_id) ?? 0) <= nowMs);
+      if (row === undefined) continue;
+      const askAgainAt = nowMs + (yield* retryDelayMs(PROBE_RETRY_MS));
+      for (const r of hostRows) input.retryAt.set(r.correlation_id, askAgainAt);
       const answer = yield* ssh
         .callHostTool(
           {
@@ -176,7 +181,7 @@ export const probeUnreachableThreads = Effect.fn("remoteReports.probeUnreachable
             writes: false,
             timeoutMs: 60_000,
             arguments: {
-              correlationId: id,
+              correlationId: row.correlation_id,
               readKey: row.read_key,
               afterSequence: row.report_cursor,
               watchRunId: null,
@@ -193,16 +198,18 @@ export const probeUnreachableThreads = Effect.fn("remoteReports.probeUnreachable
           (answer.failure.reason === "remote_refused" ||
             answer.failure.reason === "remote_outdated"));
       if (!answered) continue;
-      input.retryAt.delete(id);
-      yield* input.reopen(id).pipe(
-        Effect.flatMap((reopened) => (reopened ? input.start(id) : Effect.void)),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Unreachable remote thread not reopened.", {
-            correlationId: id,
-            cause,
-          }),
-        ),
-      );
+      for (const { correlation_id: id } of hostRows) {
+        input.retryAt.delete(id);
+        yield* input.reopen(id).pipe(
+          Effect.flatMap((reopened) => (reopened ? input.start(id) : Effect.void)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Unreachable remote thread not reopened.", {
+              correlationId: id,
+              cause,
+            }),
+          ),
+        );
+      }
     }
   },
   Effect.catchCause((cause) =>

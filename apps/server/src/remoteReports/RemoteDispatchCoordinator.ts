@@ -1136,7 +1136,7 @@ const make = Effect.gen(function* () {
         db(sql<{ readonly correlation_id: string }>`UPDATE remote_dispatches SET
         state = 'running', cancel_requested_at = NULL, cancel_ceiling = NULL,
         known_run_id = NULL, known_run_status = NULL, updated_at = ${yield* now}, end_reason = NULL,
-        ended_at = NULL, host_unavailable_since = NULL, last_error = NULL
+        ended_at = NULL, host_unavailable_since = NULL, host_last_failed_at = NULL, last_error = NULL
         WHERE correlation_id = ${r.correlation_id} AND delete_requested_at IS NULL
           AND (state IN ('idle','settled','cancelled') OR end_reason = 'host_unreachable')
         RETURNING correlation_id`),
@@ -1148,13 +1148,20 @@ const make = Effect.gen(function* () {
     selector: DismissSelector,
   ) {
     const dismissed: Array<RemoteDispatchRecord> = [];
-    for (const r of yield* rows(selectDismissable(sql, selector))) {
+    const nowDate = yield* DateTime.now;
+    const cutoff =
+      selector.unreachableForMs === undefined
+        ? null
+        : DateTime.formatIso(
+            DateTime.subtract(nowDate, { milliseconds: selector.unreachableForMs }),
+          );
+    for (const r of yield* rows(selectDismissable(sql, selector, cutoff))) {
       const id = r.correlation_id;
       // The drain is detached under the lock and interrupted outside it, so nothing waits on the
       // lock for an interruption, and a drain a later send starts has another owner.
       const drain = yield* gate(locks, id, 1).withPermits(1)(
         Effect.gen(function* () {
-          const changed = yield* rows(dismissRow(sql, id, yield* now));
+          const changed = yield* rows(dismissRow(sql, id, yield* now, cutoff));
           const row = changed[0];
           if (row === undefined) return Option.none();
           owners.delete(id);

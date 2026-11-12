@@ -93,3 +93,60 @@ it.effect("a send that reaches a thread lost to an outage follows it again", () 
     }).pipe(Effect.provide(f.layer), steadyRandom);
   }).pipe(Effect.provide(database)),
 );
+
+/** A second thread on the same host, lost to the same outage. */
+const secondLost = (f: Fixture, id: string) =>
+  Effect.gen(function* () {
+    yield* f.sql`CREATE TEMP TABLE copied AS SELECT * FROM remote_dispatches WHERE correlation_id = ${id}`;
+    yield* f.sql`UPDATE copied SET correlation_id = 'second', read_key = 'second-key', remote_thread_id = 'remote-2'`;
+    yield* f.sql`INSERT INTO remote_dispatches SELECT * FROM copied`;
+    yield* f.sql`DROP TABLE copied`;
+    return "second";
+  });
+
+it.effect(
+  "one probe per host: a host that still does not answer costs one call for all its threads",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const c = yield* Coordinator.RemoteDispatchCoordinator;
+        const id = yield* lostToOutage(f, c);
+        const second = yield* secondLost(f, id);
+        const pass = yield* c.resolveLostLaunches.pipe(Effect.forkChild);
+        const probe = yield* Queue.take(f.calls);
+        yield* Queue.offer(probe.reply, offline);
+        yield* TestClock.adjust("1 second");
+        assert.equal(yield* Queue.size(f.calls), 0);
+        yield* Fiber.join(pass);
+        assert.equal((yield* c.get(id))!.state, "lost");
+        assert.equal((yield* c.get(second))!.state, "lost");
+      }).pipe(Effect.provide(f.layer), steadyRandom);
+    }).pipe(Effect.provide(database)),
+);
+
+it.effect(
+  "one probe per host: a host that answers again is followed again for all its threads",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const c = yield* Coordinator.RemoteDispatchCoordinator;
+        const id = yield* lostToOutage(f, c);
+        const second = yield* secondLost(f, id);
+        const pass = yield* c.resolveLostLaunches.pipe(Effect.forkChild);
+        const probe = yield* Queue.take(f.calls);
+        assert.equal(probe.call.tool, "goat_origin_reports_wait");
+        yield* Queue.offer(probe.reply, Effect.succeed({ ...answer([]), timedOut: true }));
+        yield* Fiber.join(pass);
+        assert.equal((yield* c.get(id))!.state, "running");
+        assert.equal((yield* c.get(second))!.state, "running");
+        // Each followed thread's drain asks for its own reports; the probe asked once.
+        const drains = [yield* Queue.take(f.calls), yield* Queue.take(f.calls)];
+        assert.sameMembers(
+          drains.map((call) => call.call.arguments.correlationId),
+          [id, second],
+        );
+      }).pipe(Effect.provide(f.layer), steadyRandom);
+    }).pipe(Effect.provide(database)),
+);

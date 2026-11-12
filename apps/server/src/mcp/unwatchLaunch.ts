@@ -7,12 +7,14 @@ import {
 import * as Effect from "effect/Effect";
 
 import type * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import { AGENT_DISMISS_AFTER_MS } from "../remoteReports/remoteDispatchDismiss.ts";
 import { storeFailure } from "./hostThreadsResults.ts";
 import type * as LaunchWatchService from "./LaunchWatchService.ts";
 
 /**
  * Removes the caller's watch. On another host it also stops the caller's own report tracking of
- * that thread once its host no longer answers; reports from a host that answers keep arriving.
+ * that thread once its host has not answered for AGENT_DISMISS_AFTER_MS; reports from a host
+ * that answers, or that only blipped, keep arriving.
  */
 export const unwatchLaunch = Effect.fn("HostThreadsMcpService.unwatchLaunch")(function* (input: {
   readonly launchWatches: LaunchWatchService.LaunchWatchServiceShape;
@@ -27,7 +29,12 @@ export const unwatchLaunch = Effect.fn("HostThreadsMcpService.unwatchLaunch")(fu
     .pipe(Effect.mapError(storeFailure));
   if (host === undefined) return { threadId, removed } satisfies OrchestratorMcpThreadUnwatchResult;
   const stopped = yield* input.coordinator
-    .dismiss({ host, remoteThreadId: threadId, originThreadId: input.launcherThreadId })
+    .dismiss({
+      host,
+      remoteThreadId: threadId,
+      originThreadId: input.launcherThreadId,
+      unreachableForMs: AGENT_DISMISS_AFTER_MS,
+    })
     .pipe(
       Effect.mapError(
         () =>

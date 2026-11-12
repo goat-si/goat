@@ -56,6 +56,7 @@ export const RemoteDispatchRow = Schema.Struct({
   delete_requested_at: Schema.optional(Schema.NullOr(IsoDateTime)),
   delete_request_key: Schema.optional(Schema.NullOr(Schema.String)),
   host_unavailable_since: Schema.optional(Schema.NullOr(IsoDateTime)),
+  host_last_failed_at: Schema.optional(Schema.NullOr(IsoDateTime)),
   end_reason: Schema.optional(Schema.NullOr(RemoteDispatchEndReason)),
   ended_at: Schema.optional(Schema.NullOr(IsoDateTime)),
   last_error: Schema.NullOr(Schema.String),
@@ -71,10 +72,12 @@ export const decodeRemoteDispatchRows = Schema.decodeUnknownEffect(Schema.Array(
 /** One remote thread: the SSH alias and its thread id, joined by a character neither contains. */
 export const remoteThreadKey = (host: string, threadId: string) => `${host}\u001f${threadId}`;
 
-/** Every dispatch of the given remote threads, newest first. */
+/** Every dispatch of the given remote threads, newest first, through the (host, thread) index. */
 export const selectForRemoteThreads = (sql: SqlClient.SqlClient, keys: ReadonlyArray<string>) =>
   sql`SELECT * FROM remote_dispatches WHERE remote_thread_id IS NOT NULL
-    AND host || char(31) || remote_thread_id IN (SELECT value FROM json_each(${JSON.stringify(keys)}))
+    AND (host, remote_thread_id) IN (
+      SELECT substr(value, 1, instr(value, char(31)) - 1), substr(value, instr(value, char(31)) + 1)
+      FROM json_each(${JSON.stringify(keys)}))
     ORDER BY updated_at DESC, correlation_id DESC`;
 
 /**
