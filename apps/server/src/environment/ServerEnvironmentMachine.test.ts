@@ -26,7 +26,7 @@ const failure = (_tag: "NotFound" | "AlreadyExists" | "PermissionDenied", method
 function disk(
   options: {
     readonly nonce?: string;
-    readonly createdByAnotherServer?: string;
+    readonly createdByAnotherServer?: string | undefined;
     readonly linkDenied?: boolean;
   } = {},
 ) {
