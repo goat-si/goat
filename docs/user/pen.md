@@ -178,8 +178,8 @@ after Pen restarts. `pen dashboard --stop` closes the page and signs out every o
 (received / sent), and how much went over each relay. They count ssh and other `pen pipe` sessions, `pen forward`,
 and SSH and other TCP connections other members opened to this machine; connections to a program registered with
 Pen, such as GOAT, are not counted. Only the data each session carried counts, not handshakes or Pen's own framing,
-so the numbers are a little below what the network carried. Counting starts when Pen starts, and bytes moved
-while Pen is stopped are not counted.
+so the numbers are a little below what the network carried. Counting starts when Pen starts; bytes moved while Pen
+is stopped are counted only if it is back within 15 minutes.
 
 ## Remove a machine
 
