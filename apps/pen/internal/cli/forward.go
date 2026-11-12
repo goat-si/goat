@@ -69,6 +69,7 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 // runForward serves ln until ctx ends, or m or this node is revoked (pen leave revokes this node);
 // connDone (may be nil) runs after each connection's last output.
 func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, m mesh.Member, port int, stdout, stderr io.Writer, connDone func()) int {
+	// A forward that is stopping ends its connections itself (ctx is done): none of them reports that as an error.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Each connection sends its last traffic report as it ends: wait for them before returning (and exiting),
@@ -128,7 +129,9 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 			tr := newOpenTrace(stderr, fmt.Sprintf(" conn=%d", n))
 			sec, used, err := daemon.OpenTCPVia(tr.context(ctx), p.relays, p.id, m, port)
 			if err != nil {
-				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, false))
+				if ctx.Err() == nil {
+					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, false))
+				}
 				return
 			}
 			mu.Lock()
@@ -151,7 +154,6 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 					// The peer's stream stopped short of its FIN: the client reads a reset, not a clean end.
 					tc.SetLinger(0)
 				}
-				// A forward that is stopping ends its connections itself; that is no error.
 				if !wasRevoked.Load() && !clientGone(err) && ctx.Err() == nil {
 					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
 				}

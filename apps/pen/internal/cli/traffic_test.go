@@ -467,3 +467,30 @@ func TestStoppingForwardReportsItsOpenConnections(t *testing.T) {
 		t.Fatalf("stopping pen forward with an open connection printed an error: %q", f.stderr.String())
 	}
 }
+
+// A forward stopped while a connection is still opening its session is no error either.
+func TestStoppingForwardDuringASessionOpenIsQuiet(t *testing.T) {
+	svc, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	f := startForward(t, svc)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// a's answer (message 2) waits at the relay, so the open is still pending when the forward stops.
+	f.rs.DrainClientMessages(f.aNode)
+	release := f.rs.HoldNextUplinkMessage()
+	defer release()
+	c := dialTCP(t, f.addr)
+	defer c.Close()
+	if err := f.rs.NextClientMessage(ctx, f.aNode); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.stop(); code != 0 {
+		t.Fatalf("forward exit %d", code)
+	}
+	if strings.Contains(f.stderr.String(), "pen forward:") {
+		t.Fatalf("stopping pen forward while a session was opening printed an error: %q", f.stderr.String())
+	}
+}
