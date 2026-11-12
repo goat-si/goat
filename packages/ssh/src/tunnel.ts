@@ -870,7 +870,7 @@ REMOTE_MANAGED=""
 # this check would leave the host with nothing to attach to.
 ensure_listener_path
 if ! listener_probe_available; then
-  if [ "\${FORCE_STOP:-0}" = 1 ]; then
+  if valid_positive "\${FORCE_PID:-}"; then
     printf 'GOAT did not stop PID %s for an approved forced update: this host has neither /proc nor lsof to check its listener.\\n' "$FORCE_PID" >>"$LOG_FILE" 2>/dev/null || :
     printf 'GOAT did not stop PID %s on the remote host: this host needs /proc or lsof to check its listener. It was left running; check it on the host and stop it yourself (kill %s), then update again.\\n' "$FORCE_PID" "$FORCE_PID" >&2
   elif [ "$NEEDS_OWNED_UPGRADE" = 1 ] || [ "$LIVE_STATUS" = live ]; then
