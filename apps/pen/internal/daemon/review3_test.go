@@ -123,8 +123,9 @@ func TestAListDropClosesTheDroppedKeysUnconfirmedHandshakesBeforeItsAnswer(t *te
 	a := hookedFounder(t, ctx, rs, func(o *Options) {
 		o.PhoneSlots = func(total int) { events <- fmt.Sprint("slots:", total) }
 		o.ClientsWaiting = func(n int) { waiting <- n }
-		// Reported on the daemon's writer as it starts the write: the list answer is the only holder line once armed.
-		o.HolderWriting = func() {
+		// Reported as the answer becomes ready to write, on the daemon's goroutine that made it ready, in order with
+		// the events above: the list answer is the only holder line once armed.
+		o.HolderFilling = func() {
 			if answering.Load() {
 				events <- "answer"
 			}
@@ -144,7 +145,7 @@ func TestAListDropClosesTheDroppedKeysUnconfirmedHandshakesBeforeItsAnswer(t *te
 		t.Fatalf("the list drop waits for %d handshakes; want the dropped key's unconfirmed one", n)
 	}
 	if got := slotsBefore(t, events, "answer"); got != "slots:0" {
-		t.Fatalf("the list answer was written with %q; want the dropped key's unconfirmed handshake closed first", got)
+		t.Fatalf("the list answer was ready with %q; want the dropped key's unconfirmed handshake closed first", got)
 	}
 	refusedAtConfirmation(t, ctx, p)
 }

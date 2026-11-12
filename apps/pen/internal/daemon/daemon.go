@@ -87,6 +87,9 @@ type Options struct {
 	HandshakeContext func(context.Context) context.Context
 	// HolderWriting, when set, runs as a holder queue's writer holds write ownership, before it writes (tests).
 	HolderWriting func()
+	// HolderFilling, when set, runs as a holder line becomes ready to write, on the goroutine that made it ready, before
+	// the writer can reach it (tests).
+	HolderFilling func()
 	// ClientEnded, when set, runs when the goroutine that accepted a confirmed client or pairing session is done with
 	// it, after everything that goroutine releases (tests).
 	ClientEnded func()

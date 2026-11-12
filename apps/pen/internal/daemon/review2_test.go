@@ -142,8 +142,9 @@ func TestAListDropFinishesClosingTheSessionAndItsDeliveryBeforeItsAnswer(t *test
 	var answering atomic.Bool
 	a := hookedFounder(t, ctx, rs, func(o *Options) {
 		o.ClientClosed = func() { events <- "closed" }
-		// Reported on the daemon's writer as it starts the write: the list answer is the only holder line once armed.
-		o.HolderWriting = func() {
+		// Reported as the answer becomes ready to write, on the daemon's goroutine that made it ready, in order with
+		// the events above: the list answer is the only holder line once armed.
+		o.HolderFilling = func() {
 			if answering.Load() {
 				events <- "answer"
 			}
@@ -165,7 +166,7 @@ func TestAListDropFinishesClosingTheSessionAndItsDeliveryBeforeItsAnswer(t *test
 	answering.Store(true)
 	h.setList(t, 2)
 	if first := <-events; first != "closed" {
-		t.Fatalf("the list answer was written before the session and its delivery were closed (%s first)", first)
+		t.Fatalf("the list answer was ready before the session and its delivery were closed (%s first)", first)
 	}
 }
 

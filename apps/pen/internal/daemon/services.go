@@ -469,6 +469,7 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c,
 		out: newHolderQueue(c), endDone: make(chan struct{})}
 	reg.out.whileWriting = d.opt.HolderWriting
+	reg.out.whileFilling = d.opt.HolderFilling
 	reg.wmu.Lock()
 	old, err := d.svc.add(reg)
 	if err != nil {

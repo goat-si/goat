@@ -25,9 +25,9 @@ func TestAListDropWaitsForADroppedKeysHandshakeThatConfirmedButIsNotRegisteredYe
 		o.ClientConfirmed = g.hook
 		o.ClientsWaiting = func(n int) { waiting <- n }
 		o.PhoneSlots = func(total int) { events <- fmt.Sprint("slots:", total) }
-		// The holder's writer reports its write as it starts it, on the daemon's goroutine, in order with the slot
-		// counts: the list answer is the only holder line once armed.
-		o.HolderWriting = func() {
+		// Reported as the answer becomes ready to write, on the daemon's goroutine that made it ready, in order with
+		// the events above: the list answer is the only holder line once armed.
+		o.HolderFilling = func() {
 			if answering.Load() {
 				events <- "answer"
 			}
@@ -64,7 +64,7 @@ func TestAListDropWaitsForADroppedKeysHandshakeThatConfirmedButIsNotRegisteredYe
 		t.Fatal(err)
 	}
 	if got := slotsBefore(t, events, "answer"); got != "slots:0" {
-		t.Fatalf("the list answer was written with %q; want the handshake closed and its slot returned first", got)
+		t.Fatalf("the list answer was ready with %q; want the handshake closed and its slot returned first", got)
 	}
 	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("closed %d, want 4401", code)
@@ -80,7 +80,9 @@ func TestAListDropDuringADeliveryAnswersBeforeThatDeliveryEnds(t *testing.T) {
 	var answering atomic.Bool
 	a := hookedFounder(t, ctx, rs, func(o *Options) {
 		o.ClientEnded = func() { events <- "session goroutine ended" }
-		o.HolderWriting = func() {
+		// Reported as the answer becomes ready to write, on the daemon's goroutine that made it ready, in order with
+		// the events above: the list answer is the only holder line once armed.
+		o.HolderFilling = func() {
 			if answering.Load() {
 				events <- "answer"
 			}

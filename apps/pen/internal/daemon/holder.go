@@ -15,6 +15,8 @@ type holderEntry struct {
 	line    []byte
 	ready   chan struct{}
 	written chan struct{}
+	// filling, when set, runs as fill makes the entry ready, on the filling goroutine (tests).
+	filling func()
 	// ok and done are guarded by holderQueue.mu; ok is final once written is closed.
 	ok   bool
 	done bool
@@ -31,6 +33,8 @@ type holderQueue struct {
 	broken bool
 	// whileWriting, when set, runs once the writer holds wmu for a ready entry, before it checks and writes (tests).
 	whileWriting func()
+	// whileFilling, when set, is copied into each entry this queue reserves (tests).
+	whileFilling func()
 	mu           sync.Mutex
 	entries      []*holderEntry
 	failed       bool
@@ -56,7 +60,7 @@ func (q *holderQueue) reserve() (*holderEntry, bool) {
 		q.fail()
 		return nil, false
 	}
-	e := &holderEntry{ready: make(chan struct{}), written: make(chan struct{})}
+	e := &holderEntry{ready: make(chan struct{}), written: make(chan struct{}), filling: q.whileFilling}
 	q.entries = append(q.entries, e)
 	q.mu.Unlock()
 	select {
@@ -77,6 +81,9 @@ func (q *holderQueue) push(line []byte) (*holderEntry, bool) {
 
 // fill sets a reserved entry's line and lets the writer reach it.
 func (e *holderEntry) fill(line []byte) {
+	if e.filling != nil {
+		e.filling()
+	}
 	e.line = line
 	close(e.ready)
 }
