@@ -176,7 +176,7 @@ export const lostTrack = (
       task,
       {
         phase,
-        message: `${message} It may have started installing there; check goat_provider_host_matrix before trying again.`,
+        message: `${message} It may have started installing there; goat_provider_host_matrix shows whether the CLI is installed, not whether that install is still running.`,
       },
       true,
     );

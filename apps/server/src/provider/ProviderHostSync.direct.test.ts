@@ -578,7 +578,7 @@ it.effect(
         if (started.kind !== "started") return expect.unreachable();
         const lost = yield* sync.awaitDone(started.sync.syncId);
         expect(lost.hosts[0]?.message).toBe(
-          "box went away It may have started installing there; check goat_provider_host_matrix before trying again.",
+          "box went away It may have started installing there; goat_provider_host_matrix shows whether the CLI is installed, not whether that install is still running.",
         );
         // Without the remote sync id there is nothing to cancel there, so a cancel claims nothing.
         const after = yield* sync.cancel(
