@@ -44,10 +44,11 @@ export const PreviewAutomationElement = Schema.Struct({
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   selector: Schema.String,
-  x: Schema.Number,
-  y: Schema.Number,
-  width: Schema.Number,
-  height: Schema.Number,
+  // Viewport pixels; absent inside a frame, where the tree measures from the frame's corner.
+  x: Schema.optional(Schema.Number),
+  y: Schema.optional(Schema.Number),
+  width: Schema.optional(Schema.Number),
+  height: Schema.optional(Schema.Number),
 });
 export type PreviewAutomationElement = typeof PreviewAutomationElement.Type;
 

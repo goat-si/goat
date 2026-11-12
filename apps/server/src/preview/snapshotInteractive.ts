@@ -21,12 +21,6 @@ const INTERACTIVE_ROLES: ReadonlySet<string> = new Set([
   "treeitem",
   "iframe",
 ]);
-const ENTRY = /^(\s*)- '?([a-z]+)(?=[\s"':]|$)/;
-const NAME = /^\s*- '?[a-z]+ "((?:[^"\\]|\\.)*)"/;
-const REF = /\[ref=([^\]\s]+)\]/;
-const BOX = /\[box=(-?\d+),(-?\d+),(\d+),(\d+)\]/;
-const VALUE = /\]: (.+?)'?$/;
-const TEXT = /^\s*- text: (.+)$/;
 // Fields whose content is the user's input, never the element's name (as ScreenObservations reads them).
 const EDITABLE: ReadonlySet<string> = new Set([
   "textbox",
@@ -38,6 +32,19 @@ const EDITABLE: ReadonlySet<string> = new Set([
 const NAME_LIMIT = 100;
 const SCAN_LIMIT = 50;
 
+// Playwright's key: role, a JSON name or a raw one that starts and ends with "/", then attributes.
+// No attribute holds "/" or "]" and a key holding ": " is single-quoted, so a longer /…/ name's
+// closing "/" can't pass for an attribute or value: trying a lone "/" first is exact.
+const NAME = String.raw`"(?:[^"\\]|\\.)*"|\/|\/.*?\/`;
+const ATTRIBUTES = String.raw`(?: \[[^\]\/]*\])*`;
+const LINE = new RegExp(
+  String.raw`^(\s*)- (?:'((?:[^']|'')*)'|([a-z]+(?: (?:${NAME}))?${ATTRIBUTES}))(?:(:)(?: (.*))?)?$`,
+);
+const KEY_PARTS = new RegExp(`^([a-z]+)(?: (${NAME}))?(${ATTRIBUTES})$`);
+const BOX = /^box=(-?\d+),(-?\d+),(\d+),(\d+)$/;
+// Playwright prefixes a frame's refs with f<n>; their boxes are measured from the frame's corner.
+const FRAME_REF = /(?:^|-)f\d+e\d+$/;
+
 const unquote = (text: string) => {
   if (!text.startsWith('"')) return text;
   try {
@@ -47,36 +54,64 @@ const unquote = (text: string) => {
   }
 };
 
-/** The line's role when it is an action target. */
-const interactiveRole = (line: string) => {
-  const role = ENTRY.exec(line)?.[2];
-  if (role === undefined) return undefined;
-  if (INTERACTIVE_ROLES.has(role)) return role;
-  // Playwright marks only the element that sets the pointer cursor, not children inheriting it.
-  return REF.test(line) && line.includes("[cursor=pointer]") ? role : undefined;
-};
+const indentOf = (line: string) => /^\s*/.exec(line)?.[0].length ?? 0;
 
-/** A nameless pointer container is named by its descendants' text, as agent-browser names it. */
-const descendantText = (lines: ReadonlyArray<string>, index: number) => {
-  const depth = ENTRY.exec(lines[index] ?? "")?.[1]?.length ?? 0;
+/** One element line of the tree, with its ref, box and cursor read only from its own attributes. */
+const entryOf = (line: string) => {
+  const parsed = LINE.exec(line);
+  const key = parsed?.[2]?.replaceAll("''", "'") ?? parsed?.[3];
+  const parts = key === undefined ? null : KEY_PARTS.exec(key);
+  if (!parsed || !parts) return undefined;
+  const [, role = "", name, run = ""] = parts;
+  const attributes = [...run.matchAll(/\[([^\]]*)\]/g)].map((match) => match[1] ?? "");
+  const ref = attributes.find((attribute) => attribute.startsWith("ref="))?.slice("ref=".length);
+  const box = attributes.map((attribute) => BOX.exec(attribute)).find((match) => match !== null);
+  return {
+    depth: parsed[1]?.length ?? 0,
+    role,
+    name: name === undefined ? undefined : unquote(name),
+    run,
+    ref,
+    box: box && {
+      x: Number(box[1]),
+      y: Number(box[2]),
+      width: Number(box[3]),
+      height: Number(box[4]),
+    },
+    // Playwright marks only the element that sets the pointer cursor, not children inheriting it.
+    target:
+      INTERACTIVE_ROLES.has(role) || (ref !== undefined && attributes.includes("cursor=pointer")),
+    children: parsed[4] !== undefined && parsed[5] === undefined,
+    value: parsed[5] === undefined ? undefined : unquote(parsed[5]),
+  };
+};
+type Entry = NonNullable<ReturnType<typeof entryOf>>;
+
+/**
+ * A nameless element is named by the text lines directly under it. Every element under it keeps
+ * its text: the tree draws an editable region like any wrapper, so its words may be input.
+ */
+const descendantText = (lines: ReadonlyArray<string>, index: number, depth: number) => {
   const parts: string[] = [];
+  let skipped = Infinity;
   for (let next = index + 1; next < lines.length && next <= index + SCAN_LIMIT; next++) {
     const line = lines[next] ?? "";
-    if ((/^\s*/.exec(line)?.[0].length ?? 0) <= depth) break;
-    const text = TEXT.exec(line)?.[1] ?? VALUE.exec(line)?.[1];
-    if (text !== undefined) parts.push(unquote(text));
+    const indent = indentOf(line);
+    if (indent <= depth) break;
+    if (indent > skipped) continue;
+    const entry = entryOf(line);
+    const text = entry?.role === "text" ? entry.value : undefined;
+    skipped = entry?.role === "text" ? Infinity : indent;
+    if (text) parts.push(text);
     if (parts.join(" ").length >= NAME_LIMIT) break;
   }
   return parts.join(" ").slice(0, NAME_LIMIT);
 };
 
-const nameOf = (lines: ReadonlyArray<string>, index: number) => {
-  const line = lines[index] ?? "";
-  const quoted = NAME.exec(line)?.[1];
-  if (quoted !== undefined) return unquote('"' + quoted + '"');
-  if (EDITABLE.has(ENTRY.exec(line)?.[2] ?? "")) return "";
-  const value = VALUE.exec(line)?.[1];
-  return value === undefined ? descendantText(lines, index) : unquote(value);
+const nameOf = (lines: ReadonlyArray<string>, index: number, entry: Entry) => {
+  if (entry.name !== undefined) return entry.name;
+  if (EDITABLE.has(entry.role)) return "";
+  return entry.value ?? descendantText(lines, index, entry.depth);
 };
 
 export const narrowTree = (tree: string, interactiveOnly?: boolean) => {
@@ -84,15 +119,15 @@ export const narrowTree = (tree: string, interactiveOnly?: boolean) => {
   const lines = tree.split("\n");
   return lines
     .flatMap((line, index) => {
-      const role = interactiveRole(line);
-      if (role === undefined) return [];
-      const own = line.trimStart();
+      const entry = entryOf(line);
+      if (!entry?.target) return [];
       // Ancestors are filtered out, so their indentation and child markers would invent nesting.
-      const flat = own.replace(/:$/, "");
-      const named = flat.length === own.length || INTERACTIVE_ROLES.has(role) || NAME.test(line);
-      const text = named ? "" : descendantText(lines, index);
+      const own = line.trimStart();
+      if (!entry.children) return [own];
+      const named = INTERACTIVE_ROLES.has(entry.role) || entry.name !== undefined;
+      const text = named ? "" : descendantText(lines, index, entry.depth);
       // Written as the line's name, the form Playwright uses for a named element.
-      return [text ? flat.replace(/^- ('?)([a-z]+)/, `- $1$2 ${JSON.stringify(text)}`) : flat];
+      return [text ? `- ${entry.role} ${JSON.stringify(text)}${entry.run}` : own.slice(0, -1)];
     })
     .join("\n");
 };
@@ -101,22 +136,18 @@ export const narrowTree = (tree: string, interactiveOnly?: boolean) => {
 export const interactiveElementsOf = (tree: string): PreviewAutomationElement[] => {
   const lines = tree.split("\n");
   return lines.flatMap((line, index) => {
-    const role = interactiveRole(line);
-    const ref = REF.exec(line)?.[1];
-    const box = BOX.exec(line);
+    const entry = entryOf(line);
     // The tree is cut at a character limit; a line cut before its box has no usable element.
-    if (role === undefined || ref === undefined || box === null) return [];
+    if (!entry?.target || entry.ref === undefined || entry.box === undefined) return [];
     return [
       {
         // The tree names roles, not HTML tags.
-        tag: role,
-        role,
-        name: nameOf(lines, index),
-        selector: "aria-ref=" + ref,
-        x: Number(box[1]),
-        y: Number(box[2]),
-        width: Number(box[3]),
-        height: Number(box[4]),
+        tag: entry.role,
+        role: entry.role,
+        name: nameOf(lines, index, entry),
+        selector: "aria-ref=" + entry.ref,
+        // A coordinate click reads viewport pixels, which a frame's box is not.
+        ...(FRAME_REF.test(entry.ref) ? {} : entry.box),
       },
     ];
   });
