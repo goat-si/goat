@@ -1242,6 +1242,8 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:server:remote-launches",
     tag: WS_METHODS.remoteLaunchesList,
     staleTimeMs: 5_000,
+    // A host can stop answering while the list is open; nothing pushes that change.
+    refreshIntervalMs: 60_000,
   });
   return {
     cloudMachines,
