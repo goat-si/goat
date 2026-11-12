@@ -1,6 +1,6 @@
 import { RegistryContext, scheduleTask } from "@effect/atom-react";
 import type { EnvironmentRegistry } from "@goat/client-runtime/connection";
-import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import { botFileReads, type GoatBotRow } from "@goat/client-runtime/goatBot";
 import { EnvironmentId } from "@goat/contracts";
 import { AtomRegistry } from "effect/reactivity";
 import type { ReactNode } from "react";
@@ -25,6 +25,8 @@ const server = vi.hoisted(() => ({
   readGate: null as Promise<void> | null,
   /** Called as each file read reaches the server, before it waits. */
   onRead: (() => {}) as () => void,
+  /** Paths whose reads answer busy. */
+  busy: new Set<string>(),
 }));
 const SUMMARY = { mimeType: "text/markdown", text: "# Weekly summary\nThree merged." };
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -86,6 +88,8 @@ vi.mock("~/state/channels", async (original) => {
         server.onRead();
         const gate = server.readGate;
         if (gate !== null) yield* Effect.promise(() => gate);
+        if (server.busy.has(input.relativePath))
+          return { status: "busy" as const, relativePath: input.relativePath };
         const file = server.files.get(input.relativePath);
         if (file === undefined) return { status: "changed" as const };
         const bytes = new TextEncoder().encode(file.text);
@@ -205,6 +209,9 @@ function setup(
   server.failNext = false;
   server.readGate = null;
   server.onRead = () => {};
+  server.busy = new Set();
+  // The read queue is one module instance; a read a test left waiting must not hold the next.
+  botFileReads.clear();
   const registry = AtomRegistry.make({ scheduleTask });
   return {
     wrap: (ui: ReactNode) => (
@@ -443,6 +450,28 @@ it("six cards under one reply all show previews; the oldest waiting card is not 
   for (const note of notes)
     await expect.element(screen.getByText(`Note ${note.toUpperCase()}`)).toBeInTheDocument();
   expect(server.reads).toHaveLength(6);
+});
+
+it("a preview answered busy shows Preview unavailable and the card still opens", async () => {
+  using test = setup();
+  server.busy = new Set(["reports/summary.md"]);
+  const open = vi.fn();
+  await using screen = await render(
+    test.wrap(
+      <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open }}>
+        <GoatBotTimeline
+          rows={[reply("saved", "Saved `reports/summary.md`.")]}
+          onRetry={() => {}}
+        />
+      </GoatBotOpenFileContext>,
+    ),
+    { router: false }, // This reply has no links.
+  );
+  await expect.element(screen.getByText("Preview unavailable")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Open summary.md" }));
+  expect(open).toHaveBeenCalledWith(
+    expect.objectContaining({ relativePath: "reports/summary.md" }),
+  );
 });
 
 const remote = "https://tracker.example.com";

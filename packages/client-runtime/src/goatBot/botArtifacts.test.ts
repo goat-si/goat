@@ -199,7 +199,7 @@ describe("Library copy", () => {
       botArtifactOpenMessage("big.zip", { status: "too_large", size: 1, maxBytes: 1 }, "Goaty"),
     ).toBe("big.zip is larger than 20 MB, so Goaty can't send it here.");
     expect(botArtifactOpenMessage("a.txt", { status: "busy" })).toBe(
-      "Another file is still opening. Try again in a moment.",
+      "a.txt is taking too long to open. Try again in a moment.",
     );
     expect(botArtifactOpenMessage("a.txt", { status: "changed" })).toBe(
       "a.txt changed while it was opening. Try again.",
