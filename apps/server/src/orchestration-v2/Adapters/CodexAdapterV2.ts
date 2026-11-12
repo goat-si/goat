@@ -1,3 +1,5 @@
+import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
+import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
 import { makeCodexThreadClosings } from "./CodexThreadClosings.ts";
 import { makeCodexRetryTimers } from "./CodexRetryTimers.ts";
 import {
@@ -982,21 +984,6 @@ export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRo
   },
 );
 
-function parseCodexRetryProgress(
-  message: string,
-): Pick<OrchestrationV2ProviderRetry, "attempt" | "maxAttempts"> | null {
-  const match = /\b(\d+)\s*\/\s*(\d+)\b/u.exec(message);
-  if (match?.[1] === undefined || match[2] === undefined) {
-    return null;
-  }
-  const attempt = Number.parseInt(match[1], 10);
-  const maxAttempts = Number.parseInt(match[2], 10);
-  if (attempt < 1 || maxAttempts < 1) {
-    return null;
-  }
-  return { attempt, maxAttempts };
-}
-
 function codexErrorInfoCode(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -1009,7 +996,7 @@ function codexErrorInfoCode(value: unknown): string | null {
 
 type CodexErrorInfo = CodexSchema.ServerNotification__CodexErrorInfo;
 
-interface ActiveCodexTurnContext {
+export interface ActiveCodexTurnContext {
   hookStopReason?: string;
   hasOutput?: boolean;
   preOutputRetryAttempt?: number;
@@ -2018,6 +2005,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           yield* emitGoalUpdate(nativeThreadId);
         });
 
+        const mcpStartup = makeCodexMcpStartup({
+          deriveId: idAllocator.derive.turnItemFromProviderItem,
+          resolveItemPosition: (context, id) => resolveItemPosition(context, id),
+          findActiveTurn: (id) => findActiveTurnByNativeThreadId(id),
+          emitProviderEvent,
+        });
+
         const releaseGoalUpdates = (nativeThreadId: string) =>
           Effect.suspend(() => {
             goalUpdatesHeld.delete(nativeThreadId);
@@ -2180,6 +2174,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
           });
           yield* rememberRootProviderThread(input.turnInput.providerThread);
+          yield* mcpStartup.emit(context);
           return context;
         });
         const findActiveTurnByNativeThreadId =
@@ -4546,6 +4541,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             reroutedTurnModels.set(payload.turnId, payload.toModel);
             reroutedThreads.add(payload.threadId);
           }).pipe(Effect.andThen(updateSubagentSelection(payload.threadId, payload.toModel))),
+        );
+
+        yield* client.handleServerNotification(
+          "mcpServer/startupStatus/updated",
+          mcpStartup.handle,
         );
 
         yield* survivorHooks.handleNotification("hook/completed", (payload) =>
