@@ -70,6 +70,17 @@ function removeFrom(list: Array<Entry>, entry: Entry): boolean {
   return true;
 }
 
+// Web's TypeScript lib predates Promise.withResolvers.
+function settler<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (reason: unknown) => void = () => {};
+  const promise = new Promise<T>((onValue, onError) => {
+    resolve = onValue;
+    reject = onError;
+  });
+  return { promise, resolve, reject };
+}
+
 export function createBotFileReads() {
   const lanes = new Map<EnvironmentId, Lane>();
 
@@ -145,7 +156,7 @@ export function createBotFileReads() {
       if (signal?.aborted) return Promise.resolve(null);
       const lane = laneFor(environmentId);
       if (lane.opens.length >= MAX_WAITING_BOT_FILE_OPENS) return Promise.resolve(BUSY);
-      const settled = Promise.withResolvers<BotArtifactRead | null>();
+      const settled = settler<BotArtifactRead | null>();
       let done = false;
       let stopped = false;
       let endChunk: (() => void) | null = null;
@@ -195,7 +206,7 @@ export function createBotFileReads() {
       chatKey: string | null = null,
     ): BotFilePreviewRead {
       const lane = laneFor(environmentId);
-      const settled = Promise.withResolvers<BotFilePreview>();
+      const settled = settler<BotFilePreview>();
       let done = false;
       let endChunk: (() => void) | null = null;
       const finish = (outcome: BotFilePreview) => {

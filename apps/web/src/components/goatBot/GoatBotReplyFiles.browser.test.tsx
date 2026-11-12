@@ -425,10 +425,9 @@ it("six cards under one reply all show previews; the oldest waiting card is not 
       { mimeType: "text/markdown", text: `# Note ${note.toUpperCase()}` },
     ]),
   );
-  const held = Promise.withResolvers<void>();
-  const firstRead = Promise.withResolvers<void>();
-  server.readGate = held.promise;
-  server.onRead = firstRead.resolve;
+  let release = () => {};
+  server.readGate = new Promise<void>((resolve) => (release = resolve));
+  const firstRead = new Promise<void>((resolve) => (server.onRead = resolve));
   await using screen = await render(
     test.wrap(
       <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
@@ -444,9 +443,9 @@ it("six cards under one reply all show previews; the oldest waiting card is not 
   );
   // Every card asks for its preview in the commit that mounts them all, so once one read is out,
   // the other five are waiting behind it.
-  await firstRead.promise;
+  await firstRead;
   server.readGate = null;
-  held.resolve();
+  release();
   for (const note of notes)
     await expect.element(screen.getByText(`Note ${note.toUpperCase()}`)).toBeInTheDocument();
   expect(server.reads).toHaveLength(6);
