@@ -62,7 +62,10 @@ export const ChannelReadBotArtifactResult = Schema.Union([
   }),
   /** The file changed since the chunk that gave `version`; read it again from offset 0. */
   Schema.Struct({ status: Schema.Literal("changed"), relativePath: Schema.String }),
-  /** Another read on this connection is still running; ask again when it finishes. */
+  /**
+   * No chunk this time: another read on this connection is waiting for its answer, or the server
+   * could not read the file in time. Ask again later.
+   */
   Schema.Struct({ status: Schema.Literal("busy"), relativePath: Schema.String }),
 ]);
 export type ChannelReadBotArtifactResult = typeof ChannelReadBotArtifactResult.Type;
