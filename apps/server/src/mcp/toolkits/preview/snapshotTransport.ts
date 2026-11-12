@@ -214,7 +214,9 @@ export const boundSnapshotMetadata = (full: SnapshotMetadata) => {
       text = encodeJsonText(value());
     }
     if (sent.length < pastCut.length)
-      omitted.push(`${pastCut.length - sent.length} interactiveElements past the tree cut`);
+      omitted.push(
+        `${pastCut.length - sent.length} of ${pastCut.length} interactiveElements past the tree cut`,
+      );
   }
   if (visibleTextChars < metadata.visibleText.length) {
     omitted.push(

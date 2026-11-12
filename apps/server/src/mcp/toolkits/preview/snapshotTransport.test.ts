@@ -56,8 +56,10 @@ it("sends elements only for refs past the delivered tree", () => {
       `[ref=${element.selector.slice("aria-ref=".length)}]`,
     );
   const firstMissing = elements.find(
-    (element) => !parsed.accessibilityTree.includes(`[ref=${element.selector.slice(9)}]`),
+    (element) =>
+      !parsed.accessibilityTree.includes(`[ref=${element.selector.slice("aria-ref=".length)}]`),
   );
+  expect(firstMissing).toBeDefined();
   expect(parsed.interactiveElements[0]?.selector).toBe(firstMissing?.selector);
   const intact = JSON.parse(
     boundSnapshotMetadata(snapshot(lines.slice(0, 3).join("\n"), elements.slice(0, 3))).text,

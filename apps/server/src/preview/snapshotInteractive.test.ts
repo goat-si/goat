@@ -9,6 +9,7 @@ const PAGE = `<p>Article paragraph</p>
 <ul role="listbox" aria-label="Fruits"><li role="option">Apple</li></ul>
 <div role="menu"><div role="menuitemcheckbox" aria-checked="true">Bold</div><div role="menuitemradio" aria-checked="false">Left</div></div>
 <iframe title="payment" srcdoc="<button>Pay</button>"></iframe>
+<input value="draft text">
 <button onclick="document.body.dataset.saved = 'yes'">Save</button>`;
 
 const withPage = async (run: (page: Page, cdp: CDPSession) => Promise<void>) => {
@@ -45,10 +46,10 @@ it("an interactive-only snapshot keeps listboxes, menu checkbox and radio items,
     expect(tree).toMatch(/^- menuitemradio "Left" \[ref=/m);
     expect(tree).toMatch(/^- iframe \[ref=/m);
     expect(tree).toMatch(/^- button "Pay" \[ref=\S+f\d+e\d+\]/m);
-    expect(tree).toMatch(/^- generic \[ref=\S+\] \[cursor=pointer\] .*: "Open card"$/m);
+    expect(tree).toMatch(/^- generic "Open card" \[ref=\S+\] \[cursor=pointer\]/m);
     expect(tree).not.toContain("Article paragraph");
     for (const line of tree.split("\n").slice(1)) expect(line).toMatch(/^- [^\n]*[^:]$/);
-    const ref = /^- generic \[ref=(\S+)\] \[cursor=pointer\]/m.exec(tree)?.[1];
+    const ref = /^- generic "Open card" \[ref=(\S+)\] \[cursor=pointer\]/m.exec(tree)?.[1];
     await testActionPage.click(page, { locator: `aria-ref=${ref}` });
     expect(await page.locator("#card").getAttribute("data-hit")).toBe("yes");
   }));
@@ -77,6 +78,11 @@ it("a snapshot lists each interactive ref with a locator that acts on it", () =>
         "button",
       ]),
     );
+    expect(result.interactiveElements.find((element) => element.name === "Open card")?.role).toBe(
+      "generic",
+    );
+    // A field's content is the user's input, never its name.
+    expect(result.interactiveElements.find((element) => element.role === "textbox")?.name).toBe("");
     expect(result.interactiveElements.some((element) => element.name.includes("Article"))).toBe(
       false,
     );

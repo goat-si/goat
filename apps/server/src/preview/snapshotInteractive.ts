@@ -27,6 +27,14 @@ const REF = /\[ref=([^\]\s]+)\]/;
 const BOX = /\[box=(-?\d+),(-?\d+),(\d+),(\d+)\]/;
 const VALUE = /\]: (.+?)'?$/;
 const TEXT = /^\s*- text: (.+)$/;
+// Fields whose content is the user's input, never the element's name (as ScreenObservations reads them).
+const EDITABLE: ReadonlySet<string> = new Set([
+  "textbox",
+  "searchbox",
+  "combobox",
+  "spinbutton",
+  "slider",
+]);
 const NAME_LIMIT = 100;
 const SCAN_LIMIT = 50;
 
@@ -66,6 +74,7 @@ const nameOf = (lines: ReadonlyArray<string>, index: number) => {
   const line = lines[index] ?? "";
   const quoted = NAME.exec(line)?.[1];
   if (quoted !== undefined) return unquote('"' + quoted + '"');
+  if (EDITABLE.has(ENTRY.exec(line)?.[2] ?? "")) return "";
   const value = VALUE.exec(line)?.[1];
   return value === undefined ? descendantText(lines, index) : unquote(value);
 };
@@ -82,7 +91,8 @@ export const narrowTree = (tree: string, interactiveOnly?: boolean) => {
       const flat = own.replace(/:$/, "");
       const named = flat.length === own.length || INTERACTIVE_ROLES.has(role) || NAME.test(line);
       const text = named ? "" : descendantText(lines, index);
-      return [text ? flat + ": " + JSON.stringify(text) : flat];
+      // Written as the line's name, the form Playwright uses for a named element.
+      return [text ? flat.replace(/^- ('?)([a-z]+)/, `- $1$2 ${JSON.stringify(text)}`) : flat];
     })
     .join("\n");
 };
