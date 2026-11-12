@@ -60,13 +60,20 @@ const announce = Effect.fn("ChannelBotRoutineEvents.announce")(function* (
     });
     return;
   }
+  // The name is shortened so the change word stays; clients find the routine by id.
+  const prefix = "Routine ";
+  const suffix = " " + change;
+  const name = ChannelBotEvents.clipText(
+    task.title,
+    ChannelBotEvents.MAX_TEXT - prefix.length - suffix.length,
+  );
   yield* deps.emit({
     ownerId: bot.ownerId,
     botId: bot.botId,
     kind: "routine-" + change.replace(" ", "-"),
     id: task.id,
-    text: "Routine " + task.title + " " + change,
-    subject: { kind: "routine", id: task.id, name: task.title },
+    text: prefix + name + suffix,
+    subject: { kind: "routine", id: task.id, name },
   });
 });
 
