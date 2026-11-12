@@ -12,8 +12,21 @@ import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import type { SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
 
 export type Failure = ProviderHostSyncError | EnvironmentAuthorizationError;
+
+export const ownerSession = (caller: SshHostCaller): string =>
+  caller.kind === "client" ? caller.sessionId : (caller.scope.client?.sessionId ?? "mcp");
+
+/** Who a caller is for owning a sync: its thread, else its client session. */
+export const callerKey = (caller: SshHostCaller): string =>
+  caller.kind === "client"
+    ? `session:${caller.sessionId}`
+    : caller.scope.thread !== undefined
+      ? `thread:${caller.scope.thread.threadId}`
+      : `session:${caller.scope.client?.sessionId ?? "unknown"}`;
+
 export const fail = (code: ProviderHostSyncError["code"], detail: string) =>
   new ProviderHostSyncError({ code, detail });
 /** A failed ask keeps the hold's words, so the agent learns which card it waits on. */
@@ -61,6 +74,8 @@ export interface SyncOperation {
   readonly hosts: Array<HostTask>;
   /** Callers who may cancel and see sign-in codes: requester, approver, outside client. */
   readonly owners: Set<string>;
+  /** Who started it; a direct install's thread cancels remotely under the check it started with. */
+  readonly launchedBy: SshHostCaller;
   fibers: Array<Fiber.Fiber<unknown, unknown>>;
   /** Approvals that record this sync's result when its last host finishes. */
   readonly settlers: Array<(state: ProviderSyncState) => Effect.Effect<void>>;

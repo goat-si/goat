@@ -47,6 +47,38 @@ const readProgress = Schema.decodeUnknownOption(Progress);
 
 const OK_PHASES: ReadonlySet<string> = new Set(["installed", "signed_in"]);
 
+type CardInput = Parameters<Handoffs.Handoffs["Service"]["create"]>[0];
+
+/** The card a thread's install request becomes. Its args are exactly what runs once approved. */
+export const syncApprovalCard = (
+  input: ProviderSyncInput,
+  name: string,
+  where: string,
+  at: Pick<CardInput, "runId" | "nodeId"> & {
+    readonly expiresAt: NonNullable<CardInput["expiresAt"]>;
+    readonly requestedBy: Omit<CardInput["requestedBy"], "path">;
+    readonly environmentId: CardInput["target"]["environmentId"];
+  },
+): CardInput => ({
+  kind: "approval",
+  title: `Install ${name} on ${where}?`,
+  reason: `An agent asked to install ${name}${input.version && input.version !== "latest" ? ` ${input.version}` : ""} with its official installer${input.login === false ? "" : " and start its sign-in"}.`,
+  requestedBy: { ...at.requestedBy, path: HOST_SYNC_PATH },
+  target: { environmentId: at.environmentId, path: HOST_SYNC_PATH },
+  runId: at.runId,
+  nodeId: at.nodeId,
+  human: {
+    location: `Each machine runs ${name}'s own installer and sign-in. Sign in with your own account; GOAT never copies credentials between machines.`,
+  },
+  args: {
+    driver: input.driver,
+    hosts: input.hosts ?? [],
+    version: input.version ?? null,
+    login: input.login ?? true,
+  },
+  expiresAt: at.expiresAt,
+});
+
 /**
  * What the thread that asked hears once its approved sync settled: whether it started, and how
  * each host ended. Sign-in codes are never part of the recorded result.

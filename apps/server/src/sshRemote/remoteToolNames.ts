@@ -1,5 +1,7 @@
+import { ProviderHostSyncDriver } from "@goat/contracts";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
+import * as Schema from "effect/Schema";
 
 /**
  * The last version some of whose builds answer only to shipped tool names: canonical names became
@@ -60,7 +62,7 @@ export const toolRefusal = (
     return {
       ...(result.code === undefined ? {} : { remoteCode: result.code }),
       remoteClassification: CLI_MISSING,
-      ...(result.driver === undefined ? {} : { remoteDriver: result.driver }),
+      ...(syncDriver(result.driver) === undefined ? {} : { remoteDriver: result.driver }),
     };
   // A placement answer says itself whether the work may have started; absent, it may have.
   if (tool === "goat_thread_launch" && result.classification?.startsWith("placement_") === true)
@@ -80,11 +82,15 @@ export const toolRefusal = (
 };
 
 const CLI_MISSING = "provider_cli_missing";
+const isSyncDriver = Schema.is(ProviderHostSyncDriver);
+/** The remote names the driver; only one GOAT can sync becomes advice or a fact here. */
+const syncDriver = (driver: string | undefined) =>
+  driver !== undefined && isSyncDriver(driver) ? driver : undefined;
 
 /**
- * A remote refusal as this machine reports it. A missing CLI keeps the destination's own words,
- * names the alias this machine reached it by, and, when provider.sync is the fix, the call that
- * installs it from here.
+ * A remote refusal as this machine reports it. A missing CLI quotes the destination's own words
+ * under the alias this machine reached it by and, when provider.sync is the fix, adds the call
+ * that installs it from here, built only from a known driver and the alias.
  */
 export const refusalMessage = (
   tool: string,
@@ -97,11 +103,12 @@ export const refusalMessage = (
 ) => {
   if (tool !== "goat_thread_launch" || result.classification !== CLI_MISSING) return result.message;
   const own = result.message.replace(/^The remote \S+ refused: /u, "");
+  const driver = syncDriver(result.driver);
   const sync =
-    result.driver === undefined
+    driver === undefined
       ? ""
-      : ` From here: goat_call provider.sync {driver:"${result.driver}", hosts:["${alias}"], login:false}.`;
-  return `On ${alias}: ${own}${sync}`;
+      : ` From here: goat_call provider.sync ${JSON.stringify({ driver, hosts: [alias], login: false })}.`;
+  return `On ${alias}, GOAT there says: ${JSON.stringify(own)}${sync}`;
 };
 
 /** The message and facts of a remote refusal, as failure(reason, message, facts) takes them. */

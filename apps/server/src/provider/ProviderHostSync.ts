@@ -44,6 +44,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -68,7 +69,7 @@ import {
   type SshHostCaller,
 } from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { HOST_SYNC_PATH, makeApprovedSyncs } from "./approvedSyncs.ts";
+import { HOST_SYNC_PATH, makeApprovedSyncs, syncApprovalCard } from "./approvedSyncs.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
 import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
@@ -90,10 +91,12 @@ import {
 } from "./ProviderHostSyncRecipes.ts";
 import {
   askFailed,
+  callerKey,
   classify,
   type Failure,
   fail,
   type HostTask,
+  ownerSession,
   type RemoteFailure,
   type SyncOperation,
   update,
@@ -202,16 +205,6 @@ const make = Effect.gen(function* () {
       Effect.as("full-access" as RuntimeMode),
     );
   };
-
-  const ownerSession = (caller: SshHostCaller): string =>
-    caller.kind === "client" ? caller.sessionId : (caller.scope.client?.sessionId ?? "mcp");
-
-  const callerKey = (caller: SshHostCaller): string =>
-    caller.kind === "client"
-      ? `session:${caller.sessionId}`
-      : caller.scope.thread !== undefined
-        ? `thread:${caller.scope.thread.threadId}`
-        : `session:${caller.scope.client?.sessionId ?? "unknown"}`;
 
   const canManage = (caller: SshHostCaller) =>
     writeCeiling(caller).pipe(
@@ -478,6 +471,7 @@ const make = Effect.gen(function* () {
     login: boolean,
     hosts: ReadonlyArray<string | null>,
     owners: ReadonlyArray<string>,
+    launchedBy: SshHostCaller,
     settle?: SyncOperation["settlers"][number],
   ) =>
     Effect.gen(function* () {
@@ -517,6 +511,7 @@ const make = Effect.gen(function* () {
           finished: false,
         })),
         owners: new Set(owners),
+        launchedBy,
         fibers: [],
         settlers: settle === undefined ? [] : [settle],
       };
@@ -676,8 +671,9 @@ const make = Effect.gen(function* () {
       yield* update(task, { phase: "signed_in", login: undefined }, true);
     }).pipe(Effect.scoped, Effect.timeoutOption(LOGIN_DEADLINE));
 
-  const runLocal = (operation: SyncOperation, task: HostTask, owner: string) =>
+  const runLocal = (operation: SyncOperation, task: HostTask, caller: SshHostCaller) =>
     Effect.gen(function* () {
+      const owner = ownerSession(caller);
       const driver = operation.driver;
       const recipe = recipeFor(driver);
       const probe = yield* cliProbe(driver);
@@ -714,20 +710,33 @@ const make = Effect.gen(function* () {
             },
             true,
           );
-        yield* update(task, {
-          phase: "installing",
-          ran: describeInstall(command),
-          ...(command.latestOnly && operation.version !== null
-            ? { message: `${recipe.displayName}'s installer always installs the latest release.` }
-            : {}),
-        });
+        // Authority can lapse while this waits for the probe and other installs.
         const result = yield* installers.withPermits(1)(
-          runInstaller(spawner, command.command, command.args),
+          writeCeiling(caller).pipe(
+            Effect.andThen(
+              update(task, {
+                phase: "installing",
+                ran: describeInstall(command),
+                ...(command.latestOnly && operation.version !== null
+                  ? {
+                      message: `${recipe.displayName}'s installer always installs the latest release.`,
+                    }
+                  : {}),
+              }),
+            ),
+            Effect.andThen(runInstaller(spawner, command.command, command.args)),
+            Effect.result,
+          ),
         );
-        if (result.exitCode !== 0)
+        if (Result.isFailure(result))
+          return yield* update(task, { phase: "failed", message: result.failure.message }, true);
+        if (result.success.exitCode !== 0)
           return yield* update(
             task,
-            { phase: "failed", message: describeInstallFailure(result.exitCode, result.output) },
+            {
+              phase: "failed",
+              message: describeInstallFailure(result.success.exitCode, result.success.output),
+            },
             true,
           );
       }
@@ -887,9 +896,8 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const { driver, version, login, hosts } = request;
-      const created = yield* newOperation(driver, version, login, hosts, owners, settle);
+      const created = yield* newOperation(driver, version, login, hosts, owners, caller, settle);
       const { operation } = created;
-      const owner = ownerSession(caller);
       if (created.fresh)
         yield* Effect.forEach(
           operation.hosts,
@@ -897,7 +905,7 @@ const make = Effect.gen(function* () {
             fork(
               operation,
               task.state.host === null
-                ? runLocal(operation, task, owner)
+                ? runLocal(operation, task, caller)
                 : runRemote(operation, task, task.state.host, caller),
             ),
           { discard: true },
@@ -945,34 +953,19 @@ const make = Effect.gen(function* () {
         )).projection.runs.at(-1);
       if (!run || run.rootNodeId === null)
         return yield* fail("invalid_request", "Ask again while this thread is running.");
-      const name = recipeFor(input.driver).displayName;
-      const where = input.hosts?.join(", ") ?? hostname;
-      const handoff = yield* handoffs
-        .create({
-          kind: "approval",
-          title: `Install ${name} on ${where}?`,
-          reason: `An agent asked to install ${name}${input.version && input.version !== "latest" ? ` ${input.version}` : ""} with its official installer${input.login === false ? "" : " and start its sign-in"}.`,
-          requestedBy: {
-            threadId: thread.threadId,
-            providerInstanceId: thread.providerInstanceId,
-            path: HOST_SYNC_PATH,
-          },
-          target: { environmentId, path: HOST_SYNC_PATH },
+      const card = syncApprovalCard(
+        input,
+        recipeFor(input.driver).displayName,
+        input.hosts?.join(", ") ?? hostname,
+        {
+          requestedBy: { threadId: thread.threadId, providerInstanceId: thread.providerInstanceId },
+          environmentId,
           runId: run.id,
           nodeId: run.rootNodeId,
-          human: {
-            location: `Each machine runs ${name}'s own installer and sign-in. Sign in with your own account; GOAT never copies credentials between machines.`,
-          },
-          // The card describes exactly this input; it is what runs once approved.
-          args: {
-            driver: input.driver,
-            hosts: input.hosts ?? [],
-            version: input.version ?? null,
-            login: input.login ?? true,
-          },
           expiresAt: DateTime.add(yield* DateTime.now, { minutes: 15 }),
-        })
-        .pipe(Effect.mapError(askFailed));
+        },
+      );
+      const handoff = yield* handoffs.create(card).pipe(Effect.mapError(askFailed));
       return {
         kind: "needs_human" as const,
         handoff,
@@ -1034,6 +1027,12 @@ const make = Effect.gen(function* () {
     else if (caller.kind === "mcp" && caller.scope.thread !== undefined)
       yield* authorizeApprovalRequest(caller.scope);
     else yield* authorizeSshHost(sessions, caller, "orchestration:operate");
+    // A direct install's own thread cancels there under the check it started with, rechecked on send.
+    const launcher = operation.launchedBy;
+    const remoteCaller =
+      launcher.kind === "mcp" && launcher.directInstall && callerKey(launcher) === callerKey(caller)
+        ? launcher
+        : caller;
     // Read before interrupting: an interrupted task marks itself finished and would be skipped.
     const pending = operation.hosts.filter((task) => !task.finished);
     yield* Effect.forEach(operation.fibers, Fiber.interrupt, { discard: true });
@@ -1052,14 +1051,26 @@ const make = Effect.gen(function* () {
                       : undefined,
                   ),
                 ));
-          if (task.state.host !== null && remoteSyncId !== undefined)
-            yield* callRemote(caller, {
-              host: task.state.host,
+          const host = task.state.host;
+          if (host !== null && remoteSyncId !== undefined) {
+            const sent = yield* callRemote(remoteCaller, {
+              host,
               tool: CANCEL_TOOL,
               arguments: { syncId: remoteSyncId },
               writes: true,
               timeoutMs: MATRIX_DEADLINE_MS,
-            }).pipe(Effect.ignore);
+            }).pipe(Effect.exit);
+            if (Exit.isFailure(sent))
+              return yield* update(
+                task,
+                {
+                  phase: "failed",
+                  login: undefined,
+                  message: `Could not confirm the cancel on ${host}; its installer may still be running. Check goat_provider_host_matrix.`,
+                },
+                true,
+              );
+          }
           yield* update(task, { phase: "cancelled", login: undefined }, true);
         }),
       { discard: true },
