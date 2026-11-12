@@ -182,6 +182,11 @@ export interface SshRuntimeSupervisorInput {
    */
   readonly forced?: boolean | undefined;
   /**
+   * The launch stopped the old server itself and saw it exit. Its PID may already name another
+   * process, so the supervisor neither waits on that number nor reads anything from it.
+   */
+  readonly oldStopped?: boolean | undefined;
+  /**
    * On a Windows host, the release executables behind `runnerFile` and `previousRunnerFile`:
    * the runners are shell scripts there, and Windows starts the executable itself.
    */
@@ -296,7 +301,7 @@ const stuck = (pid: number, version: string): SshRuntimeSupervisorResult => ({
 const superviseReplacement = async (
   input: SshRuntimeSupervisorInput,
 ): Promise<SshRuntimeSupervisorResult> => {
-  if (!(await waitForExit(input.oldPid, input.exitTimeoutMs))) {
+  if (input.oldStopped !== true && !(await waitForExit(input.oldPid, input.exitTimeoutMs))) {
     // The drained server still owns the data, so it stays the recorded runtime and is never
     // signalled. The draining marker keeps launches from starting a second server beside it.
     if (input.previousVersion) {
@@ -422,7 +427,7 @@ const superviseReplacement = async (
           accepts(value.verdict) &&
           (requireInstance
             ? value.instanceId !== undefined && value.instanceId !== input.oldInstanceId
-            : !processExists(input.oldPid))
+            : input.oldStopped === true || !processExists(input.oldPid))
         ) {
           writeLaunchRecords(input.stateDir, identity, pid, input.port, input.platform);
           return pid;
@@ -509,6 +514,7 @@ export const supervise = Command.make("supervise", {
   identity: Flag.String("identity"),
   previousIdentity: Flag.String("previous-identity").pipe(Flag.withDefault("")),
   forced: Flag.Boolean("forced"),
+  oldStopped: Flag.Boolean("old-stopped"),
   executable: Flag.String("executable").pipe(Flag.optional),
   previousExecutable: Flag.String("previous-executable").pipe(Flag.optional),
   exitTimeoutMs: Flag.Int("exit-timeout-ms").pipe(Flag.withDefault(60_000)),

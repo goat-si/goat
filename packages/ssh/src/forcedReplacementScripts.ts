@@ -191,9 +191,12 @@ GOAT_FORCED_RECORDS
     printf 'GOAT did not signal child process %s of the stopped runtime, which still runs: a shell cannot prove the PID still names that child. Check it on the host.\\n' "$forced_child" >>"$LOG_FILE" 2>/dev/null || :
   done || :
   if [ -f "$DEFAULT_RUNTIME_FILE" ] && sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p' "$DEFAULT_RUNTIME_FILE" 2>/dev/null | grep -qx "$FORCE_PID"; then
-    rm -f "$DEFAULT_RUNTIME_FILE"
+    rm -f "$DEFAULT_RUNTIME_FILE" 2>/dev/null || :
   fi
-  rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity" "$STATE_DIR/draining" "$STATE_DIR/started" "$STATE_DIR/started.ticks"
+  # The runtime is gone, so a records cleanup that fails must not end the script before the
+  # supervisor takes over; it rewrites these records for whatever it starts.
+  rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity" "$STATE_DIR/draining" "$STATE_DIR/started" "$STATE_DIR/started.ticks" 2>/dev/null ||
+    printf 'GOAT stopped PID %s but could not remove its launch records; the supervisor replaces them.\\n' "$FORCE_PID" >>"$LOG_FILE" 2>/dev/null || :
   printf 'Stopped GOAT PID %s for the approved forced update.\\n' "$FORCE_PID" >>"$LOG_FILE" 2>/dev/null || :
   FORCE_STOP=0; LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0
 }
@@ -211,7 +214,7 @@ forced_supervise_start() {
   if [ -n "$FORCED_PREVIOUS_VERSION" ]; then
     set -- --previous-runner "$FORCED_PREVIOUS_RUNNER" --previous-version "$FORCED_PREVIOUS_VERSION" --previous-identity "$FORCED_PREVIOUS_IDENTITY"
   fi
-  nohup "$RUNNER_FILE" __ssh-helper supervise --forced --old-pid "$FORCED_STOPPED_PID" --old-instance-id forced --port "$FORCE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --target-version "$TARGET_VERSION" --identity "$forced_spawn serve --host 127.0.0.1 --port $FORCE_PORT --base-dir $DEFAULT_SERVER_HOME" "$@" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$forced_result" >/dev/null 2>>"$LOG_FILE" </dev/null &
+  nohup "$RUNNER_FILE" __ssh-helper supervise --forced --old-stopped --old-pid "$FORCED_STOPPED_PID" --old-instance-id forced --port "$FORCE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --target-version "$TARGET_VERSION" --identity "$forced_spawn serve --host 127.0.0.1 --port $FORCE_PORT --base-dir $DEFAULT_SERVER_HOME" "$@" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$forced_result" >/dev/null 2>>"$LOG_FILE" </dev/null &
   wait "$!" || true
   forced_status=absent; forced_new_pid=0; forced_new_version=
   if [ -f "$forced_result" ]; then read -r forced_status forced_new_pid forced_new_version <"$forced_result" || true; fi

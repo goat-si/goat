@@ -158,7 +158,7 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
     baseDir: flag("--base-dir"), stateDir: flag("--state-dir"), runnerFile: flag("--runner"),
     previousRunnerFile: flag("--previous-runner"), targetVersion: flag("--target-version"),
     previousVersion: flag("--previous-version"), identity: flag("--identity"), previousIdentity: flag("--previous-identity"),
-    forced: args.includes("--forced"), exitTimeoutMs: 10000, readyTimeoutMs: 10000, logFile: flag("--log") });
+    forced: args.includes("--forced"), oldStopped: args.includes("--old-stopped"), exitTimeoutMs: 10000, readyTimeoutMs: 10000, logFile: flag("--log") });
   event("supervise", { status: result.status });
   fs.writeFileSync(flag("--result"), result.status + " " + (result.pid ?? 0) + " " + (result.version ?? "-") + "\\n");
 } else if (args[0] === "__ssh-helper" && args[1] === "pick-port") {

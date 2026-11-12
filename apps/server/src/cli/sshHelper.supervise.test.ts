@@ -72,6 +72,8 @@ const superviseFailedReplacement = async (
     readonly exitTimeoutMs?: number;
     /** A forced stop of a runtime that cannot be started again leaves nothing to roll back to. */
     readonly noPrevious?: boolean;
+    /** The launch already saw the old runtime exit, so its PID number proves nothing now. */
+    readonly oldStopped?: boolean;
   },
 ) => {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-supervise-"));
@@ -121,6 +123,7 @@ const superviseFailedReplacement = async (
     exitTimeoutMs: options?.exitTimeoutMs ?? 1_000,
     readyTimeoutMs: 5_000,
     logFile: NodePath.join(stateDir, "server.log"),
+    ...(options?.oldStopped ? { forced: true, oldStopped: true } : {}),
   });
   return {
     result,
@@ -182,6 +185,17 @@ it("without a previous runtime, a failed replacement restores the data and start
   });
   assert.equal(database, "original");
   assert.deepEqual(workingDirectories, [NodeOS.homedir()]);
+});
+
+it("after a forced stop the launch saw complete, a live process on the old PID is not waited on", async () => {
+  // The test process stands for another process that took the stopped runtime's PID.
+  const { result, ran } = await superviseFailedReplacement("trial", {
+    noPrevious: true,
+    oldStopped: true,
+    oldPid: process.pid,
+  });
+  assert.isTrue(ran, "the replacement ran");
+  assert.equal(result.status, "failed");
 });
 
 it("keeps writes from another server that owned the data since the backup", async () => {
