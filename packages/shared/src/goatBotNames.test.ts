@@ -1,6 +1,6 @@
 import { expect, it } from "vite-plus/test";
 
-import { generatedBotName, isGeneratedBotName } from "./newBotNames.ts";
+import { generatedBotName, isGeneratedBotName } from "./goatBotNames.ts";
 
 it("names a new bot after the first generated name no member uses, hidden and deleted included", () => {
   expect(generatedBotName([])).toBe("New bot");

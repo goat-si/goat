@@ -27,6 +27,6 @@ export * from "./unread.ts";
 export * from "./changeRequestLinks.ts";
 export * from "./quote.ts";
 export * from "./eventSubject.ts";
-export * from "./newBotNames.ts";
+export * from "@goat/shared/goatBotNames";
 export * from "./newBots.ts";
 export * from "./botNameRowDismissal.ts";

@@ -51,6 +51,10 @@
       "types": "./src/goatBotPreviewText.ts",
       "import": "./src/goatBotPreviewText.ts"
     },
+    "./goatBotNames": {
+      "types": "./src/goatBotNames.ts",
+      "import": "./src/goatBotNames.ts"
+    },
     "./opencodexRelease": {
       "types": "./src/opencodexRelease.ts",
       "import": "./src/opencodexRelease.ts"

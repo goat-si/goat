@@ -1,6 +1,6 @@
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 
-import { generatedBotName } from "./newBotNames.ts";
+import { generatedBotName } from "@goat/shared/goatBotNames";
 
 // New bot in one press. A create lives here, above the roster, so it outlives the list's mount: one
 // per environment while it runs or waits to be retried. A created bot frees the slot at once and
