@@ -271,16 +271,20 @@ describe("Library reads", () => {
     expect(removed).toHaveBeenCalledWith("abort", added.mock.calls[0]?.[1]);
   });
 
-  it("R6: aborting a running open keeps the lane until its chunk answers; the next read starts after", async () => {
+  it("R6: aborting a running open answers null at once but keeps the lane until its chunk answers; the next read starts after", async () => {
     using test = setup();
     const { reads, server } = test;
     const controller = new AbortController();
     const opened = reads.open(A, server.readChunk, "file", controller.signal);
     reads.preview(A, server.readChunk, "next");
     controller.abort();
+    let settled: unknown = "not settled";
+    void opened.then((value) => (settled = value));
+    // Runs pending promise work without moving the clock toward the chunk's bound.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBeNull();
     expect(server.paths()).toEqual(["file@0"]);
     (await server.call(0)).answer(half("file", false));
-    await expect(opened).resolves.toBeNull();
     await server.call(1);
     expect(server.paths()).toEqual(["file@0", "next@0"]);
   });

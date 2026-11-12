@@ -191,6 +191,8 @@ export function createBotFileReads() {
       };
       onAbort = () => {
         if (removeFrom(lane.opens, entry)) entry.drop("cancelled");
+        // A running open answers at once; the lane stays held until its chunk in flight ends.
+        else if (lane.running === entry) entry.drop("cancelled");
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       lane.opens.push(entry);
