@@ -160,7 +160,11 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
+	self := p.id.NodeID()
+	revoked, stopWatch, err := watchRevoked(st, p, m)
+	if err != nil {
+		return die(err)
+	}
 	defer stopWatch()
 	// The exact form writes nothing to stderr before its ready line, so it never traces.
 	var tr *openTrace
@@ -184,11 +188,13 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	var wasRevoked atomic.Bool
+	selfRevoked := false
 	spliced := make(chan struct{})
 	defer close(spliced)
 	go func() {
 		select {
-		case <-revoked:
+		case who := <-revoked:
+			selfRevoked = who == self
 			wasRevoked.Store(true)
 			sec.Close(wire.CodeNotAdmitted)
 		case <-spliced:
@@ -202,13 +208,47 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := stream.Splice(ctx, tr.link(sec), Stdin, stdout, closeOut); err != nil {
 		if wasRevoked.Load() {
-			return die(revokedErr(m))
+			return die(revokedNodeErr(m, selfRevoked))
 		}
 		return die(fail(err, true))
 	}
 	return 0
 }
 
-func revokedErr(m mesh.Member) error {
-	return fmt.Errorf("%s (%s) was revoked from the mesh; session closed", m.Name, short(m.NodeID))
+// revokedNodeErr names who left: the member at the other end, or this node itself.
+func revokedNodeErr(m mesh.Member, self bool) error {
+	return errors.New(revokedWho(m, self) + "; session closed")
+}
+
+func revokedWho(m mesh.Member, self bool) string {
+	if self {
+		return "this node left the mesh or was revoked"
+	}
+	return fmt.Sprintf("%s (%s) was revoked from the mesh", m.Name, short(m.NodeID))
+}
+
+// watchRevoked watches m and this node. With no daemon to watch (pen down, or never started) it
+// still serves, unwatched, unless this node has left since p was loaded: a pen leave in between
+// deletes the identity and stops the daemon.
+func watchRevoked(st *state.Store, p *peer, m mesh.Member) (<-chan string, func(), error) {
+	self := p.id.NodeID()
+	revoked, stop, err := daemon.WatchRevoked(st, m.NodeID, self)
+	if err != nil {
+		return nil, stop, err
+	}
+	if revoked != nil {
+		// A revoke already in the daemon's view comes with the watch's first line: start nothing.
+		select {
+		case who := <-revoked:
+			stop()
+			return nil, func() {}, errors.New(revokedWho(m, who == self) + "; nothing was opened")
+		default:
+			return revoked, stop, nil
+		}
+	}
+	id, err := st.LoadIdentity()
+	if errors.Is(err, os.ErrNotExist) || err == nil && id.NodeID() != self {
+		return nil, stop, errors.New("this node left the mesh while this started; nothing was opened")
+	}
+	return nil, stop, err
 }
