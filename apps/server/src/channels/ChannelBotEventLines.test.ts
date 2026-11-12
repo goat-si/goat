@@ -110,9 +110,9 @@ const memberChat = (threadId: ThreadId) =>
     yield* (yield* ChannelBotEvents.ChannelBotEvents).flush;
     const threads = yield* ThreadManagement.ThreadManagementService;
     const records = yield* threads.getThreadRecords(threadId, ["messages", "turnItems"]);
-    const greeting = records.turnItems.find(
-      (item) => item.type === "assistant_message" && item.text.startsWith("Hi, I'm"),
-    );
+    const greeting = records.turnItems.flatMap((item) =>
+      item.type === "assistant_message" && item.text.startsWith("Hi, I'm") ? [item] : [],
+    )[0];
     return {
       texts: records.messages.map((message) => message.text),
       lines: records.turnItems.flatMap((item) =>
