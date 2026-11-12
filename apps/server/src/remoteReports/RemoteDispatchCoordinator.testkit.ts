@@ -270,6 +270,7 @@ export const fixture = Effect.gen(function* () {
   return {
     sql,
     statements,
+    receipts,
     launchError: (value: Ssh.SshRemoteDispatchError) => {
       launchError = value;
     },
