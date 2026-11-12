@@ -7,6 +7,7 @@ import * as NodeFS from "node:fs";
 import * as NodeBuffer from "node:buffer";
 
 import {
+  CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS,
   CHANNEL_BOT_ARTIFACT_CHUNK_BYTES,
   CHANNEL_BOT_ARTIFACT_MAX_BYTES,
   CHANNEL_GATEWAY_WS_METHODS,
@@ -20,6 +21,7 @@ import {
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -206,7 +208,27 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
     yield* home.requireHome;
     const segments = segmentsOf(input.relativePath);
     if (segments === undefined) return yield* notFound();
-    return yield* reads.withPermits(1)(Effect.scoped(readChunk(input, segments)));
+    // A started read keeps its slot until its OS calls end, since interrupting one only abandons
+    // it; waiting for a slot stays interruptible. Only the answer is bounded.
+    // The mask leaves no moment where the detached work exists without its cleanup; only the
+    // bounded wait for the answer can be interrupted. forkDetach still starts it interruptible.
+    const answer = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const work = yield* reads
+          .withPermits(1)(Effect.uninterruptible(Effect.scoped(readChunk(input, segments))))
+          .pipe(
+            Effect.tapDefect((defect) => Effect.logError("GOAT Bot Library read failed", defect)),
+            Effect.forkDetach,
+          );
+        const joined = yield* restore(
+          Fiber.join(work).pipe(Effect.timeoutOption(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS)),
+        ).pipe(Effect.onInterrupt(() => Effect.sync(() => work.interruptUnsafe())));
+        if (Option.isNone(joined)) work.interruptUnsafe();
+        return joined;
+      }),
+    );
+    if (Option.isSome(answer)) return answer.value;
+    return { status: "busy", relativePath: input.relativePath } as const;
   });
 
   const list = Effect.fn("ChannelBotArtifacts.list")(function* () {
@@ -304,7 +326,10 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
 
 export const layer = Layer.effect(ChannelBotArtifacts, make());
 
-/** `reads` belongs to one connection: a second read there while one runs answers busy. */
+/**
+ * `reads` belongs to one connection: a second read there while one waits for its answer answers
+ * busy. A request ends at its bound or when interrupted, even while the disk read goes on.
+ */
 export const rpcHandlers = (
   service: ChannelBotArtifacts["Service"],
   connectionReads: Semaphore.Semaphore,
