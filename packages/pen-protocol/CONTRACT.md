@@ -567,7 +567,10 @@ the session is already closing: a session whose
 delivery failed keeps 4404, and one the transport closed (4400 decryption failure, 4408 queue overflow) or the peer
 closed keeps that close. The node sends at most one CLOSE per session. Before the list answer, and before the
 registration's end completes, every such session is closed and every connection delivered for it to the program is
-closed by the node; the node writes no identity line for it after that. Close codes are unauthenticated and never tell
+closed by the node; the node writes no identity line for it after that. A client or pairing session's connection to
+the program ends with a FIN only once the caller's stream reached it whole (its FIN and every byte before it); every
+other close of that connection, a list drop, a registration end or a relay cut included, is a TCP reset, so the
+program never reads a cut stream as a complete one. Close codes are unauthenticated and never tell
 a caller whether the program read its bytes. It logs each failure under one of a fixed set of
 causes (dial, deadline, malformed, proof, replaced), at most once a minute per cause. A
 refused delivery passes no caller byte to the program, but the caller still classifies its own data by what it
@@ -733,6 +736,10 @@ it ends (closed after delivery, unconfirmed at its 10 s deadline, closed 1000 as
 refused after confirmation, ended with its registration), and is then returned. With at most 32 active sessions per
 relay ("Relay"), phones and pairings use at most 8 of them, and the other 24 stay for members, account sessions and
 joins.
+The node's own bound of 64 sessions per uplink (v1.3, node side) refuses an OPEN before its message 1, so a refused
+OPEN takes no phone slot and every phone slot belongs to a session that bound counts. With a relay that keeps its caps
+the bound is never reached and the phone caps bind first; with one that does not, phones still hold at most 8 of
+the 64.
 
 ### Service invites
 

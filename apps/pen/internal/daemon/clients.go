@@ -312,16 +312,26 @@ func (d *Daemon) endRegistration(reg *serviceReg) {
 	close(reg.endDone)
 }
 
-// liveLink is a client session as a stream link: its closes go through the session's single owner.
+// liveLink is a client session as a stream link: its closes go through the session's single owner. When Splice's
+// close wins the claim, it closes the relay session and leaves the local connection to serveClient, which knows
+// from Splice's result whether the phone's stream reached the program whole.
 type liveLink struct {
-	d *Daemon
-	l *live
+	d     *Daemon
+	l     *live
+	owned bool   // Splice's close won the claim; written and read on serveClient's goroutine only
+	code  uint16 // the code it closed with
 }
 
-func (k liveLink) Send(p []byte) error                      { return k.l.sec.Send(p) }
-func (k liveLink) Recv(ctx context.Context) ([]byte, error) { return k.l.sec.Recv(ctx) }
-func (k liveLink) Close(code uint16) error {
-	k.d.closeLive(k.l, code)
+func (k *liveLink) Send(p []byte) error                      { return k.l.sec.Send(p) }
+func (k *liveLink) Recv(ctx context.Context) ([]byte, error) { return k.l.sec.Recv(ctx) }
+func (k *liveLink) Close(code uint16) error {
+	k.d.mu.Lock()
+	won := claimLocked(k.l)
+	k.d.mu.Unlock()
+	if won {
+		k.owned, k.code = true, code
+		k.l.sec.Close(code)
+	}
 	return nil
 }
 
@@ -358,13 +368,26 @@ func (d *Daemon) serveClient(ctx context.Context, sec *session.Secure, a clientA
 	defer conn.Close()
 	defer d.svc.uncommit(l.reg, conn)
 	releaseSlot()
-	stream.Splice(ctx, liveLink{d, l}, conn, conn, conn.CloseWrite)
+	link := &liveLink{d: d, l: l}
+	err = stream.Splice(ctx, link, conn, conn, conn.CloseWrite)
+	if err == nil || stream.Delivered(err) {
+		// The phone's stream reached the program up to its FIN: it may end normally (commitClient set a reset).
+		conn.SetLinger(-1)
+	}
+	if link.owned {
+		d.closeOwned(l, link.code)
+	}
 }
 
 // commitClient commits a client delivery to l's registration and renders its identity line. It runs with l.gate held
 // (the caller writes line 3 before releasing it) and fails once l is closing, the registration ended or was
 // replaced, or the key is no longer listed or is now a member or a revoked member.
 func (d *Daemon) commitClient(reg *serviceReg, tc net.Conn, l *live) ([]byte, error) {
+	// Until Splice shows the phone's stream reached the program whole, every close of tc, by any owner or by the
+	// registration's end, is a reset: the program never reads a cut stream as a complete one.
+	if t, ok := tc.(*net.TCPConn); ok {
+		t.SetLinger(0)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if l.closing {
