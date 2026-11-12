@@ -47,6 +47,7 @@ import { useGoatBotMemberAt } from "./goatBotMemberThread";
 import type { GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotNameRow } from "./GoatBotNameRow";
+import { forgetRenamedBots } from "./goatBotRenamedBots";
 
 const environmentId = EnvironmentId.make("env");
 const memberThread = ThreadId.make("channel-member-bot:abc");
@@ -193,6 +194,8 @@ function NamedChat() {
 }
 
 it("a rename the list has not caught up with names the chat, and its name row goes away", async () => {
+  forgetNewBotEnvironment(environmentId);
+  forgetRenamedBots(environmentId);
   const generated = { ...research, name: "New bot 2" };
   server.presentation = {
     connection: { phase: "connected" },

@@ -1,4 +1,4 @@
-import { BotProfile } from "@goat/contracts";
+import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { useImperativeHandle, useRef, type Ref } from "react";
@@ -53,7 +53,9 @@ vi.mock("~/state/environments", async (original) => ({
 import type { GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotNameRow } from "./GoatBotNameRow";
-import { openNewBotChat } from "./goatBotNewBotOpen";
+import { resetBotNameRowDismissalsForTests } from "./goatBotNameRowDismissed";
+import { openNewBotChat, resetNameRowFocusForTests } from "./goatBotNewBotOpen";
+import { forgetRenamedBots } from "./goatBotRenamedBots";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
 let nextBot = 0;
@@ -81,6 +83,10 @@ function member(name: string, overrides: { readonly state?: "deleted" } = {}) {
 
 function setup() {
   permission.set(true);
+  resetNameRowFocusForTests();
+  resetBotNameRowDismissalsForTests();
+  localStorage.removeItem("goat:bot-name-row-dismissed:v1");
+  forgetRenamedBots(EnvironmentId.make("env-name-row"));
   // The server answers with the bot as it now is.
   const update = vi.fn(async (args: unknown): Promise<unknown> => {
     const { input } = args as { readonly input: { readonly botId: string } };

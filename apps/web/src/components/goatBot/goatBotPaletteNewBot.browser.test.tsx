@@ -9,6 +9,9 @@ import { act, render, type Screen } from "../../../test/render";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { ToastProvider } from "../ui/toast";
+import { disposeGoatBotEnvironment } from "./goatBotEnvironmentLifecycle";
+import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
+import { resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
 
 const decode = Schema.decodeSync(BotProfile);
 const profile = (botId: string, role: "main" | "member", name: string) =>
@@ -56,11 +59,17 @@ const made = profile("made", "member", "New bot 2");
 
 function setup() {
   forgetNewBotEnvironment(environmentId);
+  resetNewBotOpenHoldsForTests();
+  resetNameRowFocusForTests();
   state.listed = [profile("main", "main", "Goaty"), profile("first", "member", "New bot")];
+  // The first create waits for `answer`, any later one for `later`.
   const answer = deferred<unknown>();
-  const send = vi.fn((_input: unknown) => answer.promise);
+  const later = deferred<unknown>();
+  const send = vi.fn((_input: unknown) =>
+    send.mock.calls.length === 1 ? answer.promise : later.promise,
+  );
   state.send = send;
-  return { send, answer };
+  return { send, answer, later };
 }
 
 function App({ dialog = false }: { readonly dialog?: boolean }) {
@@ -178,4 +187,23 @@ it("a failed palette create shows a toast, and the item says to retry from Bots"
   await act(() => openCommandPalette({ query: "new bot" }));
   await expect.element(page.getByText("Couldn't create; open Bots to retry")).toBeVisible();
   expect(page.getByRole("option", { name: /^New bot/ }).query()).toBeNull();
+});
+it("the environment is removed while a palette create is pending: nothing opens, and its slot is forgotten", async () => {
+  const { send, answer, later } = setup();
+  await using screen = await renderPalette();
+  const router = screen.router;
+  if (!router) throw new Error("the palette renders under a router");
+  await runNewBot();
+  disposeGoatBotEnvironment(environmentId);
+  expect(newBotSlot(environmentId).operation).toBeNull();
+  using navigate = vi.spyOn(router, "navigate");
+  answer.resolve({ _tag: "Success", value: { bot: made } });
+  // A later create on the same environment answers after the forgotten one: only it opens.
+  await runNewBot();
+  expect(send).toHaveBeenCalledTimes(2);
+  const next = profile("next", "member", "New bot 2");
+  later.resolve({ _tag: "Success", value: { bot: next } });
+  await vi.waitFor(() => expect(router.state.location.pathname).toBe("/env-1/thread-next"));
+  expect(navigate).toHaveBeenCalledOnce();
+  expect(newBotSlot(environmentId).created.map((bot) => bot.botId)).toEqual(["next"]);
 });

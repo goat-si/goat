@@ -45,3 +45,7 @@ export function takeNameRowFocus(botId: string): boolean {
   clearFocusMark();
   return true;
 }
+
+export function resetNameRowFocusForTests(): void {
+  clearFocusMark();
+}

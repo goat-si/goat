@@ -25,6 +25,10 @@ export function newBotOpenBlocked(): boolean {
   return holds.size > 0 || document.querySelector(OPEN_MODAL) !== null;
 }
 
+export function resetNewBotOpenHoldsForTests(): void {
+  holds.clear();
+}
+
 /** Holds the open while mounted; render it inside a popup, which mounts only while open. */
 export function HoldsNewBotOpen(): null {
   // oxlint-disable-next-line goat/react-effect-budget -- The hold must end with the popup, however it unmounts.

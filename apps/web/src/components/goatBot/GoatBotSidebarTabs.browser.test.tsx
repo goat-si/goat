@@ -166,6 +166,8 @@ vi.mock("./useBotRoster", () => ({
   }),
 }));
 import { GoatBotSidebarTabs } from "./GoatBotSidebarTabs";
+import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
+import { resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
 
 /** A create answer the test releases when it chooses. */
 function deferred<T>() {
@@ -195,6 +197,8 @@ const profile = (botId: string, name: string, state?: "deleted") =>
 
 function setup() {
   forgetNewBotEnvironment(EnvironmentId.make("env-1"));
+  resetNewBotOpenHoldsForTests();
+  resetNameRowFocusForTests();
   bots.roster = [{ kind: "main", profile: { name: "Helper" } }];
   bots.profiles = [];
   bots.members = [];

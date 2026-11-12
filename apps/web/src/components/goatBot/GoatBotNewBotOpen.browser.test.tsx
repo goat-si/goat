@@ -9,7 +9,7 @@ import { useGlobalAgentStore } from "~/globalAgentStore";
 import { CommandPaletteDialogFrame } from "../CommandPaletteDialogFrame";
 import { CommandDialog } from "../ui/command";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
-import { SidebarProvider, useSidebar } from "../ui/sidebar";
+import { Sidebar, SidebarProvider, useSidebar } from "../ui/sidebar";
 import "~/index.css";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
@@ -88,6 +88,18 @@ vi.mock("./GoatBotAvatar", async (original) => ({
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberStatus: () => ({ waitingCount: 0, latest: undefined }),
 }));
+// The palette's New bot, against the same server and list as the roster.
+vi.mock("./goatBotPaletteItems", async (original) => ({
+  ...(await original<typeof import("./goatBotPaletteItems")>()),
+  useGoatBotPaletteNewBotSource: () => ({
+    environmentId: roster.read().environmentId,
+    listed: roster.read().bots,
+    send: (input: unknown) => state.create(input),
+  }),
+}));
+vi.mock("./readGoatBotEnvironmentId", () => ({
+  readGoatBotEnvironmentId: () => roster.read().environmentId,
+}));
 vi.mock("./useBotRoster", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
@@ -117,7 +129,10 @@ vi.mock("./useBotRoster", async () => {
 
 import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
+import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
+import { useGoatBotPaletteNewBot } from "./goatBotPaletteNewBot";
 import { GoatBotSidebarTabs } from "./GoatBotSidebarTabs";
+import { resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
 
 /** A create answer the test releases when it chooses. */
 function deferred<T>() {
@@ -149,12 +164,23 @@ function SidebarControls() {
 /** Something modal the person has open elsewhere in the app. */
 type Overlay = "palette" | "dialog" | null;
 
+/** Runs the palette's New bot item, as choosing it in the palette does. */
+function PaletteNewBot() {
+  const [item] = useGoatBotPaletteNewBot();
+  return (
+    <button type="button" onClick={() => void item?.run()}>
+      Palette New bot
+    </button>
+  );
+}
+
 function Roster({ overlay = null }: { readonly overlay?: Overlay }) {
   return (
     <SidebarProvider>
       {/* The provider lays out a row; the roster gets a sidebar-sized column. */}
       <div className="w-80">
         <SidebarControls />
+        <PaletteNewBot />
         <GoatBotSidebarTabs />
         {/* The open chat's own Edit bot, outside the roster. */}
         <GoatBotMemberContext value={ada}>
@@ -180,21 +206,24 @@ function Roster({ overlay = null }: { readonly overlay?: Overlay }) {
 function setup() {
   forgetNewBotEnvironment(EnvironmentId.make("env-1"));
   forgetNewBotEnvironment(EnvironmentId.make("env-2"));
+  resetNewBotOpenHoldsForTests();
+  resetNameRowFocusForTests();
   roster.set({ environmentId: "env-1", bots: [ada] });
   const answer = deferred<unknown>();
-  state.create = () => answer.promise;
+  const create = vi.fn((_input: unknown) => answer.promise);
+  state.create = create;
   useGlobalAgentStore.getState().setMode("bot");
-  return { answer: () => answer.resolve({ _tag: "Success", value: { bot: made } }) };
+  return { create, answer: () => answer.resolve({ _tag: "Success", value: { bot: made } }) };
 }
 
 /** Renders the roster at /bot with the sidebar showing and clicks New bot; the create waits. */
 async function clickNewBot() {
-  const { answer } = setup();
+  const { create, answer } = setup();
   const screen = await render(<Roster />, { router: "/bot" });
   await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
   await userEvent.click(screen.getByRole("button", { name: "New bot", exact: true }));
   await expect.element(screen.getByRole("status").getByText("Creating…")).toBeVisible();
-  return { screen, answer };
+  return { screen, create, answer };
 }
 
 const createdInStore = () =>
@@ -311,6 +340,49 @@ it.each<[string, Exclude<Overlay, null>, string]>([
     expect(router.state.location.pathname).toBe("/bot");
   },
 );
+
+it("the roster's New bot opens the chat from the narrow sidebar sheet it lives in, then closes it", async () => {
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(390, 844);
+  await using _viewport = {
+    [Symbol.asyncDispose]: () => page.viewport(viewport.width, viewport.height),
+  };
+  const { answer } = setup();
+  // The app's sidebar, which turns into a sheet on a narrow screen.
+  await using screen = await render(
+    <SidebarProvider>
+      <SidebarControls />
+      <Sidebar>
+        <GoatBotSidebarTabs />
+      </Sidebar>
+    </SidebarProvider>,
+    { router: "/bot" },
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+  const sheet = page.getByRole("dialog", { name: "Sidebar" });
+  await userEvent.click(sheet.getByRole("button", { name: "New bot", exact: true }));
+  await expect.element(sheet.getByRole("status").getByText("Creating…")).toBeVisible();
+  answer();
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env-1/thread-made"));
+  await expect.element(sheet).not.toBeInTheDocument();
+});
+
+it.each([
+  ["the roster, then the palette", ["New bot", "Palette New bot"]],
+  ["the palette, then the roster", ["Palette New bot", "New bot"]],
+])("New bot from %s while the first create runs: one bot is created", async (_case, buttons) => {
+  const { create, answer } = setup();
+  await using screen = await render(<Roster />, { router: "/bot" });
+  await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+  for (const name of buttons)
+    // The roster's New bot is aria-disabled while a create runs; the press still reaches it.
+    await userEvent.click(screen.getByRole("button", { name, exact: true }), { force: true });
+  await expect.element(screen.getByRole("status").getByText("Creating…")).toBeVisible();
+  expect(create).toHaveBeenCalledOnce();
+  answer();
+  await createdInStore();
+  expect(create).toHaveBeenCalledOnce();
+});
 
 it("a create outlives the roster: switching to Threads and back shows the created row and frees New bot", async () => {
   const { screen, answer } = await clickNewBot();
