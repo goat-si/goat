@@ -537,7 +537,8 @@ ends (exit 0), the node replaces it (exit 3, reason on stderr) or the node close
 other failure, before or at registration, exits 2 with the reason on stderr. From v1.3 the child forwards every
 further stdin line to the node unchanged and prints every line the node sends after `registered`, except
 `replaced`, on stdout unchanged ("Ops on the registration"). A stdin line longer than 4096 bytes with its LF is not
-forwarded: the child exits 2. Bytes after the last LF when stdin ends are dropped. A v1.2 child forwards nothing, so a
+forwarded: the child exits 2, as it does when it cannot write an op to the node or cannot half-close the connection
+while an op is unanswered. Bytes after the last LF when stdin ends are dropped. A v1.2 child forwards nothing, so a
 program that sends ops through it gets no answer. When stdin ends, a v1.3 child half-closes the connection, prints
 the node's answers to the ops it forwarded, and exits 0, or 1 when the node closed the connection before answering
 every op it forwarded (a v1.2 node does).
