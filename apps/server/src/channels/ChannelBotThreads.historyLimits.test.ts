@@ -3,6 +3,7 @@ import { ChannelTaskId, type ChannelListBotThreadsResult } from "@goat/contracts
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as BotThreads from "./ChannelBotThreads.ts";
+import * as TaskViews from "./channelTaskViews.ts";
 import {
   CHANNEL_BOT_THREADS_HISTORY_EXAMINED,
   quietMessagesStatement,
@@ -242,6 +243,36 @@ describe("ChannelBotThreads history limits", () => {
           20,
         );
         assert.deepStrictEqual(page.history?.launchesTruncated, [ChannelTaskId.make("busy")]);
+      }),
+    ),
+  );
+
+  it.effect("uses the empty view for a task view it cannot read and marks the page partial", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const sql = yield* SqlClient.SqlClient;
+        yield* insertTask("work", { status: "running", createdAt: at(1) });
+        yield* insertTask("second", { status: "running", createdAt: at(2) });
+        // One view the schema refuses, and one stored under another task's key.
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
+          (${TaskViews.taskViewKey(ownerId, ChannelTaskId.make("work"))}, '{"taskId":"work"}', ${at(0)}),
+          (${TaskViews.taskViewKey(ownerId, ChannelTaskId.make("second"))},
+            ${JSON.stringify({ taskId: "other", pinnedAt: at(0), doneAt: null, readThrough: null })},
+            ${at(0)})`;
+        const page = yield* history();
+        assert.deepStrictEqual(
+          page.rows.map((row) =>
+            row.kind === "task"
+              ? `${row.task.taskId} ${row.view.taskId} ${row.view.pinnedAt} ${row.view.doneAt} ${row.view.readThrough}`
+              : "",
+          ),
+          ["work work null null null", "second second null null null"],
+        );
+        assert.isTrue(page.history?.partial);
+        // The current list still fails closed on the same views, as on dev.
+        const service = yield* BotThreads.ChannelBotThreads;
+        assert.strictEqual((yield* Effect.flip(service.list(owner))).reason, "persistence_failed");
       }),
     ),
   );

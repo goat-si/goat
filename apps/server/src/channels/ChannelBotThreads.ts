@@ -350,23 +350,30 @@ const make = Effect.gen(function* () {
         : yield* sql<{ readonly key: string; readonly value_json: string }>`SELECT key, value_json
             FROM channel_runtime_state WHERE key IN ${sql.in(keys)}`.pipe(Effect.mapError(failed));
     const viewsByTask = new Map<string, ChannelTaskView>();
+    // An unreadable view, or one under another task's key, leaves its row with the empty view and
+    // marks the page partial; the current list still fails closed on it.
+    let skippedViews = 0;
     for (const row of viewRows) {
       const view = yield* Effect.try(() => decodeView(row.value_json)).pipe(
-        Effect.mapError(failed),
+        Effect.orElseSucceed(() => undefined),
       );
-      if (row.key !== TaskViews.taskViewKey(owner.ownerId, view.taskId)) return yield* failed();
+      if (view === undefined || row.key !== TaskViews.taskViewKey(owner.ownerId, view.taskId)) {
+        skippedViews += 1;
+        continue;
+      }
       viewsByTask.set(view.taskId, view);
     }
     const built = yield* rowsFor(owner, environmentId, viewsByTask, page.tasks, {
       threadsOnly: page.threadsOnly,
       launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
     });
-    const partial = page.skippedTasks > 0 || built.skippedLaunches > 0;
+    const partial = page.skippedTasks > 0 || built.skippedLaunches > 0 || skippedViews > 0;
     if (partial)
       yield* Effect.logWarning("GOAT Bot task history left out records it could not read", {
         botId,
         skippedTasks: page.skippedTasks,
         skippedLaunches: built.skippedLaunches,
+        skippedViews,
       });
     return {
       rows: built.rows,
