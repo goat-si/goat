@@ -124,12 +124,12 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 	b.WriteString("# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n")
 	controlPrefix := filepath.Join(controlDir, "cm-")
 	reuse := connectionReuse && len(controlPrefix)+40+17 < controlSocketMax
-	block := func(pattern, user string) {
+	block := func(pattern, user, node string) {
 		fmt.Fprintf(&b, "Host %s\n", pattern)
 		if user != "" {
 			fmt.Fprintf(&b, "    User %s\n", user)
 		}
-		fmt.Fprintf(&b, "    ProxyCommand %s %%n 22\n", strings.ReplaceAll(cmd, "%", "%%"))
+		fmt.Fprintf(&b, "    ProxyCommand %s %s 22\n", strings.ReplaceAll(cmd, "%", "%%"), node)
 		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(configPath(knownHosts)))
 		b.WriteString("    StrictHostKeyChecking yes\n")
 		if !reuse {
@@ -139,8 +139,10 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 		fmt.Fprintf(&b, "    ControlPath %s\n", strings.TrimSuffix(sshArg(controlPrefix), `"`)+`%C"`)
 		b.WriteString("    ControlPersist 10m\n")
 	}
+	// A member's block matches its exact, validated name, so %n there is that name. The fallback
+	// matches whatever was typed after "pen-", which is why it alone guards the name (fallbackNode).
 	for _, h := range hosts {
-		block("pen-"+h.Name, h.User)
+		block("pen-"+h.Name, h.User, "%n")
 	}
 	// Exact blocks come before pen-*: OpenSSH keeps the first value it reads, so pen-<nodeId> never takes the
 	// fallback's ProxyCommand or its shared connection, which another route may have opened. An id another
@@ -164,7 +166,7 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 			b.WriteString("    ControlMaster no\n    ControlPath none\n")
 		}
 	}
-	block("pen-*", "")
+	block(fallbackHost, "", fallbackNode)
 	return b.String()
 }
 
