@@ -1,3 +1,4 @@
+import { interruptUnlessClosed } from "./ClaudeStopTeardown.ts";
 import {
   claudePendingBackgroundTask,
   isClaudeOpaqueBackgroundTaskType,
@@ -10932,8 +10933,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               next.add(turnInput.providerTurnId);
               return next;
             });
-            yield* existing.query.interrupt.pipe(Effect.timeoutOption("10 seconds"));
-            yield* existing.query.close.pipe(Effect.ignore);
+            yield* interruptUnlessClosed({
+              closed: existing.closed,
+              interrupt: existing.query.interrupt,
+              close: existing.query.close,
+            });
             const closed = yield* Deferred.await(existing.closed).pipe(
               Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
             );
@@ -11147,6 +11151,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const closeSession = Effect.fnUntraced(function* () {
           const existing = yield* Ref.get(queryContext);
           if (existing !== null) {
+            yield* Deferred.succeed(existing.closed, undefined);
             yield* existing.query.close.pipe(Effect.ignore);
           }
           yield* Effect.yieldNow;
