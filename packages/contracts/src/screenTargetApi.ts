@@ -3,10 +3,10 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/34";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/35";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
-// At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
+// At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some first.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
 // Stop from the person ends the cell at once.`;
 
@@ -64,7 +64,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
   drag(from: Target, to: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>;
-  waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean }>; // default 15 s; answers before the cell ends
+  waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean }>; // tabs 15 s default, apps 10 s max; answers within the cell
   verify(c: Condition): Promise<{ met: boolean }> }`;
 
 const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { target } | { role, name? },
