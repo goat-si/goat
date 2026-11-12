@@ -636,6 +636,23 @@ it.effect.each([
     providerClis: { complete: false, missing: [] },
   },
   {
+    name: "a status read that reached only last known CLIs as not yet known",
+    read: () =>
+      Effect.succeed({
+        hosts: [
+          {
+            host: "build-host",
+            reachability: "unreachable",
+            lastKnown: true,
+            metrics: {
+              providers: [enabled("codex", "missing"), enabled("claudeAgent", "present")],
+            },
+          },
+        ],
+      } as never),
+    providerClis: { complete: false, missing: [] },
+  },
+  {
     name: "a status read that fails as not yet known",
     read: () => Effect.fail(new OrchestratorMcpFailure({ code: "host_unavailable", message: "x" })),
     providerClis: { complete: false, missing: [] },

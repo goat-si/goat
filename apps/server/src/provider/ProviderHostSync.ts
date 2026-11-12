@@ -76,7 +76,7 @@ import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydra
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { checksCli, ProviderCliGate } from "./ProviderCliGate.ts";
-import { runInstaller, withProbedCli } from "./ProviderHostSyncInstall.ts";
+import { pinnedMismatch, runInstaller, withProbedCli } from "./ProviderHostSyncInstall.ts";
 import {
   describeInstall,
   describeInstallFailure,
@@ -92,6 +92,7 @@ import {
 import {
   askFailed,
   callerKey,
+  cancelsSettled,
   cancelTask,
   claimCancel,
   classify,
@@ -691,8 +692,8 @@ const make = Effect.gen(function* () {
         (operation.version === null || before.version === null
           ? operation.version === null
           : before.version.includes(operation.version));
+      const command = sameVersion ? null : installCommand(driver, platform, operation.version);
       if (!sameVersion) {
-        const command = installCommand(driver, platform, operation.version);
         if (command === null)
           return yield* update(
             task,
@@ -760,6 +761,15 @@ const make = Effect.gen(function* () {
                 ? `Installed, but GOAT could not confirm ${recipe.binary} runs here.`
                 : `The installer finished, but GOAT cannot find ${recipe.binary} on its PATH here. Add the install folder to PATH and restart GOAT.`,
           },
+          true,
+        );
+      const stale = sameVersion
+        ? undefined
+        : pinnedMismatch(recipe.displayName, operation.version, after.version, command);
+      if (stale !== undefined)
+        return yield* update(
+          task,
+          { phase: "failed", version: after.version, message: stale },
           true,
         );
       yield* update(task, {
@@ -1066,14 +1076,6 @@ const make = Effect.gen(function* () {
     yield* Fiber.await(stopping);
     return view(operation);
   });
-
-  /** A later cancel can reopen finished hosts, set in the step that reopens them: wait out each. */
-  const cancelsSettled = (operation: SyncOperation): Effect.Effect<void> =>
-    Effect.suspend(() =>
-      operation.cancelling === undefined
-        ? Effect.void
-        : Fiber.await(operation.cancelling).pipe(Effect.andThen(cancelsSettled(operation))),
-    );
 
   const respondHandoff = Effect.fn("ProviderHostSync.respondHandoff")(function* (
     input: HandoffRespondInput,

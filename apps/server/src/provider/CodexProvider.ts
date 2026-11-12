@@ -48,7 +48,6 @@ import {
 import {
   buildServerProvider,
   classifySpawnFailure,
-  isCommandMissingCause,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   providerModelsFromSettings,
@@ -634,11 +633,20 @@ const probeCodexCliVersion = Effect.fn("probeCodexCliVersion")(
   },
   Effect.timeoutOption(Duration.millis(DEFAULT_TIMEOUT_MS)),
   Effect.map(Option.getOrNull),
-  Effect.catch((cause) =>
-    Effect.logDebug("Codex --version fallback failed.", { cause }).pipe(
-      Effect.as(isCommandMissingCause(cause) ? ("missing" as const) : null),
+  // "Not found" is also what a vanished cwd or a missing interpreter gives; only a missing command counts.
+  (effect, input) =>
+    Effect.catch(effect, (cause) =>
+      Effect.logDebug("Codex --version fallback failed.", { cause }).pipe(
+        Effect.as(
+          classifySpawnFailure(cause, input.cwd, undefined, {
+            binary: input.binaryPath,
+            env: { ...process.env, ...input.environment },
+          }) === "missing"
+            ? ("missing" as const)
+            : null,
+        ),
+      ),
     ),
-  ),
 );
 
 export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(function* (input: {

@@ -9,7 +9,10 @@ const UNKNOWN = { complete: false, missing: [] } as const;
 
 /** Which provider CLIs a host reported missing, and whether it had checked every one. */
 const providerClisOf = (status: GoatHostStatusResult) => {
-  const providers = status.hosts[0]?.metrics?.providers?.filter((provider) => provider.enabled);
+  const entry = status.hosts[0];
+  // An unreachable read may carry the last good metrics; they say nothing about the host now.
+  if (entry?.reachability !== "ok" || entry.lastKnown === true) return UNKNOWN;
+  const providers = entry.metrics?.providers?.filter((provider) => provider.enabled);
   if (providers === undefined) return UNKNOWN;
   // Drivers that run no CLI report no cli; an older host reports none at all, so it cannot tell.
   const reported = providers.filter((provider) => provider.cli !== undefined);

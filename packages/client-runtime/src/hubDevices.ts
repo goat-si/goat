@@ -220,8 +220,9 @@ export interface HubDeviceRow {
   readonly missingClis: string | null;
 }
 
-/** The CLIs a machine's own provider probes found missing, as one line; null when none. */
-function missingCliLabel(entry: HostStatusEntry): string | null {
+/** The CLIs a machine's own provider probes found missing, as one line; null when none or stale. */
+function missingCliLabel(entry: HostStatusEntry, current: boolean): string | null {
+  if (!current || entry.reachability !== "ok" || entry.lastKnown === true) return null;
   const names = (entry.metrics?.providers ?? [])
     .filter((provider) => provider.enabled && provider.cli === "missing")
     .map((provider) => provider.displayName ?? provider.driver);
@@ -316,7 +317,7 @@ export function hubDeviceList(input: {
       entry.opencodexChildOptIn === undefined
         ? null
         : { host: entry.host, enabled: entry.opencodexChildOptIn };
-    const missingClis = missingCliLabel(entry);
+    const missingClis = missingCliLabel(entry, input.statusCurrent ?? true);
     if (childSetup === null && childOptIn === null && missingClis === null) continue;
     const index = rowOf(entry.host);
     const row = rows[index];

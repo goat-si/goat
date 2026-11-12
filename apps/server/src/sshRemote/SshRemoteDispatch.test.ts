@@ -1874,7 +1874,7 @@ it.effect("structured remote refusal is definite", () =>
 it.effect.each([
   {
     driver: "codex",
-    from: ' From here: goat_call provider.sync {"driver":"codex","hosts":["unlisted"],"login":false}.',
+    from: ' From here: goat_call {path:"provider.sync", args:{"driver":"codex","hosts":["unlisted"],"login":false}}.',
   },
   { driver: undefined, from: "" },
   // A driver GOAT cannot sync, or text dressed up as one, never becomes this machine's advice.
@@ -1911,6 +1911,25 @@ it.effect.each([
           else expect(facts).toMatchObject({ driver });
         }),
     ),
+);
+it.effect("regression F2R-1: a missing-CLI refusal that may have started stays unknown", () =>
+  withLaunchRemote(
+    {
+      refusal: true,
+      launchReply: {
+        code: "provider_unavailable",
+        classification: "provider_cli_missing",
+        mayHaveStarted: true,
+        message: "Codex is not installed on vm-1.",
+      },
+    },
+    () =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const error = yield* dispatch.launchThread(launchInput, Effect.void).pipe(Effect.flip);
+        expect(error.launchMayHaveStarted).toBe(true);
+      }),
+  ),
 );
 it.effect("first registration permits an approval-required thread under full-access ceiling", () =>
   withLaunchRemote({ registrationAccess: true }, (record) =>

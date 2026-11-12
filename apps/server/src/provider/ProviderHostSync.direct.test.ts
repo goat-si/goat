@@ -590,3 +590,20 @@ it.effect(
       }).pipe(Effect.provide(layer));
     }),
 );
+
+it.effect(
+  "regression F2I-1: an install that leaves another version reads failed, not installed",
+  () =>
+    Effect.gen(function* () {
+      const older = {
+        kind: "present",
+        provider: { ...pending, cli: "present", version: "1.0.0" },
+      } as const;
+      const { state, host } = yield* installLocally(yield* gate([older, older], []));
+      expect(state.spawned).toHaveLength(1);
+      expect(host).toMatchObject({
+        phase: "failed",
+        message: "The installer finished, but OpenCode is still 1.0.0, not 1.2.3.",
+      });
+    }),
+);

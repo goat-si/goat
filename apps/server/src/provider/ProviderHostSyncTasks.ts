@@ -259,3 +259,11 @@ export const claimCancel = (
       );
     }),
   );
+
+/** A later cancel can reopen finished hosts, set in the step that reopens them: wait out each. */
+export const cancelsSettled = (operation: SyncOperation): Effect.Effect<void> =>
+  Effect.suspend(() =>
+    operation.cancelling === undefined
+      ? Effect.void
+      : Fiber.await(operation.cancelling).pipe(Effect.andThen(cancelsSettled(operation))),
+  );

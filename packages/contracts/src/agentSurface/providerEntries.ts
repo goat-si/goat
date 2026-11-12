@@ -87,9 +87,9 @@ export const providerSurfaceEntries = {
     toolkit: "provider",
     summary: "Stop a provider sync",
     description:
-      "Interrupt a provider sync and its local worker processes. Installed CLIs remain installed. Remote setup and GOAT-managed sign-ins can continue after cancellation; check their state with goat_provider_host_matrix.",
+      "Stop a provider sync: its local installers and sign-ins, and the syncs it started on other machines. Installed CLIs remain installed. A host reads cancelled only when its machine confirms it.",
     guide:
-      "The requester can stop its own sync with live authorization; stopping someone else's sync needs providers:manage. The current implementation interrupts workers before choosing remote operations to cancel. Interrupted remote workers mark their tasks finished and can therefore be skipped by that selection. A GOAT-managed local sign-in is a separate auth flow; stopping the sync's subscription does not cancel that flow. Treat the returned sync state as worker state, not proof that all host-side work stopped. A finished install stays installed; remove it with the provider's own uninstaller if needed.",
+      "The requester can stop its own sync with live authorization; stopping someone else's sync needs providers:manage. A cancel claims every unfinished host and sends a cancel to each remote sync. A host reads cancelled only when its machine confirms it; otherwise it says its installer may still be running, and cancelling again retries it. A remote start whose reply was lost has no sync id to cancel, so check that machine with goat_provider_host_matrix. A GOAT-managed local sign-in stops with the sync. A finished install stays installed; remove it with the provider's own uninstaller if needed.",
     effect: "write",
     capability: "none",
     capabilityReason: "Stops a sync the caller asked for; any other sync needs providers:manage.",

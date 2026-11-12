@@ -7,6 +7,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import type { CliAnswer } from "./ProviderCliGate.ts";
+import { versionCore } from "./ProviderHostSyncRecipes.ts";
 
 const INSTALL_DEADLINE = Duration.minutes(10);
 const OUTPUT_LIMIT = 16_384;
@@ -68,3 +69,21 @@ export const withProbedCli = <
         installed: answer.kind === "present",
         version: answer.kind === "present" ? answer.provider.version : null,
       };
+
+/**
+ * Why a pinned install did not take: the CLI still reports another version. Undefined when it
+ * matches, when nothing was pinned, or when the installer only installs the latest.
+ */
+export const pinnedMismatch = (
+  name: string,
+  requested: string | null,
+  found: string | null,
+  command: { readonly latestOnly: boolean } | null,
+): string | undefined =>
+  requested === null ||
+  found === null ||
+  command === null ||
+  command.latestOnly ||
+  found.includes(requested)
+    ? undefined
+    : `The installer finished, but ${name} is still ${versionCore(found) ?? found}, not ${requested}.`;

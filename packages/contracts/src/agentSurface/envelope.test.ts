@@ -443,6 +443,13 @@ describe("settlementOf", () => {
     expect(settlementOf({ status: "ok", value: 1 })).toBe("completed");
     expect(settlementOf(failed("host_pressure"))).toBe("released");
     expect(settlementOf(failed("provider_unavailable"))).toBe("released");
+    // Install the CLI, then retry with the same key: the refusal ran nothing.
+    expect(
+      settlementOf(failed("provider_unavailable", { classification: "provider_cli_missing" }), {
+        _tag: "OrchestratorMcpFailure",
+        code: "provider_cli_missing",
+      }),
+    ).toBe("released");
     // A refusal can follow a partial effect, so it is replayed rather than run again.
     expect(settlementOf(failed("capability_denied"))).toBe("completed");
     expect(settlementOf(failed("not_found"))).toBe("completed");

@@ -67,6 +67,7 @@ import {
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
+import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
   preparationRunStopped,
   watchPreparationInterruption,
@@ -302,7 +303,7 @@ const make = Effect.gen(function* () {
   // Optional so harnesses that never launch into a real folder need not provide it.
   const workspacePaths = yield* Effect.serviceOption(WorkspacePaths.WorkspacePaths);
   const preparationScope = yield* Scope.make("sequential");
-  const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
+  const { reservePreparation, releasePreparation, settleCliRaces } = yield* makeLaunchCommandSlots;
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
 
   const mapError =
@@ -999,21 +1000,6 @@ const make = Effect.gen(function* () {
             ),
           );
 
-  const reservePreparation = (commandId: CommandId) =>
-    Ref.modify(scheduledLaunches, (scheduled) => {
-      if (scheduled.has(commandId)) return [false, scheduled] as const;
-      const next = new Set(scheduled);
-      next.add(commandId);
-      return [true, next] as const;
-    });
-
-  const releasePreparation = (commandId: CommandId) =>
-    Ref.update(scheduledLaunches, (scheduled) => {
-      const next = new Set(scheduled);
-      next.delete(commandId);
-      return next;
-    });
-
   const schedulePreparation = Effect.fn("ThreadLaunchService.schedulePreparation")(function* (
     input: PreparationInput,
     threadId: ThreadId,
@@ -1473,7 +1459,12 @@ const make = Effect.gen(function* () {
     );
   });
 
-  return ThreadLaunchService.of({ launch, checkWorktreeBase, retryPreparation, prepareRun });
+  return ThreadLaunchService.of({
+    launch: settleCliRaces(launch),
+    checkWorktreeBase,
+    retryPreparation,
+    prepareRun,
+  });
 });
 
 export const layer = Layer.effect(ThreadLaunchService, make);

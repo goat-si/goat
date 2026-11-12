@@ -101,7 +101,7 @@ it.effect("an older present is probed again, so a CLI that disappeared is refuse
     expect(yield* Ref.get(f.probes)).toBe(1);
     expect(refused._tag).toBe("ProviderCliMissingError");
     expect(refused.message).toBe(
-      'Codex is not installed on vm-1 (the codex command was not found). Install it with goat_call provider.sync {driver:"codex", login:false} on that machine, or in Settings → Connections → Providers on your machines. No thread was created.',
+      'Codex is not installed on vm-1 (the codex command was not found). Install it with goat_call {path:"provider.sync", args:{driver:"codex", login:false}} on that machine, or in Settings → Connections → Providers on your machines. No thread was created.',
     );
     expect(refused.code).toBe("provider_cli_missing");
   }),

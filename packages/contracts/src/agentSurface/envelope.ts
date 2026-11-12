@@ -94,6 +94,8 @@ export interface FailureClass {
   readonly code: AgentSurfaceErrorCode;
   /** The failure proves nothing ran, so even a write without a key may be repeated. */
   readonly nothingRan?: true;
+  /** Nothing ran and the caller can fix the cause, so the same key may run once it is fixed. */
+  readonly releasesKey?: true;
 }
 const c = (code: AgentSurfaceErrorCode): FailureClass => ({ code });
 const before = (code: AgentSurfaceErrorCode): FailureClass => ({ code, nothingRan: true });
@@ -122,7 +124,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   conflict: before("conflict"),
   provider_unavailable: before("unavailable"),
   // A launch refused because the provider's CLI is missing there; install it, then retry.
-  provider_cli_missing: before("failed_precondition"),
+  provider_cli_missing: { code: "failed_precondition", nothingRan: true, releasesKey: true },
   session_receipt_pending: before("unavailable"),
   model_unavailable: before("unavailable"),
   // A routed call may have reached the remote before it stopped answering.
@@ -396,7 +398,7 @@ export const settlementOf = (
     c(result.error.code);
   if (result.error.code === "unknown_outcome" || failure.code === "unknown_outcome")
     return "unknown";
-  if (!TRANSIENT.has(failure.code)) return "completed";
+  if (!TRANSIENT.has(failure.code)) return failure.releasesKey === true ? "released" : "completed";
   return failure.nothingRan === true ? "released" : "unknown";
 };
 

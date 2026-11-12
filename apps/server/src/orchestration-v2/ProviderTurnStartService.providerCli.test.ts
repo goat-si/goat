@@ -57,7 +57,7 @@ effectIt.effect(
             class: "provider_error",
             code: "provider_cli_missing",
             message:
-              'Codex is not installed on vm-1 (the codex command was not found), so this thread could not start. Install it with goat_call provider.sync {driver:"codex", login:false} on that machine, or in Settings → Connections → Providers on your machines. Then retry this thread.',
+              'Codex is not installed on vm-1 (the codex command was not found), so this thread could not start. Install it with goat_call {path:"provider.sync", args:{driver:"codex", login:false}} on that machine, or in Settings → Connections → Providers on your machines. Then retry this thread.',
           },
         },
       ]);

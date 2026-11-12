@@ -27,7 +27,7 @@ interface Recipe {
   readonly aliases?: ReadonlyArray<string>;
   readonly npmPackage: string | null;
   readonly npmArgs?: ReadonlyArray<string>;
-  /** Posix install script, run as `bash -c script goat-install <version>`. */
+  /** Posix install script, run as `bash -o pipefail -c script goat-install <version>`. */
   readonly posixScript?: { readonly script: string; readonly pinnable: boolean };
   /** PowerShell script; `{version}` is replaced by a validated version. */
   readonly windowsScript?: { readonly script: string; readonly pinnable: boolean };
@@ -180,7 +180,15 @@ export function installCommand(
     return {
       method: "script",
       command: "bash",
-      args: ["-c", script.script, "goat-install", ...(script.pinnable ? [requested] : [])],
+      // pipefail: a failed download fails the install instead of feeding the shell nothing.
+      args: [
+        "-o",
+        "pipefail",
+        "-c",
+        script.script,
+        "goat-install",
+        ...(script.pinnable ? [requested] : []),
+      ],
       latestOnly: !script.pinnable,
     };
   }
@@ -197,7 +205,7 @@ export function installCommand(
 export function describeInstall(command: InstallCommand): string {
   if (command.method === "npm") return ["npm", ...command.args].join(" ");
   if (command.command === "bash") {
-    const [, script = "", , version] = command.args;
+    const [, , , script = "", , version] = command.args;
     return version === undefined ? script : script.replace('"$1"', version);
   }
   return command.args.at(-1) ?? command.command;

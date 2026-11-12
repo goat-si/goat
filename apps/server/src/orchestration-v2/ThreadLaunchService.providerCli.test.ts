@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import { ProviderDriverKind } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
@@ -101,5 +103,54 @@ it.effect(
         assert.isTrue(retry.resumed);
       }).pipe(Effect.provide(harness.layer));
       assert.deepEqual(yield* Ref.get(checked), [modelSelection.instanceId]);
+    }),
+);
+
+it.effect(
+  "regression F2L-1: a launch racing its own retry never reports the created thread as missing",
+  () =>
+    Effect.gen(function* () {
+      const checking = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const calls = yield* Ref.make(0);
+      const raced = Layer.succeed(
+        Gate.ProviderCliGate,
+        Gate.ProviderCliGate.of({
+          require: () =>
+            Ref.updateAndGet(calls, (count) => count + 1).pipe(
+              Effect.flatMap((count) =>
+                count === 1
+                  ? Deferred.succeed(checking, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                    )
+                  : Effect.fail(missing),
+              ),
+            ),
+          probe: () => Effect.die("launches only require"),
+          missing: () => Effect.die("launches only require"),
+        }),
+      );
+      const harness = makeHarness({ providerCliGate: raced });
+      const { threadId: _serverAllocates, ...input } = launchInput({
+        command: "command:cli-race",
+        thread: "unused",
+        message: "Only once",
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const first = yield* launches
+          .launch(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(checking);
+        // The same command again while the first still checks, as a proxy retry would send it.
+        const second = yield* launches
+          .launch(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        const created = yield* Fiber.join(first);
+        const replayed = yield* Fiber.join(second);
+        assert.equal(replayed.threadId, created.threadId);
+        assert.isTrue(replayed.resumed);
+      }).pipe(Effect.provide(harness.layer));
     }),
 );

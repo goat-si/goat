@@ -1,4 +1,5 @@
 import { ProviderHostSyncDriver } from "@goat/contracts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as Schema from "effect/Schema";
@@ -62,6 +63,8 @@ export const toolRefusal = (
     return {
       ...(result.code === undefined ? {} : { remoteCode: result.code }),
       remoteClassification: CLI_MISSING,
+      // A destination that says it may have started is believed over its classification.
+      ...(result.mayHaveStarted === true ? { launchMayHaveStarted: true } : {}),
       ...(syncDriver(result.driver) === undefined ? {} : { remoteDriver: result.driver }),
     };
   // A placement answer says itself whether the work may have started; absent, it may have.
@@ -107,7 +110,7 @@ export const refusalMessage = (
   const sync =
     driver === undefined
       ? ""
-      : ` From here: goat_call provider.sync ${JSON.stringify({ driver, hosts: [alias], login: false })}.`;
+      : ` From here: ${goatCallText("provider.sync", JSON.stringify({ driver, hosts: [alias], login: false }))}.`;
   return `On ${alias}, GOAT there says: ${JSON.stringify(own)}${sync}`;
 };
 

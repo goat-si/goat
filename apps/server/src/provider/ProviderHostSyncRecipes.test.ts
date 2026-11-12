@@ -29,7 +29,10 @@ describe("installCommand", () => {
       expect(installCommand("codex", platform, "0.133.0")).toEqual({
         method: "script",
         command: "bash",
+        // pipefail: a download that fails must fail the install, not feed sh an empty script.
         args: [
+          "-o",
+          "pipefail",
           "-c",
           'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh -s -- --release "$1"',
           "goat-install",
@@ -49,11 +52,13 @@ describe("installCommand", () => {
   it("passes a script installer's version as its own argv entry, never inside the script", () => {
     const command = installCommand("claudeAgent", "darwin", "2.0.1")!;
     expect(command.command).toBe("bash");
-    expect(command.args.slice(0, 2)).toEqual([
+    expect(command.args.slice(0, 4)).toEqual([
+      "-o",
+      "pipefail",
       "-c",
       'curl -fsSL https://claude.ai/install.sh | bash -s -- "$1"',
     ]);
-    expect(command.args.slice(2)).toEqual(["goat-install", "2.0.1"]);
+    expect(command.args.slice(4)).toEqual(["goat-install", "2.0.1"]);
   });
 
   it("uses each vendor's Windows installer and says when it cannot pin", () => {

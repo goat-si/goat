@@ -5,6 +5,7 @@ import {
   type ProviderHostSyncDriver,
   type ServerProvider,
 } from "@goat/contracts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -62,7 +63,7 @@ export class ProviderCliMissingError extends Schema.TaggedError<ProviderCliMissi
   }
   override get message(): string {
     const fix = this.syncable
-      ? `Install it with goat_call provider.sync {driver:"${this.driver}", login:false} on that machine, or in Settings → Connections → Providers on your machines.`
+      ? `Install it with ${goatCallText("provider.sync", `{driver:"${this.driver}", login:false}`)} on that machine, or in Settings → Connections → Providers on your machines.`
       : `Fix its Binary path or environment in Settings → Providers on that machine.`;
     const what = this.syncable
       ? `${this.displayName} is not installed on ${this.host} (the ${this.binary} command was not found)`
