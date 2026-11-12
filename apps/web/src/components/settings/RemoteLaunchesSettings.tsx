@@ -3,6 +3,7 @@ import {
   type EnvironmentId,
   type RemoteLaunch,
   type DesktopSshPreparationProgress,
+  type ThreadId,
 } from "@goat/contracts";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
@@ -29,6 +30,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
+import { formatElapsedDurationLabel } from "~/timestampFormat";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { EnvironmentRow } from "./EnvironmentRow";
@@ -48,7 +50,13 @@ const errorMessage = (error: unknown) =>
   error instanceof Error && error.message.trim().length > 0 ? error.message : String(error);
 
 function launchStatus(launch: RemoteLaunch): string {
-  if (launch.hostUnavailableSince !== null) return "Host unreachable";
+  if (launch.dismissedAt != null) return "Dismissed";
+  if (launch.hostUnavailableSince !== null) {
+    const away = formatElapsedDurationLabel(launch.hostUnavailableSince);
+    const host =
+      away === "" || away === "just now" ? "Host unreachable" : `Host unreachable for ${away}`;
+    return launch.state === "lost" ? `${host} · Outcome unknown` : host;
+  }
   return launch.state === null ? "Watched" : STATE_LABELS[launch.state];
 }
 
@@ -165,6 +173,33 @@ function RemoteHostLaunches({
     [],
   );
   const canConnectOverSsh = window.desktopBridge !== undefined;
+  const dismissLaunch = useAtomCommand(serverEnvironment.dismissRemoteLaunch, {
+    reportFailure: false,
+  });
+  const canDismiss = useAtomValue(
+    serverEnvironment.dismissRemoteLaunch.permissionAtom(dispatcher.environmentId),
+  );
+  const [dismissing, setDismissing] = useState<ThreadId | null>(null);
+  const dismiss = async (threadId: ThreadId) => {
+    setDismissing(threadId);
+    const result = await dismissLaunch({
+      environmentId: dispatcher.environmentId,
+      input: { host: group.host, threadId },
+    });
+    setDismissing(null);
+    if (result._tag === "Failure")
+      toastManager.add({
+        type: "error",
+        title: "Could not dismiss this launch",
+        description: errorMessage(squashAtomCommandFailure(result)),
+      });
+    else if (result.value.dispatches + result.value.watches === 0)
+      toastManager.add({
+        type: "info",
+        title: `${group.host} answered again`,
+        description: "GOAT is following this thread again, so there is nothing to dismiss.",
+      });
+  };
   const connectHost = async () => {
     if (connecting) return;
     const submissionId = ++submission.current;
@@ -283,6 +318,19 @@ function RemoteHostLaunches({
                   }
                 >
                   Launcher
+                </Button>
+              ) : null}
+              {canDismiss && entry.launch.dismissable === true && entry.launch.threadId !== null ? (
+                <Button
+                  size="xs"
+                  variant="ghost-muted"
+                  disabled={dismissing !== null}
+                  onClick={() => {
+                    const threadId = entry.launch.threadId;
+                    if (threadId !== null) void dismiss(threadId);
+                  }}
+                >
+                  {dismissing === entry.launch.threadId ? "Dismissing…" : "Dismiss"}
                 </Button>
               ) : null}
               <Button
