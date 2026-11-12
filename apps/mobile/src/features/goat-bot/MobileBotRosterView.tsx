@@ -183,6 +183,7 @@ export function MobileBotRosterView(props: {
                 size={88}
                 motion={mainMotion}
                 emoji={mainEmoji}
+                surface={selected ? "selected" : "screen"}
               />
               <Text numberOfLines={1} className="text-base font-semibold text-foreground">
                 {bot.profile?.name ?? "GOAT Bot"}
@@ -355,6 +356,7 @@ function MemberRow(props: {
         motion={null}
         emoji={mobileGoatBotMemberPicture(bot)}
         accent={goatBotAccent(bot)}
+        surface={props.selected === true ? "selected" : "screen"}
       />
       <View className="min-w-0 flex-1 gap-0.5">
         <View className="min-w-0 flex-row items-center gap-2">
