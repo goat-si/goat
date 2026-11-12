@@ -39,7 +39,10 @@ export const ProviderHostSyncDriver = Schema.Literals([
 ]);
 export type ProviderHostSyncDriver = typeof ProviderHostSyncDriver.Type;
 
-/** npm: the vendor's npm package. script: the vendor's install script. manual: a person installs it. */
+/**
+ * npm: the vendor's npm package. script: a vendor release checked against a pinned SHA-256 (older
+ * hosts: the vendor's install script). manual: a person installs it.
+ */
 export const ProviderHostInstallMethod = Schema.Literals(["npm", "script", "manual"]);
 export type ProviderHostInstallMethod = typeof ProviderHostInstallMethod.Type;
 
@@ -124,6 +127,11 @@ export const ProviderHostRow = Schema.Struct({
   cloud: Schema.optionalKey(ProviderHostCloudReadiness),
   /** Whether that machine can run computer use. Older hosts omit it. */
   computerUse: ForwardCompatibleOptional(HostComputerUse),
+  /**
+   * `verified` when that machine installs provider CLIs only from npm at a version or from a
+   * release checked against a pinned SHA-256. Older hosts omit it; they may pipe vendor scripts.
+   */
+  installs: ForwardCompatibleOptional(Schema.Literal("verified")),
 });
 export type ProviderHostRow = typeof ProviderHostRow.Type;
 

@@ -380,7 +380,9 @@ the host needs Node.js and npm. Cursor has no npm package: on macOS and Linux GO
 downloads the Cursor release it pins and checks its SHA-256 before unpacking it,
 and stops without installing anything if the download does not match. Install
 Cursor on Windows yourself. GOAT never pipes a vendor's install script into a
-shell. Each host reports what it installed and the version it then found.
+shell. A host whose GOAT is too old to promise this is not asked to install
+Codex, Claude or Cursor; update GOAT there first. Each host reports what it
+installed and the version it then found.
 Choose **Update runtime** for a host whose GOAT is too old, or **Prepare host**
 if its runtime is stopped, then retry.
 

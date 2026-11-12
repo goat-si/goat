@@ -897,3 +897,66 @@ it.effect(
       expect(host?.message?.startsWith("The host answered: " + JSON.stringify(said))).toBe(true);
     }),
 );
+
+const olderHost = (driver: string, installMethod: "npm" | "script") => ({
+  host: null,
+  status: "ok",
+  goatVersion: "0.1.8",
+  providers: [
+    {
+      driver,
+      displayName: driver,
+      installed: false,
+      version: null,
+      auth: "unknown",
+      installMethod,
+      loginMethod: "terminal",
+    },
+  ],
+});
+
+it.effect.each([
+  { driver: "codex", name: "Codex" },
+  { driver: "claudeAgent", name: "Claude" },
+  { driver: "cursor", name: "Cursor" },
+] as const)(
+  "an approved $name install on a GOAT that predates verified installs runs nothing there",
+  ({ driver, name }) =>
+    Effect.gen(function* () {
+      const { state, layer } = harness({
+        answer: () => Effect.succeed(finished),
+        remoteRow: olderHost(driver, "script"),
+      });
+      const host = yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync({ driver, hosts: ["box"], login: false }, person);
+        if (started.kind !== "started") return expect.unreachable();
+        return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
+      }).pipe(Effect.provide(layer));
+      expect(state.preflights).toEqual(["box"]);
+      expect(state.calls).toEqual([]);
+      expect(host).toMatchObject({
+        host: "box",
+        phase: "update_runtime",
+        message: `GOAT on box predates pinned, verified installs, so nothing was installed there. Update GOAT on box, or install ${name} there by hand.`,
+      });
+    }),
+);
+
+it.effect("an older GOAT that installs this CLI from npm at the version still gets the sync", () =>
+  Effect.gen(function* () {
+    const { state, layer } = harness({
+      answer: () => Effect.succeed(finished),
+      remoteRow: olderHost("opencode", "npm"),
+    });
+    yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", hosts: ["box"], login: false },
+        person,
+      );
+      if (started.kind === "started") yield* sync.awaitDone(started.sync.syncId);
+    }).pipe(Effect.provide(layer));
+    expect(state.calls.map(({ call }) => call.tool)).toEqual(["goat_provider_sync"]);
+  }),
+);

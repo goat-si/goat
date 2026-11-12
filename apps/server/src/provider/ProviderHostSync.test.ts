@@ -35,6 +35,7 @@ import {
 
 it.effect("reports old, stopped, and mismatched hosts instead of failing the matrix", () => {
   const { layer, state } = harness({
+    answersMatrix: true,
     answer: (call) =>
       call.host === "old"
         ? Effect.fail(
@@ -90,6 +91,7 @@ it.effect("regression #1002: judges hosts by the protocols they serve, not by GO
     malformed: { ssh: { min: 5, max: 1 }, orchestration: served.orchestration },
   };
   const { layer } = harness({
+    answersMatrix: true,
     answer: (call) =>
       Effect.succeed({
         rows: [
@@ -156,6 +158,7 @@ it.effect("reports cloud readiness from diagnosis, not from the CLI signed-in fl
       claudeCloud: { ready: false, reason: "forbidden_environment" },
       devinCloud: { ready: false, reason: "not_signed_in" },
     },
+    answersMatrix: true,
     answer: () => Effect.succeed({ rows: [{ host: null, status: "ok", providers: [] }] }),
   });
   return Effect.gen(function* () {
@@ -195,6 +198,7 @@ it.effect("marks every cloud cell on a hub that holds cloud launches, signed in 
   const { layer } = harness({
     hub: true,
     cloud: { cursorCloud: { ready: true } },
+    answersMatrix: true,
     answer: () => Effect.succeed({ rows: [] }),
   });
   return Effect.gen(function* () {
@@ -309,7 +313,8 @@ it.effect("an outside full-access client installs only while providers:manage is
         providersManage: true,
       },
     });
-    expect(seen).toEqual([["providers:manage"], ["providers:manage"]]);
+    // Start, the remote's preflight read, then the send: each reloads the grant.
+    expect(seen).toEqual([["providers:manage"], ["providers:manage"], ["providers:manage"]]);
 
     const revoked = yield* sync
       .sync(
@@ -334,7 +339,7 @@ it.effect("an outside full-access client installs only while providers:manage is
 });
 
 it.effect("does not carry providers:manage on a read-only remote matrix call", () => {
-  const { layer, state } = harness({ answer: remoteSyncAnswer });
+  const { layer, state } = harness({ answersMatrix: true, answer: remoteSyncAnswer });
   return Effect.gen(function* () {
     const sync = yield* HostSync.ProviderHostSync;
     const result = yield* sync.matrix(

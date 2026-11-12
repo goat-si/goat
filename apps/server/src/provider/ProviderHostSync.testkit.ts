@@ -66,6 +66,8 @@ interface Harness {
   readonly handoffs: Array<unknown>;
   readonly diagnoses: Array<string>;
   readonly downloads: Array<string>;
+  /** Matrix reads a remote install makes before it starts, answered by `remoteRow`. */
+  readonly preflights: Array<string>;
 }
 
 const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisReason) => ({
@@ -92,6 +94,10 @@ const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisR
 
 export const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
+  /** Matrix calls go to `answer`; otherwise each is a remote install's preflight read. */
+  readonly answersMatrix?: boolean;
+  /** What a remote's preflight matrix row says; by default a host with verified installs. */
+  readonly remoteRow?: Record<string, unknown>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
   /** The body every download returns; none answers 404. */
   readonly download?: Uint8Array;
@@ -123,7 +129,14 @@ export const harness = (options: {
     readonly killed: Deferred.Deferred<void>;
   };
 }) => {
-  const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [], downloads: [] };
+  const state: Harness = {
+    calls: [],
+    spawned: [],
+    handoffs: [],
+    diagnoses: [],
+    downloads: [],
+    preflights: [],
+  };
   const http = Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) =>
@@ -207,6 +220,19 @@ export const harness = (options: {
           callHostTool: <E, R>(call: Call, authorize: Effect.Effect<string, E, R>) =>
             authorize.pipe(
               Effect.flatMap((ceiling) => {
+                if (call.tool === "goat_provider_host_matrix" && options.answersMatrix !== true) {
+                  state.preflights.push(call.host);
+                  return Effect.succeed({
+                    rows: [
+                      options.remoteRow ?? {
+                        host: null,
+                        status: "ok",
+                        installs: "verified",
+                        providers: [],
+                      },
+                    ],
+                  });
+                }
                 state.calls.push({ call, ceiling });
                 return options.answer?.(call) ?? Effect.die("unexpected remote call");
               }),

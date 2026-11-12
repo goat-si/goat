@@ -29,11 +29,18 @@ const artifact: PinnedArtifact = {
 };
 
 /** Installs into a fresh home with a server that answers \`body\`; tar is faked and recorded. */
-const install = (body: Uint8Array) =>
+const install = (
+  body: Uint8Array,
+  options: { readonly status?: number; readonly existing?: string } = {},
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-artifact-" });
+    if (options.existing !== undefined) {
+      yield* fs.makeDirectory(path.join(home, ".local", "bin"), { recursive: true });
+      yield* fs.writeFileString(path.join(home, ".local", "bin", options.existing), "mine\n");
+    }
     const spawned: Array<ReadonlyArray<string>> = [];
     const spawner = ChildProcessSpawner.make((command) => {
       const args = (command as unknown as { args: ReadonlyArray<string> }).args;
@@ -60,7 +67,10 @@ const install = (body: Uint8Array) =>
     });
     const http = HttpClient.make((request) =>
       Effect.succeed(
-        HttpClientResponse.fromWeb(request, new Response(new Uint8Array(body), { status: 200 })),
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(new Uint8Array(body), { status: options.status ?? 200 }),
+        ),
       ),
     );
     const result = yield* installArtifact(spawner, "Tool", artifact).pipe(
@@ -141,4 +151,35 @@ it.effect("a host with no pinned build for its platform downloads nothing", () =
     );
     expect(downloads).toBe(0);
   }),
+);
+
+it.effect("a download that fails is reported as a failed download, and installs nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { result, spawned, left } = yield* install(release, { status: 404 });
+      expect(Result.isFailure(result) && result.failure.message).toBe(
+        "GOAT could not download Tool 2026.1.2-abc from downloads.example.test. Nothing was installed.",
+      );
+      expect(spawned).toEqual([]);
+      expect(left).toEqual([]);
+    }),
+  ),
+);
+
+it.effect(
+  "a file of someone else's under a link name is left alone, and nothing is installed",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { result, left, home, fs, path } = yield* install(release, {
+          existing: "tool-alias",
+        });
+        const at = path.join(home, ".local", "bin", "tool-alias");
+        expect(Result.isFailure(result) && result.failure.message).toBe(
+          `${at} already exists and is not Tool's. GOAT left it alone and installed nothing.`,
+        );
+        expect(yield* fs.readFileString(at)).toBe("mine\n");
+        expect(left).toEqual([]);
+      }),
+    ),
 );

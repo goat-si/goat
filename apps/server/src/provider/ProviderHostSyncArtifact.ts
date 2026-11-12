@@ -6,6 +6,7 @@ import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -58,7 +59,7 @@ export const installArtifact = Effect.fn("ProviderHostSync.installArtifact")(fun
   const hash = NodeCrypto.createHash("sha256");
   let bytes = 0;
   const url = artifact.url.replace("{os}", os).replace("{arch}", arch);
-  yield* http.execute(HttpClientRequest.get(url)).pipe(
+  const fetched = yield* http.execute(HttpClientRequest.get(url)).pipe(
     Effect.flatMap(HttpClientResponse.filterStatusOk),
     Effect.flatMap((response) =>
       response.stream.pipe(
@@ -73,8 +74,14 @@ export const installArtifact = Effect.fn("ProviderHostSync.installArtifact")(fun
       ),
     ),
     Effect.timeoutOption(DOWNLOAD_DEADLINE),
-    Effect.ignore,
+    Effect.map(Option.isSome),
+    Effect.orElseSucceed(() => false),
   );
+  // An oversized body stops the download too; that is a mismatch, reported as one below.
+  if (!fetched && bytes <= asset.bytes)
+    return yield* stop(
+      `GOAT could not download ${name} ${artifact.version} from ${new URL(url).hostname}. Nothing was installed.`,
+    );
   if (bytes !== asset.bytes || hash.digest("hex") !== asset.sha256)
     return yield* stop(
       `The ${name} download did not match GOAT's pinned SHA-256 for ${artifact.version}. Nothing was installed.`,
@@ -92,6 +99,19 @@ export const installArtifact = Effect.fn("ProviderHostSync.installArtifact")(fun
   if (tar.exitCode !== 0) return yield* stop(`GOAT could not unpack the verified ${name} release.`);
   const final = path.join(versions, artifact.version);
   const bin = path.join(home, ".local", "bin");
+  // Replace only links this install owns; any other file under that name is someone else's.
+  for (const link of artifact.links) {
+    const at = path.join(bin, link);
+    const target = yield* fs.readLink(at).pipe(Effect.option);
+    const ours = Option.isSome(target) && target.value.startsWith(versions + path.sep);
+    if (
+      !ours &&
+      (Option.isSome(target) || (yield* fs.exists(at).pipe(Effect.orElseSucceed(() => true))))
+    )
+      return yield* stop(
+        `${at} already exists and is not ${name}'s. GOAT left it alone and installed nothing.`,
+      );
+  }
   yield* Effect.gen(function* () {
     yield* fs.remove(final, { recursive: true, force: true });
     yield* fs.rename(unpacked, final);

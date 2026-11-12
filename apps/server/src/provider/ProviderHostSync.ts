@@ -107,6 +107,7 @@ import {
   type RemoteFailure,
   remoteHostState,
   type SyncOperation,
+  unverifiedRemote,
   update,
 } from "./ProviderHostSyncTasks.ts";
 
@@ -339,6 +340,7 @@ const make = Effect.gen(function* () {
         arch: runtimeArch,
         goatVersion: packageJson.version,
         protocol: servedRuntimeProtocolRanges(),
+        installs: "verified" as const,
         ...(Option.isSome(cua) ? { computerUse: yield* cua.value.computerUse } : {}),
       };
       if (!includeCloud) {
@@ -379,12 +381,13 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(classify));
 
-  const remoteRow = (caller: SshHostCaller, host: string, includeCloud: boolean) =>
+  const remoteRow = (caller: SshHostCaller, host: string, includeCloud: boolean, asOwner = false) =>
     callRemote(caller, {
       host,
       tool: MATRIX_TOOL,
       arguments: includeCloud ? { localOnly: true, cloud: true } : { localOnly: true },
       writes: false,
+      asOwner,
       timeoutMs: includeCloud ? CLOUD_MATRIX_DEADLINE_MS : MATRIX_DEADLINE_MS,
     }).pipe(
       Effect.flatMap((raw) =>
@@ -698,7 +701,10 @@ const make = Effect.gen(function* () {
             task,
             {
               phase: "failed",
-              message: `GOAT cannot install ${recipe.displayName} on ${runtimePlatform}. Install it with the vendor's instructions.`,
+              message:
+                operation.version !== null && installCommand(driver, platform, null) !== null
+                  ? `GOAT installs only the ${recipe.displayName} release it pins, not ${operation.version}. Sync latest, or install it with the vendor's instructions.`
+                  : `GOAT cannot install ${recipe.displayName} on ${runtimePlatform}. Install it with the vendor's instructions.`,
             },
             true,
           );
@@ -799,6 +805,13 @@ const make = Effect.gen(function* () {
     caller: SshHostCaller,
   ) =>
     Effect.gen(function* () {
+      // Read first, under the install's own authority: an older GOAT may pipe a vendor script.
+      const refused = unverifiedRemote(
+        yield* remoteRow(caller, host, false, true),
+        operation.driver,
+        recipeFor(operation.driver).displayName,
+      );
+      if (refused !== undefined) return yield* update(task, refused, true);
       yield* update(task, { phase: "installing" });
       // Forked into the service scope so cancelling this task leaves the call running: the
       // remote may already be installing, and only its answer names the sync to cancel there.
