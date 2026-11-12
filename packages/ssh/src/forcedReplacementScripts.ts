@@ -166,7 +166,7 @@ GOAT_FORCED_RECORDS
   fi
   forced_waited=0
   while server_alive "$FORCE_PID" && [ "$forced_waited" -lt "$DRAIN_GRACE_SECONDS" ]; do
-    sleep 1; forced_waited=$((forced_waited + 1))
+    sleep 1 || :; forced_waited=$((forced_waited + 1))
   done
   if server_alive "$FORCE_PID"; then
     # A process still running that no longer passes the checks may be the runtime after a bad read,
@@ -175,7 +175,7 @@ GOAT_FORCED_RECORDS
       forced_refused "it no longer matched the approved runtime before SIGKILL"
     fi
     forced_waited=0
-    while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1; forced_waited=$((forced_waited + 1)); done
+    while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1 || :; forced_waited=$((forced_waited + 1)); done
     if forced_parent_holds; then
       forced_restore_runner
       printf 'GOAT PID %s on the remote host did not exit after SIGKILL; the update stopped. See %s.\\n' "$FORCE_PID" "$LOG_FILE" >&2; exit 1
@@ -208,7 +208,9 @@ forced_supervise_start() {
   if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then forced_spawn="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
   else forced_spawn="$GOAT_NODE_SCRIPT_PATH"; fi
   forced_result="$STATE_DIR/replacement.result.$"
+  # A result file that survives this removal is stale, so whatever it says is never reported.
   rm -f "$forced_result" 2>/dev/null || :
+  forced_stale=0; [ ! -e "$forced_result" ] || forced_stale=1
   set --
   [ -n "$FORCED_PREVIOUS_VERSION" ] || rm -f "$FORCED_PREVIOUS_RUNNER" 2>/dev/null || :
   if [ -n "$FORCED_PREVIOUS_VERSION" ]; then
@@ -217,8 +219,8 @@ forced_supervise_start() {
   nohup "$RUNNER_FILE" __ssh-helper supervise --forced --old-stopped --old-pid "$FORCED_STOPPED_PID" --old-instance-id forced --port "$FORCE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --target-version "$TARGET_VERSION" --identity "$forced_spawn serve --host 127.0.0.1 --port $FORCE_PORT --base-dir $DEFAULT_SERVER_HOME" "$@" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$forced_result" >/dev/null 2>>"$LOG_FILE" </dev/null &
   wait "$!" || true
   forced_status=absent; forced_new_pid=0; forced_new_version=
-  if [ -f "$forced_result" ]; then read -r forced_status forced_new_pid forced_new_version <"$forced_result" || true; fi
-  rm -f "$forced_result"
+  if [ "$forced_stale" = 0 ] && [ -s "$forced_result" ]; then read -r forced_status forced_new_pid forced_new_version <"$forced_result" || true; fi
+  rm -f "$forced_result" 2>/dev/null || :
   case "$forced_status" in
     replaced)
       REMOTE_PID="$forced_new_pid"; REMOTE_PORT="$FORCE_PORT"; REMOTE_MANAGED=managed; REFRESH_DECISION=replaced

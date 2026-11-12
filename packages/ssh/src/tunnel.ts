@@ -958,7 +958,7 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
     SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
   SUPERVISE_RESULT="$STATE_DIR/replacement.result.$"
-  rm -f "$SUPERVISE_RESULT" 2>/dev/null || :
+  rm -f "$SUPERVISE_RESULT" 2>/dev/null || :; supervise_stale=0; [ ! -e "$SUPERVISE_RESULT" ] || supervise_stale=1
   # Detached, so a dropped SSH session cannot leave the host without a server.
   trap '' HUP
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
@@ -977,8 +977,8 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
     wait "$!" || true
   fi
   supervise_status=absent; supervise_pid=0; supervise_version=
-  if [ -f "$SUPERVISE_RESULT" ]; then read -r supervise_status supervise_pid supervise_version <"$SUPERVISE_RESULT" || true; fi
-  rm -f "$SUPERVISE_RESULT"
+  if [ "$supervise_stale" = 0 ] && [ -s "$SUPERVISE_RESULT" ]; then read -r supervise_status supervise_pid supervise_version <"$SUPERVISE_RESULT" || true; fi
+  rm -f "$SUPERVISE_RESULT" 2>/dev/null || :
   case "$supervise_status" in
     replaced)
       REMOTE_PID="$supervise_pid"; REMOTE_PORT="$UPGRADE_PORT"; REMOTE_MANAGED=managed
