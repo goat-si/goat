@@ -790,11 +790,13 @@ member's sessions load which relay.
 - Control op `traffic.report`, on the control socket only (the dashboard cannot send it):
   `{"op":"traffic.report","node":N,"relay":R,"in":I,"out":O}` with exactly these members. N is a node id of a
   current or revoked member of the node's view, R the relay URL the session used (at most 512 bytes; a relay the
-  node does not list counts as `""`), I and O integers from 0 to 2^53−1: the bytes since that session's last
-  counted report. Answer `{"t":"counted"}`. A refusal is `{"error":"..."}` and counts nothing. A reporter sends
-  one report every 2 minutes and one when the session ends, waits at most 1 s for an answer, and keeps bytes not
-  counted for its next report. A node older than this answers that it does not know the op; the session goes on
-  unchanged, and it prints nothing either way.
+  node does not list, when it reports or when it shows the totals, counts as `""`), I and O integers from 0 to 2^53−1: the bytes since that session's last
+  counted report. A missing or null member refuses the report. Answer `{"t":"counted"}`. A refusal is `{"error":"..."}`
+  and counts nothing. A reporter sends one report every 2 minutes and one when the session ends, gives each report
+  1 s in all (connecting, writing, the answer), and keeps the bytes for its next report only when the node did not
+  take the line or refused it: a report whose answer never came may have been counted and is not sent again. A node
+  older than this answers that it does not know the op; the session goes on unchanged, and it prints nothing either
+  way.
 - Window: 96 buckets of 15 minutes by the node's wall clock, so bytes leave the total between 23 h 45 min and 24 h
   after they were counted. A node holds at most 512 (member, relay) pairs; a new pair past that is refused until a
   pair's window is empty. The counts live only in the daemon's memory, and a restart starts them at zero.

@@ -66,10 +66,11 @@ func AddSat(a, b uint64) uint64 {
 	return math.MaxUint64
 }
 
-// sum is the entry's total over the 24 hours ending in bucket now.
+// sum is the entry's total over the 24 hours ending in bucket now. Buckets up to 24 hours ahead of now count too, so
+// a wall clock set back neither hides recent bytes nor lets a sweep drop them.
 func (e *entry) sum(now int64) (in, out uint64) {
 	for i := range e {
-		if b := &e[i]; b.idx > now-Buckets && b.idx <= now {
+		if b := &e[i]; b.idx > now-Buckets && b.idx < now+Buckets {
 			in, out = AddSat(in, b.in), AddSat(out, b.out)
 		}
 	}

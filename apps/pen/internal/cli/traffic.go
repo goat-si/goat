@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"sync/atomic"
 	"time"
 
@@ -14,8 +18,8 @@ import (
 const (
 	// trafficEvery is how often a running session reports its bytes to this machine's daemon.
 	trafficEvery = 2 * time.Minute
-	// trafficAnswerWithin bounds the wait for the daemon's answer to one report.
-	trafficAnswerWithin = time.Second
+	// trafficWithin bounds one report: connecting, writing and the daemon's answer.
+	trafficWithin = time.Second
 )
 
 var (
@@ -30,7 +34,8 @@ var (
 
 // sessionTraffic counts one session's stream bytes and reports them to this machine's daemon (op traffic.report)
 // every trafficEvery and once at the end. Reports are best effort: no daemon, an older daemon or a failed report
-// prints nothing and changes nothing for the session; the bytes stay for the next report.
+// prints nothing and changes nothing for the session. Bytes the daemon certainly did not count stay for the next
+// report; a report whose answer never came may have been counted, so its bytes are not sent again.
 type sessionTraffic struct {
 	st          *state.Store
 	node, relay string
@@ -78,19 +83,50 @@ func (s *sessionTraffic) report() {
 	if in == 0 && out == 0 {
 		return
 	}
-	var ans struct {
-		T string `json:"t"`
-	}
-	err := daemon.CallWithin(s.st, daemon.TrafficReport{Op: "traffic.report", Node: s.node, Relay: s.relay, In: in, Out: out},
-		&ans, trafficAnswerWithin)
-	if err == nil && ans.T != "counted" {
-		err = errors.New("traffic report not counted")
-	}
-	if err == nil {
+	kept, err := sendReport(s.st, daemon.TrafficReport{Op: "traffic.report", Node: s.node, Relay: s.relay, In: in, Out: out})
+	if !kept {
 		s.sentIn += in
 		s.sentOut += out
 	}
 	if trafficReported != nil {
 		trafficReported(err)
 	}
+}
+
+// sendReport sends one report and reads its answer within trafficWithin. kept is true when the daemon did not count
+// the bytes: the line never reached it whole, or it refused the report (an older daemon does not know the op).
+func sendReport(st *state.Store, r daemon.TrafficReport) (kept bool, err error) {
+	deadline := time.Now().Add(trafficWithin)
+	c, err := (&net.Dialer{Deadline: deadline}).Dial("unix", daemon.SocketPath(st))
+	if err != nil {
+		return true, err
+	}
+	defer c.Close()
+	if err := c.SetDeadline(deadline); err != nil {
+		return true, err
+	}
+	line, err := json.Marshal(r)
+	if err != nil {
+		return true, err
+	}
+	if n, err := c.Write(append(line, '\n')); err != nil && n <= len(line) {
+		return true, err
+	}
+	ans, err := bufio.NewReader(io.LimitReader(c, 4096)).ReadBytes('\n')
+	if err != nil {
+		return false, err
+	}
+	var a struct {
+		T     string `json:"t"`
+		Error string `json:"error"`
+	}
+	switch {
+	case json.Unmarshal(ans, &a) != nil:
+		return false, errors.New("traffic report: unreadable answer")
+	case a.T == "counted":
+		return false, nil
+	case a.Error != "":
+		return true, errors.New(a.Error)
+	}
+	return false, errors.New("traffic report: unexpected answer")
 }

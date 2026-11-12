@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"slices"
 
@@ -54,7 +55,7 @@ var newTrafficWindow = traffic.NewWindow
 // create are bounded by the view and the relay list, and the window's cap bounds them again.
 func (d *Daemon) reportTraffic(line []byte) (any, error) {
 	var r TrafficReport
-	if err := strictjson.Unmarshal(line, &r); err != nil {
+	if err := strictjson.Unmarshal(line, &r); err != nil || !everyMemberSet(line) {
 		return nil, errBadTraffic
 	}
 	if r.In > MaxTrafficCount || r.Out > MaxTrafficCount || len(r.Relay) > maxTrafficRelay || !ident.ValidNodeID(r.Node) {
@@ -76,6 +77,21 @@ func (d *Daemon) reportTraffic(line []byte) (any, error) {
 	return map[string]string{"t": "counted"}, nil
 }
 
+// everyMemberSet reports whether a report names all five members, none of them null (strictjson refuses unknown and
+// duplicate members, and encoding/json reads a null or a missing member as zero).
+func everyMemberSet(line []byte) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(line, &m) != nil || len(m) != len(strictjson.Names(&TrafficReport{})) {
+		return false
+	}
+	for _, v := range m {
+		if string(v) == "null" {
+			return false
+		}
+	}
+	return true
+}
+
 // meterAccepted counts an accepted session's stream bytes straight into the window.
 func (d *Daemon) meterAccepted(sec *session.Secure, relayURL string) stream.Link {
 	m, ok := d.view().MemberByNoise(sec.RemoteStatic)
@@ -85,32 +101,43 @@ func (d *Daemon) meterAccepted(sec *session.Secure, relayURL string) stream.Link
 	return traffic.Meter(sec, func(in, out uint64) { _ = d.traffic.Add(m.NodeID, relayURL, in, out) })
 }
 
-// trafficTotals groups the window by member and by relay; since is where the totals start (ms).
+// trafficTotals groups the window by member and by relay; since is where the totals start (ms). A relay no longer in
+// this node's list shows as "" (other relays), like one reported that it never listed.
 func (d *Daemon) trafficTotals() (members map[string]*MemberTraffic, relays []RelayTraffic, since int64) {
 	totals := d.traffic.Totals()
 	if len(totals) == 0 {
 		return nil, nil, 0
 	}
+	listed := d.relays()
 	members = map[string]*MemberTraffic{}
-	byRelay := map[string]*RelayTraffic{}
 	for _, t := range totals {
+		url := t.Relay
+		if !slices.Contains(listed, url) {
+			url = ""
+		}
 		m := members[t.Member]
 		if m == nil {
 			m = &MemberTraffic{}
 			members[t.Member] = m
 		}
 		m.In, m.Out = traffic.AddSat(m.In, t.In), traffic.AddSat(m.Out, t.Out)
-		m.Relays = append(m.Relays, RelayTraffic{URL: t.Relay, In: t.In, Out: t.Out})
-		r := byRelay[t.Relay]
-		if r == nil {
-			r = &RelayTraffic{URL: t.Relay}
-			byRelay[t.Relay] = r
-		}
-		r.In, r.Out = traffic.AddSat(r.In, t.In), traffic.AddSat(r.Out, t.Out)
+		m.Relays = addRelay(m.Relays, url, t.In, t.Out)
+		relays = addRelay(relays, url, t.In, t.Out)
 	}
-	for _, r := range byRelay {
-		relays = append(relays, *r)
+	byURL := func(a, b RelayTraffic) int { return cmp.Compare(a.URL, b.URL) }
+	for _, m := range members {
+		slices.SortFunc(m.Relays, byURL)
 	}
-	slices.SortFunc(relays, func(a, b RelayTraffic) int { return cmp.Compare(a.URL, b.URL) })
+	slices.SortFunc(relays, byURL)
 	return members, relays, d.traffic.Since().UnixMilli()
+}
+
+func addRelay(rs []RelayTraffic, url string, in, out uint64) []RelayTraffic {
+	for i := range rs {
+		if rs[i].URL == url {
+			rs[i].In, rs[i].Out = traffic.AddSat(rs[i].In, in), traffic.AddSat(rs[i].Out, out)
+			return rs
+		}
+	}
+	return append(rs, RelayTraffic{URL: url, In: in, Out: out})
 }

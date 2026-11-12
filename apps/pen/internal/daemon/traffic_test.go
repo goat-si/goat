@@ -79,6 +79,15 @@ func TestTrafficReportsCannotGrowTheDaemonWithoutBound(t *testing.T) {
 		`{"op":"traffic.report","node":"` + self + `","relay":"","IN":1,"out":1}`,
 		`{"op":"traffic.report","node":"` + self + `","relay":"","in":1,"out":1} {}`,
 	}
+	for _, line := range []string{
+		`{"op":"traffic.report","node":"` + self + `","in":1,"out":1}`,
+		`{"op":"traffic.report","node":"` + self + `","relay":"","in":1}`,
+		`{"op":"traffic.report","node":"` + self + `","relay":"","in":null,"out":1}`,
+		`{"op":"traffic.report","node":"` + self + `","relay":null,"in":1,"out":1}`,
+		`{"op":"traffic.report","node":null,"relay":"","in":1,"out":1}`,
+	} {
+		refused = append(refused, line)
+	}
 	for _, line := range refused {
 		if h := rawControl(t, a, line); h.reply["error"] == nil {
 			t.Fatalf("%s answered %v, want a refusal", line, h.reply)
@@ -107,5 +116,28 @@ func TestTrafficReportsCannotGrowTheDaemonWithoutBound(t *testing.T) {
 	}
 	if tr := a.ls(t).Members[0].Traffic24h; tr == nil || tr.In != 3*(1<<53-1)+300 {
 		t.Fatalf("traffic %+v after three reports at the limit", tr)
+	}
+}
+
+// A relay removed from the node's list keeps its bytes in the window; pen ls and the dashboard show them as other relays.
+func TestTrafficOverARelayNoLongerListedShowsAsOther(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	self := a.d.NodeID()
+	for _, line := range []string{trafficLine(self, rs.URL, 10, 1), trafficLine(self, "https://x.example", 5, 2)} {
+		if h := rawControl(t, a, line); h.reply["t"] != "counted" {
+			t.Fatalf("%s answered %v", line, h.reply)
+		}
+	}
+	a.d.cfgMu.Lock()
+	a.d.cfg.SetRelays([]string{"https://now-listed.example"})
+	a.d.cfgMu.Unlock()
+	ls := a.ls(t)
+	want := []RelayTraffic{{URL: "", In: 15, Out: 3}}
+	if tr := ls.Members[0].Traffic24h; tr == nil || fmt.Sprint(tr.Relays) != fmt.Sprint(want) || fmt.Sprint(ls.Relays24h) != fmt.Sprint(want) {
+		t.Fatalf("member %+v, relays %+v; want everything under other relays %+v", tr, ls.Relays24h, want)
 	}
 }

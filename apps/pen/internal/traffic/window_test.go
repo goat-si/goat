@@ -97,3 +97,20 @@ func TestAZeroReportTakesNoEntry(t *testing.T) {
 		t.Fatalf("err %v, %d entries; want nil and 0", err, w.Len())
 	}
 }
+
+func TestSettingTheClockBackNeitherHidesNorDropsRecentBytes(t *testing.T) {
+	c := &clock{t: t0.Add(Span)}
+	w := NewWindow(c.now)
+	for i := range MaxEntries {
+		if err := w.Add(fmt.Sprintf("member-%d", i), "r", 3, 4); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.t = t0
+	if err := w.Add("new", "r", 1, 1); !errors.Is(err, ErrFull) {
+		t.Fatalf("a new pair while every pair holds recent bytes: %v, want ErrFull", err)
+	}
+	if in, out := totalOf(w, "member-0", "r"); in != 3 || out != 4 {
+		t.Fatalf("after the clock went back one bucket: in %d out %d, want 3 and 4", in, out)
+	}
+}

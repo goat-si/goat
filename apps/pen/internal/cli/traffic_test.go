@@ -66,25 +66,33 @@ func sink(t *testing.T, reply int) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// signalWriter collects bytes and closes reached once it holds n.
+// signalWriter collects bytes; wait returns once it holds n.
 type signalWriter struct {
-	mu      sync.Mutex
-	buf     bytes.Buffer
-	n       int
-	reached chan struct{}
+	mu   sync.Mutex
+	cond *sync.Cond
+	n    int
 }
 
-func newSignalWriter(n int) *signalWriter { return &signalWriter{n: n, reached: make(chan struct{})} }
+func newSignalWriter() *signalWriter {
+	w := &signalWriter{}
+	w.cond = sync.NewCond(&w.mu)
+	return w
+}
 
 func (w *signalWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	before := w.buf.Len()
-	w.buf.Write(p)
-	if before < w.n && w.buf.Len() >= w.n {
-		close(w.reached)
-	}
+	w.n += len(p)
+	w.mu.Unlock()
+	w.cond.Broadcast()
 	return len(p), nil
+}
+
+func (w *signalWriter) wait(n int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for w.n < n {
+		w.cond.Wait()
+	}
 }
 
 func TestPipeReportsTheBytesItSplicedInEachDirection(t *testing.T) {
@@ -141,13 +149,13 @@ func TestPipeReportsTheBytesOfASessionTheRelayCut(t *testing.T) {
 	defer inW.Close()
 	Stdin = in
 	defer func() { Stdin = os.Stdin }()
-	out := newSignalWriter(len("partial"))
+	out := newSignalWriter()
 	var errOut bytes.Buffer
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)}, out, &errOut) }()
 	go inW.Write(make([]byte, sent))
 	<-serverGot
-	<-out.reached
+	out.wait(len("partial"))
 	aid, err := a.LoadIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -187,14 +195,14 @@ func TestPipeReportsWhileItRunsAndCountsNothingTwice(t *testing.T) {
 	defer inW.Close()
 	Stdin = in
 	defer func() { Stdin = os.Stdin }()
-	out := newSignalWriter(100)
+	out := newSignalWriter()
 	var errOut bytes.Buffer
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	if _, err := inW.Write(make([]byte, 100)); err != nil {
 		t.Fatal(err)
 	}
-	<-out.reached
+	out.wait(100)
 	ticks <- time.Now()
 	if err := <-reported; err != nil {
 		t.Fatalf("interval report: %v", err)
@@ -259,6 +267,12 @@ func founderAndJoiner(t *testing.T, ctx context.Context, rs *relaytest.Server) (
 // fakeDaemon answers watch like a daemon and every other op with answer; an empty answer hangs up instead.
 func fakeDaemon(t *testing.T, st *state.Store, answer string) {
 	t.Helper()
+	fakeDaemonFunc(t, st, func([]byte) string { return answer })
+}
+
+// fakeDaemonFunc answers watch like a daemon and every other request line with answer(line).
+func fakeDaemonFunc(t *testing.T, st *state.Store, answer func(line []byte) string) {
+	t.Helper()
 	ln, err := net.Listen("unix", daemon.SocketPath(st))
 	if err != nil {
 		t.Fatal(err)
@@ -283,8 +297,8 @@ func fakeDaemon(t *testing.T, st *state.Store, answer string) {
 					io.Copy(io.Discard, c)
 					return
 				}
-				if answer != "" {
-					c.Write([]byte(answer + "\n"))
+				if a := answer(line); a != "" {
+					c.Write([]byte(a + "\n"))
 				}
 			}()
 		}
@@ -358,4 +372,63 @@ func TestForwardReportsTheBytesOfEachConnection(t *testing.T) {
 	}
 	<-f.connDone
 	wantTraffic(t, "b's count for a (pen forward)", trafficOf(t, f.b, "a"), received, sent)
+}
+
+// A daemon that counted a report but whose answer was lost must not be sent the same bytes again: the reporter keeps
+// bytes only when it knows they were not counted.
+func TestPipeDoesNotReportBytesTwiceWhenAnAnswerIsLost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	var mu sync.Mutex
+	var reports []daemon.TrafficReport
+	fakeDaemonFunc(t, b, func(line []byte) string {
+		var r daemon.TrafficReport
+		json.Unmarshal(line, &r)
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, r)
+		if len(reports) == 1 {
+			return ""
+		}
+		return `{"t":"counted"}`
+	})
+	ticks := make(chan time.Time)
+	reported := make(chan error, 8)
+	setTrafficHooks(t, ticks, func(err error) { reported <- err })
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	in, inW := io.Pipe()
+	defer inW.Close()
+	Stdin = in
+	defer func() { Stdin = os.Stdin }()
+	out := newSignalWriter()
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
+	inW.Write(make([]byte, 100))
+	out.wait(100)
+	ticks <- time.Now()
+	if err := <-reported; err == nil {
+		t.Fatal("the report whose answer was dropped succeeded")
+	}
+	inW.Write(make([]byte, 50))
+	out.wait(150)
+	inW.Close()
+	if got := <-code; got != 0 {
+		t.Fatalf("pipe exit %d, stderr %q", got, errOut.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var sumIn, sumOut uint64
+	for _, r := range reports {
+		sumIn += r.In
+		sumOut += r.Out
+	}
+	if len(reports) != 2 || sumIn != 150 || sumOut != 150 {
+		t.Fatalf("reports %+v sum to in %d out %d; want two reports summing to the 150 bytes each way the pipe carried", reports, sumIn, sumOut)
+	}
 }
