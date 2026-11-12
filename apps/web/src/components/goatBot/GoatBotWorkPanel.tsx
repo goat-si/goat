@@ -84,6 +84,8 @@ export function GoatBotWorkPanel({
   const [peekHasFocus, setPeekHasFocus] = useState(false);
   // The routine row a chip asked for; it takes focus once it shows, and nothing else moves it.
   const [routineFocus, setRoutineFocus] = useState<string | null>(null);
+  // What held focus at the chip click; a row that shows later takes focus only if it still does.
+  const [landingFrom, setLandingFrom] = useState<Element | null>(null);
   const [landedSeq, setLandedSeq] = useState<number | null>(null);
   if (routineLanding !== null && routineLanding.seq !== landedSeq) {
     setLandedSeq(routineLanding.seq);
@@ -92,6 +94,7 @@ export function GoatBotWorkPanel({
     setPeekHasFocus(false);
     setFocusTarget(null);
     setRoutineFocus(routineLanding.routineId);
+    setLandingFrom(routineLanding.from);
   }
   const focusOnce = (element: HTMLElement | null) => {
     if (element === null) return;
@@ -118,6 +121,27 @@ export function GoatBotWorkPanel({
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
+  // A settled list without the routine ends the landing, so no later update moves focus.
+  if (
+    routineFocus !== null &&
+    routines.isSuccess &&
+    !routines.isPending &&
+    routines.data !== null &&
+    !routines.data.tasks.some((task) => task.id === routineFocus && task.threadId === threadId)
+  ) {
+    setRoutineFocus(null);
+  }
+  const panelRef = useRef<HTMLDivElement>(null);
+  // The same rule as the closed peek's: focus moves only if the person has not moved it since.
+  const landingMayFocus = () => {
+    const active = document.activeElement;
+    return (
+      active === null ||
+      active === document.body ||
+      active === landingFrom ||
+      (panelRef.current?.contains(active) ?? false)
+    );
+  };
   const work = groupBotWork(rows, [], environmentId);
   const tasks = [...work.inProgress, ...work.done];
   const peeked =
@@ -164,7 +188,7 @@ export function GoatBotWorkPanel({
     );
   }
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col px-4 pb-4 text-sm">
+    <div ref={panelRef} className="flex min-h-0 min-w-0 flex-1 flex-col px-4 pb-4 text-sm">
       <header className="flex flex-col items-center gap-2 pt-16 pb-4 text-center">
         <GoatBotAvatar size="lg" emoji={avatar} />
         <h2 className="max-w-full truncate text-base font-semibold">{botName}</h2>
@@ -286,6 +310,7 @@ export function GoatBotWorkPanel({
                 onDraft={onDraft}
                 focusRoutineId={routineFocus}
                 onRoutineFocused={() => setRoutineFocus(null)}
+                routineMayFocus={landingMayFocus}
               />
             </HomeSection>
           </div>

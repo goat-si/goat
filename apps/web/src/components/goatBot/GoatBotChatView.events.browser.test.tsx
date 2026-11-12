@@ -11,6 +11,8 @@ import "~/index.css";
 const state = vi.hoisted(() => ({
   narrow: false,
   routines: null as { tasks: unknown[] } | null,
+  /** A read is out; `routines` is what the last one answered. */
+  pending: false,
 }));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
@@ -62,7 +64,7 @@ vi.mock("~/state/query", async (original) => ({
     data: atom === "routines" ? state.routines : null,
     failure: null,
     error: null,
-    isPending: false,
+    isPending: atom === "routines" && state.pending,
     isSuccess: true,
     refresh: () => {},
   }),
@@ -96,6 +98,7 @@ const line = (name: string): GoatBotRow => ({
 function setup(routines: { tasks: unknown[] } | null) {
   state.narrow = false;
   state.routines = routines;
+  state.pending = false;
 }
 
 function view(rows: ReadonlyArray<GoatBotRow>) {
@@ -168,4 +171,45 @@ it("on a narrow screen a routine chip opens the sheet on Home with that routine 
   // The sheet's own initial focus runs as it opens; the row keeps focus once it has opened.
   await expect.element(page.getByRole("dialog")).not.toHaveAttribute("data-starting-style");
   expect(document.activeElement?.textContent).toMatch(/^Check in/);
+});
+
+it("a routine list that arrives after the person moved on leaves their focus where it is", async () => {
+  setup(null);
+  await using screen = await render(view([line("Check in")]));
+  await userEvent.click(screen.getByRole("button", { name: "Open routine Check in" }));
+  await expect
+    .element(page.getByRole("tab", { name: "Home" }))
+    .toHaveAttribute("aria-selected", "true");
+  const composer = screen.getByRole("textbox", { name: /Message/ });
+  await userEvent.click(composer);
+  setup({ tasks: [routine("r1", "Check in")] });
+  await screen.rerender(view([line("Check in")]));
+  await expect.element(page.getByRole("link", { name: /^Check in/ })).toBeVisible();
+  await expect.element(composer).toHaveFocus();
+});
+
+it("a routine deleted before its list arrives leaves no landing waiting for a later list", async () => {
+  setup(null);
+  await using screen = await render(view([line("Check in")]));
+  await userEvent.click(screen.getByRole("button", { name: "Open routine Check in" }));
+  setup({ tasks: [routine("r2", "Daily digest")] });
+  await screen.rerender(view([line("Check in")]));
+  await expect.element(page.getByRole("link", { name: /^Daily digest/ })).toBeVisible();
+  // A later list that has it again, as one more update, moves no focus.
+  setup({ tasks: [routine("r2", "Daily digest"), routine("r1", "Check in")] });
+  await screen.rerender(view([line("Check in")]));
+  await expect.element(page.getByRole("link", { name: /^Check in/ })).toBeVisible();
+  expect(document.activeElement?.textContent ?? "").not.toMatch(/^Check in/);
+});
+
+it("a refresh holding an older list keeps the chip live until a settled list lacks the routine", async () => {
+  setup({ tasks: [routine("r2", "Daily digest")] });
+  state.pending = true;
+  await using screen = await render(view([line("Check in")]));
+  await expect.element(screen.getByRole("button", { name: "Open routine Check in" })).toBeVisible();
+  state.pending = false;
+  await screen.rerender(view([line("Check in")]));
+  await expect
+    .element(screen.getByRole("button", { name: "Open routine Check in" }))
+    .not.toBeInTheDocument();
 });

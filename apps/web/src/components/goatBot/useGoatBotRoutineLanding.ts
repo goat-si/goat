@@ -4,10 +4,14 @@ import { useRef, useState } from "react";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 
-/** A routine chip's request: the panel's Home, on this routine. A new seq is a new click. */
+/**
+ * A routine chip's request: the panel's Home, on this routine. A new seq is a new click; `from`
+ * held focus when it was clicked, so a late row can tell whether the person has moved on.
+ */
 export interface GoatBotRoutineLanding {
   readonly routineId: string;
   readonly seq: number;
+  readonly from: Element | null;
 }
 
 /**
@@ -29,16 +33,22 @@ export function useGoatBotRoutineLanding(
   const clicks = useRef(0);
   // A closed panel forgets the landing, so opening it again later starts where it always does.
   if (!panelOpen && landing !== null) setLanding(null);
-  const known = routines.error === null ? (routines.data?.tasks ?? null) : null;
+  // Only a settled, successful read says what is gone; retained data while a read runs does not.
+  const settled = routines.isSuccess && !routines.isPending ? (routines.data?.tasks ?? null) : null;
+  const threadId = bot?.threadId ?? null;
+  // One set per list update: the React Compiler rebuilds it only when the list or thread changes.
+  const known =
+    settled === null
+      ? null
+      : new Set<string>(
+          settled.filter((task) => task.threadId === threadId).map((task) => task.id),
+        );
   const openRoutine = (routineId: string): (() => void) | undefined => {
     if (bot === null) return undefined;
-    const gone =
-      known !== null &&
-      !known.some((task) => task.id === routineId && task.threadId === bot.threadId);
-    if (gone) return undefined;
+    if (known !== null && !known.has(routineId)) return undefined;
     return () => {
       clicks.current += 1;
-      setLanding({ routineId, seq: clicks.current });
+      setLanding({ routineId, seq: clicks.current, from: document.activeElement });
       openPanel();
     };
   };

@@ -37,6 +37,8 @@ export function GoatBotRoutines(props: {
   /** The routine whose row scrolls into view and takes focus when it shows. */
   readonly focusRoutineId?: string | null | undefined;
   readonly onRoutineFocused?: (() => void) | undefined;
+  /** Whether that row may still take focus when it shows, or the person has moved on. */
+  readonly routineMayFocus?: (() => boolean) | undefined;
 }) {
   const nowMinute = useNowMinute();
   const botName = useGoatBotName();
@@ -89,6 +91,7 @@ export function GoatBotRoutines(props: {
               environmentId={props.environmentId}
               row={row}
               onFocused={row.id === props.focusRoutineId ? props.onRoutineFocused : undefined}
+              mayFocus={props.routineMayFocus}
             />
           ))}
         </ul>
@@ -118,11 +121,13 @@ function RoutineRow({
   environmentId,
   row,
   onFocused,
+  mayFocus,
 }: {
   environmentId: EnvironmentId;
   row: BotRoutineRow;
-  /** Present while this row should take focus; called once it has. */
+  /** Present while this row should take focus; called once it has, or once it may not. */
   onFocused?: (() => void) | undefined;
+  mayFocus?: (() => boolean) | undefined;
 }) {
   const canOperate = useAtomValue(
     serverEnvironment.setScheduledTaskEnabled.permissionAtom(environmentId),
@@ -176,8 +181,10 @@ function RoutineRow({
               ? undefined
               : (element: HTMLAnchorElement | null) => {
                   if (element === null) return;
-                  element.scrollIntoView({ block: "nearest" });
-                  element.focus({ preventScroll: true });
+                  if (mayFocus === undefined || mayFocus()) {
+                    element.scrollIntoView({ block: "nearest" });
+                    element.focus({ preventScroll: true });
+                  }
                   onFocused();
                 }
           }
