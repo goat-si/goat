@@ -260,10 +260,6 @@ export function botArtifactSizeLabel(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** What both clients say when a file's read answered busy or ran past its bound. */
-export const botArtifactSlowOpenMessage = (name: string) =>
-  `${name} is taking too long to open. Try again in a moment.`;
-
 /** What to say when a file did not open. */
 export function botArtifactOpenMessage(
   name: string,
@@ -274,7 +270,8 @@ export function botArtifactOpenMessage(
     case "too_large":
       return `${name} is larger than 20 MB, so ${botName} can't send it here.`;
     case "busy":
-      return botArtifactSlowOpenMessage(name);
+      // Both clients: the server answered busy or a chunk ran past its bound.
+      return `${name} is taking too long to open. Try again in a moment.`;
     case "changed":
       return `${name} changed while it was opening. Try again.`;
     case "invalid":

@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - Library reads run in client promise code, outside an Effect runtime.
 import {
   CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS,
   type ChannelReadBotArtifactInput,
@@ -13,9 +14,9 @@ import { readWholeBotArtifact, type BotArtifactRead } from "./botArtifacts.ts";
 // read that never answers frees the server instead of holding it until reload.
 
 /** A preview's first chunk gets this past the server's bound; a full 512 KiB chunk (about 700 KB of base64) needs about 28 s at 200 kbit/s. */
-export const BOT_FILE_PREVIEW_TRANSFER_MS = 10_000;
+const BOT_FILE_PREVIEW_TRANSFER_MS = 10_000;
 /** Each chunk of an opened file gets this past the server's bound: a full 512 KiB chunk (about 700 KB of base64) at about 200 kbit/s. */
-export const BOT_FILE_OPEN_TRANSFER_MS = 40_000;
+const BOT_FILE_OPEN_TRANSFER_MS = 40_000;
 export const BOT_FILE_PREVIEW_CHUNK_BOUND_MS =
   CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS + BOT_FILE_PREVIEW_TRANSFER_MS;
 export const BOT_FILE_OPEN_CHUNK_BOUND_MS =
@@ -40,13 +41,6 @@ export interface BotFilePreviewRead {
   readonly result: Promise<BotFilePreview>;
   /** The card went away: a waiting preview never runs; one in flight still holds the server until its chunk ends. */
   readonly cancel: () => void;
-}
-
-export interface BotFileReadsOptions {
-  readonly previewChunkBoundMs?: number;
-  readonly openChunkBoundMs?: number;
-  readonly setTimer?: (run: () => void, ms: number) => unknown;
-  readonly clearTimer?: (timer: unknown) => void;
 }
 
 interface Entry {
@@ -76,13 +70,7 @@ function removeFrom(list: Array<Entry>, entry: Entry): boolean {
   return true;
 }
 
-export function createBotFileReads(options: BotFileReadsOptions = {}) {
-  const previewBound = options.previewChunkBoundMs ?? BOT_FILE_PREVIEW_CHUNK_BOUND_MS;
-  const openBound = options.openChunkBoundMs ?? BOT_FILE_OPEN_CHUNK_BOUND_MS;
-  const setTimer = options.setTimer ?? ((run: () => void, ms: number) => setTimeout(run, ms));
-  const clearTimer =
-    options.clearTimer ??
-    ((timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>));
+export function createBotFileReads() {
   const lanes = new Map<EnvironmentId, Lane>();
 
   const laneFor = (environmentId: EnvironmentId) => {
@@ -124,11 +112,11 @@ export function createBotFileReads(options: BotFileReadsOptions = {}) {
       const end = (settle: () => void) => {
         if (ended) return;
         ended = true;
-        clearTimer(timer);
+        clearTimeout(timer);
         onEnd(null);
         settle();
       };
-      const timer = setTimer(() => end(() => resolve(busy)), boundMs);
+      const timer = setTimeout(() => end(() => resolve(busy)), boundMs);
       onEnd(() => end(() => resolve(busy)));
       let answer: Promise<ChannelReadBotArtifactResult>;
       try {
@@ -174,7 +162,7 @@ export function createBotFileReads(options: BotFileReadsOptions = {}) {
           const bounded = (input: ChannelReadBotArtifactInput) =>
             stopped
               ? Promise.resolve({ status: "busy" as const, relativePath })
-              : chunk(readChunk, input, openBound, (end) => (endChunk = end));
+              : chunk(readChunk, input, BOT_FILE_OPEN_CHUNK_BOUND_MS, (end) => (endChunk = end));
           // An abort stops the read after the chunk in flight, which keeps the server until it ends.
           readWholeBotArtifact(relativePath, bounded, signal)
             .then(
@@ -218,7 +206,12 @@ export function createBotFileReads(options: BotFileReadsOptions = {}) {
       const entry: Entry = {
         chatKey,
         start: () => {
-          chunk(readChunk, { relativePath }, previewBound, (end) => (endChunk = end))
+          chunk(
+            readChunk,
+            { relativePath },
+            BOT_FILE_PREVIEW_CHUNK_BOUND_MS,
+            (end) => (endChunk = end),
+          )
             .then(
               (answer) => finish(answer.status === "busy" ? FAILED : { status: "ready", answer }),
               () => finish(FAILED),
