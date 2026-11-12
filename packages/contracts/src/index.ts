@@ -102,6 +102,7 @@ export * from "./orchestratorMcpCloudTask.ts";
 export * from "./orchestratorMcpFailure.ts";
 export * from "./threadReplica.ts";
 export * from "./remoteReports.ts";
+export * from "./remoteLaunchesRpc.ts";
 export * from "./threadMetadataMcp.ts";
 export * from "./threadPullRequest.ts";
 export * from "./threadResult.ts";

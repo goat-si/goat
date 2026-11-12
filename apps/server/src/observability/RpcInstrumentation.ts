@@ -2,6 +2,7 @@ import {
   CHANNEL_GATEWAY_WS_METHODS,
   GLOBAL_SKILLS_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
+  REMOTE_LAUNCHES_WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
   WS_METHODS,
   type WsRpcGroup,
@@ -179,6 +180,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.scheduledTasksListWebhookDeliveries]: "scheduledTasks",
   [WS_METHODS.scheduledTasksGetWebhookDelivery]: "scheduledTasks",
   [WS_METHODS.remoteLaunchesList]: "remoteLaunches",
+  [REMOTE_LAUNCHES_WS_METHODS.dismiss]: "remoteLaunches",
   [WS_METHODS.cloudMachinesList]: "cloudMachines",
   [WS_METHODS.cloudAgentsListRuns]: "cloudAgents",
   // Deprecated folder trust RPCs, kept for older clients; remove in GOAT 0.2.0.

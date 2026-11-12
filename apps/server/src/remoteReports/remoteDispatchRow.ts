@@ -68,6 +68,15 @@ export type RemoteDispatchRow = typeof RemoteDispatchRow.Type;
 
 export const decodeRemoteDispatchRows = Schema.decodeUnknownEffect(Schema.Array(RemoteDispatchRow));
 
+/** One remote thread: the SSH alias and its thread id, joined by a character neither contains. */
+export const remoteThreadKey = (host: string, threadId: string) => `${host}\u001f${threadId}`;
+
+/** Every dispatch of the given remote threads, newest first. */
+export const selectForRemoteThreads = (sql: SqlClient.SqlClient, keys: ReadonlyArray<string>) =>
+  sql`SELECT * FROM remote_dispatches WHERE remote_thread_id IS NOT NULL
+    AND host || char(31) || remote_thread_id IN (SELECT value FROM json_each(${JSON.stringify(keys)}))
+    ORDER BY updated_at DESC, correlation_id DESC`;
+
 /**
  * Which existing row a retried launch collided with: a task on its origin task key, a thread
  * with a durable caller identity (a channel child-work record) on the correlation id it

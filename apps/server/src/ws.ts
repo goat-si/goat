@@ -2337,7 +2337,6 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(handoffs.answerSecret(input, currentSessionId)),
           ),
-        [WS_METHODS.remoteLaunchesList]: (input) => remoteLaunchCatalog.list(input),
         [WS_METHODS.cloudMachinesList]: () => cloudMachines.list(),
         [WS_METHODS.cloudAgentsListRuns]: (input) =>
           CloudAgentService.listCloudRuns(input).pipe(
@@ -3586,6 +3585,7 @@ export const layerWsRpc = (
         ServerWsChannelRpcGroup.toLayer(channelHandlers),
         ServerWsNotesRpcGroup.toLayer(noteHandlers),
         makeGlobalSkillsRpcLayer(config.globalSkillsDir, serverSettings, providerRegistry),
+        RemoteLaunchCatalog.makeRpcLayer(remoteLaunchCatalog),
         ServerWsBrowserClaimsRpcGroup.toLayer(browserClaimsHandlers),
       );
     }),
