@@ -768,3 +768,11 @@ func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
 		t.Fatalf("reports %+v; want only the 50 bytes each way that moved after the late tick", reports)
 	}
 }
+
+// The daemon buckets bytes by the wall clock, so the reporter ages them by the wall clock too. A time with a monotonic
+// reading would measure elapsed time instead, which on Linux stops while the machine sleeps and ignores clock jumps.
+func TestTheReportClockIsTheWallClock(t *testing.T) {
+	if s := trafficNow().String(); strings.Contains(s, " m=") {
+		t.Fatalf("trafficNow() = %s carries a monotonic reading", s)
+	}
+}

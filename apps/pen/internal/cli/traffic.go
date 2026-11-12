@@ -29,8 +29,9 @@ var (
 		t := time.NewTicker(trafficEvery)
 		return t.C, t.Stop
 	}
-	// trafficNow is the clock that ages bytes a report could not deliver; tests set it.
-	trafficNow = time.Now
+	// trafficNow is the clock that ages bytes not yet counted: the wall clock without its monotonic reading, as the
+	// daemon buckets by the wall clock (a monotonic reading would ignore clock jumps and, on Linux, sleep). Tests set it.
+	trafficNow = func() time.Time { return time.Now().Round(0) }
 	// trafficShutdown bounds the end of a session: the periodic report in flight, the meter settling and the last
 	// report all end by its deadline. Tests end it by hand.
 	trafficShutdown = func() (context.Context, context.CancelFunc) {
