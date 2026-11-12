@@ -835,7 +835,7 @@ const make = Effect.gen(function* () {
             `GOAT on ${input.target.alias} ${REMOTE_THREAD_STATUS_UNSUPPORTED}.`,
           );
         }
-        if (describe(error).includes("HTTP 401")) {
+        if (error.kind === "http" && error.status === 401) {
           if (linkedAliases.has(input.target.alias)) return linkExpired(input.target.alias);
           // Revoked or expired on the remote: forget it so the next call issues a fresh one.
           invalidateSession(

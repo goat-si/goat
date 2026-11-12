@@ -3824,6 +3824,7 @@ describe("SSH launcher transport", () => {
       launchedBy: true,
       expectedCalls: 1,
       success: false,
+      uncertain: true,
     },
     {
       name: "retry-refused",
@@ -3849,6 +3850,16 @@ describe("SSH launcher transport", () => {
       launchedBy: true,
       expectedCalls: 1,
       success: false,
+    },
+    {
+      // Only the endpoint's own HTTP 401 is a refused session; an RPC error may follow a create.
+      name: "rpc-says-401",
+      refusal: "upstream answered HTTP 401 after creating thread",
+      rpcCode: -32603,
+      launchedBy: true,
+      expectedCalls: 1,
+      success: false,
+      uncertain: true,
     },
   ])("passes launcher and retries only a strict pre-handler refusal: $name", (scenario) =>
     Effect.gen(function* () {
@@ -4010,6 +4021,8 @@ describe("SSH launcher transport", () => {
       );
       expect(calls).toHaveLength(scenario.expectedCalls);
       expect(result._tag).toBe(scenario.success ? "Success" : "Failure");
+      if ("uncertain" in scenario && result._tag === "Failure")
+        expect(result.failure).toMatchObject({ launchMayHaveStarted: true });
       expect(calls[0]).toEqual({
         projectId: "project-1",
         title: "Work",
