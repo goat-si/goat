@@ -183,4 +183,26 @@ describe("ChannelBotEvents", () => {
       assert.deepStrictEqual(timeline.recorded, []);
     }),
   );
+
+  it.effect("a bot's lines are pending from queueing until the last one is recorded", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const inFlight = yield* Deferred.make<void>();
+      const timeline = fakeTimeline({
+        gate,
+        onAttempt: () => Deferred.succeed(inFlight, undefined).pipe(Effect.asVoid),
+      });
+      const events = yield* makeWith(timeline.deps);
+      const ada = BotId.make("ada");
+      assert.isFalse(yield* events.pending("owner", ada));
+      yield* events.emit(line("ada", "Renamed to Ada"));
+      yield* Deferred.await(inFlight);
+      // The line is being recorded, so it may still land after anything written now.
+      assert.isTrue(yield* events.pending("owner", ada));
+      assert.isFalse(yield* events.pending("owner", BotId.make("bob")));
+      yield* Deferred.succeed(gate, undefined);
+      yield* events.flush;
+      assert.isFalse(yield* events.pending("owner", ada));
+    }).pipe(Effect.scoped),
+  );
 });

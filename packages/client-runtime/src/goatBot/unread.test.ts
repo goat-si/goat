@@ -1,5 +1,7 @@
+import { MessageId, type OrchestrationV2TurnItem, ThreadId, TurnItemId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
-import type { GoatBotRow } from "./rows.ts";
+import { buildGoatBotTimeline, goatBotConversationPreview, type GoatBotRow } from "./rows.ts";
 import { goatBotUnreadIds } from "./unread.ts";
 
 const bot = (id: string, createdAt: string): GoatBotRow => ({
@@ -56,5 +58,47 @@ describe("goatBotUnreadIds", () => {
   });
   it("treats a missing visit as unread", () => {
     expect([...goatBotUnreadIds([task, bot("new", visit)], null)]).toEqual(["task", "new"]);
+  });
+  it("a bot message written again after the visit stays read: its row keeps its first time", () => {
+    const threadId = ThreadId.make("thread-bot");
+    const first = DateTime.makeUnsafe("2026-01-01T00:00:00Z");
+    const greeting = {
+      id: TurnItemId.make("greeting"),
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: first,
+      completedAt: first,
+      updatedAt: DateTime.makeUnsafe("2026-01-03T00:00:00Z"),
+      type: "assistant_message",
+      messageId: MessageId.make("m-greeting"),
+      text: "Hi, I'm Ada.",
+      streaming: false,
+    } satisfies OrchestrationV2TurnItem;
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: [
+        {
+          position: 0,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: greeting.id,
+          item: greeting,
+        },
+      ],
+      pendingInputs: [],
+      readers: { message: () => null, taskCard: () => null },
+    });
+    expect(rows.filter((row) => row.kind === "bot").map((row) => row.id)).toHaveLength(1);
+    expect([...goatBotUnreadIds(rows, visit)]).toEqual([]);
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: visit, active: false })?.unread).toBe(
+      false,
+    );
   });
 });
