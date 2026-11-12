@@ -18,6 +18,15 @@ import {
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
 // Event lines resolve their routine or task against the home's reads, which this test does not load.
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
+vi.mock("./GoatBotReplyFiles", () => ({
+  GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
+  GoatBotReplyFiles: () => null,
+}));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));
@@ -66,6 +75,9 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ b
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
+// The chat's step reader and file opener load the environment runtime.
+vi.mock("../../state/threads", () => ({ environmentThreadDetails: {} }));
+vi.mock("./openBotLibraryFile", () => ({ openBotLibraryFile: async () => null }));
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
@@ -343,7 +355,12 @@ describe("the progress line under the last message", () => {
       h,
       <GoatBotActivityLine
         botName="GOAT Bot"
-        activity={{ state: "working", text: "Waiting for your answer" }}
+        activity={{
+          state: "working",
+          text: "Waiting for your answer",
+          attention: "waiting",
+          wait: "you",
+        }}
         inView
       />,
     );

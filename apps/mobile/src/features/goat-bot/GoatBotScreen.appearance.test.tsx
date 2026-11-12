@@ -164,34 +164,55 @@ it("opens the bot's home from the header chip, which a task's own screen does no
   screenSession.supportsTaskThreads = false;
 });
 
-it("tells VoiceOver on iOS when the bot starts waiting on something new, once per wait", async () => {
+it("tells VoiceOver once per wait on the person or a usage limit, however the wait is reworded, and never for other work", async () => {
   a11y.announce.mockClear();
   screenSession.activity = { state: "working", text: "Copying files" };
   const view = await render(<GoatBotScreen visible />);
+  const liveLabel = () => view.container.querySelector("[data-live]")?.getAttribute("aria-label");
+  const show = async (activity: GoatBotActivity) => {
+    screenSession.activity = activity;
+    await view.rerender(<GoatBotScreen visible />);
+  };
   try {
-    screenSession.activity = { state: "working", text: "Waiting for your answer" };
-    await view.rerender(<GoatBotScreen visible />);
-    await view.rerender(<GoatBotScreen visible />);
-    screenSession.activity = { state: "working", text: "Waiting on other work" };
-    await view.rerender(<GoatBotScreen visible />);
+    // The same wait, reworded as more is known while it streams: heard once, and TalkBack's live
+    // label does not change.
+    await show({ state: "working", text: "Waiting for you", attention: "waiting", wait: "you" });
+    const firstLabel = liveLabel();
+    await show({
+      state: "working",
+      text: "Waiting for your answer",
+      attention: "waiting",
+      wait: "you",
+    });
+    await show({
+      state: "working",
+      text: "Waiting for your answer on the cache",
+      attention: "waiting",
+      wait: "you",
+    });
+    expect(liveLabel()).toBe(firstLabel);
+    expect(firstLabel).toBe("GOAT Bot is waiting for you");
+    await show({
+      state: "working",
+      text: "Paused on a usage limit",
+      attention: "paused",
+      wait: "usage_limit",
+    });
     expect(a11y.announce.mock.calls.map((call) => call[0])).toEqual([
-      "GOAT Bot: Waiting for your answer",
-      "GOAT Bot: Waiting on other work",
+      "GOAT Bot is waiting for you",
+      "GOAT Bot is paused on a usage limit",
     ]);
-    // A task's own update that streams in and happens to start with "Waiting" is not a wait.
+    // Waiting on other work reads as working; so does a task update that only sounds like a wait.
     a11y.announce.mockClear();
-    for (const text of [
-      "Waiting… the build",
-      "Waiting… the build is",
-      "Waiting… the build is green",
-    ]) {
-      screenSession.activity = { state: "working", text };
-      await view.rerender(<GoatBotScreen visible />);
-    }
-    expect(a11y.announce).not.toHaveBeenCalled();
-    expect(view.container.querySelector("[data-live]")?.getAttribute("aria-label")).toBe(
-      "GOAT Bot is working",
+    await show({ state: "working", text: "Waiting on other work", wait: "other_work" });
+    expect(liveLabel()).toBe("GOAT Bot is working");
+    expect(view.container.querySelector("[data-face]")?.getAttribute("data-face")).toMatch(
+      /^working:/,
     );
+    for (const text of ["Waiting for your answer", "Waiting… the build is green"])
+      await show({ state: "working", text });
+    expect(a11y.announce).not.toHaveBeenCalled();
+    expect(liveLabel()).toBe("GOAT Bot is working");
   } finally {
     screenSession.activity = null;
     await view.unmount();
@@ -318,16 +339,17 @@ it("announces only whether the bot works, reads or waits, not every step it take
     expect(first).toEqual({ label: "GOAT Bot is working", holdsStep: false, showsStep: true });
     expect(second.label).toBe(first.label);
     expect((await live({ state: "reading", text: "Reading" })).label).toBe("GOAT Bot is reading");
-    // A wait is said as it is, so moving from one wait to another is heard.
-    expect((await live({ state: "working", text: "Waiting for your answer" })).label).toBe(
-      "GOAT Bot: Waiting for your answer",
-    );
-    expect((await live({ state: "working", text: "Waiting on other work" })).label).toBe(
-      "GOAT Bot: Waiting on other work",
-    );
-    expect((await live({ state: "working", text: "Paused on a usage limit" })).label).toBe(
-      "GOAT Bot: Paused on a usage limit",
-    );
+    // A wait is said by what it waits on, so moving from one kind of wait to another is heard.
+    expect(
+      (await live({ state: "working", text: "Waiting for your answer", wait: "you" })).label,
+    ).toBe("GOAT Bot is waiting for you");
+    expect(
+      (await live({ state: "working", text: "Paused on a usage limit", wait: "usage_limit" }))
+        .label,
+    ).toBe("GOAT Bot is paused on a usage limit");
+    expect(
+      (await live({ state: "working", text: "Waiting on other work", wait: "other_work" })).label,
+    ).toBe("GOAT Bot is working");
   } finally {
     screenSession.activity = null;
   }

@@ -890,6 +890,7 @@ export default defineConfig({
           "apps/mobile/src/**",
           "packages/client-runtime/src/**",
           "packages/contracts/src/**",
+          "packages/pen-protocol/src/client/**",
           "packages/shared/src/**",
         ],
         excludeFiles: ["**/*.test.ts", "**/*.test.tsx"],

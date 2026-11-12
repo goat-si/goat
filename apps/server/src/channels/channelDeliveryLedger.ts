@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 import type { SqlError } from "effect/sql/SqlError";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
-import type { ChannelLedger } from "./ChannelLedger.ts";
+import type { ChannelDeliveryOutcome, ChannelStoredDelivery } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 import {
   copyUndeliveredReplies,
@@ -62,21 +62,68 @@ export const unsentDeliveryQueries = (
   };
 };
 
+/** The outbox operations: claiming due rows, recording how their sends went, and recovery. */
+export interface ChannelDeliveryLedgerOps extends UnsentDeliveryRelease {
+  /**
+   * Marks the oldest due rows as delivering. A row waits while an earlier row for the same task
+   * and destination kind is still pending or in flight, so a receipt goes out before its result.
+   */
+  readonly claimDueDeliveries: (input: {
+    readonly owner: string;
+    readonly now: string;
+    readonly limit: number;
+    readonly receiptsOnly?: boolean | undefined;
+  }) => Effect.Effect<ReadonlyArray<ChannelStoredDelivery>, ChannelLedgerError>;
+  /**
+   * claimDueDeliveries, also saying how many interim messages it set aside as already heard.
+   * It sets aside a bounded number per call, so a long backlog takes several calls.
+   */
+  readonly claimDue: (input: {
+    readonly owner: string;
+    readonly now: string;
+    readonly limit: number;
+    readonly receiptsOnly?: boolean | undefined;
+  }) => Effect.Effect<
+    { readonly deliveries: ReadonlyArray<ChannelStoredDelivery>; readonly setAside: number },
+    ChannelLedgerError
+  >;
+  readonly recordDelivery: (input: {
+    readonly owner: string;
+    readonly deliveryId: ChannelDeliveryId;
+    readonly outcome: ChannelDeliveryOutcome;
+    readonly now: string;
+    readonly attempt?: number | undefined;
+  }) => Effect.Effect<void, ChannelLedgerError>;
+  readonly expireReceipts: (input: {
+    readonly owner: string;
+    readonly now: string;
+  }) => Effect.Effect<void, ChannelLedgerError>;
+  /**
+   * Records that an external delivery is being handed to its transport now. False when the row
+   * is no longer this claim's (its receipt expired, or recovery took it): then it is not sent.
+   */
+  readonly markSending: (input: {
+    readonly owner: string;
+    readonly deliveryId: ChannelDeliveryId;
+    readonly attempt: number;
+    readonly now: string;
+  }) => Effect.Effect<boolean, ChannelLedgerError>;
+  /**
+   * After a restart: GOAT bot and MCP deliveries and external ones never handed to their
+   * transport retry; external ones handed over become ambiguous.
+   */
+  readonly settleInterruptedDeliveries: (input: {
+    readonly owner: string;
+    readonly now: string;
+  }) => Effect.Effect<void, ChannelLedgerError>;
+}
+
 export const deliveryLedger = (
   sql: SqlClient.SqlClient,
   fence: (owner: string | undefined) => Effect.Effect<void, SqlError | ChannelLedgerError>,
   changed: Effect.Effect<void>,
   expired: Effect.Effect<void>,
-): Pick<
-  ChannelLedger["Service"],
-  | "claimDueDeliveries"
-  | "claimDue"
-  | "recordDelivery"
-  | "expireReceipts"
-  | "markSending"
-  | "settleInterruptedDeliveries"
-  | "releaseUnsentDeliveries"
-> => {
+): ChannelDeliveryLedgerOps => {
   const expireRows = Effect.fn("channelDeliveryLedger.expireRows")(function* (now: string) {
     // Only a send that reached a transport may have been seen; one never handed over failed.
     const rows = yield* sql<

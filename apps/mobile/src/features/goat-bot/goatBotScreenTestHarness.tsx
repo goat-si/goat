@@ -21,8 +21,126 @@ const screenSession = vi.hoisted(() => ({
   answer: vi.fn((_text: string, _taskId?: string, _questionId?: string) => true),
   // What the home sheet calls to fill the message box (New routine, a note's change).
   draft: null as null | ((text: string) => boolean),
+  // The home sheet's Edit bot, and its report that the sheet has gone.
+  editBot: null as null | (() => void),
+  homeGone: null as null | (() => void),
+  // The conversation the session shows, and what its server can do.
+  visibleTurnItems: [] as ReadonlyArray<unknown>,
+  boundedSnapshots: false,
+  environmentId: null as string | null,
+  threadId: null as string | null,
 }));
 // Event lines resolve their routine or task against the home's reads, which these tests do not load.
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+// The provider stands in, but the chat's own opener is real: its viewer shows, and a test opens an
+// image through it.
+const chatFiles = vi.hoisted(() => ({
+  opener: null as null | { open: (file: { relativePath: string }) => Promise<void> },
+  // Each time a reply's file cards mount: a row mounted again starts its preview reads over.
+  cardMounts: 0,
+}));
+vi.mock("./GoatBotReplyFiles", async () => {
+  const React = await import("react");
+  return {
+    GoatBotFilesProvider: (props: {
+      children?: ReactNode;
+      opener?: { open: (file: { relativePath: string }) => Promise<void>; viewer: ReactNode };
+    }) => {
+      chatFiles.opener = props.opener ?? null;
+      return (
+        <>
+          {props.children}
+          {props.opener?.viewer}
+        </>
+      );
+    },
+    GoatBotReplyFiles: function ReplyFiles() {
+      // Counted once per mount, as a card's first preview read would be.
+      React.useState(() => {
+        chatFiles.cardMounts += 1;
+        return null;
+      });
+      return null;
+    },
+    chatFilesScope: (environmentId: string | null, threadId: string | null) =>
+      JSON.stringify([environmentId, threadId]),
+  };
+});
+vi.mock("./openBotLibraryFile", () => ({
+  openBotLibraryFile: async (_environmentId: string, relativePath: string) => ({
+    kind: "image",
+    preview: {
+      name: relativePath,
+      file: { uri: "file:///cache/" + relativePath, dispose: () => {}, share: async () => {} },
+    },
+  }),
+}));
+// The thread state GOAT Bot's steps are read from: each thread's items, and when a reader holds or
+// lets go of one.
+const threadReads = vi.hoisted(() => ({
+  held: [] as string[],
+  released: [] as string[],
+  itemsAtom: null as
+    | null
+    | ((key: string) => import("effect/reactivity").Atom.Writable<ReadonlyArray<unknown>>),
+}));
+vi.mock("../../state/threads", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const items = Atom.family((_key: string) =>
+    Atom.make<ReadonlyArray<unknown>>([]).pipe(Atom.keepAlive),
+  );
+  threadReads.itemsAtom = items;
+  const quiet = Atom.family((key: string) =>
+    Atom.make((get) => {
+      threadReads.held.push(key);
+      get.addFinalizer(() => threadReads.released.push(key));
+      return get(items(key));
+    }),
+  );
+  const whole = Atom.make({ hasMoreHistory: false });
+  const keyOf = (ref: { environmentId: string; threadId: string }) =>
+    ref.environmentId + "\u0000" + ref.threadId;
+  return {
+    environmentThreadDetails: {
+      quietVisibleTurnItemsAtom: (ref: { environmentId: string; threadId: string }) =>
+        quiet(keyOf(ref)),
+      historyAtom: () => whole,
+    },
+  };
+});
+// Editing a member from its chat: who may edit, the edit itself, and this device's dismissals.
+const botEditing = vi.hoisted(() => ({
+  canEdit: false,
+  update: vi.fn(async (..._args: unknown[]): Promise<string | null> => null),
+  stored: null as string | null,
+  writes: [] as string[],
+  // The Edit bot sheet the chat opened: its bot, the name it starts from, and how to close it.
+  sheet: null as null | { botId: string; draftName?: string; onClose: () => void },
+}));
+vi.mock("./MobileBotEditSheet", () => ({
+  MobileBotEditSheet: (props: {
+    bot: { botId: string };
+    draftName?: string;
+    onClose: () => void;
+  }) => {
+    botEditing.sheet = {
+      botId: props.bot.botId,
+      draftName: props.draftName,
+      onClose: props.onClose,
+    };
+    return <div role="dialog" aria-label="Edit bot" />;
+  },
+}));
+vi.mock("./useMobileBotManage", () => ({
+  useMobileBotManage: () => ({ canEdit: botEditing.canEdit, update: botEditing.update }),
+}));
+vi.mock("../../lib/protectedData", () => ({ whenProtectedDataAvailable: async () => {} }));
+vi.mock("expo-secure-store", () => ({
+  getItemAsync: async () => botEditing.stored,
+  setItemAsync: async (_key: string, value: string) => {
+    botEditing.writes.push(value);
+  },
+}));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));
@@ -33,17 +151,23 @@ vi.mock("./MobileBotWork", () => ({
     chatTasks?: ReadonlyArray<{ readonly key: string }>;
     open?: boolean;
     onDraft?: (text: string) => boolean;
+    onEditBot?: () => void;
+    onDismissed?: () => void;
   }) => {
     screenSession.workTaskId = props.taskId;
     screenSession.homeOpen = props.open ?? false;
     screenSession.chatTasks = props.chatTasks ?? [];
     screenSession.draft = props.onDraft ?? null;
+    screenSession.editBot = props.onEditBot ?? null;
+    screenSession.homeGone = props.onDismissed ?? null;
     return <section aria-label="Task header">{props.taskCard}</section>;
   },
 }));
 const list = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
   scrollToIndex: vi.fn(),
+  // Rows whose cells are scrolled out of the window: their items stay in the data.
+  unmounted: new Set<string>(),
 }));
 vi.mock("./GoatBotFace", () => ({
   GoatBotHeaderFace: (props: { title: string; onPress?: () => void }) =>
@@ -103,6 +227,7 @@ vi.mock("react-native", () => ({
     return (
       <div
         ref={ref}
+        data-testid={testID}
         data-style={JSON.stringify(style)}
         data-class={className}
         data-live={accessibilityLiveRegion}
@@ -132,6 +257,8 @@ vi.mock("react-native", () => ({
     style,
     className,
     accessibilityLabel,
+    accessibilityHint,
+    accessibilityState,
     disabled,
     onPress,
   }: {
@@ -139,6 +266,8 @@ vi.mock("react-native", () => ({
     style?: unknown;
     className?: string;
     accessibilityLabel?: string;
+    accessibilityHint?: string;
+    accessibilityState?: { expanded?: boolean };
     disabled?: boolean;
     onPress?: () => void;
   }) => (
@@ -146,6 +275,8 @@ vi.mock("react-native", () => ({
       data-style={JSON.stringify(style)}
       data-class={className}
       aria-label={accessibilityLabel}
+      aria-expanded={accessibilityState?.expanded}
+      data-hint={accessibilityHint}
       disabled={disabled}
       onClick={onPress}
     >
@@ -156,18 +287,28 @@ vi.mock("react-native", () => ({
     style,
     value,
     onChangeText,
+    accessibilityLabel,
   }: {
     style?: unknown;
     value?: string;
     onChangeText?: (text: string) => void;
+    accessibilityLabel?: string;
   }) => (
     <input
-      aria-label="Message GOAT Bot"
+      // Every chat's message box answers to one label here; other fields keep their own.
+      aria-label={
+        accessibilityLabel === undefined || accessibilityLabel.startsWith("Message ")
+          ? "Message GOAT Bot"
+          : accessibilityLabel
+      }
       data-style={JSON.stringify(style)}
       value={value ?? ""}
       onChange={(event) => onChangeText?.(event.currentTarget.value)}
     />
   ),
+  Modal: (props: { visible?: boolean; children?: ReactNode }) =>
+    props.visible ? <div role="dialog">{props.children}</div> : null,
+  Image: (props: { accessibilityLabel?: string }) => <img alt={props.accessibilityLabel} />,
   Platform: { OS: "ios" },
   AccessibilityInfo: { announceForAccessibility: a11y.announce, setAccessibilityFocus: a11y.focus },
   findNodeHandle: (node: unknown) => node ?? null,
@@ -208,7 +349,7 @@ vi.mock("@legendapp/list/react-native", async () => {
   // Like LegendList, a mounted row draws again only when its item or extraData changes.
   const Row = memo(
     (props: { item: GoatBotRow; extra: unknown; render: Render }) => (
-      <div>{props.render?.({ item: props.item })}</div>
+      <div data-row={props.item.id}>{props.render?.({ item: props.item })}</div>
     ),
     (before, after) => before.item === after.item && before.extra === after.extra,
   );
@@ -224,9 +365,11 @@ vi.mock("@legendapp/list/react-native", async () => {
       if (props.ref) props.ref.current = { scrollToIndex: list.scrollToIndex };
       return (
         <>
-          {props.data?.map((item) => (
-            <Row key={item.id} item={item} extra={props.extraData} render={props.renderItem} />
-          ))}
+          {props.data?.map((item) =>
+            list.unmounted.has(item.id) ? null : (
+              <Row key={item.id} item={item} extra={props.extraData} render={props.renderItem} />
+            ),
+          )}
           {props.ListFooterComponent}
         </>
       );
@@ -276,6 +419,11 @@ vi.mock("./useMobileGoatBotSession", () => ({
       replyingSince: null,
       activity: screenSession.activity,
       supportsTaskThreads: screenSession.supportsTaskThreads,
+      streamingReplyIds: new Set<string>(),
+      visibleTurnItems: screenSession.visibleTurnItems,
+      boundedSnapshots: screenSession.boundedSnapshots,
+      historyEnvironmentId: screenSession.environmentId,
+      threadId: screenSession.threadId,
     };
   },
 }));
@@ -324,4 +472,15 @@ export async function render(element: ReactNode) {
   };
 }
 
-export { a11y, appearance, layouts, list, models, picker, screenSession };
+export {
+  a11y,
+  appearance,
+  botEditing,
+  chatFiles,
+  layouts,
+  list,
+  models,
+  picker,
+  screenSession,
+  threadReads,
+};

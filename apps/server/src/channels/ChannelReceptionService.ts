@@ -1233,13 +1233,17 @@ const make = Effect.gen(function* () {
             : quotedFromInput(asked.notesChangeRequested, message.text)
               ? undefined
               : "quote_not_in_input";
-      const noteNotice =
-        (decision.remember !== undefined && rememberRefusal === undefined
+      const saved =
+        decision.remember !== undefined && rememberRefusal === undefined
           ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
-          : droppedNoteNotice(rememberRefusal)) ?? droppedNoteNotice(editRefusal);
+          : undefined;
+      const noteNotice =
+        (saved === undefined ? droppedNoteNotice(rememberRefusal) : saved.notice) ??
+        droppedNoteNotice(editRefusal);
       let replyText = decision.replyText;
       let finalDecision = decision;
-      if (noteNotice === CHANNEL_COPY.noteEditBusy) {
+      // Nothing was saved, so the model's reply, which says it was, gives way to the notice.
+      if (saved?.held === true && noteNotice !== undefined) {
         replyText = noteNotice;
         finalDecision = { replyText, action: { type: "report_only" } };
       }

@@ -94,6 +94,8 @@ export function MobileBotRosterView(props: {
   onUnknownBot?: (() => void) | undefined;
   /** The roster is on screen; it stays mounted under other pages on some layouts. */
   visible?: boolean;
+  /** A New bot under way: its Creating…, failure or created row, after the members. */
+  newBotRow?: ReactNode;
   /** Member bots: shown ones are in `bots`; these two lists carry the reverse states. */
   members?: {
     readonly hidden: ReadonlyArray<BotProfile>;
@@ -207,6 +209,7 @@ export function MobileBotRosterView(props: {
           />
         );
       })}
+      {props.newBotRow}
       {props.members && props.members.hidden.length > 0 ? (
         <View>
           <Pressable

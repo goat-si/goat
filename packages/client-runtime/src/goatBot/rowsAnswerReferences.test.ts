@@ -350,3 +350,67 @@ describe("the card's record of who answered wins over the message's own claim", 
     expect(bot(rows, "b1")).toMatchObject({ answer: "Keep", answerIndex: 0 });
   });
 });
+
+/** A task's own view of the same thread, without the task's card that leads it. */
+const taskView = (
+  taskId: string,
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+  pendingInputs: GoatBotPendingInput[] = [],
+) =>
+  buildGoatBotTimeline({
+    visibleTurnItems: rowsOf(items),
+    pendingInputs,
+    readers: goatBotItemReaders,
+    taskId,
+    knownTaskIds: ["task-1", "task-2"],
+    conversationOnly: true,
+    answerReferences: true,
+  }).filter((row) => row.kind !== "day" && row.kind !== "task");
+
+describe("a task's own view answers its questions by reference (#2977)", () => {
+  it("names the task and question on its question, so a pick there sends both", () => {
+    const rows = taskView("task-1", [card("task-1", 1, ["q1"]), question("b1", 1, "task-1", "q1")]);
+    expect(bot(rows, "b1")).toMatchObject({ answerTaskId: "task-1", answerQuestionId: "q1" });
+  });
+
+  it("keeps a refused pick as what the person said, even while the question stays open", () => {
+    const rows = taskView("task-1", [
+      card("task-1", 2, ["q1"], []),
+      question("b1", 1, "task-1", "q1"),
+      person("u1", 2, "Keep", { taskId: "task-1", answersQuestionId: null }),
+    ]);
+    expect(ids(rows)).toEqual(["b1", "u1"]);
+    expect(bot(rows, "b1")).toMatchObject({ options: ["Keep", "Clear"] });
+    expect(bot(rows, "b1")).not.toHaveProperty("answer");
+  });
+
+  it("folds the recorded answer and the pick still on its way, and leaves other tasks out", () => {
+    const recorded = taskView("task-1", [
+      card("task-1", 2, [], [{ questionId: "q1", inputId: "in-u1" }]),
+      question("b1", 1, "task-1", "q1"),
+      person("u1", 2, "Clear", { taskId: "task-1", answersQuestionId: "q1" }),
+      question("b9", 3, "task-2", "q9"),
+      person("u9", 4, "Keep", { taskId: "task-2", answersQuestionId: "q9" }),
+    ]);
+    expect(ids(recorded)).toEqual(["b1"]);
+    expect(bot(recorded, "b1")).toMatchObject({ answer: "Clear", answerIndex: 1 });
+
+    const sendingNow = taskView(
+      "task-1",
+      [card("task-1", 1, ["q1"]), question("b1", 1, "task-1", "q1")],
+      [sending("k", 2, "Keep", "q1")],
+    );
+    expect(ids(sendingNow)).toEqual(["b1"]);
+    expect(bot(sendingNow, "b1")).toMatchObject({ answer: "Keep", answerSending: true });
+  });
+
+  it("leaves approvals and questions without a task record to the older matching", () => {
+    const rows = taskView("task-1", [
+      card("task-1", 1, ["legacy"]),
+      question("b0", 1, "task-1", "legacy", null),
+      person("u1", 2, "Keep", { taskId: "task-1" }),
+    ]);
+    expect(bot(rows, "b0")).not.toHaveProperty("answerQuestionId");
+    expect(bot(rows, "b0")).toMatchObject({ answer: "Keep", answerIndex: 0 });
+  });
+});

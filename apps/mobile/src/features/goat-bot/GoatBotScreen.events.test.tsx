@@ -32,6 +32,10 @@ type Read =
   | ReadonlyArray<object>
   | { readonly failedAfter: ReadonlyArray<object> }
   | { readonly refreshing: ReadonlyArray<object> };
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
 vi.mock("react-native", () => ({
   // Views report where they sit, as native layout does once they mount.
   View: function View({
@@ -213,6 +217,8 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
+// GOAT Bot's steps are read from the thread state, which loads the environment runtime.
+vi.mock("../../state/threads", () => ({ environmentThreadDetails: {} }));
 vi.mock("./useMobileGoatBotSession", () => ({
   // Like the real session, a deleted member's chat cannot send.
   useMobileGoatBotSession: (
@@ -229,6 +235,9 @@ vi.mock("./useMobileGoatBotSession", () => ({
     replyingSince: null,
     activity: null,
     supportsTaskThreads: true,
+    streamingReplyIds: new Set<string>(),
+    visibleTurnItems: [],
+    boundedSnapshots: false,
   }),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));

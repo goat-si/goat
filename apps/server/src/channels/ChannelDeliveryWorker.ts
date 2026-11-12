@@ -27,6 +27,12 @@ import * as ChannelWake from "./ChannelWake.ts";
 
 /** With exponential backoff capped at five minutes, ten attempts span about thirteen minutes. */
 const MAX_ATTEMPTS = 10;
+/**
+ * An answer decision is a local write that nothing else corrects, so it keeps retrying on the
+ * normal path for longer: more attempts, up to ten minutes apart, before it fails.
+ */
+export const ANSWER_DECISION_ATTEMPTS = MAX_ATTEMPTS + 6;
+const ANSWER_DECISION_MAX_WAIT_SECONDS = 600;
 /** Rows one pass may send before it yields to the rest of the loop. */
 const MAX_PER_PASS = 50;
 /** A failed hand-over's release is retried this often, at most this many times, in batches. */
@@ -54,6 +60,10 @@ export const deliveryOutcomeFor = (
   error: ChannelGatewayError,
   attempts: number,
   now: DateTime.Utc,
+  limits: { readonly maxAttempts: number; readonly maxWaitSeconds: number } = {
+    maxAttempts: MAX_ATTEMPTS,
+    maxWaitSeconds: 300,
+  },
 ): ChannelLedger.ChannelDeliveryOutcome => {
   const code = error.deliveryErrorCode ?? error.reason;
   if (error.reason === "adapter_unavailable") return { type: "failed", errorCode: code };
@@ -61,8 +71,8 @@ export const deliveryOutcomeFor = (
   if (error.deliveryErrorCode !== undefined && NON_RETRYABLE.has(error.deliveryErrorCode)) {
     return { type: "failed", errorCode: code };
   }
-  if (attempts >= MAX_ATTEMPTS) return { type: "failed", errorCode: code };
-  const waitSeconds = error.retryAfterSeconds ?? Math.min(2 ** attempts, 300);
+  if (attempts >= limits.maxAttempts) return { type: "failed", errorCode: code };
+  const waitSeconds = error.retryAfterSeconds ?? Math.min(2 ** attempts, limits.maxWaitSeconds);
   return {
     type: "retry",
     at: DateTime.formatIso(DateTime.addDuration(now, Duration.seconds(waitSeconds))),
@@ -146,7 +156,6 @@ const make = Effect.gen(function* () {
     Effect.forever,
     Effect.forkIn(scope),
   );
-
   const release = (entry: PendingRelease) =>
     Effect.gen(function* () {
       const at = DateTime.formatIso(yield* DateTime.now);
@@ -346,7 +355,17 @@ const make = Effect.gen(function* () {
                 ? {}
                 : { externalMessageId: sent.success.externalMessageId }),
             }
-          : deliveryOutcomeFor(sent.failure, delivery.attempts, finishedAt),
+          : deliveryOutcomeFor(
+              sent.failure,
+              delivery.attempts,
+              finishedAt,
+              delivery.message.personAnswer === undefined
+                ? undefined
+                : {
+                    maxAttempts: ANSWER_DECISION_ATTEMPTS,
+                    maxWaitSeconds: ANSWER_DECISION_MAX_WAIT_SECONDS,
+                  },
+            ),
       now: DateTime.formatIso(finishedAt),
     });
   });

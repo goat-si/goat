@@ -7,8 +7,19 @@ import {
 
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
+// Editing a member from its chat reads secure storage and bot permissions; these tests do not.
+vi.mock("./MobileNewBotNameRow", () => ({
+  useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
+}));
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
+// Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
+vi.mock("./GoatBotReplyFiles", () => ({
+  GoatBotFilesProvider: (props: { children?: unknown }) => props.children,
+  GoatBotReplyFiles: () => null,
+  chatFilesScope: () => "chat",
+}));
+vi.mock("./openBotLibraryFile", () => ({ openBotLibraryFile: async () => null }));
 vi.mock("./useGoatBotEventTargets", () => ({
   useGoatBotEventTargets: () => ({ land: () => null, key: "" }),
 }));
@@ -316,4 +327,51 @@ it("bounds an unclosed inline tag to its paragraph in a collapsed task summary",
   });
   expect(shown).toContain("Fixed in #7.");
   expect(shown).not.toContain(pr(7, "a/repo"));
+});
+
+type ReferenceNode = LinkNode & { identifier?: string; title?: string | null };
+/** Where each link and reference leads, in order, resolving references against their definitions. */
+function resolvedLinks(markdown: string): string[] {
+  const tree = parser.parse(markdown) as ReferenceNode;
+  const defined = new Map<string, string>();
+  const found: string[] = [];
+  const collect = (node: ReferenceNode) => {
+    if (
+      node.type === "definition" &&
+      node.identifier !== undefined &&
+      !defined.has(node.identifier)
+    )
+      defined.set(node.identifier, (node.url ?? "") + " " + (node.title ?? ""));
+    for (const child of node.children ?? []) collect(child);
+  };
+  const walk = (node: ReferenceNode) => {
+    if (node.type === "link") found.push((node.url ?? "") + " " + (node.title ?? ""));
+    if (node.type === "linkReference")
+      found.push(defined.get(node.identifier ?? "") ?? "unresolved");
+    if (node.type !== "definition") for (const child of node.children ?? []) walk(child);
+  };
+  collect(tree);
+  walk(tree);
+  return found;
+}
+
+it("draws the tables of a reply with link references in their own cards, every reference still leading where it did", async () => {
+  const text = [
+    "See [the notes][x] and [the plan].",
+    "",
+    "| Step | Link |",
+    "| --- | --- |",
+    "| Read | [the notes][X] |",
+    "",
+    '[x]: <https://example.com/notes page> "The notes"',
+    "[The  Plan]: https://example.com/plan",
+  ].join("\n");
+  await show(reply(text));
+  expect(view.container.querySelector('[aria-label="Copy table"]')).not.toBeNull();
+  // The words and the table, each in its own card; the definitions alone draw no card.
+  expect(native.markdown).toHaveLength(2);
+  expect(native.markdown.flatMap((markdown) => resolvedLinks(markdown))).toEqual(
+    resolvedLinks(text),
+  );
+  expect(resolvedLinks(text)).not.toContain("unresolved");
 });

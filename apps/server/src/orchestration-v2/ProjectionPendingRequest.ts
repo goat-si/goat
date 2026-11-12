@@ -5,6 +5,9 @@ import {
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
 
+// Shells reach every client on each change, so the card's title rides along only bounded.
+const HANDOFF_TITLE_MAX_LENGTH = 160;
+
 export function pendingRuntimeRequestSummary(
   request: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null,
 ): OrchestrationV2PendingRuntimeRequestSummary | null {
@@ -27,5 +30,13 @@ export function secretRequestAsPendingInput(
     kind: "user_input",
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
+    ...(item.type === "human_handoff"
+      ? {
+          handoff: {
+            kind: item.handoff.kind,
+            title: item.handoff.title.slice(0, HANDOFF_TITLE_MAX_LENGTH),
+          },
+        }
+      : {}),
   };
 }

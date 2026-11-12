@@ -94,6 +94,9 @@ func run(t *testing.T, kind byte, resp, init *ident.Identity, psk []byte, payloa
 		t.Fatal(err)
 	}
 	rs := <-rc
+	if !bytes.Equal(is.HandshakeHash, rs.HandshakeHash) || len(is.HandshakeHash) != 32 {
+		t.Fatalf("handshake hash: initiator %x, responder %x", is.HandshakeHash, rs.HandshakeHash)
+	}
 	ipt, rpt := []byte("ping from the initiator"), []byte("pong from the responder")
 	is.Send(ipt)
 	if got, err := rs.Recv(ctx); err != nil || !bytes.Equal(got, ipt) {
@@ -112,6 +115,7 @@ func run(t *testing.T, kind byte, resp, init *ident.Identity, psk []byte, payloa
 		KeyConfirmation:   hex.EncodeToString(ra.sent[1]),
 		InitiatorRecordPT: string(ipt), InitiatorRecord: hex.EncodeToString(ra.sent[2]),
 		ResponderRecordPT: string(rpt), ResponderRecord: hex.EncodeToString(rb.sent[1]),
+		HandshakeHash: hex.EncodeToString(rs.HandshakeHash),
 	}
 	if kind == KindJoin {
 		tr.PSK = hex.EncodeToString(psk)

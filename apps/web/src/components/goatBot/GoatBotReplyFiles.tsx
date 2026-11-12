@@ -48,8 +48,8 @@ export const GoatBotReplyFiles = memo(function GoatBotReplyFiles({
   const listing = useEnvironmentQuery(
     wanted ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null,
   );
-  const artifacts = wanted ? (listing.data?.artifacts ?? null) : null;
-  const named = artifacts === null ? [] : goatBotReplyFiles(text, artifacts);
+  const data = wanted ? (listing.data ?? null) : null;
+  const named = data === null ? [] : goatBotReplyFiles(text, data.artifacts, data.root);
   if (files === null || named.length === 0) return null;
   return (
     <div className="flex w-full max-w-[min(100%,34rem)] flex-col gap-2 pt-1.5">

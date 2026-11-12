@@ -24,8 +24,10 @@ const quotedParts = (text: string): { readonly quote?: string; readonly reply?: 
 
 /**
  * GOAT Bot's messenger timeline. Only conversation survives: the user's
- * messages, the bot's replies and one card per piece of work. Tool calls,
- * reasoning, plans and the rest of a coding run stay in the worker thread.
+ * messages, the bot's replies and one card per piece of work. The bot thread
+ * holds no tool calls; activitySteps.ts reads them from the session and worker
+ * threads and places a collapsed line between these rows, which it leaves as
+ * they are.
  *
  * The types here are display models with finished labels. Channel metadata
  * reaches them through readers. A turn is not a card, but its chip still says
@@ -400,9 +402,9 @@ export function buildGoatBotTimeline(input: {
    */
   readonly conversationOnly?: boolean;
   /**
-   * The main chat shows which message answered a task's own question from what the server
-   * recorded, never by guessing from times or words. On only where the client's card sends
-   * answers with their question; off keeps the older matching for every question.
+   * The main chat, and a task's view for that task's own questions, show which message answered
+   * a task question from what the server recorded, never by guessing from times or words. On only
+   * where the client's card sends answers with their question; off keeps the older matching.
    */
   readonly answerReferences?: boolean;
 }): GoatBotRow[] {
@@ -426,7 +428,10 @@ export function buildGoatBotTimeline(input: {
     const newest = newestCards.get(card.key);
     if (newest === undefined || card.revision > newest.revision) newestCards.set(card.key, card);
   }
-  const references = input.answerReferences === true && input.taskId === null;
+  const references = input.answerReferences === true && input.taskId !== undefined;
+  // A task's own view takes references for that task only.
+  const referencesFor = (taskId: string | null | undefined) =>
+    references && (input.taskId === null || taskId === input.taskId);
   const decidedInputs = references
     ? decidedAnswerInputs([...newestCards.values(), ...newestQuestionChips.values()])
     : new Map<string, string>();
@@ -524,7 +529,7 @@ export function buildGoatBotTimeline(input: {
         inputTexts.set(presentation.requestKey, item.text);
       }
       if (presentation?.clientKey) committedRequestKeys.add(presentation.clientKey);
-      const verdict = references
+      const verdict = referencesFor(presentation?.taskId)
         ? answerReference(presentation?.answersQuestionId, presentation?.requestKey)
         : undefined;
       // Sent from a question's card and refused: it stays here as what the person said, and
@@ -593,7 +598,9 @@ export function buildGoatBotTimeline(input: {
       if (open !== null) cardDecidesOptions.add(item.id);
       if (open === true) openOnCard.add(item.id);
       const taskQuestion =
-        references && presentation?.questionKind === "task" && presentation.questionId
+        referencesFor(presentation?.taskId) &&
+        presentation?.questionKind === "task" &&
+        presentation.questionId
           ? presentation.questionId
           : undefined;
       if (taskQuestion !== undefined) taskQuestions.set(item.id, taskQuestion);
@@ -694,7 +701,7 @@ export function buildGoatBotTimeline(input: {
     )
     .map((entry) => {
       sentTasks.set(`pending:${entry.clientKey}`, entry.taskId ?? null);
-      if (references && entry.questionId !== undefined)
+      if (referencesFor(entry.taskId) && entry.questionId !== undefined)
         referenceSends.add(`pending:${entry.clientKey}`);
       return {
         kind: "user",

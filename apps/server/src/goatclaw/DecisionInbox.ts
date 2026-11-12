@@ -56,6 +56,7 @@ import {
 import { validateTransport } from "./DecisionDestination.ts";
 import { makeDecisionRouting } from "./DecisionRouting.ts";
 import { compareDecisions } from "./decisionOrder.ts";
+import { openApprovalHandoffs } from "./openApprovalHandoffs.ts";
 
 export type { DecisionCaller } from "./DecisionAuthority.ts";
 
@@ -602,11 +603,17 @@ const make = Effect.gen(function* () {
     // Archived threads stay out of the inbox, as they do from thread shells.
     for (const row of yield* pendingRows(undefined, -1))
       if (row.archived_at === null) items.push(yield* project(row, undefined));
+    const approvals = yield* openApprovalHandoffs().pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.mapError(storageFailure),
+    );
     return {
       items: yield* presentItems(
         viewer,
         yield* routing.annotate(environmentId, items.sort(compareDecisions)),
       ),
+      handoffs: approvals.handoffs,
+      ...(approvals.total > approvals.handoffs.length ? { handoffsTotal: approvals.total } : {}),
     };
   });
   return DecisionInbox.of({

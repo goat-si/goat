@@ -692,6 +692,15 @@ export function useMobileGoatBotSession(
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     [visibleTurnItems],
   );
+  const streamingReplyIds = useMemo(
+    () =>
+      new Set<string>(
+        visibleTurnItems.flatMap(({ item }) =>
+          item.type === "assistant_message" && item.streaming ? [item.id] : [],
+        ),
+      ),
+    [visibleTurnItems],
+  );
   const reading = useReplying(replyingSince, visible);
   const turnsWaiting = useMemo(() => goatBotTurnsWaiting(visibleTurnItems), [visibleTurnItems]);
   const activityTask = useMemo(
@@ -785,6 +794,12 @@ export function useMobileGoatBotSession(
   }, [environmentId, homeKey, settingsSnapshot]);
   return {
     rows,
+    /** The conversation's items the rows were built from; empty while the chat is hidden. */
+    visibleTurnItems,
+    /** The history's server sends a thread's newest part, so GOAT Bot's steps may be read. */
+    boundedSnapshots:
+      (target ? configs.get(target.environmentId) : undefined)?.environment.capabilities
+        .goatBotOpenAsks === true,
     supportsTaskThreads,
     /** Changes when a task record in the conversation changes; null while the chat is hidden. */
     workRevision,
@@ -792,6 +807,8 @@ export function useMobileGoatBotSession(
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */
     threadId: target?.threadId ?? null,
+    /** Bot replies still arriving, by row id. */
+    streamingReplyIds,
     replyingSince,
     activity,
     /** The bot's own turns asking a question in this chat, which the task list never shows. */
