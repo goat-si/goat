@@ -309,10 +309,19 @@ it.effect.each([
     host: { phase: "failed", message: UNCONFIRMED },
   },
   {
-    start: "names a tool the remote does not have",
+    // "Unknown tool" also arrives as an RPC error after the call was sent.
+    start: "answers that the remote has no such tool",
     error: new Dispatch.SshRemoteDispatchError({
       reason: "remote_outdated",
       message: "GOAT on box does not have goat_provider_sync; update GOAT on box.",
+    }),
+    host: { phase: "failed", message: UNCONFIRMED },
+  },
+  {
+    start: "never left because the host is unknown here",
+    error: new Dispatch.SshRemoteDispatchError({
+      reason: "host_unknown",
+      message: "box is unknown",
     }),
     host: { phase: "cancelled" },
   },

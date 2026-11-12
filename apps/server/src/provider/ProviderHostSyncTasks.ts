@@ -44,16 +44,15 @@ export const askFailed = (error: HandoffError) =>
 export type RemoteFailure = {
   readonly status: "update_runtime" | "not_ready" | "unreachable" | "refused";
   readonly message: string;
-  /** Nothing reached the remote, or it refused: no sync can be running there for this call. */
+  /** The call never reached the remote, so no sync can be running there for it. */
   readonly unsent?: true;
 };
 export const classify = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
   const failure = describe(error);
-  // Only definite signals: refused here, no such tool there, or a request that never left. Any
-  // remote_refused, structured or not, may come after the remote started the sync.
+  // Only a refusal here or a request that never left is definite. Anything the remote answered,
+  // a refusal or "unknown tool" included, may come after it started the sync.
   const unsent =
     error._tag !== "SshRemoteDispatchError" ||
-    error.reason === "remote_outdated" ||
     error.reason === "invalid_request" ||
     error.reason === "host_unknown";
   return unsent ? { ...failure, unsent: true } : failure;
