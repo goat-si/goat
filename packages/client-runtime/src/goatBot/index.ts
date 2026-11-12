@@ -20,6 +20,7 @@ export * from "./faceMotion.ts";
 export * from "./botNotes.ts";
 export * from "./diagnostics.ts";
 export * from "./botArtifacts.ts";
+export * from "./fileReads.ts";
 export * from "./retry.ts";
 export * from "./botColor.ts";
 export * from "./unread.ts";

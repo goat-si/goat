@@ -270,7 +270,8 @@ export function botArtifactOpenMessage(
     case "too_large":
       return `${name} is larger than 20 MB, so ${botName} can't send it here.`;
     case "busy":
-      return "Another file is still opening. Try again in a moment.";
+      // Both clients: the server answered busy or a chunk ran past its bound.
+      return `${name} is taking too long to open. Try again in a moment.`;
     case "changed":
       return `${name} changed while it was opening. Try again.`;
     case "invalid":

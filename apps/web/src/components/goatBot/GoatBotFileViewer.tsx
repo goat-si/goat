@@ -5,7 +5,7 @@ import {
   botArtifactSizeLabel,
   botArtifactViewKind,
   botArtifactsFailure,
-  readWholeBotArtifact,
+  botFileReads,
 } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type {
@@ -20,7 +20,6 @@ import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
-import { afterLastChunkRequest } from "./goatBotFileReads";
 import { useGoatBotName } from "./goatBotMemberContext";
 
 type View =
@@ -71,7 +70,7 @@ function FileViewer({
   const [view, setView] = useState<View>({ kind: "opening" });
   // A new command function arrives every render; reading through an effect event keeps one read per file.
   const readChunk = useEffectEvent(async (input: ChannelReadBotArtifactInput) => {
-    const answer = await afterLastChunkRequest(environmentId, () => read({ environmentId, input }));
+    const answer = await read({ environmentId, input });
     if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
     return answer.value;
   });
@@ -81,8 +80,13 @@ function FileViewer({
     let imageUrl: string | null = null;
     void (async () => {
       try {
-        const result = await readWholeBotArtifact(file.relativePath, readChunk, controller.signal);
-        if (controller.signal.aborted) return;
+        const result = await botFileReads.open(
+          environmentId,
+          readChunk,
+          file.relativePath,
+          controller.signal,
+        );
+        if (result === null || controller.signal.aborted) return;
         if (result.status !== "ok") {
           setView({ kind: "message", message: botArtifactOpenMessage(name, result, botName) });
           return;
@@ -106,7 +110,7 @@ function FileViewer({
       controller.abort();
       if (imageUrl !== null) URL.revokeObjectURL(imageUrl);
     };
-  }, [file.relativePath, name, botName]);
+  }, [environmentId, file.relativePath, name, botName]);
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
