@@ -127,6 +127,12 @@ func (s *sessionTraffic) report(ctx context.Context) {
 		// Dropped: counted now, they would land in a later bucket than the one they crossed the relay in.
 		s.sentIn, s.sentOut, s.held = s.sentIn+s.held[0].in, s.sentOut+s.held[0].out, s.held[1:]
 	}
+	if now.Sub(s.lastTry) >= traffic.Span {
+		// Reports stalled for a bucket or more (the machine slept, or the clock jumped): when in that time the
+		// pending bytes moved is unknown, so they are dropped too.
+		s.sentIn, s.sentOut, s.held, s.lastTry = s.in.Load(), s.out.Load(), nil, now
+		return
+	}
 	in, out := min(s.in.Load()-s.sentIn, daemon.MaxTrafficCount), min(s.out.Load()-s.sentOut, daemon.MaxTrafficCount)
 	since := s.lastTry
 	s.lastTry = now

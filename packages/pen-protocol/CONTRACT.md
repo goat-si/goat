@@ -798,10 +798,11 @@ member's sessions load which relay.
   ends. The end of a session (a periodic report still in flight, the session's last sends and receives returning,
   the last report) shares one deadline of 1 s, so a daemon that takes reports and never answers delays the end of a
   session by at most 1 s. A report whose answer never came may have been counted, so its bytes are not sent again.
-  Bytes the node certainly did not take (the line never reached it whole, or it refused the report) wait for the
-  next report while they are less than one bucket (15 minutes) old, and are dropped after that: while no daemon
-  counts, counts are lost, never moved to a later bucket than the one their bytes crossed the relay in by more than
-  that.
+  Bytes the node certainly did not take (the line never reached it whole, or it refused the report) are kept per
+  report that carried them and wait for later reports while less than one bucket (15 minutes) has passed since they
+  began, and are dropped after that. Bytes whose report comes a bucket or more after the previous one (the machine
+  slept, or the wall clock jumped) are dropped too. Counts are lost while no daemon counts, never moved to a bucket
+  more than one bucket later than the one their bytes crossed the relay in.
 - Window: 96 buckets of 15 minutes by the node's wall clock, so bytes leave the total between 23 h 45 min and 24 h
   after they were counted. A wall clock set back by less than 23 h 45 min keeps every count; set back further, it can
   drop the counts of the buckets it skips (bucket indices, not elapsed time, decide). A node holds at most 512

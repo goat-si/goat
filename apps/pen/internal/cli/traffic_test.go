@@ -709,3 +709,62 @@ func TestPipeKeepsNewerRefusedBytesWhenAnOlderBatchExpires(t *testing.T) {
 		t.Fatalf("reports %+v; want a third report counting the 50 bytes each way from +2 min", reports)
 	}
 }
+
+// A session whose reports stalled for a bucket or more (its machine slept, or the clock jumped) cannot tell when in
+// that time its bytes moved: they are dropped, not counted in the current bucket.
+func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	var mu sync.Mutex
+	var reports []daemon.TrafficReport
+	fakeDaemonFunc(t, b, func(line []byte) string {
+		var r daemon.TrafficReport
+		json.Unmarshal(line, &r)
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, r)
+		return `{"t":"counted"}`
+	})
+	var now atomic.Int64
+	start := time.Unix(1_800_000_000, 0)
+	now.Store(start.UnixNano())
+	oldNow := trafficNow
+	t.Cleanup(func() { trafficNow = oldNow })
+	trafficNow = func() time.Time { return time.Unix(0, now.Load()) }
+	ticks := make(chan time.Time)
+	setTrafficHooks(t, ticks, nil)
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	in, inW := io.Pipe()
+	defer inW.Close()
+	Stdin = in
+	defer func() { Stdin = os.Stdin }()
+	out := newSignalWriter()
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
+	inW.Write(make([]byte, 100))
+	out.wait(100)
+	now.Store(start.Add(traffic.Span + time.Minute).UnixNano())
+	ticks <- time.Now() // the first report comes a bucket late
+	ticks <- time.Now() // taken only once the late report has finished
+	inW.Write(make([]byte, 50))
+	out.wait(150)
+	inW.Close()
+	if c := <-code; c != 0 {
+		t.Fatalf("pipe exit %d, stderr %q", c, errOut.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var sumIn, sumOut uint64
+	for _, r := range reports {
+		sumIn, sumOut = sumIn+r.In, sumOut+r.Out
+	}
+	if sumIn != 50 || sumOut != 50 {
+		t.Fatalf("reports %+v; want only the 50 bytes each way that moved after the late tick", reports)
+	}
+}
