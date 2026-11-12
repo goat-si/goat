@@ -10,13 +10,10 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
-import * as ChannelLedger from "./ChannelLedger.ts";
-import { makeInboundChoices } from "./channelInboundChoice.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
@@ -240,79 +237,6 @@ describe("decision cards", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
-
-  it.effect("still refuses a number after a restart: the decision reads only stored state", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      yield* imessageApprovals();
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
-      yield* runtime.drain;
-      const task = yield* onlyTask;
-      const request = approval("ship");
-      harness.world.runtimeRequests.set(task.worker!.threadId, [request]);
-      yield* reports.reconcile(runtime.ownerToken);
-      yield* runtime.drain;
-      // A fresh ledger over the same database, as a restarted server builds it.
-      const fresh = yield* ChannelLedger.ChannelLedger.pipe(Effect.provide(ChannelLedger.layer));
-      assert.deepInclude(yield* fresh.approvalCodeForRequest(request.id), {
-        code: "A1",
-        delivered: true,
-      });
-      const tasks = yield* fresh.listConversationTasks(task.conversationId);
-      const choice = yield* makeInboundChoices(fresh).inboundChoice(
-        imessageInput("2", "row-2"),
-        task.conversationId,
-        tasks,
-      );
-      assert.deepStrictEqual(choice, { type: "approval-number", code: "A1" });
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("a bare approve waits for a card the person was shown, not a queued newer one", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const sent = yield* imessageApprovals(["drop the cache"]);
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
-      yield* runtime.drain;
-      const task = yield* onlyTask;
-      const shown = approval("ship");
-      harness.world.runtimeRequests.set(task.worker!.threadId, [shown]);
-      yield* reports.reconcile(runtime.ownerToken);
-      yield* runtime.drain;
-      yield* gateway.ingest(imessageInput("approve", "row-2"), imessageContext);
-      yield* runtime.drain;
-      assert.strictEqual(responses(harness)[0]?.requestId, shown.id);
-
-      // A second task asks; its card fails to send, so the person never saw it.
-      yield* gateway.ingest(imessageInput("do: drop the cache", "row-3"), imessageContext);
-      yield* runtime.drain;
-      const tasks = (yield* (yield* ChannelLedger.ChannelLedger).listConversationTasks(
-        task.conversationId,
-      )).filter((each) => each.taskId !== task.taskId);
-      const queued = approval("cache");
-      harness.world.runtimeRequests.set(task.worker!.threadId, []);
-      harness.world.runtimeRequests.set(tasks[0]!.worker!.threadId, [queued]);
-      yield* reports.reconcile(runtime.ownerToken);
-      yield* runtime.drain;
-      yield* gateway.ingest(imessageInput("approve", "row-4"), imessageContext);
-      yield* runtime.drain;
-      assert.strictEqual(responses(harness).length, 1);
-      // The held card also holds this chat's later sends, so read the reply where it is queued.
-      const sql = yield* SqlClient.SqlClient;
-      const [reply] = yield* sql<{ readonly message_json: string }>`
-        SELECT message_json FROM channel_outbox WHERE cause_key LIKE 'reply:%'
-        ORDER BY created_at DESC, rowid DESC LIMIT 1`;
-      assert.include(reply?.message_json ?? "", "Which approval");
-      assert.include(reply?.message_json ?? "", 'Reply \\"Approve A2\\"');
-      assert.notInclude(sent.at(-1)?.text ?? "", "Approve A2");
-    }).pipe(Effect.provide(harness.layer));
-  });
 
   it.effect("lets a number with nothing open through to the model", () => {
     const harness = makeHarness();

@@ -838,14 +838,7 @@ const make = Effect.gen(function* () {
         });
       if (reply.code === undefined) {
         if (open.length === 0) return undefined;
-        // A bare word answers the one card the person was shown. A card still queued, or one
-        // whose delivery is unknown, makes the word ambiguous, so it asks which by code.
-        const only = open.length === 1 ? open[0] : undefined;
-        const shown =
-          only === undefined
-            ? false
-            : (yield* ledger.approvalCodeForRequest(only.approval.requestId))?.delivered === true;
-        if (only !== undefined && shown) return yield* answer(only);
+        if (open.length === 1) return yield* answer(open[0]!);
         const now = DateTime.formatIso(yield* DateTime.now);
         const coded = yield* Effect.forEach(open, (card) =>
           ledger

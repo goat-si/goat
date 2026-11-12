@@ -54,7 +54,7 @@ export const makeInboundChoices = (
     const coded = yield* Effect.forEach(openApprovalCards(needing), (card) =>
       ledger.approvalCodeForRequest(card.approval.requestId).pipe(
         Effect.map((found): DeliveredChoices | undefined =>
-          found === undefined || !found.delivered
+          found === undefined
             ? undefined
             : {
                 at: found.issuedAt,
