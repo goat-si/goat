@@ -34,6 +34,14 @@ export const statusChanges = (
             Stream.runForEach(() => Queue.offer(changes, undefined)),
             Effect.forkScoped({ startImmediately: true }),
           );
+          // A stream that stops or fails takes the desktop's readiness with it, unannounced.
+          const health = yield* receiver.value.subscribeHealth;
+          yield* health.changes.pipe(
+            Stream.map(({ status }) => status),
+            Stream.changes,
+            Stream.runForEach(() => Queue.offer(changes, undefined)),
+            Effect.forkScoped({ startImmediately: true }),
+          );
           return statusRevisions(changes);
         }),
       );

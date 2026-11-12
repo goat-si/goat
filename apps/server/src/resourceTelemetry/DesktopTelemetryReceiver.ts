@@ -731,7 +731,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           ),
         );
       }),
-      // The desktop that reported it is gone or no longer heard, so nothing may act on it.
+      // The stream that carried it ended or failed, so nothing may act on it.
       Effect.ensuring(Ref.set(cuaReadiness, Option.none())),
       Effect.andThen(
         updateHealth((current): DesktopTelemetryReceiverHealth => ({
