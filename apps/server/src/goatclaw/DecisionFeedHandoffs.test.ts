@@ -32,6 +32,7 @@ const client: Inbox.DecisionCaller = {
   sessionId: "owner",
   environmentId: EnvironmentId.make("test"),
   scopes: ["orchestration:operate"],
+  resolver: { kind: "person" },
 };
 
 const approvalItem = (
