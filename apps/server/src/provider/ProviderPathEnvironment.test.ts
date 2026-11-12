@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- util.inspect shows whether a spawn environment is a plain object.
+import * as NodeUtil from "node:util";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
@@ -49,7 +52,10 @@ const disabled = (...drivers: ReadonlyArray<string>) =>
   );
 
 /** The real registry with real Claude and Codex driver instances; `spawned` records every launch. */
-const layerRealProviders = (spawned: Array<string>) =>
+const layerRealProviders = (
+  spawned: Array<string>,
+  environments: Array<NodeJS.ProcessEnv | undefined>,
+) =>
   ProviderRegistry.layer.pipe(
     Layer.provideMerge(
       ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(layerHydrationTestServices)),
@@ -93,8 +99,10 @@ const layerRealProviders = (spawned: Array<string>) =>
     Layer.provideMerge(OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest))),
     Layer.updateService(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
       ChildProcessSpawner.make((command) => {
-        if (command._tag === "StandardCommand")
+        if (command._tag === "StandardCommand") {
           spawned.push([command.command, ...command.args].join(" "));
+          environments.push(command.options.env);
+        }
         return spawner.spawn(command);
       }),
     ),
@@ -189,6 +197,7 @@ it.live(
       environment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING = "1";
 
       const spawned: Array<string> = [];
+      const environments: Array<NodeJS.ProcessEnv | undefined> = [];
       const changed = Latch.makeUnsafe(false);
       const applySnapshot = makeApplyDesktopShellEnvironmentSnapshot(
         environment,
@@ -242,8 +251,15 @@ it.live(
           codex: { installed: true, sentence: false },
           checks: { claude: before.claude + 1, codex: before.codex + 1 },
         });
+
+        // What a provider is started with stays an ordinary object, with the new PATH in it.
+        const started = environments[spawned.lastIndexOf("claude --version")] ?? {};
+        expect(Object.getPrototypeOf(started)).toBe(Object.prototype);
+        expect(started.PATH).toBe(bin + ":/usr/bin:/bin");
+        expect(NodeUtil.inspect(started)).toContain("CLAUDE_CODE_ENTRYPOINT: 't3-code'");
+        expect(structuredClone(started)).toEqual(started);
       }).pipe(
-        Effect.provide(layerRealProviders(spawned)),
+        Effect.provide(layerRealProviders(spawned, environments)),
         Effect.provideService(HostPathChanged, changed),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

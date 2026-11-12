@@ -211,9 +211,9 @@
       "types": "./src/cliPath.ts",
       "import": "./src/cliPath.ts"
     },
-    "./environmentOverlay": {
-      "types": "./src/environmentOverlay.ts",
-      "import": "./src/environmentOverlay.ts"
+    "./hostEnvironmentFollowers": {
+      "types": "./src/hostEnvironmentFollowers.ts",
+      "import": "./src/hostEnvironmentFollowers.ts"
     },
     "./semver": {
       "types": "./src/semver.ts",

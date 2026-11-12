@@ -642,6 +642,10 @@ export const make = Effect.gen(function* () {
   );
   const installIntoProcess = yield* Effect.cached(
     Effect.gen(function* () {
+      // The server can start before any snapshot exists; give its first provider checks these folders.
+      const { platform, homeDirectory } = environment;
+      const startPath = appendWellKnownCliDirs(env.PATH, platform, homeDirectory);
+      if (startPath) env.PATH = startPath;
       const cache = yield* Effect.scoped(
         Effect.gen(function* () {
           const file = yield* fileSystem.open(cachePath, { flag: "r" });

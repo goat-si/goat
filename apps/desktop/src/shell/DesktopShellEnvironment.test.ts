@@ -321,7 +321,8 @@ describe("DesktopShellEnvironment", () => {
             const startup = yield* service.installIntoProcess.pipe(Effect.forkChild);
             yield* Deferred.await(started);
             assert.isDefined(startup.pollUnsafe());
-            assert.equal(env.PATH, "/usr/bin");
+            // The server may start now, before any snapshot: it already has the well-known folders.
+            assert.equal(env.PATH, `/usr/bin:${DARWIN_CLI_DIRS}`);
             yield* Deferred.succeed(release, undefined);
             return yield* service.awaitDiscovery;
           }),

@@ -3,6 +3,7 @@ import * as NodeTls from "node:tls";
 import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { followHostEnvironment } from "@goat/shared/hostEnvironmentFollowers";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as FileSystem from "effect/FileSystem";
@@ -12,6 +13,44 @@ import { describe, expect } from "vite-plus/test";
 import { makeApplyDesktopShellEnvironmentSnapshot } from "./DesktopShellEnvironmentReceiver.ts";
 
 describe("desktop shell environment", () => {
+  it.effect.each(["darwin", "linux", "win32"] as const)(
+    "gives provider copies the new PATH before it reports the change, except on Windows: %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const environment: NodeJS.ProcessEnv = {
+          PATH: "/usr/bin",
+          GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+        };
+        const copy = followHostEnvironment({ ...environment, OWN: "1" }, environment);
+        let pathWhenReported: string | undefined;
+        yield* makeApplyDesktopShellEnvironmentSnapshot(
+          environment,
+          platform,
+          Effect.sync(() => {
+            pathWhenReported = copy.PATH;
+          }),
+        )({
+          version: 1,
+          type: "shellEnvironment",
+          platform,
+          discovered: true,
+          environment: { PATH: "/recovered/bin" },
+        });
+        expect(environment).toEqual({ PATH: "/recovered/bin" });
+        if (platform === "win32") {
+          expect(copy).toEqual({
+            PATH: "/usr/bin",
+            GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+            OWN: "1",
+          });
+          expect(pathWhenReported).toBeUndefined();
+        } else {
+          expect(copy).toEqual({ PATH: "/recovered/bin", OWN: "1" });
+          expect(pathWhenReported).toBe("/recovered/bin");
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("reports a changed PATH or a finished discovery once, not on every snapshot", () =>
     Effect.gen(function* () {
       const environment: NodeJS.ProcessEnv = {

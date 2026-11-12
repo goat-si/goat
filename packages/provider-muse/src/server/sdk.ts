@@ -11,7 +11,7 @@ import {
 } from "@muse-code/sdk";
 import type { RuntimeMode } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { overlayEnvironment } from "@goat/shared/environmentOverlay";
+import { followHostEnvironment } from "@goat/shared/hostEnvironmentFollowers";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
 
@@ -56,15 +56,15 @@ export interface MuseSdkHostOptions {
 export function makeMuseEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  // A view: the driver builds this once, and its later checks must see the current PATH.
-  const view = overlayEnvironment(environment, {
-    META_API_KEY: undefined,
+  const museEnvironment = {
+    ...Object.fromEntries(
+      Object.keys(environment)
+        .filter((key) => key.toUpperCase() !== "META_API_KEY")
+        .map((key) => [key, environment[key]]),
+    ),
     MUSE_NO_AUTO_UPDATE: "1",
-  });
-  for (const key of Object.keys(environment)) {
-    if (key.toUpperCase() === "META_API_KEY") delete view[key];
-  }
-  return view;
+  };
+  return followHostEnvironment(museEnvironment, environment);
 }
 
 export function museVerbatimPath(path: string): string {

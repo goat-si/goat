@@ -7,7 +7,7 @@ export const POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS = 10_000;
 export const LOGIN_SHELL_RETRY_DELAYS_MS: ReadonlyArray<number> = [30_000, 120_000, 600_000];
 
 /** Set by the desktop on its server until a login shell has answered with a PATH. */
-const SHELL_DISCOVERY_PENDING_ENV = "GOAT_DESKTOP_SHELL_DISCOVERY_PENDING";
+export const SHELL_DISCOVERY_PENDING_ENV = "GOAT_DESKTOP_SHELL_DISCOVERY_PENDING";
 
 const LOGIN_SHELL_PATH_UNREAD_NOTE =
   "GOAT has not been able to read the PATH from your login shell, so it searched only the folders it already knew and the standard install folders. If the CLI is installed somewhere else, set its full path as that provider's Binary path under Settings → Providers.";
@@ -52,9 +52,6 @@ export function appendWellKnownCliDirs<Value extends string | null | undefined>(
   return [pathValue.replace(/:+$/u, ""), ...missing].join(POSIX_PATH_DELIMITER);
 }
 
-export const loginShellPathUnread = (env: NodeJS.ProcessEnv): boolean =>
-  env[SHELL_DISCOVERY_PENDING_ENV] === "1";
-
 /**
  * One sentence for every "CLI not found" message, so providers cannot drift apart. Only macOS
  * and Linux read a login shell; Windows desktop sets the same variable for other reasons.
@@ -64,7 +61,7 @@ export function withLoginShellPathNote(
   host: { readonly env: NodeJS.ProcessEnv; readonly platform: NodeJS.Platform },
 ): string {
   const readsLoginShell = host.platform === "darwin" || host.platform === "linux";
-  return readsLoginShell && loginShellPathUnread(host.env)
+  return readsLoginShell && host.env[SHELL_DISCOVERY_PENDING_ENV] === "1"
     ? `${message} ${LOGIN_SHELL_PATH_UNREAD_NOTE}`
     : message;
 }
