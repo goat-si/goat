@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   BUILTIN_PERMISSION_PROFILES,
+  EnvironmentAuthorizationError,
   type HubNode,
   type RuntimeMode,
   ThreadId,
@@ -27,6 +28,7 @@ const fixture = (options: {
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
   readonly goatclaw?: { readonly profile: string; readonly hosts?: ReadonlyArray<string> };
+  readonly readOnly?: boolean;
 }) =>
   Effect.gen(function* () {
     const modes = yield* Ref.make({
@@ -37,6 +39,7 @@ const fixture = (options: {
       node({ kind: "ssh", alias: "pen-vm1", hostname: null, username: null, port: null }),
       node({ kind: "cloud", alias: "boat-1" as never }),
     ]);
+    const revoked = yield* Ref.make(false);
     const settings = ServerSettings.layerTest(
       options.goatclaw === undefined
         ? {}
@@ -59,6 +62,18 @@ const fixture = (options: {
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         ...threadScope,
         thread: { ...threadScope.thread!, threadId },
+        ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
+        reauthorize: () =>
+          Effect.flatMap(Ref.get(revoked), (gone) =>
+            gone
+              ? Effect.fail(
+                  new EnvironmentAuthorizationError({
+                    requiredScope: "orchestration:operate",
+                    message: "The calling thread's MCP credential is no longer active.",
+                  }),
+                )
+              : Effect.void,
+          ),
       }),
       Layer.mock(ThreadManagement.ThreadManagementService)({
         getThreadShell: () =>
@@ -76,7 +91,7 @@ const fixture = (options: {
       } as unknown as HubNodes.HubNodes["Service"]),
       Profiles.layer.pipe(Layer.provide(settings)),
     );
-    return { modes, nodes, layer };
+    return { modes, nodes, revoked, layer };
   });
 
 it.effect("a full-access thread installs without a card on machines saved here", () =>
@@ -99,6 +114,7 @@ it.effect.each([
   },
   { name: "an auto thread", fixture: { runtimeMode: "auto" as const }, input: {} },
   { name: "a thread in plan mode", fixture: { interactionMode: "plan" as const }, input: {} },
+  { name: "a read-only thread credential", fixture: { readOnly: true }, input: {} },
   { name: "a request that also signs in", fixture: {}, input: { login: true } },
   { name: "a request that leaves login to its default", fixture: {}, input: { login: undefined } },
   { name: "an alias only in SSH config", fixture: {}, input: { hosts: ["box"] } },
@@ -141,4 +157,20 @@ it.effect("the check refuses once the thread drops to approvals or the machine i
       "pen-vm1 is not a machine saved in this server's connections.",
     );
   }),
+);
+
+it.effect(
+  "regression S2-1: the check refuses once the thread's credential is revoked or replaced",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({});
+      const check = (yield* directInstallCheck({ hosts: ["pen-vm1"], login: false }).pipe(
+        Effect.provide(f.layer),
+      ))!;
+      yield* check;
+      yield* Ref.set(f.revoked, true);
+      expect((yield* Effect.flip(check)).message).toBe(
+        "The calling thread's MCP credential is no longer active.",
+      );
+    }),
 );

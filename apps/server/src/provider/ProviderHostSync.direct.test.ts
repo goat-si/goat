@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
@@ -238,33 +239,57 @@ it.effect.each([{ who: "thread" }, { who: "person" }] as const)(
     }),
 );
 
+const UNCONFIRMED =
+  "Could not confirm the cancel on box; its installer may still be running. Check goat_provider_host_matrix.";
+const remoteSync = (done: boolean, host: Record<string, unknown>) => ({
+  ...finished.sync,
+  done,
+  hosts: [{ host: null, version: null, ...host }],
+});
+const dropped = new Dispatch.SshRemoteDispatchError({
+  reason: "host_unavailable",
+  message: "box went away",
+});
+
 it.effect.each([
-  { remote: "confirms", phase: "cancelled" },
-  { remote: "fails", phase: "failed" },
+  {
+    remote: "confirms",
+    reply: Effect.succeed(remoteSync(true, { phase: "cancelled" })),
+    host: { phase: "cancelled" },
+  },
+  { remote: "fails", reply: Effect.fail(dropped), host: { phase: "failed", message: UNCONFIRMED } },
+  {
+    remote: "is still installing",
+    reply: Effect.succeed(remoteSync(false, { phase: "installing" })),
+    host: { phase: "failed", message: UNCONFIRMED },
+  },
+  {
+    remote: "answers unreadably",
+    reply: Effect.succeed({ nope: true }),
+    host: { phase: "failed", message: UNCONFIRMED },
+  },
+  {
+    remote: "had already installed",
+    reply: Effect.succeed(remoteSync(true, { phase: "installed", version: "1.2.3" })),
+    host: { phase: "installed", version: "1.2.3" },
+  },
+  {
+    remote: "had already failed",
+    reply: Effect.succeed(remoteSync(true, { phase: "failed", message: "npm exited 1." })),
+    host: { phase: "failed", message: "npm exited 1." },
+  },
 ] as const)(
-  "regression S1-2: cancelling a direct remote install reaches the remote and reads $phase when it $remote",
-  ({ remote, phase }) =>
+  "regression S1-2/S2-3: cancelling a direct remote install that $remote reads what the remote confirmed",
+  ({ reply, host }) =>
     Effect.gen(function* () {
       const accepted = yield* Deferred.make<void>();
-      const running = (done: boolean) => ({
-        ...finished.sync,
-        done,
-        hosts: [{ host: null, phase: done ? "cancelled" : "installing", version: null }],
-      });
       const { state, layer } = harness({
         answer: (call) =>
           call.tool === "goat_provider_sync"
             ? Deferred.succeed(accepted, undefined).pipe(
-                Effect.as({ kind: "started", sync: running(false) }),
+                Effect.as({ kind: "started", sync: remoteSync(false, { phase: "installing" }) }),
               )
-            : remote === "fails"
-              ? Effect.fail(
-                  new Dispatch.SshRemoteDispatchError({
-                    reason: "host_unavailable",
-                    message: "box went away",
-                  }),
-                )
-              : Effect.succeed(running(true)),
+            : reply,
       });
       yield* Effect.gen(function* () {
         const sync = yield* HostSync.ProviderHostSync;
@@ -283,11 +308,51 @@ it.effect.each([
           "goat_provider_sync",
           "goat_provider_sync_cancel",
         ]);
-        expect(cancelled.hosts[0]).toMatchObject({ host: "box", phase });
-        if (phase === "failed")
-          expect(cancelled.hosts[0]?.message).toBe(
-            "Could not confirm the cancel on box; its installer may still be running. Check goat_provider_host_matrix.",
-          );
+        expect(cancelled.hosts[0]).toEqual({ host: "box", version: null, ...host });
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect.each([
+  {
+    start: "times out after the remote may have accepted it",
+    error: dropped,
+    host: { phase: "failed", message: UNCONFIRMED },
+  },
+  {
+    start: "is refused by the remote",
+    error: new Dispatch.SshRemoteDispatchError({ reason: "remote_refused", message: "no" }),
+    host: { phase: "cancelled" },
+  },
+] as const)(
+  "regression S2-2: a cancel waiting on a start that $start says only what it knows",
+  ({ error, host }) =>
+    Effect.gen(function* () {
+      const calling = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { state, layer } = harness({
+        answer: () =>
+          Deferred.succeed(calling, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(Effect.fail(error)),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", hosts: ["box"], login: false },
+          direct(Effect.void),
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        yield* Deferred.await(calling);
+        const stopping = yield* sync
+          .cancel({ syncId: started.sync.syncId }, { kind: "mcp", scope: threadScope })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        const cancelled = yield* Fiber.join(stopping);
+        // No remote sync id came back, so there is nothing to cancel there.
+        expect(state.calls.map(({ call }) => call.tool)).toEqual(["goat_provider_sync"]);
+        expect(cancelled.hosts[0]).toEqual({ host: "box", version: null, ...host });
       }).pipe(Effect.provide(layer));
     }),
 );

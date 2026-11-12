@@ -8,8 +8,11 @@ import {
   type ProviderSyncResult,
   type ProviderSyncState,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import type * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import type { SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
@@ -39,8 +42,21 @@ export const askFailed = (error: HandoffError) =>
 export type RemoteFailure = {
   readonly status: "update_runtime" | "not_ready" | "unreachable" | "refused";
   readonly message: string;
+  /** Nothing reached the remote, or it refused: no sync can be running there for this call. */
+  readonly unsent?: true;
 };
 export const classify = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
+  const failure = describe(error);
+  const local = error._tag !== "SshRemoteDispatchError";
+  return local ||
+    Dispatch.refusedByRemote(error.reason) ||
+    failure.status === "not_ready" ||
+    error.reason === "invalid_request" ||
+    error.reason === "host_unknown"
+    ? { ...failure, unsent: true }
+    : failure;
+};
+const describe = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
   const message = error.message;
   if (error._tag !== "SshRemoteDispatchError") return { status: "refused", message };
   if (Dispatch.refusedByRemote(error.reason) && message.includes(" does not have "))
@@ -97,3 +113,45 @@ export const update = (task: HostTask, next: StatePatch, finished = false) =>
     task.finished = true;
     return task.onFinished ?? Effect.void;
   });
+
+const unconfirmed = (host: string): StatePatch => ({
+  phase: "failed",
+  login: undefined,
+  message: `Could not confirm the cancel on ${host}; its installer may still be running. Check goat_provider_host_matrix.`,
+});
+
+/** A remote start a cancel waited on: its sync id, null when nothing runs there, undefined when unknown. */
+const startOutcome = (exit: Exit.Exit<ProviderSyncResult, RemoteFailure>) => {
+  if (Exit.isSuccess(exit)) return exit.value.kind === "started" ? exit.value.sync.syncId : null;
+  const failure = Cause.findErrorOption(exit.cause);
+  return Option.isSome(failure) && failure.value.unsent === true ? null : undefined;
+};
+
+/** What a cancel may say about a remote host: only what that host confirmed. */
+const afterRemoteCancel = <E>(host: string, reply: Exit.Exit<ProviderSyncState, E>) => {
+  const remote = Exit.isSuccess(reply) ? reply.value.hosts[0] : undefined;
+  if (remote?.phase === "cancelled") return { phase: "cancelled", login: undefined } as const;
+  // It finished there before the cancel arrived.
+  if (Exit.isSuccess(reply) && reply.value.done && remote !== undefined)
+    return { ...remote, host, login: undefined };
+  return unconfirmed(host);
+};
+
+/**
+ * Cancels one unfinished host. A remote one is cancelled there and reported as that host
+ * confirms; a start whose fate is unknown is reported unconfirmed.
+ */
+export const cancelTask = Effect.fn("ProviderHostSync.cancelTask")(function* <E>(
+  task: HostTask,
+  cancelRemote: (host: string, syncId: string) => Effect.Effect<ProviderSyncState, E>,
+) {
+  const host = task.state.host;
+  const syncId =
+    task.remoteSyncId ??
+    (task.starting === undefined ? null : startOutcome(yield* Fiber.await(task.starting)));
+  if (host === null || syncId === null)
+    return yield* update(task, { phase: "cancelled", login: undefined }, true);
+  if (syncId === undefined) return yield* update(task, unconfirmed(host), true);
+  const reply = yield* Effect.exit(cancelRemote(host, syncId));
+  yield* update(task, afterRemoteCancel(host, reply), true);
+});

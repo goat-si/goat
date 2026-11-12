@@ -55,6 +55,9 @@ export const directInstallCheck = Effect.fn("ProviderDirectInstall.check")(funct
           ),
         );
   const check = Effect.gen(function* () {
+    if (scope.readOnly === true || scope.reauthorize === undefined) return yield* refuse(REFUSED);
+    // The credential can be revoked or replaced while an install waits; reload it every time.
+    yield* scope.reauthorize([]);
     const caller = yield* readCaller().pipe(Effect.mapError((error) => refuse(error.message)));
     const thread: Effect.Effect<void, OrchestratorMcpFailure> = assertLiveCaller(caller).pipe(
       Effect.andThen(assertFullAccess(caller, REFUSED)),

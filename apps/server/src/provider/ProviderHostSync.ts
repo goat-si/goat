@@ -38,7 +38,6 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -92,6 +91,7 @@ import {
 import {
   askFailed,
   callerKey,
+  cancelTask,
   classify,
   type Failure,
   fail,
@@ -1039,40 +1039,15 @@ const make = Effect.gen(function* () {
     yield* Effect.forEach(
       pending,
       (task) =>
-        Effect.gen(function* () {
-          const remoteSyncId =
-            task.remoteSyncId ??
-            (task.starting === undefined
-              ? undefined
-              : yield* Fiber.await(task.starting).pipe(
-                  Effect.map((exit) =>
-                    Exit.isSuccess(exit) && exit.value.kind === "started"
-                      ? exit.value.sync.syncId
-                      : undefined,
-                  ),
-                ));
-          const host = task.state.host;
-          if (host !== null && remoteSyncId !== undefined) {
-            const sent = yield* callRemote(remoteCaller, {
-              host,
-              tool: CANCEL_TOOL,
-              arguments: { syncId: remoteSyncId },
-              writes: true,
-              timeoutMs: MATRIX_DEADLINE_MS,
-            }).pipe(Effect.exit);
-            if (Exit.isFailure(sent))
-              return yield* update(
-                task,
-                {
-                  phase: "failed",
-                  login: undefined,
-                  message: `Could not confirm the cancel on ${host}; its installer may still be running. Check goat_provider_host_matrix.`,
-                },
-                true,
-              );
-          }
-          yield* update(task, { phase: "cancelled", login: undefined }, true);
-        }),
+        cancelTask(task, (host, syncId) =>
+          callRemote(remoteCaller, {
+            host,
+            tool: CANCEL_TOOL,
+            arguments: { syncId },
+            writes: true,
+            timeoutMs: MATRIX_DEADLINE_MS,
+          }).pipe(Effect.flatMap((raw) => decodeSyncState(raw))),
+        ),
       { discard: true },
     );
     return view(operation);
