@@ -36,3 +36,7 @@ The relay never decrypts and never logs payloads, and Worker observability is of
 node ids accept uplinks, which addresses open client sessions to them and when, and the size and
 timing of every record it forwards. It cannot read, forge, replay or splice records, because the Noise
 layer authenticates both ends.
+
+Each node id's Durable Object keeps one `traffic` row: bytes toward the node and from it and session
+counts, written at most once a minute and never an address. Reading it is in the
+[runbook](../../docs/operations/pen.md#relay-traffic).

@@ -308,11 +308,17 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
   flooding empty DATA ends only its own session 4408. Session ids count per node id while
   that node has sockets on the relay and wrap like the Worker's (skipping live ids), so a node sees only its own
-  sessions' ids and nothing is kept per node id once its last socket is gone. The room, and with it the counter, outlives an uplink only while clients
+  sessions' ids and no session id state is kept per node id once its last socket is gone. The room, and with it the counter, outlives an uplink only while clients
   remain, so a new counter always meets a new uplink connection, and a node keys sessions by its uplink connection:
   an id from an earlier counter (a restart, or a room that emptied) cannot reach a session of the new one. The counter
   does not read the clock. (The Worker keeps its counter in that node id's Durable Object, one stored integer per node
   id that ever had a client reach its authenticated uplink, with no cleanup.)
+- Relay traffic (operators only, nothing on the wire): both relays count each admitted session's payload bytes toward
+  the node and from it. `pen relay serve` writes one stderr line per session the node answered (the node id's first 8
+  characters, the bytes, duration, which side ended it, the close code and the time) and every 10 minutes per-node
+  totals kept in memory for at most 256 node ids; session lines are rate limited, totals are not. The Worker logs
+  nothing and keeps one `traffic` row in each node id's Durable Object, written at most once a minute. Neither keeps
+  an address, a header or anything from a session.
 
 ## Accounts (v1.1)
 
@@ -871,3 +877,5 @@ v1.2 member-only reader refuses both valid new forms.
   code change, and `tcp`, `mesh`, `join` and `account` are unchanged except that kind 0x04 refuses a listed key. Only
   `goat` may hold a list or an invite. `service-pair` uses the handshake race; joins and account sessions keep the
   ping race. Vectors: servicepair.json, stream.json, new lines in service.json.
+- v1.3 (2026-11-12): relays count each session's payload bytes for operators ("Relay traffic" under "Several
+  relays"): the Go relay logs answered sessions and per-node totals, the Worker keeps one row per node id. No wire change.

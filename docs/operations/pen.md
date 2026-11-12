@@ -20,8 +20,8 @@ uplinks and exchanges 64 KiB each way with a client through the relay, with timi
 when `--timeout` (30 s) runs out, including a certificate that expires within 14 days (`--min-cert-days`), so it
 works as a cron or monitor probe. The check node's keys live in `relay-check/` under the state directory
 (`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id. The Go relay
-keeps nothing for it once the check's sockets close; the Worker keeps one Durable Object holding that node id's next
-session id.
+keeps only that node id's traffic totals in memory once the check's sockets close; the Worker keeps one Durable Object
+holding that node id's next session id and its traffic row (see "Relay traffic").
 That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
 sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
 while one runs waits for it, within its own `--timeout`. Run the same build of `pen` as the relay (see
@@ -72,8 +72,9 @@ offers no compression, moves 1 MiB each way between a fresh node and a client, a
 served build with `curl -fsS .../dl/<version>/SHA256SUMS` against the local file.
 
 Rollback: `pnpm exec wrangler deployments list`, then `pnpm exec wrangler rollback <version-id>`. Static assets roll
-back with the version. Each node id's Durable Object keeps only its next session id beyond its sockets, so a rollback
-loses only open sockets, which reconnect.
+back with the version. Each node id's Durable Object keeps only its next session id and its traffic row beyond its
+sockets, so a rollback loses only open sockets, which reconnect; an older version ignores the row and a later one
+adds to it.
 
 ## pen-login Worker
 
@@ -212,6 +213,54 @@ is not logged; the relay keeps serving the cached certificate until it expires, 
 fails until issuance succeeds. A failed first issuance does the same and the process keeps running. So the alarm is
 `pen relay check`, which fails 14 days before expiry. Issuance needs port 443 reachable from the internet
 (TLS-ALPN-01); restarting the service retries at once.
+
+## Relay traffic
+
+Both relays count, for each node, the payload bytes they pass toward it (`toNode`) and from it (`fromNode`). They
+record nothing else: no address, no headers, nothing from a session. The Go relay names a node by the first 8
+characters of its id, as `pen ls` shows it; the Worker keeps each node's numbers in that node's own Durable Object.
+
+**Go relay.** `pen relay serve` writes JSON lines to stderr, so on the Seoul VM they are in the journal:
+
+- `session`, once per session the node answered, when it ends: `node`, `toNode`, `fromNode`, `ms`, `end` (`client`, `node`,
+  `relay` or `uplink`: which side ended it), the close `code` and `at`. Sessions the node never answered get no line.
+  Lines are limited to a burst of 120, then one a second; `linesDropped` counts the rest, and the totals still hold
+  their bytes.
+- Every 10 minutes when something changed, a `node` line per node that changed (totals since `since`) and one `relay`
+  line (all nodes since the process started, plus `unanswered`, `linesDropped`, `nodes` and `evicted`). Open sessions are
+  counted as they go, so a tunnel open for days shows every 10 minutes. A clean stop writes these lines once more.
+
+Totals live in memory and start from zero when the process restarts. At most 256 nodes are tracked; past that the least
+recently active one is dropped (`evicted`) and starts from zero if it returns, while the `relay` line keeps every byte.
+The journal keeps the lines until its size cap (`journalctl --disk-usage`; `SystemMaxUse` in `journald.conf`).
+
+```sh
+journalctl -u pen-relay -o cat | grep '^{"event":"relay"' | tail -1
+journalctl -u pen-relay -o cat --since today | grep '^{"event":"session"' |
+  jq -s 'group_by(.node) | map({node: .[0].node, toNode: (map(.toNode) | add), fromNode: (map(.fromNode) | add), sessions: length})'
+```
+
+**Worker.** It logs nothing: Workers Logs would keep request URLs, which hold the full node id. Each node's Durable
+Object keeps one row in a `traffic` table (`to_node`, `from_node`, `sessions`, `unanswered`, and `since` and `at` in ms
+since the epoch), written at most once a minute. Read it in the dashboard under Workers & Pages, Durable Objects, the
+`Room` namespace of `pen-relay`, Data Studio: enter the full node id (`pen ls --json`) and run
+`SELECT * FROM traffic`. Data Studio needs Editor access, and its queries are billed as Durable Object use. The row
+stays as long as the object, across deploys and rollbacks. It lags by at most a minute: bytes not written yet ride on the
+node's uplink socket and survive hibernation, but sessions that ended while the node had no uplink are lost if the
+object is evicted before the next write. It costs one table page (4 KiB) per node id that ever had a session, and at
+most one row write a minute while the node has traffic.
+
+**After a deploy.** Run `pen relay check` against each relay. On the VM, `journalctl -u pen-relay -o cat -n 20` shows a
+`session` line for the check, and no line holds an address. For the Worker, the check node's row is not easy to find;
+read your own node's row in Data Studio after it carried a session.
+
+**Check the numbers against the VM.** Relayed bytes are received once and sent once, so a day's growth of the
+`relay` line's `toNode` plus `fromNode` should be within 10% of the interface's `tx_bytes` growth over the same day
+(TCP, TLS and WebSocket overhead and the VM's own traffic make up the rest). Right after a `relay` line, read
+`/sys/class/net/<interface>/statistics/tx_bytes` (the interface holding the private address, `ip -br addr`) and note
+the line; repeat a day later and compare the differences. The relay must not restart in between
+(`systemctl show pen-relay -p ExecMainStartTimestamp`). `rx_bytes` grows by the same amount plus scanners and refused
+data.
 
 ## Incidents
 
