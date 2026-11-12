@@ -9,15 +9,15 @@ export const GOAT_BOT_HEAD_VIEWBOX = "2 2 20 20";
 /** Face, ears and horns as one filled shape; every subpath runs clockwise so they merge. */
 export const GOAT_BOT_HEAD_PATH = [
   "M5.5 13 a6.5 7.1 0 1 1 13 0 a6.5 7.1 0 1 1 -13 0 Z",
-  "M6.3 10.6 C5.3 11.05 4.3 11.35 3.5 11.25 C3.1 11.2 2.75 11.05 2.8 10.7 C3 9.6 3.9 8.3 5.4 7.18 C6.3 6.6 7.5 6.35 9.3 6.45 Z",
-  "M14.7 6.45 C16.5 6.35 17.7 6.6 18.6 7.18 C20.1 8.3 21 9.6 21.2 10.7 C21.25 11.05 20.9 11.2 20.5 11.25 C19.7 11.35 18.7 11.05 17.7 10.6 Z",
-  "M8.8 7.2 C8.75 5.9 8.95 4.8 9.6 3.9 C10.25 4.6 10.7 5.5 11 6.7 Z",
-  "M13 6.7 C13.3 5.5 13.75 4.6 14.4 3.9 C15.05 4.8 15.25 5.9 15.2 7.2 Z",
+  "M6.2 10.4 C5.7 11.2 4.9 12.1 4 12.4 C3.5 12.55 2.95 12.4 2.75 11.9 C2.55 11.4 2.75 10.6 3.1 10 C3.7 9 4.9 8.1 6 7.6 C6.8 7.25 7.6 7.05 8.6 7.1 Z",
+  "M15.4 7.1 C16.4 7.05 17.2 7.25 18 7.6 C19.1 8.1 20.3 9 20.9 10 C21.25 10.6 21.45 11.4 21.25 11.9 C21.05 12.4 20.5 12.55 20 12.4 C19.1 12.1 18.3 11.2 17.8 10.4 Z",
+  "M8.3 7.8 C8.1 6.2 8.3 4.7 9 3.6 C9.8 4.5 10.5 5.6 10.9 6.9 Z",
+  "M13.1 6.9 C13.5 5.6 14.2 4.5 15 3.6 C15.7 4.7 15.9 6.2 15.7 7.8 Z",
 ].join(" ");
 
 export const GOAT_BOT_HEAD_STROKE_WIDTH = 1.35;
 /** A small "z" beside the right horn, inside the avatar circle at every size. */
-export const GOAT_BOT_HEAD_SLEEP_MARK_PATH = "M16.3 3.4 H18.3 L16.3 5.4 H18.3";
+export const GOAT_BOT_HEAD_SLEEP_MARK_PATH = "M16.7 3.8 H18.7 L16.7 5.8 H18.7";
 /** The eye line (y 12.4 in the 2..22 box); a blink scales around it. */
 export const GOAT_BOT_HEAD_EYES_ORIGIN = "50% 52%";
 
