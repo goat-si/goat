@@ -10,7 +10,12 @@ const server = vi.hoisted(() => ({
   modelEdit: true,
 }));
 
-vi.mock("~/state/channels", () => ({ channelEnvironment: { updateBot: {} } }));
+vi.mock("~/state/channels", async () => {
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  // The list read a rename starts; it never answers here.
+  const list = Atom.make(AsyncResult.initial(true));
+  return { channelEnvironment: { updateBot: {}, listBots: () => list } };
+});
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
     serverConfig: { environment: { capabilities: { goatBotMemberModelEdit: server.modelEdit } } },

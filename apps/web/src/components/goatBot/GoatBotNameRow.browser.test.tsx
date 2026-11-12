@@ -29,9 +29,14 @@ const permission = vi.hoisted(() => {
     },
   };
 });
-vi.mock("~/state/channels", () => ({
-  channelEnvironment: { updateBot: { permissionAtom: () => null } },
-}));
+vi.mock("~/state/channels", async () => {
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  // The list read a rename starts; it never answers here.
+  const list = Atom.make(AsyncResult.initial(true));
+  return {
+    channelEnvironment: { updateBot: { permissionAtom: () => null }, listBots: () => list },
+  };
+});
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => (input: unknown) => state.update(input),
 }));

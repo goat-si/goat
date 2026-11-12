@@ -26,7 +26,12 @@ vi.mock("~/state/environments", async (original) => ({
     },
   }),
 }));
-vi.mock("~/state/channels", () => ({ channelEnvironment: { updateBot: {}, createBot: {} } }));
+vi.mock("~/state/channels", async () => {
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  // The list read a rename starts; it never answers here.
+  const list = Atom.make(AsyncResult.initial(true));
+  return { channelEnvironment: { updateBot: {}, createBot: {}, listBots: () => list } };
+});
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand:
     () =>

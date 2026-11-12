@@ -24,7 +24,7 @@ import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { useGoatBotMember } from "./goatBotMemberContext";
 import { webBotNameRowDismissals } from "./goatBotNameRowDismissed";
 import { takeNameRowFocus } from "./goatBotNewBotOpen";
-import { rememberRenamedBot } from "./goatBotRenamedBots";
+import { useRememberRenamedBot } from "./useRememberRenamedBot";
 import { HoldsNewBotOpen } from "./newBotOpenHolds";
 
 const NO_PERMISSION = Atom.make(false);
@@ -101,6 +101,7 @@ function NameForm({
   readonly onGone: () => void;
 }) {
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
+  const rememberRenamedBot = useRememberRenamedBot();
   const [draft, setDraft] = useState(member.name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

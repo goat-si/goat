@@ -10,7 +10,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { GoatBotModelField } from "./GoatBotModelField";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { useGoatBotMainName } from "./goatBotMemberContext";
-import { rememberRenamedBot } from "./goatBotRenamedBots";
+import { useRememberRenamedBot } from "./useRememberRenamedBot";
 
 /** Edits a bot's profile, and a member's model where its server takes one. */
 export function GoatBotEditBotDialog({
@@ -25,6 +25,7 @@ export function GoatBotEditBotDialog({
   readonly onClose: () => void;
 } & Pick<ComponentProps<typeof GoatBotProfileDialog>, "draftName" | "finalFocus">) {
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
+  const rememberRenamedBot = useRememberRenamedBot();
   const mainName = useGoatBotMainName();
   const modelEditable = useGoatBotMemberModelEditable(bot);
   const colorEditable = useGoatBotMemberColorEditable(bot);
