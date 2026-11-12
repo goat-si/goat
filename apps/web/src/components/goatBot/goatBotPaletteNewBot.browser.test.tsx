@@ -122,7 +122,7 @@ it("the palette closes, the create answers before its exit animation ends, and t
     expect(document.querySelector("[data-command-palette]:not([data-open])")).not.toBeNull(),
   );
   answer.resolve({ _tag: "Success", value: { bot: made } });
-  await vi.waitFor(() => expect(screen.router?.state.location.search).toEqual({ bot: "made" }));
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env-1/thread-made"));
 });
 
 it.each<[string, (navigate: (to: string) => Promise<void>) => Promise<void>]>([

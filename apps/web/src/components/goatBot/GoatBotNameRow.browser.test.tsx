@@ -159,7 +159,7 @@ it("Dismiss hides the row in this browser and moves focus to the message box", a
   expect(nameField().query()).toBeNull();
 });
 
-it("the name field takes focus only when New bot opened the chat, and only once", async () => {
+it("the name field takes focus only when New bot opened the chat, on the bot's own thread, and only once", async () => {
   setup();
   const opened = member("New bot");
   await using screen = await render(<Chat bot={null} />, { router: "/" });
@@ -170,6 +170,7 @@ it("the name field takes focus only when New bot opened the chat, and only once"
   await expect.element(nameField()).not.toHaveFocus();
   await screen.rerender(<Chat bot={null} />);
   await act(() => openNewBotChat(router, opened));
+  expect(router.state.location.pathname).toBe(`/${opened.environmentId}/${opened.sessionThreadId}`);
   await screen.rerender(<Chat bot={opened} />);
   await expect.element(nameField()).toHaveFocus();
   // Coming back to the same chat later does not take focus again.

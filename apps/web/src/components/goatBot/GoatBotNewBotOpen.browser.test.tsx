@@ -190,7 +190,7 @@ it("the create answers while the person is still on the roster: its chat opens",
   const { screen, answer } = await clickNewBot();
   await using _screen = screen;
   answer();
-  await vi.waitFor(() => expect(screen.router?.state.location.search).toEqual({ bot: "made" }));
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env-1/thread-made"));
 });
 
 it.each<[string, (screen: Screen) => Promise<void>]>([
@@ -257,7 +257,7 @@ it("the chat's own Edit bot blocks the open, and the created row stays to open b
   await createdInStore();
   await userEvent.click(page.getByRole("button", { name: "Cancel" }));
   await expect.element(screen.getByRole("link", { name: "New bot", exact: true })).toBeVisible();
-  expect(screen.router?.state.location.search).toEqual({});
+  expect(screen.router?.state.location.pathname).toBe("/bot");
 });
 
 it("a menu whose row went away while it was open does not block a later open", async () => {
@@ -269,7 +269,7 @@ it("a menu whose row went away while it was open does not block a later open", a
   await act(() => roster.set({ bots: [] }));
   await expect.element(page.getByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
   answer();
-  await vi.waitFor(() => expect(screen.router?.state.location.search).toEqual({ bot: "made" }));
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env-1/thread-made"));
 });
 
 it("a create outlives the roster: switching to Threads and back shows the created row and frees New bot", async () => {
@@ -283,5 +283,5 @@ it("a create outlives the roster: switching to Threads and back shows the create
   const newBot = screen.getByRole("button", { name: "New bot", exact: true });
   await expect.element(newBot).toBeEnabled();
   await expect.element(newBot).not.toHaveAttribute("aria-disabled", "true");
-  expect(screen.router?.state.location.search).toEqual({});
+  expect(screen.router?.state.location.pathname).toBe("/bot");
 });
