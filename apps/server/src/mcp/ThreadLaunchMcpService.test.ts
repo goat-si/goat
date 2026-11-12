@@ -271,62 +271,63 @@ function fixture(
           attempted.push(input);
         }).pipe(
           Effect.andThen(() => behavior?.onLaunch?.() ?? Effect.void),
+          Effect.andThen(() =>
+            behavior?.cliMissing === undefined ? Effect.void : Effect.fail(behavior.cliMissing),
+          ),
           Effect.andThen(
-            behavior?.cliMissing !== undefined
-              ? Effect.fail(behavior.cliMissing)
-              : behavior?.createdThenRefused !== undefined && !refusedOnce
-                ? Effect.suspend(() => {
-                    refusedOnce = true;
-                    const sql = behavior.createdThenRefused!.sql();
-                    return sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+            behavior?.createdThenRefused !== undefined && !refusedOnce
+              ? Effect.suspend(() => {
+                  refusedOnce = true;
+                  const sql = behavior.createdThenRefused!.sql();
+                  return sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
                     VALUES (${input.threadId!}, ${projectId}, 'Refused', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`.pipe(
-                      Effect.orDie,
-                      Effect.andThen(
-                        Effect.fail(
-                          new ThreadLaunch.ThreadLaunchError({
-                            operation: "dispatch-message",
-                            commandId: input.commandId,
-                            projectId: input.projectId,
-                            cause: "The launcher may no longer start this work.",
-                          }),
-                        ),
+                    Effect.orDie,
+                    Effect.andThen(
+                      Effect.fail(
+                        new ThreadLaunch.ThreadLaunchError({
+                          operation: "dispatch-message",
+                          commandId: input.commandId,
+                          projectId: input.projectId,
+                          cause: "The launcher may no longer start this work.",
+                        }),
                       ),
-                    );
-                  })
-                : behavior?.failLaunches === true
-                  ? Effect.fail(
-                      new ThreadLaunch.ThreadLaunchError({
-                        operation:
-                          behavior.childThreadVisible === true
-                            ? "dispatch-message"
-                            : "resolve-project",
-                        commandId: input.commandId,
-                        projectId: input.projectId,
-                        cause: new Error("fixture launch failure"),
-                      }),
-                    )
-                  : Effect.sync(() => {
-                      launched.push(input);
-                      return {
-                        threadId: input.threadId,
-                        resumed: false,
-                        projection: {
-                          thread: {
-                            id: input.threadId,
-                            projectId,
-                            title: input.title,
-                            modelSelection,
-                          },
-                          runs: [
-                            {
-                              id: "run:cloud-launched",
-                              userMessageId: input.initialMessage?.messageId,
-                              status: "starting",
-                            },
-                          ],
-                        },
-                      } as unknown as ThreadLaunch.ThreadLaunchResult;
+                    ),
+                  );
+                })
+              : behavior?.failLaunches === true
+                ? Effect.fail(
+                    new ThreadLaunch.ThreadLaunchError({
+                      operation:
+                        behavior.childThreadVisible === true
+                          ? "dispatch-message"
+                          : "resolve-project",
+                      commandId: input.commandId,
+                      projectId: input.projectId,
+                      cause: new Error("fixture launch failure"),
                     }),
+                  )
+                : Effect.sync(() => {
+                    launched.push(input);
+                    return {
+                      threadId: input.threadId,
+                      resumed: false,
+                      projection: {
+                        thread: {
+                          id: input.threadId,
+                          projectId,
+                          title: input.title,
+                          modelSelection,
+                        },
+                        runs: [
+                          {
+                            id: "run:cloud-launched",
+                            userMessageId: input.initialMessage?.messageId,
+                            status: "starting",
+                          },
+                        ],
+                      },
+                    } as unknown as ThreadLaunch.ThreadLaunchResult;
+                  }),
           ),
         ),
     }),
