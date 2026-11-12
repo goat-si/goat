@@ -56,6 +56,7 @@ import { GoatBotNameRow } from "./GoatBotNameRow";
 import { resetBotNameRowDismissalsForTests } from "./goatBotNameRowDismissed";
 import { openNewBotChat, resetNameRowFocusForTests } from "./goatBotNewBotOpen";
 import { forgetRenamedBots } from "./goatBotRenamedBots";
+import { newBotOpenBlocked } from "./newBotOpenHolds";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
 let nextBot = 0;
@@ -157,6 +158,21 @@ it("Enter saves the typed name, says why a save failed, and moves focus to the m
     input: { botId: bot.botId, name: "Ada" },
   });
   await expect.element(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+});
+
+it("a typed name holds back a New bot open until the chat has that name", async () => {
+  setup();
+  const bot = member("New bot");
+  await using screen = await render(<Chat bot={bot} />);
+  await expect.element(nameField()).toHaveValue("New bot");
+  expect(newBotOpenBlocked()).toBe(false);
+  await userEvent.fill(nameField(), "Ada");
+  expect(newBotOpenBlocked()).toBe(true);
+  await userEvent.keyboard("{Enter}");
+  // The chat reads the saved name, as the member lookup does after a rename.
+  await screen.rerender(<Chat bot={{ ...bot, name: "Ada" }} />);
+  await expect.element(nameField()).not.toBeInTheDocument();
+  expect(newBotOpenBlocked()).toBe(false);
 });
 
 it("More opens Edit bot with the typed name, saves that name alone, and returns focus to the message box", async () => {

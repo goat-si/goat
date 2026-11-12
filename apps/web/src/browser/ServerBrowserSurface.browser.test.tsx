@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
+import { newBotOpenBlocked } from "../components/goatBot/newBotOpenHolds";
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn<(target: unknown, handlers: PreviewStreamEvents) => unknown>(),
@@ -158,6 +159,45 @@ const mouseUp = (canvas: HTMLCanvasElement, button: number) => {
   canvas.dispatchEvent(event);
   return event;
 };
+
+describe("ServerBrowserSurface page prompts", () => {
+  it("a page's prompt or file picker in your hands holds back a New bot open; another viewer's does not", async () => {
+    setup();
+    const { screen } = await renderSurface("you");
+    await using _screen = screen;
+    const handlers = mocks.createClient.mock.calls.at(-1)![1];
+    const dialog = { type: "prompt", message: "Your name?", defaultValue: "" };
+    expect(newBotOpenBlocked()).toBe(false);
+    await act(() =>
+      handlers.onControl?.({ canOperate: true, controller: "you", generation: 2, dialog }),
+    );
+    expect(newBotOpenBlocked()).toBe(true);
+    await act(() =>
+      handlers.onControl?.({
+        canOperate: true,
+        controller: "another-viewer",
+        generation: 3,
+        dialog,
+      }),
+    );
+    expect(newBotOpenBlocked()).toBe(false);
+    await act(() =>
+      handlers.onControl?.({ canOperate: true, controller: "you", generation: 4, dialog: null }),
+    );
+    expect(newBotOpenBlocked()).toBe(false);
+    await act(() =>
+      handlers.onFileChooser?.({
+        multiple: false,
+        accept: "",
+        uploadUrl: "http://preview.test/upload",
+        credentials: false,
+      }),
+    );
+    expect(newBotOpenBlocked()).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(newBotOpenBlocked()).toBe(false);
+  });
+});
 
 describe("ServerBrowserSurface history", () => {
   it("routes mouse thumb buttons to the preview's history instead of the app", async () => {
