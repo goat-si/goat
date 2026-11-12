@@ -812,8 +812,9 @@ const make = Effect.gen(function* () {
             hostFailures += 1;
             yield* grace.outage;
             if (r.kind === "task" && hostFailures >= 3 && !outageNotified) {
-              yield* taskEffect(notifyTaskOutage(publicRow(r)));
-              outageNotified = true;
+              // A refused notice is retried on the next outcome; it never holds back the outage.
+              const notice = yield* taskEffect(notifyTaskOutage(publicRow(r))).pipe(Effect.result);
+              outageNotified = notice._tag === "Success";
             }
             // None: another drain owns the row now. True: the row ended or stopped running.
             const ended = yield* owned(id, owner, taskEffect(recordUnreachable(publicRow(r))));

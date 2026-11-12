@@ -91,6 +91,7 @@ export const fixture = Effect.gen(function* () {
   const recordedTasks: OrchestrationV2Subagent[] = [];
   const unavailableProjections = new Set<ThreadId>();
   const refusedTasks = new Set<NodeId>();
+  const refusedCommandTypes = new Set<OrchestrationV2ServerCommand["type"]>();
   const notifications = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
   const launchEntered = yield* Queue.unbounded<void>();
   const launchRelease = yield* Queue.unbounded<void>();
@@ -225,6 +226,7 @@ export const fixture = Effect.gen(function* () {
           attemptedCommands.push(command);
           if (
             deliveryFails ||
+            refusedCommandTypes.has(command.type) ||
             (command.type === "delegated_task.remote.result" && refusedTasks.has(command.taskId))
           ) {
             yield* Queue.offer(failedDeliveries, undefined);
@@ -281,6 +283,7 @@ export const fixture = Effect.gen(function* () {
     recordedTasks,
     unavailableProjections,
     refusedTasks,
+    refusedCommandTypes,
     layer,
     launch,
     calls,

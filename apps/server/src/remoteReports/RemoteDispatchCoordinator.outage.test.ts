@@ -316,3 +316,35 @@ it.effect.each(["running", "completed"] as const)(
       }).pipe(Effect.provide(f.layer), steadyRandom);
     }).pipe(Effect.provide(database)),
 );
+
+it.effect("a task whose early outage notice keeps failing still ends after 24 hours", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      const launched = yield* launchTask(c);
+      yield* Queue.take(f.notifications);
+      f.refusedCommandTypes.add("message.dispatch");
+      yield* failNext(f);
+      yield* TestClock.adjust("300 seconds");
+      yield* failNext(f);
+      const sinceMs = (yield* Clock.currentTimeMillis) - DAY;
+      yield* setSince(f, launched.correlationId, sinceMs);
+      // The third unreachable outcome tries the early notice, which the origin refuses.
+      const third = yield* nextCall(f);
+      f.recordedTasks.push(
+        subagent("task-A", "failed", `box has not answered since ${iso(sinceMs)}.`),
+      );
+      yield* Queue.offer(third.reply, unreachable());
+      yield* TestClock.adjust("1 hour");
+      assert.isTrue(f.attemptedCommands.some((command) => command.type === "message.dispatch"));
+      const row = (yield* c.get(launched.correlationId))!;
+      assert.equal(row.state, "lost");
+      assert.equal(row.endReason, "host_unreachable");
+      assert.deepEqual(
+        (yield* Queue.clear(f.notifications)).map((command) => command.type),
+        ["delegated_task.remote.result"],
+      );
+    }).pipe(Effect.provide(f.layer), steadyRandom);
+  }).pipe(Effect.provide(database)),
+);

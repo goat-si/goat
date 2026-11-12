@@ -568,6 +568,8 @@ there, and GOAT follows it again if the host answers. **Dismiss** next to such a
 thread stops following it at once, without the host. The agent that started it
 can do the same with `goat_thread_unwatch` and the host. Forgetting the host
 does not dismiss its threads. Sending to a dismissed thread follows it again.
+A delegated task on such a host fails after that day instead, and stays failed
+if the host answers later.
 
 ### Link a GOAT server for agents without SSH
 
