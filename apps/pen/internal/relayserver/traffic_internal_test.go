@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -697,4 +698,45 @@ func TestClosingTwiceIsHarmless(t *testing.T) {
 	}
 	wg.Wait()
 	lv.s.Close()
+}
+
+// failingLog fails its first fail writes, then keeps what it is given.
+type failingLog struct {
+	lineLog
+	fail int
+}
+
+func (f *failingLog) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	if f.fail > 0 {
+		f.fail--
+		f.mu.Unlock()
+		return 0, errors.New("log unavailable")
+	}
+	f.mu.Unlock()
+	return f.lineLog.Write(p)
+}
+
+// A line the log failed to take counts as dropped, and the totals it carried go out again at the
+// next summary even when no traffic came in between.
+func TestALineTheLogFailedToTakeIsCountedAndItsSummaryRetried(t *testing.T) {
+	s := New(DefaultLimits())
+	log := &failingLog{fail: 2}
+	s.TrafficLog = log
+	s.trafficStart()
+	t.Cleanup(s.Close)
+	s.traffic.mu.Lock()
+	s.traffic.addLocked("n0000000", true, 5, 7, 1, time.Now())
+	s.traffic.mu.Unlock()
+	s.traffic.summarize(nil)
+	syncLog(s)
+	s.traffic.summarize(nil)
+	syncLog(s)
+	raw := log.lineLog.raw()
+	if node := parse(t, raw, "node"); len(node) != 1 || node[0]["toNode"] != float64(5) {
+		t.Fatalf("node lines %v, want the failed one written again", node)
+	}
+	if relay := parse(t, raw, "relay"); len(relay) != 1 || relay[0]["linesDropped"] != float64(2) {
+		t.Fatalf("relay lines %v, want one counting the 2 failed writes", relay)
+	}
 }

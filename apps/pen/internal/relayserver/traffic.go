@@ -303,15 +303,26 @@ type relayLine struct {
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-// write is the log writer: the only goroutine that writes to the traffic log.
-func write(w io.Writer, lines <-chan logItem, written chan<- struct{}) {
+// write is the log writer: the only goroutine that writes to the traffic log. A line the log does
+// not take whole counts as dropped and marks every total changed, so the next summary writes them
+// again. A log that never returns from Write keeps this one goroutine, holding at most the queue,
+// until the process exits: Close stops waiting for it after WriteTimeout.
+func (t *traffic) write(w io.Writer, lines <-chan logItem, written chan<- struct{}) {
 	defer close(written)
 	for it := range lines {
 		if it.ack != nil {
 			close(it.ack)
 			continue
 		}
-		w.Write(it.b)
+		if n, err := w.Write(it.b); err != nil || n < len(it.b) {
+			t.mu.Lock()
+			t.relay.linesDropped++
+			t.changed = true
+			for _, node := range t.nodes {
+				node.changed = true
+			}
+			t.mu.Unlock()
+		}
 	}
 }
 
@@ -349,7 +360,7 @@ func (s *Server) trafficStart() {
 			n = LogQueue
 		}
 		t.lines, t.written = make(chan logItem, n), make(chan struct{})
-		go write(s.TrafficLog, t.lines, t.written)
+		go t.write(s.TrafficLog, t.lines, t.written)
 		t.timer = time.AfterFunc(SummaryEvery, s.summaryTick)
 	})
 }
