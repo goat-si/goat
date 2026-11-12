@@ -111,7 +111,8 @@ unanswered. Kind 0x02 (Doriterm's typed code) is not used.
   Message 2: always `{"v":1}`. A responder that refuses after message 1 closes without answering; one that refuses
   after confirmation (port refused, invite lost a race) sends CLOSE with the code. Nothing a replayed message 1 can
   trigger depends on the stream's target, except that a `service-pair` message 1 spends one answer of its invite's
-  budget and takes a phone slot until the session ends ("Service invites").
+  budget and takes a phone slot until the session ends ("Service invites"), and a listed client's kind 0x01 message 1
+  for its service takes a phone slot until the session ends ("Phone slots").
 - Admission: kind 0x01 admits only an initiator static key that is a current member's noisePub in the responder's
   mesh view (4401 otherwise), and from v1.3 a listed client key for one service stream ("Service clients"). Kind 0x03
   is valid only with `stream:"join"` and an `"invite"` member, or from v1.3 with `stream:"service-pair"` ("Service
@@ -652,8 +653,8 @@ effective route before using it refuses it.
 
 A program that registered a name can let keys that are not members reach it: GOAT uses this for phones it paired.
 A listed client key reaches only the service stream of the name whose registration lists it, and a service invite
-admits pairing handshakes for one pairing. Nothing here changes members, records, sync, `tcp`, `mesh`, `join` or
-`account`, and the version nodes announce in the sync hello is unchanged (`"pen":"1.1"`, or `"2.0"` in a mesh of the shared
+admits pairing handshakes for one pairing. Nothing here changes members, records, sync, `tcp`, `mesh` or `join`;
+`account` changes only in that kind 0x04 refuses a key any registration lists ("Admission of client keys"); and the version nodes announce in the sync hello is unchanged (`"pen":"1.1"`, or `"2.0"` in a mesh of the shared
 epoch). In v1.3 only a registration of the name `goat` may hold a client
 list or an invite. Until its holder sends a list no client key is admitted, and until it sends an invite no
 `service-pair` handshake is.

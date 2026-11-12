@@ -373,8 +373,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	os.Remove(d.st.Path(DashboardFile))
 	d.capLog()
 	d.pruneInvites()
-	d.spawn(func() { d.serveControl(ctx, ln) })
+	// Uplinks first: startUplinks publishes the relay list before any control request, so no snapshot lacks it.
 	d.startUplinks()
+	d.spawn(func() { d.serveControl(ctx, ln) })
 	d.spawn(func() { d.acceptLoop(ctx) })
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
 	d.spawn(func() {

@@ -200,6 +200,24 @@ func TestAPairingHandshakeCannotBurnAnInviteThatWasReplacedCancelledOrExpired(t 
 	burnRefused("expired", p)
 }
 
+func TestCancellingAnInviteThatBurnedAndThenExpiredReportsBurned(t *testing.T) {
+	f := newPairFixture(t)
+	const id = "DDDDDDDDDDDDDDDD"
+	psk := f.invite(t, id)
+	p, err := f.pair(t, phone(t), psk, servicePair(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+	f.event(t, "invite-burned", id)
+	f.clk.advance(6 * time.Minute)
+	if m := f.h.op(t, cancelOp(id)); m["t"] != "invite-cancelled" || m["was"] != "burned" {
+		t.Fatalf("cancel answered %v; want burned, which takes precedence over expiry", m)
+	}
+}
+
 func TestMeshInvitesAndServiceInvitesNeverMatchEachOthersHandshake(t *testing.T) {
 	f := newPairFixture(t)
 	tok := f.a.invite(t, time.Minute)

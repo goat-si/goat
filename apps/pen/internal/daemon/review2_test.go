@@ -139,7 +139,16 @@ func TestAListDropFinishesClosingTheSessionAndItsDeliveryBeforeItsAnswer(t *test
 	rs := relaytest.New()
 	defer rs.Close()
 	events := make(chan string, 8)
-	a := hookedFounder(t, ctx, rs, func(o *Options) { o.ClientClosed = func() { events <- "closed" } })
+	var answering atomic.Bool
+	a := hookedFounder(t, ctx, rs, func(o *Options) {
+		o.ClientClosed = func() { events <- "closed" }
+		// Reported on the daemon's writer as it starts the write: the list answer is the only holder line once armed.
+		o.HolderWriting = func() {
+			if answering.Load() {
+				events <- "answer"
+			}
+		}
+	})
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
 	prog.serve()
@@ -153,10 +162,10 @@ func TestAListDropFinishesClosingTheSessionAndItsDeliveryBeforeItsAnswer(t *test
 	if err := echo(ctx, sec, "x"); err != nil {
 		t.Fatal(err)
 	}
+	answering.Store(true)
 	h.setList(t, 2)
-	events <- "answer"
 	if first := <-events; first != "closed" {
-		t.Fatalf("the list answer came before the session and its delivery were closed (%s first)", first)
+		t.Fatalf("the list answer was written before the session and its delivery were closed (%s first)", first)
 	}
 }
 
