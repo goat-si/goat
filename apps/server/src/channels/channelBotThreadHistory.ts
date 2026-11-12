@@ -46,7 +46,8 @@ export const decodeHistoryCursor = Effect.fn("ChannelBotThreads.decodeHistoryCur
   scope: CursorScope,
   cursor: string,
 ) {
-  if (!cursor.startsWith("v1.")) return yield* invalid();
+  if (cursor.length > CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH || !cursor.startsWith("v1."))
+    return yield* invalid();
   const [botTag, ownerTag, createdAt, taskId] = yield* decodeBody(
     Buffer.from(cursor.slice(3), "base64url").toString("utf8"),
   ).pipe(Effect.mapError(invalid));
@@ -65,14 +66,17 @@ export const decodeHistoryCursor = Effect.fn("ChannelBotThreads.decodeHistoryCur
 });
 
 /**
- * A launch with a thread to open, the only kind history lists. Its destination is set when the
- * launch is claimed or bound and is replaced, never removed, so a record only ever enters this set.
- * The terms are channel_child_work_launches' own, which SQLite needs to use that index.
+ * A launch with a thread, the only kind history lists: a remote id arrives with the destination's
+ * acknowledgement, a local one at the claim, before the thread exists, so it counts once bound or
+ * finished. Counted states move only to counted ones. The terms are channel_child_work_launches'
+ * own; INDEXED BY makes a mismatch fail instead of scanning every child record.
  */
 const openableLaunch = (sql: SqlClient.SqlClient) =>
   sql`s.key >= 'child-work:' AND s.key < 'child-work;'
     AND json_extract(s.value_json, '$.surface') IN ('thread_launch', 'ssh_thread_launch')
-    AND json_extract(s.value_json, '$.destination.threadId') IS NOT NULL`;
+    AND json_extract(s.value_json, '$.destination.threadId') IS NOT NULL
+    AND (json_extract(s.value_json, '$.surface') = 'ssh_thread_launch'
+      OR json_extract(s.value_json, '$.state') IN ('bound', 'completed', 'failed', 'cancelled'))`;
 
 /** A task's newest openable launches, read from their index; one more tells whether there are more. */
 export const launchesStatement = (
@@ -87,7 +91,7 @@ export const launchesStatement = (
     readonly work_kind: unknown;
   }>`SELECT s.key, s.value_json, p.title, p.project_id,
       json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
-    FROM channel_runtime_state s
+    FROM channel_runtime_state s INDEXED BY channel_child_work_launches
     -- Only a local launch's thread is in this machine's projection.
     LEFT JOIN orchestration_v2_projection_threads p
       ON json_extract(s.value_json, '$.surface') = 'thread_launch'
@@ -100,7 +104,7 @@ export const launchesStatement = (
 
 /**
  * A bot's tasks by creation, newest first; created_at and task_id never change, so a task keeps its
- * place between pages. A turn joins once a launch has a thread to open, and never leaves. The terms
+ * place between pages. A turn joins once a launch has a thread, and never leaves. The terms
  * keep channel_tasks the outer loop on its index; the redundant "<=" makes the cursor a seek.
  */
 export const historyStatement = (
@@ -121,8 +125,9 @@ export const historyStatement = (
       AND EXISTS (SELECT 1 FROM channel_conversations c WHERE c.conversation_id = t.conversation_id
         AND c.owner_id = ${input.ownerId} AND c.kind = 'goat')
       AND (COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' OR EXISTS (
-        SELECT 1 FROM channel_runtime_state s
-        WHERE json_extract(s.value_json, '$.taskId') = t.task_id AND ${openableLaunch(sql)}))
+        SELECT 1 FROM channel_runtime_state s INDEXED BY channel_child_work_launches
+        -- "+" drops task_id's TEXT affinity, which would keep SQLite from seeking the index.
+        WHERE json_extract(s.value_json, '$.taskId') = +t.task_id AND ${openableLaunch(sql)}))
       ${after}
     ORDER BY t.created_at DESC, t.task_id DESC LIMIT ${input.limit}`;
 };
@@ -147,10 +152,15 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
     rows.length > page.length && last !== undefined
       ? encodeHistoryCursor(scope, { createdAt: last.created_at, taskId: last.task_id })
       : undefined;
-  // Ids GOAT generates are short digests; a longer stored one cannot be named in a cursor.
-  const endedEarly = next !== undefined && next.length > CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH;
+  // Ids GOAT generates are short digests; a cursor the decoder would refuse is never issued.
+  const endedEarly =
+    next !== undefined &&
+    !(yield* decodeHistoryCursor(scope, next).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    ));
   if (endedEarly)
-    yield* Effect.logWarning("GOAT Bot task history stops at a task id too long for a cursor", {
+    yield* Effect.logWarning("GOAT Bot task history stops at a task it cannot name in a cursor", {
       taskId: last?.task_id,
     });
   return {

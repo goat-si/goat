@@ -74,4 +74,21 @@ describe("mergeBotThreadHistory", () => {
     ]);
     expect([...merged.launchesTruncated]).toEqual(["b"]);
   });
+
+  it("says the walk ended early when a page could not name its next task", () => {
+    const current = { rows: [task("a")], mainMessageCount: 0 };
+    const first = { rows: [task("b")], mainMessageCount: 0, history: { nextCursor: "v1.x" } };
+    expect(
+      mergeBotThreadHistory(current, [
+        first,
+        { rows: [task("c")], mainMessageCount: 0, history: {} },
+      ]).endedEarly,
+    ).toBe(false);
+    expect(
+      mergeBotThreadHistory(current, [
+        first,
+        { rows: [task("c")], mainMessageCount: 0, history: { endedEarly: true } },
+      ]).endedEarly,
+    ).toBe(true);
+  });
 });

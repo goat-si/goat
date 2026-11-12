@@ -42,6 +42,8 @@ export function mergeBotThreadHistory(
   readonly mainMessageCount: number;
   /** Tasks whose launches the history lists only in part; the rest stay in Threads. */
   readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
+  /** The walk stopped at a task the server could not name in a cursor; older tasks are unlisted. */
+  readonly endedEarly: boolean;
 } {
   const seen = new Set<string>();
   const rows: BotThreadRow[] = [];
@@ -71,5 +73,6 @@ export function mergeBotThreadHistory(
         .flatMap((page) => page.history?.launchesTruncated ?? [])
         .filter((taskId) => !complete.has(taskId)),
     ),
+    endedEarly: pages.some((page) => page.history?.endedEarly === true),
   };
 }

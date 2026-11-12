@@ -557,6 +557,176 @@ describe("ChannelBotThreads history", () => {
     ),
   );
 
+  it.effect("ends the walk at a task id the cursor decoder refuses though the cursor fits", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const long = "a".repeat(201);
+        for (let index = 0; index < 49; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        yield* insertTask(long, { status: "completed", createdAt: at(49) });
+        yield* insertTask("after", { status: "completed", createdAt: at(60) });
+        assert.isBelow(
+          encodeHistoryCursor({ ownerId, botId: "main" }, { createdAt: at(49), taskId: long })
+            .length,
+          512,
+        );
+        const page = yield* history();
+        assert.strictEqual(taskIds([page]).at(-1), long);
+        assert.isUndefined(page.history?.nextCursor);
+        assert.isTrue(page.history?.endedEarly);
+      }),
+    ),
+  );
+
+  it.effect("lists a launch only once its thread exists, never one whose claim was refused", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const children = yield* ChildStore.ChannelChildWorkStore;
+        const sql = yield* SqlClient.SqlClient;
+        const reserve = (taskId: string, surface: "thread_launch" | "ssh_thread_launch") =>
+          children.admitReserved(
+            {
+              ownerId,
+              taskId: ChannelTaskId.make(taskId),
+              generation: 1,
+              callerThreadId: botThreadId,
+              requestKey: "k-" + taskId,
+              promptDigest: "digest",
+              state: "reserved",
+              createdAt: at(1),
+              updatedAt: at(1),
+              childWorkId: ChannelChildWorkId.make("cw-" + taskId),
+              surface,
+            },
+            4,
+          );
+        const move = (
+          taskId: string,
+          from: "reserved" | "launched" | "bound",
+          to: "launched" | "bound" | "completed" | "released",
+          destination?: { threadId?: string; host?: string; correlationId?: string },
+        ) => {
+          const { threadId, ...rest } = destination ?? {};
+          return children.transition({
+            taskId: ChannelTaskId.make(taskId),
+            childWorkId: ChannelChildWorkId.make("cw-" + taskId),
+            from: [from],
+            to,
+            ...(destination === undefined
+              ? {}
+              : {
+                  destination: {
+                    ...rest,
+                    ...(threadId === undefined ? {} : { threadId: ThreadId.make(threadId) }),
+                  },
+                }),
+            now: at(0),
+          });
+        };
+        for (const id of ["refused", "created", "remote-created", "in-flight"])
+          yield* insertTask(id, { status: "running", createdAt: at(1), kind: "turn" });
+        yield* insertTask("work-refused", { status: "running", createdAt: at(2) });
+        // ThreadLaunchMcpService claims the local id, then a refused permission check releases it.
+        for (const id of ["refused", "work-refused"]) {
+          yield* reserve(id, "thread_launch");
+          yield* move(id, "reserved", "launched", { threadId: "thread:" + id });
+          yield* move(id, "launched", "released");
+        }
+        yield* reserve("created", "thread_launch");
+        yield* move("created", "reserved", "launched", { threadId: "thread:created" });
+        yield* move("created", "launched", "bound", { threadId: "thread:created" });
+        yield* move("created", "bound", "completed");
+        // A remote thread acknowledged by its destination stays listed after a later release.
+        yield* reserve("remote-created", "ssh_thread_launch");
+        yield* move("remote-created", "reserved", "launched", { correlationId: "c", host: "box" });
+        yield* move("remote-created", "launched", "bound", {
+          correlationId: "c",
+          host: "box",
+          threadId: "remote:created",
+        });
+        yield* move("remote-created", "bound", "released");
+        // Claimed and not yet confirmed: out until the launch binds.
+        yield* reserve("in-flight", "thread_launch");
+        yield* move("in-flight", "reserved", "launched", { threadId: "thread:in-flight" });
+        const listedTurns = () =>
+          historyStatement(sql, { ownerId, botId: "main", after: undefined, limit: 51 }).pipe(
+            Effect.map((rows) => rows.map((row) => row.task_id).toSorted()),
+          );
+        assert.deepStrictEqual(yield* listedTurns(), ["created", "remote-created", "work-refused"]);
+        const page = yield* history();
+        assert.deepStrictEqual(
+          page.rows.map((row) =>
+            row.kind === "coding" ? String(row.threadId) : String(row.task.taskId),
+          ),
+          ["thread:created", "work-refused"],
+        );
+        assert.deepStrictEqual(
+          (page.remoteWork ?? []).map((item) => String(item.taskId)),
+          ["remote-created"],
+        );
+        yield* move("in-flight", "launched", "bound", { threadId: "thread:in-flight" });
+        assert.deepStrictEqual(yield* listedTurns(), [
+          "created",
+          "in-flight",
+          "remote-created",
+          "work-refused",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("seeks each turn's launches from their index under skewed statistics", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const sql = yield* SqlClient.SqlClient;
+        // 6,000 tasks, every third a turn and every fifth another bot's.
+        yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 5999)
+          INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
+            generation, task_json, created_at, updated_at, bot_id)
+          SELECT printf('task-%04d', i), ${ownerId}, 'conv:bot', 'completed', 1, 1,
+            CASE WHEN i % 3 = 0 THEN json_object('kind', 'turn') ELSE '{}' END,
+            strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-12', printf('-%d minutes', i)),
+            strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-12', printf('-%d minutes', i)),
+            CASE WHEN i % 5 = 0 THEN 'other' ELSE 'main' END FROM n`;
+        // 5,000 launches with threads, all on one turn.
+        yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 4999)
+          INSERT INTO channel_runtime_state (key, value_json, updated_at)
+          SELECT printf('child-work:task-0003:cw-%04d', i),
+            json_object('childWorkId', printf('cw-%04d', i), 'ownerId', ${ownerId},
+              'taskId', 'task-0003', 'surface', 'thread_launch', 'state', 'completed',
+              'createdAt', strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-12', printf('-%d seconds', i)),
+              'destination', json_object('threadId', printf('thread:%04d', i))),
+            '2026-10-12T00:00:00.000Z' FROM n`;
+        yield* sql`ANALYZE`;
+        const planOf = (
+          statement: ReturnType<typeof historyStatement> | ReturnType<typeof launchesStatement>,
+        ) =>
+          sql<{ readonly detail: string }>`EXPLAIN QUERY PLAN ${statement}`.pipe(
+            Effect.map((rows) => rows.map((row) => row.detail)),
+          );
+        for (const after of [undefined, { createdAt: at(3000), taskId: "task-3000" }]) {
+          const plan = yield* planOf(
+            historyStatement(sql, { ownerId, botId: "main", after, limit: 51 }),
+          );
+          const text = plan.join("\n");
+          assert.match(text, /SEARCH t USING INDEX channel_tasks_owner_bot_created/, text);
+          assert.include(plan, "SEARCH s USING INDEX channel_child_work_launches (<expr>=?)", text);
+          assert.notMatch(text, /SCAN s\b/, text);
+          assert.notInclude(text, "TEMP B-TREE", text);
+        }
+        for (const taskId of ["task-0003", "task-0006"]) {
+          const plan = yield* planOf(launchesStatement(sql, { ownerId, taskId, limit: 21 }));
+          const text = plan.join("\n");
+          assert.include(plan, "SEARCH s USING INDEX channel_child_work_launches (<expr>=?)", text);
+          assert.notInclude(text, "TEMP B-TREE", text);
+        }
+      }),
+    ),
+  );
+
   it.effect("keeps a task retried through the retry service in its place between pages", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

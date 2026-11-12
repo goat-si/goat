@@ -534,7 +534,7 @@ export const ChannelListBotThreadsResult = Schema.Struct({
       nextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
       /** Tasks that launched more threads than this page lists; the rest stay in Threads. */
       launchesTruncated: Schema.optionalKey(Schema.Array(ChannelTaskId)),
-      /** The walk cannot go on: the next task's stored id is too long to name in a cursor. */
+      /** The walk cannot go on: the next task's stored id cannot be named in a cursor. */
       endedEarly: Schema.optionalKey(Schema.Boolean),
     }),
   ),
