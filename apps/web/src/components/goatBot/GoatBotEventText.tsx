@@ -1,4 +1,4 @@
-import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import { goatBotEventSubjectSpan, type GoatBotRow } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 
@@ -22,8 +22,8 @@ export function GoatBotEventText({
 }) {
   const member = useGoatBotMember();
   const subject = row.subject;
-  const at = subject === undefined ? -1 : row.text.indexOf(subject.name);
-  if (subject === undefined || at < 0) return row.text;
+  const span = goatBotEventSubjectSpan(row);
+  if (subject === undefined || span === undefined) return row.text;
   const label = (subject.kind === "routine" ? "Open routine " : "Open task ") + subject.name;
   const chip =
     subject.kind === "task" ? (
@@ -44,9 +44,9 @@ export function GoatBotEventText({
   if (chip === null) return row.text;
   return (
     <>
-      {row.text.slice(0, at)}
+      {span.before}
       {chip}
-      {row.text.slice(at + subject.name.length)}
+      {span.after}
     </>
   );
 }

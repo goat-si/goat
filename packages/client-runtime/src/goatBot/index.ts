@@ -25,3 +25,4 @@ export * from "./botColor.ts";
 export * from "./unread.ts";
 export * from "./changeRequestLinks.ts";
 export * from "./quote.ts";
+export * from "./eventSubject.ts";
