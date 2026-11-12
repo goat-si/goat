@@ -289,6 +289,55 @@ describe("Library reads", () => {
     expect(server.paths()).toEqual(["file@0", "next@0"]);
   });
 
+  it("an open aborted during a chunk that then fails answers null once, rejects nothing, and frees the lane", async () => {
+    using test = setup();
+    const { reads, server } = test;
+    const controller = new AbortController();
+    const opened = reads.open(A, server.readChunk, "file", controller.signal);
+    reads.preview(A, server.readChunk, "next");
+    controller.abort();
+    (await server.call(0)).fail(new Error("connection lost"));
+    // An unhandled rejection after this point fails the run.
+    await expect(opened).resolves.toBeNull();
+    await server.call(1);
+    expect(server.paths()).toEqual(["file@0", "next@0"]);
+  });
+
+  it("an open aborted between two chunks answers null at once, asks for no further chunk, and frees the lane", async () => {
+    using test = setup();
+    const { reads, server } = test;
+    const controller = new AbortController();
+    const opened = reads.open(A, server.readChunk, "file", controller.signal);
+    reads.preview(A, server.readChunk, "next");
+    (await server.call(0)).answer(half("file", false));
+    controller.abort();
+    await expect(opened).resolves.toBeNull();
+    await server.call(1);
+    expect(server.paths()).toEqual(["file@0", "next@0"]);
+  });
+
+  it("a file that changed while it was opened is read again once and shows", async () => {
+    using test = setup();
+    const { reads, server } = test;
+    const opened = reads.open(A, server.readChunk, "file");
+    (await server.call(0)).answer({ status: "changed", relativePath: "file" });
+    (await server.call(1)).answer(chunk("file"));
+    await expect(opened).resolves.toMatchObject({ status: "ok", size: 4 });
+    expect(server.paths()).toEqual(["file@0", "file@0"]);
+  });
+
+  it("a file that changes on every read ends as changed after two reads, and frees the lane", async () => {
+    using test = setup();
+    const { reads, server } = test;
+    const opened = reads.open(A, server.readChunk, "file");
+    reads.preview(A, server.readChunk, "next");
+    (await server.call(0)).answer({ status: "changed", relativePath: "file" });
+    (await server.call(1)).answer({ status: "changed", relativePath: "file" });
+    await expect(opened).resolves.toEqual({ status: "changed" });
+    await server.call(2);
+    expect(server.paths()).toEqual(["file@0", "file@0", "next@0"]);
+  });
+
   it("cancelling a running preview, by its card or by leaving its chat, keeps the lane until its chunk answers or hits its bound", async () => {
     using test = setup();
     const { reads, server } = test;

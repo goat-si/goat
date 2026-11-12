@@ -8,10 +8,10 @@ import {
 
 import { readWholeBotArtifact, type BotArtifactRead } from "./botArtifacts.ts";
 
-// The server reads one Library file per connection at a time, so each server gets one chunk
-// request in flight and the next waits instead of hearing "busy". Opens go first, in order, and
-// hold the server for their whole file; previews run newest first. Every chunk has a bound, so a
-// read that never answers frees the server instead of holding it until reload.
+// The server reads one Library file per connection at a time, so each server gets one chunk in
+// flight; opens go first and hold it for their whole file. Every chunk has a bound. Nothing is
+// asked again after busy, a bound or a failure; a file that changed while it was opened is read
+// again once (readWholeBotArtifact), so one open makes at most two passes.
 
 /** A preview's first chunk gets this past the server's bound; a full 512 KiB chunk (about 700 KB of base64) needs about 28 s at 200 kbit/s. */
 const BOT_FILE_PREVIEW_TRANSFER_MS = 10_000;
@@ -30,7 +30,7 @@ export type BotFileReadChunk = (
   input: ChannelReadBotArtifactInput,
 ) => Promise<ChannelReadBotArtifactResult>;
 
-/** A busy, unanswered, thrown or rejected first chunk is `failed`; nothing retries on its own. */
+/** A busy, unanswered, thrown or rejected first chunk is `failed` and is not asked again. */
 export type BotFilePreview =
   | { readonly status: "ready"; readonly answer: ChannelReadBotArtifactResult }
   | { readonly status: "failed" }
