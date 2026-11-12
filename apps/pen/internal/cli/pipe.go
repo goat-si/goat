@@ -158,7 +158,7 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	self := p.id.NodeID()
-	revoked, stopWatch, err := daemon.WatchRevoked(st, m.NodeID, self)
+	revoked, stopWatch, err := watchRevoked(st, p, m)
 	if err != nil {
 		return die(err)
 	}
@@ -218,4 +218,20 @@ func revokedNodeErr(m mesh.Member, self bool) error {
 		return errors.New("this node left the mesh or was revoked; session closed")
 	}
 	return fmt.Errorf("%s (%s) was revoked from the mesh; session closed", m.Name, short(m.NodeID))
+}
+
+// watchRevoked watches m and this node. With no daemon to watch (pen down, or never started) it
+// still serves, unwatched, unless this node has left since p was loaded: a pen leave in between
+// deletes the identity and stops the daemon.
+func watchRevoked(st *state.Store, p *peer, m mesh.Member) (<-chan string, func(), error) {
+	self := p.id.NodeID()
+	revoked, stop, err := daemon.WatchRevoked(st, m.NodeID, self)
+	if err != nil || revoked != nil {
+		return revoked, stop, err
+	}
+	id, err := st.LoadIdentity()
+	if errors.Is(err, os.ErrNotExist) || err == nil && id.NodeID() != self {
+		return nil, stop, errors.New("this node left the mesh while this started; nothing was opened")
+	}
+	return nil, stop, err
 }

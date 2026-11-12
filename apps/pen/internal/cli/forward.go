@@ -71,7 +71,7 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	self := p.id.NodeID()
-	revoked, stopWatch, err := daemon.WatchRevoked(st, m.NodeID, self)
+	revoked, stopWatch, err := watchRevoked(st, p, m)
 	if err != nil {
 		ln.Close()
 		return fail(stderr, err)

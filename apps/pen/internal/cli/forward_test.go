@@ -254,3 +254,43 @@ func TestForwardDoesNotStartWhenTheDaemonDropsItsWatch(t *testing.T) {
 		t.Fatal("the forward that did not start still holds its port")
 	}
 }
+
+// A pen leave that finishes between loading the peer and starting the watch deletes this node's
+// identity and stops the daemon; with no daemon to watch, the forward checks and does not start.
+func TestForwardDoesNotStartAfterThisNodeLeftWhileItLoaded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := meshOfTwo(t, ctx, rs)
+	p, err := loadPeer(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Resolve(p.view.SortedMembers(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := tmpStore(t) // what the leave leaves behind: no identity and no daemon
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	out, outW := io.Pipe()
+	go func() {
+		code <- runForward(ctx, ln, left, p, m, 9, outW, &errOut, nil)
+		outW.Close()
+	}()
+	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "" {
+		t.Fatalf("the forward started for a node that left: %q", line)
+	}
+	if got := <-code; got == 0 || !strings.Contains(errOut.String(), "left the mesh") {
+		t.Fatalf("forward exit %d, stderr %q; want a failure saying this node left", got, errOut.String())
+	}
+	if c, err := net.Dial("tcp", ln.Addr().String()); err == nil {
+		c.Close()
+		t.Fatal("the forward that did not start still holds its port")
+	}
+}
