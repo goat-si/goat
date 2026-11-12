@@ -204,9 +204,10 @@ export const make = Effect.gen(function* () {
         (guess.failure.reason === "rate-limited" || guess.failure.reason === "unauthenticated")
       )
         return yield* guess.failure;
-      // A guess that fails, say for a head since force-pushed away, is only a missed head start.
-      if (sameBasis(seen, pullRequest))
-        return [pullRequest, yield* Effect.fromResult(guess)] as const;
+      // A guess that fails, say for a head since force-pushed away or a dropped request, is only
+      // a missed head start, so the read is made again from the fresh pull request.
+      if (Result.isSuccess(guess) && sameBasis(seen, pullRequest))
+        return [pullRequest, guess.success] as const;
     }
     return [pullRequest, yield* dependents(pullRequest)] as const;
   });
