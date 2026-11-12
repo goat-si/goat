@@ -130,7 +130,9 @@ it("updates edge fade flags as the reader scrolls", async () => {
     margin: "0",
   });
   // A reader who has not moved up follows the list as it grows; let that land before scrolling.
-  await vi.waitFor(() => expect(wrapper.dataset.atBottom).toBe("true"));
+  // The flags start at both edges, so wait for the follow to leave the top.
+  await vi.waitFor(() => expect(wrapper.dataset.atTop).toBe("false"));
+  expect(wrapper.dataset.atBottom).toBe("true");
   scroll.scrollTop = 0;
   await act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
   expect(wrapper.dataset.atTop).toBe("true");
