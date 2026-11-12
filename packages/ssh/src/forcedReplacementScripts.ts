@@ -34,7 +34,7 @@ forced_ticks_of() {
 # The start time of the runtime this launch started, the evidence a later forced stop asks for. It
 # is written to a new file and renamed into place, so a planted link is replaced, never followed.
 forced_record_start() {
-  rm -f "$STATE_DIR/started" "$STATE_DIR/started.ticks"
+  rm -f "$STATE_DIR/started" "$STATE_DIR/started.ticks" 2>/dev/null || :
   forced_started_now="$(forced_start_of "$1")" || forced_started_now=
   [ -n "$forced_started_now" ] || return 0
   forced_record_file started "$forced_started_now" && forced_record_file started.ticks "$(forced_ticks_of "$1")" ||
@@ -60,6 +60,12 @@ forced_stop_runtime() {
     forced_restore_runner
     forced_log_refusal "$1"
     printf 'GOAT did not stop PID %s on the remote host because %s; it was left running. Ask again so the approval names the runtime running now, or check it on the host and stop it yourself (kill %s).\\n' "$FORCE_PID" "$1" "$FORCE_PID" >&2; exit 1
+  }
+  # Without a working sleep no grace can be given, so nothing more is signalled or started.
+  forced_wait_failed() {
+    forced_restore_runner
+    forced_log_refusal "the host could not wait after $1"
+    printf 'GOAT sent %s to PID %s on the remote host but could not wait for it to exit (sleep failed); nothing more was signalled or started. Check it on the host. See %s.\\n' "$1" "$FORCE_PID" "$LOG_FILE" >&2; exit 1
   }
   # Once the new runner is published, a stop that does not happen puts the old one back.
   FORCED_PUBLISHED=0
@@ -166,7 +172,7 @@ GOAT_FORCED_RECORDS
   fi
   forced_waited=0
   while server_alive "$FORCE_PID" && [ "$forced_waited" -lt "$DRAIN_GRACE_SECONDS" ]; do
-    sleep 1 || :; forced_waited=$((forced_waited + 1))
+    sleep 1 || forced_wait_failed SIGTERM; forced_waited=$((forced_waited + 1))
   done
   if server_alive "$FORCE_PID"; then
     # A process still running that no longer passes the checks may be the runtime after a bad read,
@@ -175,7 +181,7 @@ GOAT_FORCED_RECORDS
       forced_refused "it no longer matched the approved runtime before SIGKILL"
     fi
     forced_waited=0
-    while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1 || :; forced_waited=$((forced_waited + 1)); done
+    while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1 || forced_wait_failed SIGKILL; forced_waited=$((forced_waited + 1)); done
     if forced_parent_holds; then
       forced_restore_runner
       printf 'GOAT PID %s on the remote host did not exit after SIGKILL; the update stopped. See %s.\\n' "$FORCE_PID" "$LOG_FILE" >&2; exit 1
@@ -223,8 +229,8 @@ forced_supervise_start() {
   rm -f "$forced_result" 2>/dev/null || :
   case "$forced_status" in
     replaced)
-      REMOTE_PID="$forced_new_pid"; REMOTE_PORT="$FORCE_PORT"; REMOTE_MANAGED=managed; REFRESH_DECISION=replaced
-      forced_record_start "$REMOTE_PID" ;;
+      # The supervisor already recorded this runtime, its start time included.
+      REMOTE_PID="$forced_new_pid"; REMOTE_PORT="$FORCE_PORT"; REMOTE_MANAGED=managed; REFRESH_DECISION=replaced ;;
     stuck)
       printf 'GOAT %s, started as PID %s on the remote host, did not become ready and did not exit after SIGKILL; it was left running and nothing more was started. Check it on the host. See %s.\\n' "$forced_new_version" "$forced_new_pid" "$LOG_FILE" >&2; exit 1 ;;
     rolled-back)

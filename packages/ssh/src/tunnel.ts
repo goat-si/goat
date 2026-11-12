@@ -986,7 +986,7 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
     rolled-back)
       if [ "$LIVE_COMPATIBLE" != 1 ]; then
         # The restored server is a new instance, so the fence for the drained one is done.
-        rm -f "$STATE_DIR/draining"
+        rm -f "$STATE_DIR/draining" 2>/dev/null || printf 'GOAT could not remove %s; the next update treats the old drain as unconfirmed.\\n' "$STATE_DIR/draining" >>"$LOG_FILE" 2>/dev/null || :
         printf 'GOAT %s did not start on the remote host; GOAT %s was restored and is running, but this app cannot attach to it. See %s.\n' "$TARGET_VERSION" "$supervise_version" "$LOG_FILE" >&2; exit 1
       fi
       printf 'GOAT %s did not start on the remote host; GOAT %s was restored.\n' "$TARGET_VERSION" "$supervise_version" >&2
@@ -1002,7 +1002,7 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
       fi
       printf 'Remote runtime replacement failed; see %s.\n' "$LOG_FILE" >&2; exit 1 ;;
   esac
-  rm -f "$STATE_DIR/draining"
+  rm -f "$STATE_DIR/draining" 2>/dev/null || printf 'GOAT could not remove %s; the next update treats the old drain as unconfirmed.\\n' "$STATE_DIR/draining" >>"$LOG_FILE" 2>/dev/null || :
 elif [ "$LIVE_STATUS" = live ]; then
   if [ "$LIVE_COMPATIBLE" != 1 ]; then
     printf 'Live GOAT compatibility changed; reconnect.\n' >&2; exit 1
@@ -1021,7 +1021,7 @@ else
       fi
     done
   fi
-  publish_selected_runner
+  [ -n "\${FORCED_STOPPED_PID:-}" ] || publish_selected_runner
 fi
 [ -z "\${FORCED_STOPPED_PID:-}" ] || forced_supervise_start
 # A runtime older than this host's database exits before ready on every start. The marker
