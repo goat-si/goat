@@ -36,6 +36,7 @@ import {
   useGoatBotName,
 } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
+import type { GoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
 
 // Home is one scroll of what the bot runs and does; Library holds what it keeps.
 const tabs = ["Home", "Library"] as const;
@@ -51,6 +52,7 @@ export function GoatBotWorkPanel({
   onRetryInput,
   openFile = null,
   onOpenFile,
+  routineLanding = null,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
@@ -66,6 +68,8 @@ export function GoatBotWorkPanel({
   openFile?: string | null | undefined;
   /** Opens a Library file in place of the conversation. */
   onOpenFile: (file: ChannelBotArtifact) => void;
+  /** A routine chip in the chat: Home shows with that routine's row focused. */
+  routineLanding?: GoatBotRoutineLanding | null | undefined;
 }) {
   const [tab, setTab] = useState<Tab>("Home");
   const [peek, setPeek] = useState<{
@@ -78,6 +82,17 @@ export function GoatBotWorkPanel({
   const [focusTarget, setFocusTarget] = useState<ChannelTaskId | "home" | null>(null);
   // A peek removed while focused fires no blur, so this still says it held focus as it closes.
   const [peekHasFocus, setPeekHasFocus] = useState(false);
+  // The routine row a chip asked for; it takes focus once it shows, and nothing else moves it.
+  const [routineFocus, setRoutineFocus] = useState<string | null>(null);
+  const [landedSeq, setLandedSeq] = useState<number | null>(null);
+  if (routineLanding !== null && routineLanding.seq !== landedSeq) {
+    setLandedSeq(routineLanding.seq);
+    setTab("Home");
+    setPeek(null);
+    setPeekHasFocus(false);
+    setFocusTarget(null);
+    setRoutineFocus(routineLanding.routineId);
+  }
   const focusOnce = (element: HTMLElement | null) => {
     if (element === null) return;
     // Only focus that the closed peek dropped moves; someone typing elsewhere keeps theirs.
@@ -85,10 +100,13 @@ export function GoatBotWorkPanel({
     if (active === null || active === document.body) element.focus();
     setFocusTarget(null);
   };
-  // Back also returns Home to where it was scrolled.
+  // Back also returns Home to where it was scrolled, once per mount; a routine landing scrolls it.
   const homeScroll = useRef(0);
+  const homePanel = useRef<HTMLElement | null>(null);
   const restoreHome = (element: HTMLElement | null) => {
-    if (element !== null) element.scrollTop = homeScroll.current;
+    if (element === null || element === homePanel.current) return;
+    homePanel.current = element;
+    if (routineFocus === null) element.scrollTop = homeScroll.current;
   };
   const member = useGoatBotMember();
   const botName = useGoatBotName();
@@ -152,7 +170,14 @@ export function GoatBotWorkPanel({
         <h2 className="max-w-full truncate text-base font-semibold">{botName}</h2>
         <GoatBotEditBotButton />
       </header>
-      <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
+      <Tabs
+        value={tab}
+        onValueChange={(value: Tab) => {
+          setTab(value);
+          setRoutineFocus(null);
+        }}
+        className="min-h-0 flex-1"
+      >
         <TabsList aria-label={`${botName} work`} variant="plain" className="justify-center">
           {tabs.map((name) => (
             <TabsTab
@@ -227,7 +252,10 @@ export function GoatBotWorkPanel({
                             onPeek={
                               peekRows === undefined
                                 ? undefined
-                                : () => setPeek({ taskId: row.task.taskId, title: row.task.title })
+                                : () => {
+                                    setRoutineFocus(null);
+                                    setPeek({ taskId: row.task.taskId, title: row.task.title });
+                                  }
                             }
                           />
                         ))}
@@ -256,6 +284,8 @@ export function GoatBotWorkPanel({
                 error={routines.error}
                 onRetry={routines.refresh}
                 onDraft={onDraft}
+                focusRoutineId={routineFocus}
+                onRoutineFocused={() => setRoutineFocus(null)}
               />
             </HomeSection>
           </div>

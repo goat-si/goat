@@ -26,8 +26,9 @@ it("shows a bot event as a note line in the conversation", async () => {
   await expect.element(screen.getByRole("button")).not.toBeInTheDocument();
 });
 
-it("turns the routine a line names into a chip that opens the bot's home", async () => {
-  const onOpenHome = vi.fn();
+it("turns the routine a line names into a chip that opens that routine by id", async () => {
+  const open = vi.fn();
+  const onOpenRoutine = vi.fn(() => open);
   const named: GoatBotRow = {
     ...event,
     subject: { kind: "routine", id: "routine-1", name: "Check in" },
@@ -37,14 +38,15 @@ it("turns the routine a line names into a chip that opens the bot's home", async
       environmentId={EnvironmentId.make("env")}
       rows={[named]}
       onRetry={() => {}}
-      onOpenHome={onOpenHome}
+      onOpenRoutine={onOpenRoutine}
     />,
   );
   await expect
     .element(screen.getByRole("note").filter({ hasText: "Routine Check in paused" }))
     .toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Open routine Check in" }));
-  expect(onOpenHome).toHaveBeenCalledOnce();
+  expect(onOpenRoutine).toHaveBeenCalledWith("routine-1");
+  expect(open).toHaveBeenCalledOnce();
 });
 
 it("a routine named like the line's first word gets its chip on the name, not the first word", async () => {
@@ -58,7 +60,7 @@ it("a routine named like the line's first word gets its chip on the name, not th
       environmentId={EnvironmentId.make("env")}
       rows={[named]}
       onRetry={() => {}}
-      onOpenHome={() => {}}
+      onOpenRoutine={() => () => {}}
     />,
   );
   const note = screen.getByRole("note");

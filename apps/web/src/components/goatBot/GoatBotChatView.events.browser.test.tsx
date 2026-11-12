@@ -155,3 +155,17 @@ it("a routine the loaded list no longer has is plain text; while the list loads 
     .element(screen.getByRole("button", { name: "Open routine Check in" }))
     .not.toBeInTheDocument();
 });
+
+it("on a narrow screen a routine chip opens the sheet on Home with that routine focused", async () => {
+  setup({ tasks: [routine("r2", "Daily digest"), routine("r1", "Check in")] });
+  state.narrow = true;
+  await using screen = await render(view([line("Check in")]));
+  await userEvent.click(screen.getByRole("button", { name: "Open routine Check in" }));
+  await expect
+    .element(page.getByRole("tab", { name: "Home" }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect.element(page.getByRole("link", { name: /^Check in/ })).toHaveFocus();
+  // The sheet's own initial focus runs as it opens; the row keeps focus once it has opened.
+  await expect.element(page.getByRole("dialog")).not.toHaveAttribute("data-starting-style");
+  expect(document.activeElement?.textContent).toMatch(/^Check in/);
+});

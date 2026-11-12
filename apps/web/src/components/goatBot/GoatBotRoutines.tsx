@@ -34,6 +34,9 @@ export function GoatBotRoutines(props: {
   readonly onRetry: () => void;
   /** Starts a routine request in the chat's message box; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
+  /** The routine whose row scrolls into view and takes focus when it shows. */
+  readonly focusRoutineId?: string | null | undefined;
+  readonly onRoutineFocused?: (() => void) | undefined;
 }) {
   const nowMinute = useNowMinute();
   const botName = useGoatBotName();
@@ -81,7 +84,12 @@ export function GoatBotRoutines(props: {
       ) : rows.length === 0 ? null : (
         <ul className="m-0 list-none space-y-1 p-0">
           {rows.map((row) => (
-            <RoutineRow key={row.id} environmentId={props.environmentId} row={row} />
+            <RoutineRow
+              key={row.id}
+              environmentId={props.environmentId}
+              row={row}
+              onFocused={row.id === props.focusRoutineId ? props.onRoutineFocused : undefined}
+            />
           ))}
         </ul>
       )}
@@ -106,7 +114,16 @@ function CheckInOffer(props: {
   );
 }
 
-function RoutineRow({ environmentId, row }: { environmentId: EnvironmentId; row: BotRoutineRow }) {
+function RoutineRow({
+  environmentId,
+  row,
+  onFocused,
+}: {
+  environmentId: EnvironmentId;
+  row: BotRoutineRow;
+  /** Present while this row should take focus; called once it has. */
+  onFocused?: (() => void) | undefined;
+}) {
   const canOperate = useAtomValue(
     serverEnvironment.setScheduledTaskEnabled.permissionAtom(environmentId),
   );
@@ -154,6 +171,16 @@ function RoutineRow({ environmentId, row }: { environmentId: EnvironmentId; row:
           to="/settings/scheduled-tasks"
           search={{ environmentId, taskId: row.id }}
           className="min-w-0 flex-1"
+          ref={
+            onFocused === undefined
+              ? undefined
+              : (element: HTMLAnchorElement | null) => {
+                  if (element === null) return;
+                  element.scrollIntoView({ block: "nearest" });
+                  element.focus({ preventScroll: true });
+                  onFocused();
+                }
+          }
         >
           <span className="block truncate font-medium">{row.title}</span>
           <span className="block text-xs text-muted-foreground">
