@@ -871,7 +871,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
                   (codexSettings.binaryPath === "codex"
                     ? " Installing ChatGPT or Codex desktop may not add codex to PATH."
                     : " Make sure the configured executable exists and can be run."),
-                resolvedEnvironment,
+                { env: resolvedEnvironment, platform: yield* HostProcess.Platform },
               ),
       },
     });

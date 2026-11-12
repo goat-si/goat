@@ -18,6 +18,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { createModelCapabilities } from "@goat/shared/model";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import { withLoginShellPathNote } from "@goat/shared/cliPath";
+import * as HostProcess from "@goat/shared/HostProcess";
 import {
   query as claudeQuery,
   type ModelInfo as ClaudeModelInfo,
@@ -583,10 +584,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         auth: { status: "unknown" },
         message:
           failure === "missing"
-            ? withLoginShellPathNote(
-                "Claude Agent CLI (`claude`) was not found on PATH.",
-                resolvedEnvironment,
-              )
+            ? withLoginShellPathNote("Claude Agent CLI (`claude`) was not found on PATH.", {
+                env: resolvedEnvironment,
+                platform: yield* HostProcess.Platform,
+              })
             : (spawnFailureMessage(failure, spawnCwd, claudeSettings.binaryPath) ??
               "Failed to execute Claude Agent CLI health check."),
       },

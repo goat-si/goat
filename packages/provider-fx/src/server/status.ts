@@ -3,6 +3,7 @@ import type { FxSettings } from "../settings.ts";
 import { createModelCapabilities } from "@goat/shared/model";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import { withLoginShellPathNote } from "@goat/shared/cliPath";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -189,7 +190,10 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
       status: "error",
       auth: { status: "unknown" },
       message: missing
-        ? withLoginShellPathNote("fx is not installed or not on PATH.", environment)
+        ? withLoginShellPathNote("fx is not installed or not on PATH.", {
+            env: environment,
+            platform: yield* HostProcess.Platform,
+          })
         : (spawnFailureMessage(failure, spawnCwd, settings.binaryPath || "fx") ??
           "Failed to run `fx --version`."),
     });

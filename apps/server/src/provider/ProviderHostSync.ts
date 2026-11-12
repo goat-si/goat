@@ -754,7 +754,8 @@ const make = Effect.gen(function* () {
       }
       const snapshot = yield* refreshDriver(driver);
       const after = (yield* localProviders).find((provider) => provider.driver === driver);
-      const notFound = installedButNotFound(recipe.binary, yield* HostProcess.Environment);
+      const host = { env: yield* HostProcess.Environment, platform: runtimePlatform };
+      const notFound = installedButNotFound(recipe.binary, host);
       if (after?.installed !== true)
         return yield* update(task, { phase: "failed", message: notFound }, true);
       yield* update(task, {

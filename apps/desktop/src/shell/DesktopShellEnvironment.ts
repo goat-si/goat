@@ -427,13 +427,18 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
   > {
     const fileSystem = yield* FileSystem.FileSystem;
     const shellEnvironment: EnvironmentPatch = {};
+    const candidates = listLoginShellCandidates(config.platform, config.env.SHELL);
+    let answeredBy: string | undefined;
 
-    for (const shell of listLoginShellCandidates(config.platform, config.env.SHELL)) {
+    for (const shell of candidates) {
       Object.assign(
         shellEnvironment,
         yield* readLoginShellEnvironment(shell, LOGIN_SHELL_ENV_NAMES, config.env),
       );
-      if (shellEnvironment.PATH) break;
+      if (shellEnvironment.PATH) {
+        answeredBy = shell;
+        break;
+      }
     }
 
     const launchctlPath =
@@ -524,7 +529,8 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       }
     }
 
-    return Option.isSome(trimNonEmpty(shellEnvironment.PATH));
+    // A fallback shell's PATH is used but is not the person's, so discovery stays unfinished.
+    return answeredBy === candidates[0] && Option.isSome(trimNonEmpty(shellEnvironment.PATH));
   },
 );
 

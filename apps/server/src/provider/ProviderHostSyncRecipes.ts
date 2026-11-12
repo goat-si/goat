@@ -121,10 +121,13 @@ export const forgetCommandMisses = Effect.gen(function* () {
 });
 
 /** The installer exited cleanly, yet the CLI is in none of the folders this server searches. */
-export const installedButNotFound = (binary: string, environment: NodeJS.ProcessEnv) =>
+export const installedButNotFound = (
+  binary: string,
+  host: Parameters<typeof withLoginShellPathNote>[1],
+) =>
   withLoginShellPathNote(
     `The installer finished, but GOAT cannot find ${binary} on its PATH here. Add the install folder to PATH and restart GOAT.`,
-    environment,
+    host,
   );
 
 /** Safe summary of a failed installer; the raw output never leaves this process. */

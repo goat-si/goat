@@ -10,6 +10,7 @@ import type { GrokSettings } from "../settings.ts";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import { causeErrorTag } from "@goat/shared/observability";
 import { withLoginShellPathNote } from "@goat/shared/cliPath";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -472,10 +473,10 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         auth: { status: "unknown" },
         message:
           failure === "missing"
-            ? withLoginShellPathNote(
-                "Grok CLI (`grok`) is not installed or not on PATH.",
-                probeEnvironment,
-              )
+            ? withLoginShellPathNote("Grok CLI (`grok`) is not installed or not on PATH.", {
+                env: probeEnvironment,
+                platform: yield* HostProcess.Platform,
+              })
             : (spawnFailureMessage(failure, spawnCwd, grokSettings.binaryPath || "grok") ??
               "Failed to execute Grok CLI health check."),
       },

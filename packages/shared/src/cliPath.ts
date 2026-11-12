@@ -12,12 +12,14 @@ const SHELL_DISCOVERY_PENDING_ENV = "GOAT_DESKTOP_SHELL_DISCOVERY_PENDING";
 const LOGIN_SHELL_PATH_UNREAD_NOTE =
   "GOAT has not been able to read the PATH from your login shell, so it searched only the folders it already knew and the standard install folders. If the CLI is installed somewhere else, set its full path as that provider's Binary path under Settings → Providers.";
 
-const withoutTrailingSlash = (entry: string): string => entry.trim().replace(/(?<=.)\/+$/u, "");
+// Never trimmed: a folder name may end in a space.
+const withoutTrailingSlash = (entry: string): string => entry.replace(/(?<=.)\/+$/u, "");
 
 /**
  * Where vendor installers put CLIs without a shell profile's help: ~/.local/bin (Claude Code,
  * Codex, Cursor), ~/.bun/bin (bun), Homebrew's default prefix, and npm's usual /usr/local.
- * Absolute folders only, per-user first; empty off macOS and Linux.
+ * Absolute folders only, per-user first; empty off macOS and Linux. A home that is not absolute,
+ * is the root, or holds the PATH delimiter gets no per-user folders: it would add relative entries.
  */
 export function wellKnownCliDirs(
   platform: NodeJS.Platform,
@@ -25,7 +27,7 @@ export function wellKnownCliDirs(
 ): ReadonlyArray<string> {
   if (platform !== "darwin" && platform !== "linux") return [];
   const root = withoutTrailingSlash(home ?? "");
-  const perUser = root.startsWith("/") && root !== "/";
+  const perUser = root.startsWith("/") && root !== "/" && !root.includes(POSIX_PATH_DELIMITER);
   return [
     ...(perUser ? [`${root}/.local/bin`, `${root}/.bun/bin`] : []),
     platform === "darwin" ? "/opt/homebrew/bin" : "/home/linuxbrew/.linuxbrew/bin",
@@ -53,10 +55,16 @@ export function appendWellKnownCliDirs<Value extends string | null | undefined>(
 export const loginShellPathUnread = (env: NodeJS.ProcessEnv): boolean =>
   env[SHELL_DISCOVERY_PENDING_ENV] === "1";
 
-/** One sentence for every "CLI not found" message, so providers cannot drift apart. */
+/**
+ * One sentence for every "CLI not found" message, so providers cannot drift apart. Only macOS
+ * and Linux read a login shell; Windows desktop sets the same variable for other reasons.
+ */
 export function withLoginShellPathNote(
   message: string,
-  env: NodeJS.ProcessEnv = process.env,
+  host: { readonly env: NodeJS.ProcessEnv; readonly platform: NodeJS.Platform },
 ): string {
-  return loginShellPathUnread(env) ? `${message} ${LOGIN_SHELL_PATH_UNREAD_NOTE}` : message;
+  const readsLoginShell = host.platform === "darwin" || host.platform === "linux";
+  return readsLoginShell && loginShellPathUnread(host.env)
+    ? `${message} ${LOGIN_SHELL_PATH_UNREAD_NOTE}`
+    : message;
 }

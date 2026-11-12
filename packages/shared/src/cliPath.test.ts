@@ -22,17 +22,33 @@ describe("well-known CLI folders", () => {
   });
 
   it("names absolute folders only and leaves Windows and a missing PATH alone", () => {
-    for (const home of [undefined, "", "relative/home", "~", "/"]) {
+    // A home holding the PATH delimiter would split into a relative entry such as ./.local/bin.
+    for (const home of [undefined, "", "relative/home", "~", "/", "//", "/Users/alice:."]) {
       expect(wellKnownCliDirs("linux", home)).toEqual([
         "/home/linuxbrew/.linuxbrew/bin",
         "/usr/local/bin",
       ]);
     }
+    expect(appendWellKnownCliDirs("/usr/bin", "darwin", "/Users/alice:.")).toBe(
+      "/usr/bin:/opt/homebrew/bin:/usr/local/bin",
+    );
     expect(wellKnownCliDirs("win32", "C:\\Users\\me")).toEqual([]);
     expect(appendWellKnownCliDirs("C:\\Windows", "win32", "C:\\Users\\me")).toBe("C:\\Windows");
     expect(appendWellKnownCliDirs(undefined, "darwin", "/Users/me")).toBeUndefined();
     expect(appendWellKnownCliDirs(null, "darwin", "/Users/me")).toBeNull();
     expect(appendWellKnownCliDirs("", "darwin", "/Users/me")).toBe("");
+  });
+
+  it("keeps a home folder whose name ends in a space, and only strips trailing slashes", () => {
+    expect(wellKnownCliDirs("darwin", "/Users/al //")).toEqual([
+      "/Users/al /.local/bin",
+      "/Users/al /.bun/bin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+    ]);
+    expect(appendWellKnownCliDirs("/usr/bin:/Users/al/.local/bin", "darwin", "/Users/al ")).toBe(
+      "/usr/bin:/Users/al/.local/bin:/Users/al /.local/bin:/Users/al /.bun/bin:/opt/homebrew/bin:/usr/local/bin",
+    );
   });
 
   it.effect("finds a CLI installed into ~/.local/bin after PATH was built", () =>
@@ -54,11 +70,16 @@ describe("well-known CLI folders", () => {
 });
 
 describe("login shell PATH note", () => {
-  it("explains a missing CLI only while the login shell PATH is unread", () => {
+  it("explains a missing CLI only on macOS and Linux while the login shell PATH is unread", () => {
     const message = "Claude Agent CLI (`claude`) was not found on PATH.";
-    expect(withLoginShellPathNote(message, {})).toBe(message);
-    const noted = withLoginShellPathNote(message, { GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" });
-    expect(noted.startsWith(message + " GOAT has not been able to read the PATH")).toBe(true);
-    expect(noted).toContain("Binary path");
+    const pending = { GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
+    expect(withLoginShellPathNote(message, { env: {}, platform: "darwin" })).toBe(message);
+    for (const platform of ["darwin", "linux"] as const) {
+      const noted = withLoginShellPathNote(message, { env: pending, platform });
+      expect(noted.startsWith(message + " GOAT has not been able to read the PATH")).toBe(true);
+      expect(noted).toContain("Binary path");
+    }
+    // Windows desktop sets the same variable, but has no login shell to wait for.
+    expect(withLoginShellPathNote(message, { env: pending, platform: "win32" })).toBe(message);
   });
 });

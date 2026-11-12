@@ -3,6 +3,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ClaudeSettings } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -56,12 +57,15 @@ it.effect("says the login shell PATH is unread when claude is missing during dis
         }),
       ),
     );
-    const check = (environment: NodeJS.ProcessEnv) =>
+    const check = (environment: NodeJS.ProcessEnv, platform: NodeJS.Platform = "darwin") =>
       checkClaudeProviderStatus(
         decodeClaudeSettings({ enabled: true, binaryPath: "claude" }),
         undefined,
         { PATH: "/goat-test-no-such-folder", ...environment },
-      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      ).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(HostProcess.Platform, platform),
+      );
     const notFound = "Claude Agent CLI (`claude`) was not found on PATH.";
     const read = yield* check({});
     assert.equal(read.installed, false);
@@ -72,5 +76,7 @@ it.effect("says the login shell PATH is unread when claude is missing during dis
       unread.message ?? "",
       notFound + " GOAT has not been able to read the PATH from your login shell",
     );
+    const windows = yield* check({ GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" }, "win32");
+    assert.equal(windows.message, notFound);
   }).pipe(Effect.provide(NodeServices.layer)),
 );

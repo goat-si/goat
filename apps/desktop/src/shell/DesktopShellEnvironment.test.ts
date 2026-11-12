@@ -110,6 +110,8 @@ function runShellEnvironment(input: {
   ) => string | { output: string; exitCode: number };
   readonly failure?: PlatformError.PlatformError;
   readonly processSpawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  /** Completed when the service moves a finished cache file into place. */
+  readonly cacheWritten?: Deferred.Deferred<void>;
 }) {
   const layerEnvironment = Layer.effect(
     DesktopEnvironment.DesktopEnvironment,
@@ -136,6 +138,19 @@ function runShellEnvironment(input: {
       );
     }),
   );
+  const { cacheWritten } = input;
+  const layerFileSystem = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      if (cacheWritten === undefined) return fs;
+      return {
+        ...fs,
+        rename: (from: string, to: string) =>
+          fs.rename(from, to).pipe(Effect.tap(() => Deferred.succeed(cacheWritten, undefined))),
+      };
+    }),
+  ).pipe(Layer.provide(NodeServices.layer));
 
   const program = Effect.gen(function* () {
     const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
@@ -146,6 +161,7 @@ function runShellEnvironment(input: {
   }).pipe(
     Effect.provide(
       DesktopShellEnvironment.layer.pipe(
+        Layer.provide(layerFileSystem),
         Layer.provide(Layer.mergeAll(layerEnvironment, NodeServices.layer, layerSpawner)),
       ),
     ),
@@ -690,6 +706,97 @@ describe("DesktopShellEnvironment", () => {
 
       assert.isFalse(prepared);
     }),
+  );
+
+  it.effect(
+    "uses a fallback shell's PATH without ending discovery, then finishes when the person's shell answers",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped();
+        const cachePath = `${stateDir}/shell-environment-cache.json`;
+        const env: NodeJS.ProcessEnv = { SHELL: "/usr/local/bin/fish", PATH: "/usr/bin" };
+        const firstProbe = yield* Deferred.make<void>();
+        const cacheWritten = yield* Deferred.make<void>();
+        let ownShellProbes = 0;
+        yield* runShellEnvironment({
+          env,
+          stateDir,
+          cacheWritten,
+          platform: "darwin",
+          handler: () => "",
+          processSpawner: ChildProcessSpawner.make((command) => {
+            if (command._tag !== "StandardCommand") return Effect.succeed(makeProcess(""));
+            if (command.command === "/bin/zsh")
+              return Effect.succeed(makeProcess(envOutput({ PATH: "/fallback/bin" })));
+            if (command.command !== "/usr/local/bin/fish") return Effect.succeed(makeProcess(""));
+            ownShellProbes++;
+            return ownShellProbes === 1
+              ? Deferred.succeed(firstProbe, undefined).pipe(
+                  Effect.andThen(
+                    Effect.acquireRelease(Effect.succeed(makeHungProcess()), () => Effect.never),
+                  ),
+                )
+              : Effect.succeed(makeProcess(envOutput({ PATH: "/own/bin" })));
+          }),
+          use: (service) =>
+            Effect.gen(function* () {
+              yield* service.installIntoProcess;
+              yield* Deferred.await(firstProbe);
+              yield* TestClock.adjust("10 seconds");
+              assert.isFalse(yield* service.awaitDiscovery);
+              const pending = Option.getOrUndefined(yield* Stream.runHead(service.updates));
+              assert.isFalse(pending?.discovered);
+              assert.equal(pending?.environment.PATH, `/fallback/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
+              assert.isFalse(yield* Effect.orDie(fs.exists(cachePath)));
+
+              yield* TestClock.adjust("30 seconds");
+              assert.equal(ownShellProbes, 2);
+              const recovered = yield* service.updates.pipe(
+                Stream.filter((snapshot) => snapshot.discovered),
+                Stream.runHead,
+              );
+              assert.equal(
+                Option.getOrUndefined(recovered)?.environment.PATH,
+                `/own/bin:/usr/bin:${DARWIN_CLI_DIRS}`,
+              );
+              yield* Deferred.await(cacheWritten);
+              const cached = yield* fs
+                .readFileString(cachePath)
+                .pipe(Effect.flatMap(decodeCache), Effect.orDie);
+              assert.equal(cached.environment.PATH, "/own/bin:/usr/bin");
+              return true;
+            }),
+        }).pipe(Effect.provide(Logger.layer([])));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps a good cache when only a fallback shell answers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped();
+      const cachePath = `${stateDir}/shell-environment-cache.json`;
+      const contents = encodeCache({
+        version: 1,
+        key: '["darwin","/test-home","/usr/local/bin/fish",""]',
+        environment: { PATH: "/own-cached/bin" },
+      });
+      yield* fs.writeFileString(cachePath, contents);
+      const env: NodeJS.ProcessEnv = { SHELL: "/usr/local/bin/fish", PATH: "/usr/bin" };
+      const prepared = yield* runShellEnvironment({
+        env,
+        stateDir,
+        platform: "darwin",
+        handler: (command) =>
+          command._tag === "StandardCommand" && command.command === "/bin/zsh"
+            ? envOutput({ PATH: "/fallback/bin" })
+            : { output: "", exitCode: 1 },
+      }).pipe(Effect.provide(Logger.layer([])));
+
+      assert.isFalse(prepared);
+      assert.equal(env.PATH, `/own-cached/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
+      assert.equal(yield* fs.readFileString(cachePath), contents);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("loads PowerShell profile environment on Windows", () =>
