@@ -36,9 +36,11 @@ export const statusChanges = (
           );
           // A stream that stops or fails takes the desktop's readiness with it, unannounced.
           const health = yield* receiver.value.subscribeHealth;
-          yield* health.changes.pipe(
+          // Seeded with the current status, so a sample that changes nothing never ticks.
+          yield* Stream.concat(Stream.make(health.latest), health.changes).pipe(
             Stream.map(({ status }) => status),
             Stream.changes,
+            Stream.drop(1),
             Stream.runForEach(() => Queue.offer(changes, undefined)),
             Effect.forkScoped({ startImmediately: true }),
           );
