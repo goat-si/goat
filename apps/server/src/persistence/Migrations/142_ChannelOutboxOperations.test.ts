@@ -12,7 +12,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 140 });
+      yield* runMigrations({ toMigrationInclusive: 141 });
       yield* sql`INSERT INTO channel_outbox ${sql.insert({
         delivery_id: "before",
         cause_key: "test:before",
