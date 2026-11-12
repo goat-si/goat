@@ -63,6 +63,7 @@ it.effect("reports a missing executable from the nested spawn cause", () =>
       ),
     );
     expect(snapshot.installed).toBe(false);
+    expect(snapshot.cli).toBe("missing");
   }),
 );
 
@@ -89,6 +90,7 @@ it.effect("does not report an EIO spawn error as missing when the path contains 
       ),
     );
     expect(snapshot.installed).toBe(true);
+    expect(snapshot.cli).toBeUndefined();
   }),
 );
 
@@ -120,5 +122,6 @@ it.effect("reports structured Windows command-not-found evidence as missing", ()
       ),
     );
     expect(snapshot.installed).toBe(false);
+    expect(snapshot.cli).toBe("missing");
   }),
 );

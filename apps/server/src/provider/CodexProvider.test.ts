@@ -25,6 +25,7 @@ it.effect("reports a deleted process cwd as a Codex working directory failure", 
       Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service),
     );
     assert.isTrue(snapshot.installed);
+    assert.isUndefined(snapshot.cli);
     assert.equal(snapshot.status, "error");
     assert.include(snapshot.message ?? "", "working directory");
   }).pipe(Effect.provide(NodeServices.layer)),
@@ -49,6 +50,8 @@ it.effect.each([
       {},
     ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
     assert.equal(snapshot.installed, installed);
+    // Only a command that was not found says the CLI is missing; a cwd or permission failure cannot tell.
+    assert.equal(snapshot.cli, installed ? undefined : "missing");
     assert.equal(snapshot.status, "error");
     if (installed) {
       const checks = snapshotChecks({
@@ -285,6 +288,8 @@ it.effect.each(["missing", "changed"])(
       ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
       assert.equal(snapshot.codexRoute?.state, "home");
       assert.equal(snapshot.codexRoute?.effectiveBaseUrl, fixture.input.settings.opencodexBaseUrl);
+      assert.equal(snapshot.cli, "present");
+      assert.equal(snapshot.cliCheckedAt, snapshot.checkedAt);
       const account = yield* fs.readFileString(`${fixture.input.execution.home}/account-observed`);
       assert.include(account, fixture.catalog);
       assert.include(account, fixture.input.settings.opencodexBaseUrl);

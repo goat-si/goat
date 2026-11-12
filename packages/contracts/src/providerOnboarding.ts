@@ -15,7 +15,7 @@ import { HandoffSummary } from "./handoff.ts";
 import { ProviderDiagnosisFix } from "./providerDiagnosis.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import type { ProviderAuthState } from "./providerSetup.ts";
-import { ServerProviderAuthStatus, ServerProviderState } from "./server.ts";
+import { ServerProviderAuthStatus, ServerProviderState } from "./serverProviderState.ts";
 
 /** The provider's own sign-in command, for drivers whose sign-in may need its terminal. */
 export const PROVIDER_SIGN_IN_COMMANDS: Readonly<Record<string, string>> = {

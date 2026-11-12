@@ -466,6 +466,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       models: fallbackModels,
       probe: {
         installed: failure !== "missing",
+        ...(failure === "missing" ? { cli: "missing" as const } : {}),
         version: null,
         status: "error",
         auth: { status: "unknown" },
@@ -508,6 +509,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       checkedAt,
       models: fallbackModels,
       probe: {
+        cli: "present",
         installed: true,
         version,
         status: "error",
@@ -575,6 +577,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       models,
       skills,
       probe: {
+        cli: "present",
         installed: true,
         version,
         status: "error",
@@ -593,6 +596,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     skills,
     slashCommands: acpMetadata?.slashCommands ?? [COMPACT_SLASH_COMMAND],
     probe: {
+      cli: "present",
       installed: true,
       version,
       status: incompleteMessage ? "warning" : "ready",

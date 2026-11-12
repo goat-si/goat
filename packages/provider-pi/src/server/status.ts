@@ -402,6 +402,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       models: fallbackModels,
       probe: {
         installed: failure !== "missing",
+        ...(failure === "missing" ? { cli: "missing" as const } : {}),
         version: null,
         status: "error",
         auth: { status: "unknown" },
@@ -442,6 +443,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       checkedAt,
       models: fallbackModels,
       probe: {
+        cli: "present",
         installed: true,
         version,
         status: "error",
@@ -458,6 +460,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       checkedAt,
       models: fallbackModels,
       probe: {
+        cli: "present",
         installed: true,
         version: null,
         status: "error",
@@ -476,6 +479,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       checkedAt,
       models: fallbackModels,
       probe: {
+        cli: "present",
         installed: true,
         version,
         status: "error",
@@ -493,6 +497,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       checkedAt,
       models: fallbackModels,
       probe: {
+        cli: "present",
         installed: true,
         version,
         status: "error",
@@ -519,6 +524,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       checkedAt,
       models: fallbackModels,
       probe: {
+        cli: "present",
         installed: true,
         version,
         status: "ready",
@@ -534,6 +540,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       checkedAt,
       models: fallbackModels,
       probe: {
+        cli: "present",
         installed: true,
         version,
         status: "ready",
@@ -565,6 +572,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     slashCommands: discovery.slashCommands,
     skills: discovery.skills,
     probe: {
+      cli: "present",
       installed: true,
       version,
       // Other Pi models still work when only the default is unavailable, so keep the picker usable.

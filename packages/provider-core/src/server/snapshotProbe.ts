@@ -5,6 +5,7 @@ import type {
   RuntimeMode,
   ServerProvider,
   ServerProviderAuth,
+  ServerProviderCli,
   ServerProviderSkill,
   ServerProviderSlashCommand,
   ServerProviderModel,
@@ -80,6 +81,8 @@ export interface ProviderProbeResult {
   readonly auth: ServerProviderAuth;
   readonly message?: string;
   readonly usageLimits?: ServerProviderUsageLimits;
+  /** Set only when this probe ran, or tried to run, the instance's CLI (ServerProvider.cli). */
+  readonly cli?: ServerProviderCli;
 }
 
 export interface ServerProviderPresentation {
@@ -317,6 +320,9 @@ export function buildServerProvider(input: {
     setup: { canAuthenticate: false, canInstall: false },
     checkedAt: input.checkedAt,
     ...(input.probe.message ? { message: input.probe.message } : {}),
+    ...(input.probe.cli === undefined
+      ? {}
+      : { cli: input.probe.cli, cliCheckedAt: input.checkedAt }),
     models: input.models,
     ...(input.updateRequiredModels?.length
       ? { updateRequiredModels: input.updateRequiredModels }

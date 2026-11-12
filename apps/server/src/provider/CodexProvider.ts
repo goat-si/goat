@@ -849,6 +849,8 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         : null;
     const installed = maybeInstalled && versionProbe !== "missing";
     const version = versionProbe === "missing" ? null : versionProbe;
+    // Missing only when the command was not found; a version answer proves it is there.
+    const cli = !installed ? "missing" : typeof versionProbe === "string" ? "present" : undefined;
     return buildStatus({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,
@@ -857,6 +859,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       skills: [],
       probe: {
         installed,
+        ...(cli === undefined ? {} : { cli }),
         version,
         status: "error",
         auth: { status: "unknown" },
@@ -946,6 +949,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       },
     ],
     probe: {
+      cli: "present",
       installed: true,
       version: snapshot.version ?? null,
       status: snapshot.models === undefined ? "warning" : accountStatus.status,

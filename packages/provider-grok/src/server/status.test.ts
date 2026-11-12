@@ -65,6 +65,7 @@ it.layer(layer)("checkGrokProviderStatus", (it) => {
         {},
       ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
       expect(snapshot.installed).toBe(true);
+      expect(snapshot.cli).toBeUndefined();
       expect(snapshot.message).toContain("working directory");
     }),
   );
@@ -87,6 +88,7 @@ it.layer(layer)("checkGrokProviderStatus", (it) => {
         {},
       ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
       expect(snapshot.installed).toBe(true);
+      expect(snapshot.cli).toBeUndefined();
       expect(snapshot.message).toContain(cwd);
     }),
   );
@@ -118,6 +120,7 @@ it.layer(layer)("checkGrokProviderStatus", (it) => {
         label: "xAI API key",
       });
       expect(["ready", "warning"]).toContain(snapshot.status);
+      expect(snapshot.cli).toBe("present");
       expect(JSON.stringify(snapshot)).not.toContain(secret);
     }).pipe(Effect.scoped),
   );
