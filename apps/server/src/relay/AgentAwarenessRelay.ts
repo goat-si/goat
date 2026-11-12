@@ -376,8 +376,10 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
     .map((thread) => thread.id);
 }
 
-/** @public */
-export const make = Effect.gen(function* () {
+/** @public `publishedStateByThread` lets a test watch which threads the relay remembers. */
+export const makeWith = Effect.fn("AgentAwarenessRelay.make")(function* (
+  options: { readonly publishedStateByThread?: Ref.Ref<Map<ThreadId, string>> } = {},
+) {
   if (!isGoatConnectEnabled()) {
     return AgentAwarenessRelay.of({
       publishThread: () => Effect.void,
@@ -396,7 +398,8 @@ export const make = Effect.gen(function* () {
   const cloudLinkKeyPair = yield* EnvironmentSigningKey.load(secrets);
   const startedAt = (yield* DateTime.now).epochMilliseconds;
   const catchUpRequests = yield* Queue.dropping<void>(1);
-  const publishedStateByThreadRef = yield* Ref.make(new Map<ThreadId, string>());
+  const publishedStateByThreadRef =
+    options.publishedStateByThread ?? (yield* Ref.make(new Map<ThreadId, string>()));
   const subagentWaits = makeSubagentWaits(threads);
   let enqueueParent: (id: ThreadId) => Effect.Effect<void> = () => Effect.void;
 
@@ -697,9 +700,15 @@ export const make = Effect.gen(function* () {
     }).pipe(withRelayClientTracing);
     publishConfirmDeadlines.delete(threadId);
     heldCompletions.delete(threadId);
-    yield* Ref.update(publishedStateByThreadRef, (publishedStates) =>
-      new Map(publishedStates).set(threadId, publishIdentity),
-    );
+    // Idle threads keep their tombstone so later events skip it; an archived or deleted thread's is
+    // dropped, so the map stays within threads still listed. One that returns republishes as after a restart.
+    const gone = snapshot.reason !== "snapshot";
+    yield* Ref.update(publishedStateByThreadRef, (publishedStates) => {
+      const next = new Map(publishedStates);
+      if (gone) next.delete(threadId);
+      else next.set(threadId, publishIdentity);
+      return next;
+    });
   });
 
   const processThreadPublish = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -922,5 +931,8 @@ export const make = Effect.gen(function* () {
     start,
   });
 });
+
+/** @public */
+export const make = makeWith();
 
 export const layer = Layer.effect(AgentAwarenessRelay, make);

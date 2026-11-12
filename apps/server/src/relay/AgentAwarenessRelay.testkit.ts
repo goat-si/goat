@@ -124,6 +124,7 @@ export const makeTestRelay = Effect.fnUntraced(function* (
     getOrCreateRandom: unused,
   });
   const currentShell = yield* Ref.make<OrchestrationV2ThreadShell | null>(shell());
+  const publishedStates = yield* Ref.make(new Map<ThreadId, string>());
   const shellReads: ThreadId[] = [];
   const catchUp = { shellSnapshotReads: 0 };
   const threads = ThreadManagementService.ThreadManagementService.of({
@@ -225,7 +226,9 @@ export const makeTestRelay = Effect.fnUntraced(function* (
     },
     { preconnect: () => {} },
   );
-  const relay = yield* AgentAwarenessRelay.make.pipe(
+  const relay = yield* AgentAwarenessRelay.makeWith({
+    publishedStateByThread: publishedStates,
+  }).pipe(
     Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
     Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
     Effect.provideService(ServerEnvironment.ServerEnvironment, {
@@ -257,5 +260,14 @@ export const makeTestRelay = Effect.fnUntraced(function* (
     Effect.provideService(FetchHttpClient.Fetch, fetch),
     Effect.provide(NodeCrypto.layer),
   );
-  return { relay, secrets, secretReads, currentShell, shellReads, publications, catchUp };
+  return {
+    relay,
+    secrets,
+    secretReads,
+    currentShell,
+    shellReads,
+    publications,
+    catchUp,
+    publishedStates,
+  };
 });

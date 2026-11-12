@@ -360,6 +360,40 @@ describe("AgentAwarenessRelay", () => {
     }),
   );
 
+  it.effect(
+    "bound: forgets archived and deleted threads once their tombstone is out, and republishes one that comes back",
+    () =>
+      Effect.gen(function* () {
+        const shells = new Map([
+          [THREAD_ID, shell()],
+          [SECOND_THREAD_ID, shell({ id: SECOND_THREAD_ID })],
+        ]);
+        const { relay, publications, publishedStates } = yield* makeTestRelay({
+          readShell: (id) => Effect.sync(() => shells.get(id) ?? null),
+        });
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(SECOND_THREAD_ID);
+        assert.equal((yield* Ref.get(publishedStates)).size, 2);
+
+        shells.set(THREAD_ID, shell({ archivedAt: DateTime.makeUnsafe(NOW) }));
+        shells.delete(SECOND_THREAD_ID);
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(SECOND_THREAD_ID);
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+        assert.deepEqual(
+          publications.map((publication) => publication.state?.phase ?? null),
+          ["running", "running", null, null],
+        );
+        assert.equal((yield* Ref.get(publishedStates)).size, 0);
+
+        shells.set(THREAD_ID, shell());
+        yield* relay.publishThread(THREAD_ID);
+        assert.equal(publications[4]?.state?.phase, "running");
+        assert.isTrue(publications[4]?.url.includes(THREAD_ID) ?? false);
+      }),
+  );
+
   it.effect("does not alert an old completion after publishing its thread's tombstone", () =>
     Effect.gen(function* () {
       const oldCompleted = shell({
