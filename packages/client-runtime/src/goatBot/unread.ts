@@ -1,12 +1,18 @@
 import type { GoatBotRow } from "./rows.ts";
 
-export function goatBotFirstUnread(rows: ReadonlyArray<GoatBotRow>, lastVisitedAt: string | null) {
+/** The bot messages and work cards that are newer than the person's last visit. */
+export function goatBotUnreadIds(
+  rows: ReadonlyArray<GoatBotRow>,
+  lastVisitedAt: string | null,
+): ReadonlySet<string> {
   const visitedAt = lastVisitedAt ? Date.parse(lastVisitedAt) : Number.NEGATIVE_INFINITY;
-  const unread = rows.filter(
-    (row) =>
-      (row.kind === "bot" && Date.parse(row.createdAt) > visitedAt) ||
-      (row.kind === "task" && Date.parse(row.card.updatedAt) > visitedAt),
+  return new Set(
+    rows
+      .filter(
+        (row) =>
+          (row.kind === "bot" && Date.parse(row.createdAt) > visitedAt) ||
+          (row.kind === "task" && Date.parse(row.card.updatedAt) > visitedAt),
+      )
+      .map((row) => row.id),
   );
-  const first = unread[0];
-  return first ? { rowId: first.id, count: unread.length } : null;
 }
