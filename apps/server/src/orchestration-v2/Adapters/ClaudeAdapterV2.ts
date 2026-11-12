@@ -1,3 +1,5 @@
+import { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
+export { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
 import { CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL } from "../PromptRefusal.ts";
 import { interruptUnlessClosed } from "./ClaudeStopTeardown.ts";
 import {
@@ -2047,35 +2049,6 @@ function isSupportedClaudeImageMimeType(
   mimeType: string,
 ): mimeType is SupportedClaudeImageMimeType {
   return supportedClaudeImageMimeTypes.has(mimeType);
-}
-
-export function makeClaudeUserMessage(input: {
-  readonly text: string;
-  readonly priority?: SDKUserMessage["priority"];
-  readonly skills?: ReadonlyMap<string, ClaudeSkillTarget>;
-  readonly uuid?: SDKUserMessage["uuid"];
-}): SDKUserMessage {
-  // Claude expands a skill only when `/name` starts the last text block.
-  // Keep the whole request before that block; see ClaudeSkillDispatch.
-  const dispatch =
-    input.skills === undefined ? undefined : planClaudeSkillDispatch(input.text, input.skills);
-  return {
-    type: "user",
-    message: {
-      role: "user",
-      content: dispatch
-        ? [
-            ...(dispatch.leadingText === undefined
-              ? []
-              : [{ type: "text" as const, text: dispatch.leadingText }]),
-            { type: "text" as const, text: dispatch.commandText },
-          ]
-        : input.text,
-    },
-    parent_tool_use_id: null,
-    ...(input.priority === undefined ? {} : { priority: input.priority }),
-    ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
-  };
 }
 
 // Never decode streams just to enforce a provider limit. Only accept an explicit,
