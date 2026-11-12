@@ -87,6 +87,7 @@ const PAGE_SIZE = 100;
 const EXPIRED_LIST_POSITION = "listChangeRequests.resume";
 /** Bounds each paged read, so one very long pull request cannot stall its detail. */
 const MAX_PAGES = 10;
+const MAX_CACHED_AVATARS = 1_000;
 
 const unsupported = (operation: string, detail: string) =>
   Effect.fail(
@@ -402,6 +403,15 @@ export const make = Effect.gen(function* () {
   // Avatars only change when someone replaces their picture, so each actor's is read once per
   // server. An actor the CLI reports without one is cached as "" so it is not asked about again.
   const avatarCache = new Map<string, string>();
+  // Oldest entries go first; an evicted actor is only read again.
+  const rememberAvatar = (id: string, url: string) => {
+    avatarCache.delete(id);
+    avatarCache.set(id, url);
+    for (const oldest of avatarCache.keys()) {
+      if (avatarCache.size <= MAX_CACHED_AVATARS) break;
+      avatarCache.delete(oldest);
+    }
+  };
   let avatarRead: Fiber.Fiber<OriginAvatars> | null = null;
   const avatarsFor = Effect.fn("OriginPullRequestProvider.avatarsFor")(function* (
     cwd: string,
@@ -429,8 +439,8 @@ export const make = Effect.gen(function* () {
     cli.execute({ cwd, operation: "readAvatars", args }).pipe(
       Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))),
       Effect.map((json) => {
-        for (const [id, url] of originAvatars(json)) avatarCache.set(id, url);
-        for (const id of ids) if (!avatarCache.has(id)) avatarCache.set(id, "");
+        for (const [id, url] of originAvatars(json)) rememberAvatar(id, url);
+        for (const id of ids) if (!avatarCache.has(id)) rememberAvatar(id, "");
         return avatarCache;
       }),
       // A picture is decoration: a failed read leaves initials rather than failing the page.

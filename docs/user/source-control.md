@@ -153,8 +153,10 @@ origin auth login
 ```
 
 If cloning or pushing asks for a username, run `origin auth setup-git` to point Git at the CLI's
-credentials again. Origin repositories use HTTPS and are published privately. Repositories mirrored
-from GitHub keep their pull requests on GitHub; open those from the GitHub remote.
+credentials again. Origin repositories use HTTPS. Origin creates a new repository visible to your
+Cursor team, and GOAT then makes it private right away; if that step fails, GOAT says so and you
+can set it to private on cursor.com. Repositories mirrored from GitHub keep their pull requests on
+GitHub; open those from the GitHub remote.
 
 ## Start, clone, or publish a project
 

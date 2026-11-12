@@ -28,6 +28,7 @@ const MISSING_TOKEN_TTL_MS = 10_000;
 /** How long a session is trusted before the CLI is asked again, as the GitHub and GitCafe credentials are. */
 const SESSION_TTL_MS = 5 * 60_000;
 const MAX_OUTPUT_BYTES = 8_000_000;
+const WARM_UP_MAX_BYTES = 64_000;
 const API_BASE_URL = "https://api.cursor.com";
 
 export const ORIGIN_COMMAND = "origin";
@@ -402,14 +403,34 @@ const make = Effect.gen(function* () {
   // A session's first question is who is signed in, which the CLI answers in most of a second.
   // The token read and the API connection's TLS handshake happen meanwhile, so the request that
   // follows starts warm. The API's root takes no credentials and counts against no limit.
+  // One warm-up at a time; its body is drained, never held, so the connection can be reused.
+  let warming = false;
   const warmUp = (cwd: string) =>
-    Effect.all(
-      [
-        currentToken(cwd),
-        httpClient.execute(HttpClientRequest.get(API_BASE_URL)).pipe(Effect.flatMap((r) => r.text)),
-      ],
-      { concurrency: "unbounded", discard: true },
-    ).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.ignore);
+    Effect.suspend(() => {
+      if (warming) return Effect.void;
+      warming = true;
+      return Effect.all(
+        [
+          currentToken(cwd),
+          httpClient
+            .execute(HttpClientRequest.get(API_BASE_URL))
+            .pipe(
+              Effect.flatMap((r) =>
+                collectUint8StreamText({ stream: r.stream, maxBytes: WARM_UP_MAX_BYTES }),
+              ),
+            ),
+        ],
+        { concurrency: "unbounded", discard: true },
+      ).pipe(
+        Effect.timeout(DEFAULT_TIMEOUT_MS),
+        Effect.ignore,
+        Effect.ensuring(
+          Effect.sync(() => {
+            warming = false;
+          }),
+        ),
+      );
+    });
 
   const viewer: OriginCli["Service"]["viewer"] = Effect.fn("OriginCli.viewer")(function* (cwd) {
     if (viewerAccount !== null && viewerExpiresAt > (yield* Clock.currentTimeMillis))
