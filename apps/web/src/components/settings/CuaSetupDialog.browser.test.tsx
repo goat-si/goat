@@ -17,12 +17,17 @@ const HELPER = {
 /** System Settings as seen through the helper: opening a pane grants it unless told otherwise. */
 function fixture(options: { grantOnOpen?: boolean; unusable?: string } = {}) {
   const grants = { accessibility: false, screenRecording: false };
+  // What the helper's next reads end as when it does not answer at all.
+  const helper = { unanswered: undefined as DesktopCuaGrants | undefined };
   return {
     grants,
-    onCheck: vi.fn(async (): Promise<DesktopCuaGrants> =>
-      options.unusable
-        ? { principal: "unusable", message: options.unusable }
-        : { ...HELPER, ...grants },
+    helper,
+    onCheck: vi.fn(
+      async (): Promise<DesktopCuaGrants> =>
+        helper.unanswered ??
+        (options.unusable
+          ? { principal: "unusable", message: options.unusable }
+          : { ...HELPER, ...grants }),
     ),
     onAllow: vi.fn(async (permission: CuaPermission) => {
       if (options.grantOnOpen === false) return;
@@ -182,16 +187,17 @@ it("asks for the helper's grants one step at a time and marks each one allowed",
   expect(button("Turn on")?.disabled).toBe(false);
 });
 
-it("keeps waiting while an older copy's switch is on, and says how to replace that entry", async () => {
+it("keeps waiting while another copy's switch is on, and says which copy GOAT checks without telling the person to remove the other app's row", async () => {
   const f = fixture({ grantOnOpen: false });
   await using _screen = await dialog(f);
   await refocus();
   await click("Open Settings");
   await refocus();
   expect(text()).toContain("Accessibility (waiting for you)");
-  expect(text()).toContain(
-    "in both Accessibility and Screen & System Audio Recording, remove every GOAT Computer Use row with the − button",
-  );
+  expect(text()).toContain("The row that is on may be for another copy");
+  expect(text()).toContain("GOAT and GOAT Nightly each list their own GOAT Computer Use");
+  expect(text()).not.toContain("belongs to an older copy");
+  expect(text()).not.toContain("remove every");
   expect(button("Open again")).toBeDefined();
   expect(button("Turn on")?.disabled).toBe(true);
   // A helper is read fresh on every check, so waiting alone never calls for a restart.
@@ -200,17 +206,66 @@ it("keeps waiting while an older copy's switch is on, and says how to replace th
   await click("Still not allowed?");
   expect(text()).toContain("tccutil reset Accessibility si.goat.desktop.computer-use");
   expect(text()).toContain("Only the switch for GOAT Computer Use counts.");
-  expect(text()).toContain(
-    "In both Accessibility and Screen & System Audio Recording, select every GOAT Computer Use row",
-  );
-  expect(text()).toContain(HELPER.bundlePath);
+  expect(text()).not.toContain("select every");
+  expect(text()).toContain("takes away that app's permission");
+  expect(text()).toContain(`GOAT is checking the copy at ${HELPER.bundlePath}.`);
+  expect(text()).toContain(`Its bundle ID is ${HELPER.bundleId}.`);
   await click("Show GOAT Computer Use in Finder");
   expect(f.onReveal).toHaveBeenCalledTimes(1);
 
-  // The person removes the stale entry and drags the current helper in.
+  // The person drags the helper of the app in use into the list and turns it on.
   f.grants.accessibility = true;
   await refocus();
   expect(text()).toContain("Accessibility (allowed)");
+});
+
+it("says GOAT Computer Use did not answer after two failed reads, with Try again and no grant steps or Quit & reopen, and returns to the steps once it answers", async () => {
+  const f = fixture({ grantOnOpen: false });
+  await using _screen = await dialog(f);
+  await refocus();
+  await click("Open Settings");
+  await refocus();
+  expect(text()).toContain("Accessibility (waiting for you)");
+
+  const message = "GOAT Computer Use did not answer: it took too long.";
+  f.helper.unanswered = { principal: "unusable", message, unanswered: "tookTooLong" };
+  await refocus();
+  await refocus();
+  expect(text()).toContain(message);
+  expect(text()).toContain("this does not mean one is missing");
+  expect(text()).not.toContain("waiting for you");
+  for (const label of ["Open Settings", "Open again", "Quit & reopen"])
+    expect(button(label), label).toBeUndefined();
+  expect(button("Turn on")?.disabled).toBe(true);
+
+  const asked = f.onCheck.mock.calls.length;
+  await click("Try again");
+  expect(f.onCheck.mock.calls.length).toBeGreaterThan(asked);
+  expect(text()).toContain(message);
+
+  f.helper.unanswered = undefined;
+  await refocus();
+  expect(text()).toContain("Accessibility (waiting for you)");
+  expect(text()).not.toContain(message);
+});
+
+it("stops showing a grant as waiting for its switch when reads keep failing, instead of retrying without a word", async () => {
+  const f = fixture({ grantOnOpen: false });
+  await using _screen = await dialog(f);
+  await refocus();
+  await click("Open Settings");
+  await refocus();
+  expect(text()).toContain("Accessibility (waiting for you)");
+
+  // A desktop from before the reason rejects the read instead of answering it.
+  f.onCheck.mockRejectedValue(new Error("Error invoking remote method"));
+  await refocus();
+  await refocus();
+  expect(text()).toContain("GOAT could not check the permissions on this Mac.");
+  expect(text()).not.toContain("waiting for you");
+  expect(text()).not.toContain("We'll try again automatically");
+  expect(button("Open again")).toBeUndefined();
+  expect(button("Try again")).toBeDefined();
 });
 
 it("shows a broken helper's reason and offers no other app to allow", async () => {

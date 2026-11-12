@@ -51,6 +51,8 @@ interface StatusLine {
   readonly error?: boolean;
   readonly grant?: CuaPermission;
   readonly retry?: boolean;
+  /** The retry button's words when it is not a failed setup that is run again. */
+  readonly retryLabel?: string;
   /** This desktop can run the check that proves capture and the tree, and nothing has. */
   readonly check?: boolean;
   readonly relaunch?: boolean;
@@ -123,6 +125,18 @@ function setupLine(input: {
     return text ? { text } : null;
   }
   if (setup.busy) return { text: "Setting up…" };
+  // No answer says nothing about the grants, so neither the grant nor a restart is offered. A
+  // host that is ready and not being set up stays so: its proof is a real capture, and these
+  // reads only look for a grant that was taken away.
+  const settled = phase.step === "ready" || (phase.step === "idle" && input.readiness.ready);
+  if (localMac && setup.unanswered && !settled)
+    return {
+      text: setup.unanswered.message,
+      error: true,
+      retry: true,
+      retryLabel: "Try again",
+      hint: "GOAT could not read the permissions, so this does not mean one is missing.",
+    };
   if (localMac && setup.unusable) return { text: setup.unusable, error: true, retry: true };
   if (localMac && setup.missing)
     return {
@@ -418,7 +432,7 @@ function ComputerUseStatus({
             disabled={!canConfigure}
             onClick={() => void setup.start()}
           >
-            Retry setup
+            {line.retryLabel ?? "Retry setup"}
           </Button>
         ) : line?.check ? (
           <Button

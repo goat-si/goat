@@ -296,6 +296,33 @@ it("keeps the grant prompt and does not resume when a read fails", async () => {
   expect(f.verify).not.toHaveBeenCalled();
 });
 
+it("says GOAT Computer Use did not answer once reads keep failing, offers Try again instead of the grant, and asks for the grant again once it answers", async () => {
+  const f = setup({ granted: false });
+  await using screen = await render(panel(f));
+  await clickSwitch("Computer use");
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Needs your OK/));
+
+  const message = "GOAT Computer Use did not answer: it stopped before it answered.";
+  f.checkGrants.mockResolvedValue({ principal: "unusable", message, unanswered: "stopped" });
+  await refocus();
+  await refocus();
+  await vi.waitFor(() => expect(statusText()).toBe(message));
+  expect(buttonLabels()).toContain("Try again");
+  for (const label of ["Open", "Open again", "Quit & reopen", "Retry setup"])
+    expect(buttonLabels(), label).not.toContain(label);
+
+  // Asking again runs setup from the start; a helper that still does not answer says so again.
+  await screen.getByRole("button", { name: "Try again" }).click();
+  await vi.waitFor(() => expect(f.save).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(statusText()).toBe(message));
+  expect(buttonLabels()).toContain("Try again");
+  expect(f.verify).not.toHaveBeenCalled();
+
+  f.checkGrants.mockImplementation(async () => ({ ...HELPER, ...f.grants }));
+  await refocus();
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Needs your OK/));
+});
+
 it("a failure the host reports outranks this session's passing check, even with the same text", async () => {
   const f = setup({ status: { ...idleMac, failure: "Helper could not start." } });
   await using _screen = await render(panel(f));
