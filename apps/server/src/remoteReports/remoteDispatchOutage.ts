@@ -21,7 +21,7 @@ import { dispatchMonitorMessage } from "./remoteMonitorMessage.ts";
  * Unreachable does not prove the machine stopped. Ending tracking releases the lane and channel
  * slot the work held, so the wait covers sleep, a reboot or a travel day before it gives up.
  */
-export const OUTAGE_LOST_AFTER_MS = 24 * 60 * 60_000;
+const OUTAGE_LOST_AFTER_MS = 24 * 60 * 60_000;
 
 const UNREACHABLE = new Set(["host_unavailable", "ssh_failed", "host_unknown"]);
 
@@ -29,8 +29,7 @@ const UNREACHABLE = new Set(["host_unavailable", "ssh_failed", "host_unknown"]);
 export const isUnreachable = (error: unknown): boolean =>
   error instanceof SshRemoteDispatch.SshRemoteDispatchError && UNREACHABLE.has(error.reason);
 
-export const notAnswering = (host: string, since: string) =>
-  `${host} has not answered since ${since}.`;
+const notAnswering = (host: string, since: string) => `${host} has not answered since ${since}.`;
 
 const storage = (cause: unknown) => new RemoteTaskError({ stage: "storage", cause });
 const delivery = (cause: unknown) => new RemoteTaskError({ stage: "delivery", cause });
