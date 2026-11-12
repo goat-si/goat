@@ -101,7 +101,8 @@ export class ChannelChildWorkStore extends Context.Service<
     /**
      * Compare-and-set on state; returns the updated record, or undefined when the record moved
      * on (another writer won the race) or is gone. threadIdIfMissing is written only when the
-     * current record has no thread id, so it never replaces one.
+     * current record has no thread id, so it never replaces one; a call that also passes a
+     * destination is refused, since that destination would replace the current one.
      */
     readonly transition: (input: {
       readonly taskId: ChannelTaskId;
@@ -225,6 +226,11 @@ const make = Effect.gen(function* () {
     readonly threadIdIfMissing?: ThreadId | undefined;
     readonly now: string;
   }) {
+    if (input.destination !== undefined && input.threadIdIfMissing !== undefined)
+      return yield* new ChannelChildWorkStoreError({
+        operation: "transition",
+        detail: "A transition takes a destination or threadIdIfMissing, not both.",
+      });
     return yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -235,11 +241,10 @@ const make = Effect.gen(function* () {
           if (rows[0] === undefined) return undefined;
           const current = decode(rows[0].value_json);
           if (!input.from.includes(current.state)) return undefined;
-          const destination = input.destination ?? current.destination;
           const filled =
-            input.threadIdIfMissing === undefined || destination?.threadId !== undefined
-              ? destination
-              : { ...destination, threadId: input.threadIdIfMissing };
+            input.threadIdIfMissing === undefined || current.destination?.threadId !== undefined
+              ? (input.destination ?? current.destination)
+              : { ...current.destination, threadId: input.threadIdIfMissing };
           const next: ChannelChildWork = {
             ...current,
             state: input.to,

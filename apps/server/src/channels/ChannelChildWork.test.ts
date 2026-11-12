@@ -418,6 +418,44 @@ describe("ChannelChildWork reconcile", () => {
   );
 });
 
+describe("ChannelChildWorkStore transition", () => {
+  it.effect(
+    "refuses a destination together with threadIdIfMissing and keeps the recorded thread",
+    () =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const admission = yield* admit("remote thread", { surface: "ssh_thread_launch" });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* Effect.scoped(
+          childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+        );
+        yield* childWork.markBound(admission.record, {
+          correlationId,
+          host: "box",
+          threadId: ThreadId.make("own-thread"),
+        });
+        const refused = yield* Effect.result(
+          store.transition({
+            taskId,
+            childWorkId: admission.record.childWorkId,
+            from: ["bound"],
+            to: "completed",
+            destination: { correlationId, host: "box" },
+            threadIdIfMissing: ThreadId.make("other-thread"),
+            now: NOW,
+          }),
+        );
+        assert.strictEqual(refused._tag, "Failure");
+        const record = yield* store.get(taskId, admission.record.childWorkId);
+        assert.strictEqual(record?.state, "bound");
+        assert.strictEqual(record?.destination?.threadId, "own-thread");
+      }).pipe(Effect.provide(makeLayer())),
+  );
+});
+
 describe("ChannelChildWork cancelForTask", () => {
   it.effect("stops launched thread children and releases reservations on a task stop", () => {
     const dispatched: Array<DispatchedStop> = [];
