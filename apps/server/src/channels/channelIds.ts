@@ -246,6 +246,10 @@ export const timelineIdsFor = (threadId: ThreadId, recordKey: string, revision: 
   commandId: CommandId.make(stableId("channel-record", [threadId, recordKey, revision])),
 });
 
+/** A member's greeting; the orchestrator writes it again only while nothing follows it. */
+export const GREETING_RECORD_PREFIX = "greeting:";
+export const greetingRecordKeyFor = (botId: string) => GREETING_RECORD_PREFIX + botId;
+
 /** The owner's bot, or the bot that replaces a deleted one: every caller lands on one thread. */
 export const botLaunchIdsFor = (ownerId: string, replacing?: ThreadId) => {
   const parts = replacing === undefined ? [ownerId] : [ownerId, replacing];
