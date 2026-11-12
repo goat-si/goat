@@ -1,14 +1,18 @@
 import type { EnvironmentMachineKind } from "@goat/contracts";
+import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import * as ProcessRunner from "../processRunner.ts";
 
 const DMI_ROOT = "/sys/class/dmi/id";
 const KERNEL_RELEASE_PATH = "/proc/sys/kernel/osrelease";
+const MACHINE_NONCE_FILE = "machine-nonce";
+const MACHINE_NONCE_PATTERN = /^[0-9a-f]{32}$/;
 
 // SMBIOS 3.x System Enclosure types (table 17).
 const DMI_CHASSIS_KINDS: Readonly<Record<string, EnvironmentMachineKind>> = {
@@ -192,18 +196,51 @@ const hashIdentity = Effect.fn("hashServerMachineIdentity")(function* (value: st
   return digest === null ? null : Hex.encode(digest).slice(0, 32);
 });
 
+const machineNoncePath = Effect.fn("machineNoncePath")(function* () {
+  const path = yield* Path.Path;
+  const directory = path.join(yield* HostProcess.HomeDirectory, GOAT_HOME_DIR_NAME);
+  return { directory, file: path.join(directory, MACHINE_NONCE_FILE) };
+});
+
+const readMachineNonce = Effect.fn("readMachineNonce")(function* () {
+  const nonce = yield* readOptionalFile((yield* machineNoncePath()).file);
+  return nonce !== null && MACHINE_NONCE_PATTERN.test(nonce) ? nonce : null;
+});
+
 /**
- * `machineId` is one value for every GOAT server on this machine, such as the desktop app's
- * server and the headless server SSH launches start in ~/.goat. `machineUserId` narrows it to
- * one OS account, whose servers read the same SSH config. Clients only compare them, so both
- * are salted hashes: the OS identifier itself is not something a paired client needs to learn.
+ * A random value in ~/.goat shared by this account's servers. Images and VM forks copy the OS
+ * machine identifier and often the boot id, but a clone gets its own nonce unless ~/.goat was in
+ * the image. Only the server command creates it, so tests that build the environment never write.
+ */
+export const ensureServerMachineNonce = Effect.fn("ensureServerMachineNonce")(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const crypto = yield* Crypto.Crypto;
+  const { directory, file } = yield* machineNoncePath();
+  if ((yield* readOptionalFile(file)) !== null) return;
+  // Link a complete file into place so a racing server sees nothing or the winner's nonce.
+  const fresh = Hex.encode(yield* crypto.randomBytes(16));
+  const staged = file + "." + fresh;
+  yield* fileSystem.makeDirectory(directory, { recursive: true });
+  yield* fileSystem.writeFileString(staged, fresh + "\n");
+  yield* fileSystem.link(staged, file).pipe(Effect.ignore);
+  yield* fileSystem.remove(staged);
+}, Effect.ignore);
+
+/**
+ * Both are the same for every GOAT server one OS account runs on this machine, such as the
+ * desktop app's and the headless one SSH launches start in ~/.goat; `machineUserId` also names
+ * their shared SSH config. Clients only compare them, so they are salted hashes.
  */
 export const detectServerMachineIdentity = Effect.fn("detectServerMachineIdentity")(function* () {
   const identifier = (yield* readOsMachineIdentifier())?.toLowerCase() ?? null;
   if (identifier === null) return { machineId: null, machineUserId: null };
+  const nonce = yield* readMachineNonce();
+  if (nonce === null) return { machineId: null, machineUserId: null };
   const home = yield* HostProcess.HomeDirectory;
   return {
-    machineId: yield* hashIdentity("goat-machine-id:v1:" + identifier),
-    machineUserId: yield* hashIdentity("goat-machine-user:v1:" + identifier + "\u0000" + home),
+    machineId: yield* hashIdentity("goat-machine-id:v2:" + identifier + "\u0000" + nonce),
+    machineUserId: yield* hashIdentity(
+      "goat-machine-user:v2:" + identifier + "\u0000" + nonce + "\u0000" + home,
+    ),
   };
 });
