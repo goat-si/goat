@@ -9,7 +9,7 @@ import { runTurnPrepareInput } from "./RunTurnPrepareInput.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
-import { makeAssistantIdleWake } from "./assistantIdleWake.ts";
+import { makeAssistantIdleWake, makePendingSnapshotHold } from "./assistantIdleWake.ts";
 import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
@@ -1388,6 +1388,7 @@ export const layer: Layer.Layer<
         });
         // The last stored root snapshot's pendingBackgroundWork; adapters that omit it leave it false.
         let rootSnapshotPendingWork = false;
+        const pendingSnapshotHold = makePendingSnapshotHold((at) => idleWake.schedule(at));
         const shouldStopProviderEventIngestion = Effect.gen(function* () {
           if (!(yield* agentTurnsSettled)) {
             return false;
@@ -1411,11 +1412,6 @@ export const layer: Layer.Layer<
           if (yield* Ref.get(providerThreadOwnerLost)) {
             return true;
           }
-          // The live probe reads adapter state, which runs ahead of the events consumed here
-          // (the idle-flush merge pulls provider events early); trust the last stored snapshot.
-          if (rootSnapshotPendingWork) {
-            return false;
-          }
           // Claude background Bash has no turn-item projection. Use only the
           // thread-scoped probe: session-wide pending work (siblings, wake
           // buffers, session subagents) must not pin this root subscription.
@@ -1428,7 +1424,8 @@ export const layer: Layer.Layer<
               return false;
             }
           }
-          return true;
+          // The probe runs ahead of events the idle-flush merge pulled but has not processed.
+          return !(rootSnapshotPendingWork && (yield* pendingSnapshotHold.holds()));
         });
         const receipt = { receiptLine: isGoatBotSessionThreadId(input.run.threadId) };
         const filterAssistantEvent = makeAssistantStreamingFilter(responseStreamingMode, receipt);
@@ -1666,8 +1663,10 @@ export const layer: Layer.Layer<
             eventSubscription.events.pipe(Stream.merge(idleWake.events, { haltStrategy: "left" })),
             (event) =>
               Effect.gen(function* () {
-                if (event.type !== "idle_flush")
+                if (event.type !== "idle_flush") {
+                  pendingSnapshotHold.providerEvent();
                   return yield* ingestEvent(yield* routeEvent(event));
+                }
                 const now = Math.max(DateTime.toEpochMillis(yield* DateTime.now), event.at);
                 idleWake.fired(now);
                 for (const held of filterAssistantEvent.takeIdleFlushes(now)) {

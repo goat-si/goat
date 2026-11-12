@@ -32,3 +32,29 @@ export const makeAssistantIdleWake = Effect.fn("assistantIdleWake.make")(functio
   });
   return { events: Stream.fromQueue(ticks), schedule, fired, close };
 });
+
+// Long enough for every provider event the idle-flush merge pulled early to be processed.
+const PENDING_SNAPSHOT_RECHECK_MS = 5_000;
+
+/**
+ * A stored pending-work snapshot keeps ingestion open while provider events keep arriving, and
+ * lets go once the stream has been quiet past a recheck, so an adapter that never clears it
+ * cannot pin the run.
+ */
+export function makePendingSnapshotHold(schedule: (at: number) => Effect.Effect<void>) {
+  let events = 0;
+  let recheck: { readonly events: number; readonly at: number } | undefined;
+  return {
+    providerEvent: () => {
+      events++;
+    },
+    // Called from each stop check, which already has a span.
+    holds: Effect.fnUntraced(function* () {
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      if (recheck?.events !== events) recheck = { events, at: now + PENDING_SNAPSHOT_RECHECK_MS };
+      if (now >= recheck.at) return false;
+      yield* schedule(recheck.at);
+      return true;
+    }),
+  };
+}
