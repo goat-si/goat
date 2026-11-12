@@ -243,6 +243,7 @@ async function standInOpen(relativePath: string) {
   }
 }
 import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { botFileReads } from "@goat/client-runtime/goatBot";
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
 import { chatFilesScope, GoatBotFilesProvider } from "./GoatBotReplyFiles";
 import { useBotFileOpener } from "./MobileBotFileViewer";
@@ -269,6 +270,11 @@ afterEach(async () => {
   files.realOpen = false;
   screenSession.current = {};
 });
+
+// The shared Library read lane is one module instance; each test starts it empty.
+function setup() {
+  botFileReads.clear();
+}
 
 const props = { canSend: true, onSend: () => true, onRetry: vi.fn(), onSelectThread: () => {} };
 const at = "2026-11-12T01:00:00.000Z";
@@ -360,6 +366,7 @@ const listed = (...paths: string[]) => ({
 });
 
 it("shows a card for a file the listing has, previews its words without media or links, and opens it in the Library's viewer", async () => {
+  setup();
   files.listing = listed("reports/report.md");
   await show([bot("b1", "Saved it to `reports/report.md`.")]);
   expect(card("report.md")).not.toBeNull();
@@ -387,6 +394,7 @@ it("shows a card for a file the listing has, previews its words without media or
 });
 
 it("draws an image preview from the chunk's own data", async () => {
+  setup();
   files.listing = listed("chart.png");
   await show([bot("b1", "Here: `chart.png`")]);
   const png = [
@@ -413,6 +421,7 @@ it("draws an image preview from the chunk's own data", async () => {
 });
 
 it("shows no card for a file the listing lacks, plain inline code, an older server or no file named", async () => {
+  setup();
   files.listing = listed("reports/report.md");
   await show([
     bot("b1", "Run `npm test` first."),
@@ -430,6 +439,7 @@ it("shows no card for a file the listing lacks, plain inline code, an older serv
 });
 
 it("reads no listing for inline code the Library cannot list, and reads one for a bare name like README", async () => {
+  setup();
   files.listing = listed("README");
   const odd = bot("b1", "Open `https://example.com/a.md`, `.env` or `../up.md`; run `a:b`.");
   await show([odd]);
@@ -441,6 +451,7 @@ it("reads no listing for inline code the Library cannot list, and reads one for 
 });
 
 it("matches names with spaces and full artifact paths, and shows the card under a question too", async () => {
+  setup();
   files.listing = {
     ...listed("quarterly report.md", "notes/README"),
     root: "/home/me/.goat/artifacts",
@@ -454,6 +465,7 @@ it("matches names with spaces and full artifact paths, and shows the card under 
 });
 
 it("shows a card once a late listing names the file", async () => {
+  setup();
   files.listing = null;
   await show([bot("b1", "Saved `report.md`.")]);
   expect(card("report.md")).toBeNull();
@@ -464,6 +476,7 @@ it("shows a card once a late listing names the file", async () => {
 });
 
 it("reads the listing again for a file named while a read was running, so a file saved meanwhile still gets its card", async () => {
+  setup();
   files.listing = listed("old.md");
   files.pending = true;
   await show([bot("b1", "Old: `old.md`.")]);
@@ -486,6 +499,7 @@ it("reads the listing again for a file named while a read was running, so a file
 });
 
 it("still reads for a newly named file after many replies with plain inline code", async () => {
+  setup();
   files.listing = listed();
   const plain = Array.from({ length: 12 }, (_, index) => bot(`p${index}`, `Run \`step${index}\`.`));
   await show(plain);
@@ -500,6 +514,7 @@ it("still reads for a newly named file after many replies with plain inline code
 });
 
 it("drops a late preview answer once the chat changes", async () => {
+  setup();
   files.listing = listed("a.md");
   await show([bot("b1", "See `a.md`")]);
   expect(files.previews.map((entry) => entry.relativePath)).toEqual(["a.md"]);
@@ -512,6 +527,7 @@ it("drops a late preview answer once the chat changes", async () => {
 });
 
 it("never starts a waiting preview read once its card has left", async () => {
+  setup();
   files.listing = listed("a.md", "b.md");
   await show([bot("b1", "`a.md` and `b.md`")]);
   // One read runs at a time: a.md is in flight, b.md waits.
@@ -523,6 +539,7 @@ it("never starts a waiting preview read once its card has left", async () => {
 });
 
 it("reads the listing again for a later mention of a listed file, so a rewritten file previews again", async () => {
+  setup();
   const first = bot("b1", "See `report.md`.");
   const later = { ...bot("b2", "Updated `report.md`."), createdAt: "2026-10-12T09:50:00Z" };
   // Answers every read so far, then the one that was waiting behind them.
@@ -558,6 +575,7 @@ it("reads the listing again for a later mention of a listed file, so a rewritten
 });
 
 it("reads the listing exactly once for a reply that streams 50 file names and then finishes", async () => {
+  setup();
   files.listing = listed();
   const spans = (count: number) =>
     Array.from({ length: count }, (_, index) => `\`step${index}.md\``).join(" ");
@@ -579,6 +597,7 @@ it("reads the listing exactly once for a reply that streams 50 file names and th
 });
 
 it("reads nothing more when history rows mount again, or an older or same-time reply arrives after a read", async () => {
+  setup();
   files.listing = listed("a.md");
   const history = Array.from({ length: 30 }, (_, index) =>
     bot(`h${index}`, `Saved \`f${index}.md\`.`),
@@ -607,6 +626,7 @@ it("reads nothing more when history rows mount again, or an older or same-time r
 });
 
 it("names the file's kind to a screen reader", async () => {
+  setup();
   files.listing = listed("report.md", "chart.png", "data.csv");
   await show([bot("b1", "`report.md`, `chart.png` and `data.csv`")]);
   const labels = [...view.container.querySelectorAll('button[aria-label^="Open "]')].map((button) =>
@@ -643,6 +663,7 @@ function screenFor(threadId: string, rows: ReturnType<typeof bot>[]) {
 const dialogImage = () => view.container.querySelector('[role="dialog"] img');
 
 it("drops an open still reading when the chat changes, and closes a shown image", async () => {
+  setup();
   files.listing = listed("chart.png");
   const rows = [bot("b1", "Here: `chart.png`")];
   h = createNativeMemoryHarness();
@@ -691,9 +712,10 @@ async function answerNext(path: string, value: object) {
   await act(async () => entry?.answer(value));
   await settle();
 }
-const FAILED = /Another file is still opening|Couldn't open/;
+const FAILED = /taking too long|Couldn't open/;
 
 it("opens a card tapped while its own preview is loading once that chunk is in, with no error, and keeps the preview", async () => {
+  setup();
   files.realOpen = true;
   files.listing = listed("chart.png");
   await show([bot("b1", "Here: `chart.png`")]);
@@ -708,6 +730,7 @@ it("opens a card tapped while its own preview is loading once that chunk is in, 
 });
 
 it("runs a tapped card's open right after the preview in flight, ahead of the previews still waiting", async () => {
+  setup();
   files.realOpen = true;
   files.listing = listed("report.md", "chart.png", "notes.md");
   await show([bot("b1", "`report.md`, `chart.png` and `notes.md`")]);
@@ -719,9 +742,62 @@ it("runs a tapped card's open right after the preview in flight, ahead of the pr
   await answerNext("notes.md", chunk("notes.md", "text/markdown", "Notes"));
   expect(view.container.textContent).not.toMatch(FAILED);
   expect(card("notes.md")?.textContent).not.toContain("Opening");
-  await answerNext("chart.png", pngChunk("chart.png"));
+  // The waiting previews run newest first.
   await answerNext("notes.md", chunk("notes.md", "text/markdown", "Notes preview"));
+  await answerNext("chart.png", pngChunk("chart.png"));
   expect(card("report.md")?.textContent).toContain("Weekly words");
   expect(card("chart.png")?.querySelector("img")).not.toBeNull();
   expect(card("notes.md")?.textContent).toContain("Notes preview");
+});
+it("shows Preview unavailable in the slot when a preview fails or has nothing to show, and the card still opens", async () => {
+  setup();
+  files.listing = listed("report.md", "chart.png");
+  await show([bot("b1", "`report.md` and `chart.png`")]);
+  // chart.png's bytes are a GIF under a PNG name, so there is nothing to draw; report.md is busy.
+  for (let read = 0; read < 2; read += 1) {
+    const next = files.previews.find((entry) => !entry.answered)?.relativePath ?? "";
+    await answerNext(
+      next,
+      next === "chart.png"
+        ? chunk("chart.png", "image/png", "GIF89a not a png")
+        : { status: "busy", relativePath: next },
+    );
+  }
+  expect(card("report.md")?.textContent).toContain("Preview unavailable");
+  expect(card("chart.png")?.textContent).toContain("Preview unavailable");
+  await act(async () => card("report.md")?.click());
+  await settle();
+  expect(files.opened).toEqual(["report.md"]);
+});
+
+it("says a busy open is taking too long, in the words both clients use", async () => {
+  setup();
+  files.realOpen = true;
+  files.listing = listed("report.md");
+  await show([bot("b1", "Here: `report.md`")]);
+  await answerNext("report.md", chunk("report.md", "text/markdown", "Weekly words"));
+  await act(async () => card("report.md")?.click());
+  await settle();
+  await answerNext("report.md", { status: "busy", relativePath: "report.md" });
+  expect(view.container.textContent).toContain(
+    "report.md is taking too long to open. Try again in a moment.",
+  );
+  expect(card("report.md")?.textContent).not.toContain("Opening");
+});
+it("leaves no card stuck on Opening after its open is stopped by a chat change and the person comes back", async () => {
+  setup();
+  files.realOpen = true;
+  files.listing = listed("report.md");
+  const rows = [bot("b1", "Here: `report.md`")];
+  await show(rows);
+  // report.md's preview is in flight; the open waits behind it.
+  await act(async () => card("report.md")?.click());
+  await settle();
+  expect(card("report.md")?.textContent).toContain("Opening");
+  await view.rerender(chat(rows, "thread-b"));
+  await settle();
+  await view.rerender(chat(rows, "thread-a"));
+  await settle();
+  expect(card("report.md")?.textContent).not.toContain("Opening");
+  expect(card("report.md")?.disabled).toBe(false);
 });

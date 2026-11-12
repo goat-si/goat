@@ -208,6 +208,20 @@ describe("Library reads", () => {
     expect(server.count()).toBe(MAX_WAITING_BOT_FILE_PREVIEWS + 1);
   });
 
+  it("a card that cancels its waiting preview settles it cancelled, and its read is never asked", async () => {
+    using test = setup();
+    const { reads, server } = test;
+    reads.preview(A, server.readChunk, "running");
+    const gone = reads.preview(A, server.readChunk, "gone");
+    reads.preview(A, server.readChunk, "kept");
+    gone.cancel();
+    await expect(gone.result).resolves.toEqual({ status: "cancelled" });
+    (await server.call(0)).answer(chunk("running"));
+    (await server.call(1)).answer(chunk("kept"));
+    await vi.advanceTimersByTimeAsync(BOT_FILE_PREVIEW_CHUNK_BOUND_MS);
+    expect(server.paths()).toEqual(["running@0", "kept@0"]);
+  });
+
   it("R2: leaving a chat drops its waiting previews and keeps another chat's", async () => {
     using test = setup();
     const { reads, server } = test;
