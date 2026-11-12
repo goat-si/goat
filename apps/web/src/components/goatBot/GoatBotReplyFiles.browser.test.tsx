@@ -249,6 +249,33 @@ it("a reply whose code no listed file can match asks the server for nothing", as
 
 const ROOT = "/srv/goat/userdata/goat-bot/artifacts";
 
+it("a reply naming a file saved after the listing was read still gets its card, from one more read", async () => {
+  using test = setup();
+  const view = (rows: ReadonlyArray<GoatBotRow>) =>
+    test.wrap(
+      <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+        <GoatBotTimeline rows={rows} onRetry={() => {}} />
+      </GoatBotOpenFileContext>,
+    );
+  const first = reply("first", "Saved `reports/summary.md`.");
+  await using screen = await render(view([first]), { router: false }); // No links here.
+  await expect.element(screen.getByRole("button", { name: "Open summary.md" })).toBeVisible();
+  expect(server.listed).toBe(1);
+  server.files.set("reports/plan.md", { mimeType: "text/markdown", text: "# Plan" });
+  server.files.set("reports/notes.md", { mimeType: "text/markdown", text: "# Notes" });
+  // Two replies that arrive together share the one read.
+  await screen.rerender(
+    view([
+      first,
+      reply("plan", "Then I saved `reports/plan.md`."),
+      reply("notes", "And `reports/notes.md`."),
+    ]),
+  );
+  await expect.element(screen.getByRole("button", { name: "Open plan.md" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Open notes.md" })).toBeVisible();
+  expect(server.listed).toBe(2);
+});
+
 it("a full path gets a card only when it is inside this server's artifacts folder", async () => {
   using test = setup(undefined, ROOT);
   await using screen = await render(

@@ -32,6 +32,9 @@ type Preview =
   | { readonly kind: "image"; readonly url: string }
   | null;
 
+// The listing read each listing was last read again after, so replies that saw one read share one.
+const rereadAfter = new WeakMap<object, number>();
+
 /** Cards under a bot reply for each Library file it names, so the person can open it. */
 export const GoatBotReplyFiles = memo(function GoatBotReplyFiles({
   text,
@@ -45,9 +48,20 @@ export const GoatBotReplyFiles = memo(function GoatBotReplyFiles({
     environmentId !== null &&
     configs.get(environmentId)?.environment.capabilities.goatBotLibrary === true;
   const wanted = environmentId !== null && supported && goatBotReplyMayNameFile(text);
-  const listing = useEnvironmentQuery(
-    wanted ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null,
-  );
+  const query = wanted ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null;
+  const listing = useEnvironmentQuery(query);
+  // A listing read before this reply arrived may predate the file it names; a listing first
+  // read for this reply needs no second read.
+  const [readBefore] = useState(() => (listing.data === null ? null : listing.dataUpdatedAt));
+  const readAgain = useEffectEvent((readAt: number) => {
+    if (query === null || rereadAfter.get(query) === readAt) return;
+    rereadAfter.set(query, readAt);
+    listing.refresh();
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- The Library lives on the server and nothing tells this client a file was saved; read it again once for a reply that arrives later.
+  useEffect(() => {
+    if (readBefore !== null) readAgain(readBefore);
+  }, [readBefore]);
   const data = wanted ? (listing.data ?? null) : null;
   const named = data === null ? [] : goatBotReplyFiles(text, data.artifacts, data.root);
   if (files === null || named.length === 0) return null;
