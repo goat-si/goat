@@ -1,9 +1,7 @@
 /**
- * A GOAT Bot turn that asked the person waits only until their next message in its conversation.
- * Session routing runs that message as a new turn on the same session, which carries the question
- * on, so the asking turn records that message as its answer and ends without another reply.
- *
- * @module channelSupersededTurns
+ * A GOAT Bot turn that asked waits until the session runs the person's next message as a new turn
+ * with the question in context. Then the question closes, never naming that message as its answer
+ * (it may be about something else), and the asking turn ends without another reply.
  */
 import { isGoatBotSessionThreadId, type ChannelTask } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -13,7 +11,13 @@ import type * as ChannelLedger from "./ChannelLedger.ts";
 import { taskEventIdFor } from "./channelIds.ts";
 import { prepareTransition } from "./channelTaskWrites.ts";
 
-/** The asker's first turn after the turn's newest question; a coding thread's ask is excluded. */
+/** What the closed question records instead of an answer the person never gave it. */
+export const SUPERSEDED_QUESTION_ANSWER = "(No answer; the conversation went on.)";
+
+/**
+ * A later turn from the asker that the session ran, finishing or asking again. One still queued
+ * or running, or one that failed or was stopped, never reached the session with the question.
+ */
 const supersedingTurn = (
   asking: ChannelTask,
   conversation: ReadonlyArray<ChannelTask>,
@@ -36,13 +40,14 @@ const supersedingTurn = (
       (other) =>
         other.taskId !== asking.taskId &&
         other.kind === "turn" &&
+        (other.status === "completed" || other.status === "waiting_input") &&
         other.requester.principalId === asking.requester.principalId &&
         Date.parse(other.createdAt) > askedAt,
     )
     .toSorted((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0];
 };
 
-/** Settles `stored` when a later turn took the person's reply; false when it still waits. */
+/** Settles `stored` once a later turn took the conversation on; false while it still waits. */
 export const settleSupersededTurn = Effect.fn("channelSupersededTurns.settle")(function* (
   ledger: ChannelLedger.ChannelLedger["Service"],
   stored: ChannelLedger.ChannelStoredTask,
@@ -72,11 +77,7 @@ export const settleSupersededTurn = Effect.fn("channelSupersededTurns.settle")(f
       current,
       {
         type: "task.question.answered",
-        payload: {
-          questionId: question.questionId,
-          answer: later.instruction,
-          inputId: later.originInputId,
-        },
+        payload: { questionId: question.questionId, answer: SUPERSEDED_QUESTION_ANSWER },
       },
       false,
     );
