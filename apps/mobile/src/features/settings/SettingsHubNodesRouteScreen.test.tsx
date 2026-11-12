@@ -367,7 +367,7 @@ it("says when OpenCodex link state could not be read, keeps the hub's devices, a
   expect(state.refreshHosts).toHaveBeenCalledOnce();
 });
 
-it("rereads host status while a setup is running, and stops once none is", async () => {
+it("rereads host status every 15 s while a setup runs, and every minute once none does", async () => {
   state.environments = [first];
   state.selectedTargets = [first];
   state.hosts = [
@@ -382,8 +382,11 @@ it("rereads host status while a setup is running, and stops once none is", async
       { host: "lab", reachability: "ok", opencodexChild: { state: "child", checkedAt: 1 } },
     ];
     await render();
-    act(() => vi.advanceTimersByTime(60_000));
+    act(() => vi.advanceTimersByTime(59_999));
     expect(state.refreshHosts).toHaveBeenCalledOnce();
+    // A CLI that appears or vanishes there still shows while the screen stays open.
+    act(() => vi.advanceTimersByTime(1));
+    expect(state.refreshHosts).toHaveBeenCalledTimes(2);
   } finally {
     vi.useRealTimers();
   }
