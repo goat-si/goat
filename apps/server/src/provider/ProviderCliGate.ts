@@ -260,16 +260,18 @@ export const providerCliGuard = Effect.serviceOption(ProviderCliGate).pipe(
   ),
 );
 
-/** A session that failed to open because its CLI is now missing becomes that refusal; anything else is unchanged. */
-export const explainOpenFailure = Effect.fn("ProviderCliGate.explainOpenFailure")(function* <E>(
-  failure: E,
-): Effect.fn.Return<E | ProviderCliMissingError> {
-  const instanceId =
-    (failure as { readonly _tag?: unknown; readonly instanceId?: unknown })._tag ===
-    "ProviderSessionOpenError"
-      ? (failure as unknown as { readonly instanceId: ProviderInstanceId }).instanceId
-      : undefined;
-  const gate = yield* Effect.serviceOption(ProviderCliGate);
-  if (instanceId === undefined || Option.isNone(gate)) return failure;
-  return (yield* gate.value.missing(instanceId, true, failure)) ?? failure;
-});
+/**
+ * For upstream files, captured when their layer is built: a session that failed to open because
+ * its CLI is now missing becomes that refusal; anything else, or no gate, is unchanged.
+ */
+export const openFailureExplainer = Effect.serviceOption(ProviderCliGate).pipe(
+  Effect.map((gate) =>
+    Effect.fn("ProviderCliGate.explainOpenFailure")(function* <E extends { readonly _tag: string }>(
+      failure: E,
+    ): Effect.fn.Return<E | ProviderCliMissingError> {
+      if (failure._tag !== "ProviderSessionOpenError" || Option.isNone(gate)) return failure;
+      const { instanceId } = failure as unknown as { readonly instanceId: ProviderInstanceId };
+      return (yield* gate.value.missing(instanceId, true, failure)) ?? failure;
+    }),
+  ),
+);

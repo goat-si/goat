@@ -94,6 +94,8 @@ export function makeLocalCommandHarness(input: {
   };
   /** The run continues the previous one after a restart, and Codex kept that run's turn alive. */
   readonly restartContinuation?: { readonly cancelledWork: boolean };
+  /** The provider CLI gate the start runs with; none unless given. */
+  readonly providerCliGate?: Layer.Layer<import("../provider/ProviderCliGate.ts").ProviderCliGate>;
 }) {
   const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
   const threadId = ThreadId.make("thread-native-account-command");
@@ -551,6 +553,7 @@ export function makeLocalCommandHarness(input: {
           prepareProviderHandoff: () => Effect.die("history read must fail first"),
         }),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
+        input.providerCliGate ?? Layer.empty,
         IdAllocator.layer,
         layerWorktreeLocation(input.worktreesDir),
         input.fileSystem === undefined
