@@ -174,6 +174,8 @@ type serveConfig struct {
 	// readTimeout and limits override the defaults in tests.
 	readTimeout time.Duration
 	limits      *relayserver.Limits
+	// trafficLog receives the relay's session and totals lines (stderr, so the service journal).
+	trafficLog io.Writer
 }
 
 func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
@@ -299,6 +301,7 @@ func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(add
 	rs.MaxSockets, rs.MaxPerIP, rs.MaxUnauthPerNode = c.maxSockets, c.maxPerIP, c.maxUnauth
 	rs.MaxQueued = c.maxQueuedMiB << 20
 	rs.MaxQueuedPerSource = c.maxShareMiB << 20
+	rs.TrafficLog = c.trafficLog
 	rs.Hooks = hooks
 	readTimeout := 30 * time.Second
 	if c.readTimeout > 0 {
@@ -352,6 +355,7 @@ func runRelayServe(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	c.trafficLog = stderr
 	mode := "tls"
 	if c.plain {
 		mode = "plain"

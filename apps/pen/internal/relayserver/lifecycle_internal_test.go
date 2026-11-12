@@ -114,6 +114,8 @@ type liveNode struct {
 	opens []uint32
 	// opened receives each OPEN's sid as it arrives (dropped when full).
 	opened chan uint32
+	// frames receives each DATA and CLOSE frame as it arrives (dropped when full).
+	frames chan wire.Frame
 }
 
 func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
@@ -131,7 +133,7 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 		answer = relay.AnswerChallenge(id, lv.origin, ch)
 	}
 	ws.Write(ctx, websocket.MessageBinary, answer)
-	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64)}
+	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64), frames: make(chan wire.Frame, 1024)}
 	go func() {
 		total, last := uint64(len(ch)), uint64(0)
 		for {
@@ -152,6 +154,11 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 				n.mu.Unlock()
 				select {
 				case n.opened <- f.SID:
+				default:
+				}
+			} else if err == nil {
+				select {
+				case n.frames <- f:
 				default:
 				}
 			}

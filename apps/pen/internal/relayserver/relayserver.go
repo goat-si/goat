@@ -109,8 +109,12 @@ type Server struct {
 	// MaxReading caps what messages being read hold past each socket's read allowance (0 means
 	// DefaultMaxReading); one source holds at most an eighth of it.
 	MaxReading int
+	// TrafficLog receives one line per session the node answered and the byte totals every
+	// SummaryEvery (traffic.go); nil writes nothing. Set it before the relay serves.
+	TrafficLog io.Writer
 
 	queued, reading atomic.Int64
+	traffic         traffic
 
 	mu     sync.Mutex
 	rooms  map[string]*room
@@ -296,6 +300,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f(nodeID, role)
 		}()
 	}
+	if role == "client" {
+		// After release, so a slow log never holds the socket's caps.
+		defer func() {
+			if k.sid != 0 {
+				s.sessionDone(k)
+			}
+		}()
+	}
 	defer s.release(k)
 	if role == "node" {
 		rm.acceptUplink(k, origin)
@@ -429,6 +441,7 @@ func (s *Server) ended(k *sock, code uint16) {
 
 // Close aborts every socket.
 func (s *Server) Close() {
+	s.trafficStop()
 	s.mu.Lock()
 	all := make([]*sock, 0, len(s.socks))
 	for k := range s.socks {
@@ -510,6 +523,14 @@ type sock struct {
 	closeWire uint64
 	upEnd     uint64
 	upUnacked uint64
+	// Traffic (client): payload bytes relayed toward the node and from it, how much of them the
+	// totals hold, whether the node answered, and when and how the session began and ended.
+	toNode, fromNode       uint64
+	countedTo, countedFrom uint64
+	answered               bool
+	admitted, endedAt      time.Time
+	endedBy                string
+	endCode                uint16
 }
 
 // room is one node's uplink and its sessions.
@@ -591,6 +612,8 @@ func (rm *room) acceptClient(k *sock) bool {
 	k.held = up
 	up.closeWire += closeFrameWire
 	k.sid = rm.nextSid()
+	k.admitted = rm.srv.traffic.clock()
+	rm.srv.trafficStart()
 	rm.order++
 	k.order = rm.order
 	k.pending = true
@@ -787,7 +810,7 @@ func (rm *room) onUplinkFrame(k *sock, b []byte) {
 		return
 	}
 	if c := rm.clients[f.SID]; c != nil {
-		rm.closeSock(c, sendable(f.CloseCode()))
+		rm.closeAs(c, sendable(f.CloseCode()), "node")
 		// The node closed it, so no CLOSE goes back: give the reservation back.
 		if c.held == k {
 			c.held = nil
@@ -810,6 +833,7 @@ func (rm *room) toClient(c *sock, payload []byte) {
 			return
 		}
 		c.pending = false
+		c.answered = true
 		c.deadline.Stop()
 	}
 	if c.sent-c.acked+uint64(len(payload)) > SocketWindow {
@@ -823,12 +847,13 @@ func (rm *room) toClient(c *sock, payload []byte) {
 		return
 	}
 	c.sent += uint64(len(payload))
+	c.fromNode += uint64(len(payload))
 }
 
 func (rm *room) onClientData(c *sock, payload []byte) {
 	up := rm.uplink
 	if up == nil {
-		rm.closeSock(c, wire.CodeOffline)
+		rm.closeAs(c, wire.CodeOffline, "uplink")
 		return
 	}
 	frameLen := wire.HeaderLen + len(payload)
@@ -865,6 +890,7 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	up.sent += uint64(frameLen)
 	c.upEnd = up.sent
 	c.upUnacked = mine
+	c.toNode += uint64(len(payload))
 }
 
 // sendClose tells the node a client session ended, from the reservation made when it was
@@ -897,7 +923,7 @@ func (rm *room) dropUplink(k *sock, code uint16) {
 	}
 	rm.uplink = nil
 	for _, c := range rm.clients {
-		rm.closeSock(c, wire.CodeOffline)
+		rm.closeAs(c, wire.CodeOffline, "uplink")
 	}
 }
 
@@ -923,8 +949,22 @@ func (rm *room) closeSock(k *sock, code uint16) {
 	if k.role == roleClient && rm.clients[k.sid] == k {
 		delete(rm.clients, k.sid)
 	}
+	if k.role == roleClient {
+		k.endedAt = rm.srv.traffic.clock()
+		if k.endedBy == "" {
+			k.endedBy, k.endCode = "relay", code
+		}
+	}
 	rm.srv.ended(k, code)
 	k.out.close(code)
+}
+
+// closeAs closes a client socket, recording who ended the session ("client", "node" or "uplink").
+func (rm *room) closeAs(k *sock, code uint16, by string) {
+	if !k.closed && k.endedBy == "" {
+		k.endedBy, k.endCode = by, code
+	}
+	rm.closeSock(k, code)
 }
 
 func (rm *room) peerGone(k *sock, code uint16) {
@@ -937,7 +977,8 @@ func (rm *room) peerGone(k *sock, code uint16) {
 		rm.dropUplink(k, wire.CodeOffline)
 		return
 	}
-	rm.closeSock(k, sendable(code))
+	rm.closeAs(k, sendable(code), "client")
+	k.endCode = code
 	if code < 1000 || code > 4999 {
 		code = 1000
 	}
