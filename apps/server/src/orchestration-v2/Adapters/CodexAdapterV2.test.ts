@@ -1,3 +1,4 @@
+import { assertSubagentProgress } from "./CodexSubagentProgress.testkit.ts";
 import { codexReceiptTranscript, verifyCodexReceipt } from "./CodexReceipt.testkit.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as Queue from "effect/Queue";
@@ -5338,6 +5339,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         assert.equal(childCommandUpdates.at(-1)?.turnItem.status, "interrupted");
         assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "interrupted");
+        assertSubagentProgress(harness.subagentUpdates());
         assertChildProviderTerminalBeforeRoot(harness.events, harness.threadId);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(Effect.provide(layerAdapterTest)),

@@ -1,3 +1,8 @@
+import {
+  isTerminalProviderTurn,
+  providerTurnsForThread,
+  countTerminalTurnsAfterBoundary,
+} from "./CodexTurnHistory.ts";
 import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
 import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
 import { makeCodexThreadClosings } from "./CodexThreadClosings.ts";
@@ -825,14 +830,6 @@ function providerThreadFromCodexThread(input: {
   };
 }
 
-// /goal control turns never reach Codex and must not count toward native rollback.
-const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
-  turn.nativeTurnRef !== null &&
-  (turn.status === "completed" ||
-    turn.status === "interrupted" ||
-    turn.status === "failed" ||
-    turn.status === "cancelled");
-
 class CodexGoalObjectiveTooLongError extends Schema.TaggedError<CodexGoalObjectiveTooLongError>()(
   "CodexGoalObjectiveTooLongError",
   { length: Schema.Number, limit: Schema.Number },
@@ -887,26 +884,6 @@ function describeCodexGoal(goal: OrchestrationV2ProviderGoal): string {
 // Codex starts the next goal turn milliseconds after the last one completes.
 const CODEX_GOAL_CONTINUATION_GRACE = "5 seconds";
 const CODEX_PRE_OUTPUT_RETRY_DELAYS_MS = [30_000, 120_000, 300_000] as const;
-
-const providerTurnsForThread = (
-  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
-  providerThread: OrchestrationV2ProviderThread,
-): ReadonlyArray<OrchestrationV2ProviderTurn> =>
-  providerTurns.filter((turn) => turn.providerThreadId === providerThread.id);
-
-const countTerminalTurnsAfterBoundary = (
-  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
-  providerTurnId: ProviderTurnId,
-): number | null => {
-  const boundaryTurn = providerTurns.find((turn) => turn.id === providerTurnId);
-  if (boundaryTurn === undefined) {
-    return null;
-  }
-
-  return providerTurns.filter(
-    (turn) => turn.ordinal > boundaryTurn.ordinal && isTerminalProviderTurn(turn),
-  ).length;
-};
 
 const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkRollbackTurnCount")(
   function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
@@ -2582,9 +2559,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly completedAt?: DateTime.Utc | null;
             readonly startedAt?: DateTime.Utc;
             readonly reopen?: boolean;
+            readonly progress?: string;
           }) {
             const now = yield* DateTime.now;
-            const prior = input.subagent.task;
+            const prior = input.reopen
+              ? (({ progress: _staleProgress, ...rest }) => rest)(input.subagent.task)
+              : input.subagent.task;
             const settled = !isOrchestrationV2WorkActive(prior.status);
             // Late snapshots must not reopen completed children; only new turns may.
             if (settled && isOrchestrationV2WorkActive(input.status) && !input.reopen) return;
@@ -2602,6 +2582,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }
                 : {}),
               startedAt: input.startedAt ?? prior.startedAt,
+              ...(input.progress === undefined ? {} : { progress: input.progress }),
               result: input.result === undefined ? input.subagent.task.result : input.result,
               completedAt,
               updatedAt: now,
@@ -2639,6 +2620,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 providerInstanceId: task.providerInstanceId,
                 childThreadId: task.childThreadId,
                 prompt: task.prompt,
+                ...(task.progress === undefined ? {} : { progress: task.progress }),
                 result: task.result,
               },
             });
@@ -2656,6 +2638,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* emitProviderEvent({ type: "node.updated", driver: CODEX_PROVIDER, node });
           yield* emitSubagentTaskUpdate({ subagent, status: "interrupted", completedAt });
         });
+        // A native child's running item is the line its parent's subagent row shows.
+        const reportSubagentProgress =
+          /* Provider events include streaming deltas; avoid a span for each update. */
+          Effect.fnUntraced(function* (context: ActiveCodexTurnContext, progress: string | null) {
+            const subagent = context.subagent;
+            const line = progress?.trim();
+            if (subagent === null || !line) return;
+            if (!isOrchestrationV2WorkActive(subagent.task.status)) return;
+            if (subagent.task.progress === line) return;
+            yield* emitSubagentTaskUpdate({
+              subagent,
+              status: subagent.task.status,
+              progress: line,
+            });
+          });
 
         const emitSubagentProviderTurnStarted =
           /* Provider events include streaming deltas; avoid a span for each update. */
@@ -4949,6 +4946,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 driver: CODEX_PROVIDER,
                 turnItem: artifacts.turnItem,
               });
+              yield* reportSubagentProgress(context, payload.item.command);
               return;
             }
 
@@ -4967,6 +4965,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 driver: CODEX_PROVIDER,
                 turnItem: artifacts.turnItem,
               });
+              if (artifacts.turnItem.type === "dynamic_tool") {
+                yield* reportSubagentProgress(
+                  context,
+                  artifacts.turnItem.title ?? artifacts.turnItem.toolName,
+                );
+              }
               return;
             }
 
