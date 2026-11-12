@@ -88,6 +88,7 @@ const EXPIRED_LIST_POSITION = "listChangeRequests.resume";
 /** Bounds each paged read, so one very long pull request cannot stall its detail. */
 const MAX_PAGES = 10;
 const MAX_CACHED_AVATARS = 1_000;
+const MAX_CACHED_PATCH_CHARS = 1_000_000;
 
 const unsupported = (operation: string, detail: string) =>
   Effect.fail(
@@ -141,8 +142,10 @@ export const make = Effect.gen(function* () {
   // and are redone only when it has moved since.
   const lastSeen = new Map<string, OriginPullRequest>();
   const remember = (key: string, pullRequest: OriginPullRequest) => {
+    // The early reads use only the head, base, version and author; the free text can be large.
+    const { body: _body, labels: _labels, ...basis } = pullRequest;
     lastSeen.delete(key);
-    lastSeen.set(key, pullRequest);
+    lastSeen.set(key, basis);
     if (lastSeen.size > 1024) lastSeen.delete(lastSeen.keys().next().value ?? "");
   };
   const sameBasis = (seen: OriginPullRequest, current: OriginPullRequest) =>
@@ -308,7 +311,13 @@ export const make = Effect.gen(function* () {
     },
     {
       capacity: 64,
-      timeToLive: (exit) => (Exit.isSuccess(exit) && exit.value.pinned ? "1 hour" : 0),
+      // A large patch is read again rather than held, so the cache stays within 64 small entries.
+      timeToLive: (exit) =>
+        Exit.isSuccess(exit) &&
+        exit.value.pinned &&
+        exit.value.patch.length <= MAX_CACHED_PATCH_CHARS
+          ? "1 hour"
+          : 0,
     },
   );
 
