@@ -202,7 +202,10 @@ export interface LaunchWatchServiceShape {
   readonly find: (
     input: LaunchWatchKey,
   ) => Effect.Effect<LaunchWatch | null, LaunchWatchStoreError>;
-  readonly unwatch: (input: LaunchWatchTarget) => Effect.Effect<boolean, LaunchWatchStoreError>;
+  readonly unwatch: (
+    input: LaunchWatchTarget,
+    ifUnreachable?: { readonly incarnation: string },
+  ) => Effect.Effect<boolean, LaunchWatchStoreError>;
   readonly list: (
     launcherThreadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<LaunchWatch>, LaunchWatchStoreError>;
@@ -1876,13 +1879,16 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const unwatch: LaunchWatchServiceShape["unwatch"] = (input) =>
+  const unwatch: LaunchWatchServiceShape["unwatch"] = (input, ifUnreachable) =>
     Effect.gen(function* () {
       const detached = yield* locked(
         Effect.gen(function* () {
           yield* ensureLoaded;
           const { id } = keyOf(input);
-          if (!watches.has(id)) return { removed: false, fiber: undefined } as const;
+          const held = watches.get(id);
+          const same =
+            ifUnreachable === undefined || held?.incarnation === ifUnreachable.incarnation;
+          if (!held || !same || (ifUnreachable && !held.outage)) return { removed: false } as const;
           yield* save((map) => {
             const watch = map.get(id)!;
             if (watch.recovery !== undefined) map.set(id, { ...watch, detached: true });

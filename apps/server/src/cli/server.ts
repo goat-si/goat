@@ -14,6 +14,10 @@ import * as CliError from "effect/cli/CliError";
 import { SERVICE_LAUNCHER_CONTEXT_ENV } from "../cloud/serviceProtocol.ts";
 import * as ServerConfig from "../config.ts";
 import { applyDevSshPolicy } from "../devSshPolicy.ts";
+import {
+  ensureServerMachineNonce,
+  serverMachineNonceDirectory,
+} from "../environment/ServerEnvironmentMachine.ts";
 import { awaitLauncherLoss } from "../launcherWatch.ts";
 import { holdWorkspaceLeaseRegistry } from "../workspace/workspaceLeaseRegistry.ts";
 import {
@@ -66,6 +70,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   const environment = yield* HostProcess.Environment;
   // Before any layer starts, so nothing in this process can reach another machine first.
   yield* applyDevSshPolicy(config, environment);
+  // Before the environment descriptor reads it, so this server reports which machine it is on.
+  yield* ensureServerMachineNonce(yield* serverMachineNonceDirectory(config));
   // An invalid context fails later in ServiceLauncherClient; it must not make startup wait.
   const launcherContext = launcherContextFromEnvironment(environment[SERVICE_LAUNCHER_CONTEXT_ENV]);
   const sshReplacementId = environment[SSH_REPLACEMENT_ID_ENV]?.trim() || undefined;

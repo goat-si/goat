@@ -272,45 +272,6 @@ export interface GoatBotFaceTasks {
   readonly activeSince: number | null;
 }
 
-/** How a face draws its eyes over the goat mark's horns, on the mark's 24-unit grid. */
-export interface GoatBotFaceArt {
-  /** Both eyes as one path. */
-  readonly eyes: string;
-  /** Stroked lines rather than filled shapes. */
-  readonly stroked: boolean;
-  readonly sleepMark: boolean;
-}
-
-export const GOAT_BOT_FACE_STROKE_WIDTH = 1.5;
-/** A small "z" above the right horn. */
-export const GOAT_BOT_SLEEP_MARK_PATH = "M17.2 2.9 H19.8 L17.2 5.5 H19.8";
-
-const EYE_X = [9.4, 14.6] as const;
-
-function ovals(y: number, rx: number, ry: number, dx = 0): string {
-  return EYE_X.map(
-    (x) => `M${x + dx - rx} ${y} a${rx} ${ry} 0 1 0 ${2 * rx} 0 a${rx} ${ry} 0 1 0 ${-2 * rx} 0`,
-  ).join(" ");
-}
-
-function lines(y: number, bend: number): string {
-  return EYE_X.map((x) => `M${x - 1.5} ${y} Q${x} ${y + bend} ${x + 1.5} ${y}`).join(" ");
-}
-
-const FACE_ART: Record<GoatBotFaceState, GoatBotFaceArt> = {
-  idle: { eyes: ovals(15.4, 1.65, 1.65), stroked: false, sleepMark: false },
-  reading: { eyes: ovals(16.4, 1.45, 1.45), stroked: false, sleepMark: false },
-  working: { eyes: ovals(15.4, 1.5, 1.5, 0.9), stroked: false, sleepMark: false },
-  waiting: { eyes: ovals(14.6, 1.65, 1.65), stroked: false, sleepMark: false },
-  failed: { eyes: lines(15.5, 0), stroked: true, sleepMark: false },
-  finished: { eyes: lines(16.2, -3.6), stroked: true, sleepMark: false },
-  sleeping: { eyes: lines(15, 3.4), stroked: true, sleepMark: true },
-};
-
-export function goatBotFaceArt(state: GoatBotFaceState): GoatBotFaceArt {
-  return FACE_ART[state];
-}
-
 /**
  * The bot's turns and work, read from the newest chip of each task in its conversation whether or
  * not a roster shows it. GOAT Bot runs in per-task session threads, so its conversation thread's

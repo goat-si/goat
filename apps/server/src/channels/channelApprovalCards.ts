@@ -16,6 +16,8 @@ import type {
   ProviderApprovalDecision,
 } from "@goat/contracts";
 
+import { CHANNEL_COPY } from "./channelCopy.ts";
+
 export interface OpenApprovalCard {
   readonly task: ChannelTask;
   readonly approval: ChannelTaskApprovalRef;
@@ -48,7 +50,8 @@ export interface ApprovalReply {
  * ("approve the PR") is conversation, never an approval of whatever happens to be waiting.
  */
 export const parseApprovalReply = (text: string): ApprovalReply | undefined => {
-  const trimmed = text.trim();
+  // Hangul typed on a Mac can arrive decomposed.
+  const trimmed = text.normalize("NFC").trim();
   if (trimmed === "" || trimmed.length > MAX_REPLY_LENGTH) return undefined;
   const [first = "", ...rest] = trimmed.split(/\s+/);
   const verb = first.toLowerCase().replace(/[.!,:]+$/, "");
@@ -79,11 +82,22 @@ const actionPhrase = (kind: OrchestrationV2RuntimeRequest["kind"] | undefined): 
 };
 
 const MAX_PROMPT_CHARS = 400;
+/** Bounds a card so three in one Slack section (3,000 characters) keep every prompt visible. */
+const MAX_TITLE_CHARS = 120;
 
-/** The two buttons on an approval card. A number or a Slack button sends one of these labels. */
-export const approvalChoiceLabels = (code: string): readonly [string, string] => [
-  "Approve " + code,
+const clip = (text: string, max: number) =>
+  text.length > max ? text.slice(0, max - 1) + "…" : text;
+
+/** The work's title as an approval card shows it. */
+export const approvalTitle = (task: ChannelTask) => clip(task.title, MAX_TITLE_CHARS);
+
+/**
+ * The two buttons on an approval card, Deny first so a quick first pick never approves. A Slack
+ * button or a GOAT app choice sends one of these labels; typed, they are the only approval reply.
+ */
+const approvalChoiceLabels = (code: string): readonly [string, string] => [
   "Deny " + code,
+  "Approve " + code,
 ];
 
 /** Same words a local answer records, and the provenance a remote respond requires. */
@@ -104,7 +118,10 @@ export const approvalSent = (decision: ApprovalReply["decision"], title: string)
     ? "Approved. " + title + " continues."
     : "Denied. I told the agent on " + title + " not to.";
 
-/** The card's words and buttons; the buttons carry the card's code. */
+/**
+ * The card's words and buttons; the buttons carry the card's code. A request it can't show (no
+ * prompt, or held on another machine) keeps its buttons and says to check the thread first.
+ */
 export const approvalCard = (input: {
   readonly card: OpenApprovalCard;
   readonly code: string;
@@ -115,12 +132,11 @@ export const approvalCard = (input: {
   const prompt = input.prompt?.trim();
   const detail =
     prompt === undefined || prompt === ""
-      ? ""
-      : "\n" +
-        (prompt.length > MAX_PROMPT_CHARS ? prompt.slice(0, MAX_PROMPT_CHARS - 1) + "…" : prompt);
+      ? "\n" + CHANNEL_COPY.approvalDetailNotShown
+      : "\n" + clip(prompt, MAX_PROMPT_CHARS);
   return {
     text:
-      input.card.task.title +
+      approvalTitle(input.card.task) +
       ": " +
       (input.bySubagent ? "a subagent" : "the agent") +
       " wants to " +
@@ -128,20 +144,5 @@ export const approvalCard = (input: {
       "." +
       detail,
     options: approvalChoiceLabels(input.code),
-  };
-};
-
-/** The question asked when a bare "approve" could mean more than one card. */
-export const whichApproval = (
-  cards: ReadonlyArray<{ readonly card: OpenApprovalCard; readonly code: string }>,
-  decision: ApprovalReply["decision"],
-): { readonly text: string; readonly options: ReadonlyArray<string> } => {
-  const verb = decision === "accept" ? "Approve" : "Deny";
-  const shown = cards.slice(0, 4);
-  return {
-    text:
-      "More than one approval is waiting. Which one?\n" +
-      shown.map((entry) => "- " + entry.code + ": " + entry.card.task.title).join("\n"),
-    options: shown.map((entry) => verb + " " + entry.code),
   };
 };

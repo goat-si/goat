@@ -1,6 +1,7 @@
 import {
   type DecisionItem,
   isDecisionItemWaiting,
+  unlistedApprovalsNotice,
 } from "@goat/client-runtime/state/decision-inbox";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
@@ -64,6 +65,11 @@ export function DecisionInbox() {
                   </div>
                 ))}
               </div>
+            ) : null}
+            {snapshot.unlistedApprovals > 0 ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                {unlistedApprovalsNotice(snapshot.unlistedApprovals)}
+              </p>
             ) : null}
             {current ? (
               <DecisionCard

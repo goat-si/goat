@@ -5,6 +5,7 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import * as NodeSqlite from "node:sqlite";
 import { nodeIdFromSignPub, signingKeyFromSeed } from "@goat/pen-protocol/identity";
 import { RawWebSocket } from "./rawSocket.ts";
 import {
@@ -21,6 +22,8 @@ const PACKAGE_DIR = NodePath.join(import.meta.dirname, "..");
 
 export interface Relay {
   readonly url: string;
+  /** Where wrangler keeps the Durable Objects' storage. */
+  readonly persist: string;
   stop(): Promise<void>;
 }
 
@@ -39,10 +42,17 @@ function freePort(): Promise<number> {
   });
 }
 
-/** Runs `wrangler dev` in its own process group and resolves on its "Ready on" line. */
-export async function startRelay(vars: Record<string, string> = {}): Promise<Relay> {
+/**
+ * Runs `wrangler dev` in its own process group and resolves on its "Ready on" line. A given
+ * persist directory is reused and kept on stop (a restart); otherwise a new one is removed.
+ */
+export async function startRelay(
+  vars: Record<string, string> = {},
+  options: { persist?: string } = {},
+): Promise<Relay> {
   const [port, inspectorPort] = [await freePort(), await freePort()];
-  const persist = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-relay-"));
+  const persist =
+    options.persist ?? NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-relay-"));
   const args = [
     "dev",
     "--ip",
@@ -85,6 +95,7 @@ export async function startRelay(vars: Record<string, string> = {}): Promise<Rel
   });
   return {
     url,
+    persist,
     stop: async () => {
       if (child.pid !== undefined && child.exitCode === null) {
         try {
@@ -94,9 +105,61 @@ export async function startRelay(vars: Record<string, string> = {}): Promise<Rel
         }
       }
       await exited;
-      NodeFS.rmSync(persist, { recursive: true, force: true });
+      if (options.persist === undefined) NodeFS.rmSync(persist, { recursive: true, force: true });
     },
   };
+}
+
+export interface TotalsRow {
+  readonly to_node: number;
+  readonly from_node: number;
+  readonly sessions: number;
+  readonly unanswered: number;
+  readonly since: number;
+  readonly at: number;
+}
+
+/** Every Room's traffic row, read from the SQLite files wrangler keeps under persist. */
+export function readTotals(persist: string): Array<TotalsRow> {
+  const rows: Array<TotalsRow> = [];
+  for (const db of trafficDatabases(persist)) {
+    try {
+      for (const row of db.prepare("SELECT * FROM traffic").all()) {
+        rows.push({
+          to_node: Number(row.to_node),
+          from_node: Number(row.from_node),
+          sessions: Number(row.sessions),
+          unanswered: Number(row.unanswered),
+          since: Number(row.since),
+          at: Number(row.at),
+        });
+      }
+    } finally {
+      db.close();
+    }
+  }
+  return rows;
+}
+
+/** How many Rooms hold a traffic table. */
+export function trafficTables(persist: string): number {
+  const dbs = trafficDatabases(persist);
+  for (const db of dbs) db.close();
+  return dbs.length;
+}
+
+function trafficDatabases(persist: string): Array<NodeSqlite.DatabaseSync> {
+  const files = NodeFS.readdirSync(persist, { recursive: true, encoding: "utf8" });
+  return files.flatMap((file) => {
+    if (!file.endsWith(".sqlite")) return [];
+    const db = new NodeSqlite.DatabaseSync(NodePath.join(persist, file), { readOnly: true });
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'traffic'")
+      .get();
+    if (table !== undefined) return [db];
+    db.close();
+    return [];
+  });
 }
 
 /** Values arrive in order; `ready` resolves when one is waiting without taking it. */

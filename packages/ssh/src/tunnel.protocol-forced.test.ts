@@ -92,12 +92,21 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live.each(["start time", "port", "uid", "no approval"] as const)(
+    const refusedBecause = {
+      "start time": "its start time differs from the approved one",
+      uid: "another user owns it",
+      "start tick": "the start tick recorded at its launch differs",
+    } as const;
+
+    it.live.each(["start time", "port", "uid", "start tick", "no approval"] as const)(
       "a runtime that fails the %s check is never signalled",
       (mismatch) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture(unverified);
           if (mismatch === "uid") yield* f.fs.writeFileString(`${f.test}/foreign-uid`, "4242\n");
+          // On Linux the live tick is real and on macOS it is empty; neither is this record.
+          if (mismatch === "start tick")
+            yield* f.fs.writeFileString(`${f.state}/started.ticks`, "1\n");
           const startedAt = yield* startOf(f, f.pid);
           const before = yield* f.snapshot;
           const result = yield* f.run("launch", false, {
@@ -117,11 +126,53 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(isAlive(f.pid));
           assert.deepEqual(yield* f.snapshot, before);
           assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+          if (mismatch === "no approval") return;
+          if (mismatch === "port") {
+            // The records no longer name the approved port, so the stop is refused and logged.
+            assert.include(
+              yield* f.fs.readFileString(`${f.state}/server.log`),
+              `GOAT did not stop PID ${f.pid} for an approved forced update: the launch records no longer name it on port ${f.port + 1}.`,
+            );
+            return;
+          }
+          // The person is told how to stop it themselves; the host log says which check failed.
+          if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+          assert.include(
+            yield* f.fs.readFileString(`${f.state}/server.log`),
+            `GOAT did not stop PID ${f.pid} for an approved forced update: ${refusedBecause[mismatch]}.`,
+          );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live(
-      "a runtime that ignores SIGTERM is killed after the grace, with its recorded child",
+      "a runtime that no longer matches before SIGKILL is left running with its records",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            ...unverified,
+            ignoreSigterm: true,
+            startChangesOnTerm: true,
+          });
+          const startedAt = yield* startOf(f, f.pid);
+          const before = yield* f.snapshot;
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 1,
+            forceReplace: { pid: f.pid, port: f.port, startedAt },
+          });
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+          assert.isTrue(isAlive(f.pid));
+          assert.deepEqual(yield* f.snapshot, before);
+          assert.include(
+            yield* f.fs.readFileString(`${f.state}/server.log`),
+            `GOAT did not stop PID ${f.pid} for an approved forced update: it no longer matched the approved runtime before SIGKILL.`,
+          );
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live(
+      "a runtime that ignores SIGTERM is killed after the grace, and its child is left running and named",
       () =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
@@ -141,7 +192,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             String(Result.isFailure(result) && result.failure),
           );
           assert.isFalse(isAlive(f.pid));
-          assert.isFalse(isAlive(child));
+          // Children are never signalled: one still running is named for a person to check.
+          assert.isTrue(isAlive(child));
+          assert.include(
+            yield* f.fs.readFileString(`${f.state}/server.log`),
+            `child process ${child}`,
+          );
           assert.isTrue((yield* events(f)).some((entry) => entry.type === "stop"));
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -494,7 +550,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH forced replacement deep descendants",
   () => {
-    it.live("a descendant forty levels below the runtime is signalled too", () =>
+    it.live("a descendant forty levels below the runtime is found and named", () =>
       Effect.gen(function* () {
         const f = yield* makeProtocolFixture(unverified);
         const deep = yield* f.realSpawner.spawn(
@@ -512,7 +568,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         ].join("\n");
         const bin = `${f.test}/deep-bin`;
         yield* f.fs.makeDirectory(bin);
-        // The table shows the spawned process at the end of a chain forty processes deep.
+        // The table shows the spawned process at the end of a chain forty processes deep, and its
+        // parent read agrees, as for a real chain.
         yield* f.fs.writeFileString(
           `${bin}/ps`,
           `#!/bin/sh
@@ -521,6 +578,7 @@ if [ "$*" = "-A -o pid= -o ppid= -o uid= -o lstart=" ]; then
 ${rows}
   exit 0
 fi
+if [ "$*" = "-o ppid= -p ${deepPid}" ]; then echo ${chain.at(-1)}; exit 0; fi
 exec "$HOME/.test/identity-bin/ps" "$@"
 `,
         );
@@ -533,7 +591,11 @@ exec "$HOME/.test/identity-bin/ps" "$@"
         });
         assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
         assert.isFalse(isAlive(f.pid));
-        assert.isFalse(isAlive(deepPid));
+        assert.isTrue(isAlive(deepPid));
+        assert.include(
+          yield* f.fs.readFileString(`${f.state}/server.log`),
+          `child process ${deepPid}`,
+        );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   },

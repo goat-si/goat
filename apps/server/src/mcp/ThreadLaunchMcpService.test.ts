@@ -42,6 +42,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { newLaunchWatch } from "./launchWatch.ts";
 import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import { fakeCloudCapabilities } from "../orchestration-v2/testkit/FakeCloudAdapter.ts";
+import * as Gate from "../provider/ProviderCliGate.ts";
 
 const projectId = ProjectId.make("project:cloud-launch");
 const instanceId = ProviderInstanceId.make("fakeCloud");
@@ -157,6 +158,8 @@ function fixture(
     readonly onRoute?: () => Effect.Effect<unknown>;
     /** Runs inside the launch, before the thread exists. */
     readonly onLaunch?: () => Effect.Effect<unknown>;
+    /** The launch is refused before the thread exists because the provider CLI is missing. */
+    readonly cliMissing?: Gate.ProviderCliMissingError;
   },
 ) {
   let refusedOnce = false;
@@ -268,6 +271,9 @@ function fixture(
           attempted.push(input);
         }).pipe(
           Effect.andThen(() => behavior?.onLaunch?.() ?? Effect.void),
+          Effect.andThen(() =>
+            behavior?.cliMissing === undefined ? Effect.void : Effect.fail(behavior.cliMissing),
+          ),
           Effect.andThen(
             behavior?.createdThenRefused !== undefined && !refusedOnce
               ? Effect.suspend(() => {
@@ -850,6 +856,36 @@ it.effect(
         expect(fifth).toMatchObject({ code: "capacity_exceeded" });
         expect(f.attempted).toHaveLength(4);
         expect(yield* setup.states()).toEqual(["bound", "bound", "bound", "bound"]);
+      }),
+    );
+  },
+);
+
+it.effect.each([true, false])(
+  "a launch refused for a missing CLI says what to run and releases the reservation (syncable %s)",
+  (syncable) => {
+    const cliMissing = new Gate.ProviderCliMissingError({
+      instanceId,
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Codex",
+      host: "vm-1",
+      binary: syncable ? "codex" : "/opt/codex-beta",
+      syncable,
+      created: false,
+    });
+    const f = fixture(false, "published-ref", undefined, undefined, {}, { cliMissing });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const setup = yield* withChannelAdmission(f);
+        const failed = yield* Effect.flip(setup.launch("Inspect"));
+        expect(failed).toMatchObject({
+          code: "provider_unavailable",
+          classification: "provider_cli_missing",
+          message: cliMissing.message,
+        });
+        // driver tells a caller on another machine that provider.sync is the fix.
+        expect(failed.driver).toBe(syncable ? "codex" : undefined);
+        expect(yield* setup.states()).toEqual(["released"]);
       }),
     );
   },

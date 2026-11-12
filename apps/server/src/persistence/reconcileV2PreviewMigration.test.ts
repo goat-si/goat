@@ -157,7 +157,8 @@ describe("V2 preview upgrade", () => {
         [140, "PlacementAdmission"],
         [141, "AuthSessionPenBinding"],
         [142, "ChannelOutboxOperations"],
-        [143, "ChannelBotTaskHistory"],
+        [143, "RemoteDispatchHostOutage"],
+        [144, "ChannelBotTaskHistory"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -325,7 +326,8 @@ describe("V2 preview upgrade", () => {
         [140, "PlacementAdmission"],
         [141, "AuthSessionPenBinding"],
         [142, "ChannelOutboxOperations"],
-        [143, "ChannelBotTaskHistory"],
+        [143, "RemoteDispatchHostOutage"],
+        [144, "ChannelBotTaskHistory"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

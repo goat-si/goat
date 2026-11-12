@@ -49,8 +49,12 @@ export const protocolExecutable = (
     stopBarrier?: boolean;
     /** Log SIGTERM and keep running, as a runtime that ignores it does. */
     ignoreSigterm?: boolean;
+    /** On SIGTERM, ps reports another start time for this process, as when a read goes wrong. */
+    startChangesOnTerm?: boolean;
     /** Start one long-running child, as a provider app-server, and record its PID in .test/child-pid. */
     spawnChild?: boolean;
+    /** The spawned child records its parent on SIGTERM and keeps running. */
+    childIgnoresTerm?: boolean;
     /** Advertise `drainRestart` with a per-start instance id and answer the drain endpoint. */
     drain?: boolean;
     /** Build commit time answered by `__ssh-helper commit-time`; unstamped when absent. */
@@ -154,7 +158,7 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
     baseDir: flag("--base-dir"), stateDir: flag("--state-dir"), runnerFile: flag("--runner"),
     previousRunnerFile: flag("--previous-runner"), targetVersion: flag("--target-version"),
     previousVersion: flag("--previous-version"), identity: flag("--identity"), previousIdentity: flag("--previous-identity"),
-    exitTimeoutMs: 10000, readyTimeoutMs: 10000, logFile: flag("--log") });
+    forced: args.includes("--forced"), oldStopped: args.includes("--old-stopped"), exitTimeoutMs: 10000, readyTimeoutMs: 10000, logFile: flag("--log") });
   event("supervise", { status: result.status });
   fs.writeFileSync(flag("--result"), result.status + " " + (result.pid ?? 0) + " " + (result.version ?? "-") + "\\n");
 } else if (args[0] === "__ssh-helper" && args[1] === "pick-port") {
@@ -303,6 +307,7 @@ server.close(() => process.exit(0));
   }
   process.on("SIGTERM", () => {
 event("stop");
+if (${JSON.stringify(signals.startChangesOnTerm ?? false)}) fs.writeFileSync(path.join(test, "foreign-start"), "Thu Jan  1 00:00:00 1970\\n");
 if (${JSON.stringify(signals.ignoreSigterm ?? false)}) return;
 if (${JSON.stringify(signals.stopBarrier ?? false)}) {
   stopRequested = true;
@@ -322,7 +327,8 @@ fs.mkdirSync(path.dirname(runtimeFile), {recursive: true}); fs.writeFileSync(run
 if (drainCapable) fs.writeFileSync(tokenFile, "fixture-token-" + process.pid + "\\n", {mode: 0o600});
 fs.appendFileSync(path.join(test, "pids"), process.pid + "\\n");
 if (${JSON.stringify(signals.spawnChild ?? false)}) {
-  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
+  // On SIGTERM the child records which process was its parent at that moment.
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => { require('node:fs').writeFileSync(process.argv[1], String(process.ppid)); if (process.argv[2] !== 'stay') process.exit(0); }); setInterval(() => {}, 1 << 30)", path.join(test, "child-term-ppid"), ${JSON.stringify(signals.childIgnoresTerm ? "stay" : "exit")}], { stdio: "ignore" });
   fs.appendFileSync(path.join(test, "pids"), child.pid + "\\n");
   fs.writeFileSync(path.join(test, "child-pid"), String(child.pid));
 }
@@ -357,7 +363,9 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   nodeMode?: boolean;
   stopBarrier?: boolean;
   ignoreSigterm?: boolean;
+  startChangesOnTerm?: boolean;
   spawnChild?: boolean;
+  childIgnoresTerm?: boolean;
   contestedPort?: number;
   contestedAttempts?: number;
   homePrefix?: string;
@@ -564,11 +572,28 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
       yield* fs.writeFileString(`${state}/port`, `${port}\n`);
       yield* fs.writeFileString(`${state}/managed`, input.kind + "\n");
     }
-    if (input.kind === "managed")
+    if (input.kind === "managed") {
       yield* fs.writeFileString(
         `${state}/identity`,
         `${old}/goat serve --host 127.0.0.1 --port ${port} --base-dir ${home}/.goat\n`,
       );
+      // A runtime this build started also has its start recorded, in seconds and, on Linux, ticks.
+      const ps = yield* realSpawner.spawn(
+        ChildProcess.make("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+          env: { LC_ALL: "C", TZ: "UTC" },
+          extendEnv: false,
+        }),
+      );
+      const lstart = (yield* ps.stdout.pipe(Stream.decodeText(), Stream.mkString))
+        .trim()
+        .replace(/\s+/gu, " ");
+      const stat = `/proc/${pid}/stat`;
+      const ticks = (yield* fs.exists(stat))
+        ? ((yield* fs.readFileString(stat)).replace(/^.*\) /su, "").split(" ")[19] ?? "-")
+        : "-";
+      yield* fs.writeFileString(`${state}/started`, `${lstart}\n`);
+      yield* fs.writeFileString(`${state}/started.ticks`, `${ticks}\n`);
+    }
   }
   const stem = `goat-${ARCHIVE.archiveVersion}-${platform}-${arch}`;
   const stage = `${home}/stage/${stem}`;

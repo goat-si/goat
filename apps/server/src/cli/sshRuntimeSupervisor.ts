@@ -70,11 +70,71 @@ const copyDatabase = (fromDir: string, toDir: string) => {
 
 const writeAtomically = (file: string, contents: string, mode = 0o600) => {
   const next = `${file}.next.${process.pid}`;
-  NodeFS.writeFileSync(next, contents, { mode });
+  // Removing first and creating exclusively means a link planted at this name is never followed.
+  NodeFS.rmSync(next, { force: true });
+  NodeFS.writeFileSync(next, contents, { mode, flag: "wx" });
   NodeFS.renameSync(next, file);
 };
 
-const writeLaunchRecords = (stateDir: string, identity: string, pid: number, port: number) => {
+// After a forced stop another server may answer on the port; only the runtime record the child
+// writes for this base directory proves the answer came from it.
+const recordsChild = (baseDir: string, pid: number, port: number) => {
+  try {
+    const record: unknown = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(baseDir, "userdata", "server-runtime.json"), "utf8"),
+    );
+    return (
+      typeof record === "object" &&
+      record !== null &&
+      "pid" in record &&
+      record.pid === pid &&
+      "port" in record &&
+      record.port === port
+    );
+  } catch {
+    return false;
+  }
+};
+
+// Runs after a runtime is ready and recorded: a leftover file is logged and never changes the result.
+const cleanUpAfterStart = (path: string) => {
+  try {
+    NodeFS.rmSync(path, { recursive: true, force: true });
+  } catch (cause) {
+    process.stderr.write(
+      `Replacement supervisor could not remove ${path}: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+    );
+  }
+};
+
+/**
+ * The start time a launch records for a forced stop to compare, as `ps -o lstart=` prints it in
+ * UTC, and on Linux the start tick from /proc; undefined where neither can be read.
+ */
+const launchStart = (pid: number) => {
+  const ps = NodeChildProcess.spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+  });
+  const started = ps.status === 0 ? ps.stdout.trim().replace(/\s+/gu, " ") : "";
+  if (started === "") return undefined;
+  let ticks = "-";
+  try {
+    const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
+    ticks = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19] ?? "-";
+  } catch {
+    // No /proc on this host: the start time alone is recorded.
+  }
+  return { started, ticks };
+};
+
+const writeLaunchRecords = (
+  stateDir: string,
+  identity: string,
+  pid: number,
+  port: number,
+  platform: NodeJS.Platform | undefined,
+) => {
   for (const [name, contents] of [
     ["identity", `${identity}\n`],
     ["pid", `${pid}\n`],
@@ -82,6 +142,14 @@ const writeLaunchRecords = (stateDir: string, identity: string, pid: number, por
     ["managed", "managed\n"],
   ] as const)
     writeAtomically(NodePath.join(stateDir, name), contents);
+  const start = platform === "win32" ? undefined : launchStart(pid);
+  if (start === undefined) {
+    for (const name of ["started", "started.ticks"])
+      NodeFS.rmSync(NodePath.join(stateDir, name), { force: true });
+    return;
+  }
+  writeAtomically(NodePath.join(stateDir, "started"), `${start.started}\n`);
+  writeAtomically(NodePath.join(stateDir, "started.ticks"), `${start.ticks}\n`);
 };
 
 const restoreRunner = (input: SshRuntimeSupervisorInput) => {
@@ -121,12 +189,23 @@ export interface SshRuntimeSupervisorInput {
   readonly stateDir: string;
   /** Published runner for `targetVersion`, and a private copy of the one it replaced. */
   readonly runnerFile: string;
+  /** Empty with previousVersion: a forced stop left no earlier runtime that can be started again. */
   readonly previousRunnerFile: string;
   readonly targetVersion: string;
   readonly previousVersion: string;
   /** Launch identities recorded for the ownership checks, as the launch script writes them. */
   readonly identity: string;
   readonly previousIdentity: string;
+  /**
+   * The old server was stopped by a person's approved forced update, not drained. It predates
+   * instance ids, so starting it again is proven by its version and protocol answer alone.
+   */
+  readonly forced?: boolean | undefined;
+  /**
+   * The launch stopped the old server itself and saw it exit. Its PID may already name another
+   * process, so the supervisor neither waits on that number nor reads anything from it.
+   */
+  readonly oldStopped?: boolean | undefined;
   /**
    * On a Windows host, the release executables behind `runnerFile` and `previousRunnerFile`:
    * the runners are shell scripts there, and Windows starts the executable itself.
@@ -142,7 +221,15 @@ export interface SshRuntimeSupervisorInput {
 
 export type SshRuntimeSupervisorResult =
   | { readonly status: "replaced" | "rolled-back"; readonly pid: number; readonly version: string }
-  | { readonly status: "old-alive" | "failed"; readonly reason: string };
+  | { readonly status: "old-alive" | "failed"; readonly reason: string }
+  /** A server it started failed and did not exit after SIGKILL; it was left running. */
+  | {
+      readonly status: "stuck";
+      readonly pid: number;
+      /** The version that process was started as: the target, or the previous one on rollback. */
+      readonly version: string;
+      readonly reason: string;
+    };
 
 /**
  * Starts a program outside the SSH session's job object, which Windows OpenSSH terminates with
@@ -208,7 +295,7 @@ export const superviseSshRuntimeReplacement = async (
       writeAtomically(
         NodePath.join(input.stateDir, SSH_REPLACEMENT_RECORD_FILE),
         encodeSshReplacementRecord({
-          status: result.status,
+          status: result.status === "stuck" ? "failed" : result.status,
           targetVersion: input.targetVersion,
           previousVersion: input.previousVersion,
           at: new Date().toISOString(),
@@ -224,15 +311,30 @@ export const superviseSshRuntimeReplacement = async (
   return result;
 };
 
+const stuck = (pid: number, version: string): SshRuntimeSupervisorResult => ({
+  status: "stuck",
+  pid,
+  version,
+  reason: `GOAT ${version} (pid ${pid}) did not become ready and did not exit after SIGKILL; it was left running and nothing was restored.`,
+});
+
 const superviseReplacement = async (
   input: SshRuntimeSupervisorInput,
 ): Promise<SshRuntimeSupervisorResult> => {
-  if (!(await waitForExit(input.oldPid, input.exitTimeoutMs))) {
+  if (input.oldStopped !== true && !(await waitForExit(input.oldPid, input.exitTimeoutMs))) {
     // The drained server still owns the data, so it stays the recorded runtime and is never
     // signalled. The draining marker keeps launches from starting a second server beside it.
-    restoreRunner(input);
-    NodeFS.rmSync(input.previousRunnerFile, { force: true });
-    writeLaunchRecords(input.stateDir, input.previousIdentity, input.oldPid, input.port);
+    if (input.previousVersion) {
+      restoreRunner(input);
+      NodeFS.rmSync(input.previousRunnerFile, { force: true });
+    }
+    writeLaunchRecords(
+      input.stateDir,
+      input.previousIdentity,
+      input.oldPid,
+      input.port,
+      input.platform,
+    );
     return {
       status: "old-alive",
       reason: `The drained GOAT ${input.previousVersion} (pid ${input.oldPid}) did not exit; it was left running.`,
@@ -263,6 +365,7 @@ const superviseReplacement = async (
     identity: string,
     accepts: (verdict: RuntimeProtocolVerdict) => boolean,
     extraEnv: Record<string, string> = {},
+    requireInstance = true,
   ) => {
     const args = [
       "serve",
@@ -275,6 +378,8 @@ const superviseReplacement = async (
     ];
     const env = { GOAT_NO_BROWSER: "1", GOAT_RUNTIME_ORIGIN: "ssh", ...extraEnv };
     let pid: number | undefined;
+    // On POSIX the child handle signals only that process: once Node reaps it, kill does nothing.
+    let child: NodeChildProcess.ChildProcess | undefined;
     try {
       if (input.platform === "win32") {
         pid =
@@ -290,7 +395,7 @@ const superviseReplacement = async (
         const log = NodeFS.openSync(input.logFile, "a");
         try {
           const started = Promise.withResolvers<boolean>();
-          const child = guardChild(
+          child = guardChild(
             NodeChildProcess.spawn(runner, args, {
               cwd: serverWorkingDirectory(NodeOS.homedir()),
               detached: true,
@@ -313,17 +418,42 @@ const superviseReplacement = async (
       return undefined;
     }
     if (pid === undefined) return undefined;
+    const own = child;
+    const exited = () =>
+      own === undefined ? !processExists(pid) : own.exitCode !== null || own.signalCode !== null;
+    const exitWithin = (ms: number) =>
+      own === undefined
+        ? waitForExit(pid, ms)
+        : new Promise<boolean>((resolve) => {
+            if (exited()) return resolve(true);
+            const onExit = () => {
+              clearTimeout(timer);
+              resolve(true);
+            };
+            const timer = setTimeout(() => {
+              own.off("exit", onExit);
+              resolve(exited());
+            }, ms);
+            own.once("exit", onExit);
+          });
+    const signal = (name: NodeJS.Signals) =>
+      own === undefined ? process.kill(pid, name) : own.kill(name);
     const deadline = Date.now() + input.readyTimeoutMs;
-    while (Date.now() < deadline && processExists(pid)) {
+    while (Date.now() < deadline && !exited()) {
       try {
         const value = await readSshRuntimeCompatibility(input.port);
         if (
           value.serverVersion === version &&
           accepts(value.verdict) &&
-          value.instanceId !== undefined &&
-          value.instanceId !== input.oldInstanceId
+          (requireInstance
+            ? value.instanceId !== undefined &&
+              value.instanceId !== input.oldInstanceId &&
+              (input.oldStopped !== true || recordsChild(input.baseDir, pid, input.port))
+            : input.oldStopped === true
+              ? recordsChild(input.baseDir, pid, input.port)
+              : !processExists(input.oldPid))
         ) {
-          writeLaunchRecords(input.stateDir, identity, pid, input.port);
+          writeLaunchRecords(input.stateDir, identity, pid, input.port, input.platform);
           return pid;
         }
       } catch {
@@ -332,10 +462,10 @@ const superviseReplacement = async (
       await delay(100);
     }
     // Only the child this supervisor started is ever signalled.
-    if (processExists(pid)) {
-      process.kill(pid, "SIGTERM");
-      if (!(await waitForExit(pid, 5000))) process.kill(pid, "SIGKILL");
-      await waitForExit(pid, 5000);
+    if (!exited()) {
+      signal("SIGTERM");
+      if (!(await exitWithin(5000))) signal("SIGKILL");
+      if (!(await exitWithin(5000))) return { stuck: pid };
     }
     return undefined;
   };
@@ -348,9 +478,10 @@ const superviseReplacement = async (
     (verdict) => verdict === "compatible",
     { [SSH_REPLACEMENT_ID_ENV]: replacementId },
   );
+  if (typeof started === "object") return stuck(started.stuck, input.targetVersion);
   if (started !== undefined) {
-    NodeFS.rmSync(backup, { recursive: true, force: true });
-    NodeFS.rmSync(input.previousRunnerFile, { force: true });
+    cleanUpAfterStart(backup);
+    if (input.previousRunnerFile) cleanUpAfterStart(input.previousRunnerFile);
     return { status: "replaced", pid: started, version: input.targetVersion };
   }
   const restoreLock = tryAcquireServerOwnerLock(userdata, sshSupervisorOwner(replacementId));
@@ -365,6 +496,11 @@ const superviseReplacement = async (
   } finally {
     restoreLock.release();
   }
+  if (!input.previousVersion)
+    return {
+      status: "failed",
+      reason: `GOAT ${input.targetVersion} did not start, and no earlier runtime could be started again.`,
+    };
   restoreRunner(input);
   // The previous version served this host before the swap. After an incompatible replacement
   // it does not speak this build's protocol, so it must only prove it is that version, freshly
@@ -375,14 +511,17 @@ const superviseReplacement = async (
     input.previousVersion,
     input.previousIdentity,
     (verdict) => verdict !== "unknown",
+    {},
+    input.forced !== true,
   );
+  if (typeof restored === "object") return stuck(restored.stuck, input.previousVersion);
   if (restored === undefined)
     return {
       status: "failed",
       reason: `GOAT ${input.targetVersion} and the previous ${input.previousVersion} both failed to start.`,
     };
-  NodeFS.rmSync(backup, { recursive: true, force: true });
-  NodeFS.rmSync(input.previousRunnerFile, { force: true });
+  cleanUpAfterStart(backup);
+  cleanUpAfterStart(input.previousRunnerFile);
   return { status: "rolled-back", pid: restored, version: input.previousVersion };
 };
 
@@ -393,11 +532,13 @@ export const supervise = Command.make("supervise", {
   baseDir: Flag.String("base-dir"),
   stateDir: Flag.String("state-dir"),
   runnerFile: Flag.String("runner"),
-  previousRunnerFile: Flag.String("previous-runner"),
+  previousRunnerFile: Flag.String("previous-runner").pipe(Flag.withDefault("")),
   targetVersion: Flag.String("target-version"),
-  previousVersion: Flag.String("previous-version"),
+  previousVersion: Flag.String("previous-version").pipe(Flag.withDefault("")),
   identity: Flag.String("identity"),
-  previousIdentity: Flag.String("previous-identity"),
+  previousIdentity: Flag.String("previous-identity").pipe(Flag.withDefault("")),
+  forced: Flag.Boolean("forced"),
+  oldStopped: Flag.Boolean("old-stopped"),
   executable: Flag.String("executable").pipe(Flag.optional),
   previousExecutable: Flag.String("previous-executable").pipe(Flag.optional),
   exitTimeoutMs: Flag.Int("exit-timeout-ms").pipe(Flag.withDefault(60_000)),
@@ -423,7 +564,14 @@ export const supervise = Command.make("supervise", {
           };
         }
         const line = `${result.status} ${"pid" in result ? result.pid : 0} ${"version" in result ? result.version : "-"}\n`;
-        writeAtomically(resultFile, line);
+        try {
+          writeAtomically(resultFile, line);
+        } catch (cause) {
+          // The launch then reports an unknown outcome; the log keeps the real one.
+          process.stderr.write(
+            `Replacement supervisor could not record its result (${line.trim()}): ${cause instanceof Error ? cause.message : String(cause)}\n`,
+          );
+        }
         if ("reason" in result) process.stderr.write(result.reason + "\n");
         process.stdout.write(line);
       }),

@@ -1,4 +1,5 @@
 import type { BotProfile, ChannelMessageMeta, ThreadId } from "@goat/contracts";
+import { isGeneratedBotName } from "@goat/shared/goatBotNames";
 import * as Effect from "effect/Effect";
 
 import type * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -11,6 +12,12 @@ const PURPOSE_SHOWN = 300;
 function memberGreetingText(bot: Pick<BotProfile, "name" | "purpose">): string {
   const purpose = bot.purpose.trim();
   const shown = purpose.length > PURPOSE_SHOWN ? purpose.slice(0, PURPOSE_SHOWN) + "…" : purpose;
+  // A generated name is not the person's choice, so the greeting waits for the real one.
+  if (isGeneratedBotName(bot.name)) {
+    return purpose === ""
+      ? "Hi, I'm your new bot. Give me a name, or tell me what you'd like me to start with."
+      : `Hi, I'm your new bot. You set me up for: ${shown}\n\nGive me a name, or tell me what you'd like me to start with.`;
+  }
   return purpose === ""
     ? `Hi, I'm ${bot.name}. What would you like me to start with?`
     : `Hi, I'm ${bot.name}. You set me up for: ${shown}\n\nWhat would you like me to start with?`;

@@ -8,10 +8,12 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderDiagnosisReason,
+  type ServerProvider,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
@@ -27,6 +29,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
 import * as Diagnosis from "./ProviderDiagnosisService.ts";
+import * as ProviderCliGate from "./ProviderCliGate.ts";
 import * as HostSync from "./ProviderHostSync.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -107,6 +110,14 @@ export const harness = (options: {
       { readonly ready: boolean; readonly reason?: ProviderDiagnosisReason }
     >
   >;
+  /** The provider CLI gate a local install asks; none unless given. */
+  readonly cliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
+  /** An installer that runs until stopped, and whose stopping waits for killed. */
+  readonly running?: {
+    readonly started: Deferred.Deferred<void>;
+    readonly killing: Deferred.Deferred<void>;
+    readonly killed: Deferred.Deferred<void>;
+  };
 }) => {
   const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
   const spawner = Layer.succeed(
@@ -115,22 +126,34 @@ export const harness = (options: {
       const child = command as unknown as { command: string; args: ReadonlyArray<string> };
       state.spawned.push({ command: child.command, args: child.args });
       const result = options.installer ?? { stdout: "", stderr: "", code: 0 };
-      return (options.onInstall ?? Effect.void).pipe(
-        Effect.as(
-          ChildProcessSpawner.makeHandle({
-            pid: ChildProcessSpawner.ProcessId(1),
-            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
-            isRunning: Effect.succeed(false),
-            kill: () => Effect.void,
-            unref: Effect.succeed(Effect.void),
-            stdin: Sink.drain,
-            stdout: Stream.make(encoder.encode(result.stdout)),
-            stderr: Stream.make(encoder.encode(result.stderr)),
-            all: Stream.empty,
-            getInputFd: () => Sink.drain,
-            getOutputFd: () => Stream.empty,
-          }),
+      const running = options.running;
+      return Effect.as(
+        (options.onInstall ?? Effect.void).pipe(
+          Effect.andThen(
+            running === undefined ? Effect.void : Deferred.succeed(running.started, undefined),
+          ),
         ),
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode:
+            running === undefined
+              ? Effect.succeed(ChildProcessSpawner.ExitCode(result.code))
+              : Effect.never,
+          isRunning: Effect.succeed(false),
+          kill: () =>
+            running === undefined
+              ? Effect.void
+              : Deferred.succeed(running.killing, undefined).pipe(
+                  Effect.andThen(Deferred.await(running.killed)),
+                ),
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.make(encoder.encode(result.stdout)),
+          stderr: Stream.make(encoder.encode(result.stderr)),
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        }),
       );
     }),
   );
@@ -224,6 +247,7 @@ export const harness = (options: {
         Layer.mock(Environment.ServerEnvironmentIdentity)({
           getEnvironmentId: Effect.succeed(environmentId),
         }),
+        options.cliGate ?? Layer.empty,
         spawner,
       ),
     ),
@@ -246,3 +270,35 @@ export const threadScope: McpInvocationScope = {
   grantedScopes: ["orchestration:read"],
   reauthorize: () => Effect.void,
 };
+
+export const openCodeInstance = ProviderInstanceId.make("opencode");
+/** OpenCode as a snapshot reports it before its probe ran: installed, version unknown. */
+export const pendingOpenCode = {
+  instanceId: openCodeInstance,
+  driver: ProviderDriverKind.make("opencode"),
+  displayName: "OpenCode",
+  enabled: true,
+  installed: true,
+  version: null,
+  status: "warning",
+  auth: { status: "unknown" },
+  checkedAt: "2026-11-12T00:00:00.000Z",
+  models: [],
+  slashCommands: [],
+  skills: [],
+} satisfies ServerProvider;
+
+/** A CLI probe that says it started, then answers missing once released. */
+export const heldGate = (probing: Deferred.Deferred<void>, release: Deferred.Deferred<void>) =>
+  Layer.succeed(
+    ProviderCliGate.ProviderCliGate,
+    ProviderCliGate.ProviderCliGate.of({
+      require: () => Effect.void,
+      missing: () => Effect.void.pipe(Effect.as(undefined)),
+      probe: () =>
+        Deferred.succeed(probing, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({ kind: "missing", provider: { ...pendingOpenCode, cli: "missing" } } as const),
+        ),
+    }),
+  );

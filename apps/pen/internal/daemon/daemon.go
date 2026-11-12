@@ -155,6 +155,8 @@ type Daemon struct {
 	saveErr error
 	// hostKeysErr names the sshd key files the last host key check could not read, shown by pen ls.
 	hostKeysErr string
+	// traffic counts stream bytes per member and relay for the last 24 hours, in memory only (traffic.go).
+	traffic *trafficWindow
 
 	// svc holds the registered local services (services.go).
 	svc serviceBook
@@ -314,6 +316,7 @@ func New(opt Options) (*Daemon, error) {
 		d.sshUser = opt.SSHUser
 	}
 	d.accept = make(chan relay.Conn, 64)
+	d.traffic = newTrafficWindow(d.now)
 	d.lastView = store.View()
 	return d, nil
 }

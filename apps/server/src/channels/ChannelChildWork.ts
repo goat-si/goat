@@ -52,6 +52,8 @@ import {
   retiredWorkerKeyFor,
 } from "./channelIds.ts";
 
+const FAILED_RUNS: ReadonlySet<string> = new Set(["failed", "interrupted", "rolled_back"]);
+
 /** At most this many active delegated subagents per channel task. */
 export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 8;
 
@@ -654,8 +656,15 @@ const make = Effect.gen(function* () {
   ) {
     // Read before the dispatch row, for the same reason as reconcileLocal.
     const launchEnded = record.state === "launched" && !isLaunching(record);
-    const rows = yield* sql<{ readonly state: string; readonly remote_thread_id: string | null }>`
-      SELECT state, remote_thread_id FROM remote_dispatches WHERE correlation_id = ${correlationId}
+    const rows = yield* sql<{
+      readonly state: string;
+      readonly kind: string;
+      readonly known_run_status: string | null;
+      readonly end_reason: string | null;
+      readonly remote_thread_id: string | null;
+    }>`
+      SELECT state, kind, known_run_status, end_reason, remote_thread_id FROM remote_dispatches
+      WHERE correlation_id = ${correlationId}
     `.pipe(Effect.mapError(() => undefined));
     if (rows === undefined) return false;
     if (rows[0] === undefined) {
@@ -664,7 +673,7 @@ const make = Effect.gen(function* () {
       if (!launchEnded) return false;
       return yield* transition(record, ["launched"], "released");
     }
-    const state = rows[0].state;
+    const { state, kind, known_run_status: runStatus, end_reason: endReason } = rows[0];
     // The coordinator stores a remote thread launch's acknowledged thread before the launch binds
     // it, so a pass that gets here first, or after a crash, fills it in; a set one is kept.
     const remoteThreadId = rows[0].remote_thread_id;
@@ -680,8 +689,16 @@ const make = Effect.gen(function* () {
       if (record.state !== "bound") return yield* move(["launched", "unknown"], "bound");
       return acknowledged === undefined ? false : yield* move(["bound"], "bound");
     }
-    if (state === "settled") return yield* move(["launched", "bound", "unknown"], "completed");
+    // A task's row settles for every result; the run status it keeps says which.
+    if (state === "settled")
+      return yield* move(
+        ["launched", "bound", "unknown"],
+        kind === "task" && FAILED_RUNS.has(runStatus ?? "") ? "failed" : "completed",
+      );
     if (state === "cancelled") return yield* move(["launched", "bound", "unknown"], "cancelled");
+    // GOAT stopped tracking it after a day without contact; whatever ran there is not this slot's.
+    if (state === "lost" && endReason === "host_unreachable")
+      return yield* move(["launched", "bound", "unknown"], "failed");
     if (state === "lost") {
       // The outcome is uncertain until the coordinator's resolve pass settles the row with the
       // destination: rebound (running) or fenced (cancelled).

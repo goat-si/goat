@@ -30,7 +30,7 @@ interface Recipe {
   readonly aliases?: ReadonlyArray<string>;
   readonly npmPackage: string | null;
   readonly npmArgs?: ReadonlyArray<string>;
-  /** Posix install script, run as `bash -c script goat-install <version>`. */
+  /** Posix install script, run as `bash -o pipefail -c script goat-install <version>`. */
   readonly posixScript?: { readonly script: string; readonly pinnable: boolean };
   /** PowerShell script; `{version}` is replaced by a validated version. */
   readonly windowsScript?: { readonly script: string; readonly pinnable: boolean };
@@ -50,6 +50,16 @@ const RECIPES: Record<ProviderHostSyncDriver, Recipe> = {
     displayName: "Codex",
     binary: "codex",
     npmPackage: "@openai/codex",
+    // OpenAI's installer needs no Node; it writes ~/.local/bin or %LOCALAPPDATA%\Programs\OpenAI\Codex\bin.
+    posixScript: {
+      script:
+        'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh -s -- --release "$1"',
+      pinnable: true,
+    },
+    windowsScript: {
+      script: "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+      pinnable: false,
+    },
     deviceLogin: { args: ["login", "--device-auth"], hosts: ["auth.openai.com"] },
     terminalLogin: "codex login --device-auth",
   },
@@ -144,18 +154,20 @@ export function describeInstallFailure(exitCode: number | null, output: string):
 
 /** `codex-cli 0.42.0` and `0.42.0 (Claude Code)` both pin to 0.42.0. */
 export function versionCore(version: string): string | null {
-  return (
-    /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?/u.exec(
+  // A whole version or none: an identifier that runs on past a pin's bounds is not cut short,
+  // and a build-tagged version is no pin, since a pin cannot name build metadata.
+  const match =
+    /(?<![0-9A-Za-z_.+-])\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?(\+[0-9A-Za-z.-]*)?(?![0-9A-Za-z_+-]|\.[0-9A-Za-z])/u.exec(
       version,
-    )?.[0] ?? null
-  );
+    );
+  return match === null || match[1] !== undefined ? null : match[0];
 }
 
 export const hostPlatform = (platform: string): HostPlatform =>
   platform === "darwin" || platform === "linux" || platform === "win32" ? platform : "other";
 
 const VERSION =
-  /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?)$/u;
+  /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?)$/u;
 
 /** The command to install `driver` on this platform, or null when a person must. */
 export function installCommand(
@@ -188,7 +200,15 @@ export function installCommand(
     return {
       method: "script",
       command: "bash",
-      args: ["-c", script.script, "goat-install", ...(script.pinnable ? [requested] : [])],
+      // pipefail: a failed download fails the install instead of feeding the shell nothing.
+      args: [
+        "-o",
+        "pipefail",
+        "-c",
+        script.script,
+        "goat-install",
+        ...(script.pinnable ? [requested] : []),
+      ],
       latestOnly: !script.pinnable,
     };
   }
@@ -199,6 +219,16 @@ export function installCommand(
     args: ["install", "-g", `${recipe.npmPackage}@${requested}`, ...(recipe.npmArgs ?? [])],
     latestOnly: false,
   };
+}
+
+/** What a person reads as the command a host ran: the vendor's own line, with its version. */
+export function describeInstall(command: InstallCommand): string {
+  if (command.method === "npm") return ["npm", ...command.args].join(" ");
+  if (command.command === "bash") {
+    const [, , , script = "", , version] = command.args;
+    return version === undefined ? script : script.replace('"$1"', version);
+  }
+  return command.args.at(-1) ?? command.command;
 }
 
 export function installMethod(
@@ -274,4 +304,33 @@ export function relayableBrowserUrl(
     if (target !== null && LOOPBACK.test(target.hostname)) return null;
   }
   return url.toString();
+}
+
+/**
+ * A sign-in instruction another machine reported, as this machine relays it: a vendor page or
+ * device code only on the vendor's own hosts, otherwise the recipe's own words for that driver.
+ */
+export function trustedLogin(
+  driver: ProviderHostSyncDriver,
+  host: string,
+  login: ProviderSyncLogin,
+): ProviderSyncLogin {
+  const recipe = RECIPES[driver];
+  const terminal = { type: "terminal", command: recipe.terminalLogin } as const;
+  if (login.type === "device_code") {
+    const url = safeUrl(login.url);
+    const vendor = url !== null && (recipe.deviceLogin?.hosts ?? []).includes(url.hostname);
+    // The page alone: a remote's query or fragment never rides along.
+    return url !== null && vendor && /^[A-Z0-9]{4,5}-[A-Z0-9]{4,6}$/u.test(login.userCode)
+      ? { type: "device_code", url: url.origin + url.pathname, userCode: login.userCode }
+      : terminal;
+  }
+  if (login.type === "browser")
+    return relayableBrowserUrl(driver, login.url, false) === null ? terminal : login;
+  if (login.type === "open_host")
+    return {
+      type: "open_host",
+      instruction: `Finish ${recipe.displayName} sign-in in GOAT on ${host}: Settings, Providers, ${recipe.displayName}.`,
+    };
+  return terminal;
 }

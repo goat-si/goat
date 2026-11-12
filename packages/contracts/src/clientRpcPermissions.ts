@@ -1,4 +1,5 @@
 import { GLOBAL_SKILLS_WS_METHODS } from "./globalSkillsRpc.ts";
+import { REMOTE_LAUNCHES_WS_METHODS } from "./remoteLaunchesRpc.ts";
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
@@ -26,6 +27,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   [GLOBAL_SKILLS_WS_METHODS.globalRemove]: AuthSettingsWriteScope,
   [GLOBAL_SKILLS_WS_METHODS.globalRescan]: AuthSettingsWriteScope,
+  // It ends this environment's tracking of another machine's thread, for every launcher.
+  [REMOTE_LAUNCHES_WS_METHODS.dismiss]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.forkThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,

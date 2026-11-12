@@ -17,10 +17,14 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   readonly message: string;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;
+  /** Arguments a remote refused goat_thread_launch for before creating anything; nothing ran. */
+  readonly undeclaredArguments?: ReadonlyArray<string> | undefined;
   /** A placement answer's classification (placement_not_started, placement_full, ...). */
   readonly remoteClassification?: string | undefined;
   /** The idle thread a not-started placement left on the remote. */
   readonly remoteThreadId?: string | undefined;
+  /** With a provider_cli_missing classification: the driver provider.sync installs there. */
+  readonly remoteDriver?: string | undefined;
 }> {}
 
 /**
@@ -38,6 +42,47 @@ export const memoryRefusal = (message: string) =>
     message,
     remoteCode: MEMORY_CEILING_UNSUPPORTED,
   });
+
+/**
+ * The arguments a remote says goat_thread_launch does not take, so nothing ran: GOAT's admission
+ * refusal of undeclared arguments (invalid_request), or an older schema's own invalid-params
+ * message, each before the handler and starting with that sentence. Bare text, another code or
+ * error, a may-have-started answer, or the sentence anywhere else may follow a create.
+ */
+export const undeclaredLaunchArguments = (
+  tool: string,
+  said: {
+    readonly message?: string | undefined;
+    readonly rpcCode?: number | undefined;
+    readonly code?: string | undefined;
+    readonly mayHaveStarted?: boolean | undefined;
+  },
+): ReadonlyArray<string> | undefined => {
+  if (tool !== "goat_thread_launch" || said.mayHaveStarted === true) return undefined;
+  if (said.rpcCode !== -32602 && said.code !== "invalid_request") return undefined;
+  const named = /^goat_thread_launch does not take (\w+(?:, \w+)*), so nothing ran/u.exec(
+    said.message ?? "",
+  );
+  return named?.[1]?.split(", ");
+};
+
+/** What a failed call says of a launch: the RPC error's own message, never its data. */
+export const rpcLaunchFacts = (
+  tool: string,
+  error: {
+    readonly rpcCode?: number | undefined;
+    readonly rpcMessage?: string | undefined;
+    readonly rpcMayHaveStarted?: boolean | undefined;
+  },
+) => {
+  const undeclared = undeclaredLaunchArguments(tool, {
+    rpcCode: error.rpcCode,
+    message: error.rpcMessage,
+    mayHaveStarted: error.rpcMayHaveStarted,
+  });
+  if (undeclared !== undefined) return { undeclaredArguments: undeclared };
+  return tool === "goat_thread_launch" ? { launchMayHaveStarted: true } : {};
+};
 
 export const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
   new SshRemoteDispatchError({ reason, message, ...facts });

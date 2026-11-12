@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@goat/contracts";
+import { type EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 import {
@@ -230,6 +230,142 @@ describe("decision inbox approval handoffs", () => {
       expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 1 });
     } finally {
       stopSummary();
+      h.registry.dispose();
+    }
+  });
+
+  it("docks a thread's approval the capped feed left out, and the inbox says how many it cannot list", () => {
+    const h = harness();
+    const stopItems = h.registry.mount(h.inbox.itemsAtom);
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      const newer = approval("newer");
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [
+          {
+            threadTitle: "Other",
+            handoff: {
+              ...newer,
+              requestedBy: { ...newer.requestedBy, threadId: ThreadId.make("other") },
+            },
+          },
+        ],
+        handoffsTotal: 2,
+      });
+      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
+      h.set(ref(a), [], "live", null, [handoffItem(approval("older"))]);
+      expect(
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
+      ).toEqual(["older"]);
+      expect(h.registry.get(h.inbox.itemsAtom).unlistedApprovals).toBe(1);
+    } finally {
+      stopDock();
+      stopItems();
+      h.registry.dispose();
+    }
+  });
+
+  it("does not dock a cached approval the capped feed does not confirm until its thread is live", () => {
+    const h = harness();
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("listed") }],
+        handoffsTotal: 201,
+      });
+      // Answered elsewhere while away; the cached projection still holds it.
+      h.set(ref(a), [], "synchronizing", null, [handoffItem(approval("stale"))]);
+      const docked = () =>
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId);
+      expect(docked()).toEqual(["listed"]);
+      h.set(ref(a), [], "cached", "Disconnected", [handoffItem(approval("stale"))]);
+      expect(docked()).toEqual(["listed"]);
+      h.set(ref(a), [], "live", null, [handoffItem(approval("older"))]);
+      expect(docked()).toEqual(["older", "listed"]);
+      // A server whose feed cannot list approvals relies on the thread alone, so it must be live too.
+      h.registry.set(h.feeds(a), { items: [] });
+      h.set(ref(a), [], "cached", "Disconnected", [handoffItem(approval("stale"))]);
+      expect(docked()).toEqual([]);
+    } finally {
+      stopDock();
+      h.registry.dispose();
+    }
+  });
+
+  it("keeps a capped feed's approval docked when the thread's loaded history lacks it", () => {
+    const h = harness();
+    const stopDock = h.registry.mount(h.inbox.openApprovalsAtom(ref(a)));
+    try {
+      // A server that caps the feed but does not retain old handoffs in its snapshots.
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("listed") }],
+        handoffsTotal: 201,
+      });
+      h.set(ref(a), [], "live", null, [handoffItem(approval("loaded"))]);
+      expect(
+        h.registry.get(h.inbox.openApprovalsAtom(ref(a))).map((entry) => entry.handoffId),
+      ).toEqual(["loaded", "listed"]);
+    } finally {
+      stopDock();
+      h.registry.dispose();
+    }
+  });
+
+  it("forgets a remembered approval when it reconnects to a server whose feed cannot list approvals", () => {
+    const h = harness();
+    const stopSummary = h.registry.mount(h.inbox.summaryAtom);
+    const stopItems = h.registry.mount(h.inbox.itemsAtom);
+    try {
+      h.registry.set(h.shells, []);
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
+      });
+      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
+      h.registry.set(h.presentations(a), {
+        ...h.registry.get(h.presentations(a))!,
+        connection: { phase: "offline", error: null, traceId: null },
+      });
+      expect(h.registry.get(h.inbox.itemsAtom).items).toHaveLength(1);
+      // Back on a server whose feed has no handoffs field: nothing confirms the remembered card.
+      h.registry.set(h.feeds(a), { items: [] });
+      h.registry.set(h.presentations(a), {
+        ...h.registry.get(h.presentations(a))!,
+        connection: { phase: "connected", error: null, traceId: null },
+      });
+      expect(h.registry.get(h.inbox.itemsAtom).items).toEqual([]);
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 0, total: 0 });
+    } finally {
+      stopItems();
+      stopSummary();
+      h.registry.dispose();
+    }
+  });
+
+  it("treats an approval as removed, not waiting, once its environment leaves the catalog", () => {
+    const h = harness();
+    const stopItems = h.registry.mount(h.inbox.itemsAtom);
+    try {
+      h.registry.set(h.feeds(a), {
+        items: [],
+        handoffs: [{ threadTitle: "Hub", handoff: approval("one") }],
+      });
+      h.registry.set(h.feeds(b), { items: [], handoffs: [] });
+      const entry = h.registry.get(h.inbox.itemsAtom).items[0]!;
+      const catalog = h.registry.get(h.catalog);
+      h.registry.set(h.catalog, {
+        ...catalog,
+        entries: new Map([...catalog.entries].filter(([id]) => id !== a)),
+      });
+      const after = h.registry.get(h.inbox.itemsAtom);
+      expect(after.items).toEqual([]);
+      expect(isDecisionItemWaiting(after, entry)).toBe(false);
+      expect(isDecisionItemRemoved(after, entry.id)).toBe(true);
+    } finally {
+      stopItems();
       h.registry.dispose();
     }
   });

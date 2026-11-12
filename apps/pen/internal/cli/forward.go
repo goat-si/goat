@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -68,7 +69,13 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 // runForward serves ln until ctx ends, or m or this node is revoked (pen leave revokes this node);
 // connDone (may be nil) runs after each connection's last output.
 func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, m mesh.Member, port int, stdout, stderr io.Writer, connDone func()) int {
+	// A forward that is stopping ends its connections itself (ctx is done): none of them reports that as an error.
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Each connection sends its last traffic report as it ends: wait for them before returning (and exiting),
+	// cancelling first so they end.
+	var conns sync.WaitGroup
+	defer waitConns(&conns)
 	defer cancel()
 	self := p.id.NodeID()
 	revoked, stopWatch, err := watchRevoked(st, p, m)
@@ -111,16 +118,20 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 			}
 			return fail(stderr, err)
 		}
+		conns.Add(1)
 		go func() {
+			defer conns.Done()
 			if connDone != nil {
 				defer connDone()
 			}
 			tc := c.(*net.TCPConn)
 			defer tc.Close()
 			tr := newOpenTrace(stderr, fmt.Sprintf(" conn=%d", n))
-			sec, err := daemon.OpenTCP(tr.context(ctx), p.relays, p.id, m, port)
+			sec, used, err := daemon.OpenTCPVia(tr.context(ctx), p.relays, p.id, m, port)
 			if err != nil {
-				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, false))
+				if ctx.Err() == nil {
+					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, false))
+				}
 				return
 			}
 			mu.Lock()
@@ -137,15 +148,36 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 				mu.Unlock()
 			}()
 			lc := localConn{tc}
-			if err := stream.Splice(ctx, tr.link(sec), lc, lc, lc.CloseWrite); err != nil {
+			counted := startTraffic(st, m.NodeID, used)
+			if err := stream.Splice(ctx, counted.link(tr.link(sec)), lc, lc, lc.CloseWrite); err != nil {
 				if !stream.Delivered(err) {
 					// The peer's stream stopped short of its FIN: the client reads a reset, not a clean end.
 					tc.SetLinger(0)
 				}
-				if !wasRevoked.Load() && !clientGone(err) {
+				if !wasRevoked.Load() && !clientGone(err) && ctx.Err() == nil {
 					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
 				}
 			}
+			// The local client sees its end before the last report goes out.
+			tc.Close()
+			counted.finish()
 		}()
+	}
+}
+
+// forwardDrain bounds how long a stopping forward waits for its connections' last reports.
+const forwardDrain = 3 * time.Second
+
+func waitConns(conns *sync.WaitGroup) {
+	done := make(chan struct{})
+	go func() {
+		conns.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(forwardDrain)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
 	}
 }

@@ -219,6 +219,12 @@ type outq struct {
 	done        bool
 	wake        chan struct{}
 	ended       chan struct{}
+	// tallies, on an uplink, are the sessions whose delivered bytes this queue counts, until the
+	// writer passes a session's end mark or the queue ends; own, on a client, is its session's.
+	// writingTally is the one the item being written counts toward.
+	tallies      map[uint32]*sessionTally
+	own          *sessionTally
+	writingTally *sessionTally
 }
 
 type outItem struct {
@@ -235,6 +241,8 @@ const (
 	itemPong
 	itemCharged
 	itemSession
+	// itemMark ends a session's frames on an uplink: the writer lets go of its tally there.
+	itemMark
 )
 
 func (it outItem) is(f uint8) bool { return it.flags&f != 0 }
@@ -330,11 +338,7 @@ func (q *outq) push(it outItem) {
 		q.signal()
 		return
 	}
-	if q.n == len(q.ring) {
-		q.resize(max(minRing, 2*len(q.ring)))
-	}
-	q.ring[(q.head+q.n)%len(q.ring)] = it
-	q.n++
+	q.appendLocked(it)
 	q.bytes += c
 	if it.is(itemCharged) {
 		q.charged += c
@@ -350,6 +354,59 @@ func (q *outq) push(it outItem) {
 	}
 	q.mu.Unlock()
 	q.signal()
+}
+
+func (q *outq) appendLocked(it outItem) {
+	if q.n == len(q.ring) {
+		q.resize(max(minRing, 2*len(q.ring)))
+	}
+	q.ring[(q.head+q.n)%len(q.ring)] = it
+	q.n++
+}
+
+// setOwn sets the tally a client's queue counts its session data toward.
+func (q *outq) setOwn(t *sessionTally) {
+	q.mu.Lock()
+	q.own = t
+	q.mu.Unlock()
+}
+
+// track has this uplink queue count sid's DATA toward t and hold t until the session's end mark
+// is passed; it reports false, holding nothing, when the queue has ended or still holds sid.
+func (q *outq) track(sid uint32, t *sessionTally) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.done || q.tallies[sid] != nil {
+		return false
+	}
+	if q.tallies == nil {
+		q.tallies = map[uint32]*sessionTally{}
+	}
+	t.refs.Add(1)
+	q.tallies[sid] = t
+	return true
+}
+
+// endSession queues sid's end mark behind its frames. The mark costs nothing: it takes one ring
+// slot, and an uplink holds at most one per session it admitted.
+func (q *outq) endSession(sid uint32) {
+	q.mu.Lock()
+	if q.tallies[sid] == nil {
+		q.mu.Unlock()
+		return
+	}
+	q.appendLocked(outItem{sid: sid, flags: itemMark})
+	q.mu.Unlock()
+	q.signal()
+}
+
+// delivered counts a written item toward t, the session it belongs to.
+func delivered(it outItem, t *sessionTally) {
+	if it.sid != 0 {
+		t.toNode.Add(uint64(len(it.data) - wire.HeaderLen))
+	} else {
+		t.fromNode.Add(uint64(len(it.data)))
+	}
 }
 
 func (q *outq) signal() {
@@ -373,6 +430,21 @@ func (q *outq) pop() outItem {
 	q.ring[q.head] = outItem{}
 	q.head = (q.head + 1) % len(q.ring)
 	q.n--
+	if it.is(itemMark) {
+		return it
+	}
+	// Session data counts toward its session's tally, held until the write's result is counted:
+	// a drop meanwhile must not count the session before this write.
+	q.writingTally = nil
+	if it.is(itemCharged) && !it.is(itemSession) {
+		q.writingTally = q.own
+		if it.sid != 0 {
+			q.writingTally = q.tallies[it.sid]
+		}
+		if q.writingTally != nil {
+			q.writingTally.refs.Add(1)
+		}
+	}
 	c := cost(it)
 	q.bytes -= c
 	q.writing = c
@@ -398,12 +470,18 @@ func (q *outq) pop() outItem {
 	return it
 }
 
-// dropLocked ends the queue and gives back what its queued items cost and what it reserved.
+// dropLocked ends the queue and gives back what its queued items cost and what it reserved, and
+// lets go of the tallies it held.
 func (q *outq) dropLocked() {
 	q.done = true
 	q.budget.release(q.charged + q.reserved)
 	q.bytes, q.charged, q.reserved, q.sessionBytes = 0, 0, 0, 0
 	q.ring, q.head, q.n, q.bySID = nil, 0, 0, nil
+	tallies := q.tallies
+	q.tallies = nil
+	for _, t := range tallies {
+		t.release()
+	}
 }
 
 // queued reports what the queue holds for one session and in total, overhead included.
@@ -536,7 +614,19 @@ func (q *outq) run() {
 			continue
 		}
 		it := q.pop()
+		held := q.writingTally
+		q.writingTally = nil
 		q.mu.Unlock()
+		if it.is(itemMark) {
+			q.mu.Lock()
+			t := q.tallies[it.sid]
+			delete(q.tallies, it.sid)
+			q.mu.Unlock()
+			if t != nil {
+				t.release()
+			}
+			continue
+		}
 		if it.close != 0 {
 			q.written()
 			cctx, cancel := context.WithTimeout(ctx, q.timeout)
@@ -574,7 +664,14 @@ func (q *outq) run() {
 			q.mu.Lock()
 			q.dropLocked()
 			q.mu.Unlock()
+			if held != nil {
+				held.release()
+			}
 			return
+		}
+		if held != nil {
+			delivered(it, held)
+			held.release()
 		}
 	}
 }

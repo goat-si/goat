@@ -22,6 +22,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
@@ -605,6 +606,22 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     if (correlationId !== undefined && receipt._tag === "Some") {
                       yield* receipt.value.correlate(correlationId);
                     }
+                    // The lane names its dispatch before the launch, so a completion lost to a crash
+                    // still settles once that dispatch ends.
+                    const launchCorrelationId =
+                      correlationId ??
+                      `rr-${yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie)}`;
+                    if (admitted.enabled)
+                      yield* permissions.correlate(laneId, launchCorrelationId).pipe(
+                        Effect.mapError(
+                          (failure) =>
+                            new OrchestratorMcpFailure({
+                              code: failure.code,
+                              message: failure.message,
+                              mayHaveStarted: false,
+                            }),
+                        ),
+                      );
                     const value = yield* coordinator.launch(
                       {
                         kind: "thread",
@@ -612,7 +629,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                         delivery: input.reportDelivery ?? "wake",
                         // A channel-owned launch carries its record's correlation id, so a retry's
                         // INSERT collides on the row instead of starting a second remote thread.
-                        correlationId,
+                        correlationId: launchCorrelationId,
                         launch: guardedLaunch,
                       },
                       authorize.pipe(Effect.asVoid),

@@ -90,12 +90,14 @@ function fittingPieces(text: string, room: number, limit = SLACK_CHUNK_LIMIT): A
 export function formatSlackOutboundMessages(input: {
   readonly text: string;
   readonly mentionUserId?: string | undefined;
+  /** Formatted characters per message; a message carrying buttons must fit one section. */
+  readonly limit?: number | undefined;
 }): Array<string> {
   const mention =
     input.mentionUserId !== undefined && SLACK_USER_ID.test(input.mentionUserId)
       ? `<@${input.mentionUserId}> `
       : "";
-  const room = SLACK_TEXT_LIMIT - mention.length;
+  const room = (input.limit ?? SLACK_TEXT_LIMIT) - mention.length;
   const text = markdownTablesToLists(input.text.trim(), { bullet: "•", boldFirst: true });
   const pieces = fittingPieces(text, room);
   const kept =
@@ -145,10 +147,10 @@ const buttonText = (label: string) =>
     : label.slice(0, SLACK_BUTTON_TEXT_LIMIT - 1) + "…";
 
 /**
- * Block Kit for a card or question: the fallback text in a section, and one button per option.
- * The button value is the option label, which reception reads as the person's reply.
+ * Block Kit for a card or question: the text in a section, and one button per option. The button
+ * value is the option label, which reception reads as the person's reply.
  */
-export const slackChoiceBlocks = (
+const slackChoiceBlocks = (
   text: string,
   options: ReadonlyArray<string>,
 ): ReadonlyArray<SlackChoiceBlock> | undefined => {
@@ -165,6 +167,7 @@ export const slackChoiceBlocks = (
         ],
   );
   if (elements.length === 0) return undefined;
+  // slackOutboundPosts sizes these posts to one section; the cut only guards other callers.
   const section =
     text.length <= SLACK_SECTION_TEXT_LIMIT
       ? text
@@ -174,3 +177,28 @@ export const slackChoiceBlocks = (
     { type: "actions", block_id: "goat_choices", elements },
   ];
 };
+
+/**
+ * The posts one outbound message becomes: its text parts, the last carrying the choice buttons.
+ * With buttons every part fits one section, split before escaping, so none is cut or broken; a
+ * message too long for Slack keeps its text and loses the buttons, which would sit beside a cut.
+ */
+export function slackOutboundPosts(input: {
+  readonly text: string;
+  readonly mentionUserId?: string | undefined;
+  readonly options?: ReadonlyArray<string> | undefined;
+}): Array<{ readonly text: string; readonly blocks?: ReadonlyArray<SlackChoiceBlock> }> {
+  const parts = formatSlackOutboundMessages({
+    text: input.text,
+    mentionUserId: input.mentionUserId,
+    limit: (input.options ?? []).length > 0 ? SLACK_SECTION_TEXT_LIMIT : SLACK_TEXT_LIMIT,
+  });
+  const options = parts.at(-1) === SLACK_TRUNCATED_NOTE ? [] : (input.options ?? []);
+  return parts.map((text, index) => {
+    const blocks =
+      index === parts.length - 1 && options.length > 0
+        ? slackChoiceBlocks(text, options)
+        : undefined;
+    return blocks === undefined ? { text } : { text, blocks };
+  });
+}

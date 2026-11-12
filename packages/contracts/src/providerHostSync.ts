@@ -191,6 +191,8 @@ export const ProviderSyncHostState = Schema.Struct({
   version: Schema.NullOr(Version),
   message: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(1_024))),
   login: Schema.optionalKey(ProviderSyncLogin),
+  /** The installer command line this host ran, from GOAT's fixed recipe. */
+  ran: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
 });
 export type ProviderSyncHostState = typeof ProviderSyncHostState.Type;
 
@@ -211,7 +213,7 @@ export type ProviderSyncState = typeof ProviderSyncState.Type;
 /** Exact release or `latest`. The strict pattern keeps it safe as an installer argument. */
 export const ProviderSyncVersion = Schema.String.check(
   Schema.isPattern(
-    /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?)$/u,
+    /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?)$/u,
   ),
 );
 

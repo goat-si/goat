@@ -25,6 +25,7 @@ import Migration0073 from "../persistence/Migrations/091_MemoryTaskGrantCeiling.
 import Migration0089 from "../persistence/Migrations/104_RemoteDispatchObservation.ts";
 import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
 import Migration0137 from "../persistence/Migrations/137_RemoteDispatchDeleteIntent.ts";
+import Migration0143 from "../persistence/Migrations/143_RemoteDispatchHostOutage.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -68,6 +69,7 @@ export const fixture = Effect.gen(function* () {
   yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
   for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
   yield* Migration0137;
+  yield* Migration0143;
   const calls = yield* Queue.unbounded<{
     call: Ssh.SshHostToolCall;
     ceiling: RuntimeMode;
@@ -89,6 +91,7 @@ export const fixture = Effect.gen(function* () {
   const recordedTasks: OrchestrationV2Subagent[] = [];
   const unavailableProjections = new Set<ThreadId>();
   const refusedTasks = new Set<NodeId>();
+  const refusedCommandTypes = new Set<OrchestrationV2ServerCommand["type"]>();
   const notifications = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
   const launchEntered = yield* Queue.unbounded<void>();
   const launchRelease = yield* Queue.unbounded<void>();
@@ -96,6 +99,7 @@ export const fixture = Effect.gen(function* () {
   const launches: Ssh.SshLaunchInput[] = [];
   const rearms: Array<Parameters<LaunchWatchService.LaunchWatchServiceShape["rearm"]>[0]> = [];
   let launchError: Ssh.SshRemoteDispatchError | undefined;
+  let launchAttempts = 0;
   const statements: string[] = [];
   let supported = true;
   let empty = false;
@@ -160,6 +164,7 @@ export const fixture = Effect.gen(function* () {
       connectedHosts: Effect.succeed(["box"]),
       launchThread: (input, check) =>
         Effect.gen(function* () {
+          launchAttempts += 1;
           if (pauseRegistration) {
             yield* Queue.offer(launchEntered, undefined);
             yield* Queue.take(launchRelease);
@@ -176,6 +181,8 @@ export const fixture = Effect.gen(function* () {
               reason: "remote_refused",
               message:
                 "The remote goat_thread_launch refused: goat_thread_launch does not take report, so nothing ran. It takes projectId, title, message, workspace, runtimeMode.",
+              remoteCode: "invalid_request",
+              undeclaredArguments: ["report"],
             });
           return {
             host: "box",
@@ -223,6 +230,7 @@ export const fixture = Effect.gen(function* () {
           attemptedCommands.push(command);
           if (
             deliveryFails ||
+            refusedCommandTypes.has(command.type) ||
             (command.type === "delegated_task.remote.result" && refusedTasks.has(command.taskId))
           ) {
             yield* Queue.offer(failedDeliveries, undefined);
@@ -268,9 +276,11 @@ export const fixture = Effect.gen(function* () {
   return {
     sql,
     statements,
+    receipts,
     launchError: (value: Ssh.SshRemoteDispatchError) => {
       launchError = value;
     },
+    launchAttempts: () => launchAttempts,
     lost,
     deleteKept,
     attemptedCommands,
@@ -278,6 +288,7 @@ export const fixture = Effect.gen(function* () {
     recordedTasks,
     unavailableProjections,
     refusedTasks,
+    refusedCommandTypes,
     layer,
     launch,
     calls,

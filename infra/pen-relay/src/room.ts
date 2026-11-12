@@ -13,7 +13,17 @@ import {
   readClose,
   relayOrigin,
 } from "@goat/pen-protocol/wire";
-import { type Env, readLimits, type RelayLimits } from "./limits.ts";
+import { type Env, readLimits, type RelayLimits, tracksTraffic } from "./limits.ts";
+import {
+  addCounts,
+  type Counts,
+  flushTotals,
+  isEmpty,
+  NO_COUNTS,
+  sqlTotalsStore,
+  type TotalsStore,
+  writableAt,
+} from "./traffic.ts";
 
 // Everything a socket needs lives in its attachment, so a hibernated Room wakes with it intact.
 interface SocketState {
@@ -36,6 +46,8 @@ interface UplinkState extends SocketState {
   readonly origin: string;
   authed: boolean;
   challenge: string;
+  /** Session counts the totals row does not hold yet (it is written at most once a minute). */
+  carry?: Counts;
 }
 
 interface ClientState extends SocketState {
@@ -47,6 +59,15 @@ interface ClientState extends SocketState {
   upEnd: number;
   /** This session's unacked DATA on the uplink; may overcount, never undercounts. */
   upUnacked: number;
+  /**
+   * The node id, when it was listed at admission: payload bytes relayed toward the node and from
+   * it, and how much of them the totals hold. The list is checked again before anything is written.
+   */
+  track?: string;
+  toNode?: number;
+  fromNode?: number;
+  countedTo?: number;
+  countedFrom?: number;
 }
 
 type State = UplinkState | ClientState;
@@ -88,12 +109,27 @@ function sendableCode(code: number): number {
   return code === 1000 || (code >= 3000 && code <= 4999) ? code : 1000;
 }
 
+/** The session's bytes the totals do not hold yet, now counted. */
+function takeUncounted(state: ClientState): Counts {
+  const toNode = (state.toNode ?? 0) - (state.countedTo ?? 0);
+  const fromNode = (state.fromNode ?? 0) - (state.countedFrom ?? 0);
+  state.countedTo = state.toNode ?? 0;
+  state.countedFrom = state.fromNode ?? 0;
+  return { ...NO_COUNTS, toNode, fromNode };
+}
+
 export class Room extends DurableObject<Env> {
   private readonly limits: RelayLimits;
+  private readonly totals: TotalsStore;
+  /** Counts not written yet while no authenticated uplink carries them (lost if the Room is evicted). */
+  private unsaved: Counts = NO_COUNTS;
+  /** The node id unsaved belongs to, kept with it in memory. */
+  private unsavedNode: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.limits = readLimits(env);
+    this.totals = sqlTotalsStore(ctx.storage.sql);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
@@ -145,6 +181,9 @@ export class Room extends DurableObject<Env> {
       pending: true,
       upEnd: 0,
       upUnacked: 0,
+      ...(tracksTraffic(this.env, nodeId)
+        ? { track: nodeId, toNode: 0, fromNode: 0, countedTo: 0, countedFrom: 0 }
+        : {}),
     };
     save(server, state);
     const pending = this.clients()
@@ -201,6 +240,7 @@ export class Room extends DurableObject<Env> {
         this.fail(ws, state, CloseCode.Timeout);
       }
     }
+    this.writeTotalsIfDue(now);
     let next = Number.POSITIVE_INFINITY;
     for (const ws of this.ctx.getWebSockets()) {
       const state = read(ws);
@@ -211,6 +251,7 @@ export class Room extends DurableObject<Env> {
         state.deadline || Number.POSITIVE_INFINITY,
       );
     }
+    if (this.hasUnwritten()) next = Math.min(next, this.nextWrite());
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
   }
 
@@ -282,6 +323,9 @@ export class Room extends DurableObject<Env> {
       state.authed = true;
       state.deadline = 0;
       state.challenge = "";
+      // Counts a replaced or lost uplink carried move to this one, which survives hibernation.
+      state.carry = addCounts(state.carry ?? NO_COUNTS, this.unsaved);
+      this.unsaved = NO_COUNTS;
       save(ws, state);
     });
   }
@@ -320,7 +364,7 @@ export class Room extends DurableObject<Env> {
     const code = frame?.type === FrameType.Close ? readClose(frame.payload) : null;
     if (frame === null || code === null) return this.dropUplink(ws, state, CloseCode.Protocol);
     const session = this.session(frame.sid);
-    if (session) closeSocket(session[0], session[1], sendableCode(code));
+    if (session) this.closeClient(session[0], session[1], sendableCode(code));
   }
 
   private toClient([ws, state]: Entry<ClientState>, payload: Uint8Array): void {
@@ -334,13 +378,16 @@ export class Room extends DurableObject<Env> {
       return this.endSession(ws, state, CloseCode.Timeout);
     }
     ws.send(payload);
+    const fresh = state.track !== undefined && payload.length > 0 && !this.uncounted(state);
     state.sent += payload.length;
+    if (state.track) state.fromNode = (state.fromNode ?? 0) + payload.length;
     save(ws, state);
+    if (fresh) this.armTotals();
   }
 
   private onClientData([ws, state]: Entry<ClientState>, payload: Uint8Array): void {
     const uplink = this.uplink();
-    if (!uplink) return closeSocket(ws, state, CloseCode.Offline);
+    if (!uplink) return this.closeClient(ws, state, CloseCode.Offline);
     const [up, upState] = uplink;
     const frame = encodeFrame(FrameType.Data, state.sid, payload);
     if (upState.acked >= state.upEnd) state.upUnacked = 0;
@@ -357,7 +404,10 @@ export class Room extends DurableObject<Env> {
     save(up, upState);
     state.upEnd = upState.sent;
     state.upUnacked = mine;
+    const fresh = state.track !== undefined && payload.length > 0 && !this.uncounted(state);
+    if (state.track) state.toNode = (state.toNode ?? 0) + payload.length;
     save(ws, state);
+    if (fresh) this.armTotals();
   }
 
   /** OPEN and CLOSE may use RELAY_HEADROOM past the window; an uplink that leaves even that unacked is dropped. */
@@ -372,7 +422,7 @@ export class Room extends DurableObject<Env> {
 
   /** The relay ends a session: the client closes with code and the node hears CLOSE with it. */
   private endSession(ws: WebSocket, state: ClientState, code: number): void {
-    closeSocket(ws, state, code);
+    this.closeClient(ws, state, code);
     const uplink = this.uplink();
     if (uplink)
       this.sendRelayFrame(uplink, encodeFrame(FrameType.Close, state.sid, closePayload(code)));
@@ -380,10 +430,13 @@ export class Room extends DurableObject<Env> {
 
   private dropUplink(ws: WebSocket, state: UplinkState, code: number): void {
     const wasCurrent = state.authed;
+    if (!isEmpty(state.carry ?? NO_COUNTS)) this.unsavedNode = state.nodeId;
+    this.unsaved = addCounts(this.unsaved, state.carry ?? NO_COUNTS);
+    state.carry = NO_COUNTS;
     closeSocket(ws, state, code);
     if (!wasCurrent) return;
     for (const [client, clientState] of this.clients())
-      closeSocket(client, clientState, CloseCode.Offline);
+      this.closeClient(client, clientState, CloseCode.Offline);
   }
 
   private fail(ws: WebSocket, state: State, code: number): void {
@@ -395,10 +448,117 @@ export class Room extends DurableObject<Env> {
     const state: State | null = ws.deserializeAttachment();
     if (!state || state.closed) return;
     if (state.role === "node") return this.dropUplink(ws, state, CloseCode.Offline);
-    closeSocket(ws, state, sendableCode(code));
+    this.closeClient(ws, state, sendableCode(code));
     const uplink = this.uplink();
     const forwarded = code >= 1000 && code <= 4999 ? code : 1000;
     if (uplink)
       this.sendRelayFrame(uplink, encodeFrame(FrameType.Close, state.sid, closePayload(forwarded)));
+  }
+
+  /** Closes a client socket and adds its session to the totals. */
+  private closeClient(ws: WebSocket, state: ClientState, code: number): void {
+    const ending = !state.closed;
+    const bytes = takeUncounted(state);
+    closeSocket(ws, state, code);
+    if (!ending || !state.track) return;
+    if (!tracksTraffic(this.env, state.track)) return this.discardTotals();
+    this.unsavedNode = state.track;
+    const answered = state.pending ? 0 : 1;
+    this.keepTotals(
+      addCounts(this.unwritten(), { ...bytes, sessions: answered, unanswered: 1 - answered }),
+      Date.now(),
+    );
+  }
+
+  /** What the uplink and the Room carry for the totals row, now taken from them. */
+  private unwritten(): Counts {
+    const uplink = this.uplink();
+    const carried = addCounts(this.unsaved, uplink?.[1].carry ?? NO_COUNTS);
+    this.unsaved = NO_COUNTS;
+    if (uplink && !isEmpty(uplink[1].carry ?? NO_COUNTS)) {
+      uplink[1].carry = NO_COUNTS;
+      save(uplink[0], uplink[1]);
+    }
+    return carried;
+  }
+
+  /**
+   * Writes pending to the totals row when a minute has passed since the last write, else carries
+   * it on the authenticated uplink's attachment, which survives hibernation.
+   */
+  private keepTotals(pending: Counts, now: number): void {
+    const left = flushTotals(this.totals, pending, now, this.limits.totalsEveryMs);
+    if (isEmpty(left)) return;
+    const uplink = this.uplink();
+    if (uplink) {
+      uplink[1].carry = left;
+      save(uplink[0], uplink[1]);
+    } else {
+      this.unsaved = left;
+    }
+    this.ctx.waitUntil(this.armAlarm(this.nextWrite()));
+  }
+
+  /** On an alarm: once the minute has passed, writes what open sessions relayed and what is carried. */
+  private writeTotalsIfDue(now: number): void {
+    if (!this.hasUnwritten() || now < this.nextWrite()) return;
+    if (!this.stillListed()) return this.discardTotals();
+    let pending = this.unwritten();
+    for (const [ws, state] of this.clients()) {
+      pending = addCounts(pending, takeUncounted(state));
+      save(ws, state);
+    }
+    this.keepTotals(pending, now);
+  }
+
+  /**
+   * Whether this Room's node is still in the list this version runs with. Counts can outlive a
+   * list change (in socket attachments, or on an object still running its previous version), so
+   * every write checks again.
+   */
+  private stillListed(): boolean {
+    const node =
+      this.uplink()?.[1].nodeId ??
+      this.clients().find(([, s]) => s.track)?.[1].track ??
+      this.unsavedNode;
+    return node !== undefined && tracksTraffic(this.env, node);
+  }
+
+  /** Drops every count not written yet, and stops counting open sessions: the node is no longer listed. */
+  private discardTotals(): void {
+    this.unsaved = NO_COUNTS;
+    const uplink = this.uplink();
+    if (uplink && !isEmpty(uplink[1].carry ?? NO_COUNTS)) {
+      uplink[1].carry = NO_COUNTS;
+      save(uplink[0], uplink[1]);
+    }
+    for (const [ws, state] of this.clients()) {
+      if (state.track === undefined) continue;
+      delete state.track;
+      state.countedTo = state.toNode ?? 0;
+      state.countedFrom = state.fromNode ?? 0;
+      save(ws, state);
+    }
+  }
+
+  private hasUnwritten(): boolean {
+    if (!isEmpty(this.unsaved) || !isEmpty(this.uplink()?.[1].carry ?? NO_COUNTS)) return true;
+    return this.clients().some(([, state]) => state.track !== undefined && this.uncounted(state));
+  }
+
+  private uncounted(state: ClientState): boolean {
+    return (
+      (state.toNode ?? 0) !== (state.countedTo ?? 0) ||
+      (state.fromNode ?? 0) !== (state.countedFrom ?? 0)
+    );
+  }
+
+  /** An open session has bytes the totals lack: wake when the next write is allowed. */
+  private armTotals(): void {
+    this.ctx.waitUntil(this.armAlarm(this.nextWrite()));
+  }
+
+  private nextWrite(): number {
+    return writableAt(this.totals.read(), this.limits.totalsEveryMs);
   }
 }

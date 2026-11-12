@@ -5,6 +5,7 @@ import {
   SLACK_MAX_MESSAGES,
   SLACK_TEXT_LIMIT,
   SLACK_TRUNCATED_NOTE,
+  slackOutboundPosts,
   stripBotMention,
   toSlackMrkdwn,
 } from "./slackMessageFormatting.ts";
@@ -142,5 +143,33 @@ describe("tables in Slack replies", () => {
   it("leaves a table inside a code block as it is", () => {
     const text = "```\n| a | b |\n| - | - |\n| 1 | 2 |\n```";
     expect(formatSlackOutboundMessages({ text })).toEqual([text]);
+  });
+});
+
+describe("slackOutboundPosts", () => {
+  // Slack shows a post's sections, not its text, and keeps every button: a section cut in the
+  // middle of "&amp;" or a link would change what the person reads beside the choices.
+  it("shows a post with buttons whole, in one section, with no entity split", () => {
+    const posts = slackOutboundPosts({
+      text: "x".repeat(2999) + "&" + "y".repeat(400),
+      options: ["Deny A1", "Approve A1"],
+    });
+    const carrying = posts.filter((post) => post.blocks !== undefined);
+    expect(carrying).toHaveLength(1);
+    const sections = (carrying[0]?.blocks ?? []).flatMap((block) =>
+      block.type === "section" ? [block.text.text] : [],
+    );
+    expect(sections).toEqual([carrying[0]?.text]);
+    const shown = posts.map((post) => post.text).join("");
+    expect(shown.replaceAll(/&(amp|lt|gt);/g, "")).not.toContain("&");
+    expect(shown.replaceAll(/\s/g, "")).toBe("x".repeat(2999) + "&amp;" + "y".repeat(400));
+  });
+  it("drops the buttons when the text runs out of room, so none sits beside a cut card", () => {
+    const posts = slackOutboundPosts({
+      text: "x".repeat(30001),
+      options: ["Deny A1", "Approve A1"],
+    });
+    expect(posts.at(-1)?.text).toBe(SLACK_TRUNCATED_NOTE);
+    expect(posts.filter((post) => post.blocks !== undefined)).toHaveLength(0);
   });
 });

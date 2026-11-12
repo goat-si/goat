@@ -312,6 +312,28 @@ describe("fromToolResult", () => {
       message: "Memory storage limit reached: 112.3 MiB of 100.0 MiB used.",
       retryable: false,
     });
+    // A launch refused for a missing CLI ran nothing; the agent installs it, then retries.
+    expect(
+      errorOf(
+        fromToolResult(
+          {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  _tag: "OrchestratorMcpFailure",
+                  code: "provider_unavailable",
+                  classification: "provider_cli_missing",
+                  message: "Codex is not installed on vm-1.",
+                }),
+              },
+            ],
+            isError: true,
+          },
+          write,
+        ),
+      ),
+    ).toMatchObject({ code: "failed_precondition", reason: "provider_cli_missing" });
     expect(
       errorOf(
         fromToolResult(
@@ -421,6 +443,21 @@ describe("settlementOf", () => {
     expect(settlementOf({ status: "ok", value: 1 })).toBe("completed");
     expect(settlementOf(failed("host_pressure"))).toBe("released");
     expect(settlementOf(failed("provider_unavailable"))).toBe("released");
+    // A remote's legacy code does not make a missing CLI look transient.
+    const remote = failed("provider_unavailable", {
+      classification: "provider_cli_missing",
+      remoteCode: "provider_unavailable",
+    });
+    expect(remote).toMatchObject({
+      error: { code: "failed_precondition", reason: "provider_cli_missing", retryable: false },
+    });
+    // Install the CLI, then retry with the same key: the refusal ran nothing.
+    expect(
+      settlementOf(failed("provider_unavailable", { classification: "provider_cli_missing" }), {
+        _tag: "OrchestratorMcpFailure",
+        code: "provider_cli_missing",
+      }),
+    ).toBe("released");
     // A refusal can follow a partial effect, so it is replayed rather than run again.
     expect(settlementOf(failed("capability_denied"))).toBe("completed");
     expect(settlementOf(failed("not_found"))).toBe("completed");

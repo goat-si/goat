@@ -35,11 +35,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
+import { openFailureExplainer } from "../provider/ProviderCliGate.ts";
 import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EventSink from "./EventSink.ts";
@@ -141,7 +141,7 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const adapterRegistry = yield* Effect.serviceOption(ProviderAdapters.ProviderAdapterRegistryV2);
     const cloudSources = yield* Effect.serviceOption(CloudSource.CloudTaskSourceService);
-
+    const explainOpenFailure = yield* openFailureExplainer;
     // Build draining callbacks outside startup scope so they cannot retain full thread history.
     const makeRunControls = (input: {
       readonly threadId: ThreadId;
@@ -813,7 +813,7 @@ export const layer: Layer.Layer<
         yield* settleStartFailure({
           signal: "provider-session-open-failure",
           title: "Provider session failed to open",
-          error: sessionResult.failure,
+          error: yield* explainOpenFailure(sessionResult.failure),
         });
         return;
       }

@@ -7,6 +7,13 @@ export const dispatchFacts = (error: SshRemoteDispatch.SshRemoteDispatchError) =
   reason: error.reason,
   ...(error.remoteCode === undefined ? {} : { remoteCode: error.remoteCode }),
   ...(error.launchMayHaveStarted === true ? { mayHaveStarted: true } : {}),
+  // A missing CLI on the destination keeps its classification, and the driver provider.sync installs.
+  ...(error.remoteClassification === "provider_cli_missing"
+    ? {
+        classification: error.remoteClassification,
+        ...(error.remoteDriver === undefined ? {} : { driver: error.remoteDriver }),
+      }
+    : {}),
 });
 
 const isFailureCode = Schema.is(OrchestratorMcpFailureCode);

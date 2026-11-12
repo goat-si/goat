@@ -65,7 +65,6 @@ import {
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2SearchThreadError,
-  OrchestrationV2ThreadLaunchError,
   PersistChatAttachmentsError,
   ProjectListEntriesError,
   ProjectMutationError,
@@ -246,6 +245,7 @@ import {
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
+import { launchErrorFor } from "./orchestration-v2/launchErrors.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import {
   buildBoundedThreadStreamSnapshot,
@@ -2242,41 +2242,12 @@ export const layerWsRpc = (
                   projection: projectThreadProjectionForWire(result.projection),
                 })),
                 Effect.catchTags({
-                  AttachmentClaimError: (cause) =>
-                    new OrchestrationV2ThreadLaunchError({
-                      commandId: input.commandId,
-                      projectId: input.projectId,
-                      message: cause.message,
-                      cause,
-                    }),
-                  ThreadLaunchError: (cause) =>
-                    new OrchestrationV2ThreadLaunchError({
-                      commandId: input.commandId,
-                      projectId: input.projectId,
-                      message: "Failed to launch thread",
-                      cause,
-                    }),
-                  ThreadLaunchWorkspaceMissingError: (cause) =>
-                    new OrchestrationV2ThreadLaunchError({
-                      commandId: input.commandId,
-                      projectId: input.projectId,
-                      message: cause.message,
-                      cause,
-                    }),
-                  ServerRuntimeStartupError: (cause) =>
-                    new OrchestrationV2ThreadLaunchError({
-                      commandId: input.commandId,
-                      projectId: input.projectId,
-                      message: "Failed to launch thread",
-                      cause,
-                    }),
-                  ThreadManagementProviderInstanceDisabledError: (cause) =>
-                    new OrchestrationV2ThreadLaunchError({
-                      commandId: input.commandId,
-                      projectId: input.projectId,
-                      message: cause.message,
-                      cause,
-                    }),
+                  AttachmentClaimError: launchErrorFor(input),
+                  ThreadLaunchError: launchErrorFor(input, "Failed to launch thread"),
+                  ThreadLaunchWorkspaceMissingError: launchErrorFor(input),
+                  ServerRuntimeStartupError: launchErrorFor(input, "Failed to launch thread"),
+                  ThreadManagementProviderInstanceDisabledError: launchErrorFor(input),
+                  ProviderCliMissingError: launchErrorFor(input),
                 }),
               ),
             ),
@@ -2337,7 +2308,6 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(handoffs.answerSecret(input, currentSessionId)),
           ),
-        [WS_METHODS.remoteLaunchesList]: (input) => remoteLaunchCatalog.list(input),
         [WS_METHODS.cloudMachinesList]: () => cloudMachines.list(),
         [WS_METHODS.cloudAgentsListRuns]: (input) =>
           CloudAgentService.listCloudRuns(input).pipe(
@@ -3586,6 +3556,7 @@ export const layerWsRpc = (
         ServerWsChannelRpcGroup.toLayer(channelHandlers),
         ServerWsNotesRpcGroup.toLayer(noteHandlers),
         makeGlobalSkillsRpcLayer(config.globalSkillsDir, serverSettings, providerRegistry),
+        RemoteLaunchCatalog.makeRpcLayer(remoteLaunchCatalog),
         ServerWsBrowserClaimsRpcGroup.toLayer(browserClaimsHandlers),
       );
     }),

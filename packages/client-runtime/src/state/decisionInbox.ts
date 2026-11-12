@@ -40,6 +40,13 @@ export type DecisionItem = {
 
 const PERSON: DecisionRouting = { routedTo: "person" };
 
+/** What the inbox says about approvals open beyond the ones its capped feed lists. */
+export function unlistedApprovalsNotice(count: number) {
+  return count === 1
+    ? "1 older approval is not listed here. It is docked in its thread, which the thread list shows as waiting for you."
+    : `${count} older approvals are not listed here. Each is docked in its thread, which the thread list shows as waiting for you.`;
+}
+
 /**
  * The reason sent with a person's answer. The server requires one: a projected request passes it
  * to its asking thread's response, a durable decision drops it. A blank reason names the choice.
@@ -105,6 +112,7 @@ export function isDecisionItemRemoved(
     readonly items: ReadonlyArray<DecisionItem>;
     readonly authoritativeRefs: ReadonlyArray<ScopedThreadRef>;
     readonly feedEnvironments?: ReadonlyArray<EnvironmentId>;
+    readonly catalogEnvironments?: ReadonlyArray<EnvironmentId>;
   },
   id: string,
 ): boolean {
@@ -112,7 +120,11 @@ export function isDecisionItemRemoved(
   // Pending ids are [environmentId, threadId, requestId]; feed-owned ones [kind, environmentId, id].
   const [first, second] = JSON.parse(id) as [string, string, string];
   if (first === "decision" || first === "handoff")
-    return (snapshot.feedEnvironments ?? []).some((environmentId) => environmentId === second);
+    return (
+      (snapshot.feedEnvironments ?? []).some((environmentId) => environmentId === second) ||
+      (snapshot.catalogEnvironments !== undefined &&
+        !snapshot.catalogEnvironments.some((environmentId) => environmentId === second))
+    );
   return snapshot.authoritativeRefs.some(
     (ref) => ref.environmentId === first && ref.threadId === second,
   );
@@ -120,19 +132,24 @@ export function isDecisionItemRemoved(
 
 /**
  * Whether an item cannot be answered yet but has not gone: a feed-owned item (durable decision or
- * approval handoff) while its environment's feed is away, a thread request while its thread loads
- * or fails to.
+ * approval handoff) while its still-enabled environment's feed is away, a thread request while its
+ * thread loads or fails to. An environment removed or disabled has taken its items with it.
  */
 export function isDecisionItemWaiting(
   snapshot: {
     readonly feedEnvironments: ReadonlyArray<EnvironmentId>;
+    readonly catalogEnvironments?: ReadonlyArray<EnvironmentId>;
     readonly loadingRefs: ReadonlyArray<ScopedThreadRef>;
     readonly errors: ReadonlyArray<{ readonly ref: ScopedThreadRef }>;
   },
   item: DecisionItem,
 ): boolean {
   if (item.kind === "decision" || item.kind === "handoff")
-    return !snapshot.feedEnvironments.includes(item.ref.environmentId);
+    return (
+      !snapshot.feedEnvironments.includes(item.ref.environmentId) &&
+      (snapshot.catalogEnvironments === undefined ||
+        snapshot.catalogEnvironments.includes(item.ref.environmentId))
+    );
   return (
     snapshot.loadingRefs.some((ref) => threadRefsEqual([ref], [item.ref])) ||
     snapshot.errors.some(({ ref }) => threadRefsEqual([ref], [item.ref]))
@@ -220,6 +237,7 @@ export function createDecisionInboxAtoms(input: {
 
   // The last approval list each enabled environment's feed gave. A disconnected environment keeps
   // its list, so an approval stays listed (and cannot be answered) until a loaded feed drops it.
+  // A loaded feed that cannot list approvals (an older server) confirms none, so it forgets them.
   type Known = { readonly handoffs: ReadonlyArray<DecisionHandoff>; readonly open: number };
   let knownHandoffs: ReadonlyMap<EnvironmentId, Known> = new Map();
   const knownHandoffsAtom = Atom.make((get) => {
@@ -231,9 +249,11 @@ export function createDecisionInboxAtoms(input: {
         input.feedAtom !== undefined && connected.includes(id) ? get(input.feedAtom(id)) : null;
       // A feed that sends only the newest approvals says how many are open in all.
       const known: Known | undefined =
-        feed?.handoffs === undefined
+        feed === null
           ? knownHandoffs.get(id)
-          : { handoffs: feed.handoffs, open: feed.handoffsTotal ?? feed.handoffs.length };
+          : feed.handoffs === undefined
+            ? undefined
+            : { handoffs: feed.handoffs, open: feed.handoffsTotal ?? feed.handoffs.length };
       if (known !== undefined && known.open > 0) next.set(id, known);
     }
     knownHandoffs = next;
@@ -254,8 +274,11 @@ export function createDecisionInboxAtoms(input: {
       )
         continue;
       const ref = { environmentId: thread.environmentId, threadId: thread.id };
-      if (!unique.has(threadKey(ref)))
-        flagged.set(thread.environmentId, [...(flagged.get(thread.environmentId) ?? []), ref]);
+      if (!unique.has(threadKey(ref))) {
+        const refs = flagged.get(thread.environmentId);
+        if (refs === undefined) flagged.set(thread.environmentId, [ref]);
+        else refs.push(ref);
+      }
       if (!thread.hasPendingUserInput) approvalOnly.add(threadKey(ref));
       unique.set(threadKey(ref), ref);
     }
@@ -312,6 +335,10 @@ export function createDecisionInboxAtoms(input: {
     const loadingRefs: ScopedThreadRef[] = [];
     const errors: { readonly ref: ScopedThreadRef; readonly message: string }[] = [];
     const feedEnvironments: EnvironmentId[] = [];
+    const catalogEnvironments: EnvironmentId[] = [];
+    for (const [id, entry] of get(input.catalogValueAtom).entries) {
+      if (entry.enabled) catalogEnvironments.push(id);
+    }
     const pendingRouting = new Map<string, DecisionRouting>();
     for (const environmentId of get(connectedAtom)) {
       const feed = input.feedAtom === undefined ? null : get(input.feedAtom(environmentId));
@@ -337,7 +364,10 @@ export function createDecisionInboxAtoms(input: {
         });
       }
     }
+    // Approvals open beyond what the capped feeds list; each stays docked in its own thread.
+    let unlistedApprovals = 0;
     for (const [environmentId, known] of get(knownHandoffsAtom)) {
+      unlistedApprovals += Math.max(known.open - known.handoffs.length, 0);
       for (const entry of known.handoffs) {
         items.push({
           id: handoffKey(environmentId, entry.handoff.handoffId),
@@ -385,6 +415,8 @@ export function createDecisionInboxAtoms(input: {
       items: orderDecisionQueue(items, []),
       authoritativeRefs,
       feedEnvironments,
+      catalogEnvironments,
+      unlistedApprovals,
       loadingRefs,
       errors,
       isLoading: loadingRefs.length > 0,
@@ -393,8 +425,9 @@ export function createDecisionInboxAtoms(input: {
 
   /**
    * A thread's open approval handoffs for its composer. Reading it keeps the environment's feed
-   * subscribed, which lists every one. Only a loaded feed that cannot list them (an older server)
-   * falls back to the thread's loaded items, since reading those loads the thread.
+   * subscribed. A loaded feed that cannot list them all (an older server, or more open than it
+   * sends) falls back to the thread's loaded items, which keep every waiting approval; reading
+   * those loads the thread.
    */
   const openApprovalsAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
@@ -408,12 +441,21 @@ export function createDecisionInboxAtoms(input: {
           entry.handoff.requestedBy.threadId === ref.threadId ? [entry.handoff] : [],
         );
       // While the feed is away, the last list it gave stays docked; feedAwayAtom disables it.
-      const next =
-        feed === null
-          ? forThread(known.get(ref.environmentId)?.handoffs ?? [])
-          : feed.handoffs === undefined
-            ? get(input.details.pendingHandoffsAtom(ref))
-            : forThread(feed.handoffs);
+      let next: ReadonlyArray<Handoff>;
+      // A cached or failed thread detail can still hold an approval answered elsewhere.
+      const liveLoaded = () =>
+        get(input.details.statusAtom(ref)) === "live" && get(input.details.errorAtom(ref)) === null
+          ? get(input.details.pendingHandoffsAtom(ref))
+          : [];
+      if (feed === null) next = forThread(known.get(ref.environmentId)?.handoffs ?? []);
+      else if (feed.handoffs === undefined) next = liveLoaded();
+      else if ((feed.handoffsTotal ?? feed.handoffs.length) > feed.handoffs.length) {
+        // Capped: the thread's loaded approvals plus the feed's, since a server without snapshot
+        // retention can leave a listed one outside the loaded history.
+        const loaded = liveLoaded();
+        const ids = new Set(loaded.map((handoff) => handoff.handoffId));
+        next = [...loaded, ...forThread(feed.handoffs).filter((h) => !ids.has(h.handoffId))];
+      } else next = forThread(feed.handoffs);
       if (!sameHandoffs(value, next)) value = next;
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`decision-inbox-open-approvals:${key}`));

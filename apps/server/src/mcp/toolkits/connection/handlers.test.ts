@@ -4,6 +4,7 @@ import * as Sessions from "../../../auth/SessionStore.ts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  OrchestratorMcpFailure,
   HubNodesError,
   ProviderInstanceId,
   SSH_PREFLIGHT_STEP_ORDER,
@@ -20,6 +21,7 @@ import * as Schema from "effect/Schema";
 
 import * as Broker from "../../../connections/ConnectionCatalogBroker.ts";
 import * as HubNodes from "../../../hubNodes/HubNodes.ts";
+import * as HostStatus from "../../HostStatusMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { liveThreadsLayer } from "../../McpToolAccess.testkit.ts";
@@ -95,8 +97,14 @@ const testLayer = (
   hub: Partial<HubNodes.HubNodes["Service"]> = {},
   broker: Partial<Broker.ConnectionCatalogBroker["Service"]> = {},
   setup: Partial<Setup.SshHostSetup["Service"]> = {},
+  hostStatus?: HostStatus.HostStatusMcpServiceShape["read"],
 ) =>
   McpToolAccess.HandlersLayer.layer(Handlers.layer).pipe(
+    Layer.provideMerge(
+      hostStatus === undefined
+        ? Layer.empty
+        : Layer.mock(HostStatus.HostStatusMcpService)({ read: hostStatus }),
+    ),
     Layer.provideMerge(Layer.succeed(McpInvocationContext.McpInvocationContext, caller)),
     Layer.provideMerge(
       SshDeviceAdd.layer.pipe(
@@ -598,3 +606,77 @@ it("rejects labels beyond the hub contract before saving", () => {
     "build-host",
   );
 });
+
+const statusWith = (providers: ReadonlyArray<Record<string, unknown>>) => () =>
+  Effect.succeed({
+    hosts: [{ host: "build-host", reachability: "ok", metrics: { providers } }],
+  } as never);
+const enabled = (driver: string, cli?: string) => ({
+  instanceId: driver,
+  driver,
+  displayName: driver === "codex" ? "Codex" : "Claude",
+  enabled: true,
+  ...(cli === undefined ? {} : { cli }),
+});
+
+it.effect.each([
+  {
+    name: "a missing CLI once every CLI was checked",
+    read: statusWith([enabled("codex", "missing"), enabled("claudeAgent", "present")]),
+    providerClis: { complete: true, missing: [{ driver: "codex", displayName: "Codex" }] },
+  },
+  {
+    name: "a CLI driver that gave no answer as not yet known",
+    read: statusWith([enabled("codex"), enabled("claudeAgent", "present")]),
+    providerClis: { complete: false, missing: [] },
+  },
+  {
+    name: "an unchecked CLI as not yet known",
+    read: statusWith([enabled("codex", "unknown")]),
+    providerClis: { complete: false, missing: [] },
+  },
+  {
+    name: "an older host that does not report CLIs as not yet known",
+    read: statusWith([enabled("codex")]),
+    providerClis: { complete: false, missing: [] },
+  },
+  {
+    name: "a status read that reached only last known CLIs as not yet known",
+    read: () =>
+      Effect.succeed({
+        hosts: [
+          {
+            host: "build-host",
+            reachability: "unreachable",
+            lastKnown: true,
+            metrics: {
+              providers: [enabled("codex", "missing"), enabled("claudeAgent", "present")],
+            },
+          },
+        ],
+      } as never),
+    providerClis: { complete: false, missing: [] },
+  },
+  {
+    name: "a status read that fails as not yet known",
+    read: () => Effect.fail(new OrchestratorMcpFailure({ code: "host_unavailable", message: "x" })),
+    providerClis: { complete: false, missing: [] },
+  },
+])("a connected device reports $name, and stays connected", ({ read, providerClis }) =>
+  call("goat_connection_add_ssh", { host: "build-host", label: "Build" }).pipe(
+    Effect.tap((result) =>
+      Effect.sync(() =>
+        expect(result).toMatchObject({ outcome: "connected", hub: { saved: true }, providerClis }),
+      ),
+    ),
+    Effect.provide(
+      testLayer(
+        undefined,
+        { add: (_input, options) => options.beforeSave.pipe(Effect.as({ created: true, node })) },
+        {},
+        {},
+        read,
+      ),
+    ),
+  ),
+);

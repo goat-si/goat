@@ -185,3 +185,47 @@ it.each([false, true])(
     expect(bounded.hasMoreHistory).toBe(false);
   },
 );
+it("retains a waiting approval handoff outside the window and drops an answered one", () => {
+  const handoff = (id: string, state: "pending" | "completed") => {
+    const row = makeRow(0);
+    return {
+      ...row.item,
+      id: TurnItemId.make(id),
+      type: "human_handoff",
+      status: state === "pending" ? "waiting" : "completed",
+      handoff: {
+        handoffId: TurnItemId.make(id),
+        kind: "approval",
+        title: `Approve ${id}`,
+        reason: "Needed",
+        requestedBy: { threadId: THREAD, providerInstanceId: null, path: "hub.device_join" },
+        target: { environmentId: "env", path: "hub.device_join" },
+        dedupeKey: id,
+        state,
+        expiresAt: null,
+        createdAt: NOW,
+        actor: { type: "agent", threadId: THREAD },
+      },
+    } as unknown as OrchestrationV2TurnItem;
+  };
+  const waiting = handoff("handoff-waiting", "pending");
+  const answered = handoff("handoff-answered", "completed");
+  const rows = [
+    { ...makeRow(0), sourceItemId: waiting.id, item: waiting },
+    { ...makeRow(1), sourceItemId: answered.id, item: answered },
+    makeRow(2),
+    makeRow(3),
+  ] as OrchestrationV2ProjectedTurnItem[];
+  const bounded = buildBoundedThreadProjection({
+    projection: { ...makeProjection(rows), runs: [], attempts: [], runtimeRequests: [] },
+    snapshotSequence: 1,
+    policy: { maxItems: 1, maxEncodedBytes: 10_000_000 },
+  });
+  expect(bounded.projection.visibleTurnItems.map((entry) => entry.sourceItemId)).toEqual([
+    "item-3",
+  ]);
+  expect(bounded.projection.turnItems.map((item) => item.id)).toEqual([
+    "item-3",
+    "handoff-waiting",
+  ]);
+});

@@ -43,6 +43,14 @@ export const CHANNEL_COPY = {
   approvalNotAllowed:
     "I can't pass that on: answering this approval needs the same access as the person who asked for the work, GOAT memory included.",
   approvalAlreadyAnswered: "That approval was already answered.",
+  approvalNotByNumber:
+    "While an approval is waiting, a number doesn't answer anything. Reply with the words below, or with a question's choice.",
+  approvalNeedsCode: "Which approval? Reply with its code, so I answer the one you mean.",
+  approvalDetailUnreadable:
+    "I can't show what it asks here, so open its thread in GOAT to answer it.",
+  approvalDetailNotShown:
+    "I can't show what this asks here. Check its thread in GOAT before answering.",
+  approvalsMoreWaiting: " more waiting. They show here once these are answered, or open GOAT.",
   approvalFailed:
     "I couldn't pass that approval on. Open the work's thread in GOAT to answer it there.",
   approvalRemoteRefused:

@@ -32,6 +32,11 @@ import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./provider
 import { ServerSettings } from "./settings.ts";
 import { AutomationHold } from "./automationHold.ts";
 import { serverCapabilityFields } from "./serverCapabilityFields.ts";
+import {
+  ServerProviderAuthStatus,
+  ServerProviderState,
+  serverProviderCliFields,
+} from "./serverProviderState.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -80,16 +85,6 @@ export type ServerWorktreeCheckoutHealth = typeof ServerWorktreeCheckoutHealth.T
 export function defenderExclusionCommand(directory: string): string {
   return `Add-MpPreference -ExclusionPath '${directory.replaceAll("'", "''")}'`;
 }
-
-export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
-export type ServerProviderState = typeof ServerProviderState.Type;
-
-export const ServerProviderAuthStatus = Schema.Literals([
-  "authenticated",
-  "unauthenticated",
-  "unknown",
-]);
-export type ServerProviderAuthStatus = typeof ServerProviderAuthStatus.Type;
 
 export const ServerProviderAuth = Schema.Struct({
   status: ServerProviderAuthStatus,
@@ -285,6 +280,7 @@ export const ServerProvider = Schema.Struct({
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
+  ...serverProviderCliFields,
   codexRoute: Schema.optionalKey(CodexRouteStatus),
   homeRoute: Schema.optionalKey(ProviderHomeRouteStatus),
   availability: Schema.optional(ServerProviderAvailability),

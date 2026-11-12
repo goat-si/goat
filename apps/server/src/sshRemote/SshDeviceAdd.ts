@@ -86,6 +86,16 @@ export const SshDeviceAddResult = Schema.Union([
     created: Schema.Boolean,
     hub: HubRegistration,
     desktopCatalog: Schema.Literals(["saved", "not_attached"]),
+    /**
+     * The provider CLIs GOAT on the device reported missing. complete is false until every CLI
+     * there was checked, including when the device's status could not be read.
+     */
+    providerClis: Schema.optionalKey(
+      Schema.Struct({
+        complete: Schema.Boolean,
+        missing: Schema.Array(Schema.Struct({ driver: Schema.String, displayName: Schema.String })),
+      }),
+    ),
   }),
   Schema.Struct({ ...SshHostResult.members[0].fields, ...unsaved }),
   Schema.Struct({ ...SshHostResult.members[1].fields, ...unsaved }),

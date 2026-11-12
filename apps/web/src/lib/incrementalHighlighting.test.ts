@@ -2,6 +2,7 @@ import { toHtml } from "hast-util-to-html";
 import { disposeHighlighter, getSharedHighlighter } from "@pierre/diffs";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
+import type { DiffThemeName } from "./diffRendering";
 import { createIncrementalHighlightedDocument } from "./incrementalHighlighting";
 
 const samples = {
@@ -18,9 +19,12 @@ const samples = {
   sql: "SELECT 'multi\nline'\nFROM table_name;\n",
 } as const;
 
+// Shiki cannot load the Zed-only goat palettes, so both engines compare on the stock ones.
+const STOCK_DARK = "pierre-dark" as DiffThemeName;
+
 const highlighterOptions = {
   langs: Object.keys(samples) as Array<keyof typeof samples>,
-  themes: ["pierre-dark", "pierre-light"],
+  themes: [STOCK_DARK, "pierre-light"],
 };
 
 describe.each(["shiki-wasm", "highlights"] as const)(
@@ -35,7 +39,7 @@ describe.each(["shiki-wasm", "highlights"] as const)(
           ...highlighterOptions,
           preferredHighlighter: engine,
         });
-        for (const theme of ["pierre-dark", "pierre-light"] as const) {
+        for (const theme of [STOCK_DARK, "pierre-light"] as const) {
           const highlight = createIncrementalHighlightedDocument(highlighter, language, theme);
           for (let end = 0; end <= code.length; end++) {
             const text = code.slice(0, end);
@@ -53,11 +57,7 @@ describe.each(["shiki-wasm", "highlights"] as const)(
         ...highlighterOptions,
         preferredHighlighter: engine,
       });
-      const highlight = createIncrementalHighlightedDocument(
-        highlighter,
-        "typescript",
-        "pierre-dark",
-      );
+      const highlight = createIncrementalHighlightedDocument(highlighter, "typescript", STOCK_DARK);
       const inputs = [
         "/* open\ncomment\n",
         "/* open\ncomment\n*/\nconst x = 1;",
@@ -69,7 +69,7 @@ describe.each(["shiki-wasm", "highlights"] as const)(
       ];
       for (const text of inputs) {
         expect(toHtml(highlight(text))).toBe(
-          highlighter.codeToHtml(text, { lang: "typescript", theme: "pierre-dark" }),
+          highlighter.codeToHtml(text, { lang: "typescript", theme: STOCK_DARK }),
         );
       }
       highlight.dispose();
@@ -82,7 +82,7 @@ describe.each(["shiki-wasm", "highlights"] as const)(
         preferredHighlighter: engine,
       });
       expect(() =>
-        createIncrementalHighlightedDocument(highlighter, "cobol", "pierre-dark").dispose(),
+        createIncrementalHighlightedDocument(highlighter, "cobol", STOCK_DARK).dispose(),
       ).not.toThrow();
     });
 
@@ -91,16 +91,12 @@ describe.each(["shiki-wasm", "highlights"] as const)(
         ...highlighterOptions,
         preferredHighlighter: engine,
       });
-      const highlight = createIncrementalHighlightedDocument(
-        highlighter,
-        "typescript",
-        "pierre-dark",
-      );
+      const highlight = createIncrementalHighlightedDocument(highlighter, "typescript", STOCK_DARK);
       const code = "/* multi\r\nline */\r\nconst x = 1;\r\n";
       for (let end = 0; end <= code.length; end++) {
         const text = code.slice(0, end);
         expect(toHtml(highlight(text))).toBe(
-          highlighter.codeToHtml(text, { lang: "typescript", theme: "pierre-dark" }),
+          highlighter.codeToHtml(text, { lang: "typescript", theme: STOCK_DARK }),
         );
       }
     });

@@ -376,16 +376,29 @@ provider versions and sign-in status on this machine and connected SSH hosts.
 Choose **Sync to other hosts…** for a provider and select your destination
 machines. GOAT uses the vendor's official npm package or installer for each
 operating system, matching this machine's version by default, or installing the
-latest if it is absent here. Cursor's installer always installs the latest.
+latest if it is absent here. Codex installs with OpenAI's installer and needs no
+Node.js. Cursor's installer, and Codex's on Windows, always install the latest.
+Each host reports the installer command it ran and the version it then found.
 Choose **Update runtime** for a host whose GOAT is too old, or **Prepare host**
 if its runtime is stopped, then retry.
+
+Before a thread starts on another machine, GOAT there checks that the provider's
+CLI is installed. If it is missing, the launch is refused before any thread is
+created, with the machine's name and the sync to run. Settings → Hub shows the
+same thing on each machine's row, and machines without that CLI are left out
+when GOAT picks where to run new work. A thread whose CLI disappears later says
+so; install the CLI and retry that thread.
 
 Each host installs and starts its own sign-in. Complete the offered device code
 or vendor sign-in page, or finish in GOAT on that host. If a terminal step is
 needed, run it on the destination: `claude auth login`, `agent login` (Cursor),
 `grok login`, `opencode auth login`, or `pi` followed by `/login`. Codex uses
 `codex login --device-auth`. An agent can request a sync; approve the request in
-its thread before installation starts. Cancelling stops unfinished work; a
+its thread before installation starts. An agent thread running with full access
+can install a CLI without asking, only on machines saved in **Settings →
+Connections** and without signing in; with permission profiles on, its profile
+must also allow remote launches there. Signing in always stays with you.
+Cancelling stops unfinished work; a
 completed installation stays installed.
 
 GOAT never copies credentials between machines. For headless Codex login,
@@ -559,6 +572,19 @@ an agent sends to a thread on another machine shows **Sent by** with the sending
 thread's name; it opens that thread while this app is connected to its machine.
 The name is how the sending machine described itself, so treat it as a label,
 not as proof of who sent it.
+
+When the machine a thread runs on stops answering, the thread leaves Fleet and
+Remote launches shows how long its host has been unreachable. GOAT keeps trying,
+and after a day of trying without an answer it stops following the thread (time
+this machine spends asleep or off does not count), tells the agent
+that started it, and frees the capacity it held; the thread may still be running
+there, and GOAT follows it again if the host answers. **Dismiss** next to such a
+thread stops following it at once, without the host. The agent that started it
+can do the same with `goat_thread_unwatch` and the host once the host has not
+answered for 15 minutes. Forgetting the host
+does not dismiss its threads. Sending to a dismissed thread follows it again.
+A delegated task on such a host fails after that day instead, and stays failed
+if the host answers later.
 
 ### Link a GOAT server for agents without SSH
 

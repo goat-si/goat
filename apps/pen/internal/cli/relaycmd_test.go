@@ -458,3 +458,26 @@ func TestRelayDownloadTakesOnlyAnHTTPSOriginOrALoopbackHTTPOne(t *testing.T) {
 		}
 	}
 }
+
+// The node list is operator input: full node ids, comma-separated (the unit passes an empty one
+// when none is set); anything else is refused, so a typo never silently tracks nothing.
+func TestTrafficNodesTakeFullNodeIDsOnly(t *testing.T) {
+	a, _ := ident.Generate(rand.Reader)
+	b, _ := ident.Generate(rand.Reader)
+	base := []string{"--plain", "--listen", "127.0.0.1:0"}
+	c, err := parseServe(append(base, "--traffic-nodes="+a.NodeID()+", "+b.NodeID()), &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.trafficNodes) != 2 || !c.trafficNodes[a.NodeID()] || !c.trafficNodes[b.NodeID()] {
+		t.Fatalf("traffic nodes %v", c.trafficNodes)
+	}
+	if c, err := parseServe(append(base, "--traffic-nodes="), &bytes.Buffer{}); err != nil || len(c.trafficNodes) != 0 {
+		t.Fatalf("an empty list: %v %v", c.trafficNodes, err)
+	}
+	for _, bad := range []string{a.NodeID()[:8], strings.ToUpper(a.NodeID()), a.NodeID() + ";" + b.NodeID()} {
+		if _, err := parseServe(append(base, "--traffic-nodes="+bad), &bytes.Buffer{}); err == nil {
+			t.Fatalf("accepted --traffic-nodes=%s", bad)
+		}
+	}
+}

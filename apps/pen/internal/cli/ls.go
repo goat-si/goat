@@ -36,7 +36,7 @@ func ago(ms int64) string {
 func printMembers(w io.Writer, ls daemon.LsReply) {
 	printAccount(w, ls)
 	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tNODE\tFINGERPRINT\tPATH\tLAST SEEN\tVIA\tADMITTED BY")
+	fmt.Fprintln(tw, "NAME\tNODE\tFINGERPRINT\tPATH\tLAST SEEN\tVIA\tADMITTED BY\t24H IN/OUT")
 	for _, m := range ls.Members {
 		name, seen := m.Name, ago(m.LastSeen)
 		if m.Self {
@@ -53,12 +53,13 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 		if m.AdmittedBy == "" {
 			by = "(founder)"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\trelay\t%s\t%s\t%s\n", name, short(m.NodeID), m.Fingerprint, seen, via(m.Member), by)
+		fmt.Fprintf(tw, "%s\t%s\t%s\trelay\t%s\t%s\t%s\t%s\n", name, short(m.NodeID), m.Fingerprint, seen, via(m.Member), by, inOut(m.Traffic24h))
 	}
 	for _, m := range ls.Revoked {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t%s\t-\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub), via(m))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t%s\t-\t%s\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub), via(m.Member), inOut(m.Traffic24h))
 	}
 	tw.Flush()
+	printTraffic(w, ls)
 	printNotAMember(w, ls)
 	var bare []string
 	for _, m := range ls.Members {
@@ -74,6 +75,50 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 			fmt.Fprintf(w, "%s joined via Google %s, fingerprint %s (%s)\n", m.Name, safe(m.Email), m.Fingerprint, ago(m.Since))
 		}
 	}
+}
+
+// inOut is a member's 24-hour stream bytes for the table.
+func inOut(t *daemon.MemberTraffic) string {
+	if t == nil {
+		return "-"
+	}
+	return humanBytes(t.In) + " / " + humanBytes(t.Out)
+}
+
+// printTraffic adds each relay's 24-hour total, and when the daemon has counted for less than 24 hours, since when.
+func printTraffic(w io.Writer, ls daemon.LsReply) {
+	for _, r := range ls.Relays24h {
+		url := r.URL
+		if url == "" {
+			url = "other relays"
+		}
+		fmt.Fprintf(w, "relay    %s: %s in, %s out in 24 h\n", safe(url), humanBytes(r.In), humanBytes(r.Out))
+	}
+	if ls.TrafficSince != 0 && time.Since(time.UnixMilli(ls.TrafficSince)) < 23*time.Hour {
+		fmt.Fprintf(w, "traffic  counted since %s, when the daemon started; pen pipe, pen forward and sessions this machine accepted\n",
+			time.UnixMilli(ls.TrafficSince).Format("2006-01-02 15:04"))
+	}
+}
+
+// humanBytes writes n in SI units (1 kB is 1000 bytes) with three significant digits.
+func humanBytes(n uint64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d B", n)
+	}
+	f := float64(n)
+	for _, unit := range []string{"kB", "MB", "GB", "TB", "PB"} {
+		f /= 1000
+		if f < 999.5 || unit == "PB" {
+			switch {
+			case f < 9.995:
+				return fmt.Sprintf("%.2f %s", f, unit)
+			case f < 99.95:
+				return fmt.Sprintf("%.1f %s", f, unit)
+			}
+			return fmt.Sprintf("%.0f %s", f, unit)
+		}
+	}
+	return ""
 }
 
 // announceFor is how long pen ls announces a member admitted for a Google account.
@@ -190,7 +235,7 @@ func RunLs(args []string, stdout, stderr io.Writer) int {
 	}
 	target := ""
 	if *until != "" {
-		all := append(lsMembers(ls), ls.Revoked...)
+		all := append(lsMembers(ls), revokedMembers(ls)...)
 		m, err := Resolve(all, *until)
 		if err != nil {
 			return fail(stderr, err)
@@ -237,6 +282,14 @@ func refNames(rs []daemon.NameRef) string {
 	return strings.Join(out, ", ")
 }
 
+func revokedMembers(ls daemon.LsReply) []mesh.Member {
+	out := make([]mesh.Member, 0, len(ls.Revoked))
+	for _, m := range ls.Revoked {
+		out = append(out, m.Member)
+	}
+	return out
+}
+
 func lsMembers(ls daemon.LsReply) []mesh.Member {
 	out := make([]mesh.Member, 0, len(ls.Members))
 	for _, m := range ls.Members {
@@ -246,7 +299,10 @@ func lsMembers(ls daemon.LsReply) []mesh.Member {
 }
 
 func offlineLs(v *mesh.View, id *ident.Identity) daemon.LsReply {
-	ls := daemon.LsReply{MeshID: v.MeshID, Uplink: "daemon not running", Revoked: v.SortedRevoked(), Account: v.Account, Locked: v.Locked}
+	ls := daemon.LsReply{MeshID: v.MeshID, Uplink: "daemon not running", Revoked: []daemon.LsRevoked{}, Account: v.Account, Locked: v.Locked}
+	for _, m := range v.SortedRevoked() {
+		ls.Revoked = append(ls.Revoked, daemon.LsRevoked{Member: m})
+	}
 	if id != nil {
 		ls.Self = id.NodeID()
 	}

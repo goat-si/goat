@@ -262,6 +262,47 @@ describe("ChannelChildWork reconcile", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
+  it.effect.each([
+    [
+      "a thread GOAT stopped following after a day without contact",
+      "thread",
+      "lost",
+      "host_unreachable",
+      null,
+      "failed",
+    ],
+    ["a dismissed thread", "thread", "cancelled", "dismissed", null, "cancelled"],
+    ["a task whose run failed", "task", "settled", null, "failed", "failed"],
+    ["a task whose run was interrupted", "task", "settled", null, "interrupted", "failed"],
+    ["a task whose run completed", "task", "settled", null, "completed", "completed"],
+  ] as const)(
+    "settles the remote child of %s by its own outcome",
+    ([, kind, state, endReason, runStatus, expected]) =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const sql = yield* SqlClient.SqlClient;
+        const admission = yield* admit("remote work", { surface: "delegate_remote" });
+        if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* Effect.scoped(
+          childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+        );
+        yield* sql`INSERT INTO remote_dispatches
+          (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, task_id, parent_run_id,
+            known_run_status, end_reason, ended_at, created_at, updated_at)
+          VALUES (${correlationId}, ${kind}, ${admission.record.callerThreadId}, 'box', 'read-key', 'wake',
+            ${state}, ${kind === "task" ? "task" : null}, ${kind === "task" ? "parent" : null}, ${runStatus},
+            ${endReason}, ${endReason === null ? null : NOW}, ${NOW}, ${NOW})`;
+        assert.strictEqual(yield* childWork.reconcile, 1);
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        assert.strictEqual(
+          (yield* store.get(taskId, admission.record.childWorkId))?.state,
+          expected,
+        );
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
   it.effect(
     "keeps a remote launch's acknowledged thread when reconcile binds it before the launch does",
     () =>
@@ -414,6 +455,43 @@ describe("ChannelChildWork reconcile", () => {
         assert.strictEqual((yield* store.get(taskId, sent.record.childWorkId))?.state, "launched");
         const next = yield* admit("after release", { surface: "delegate_remote" });
         assert.strictEqual(next._tag, "admitted");
+      }).pipe(Effect.provide(makeLayer())),
+  );
+});
+
+describe("ChannelChildWork reconcile after a host outage or a dismissal", () => {
+  it.effect.each([
+    ["its host was unreachable for a day", "lost", "host_unreachable", "failed"],
+    ["a person dismissed it", "cancelled", "dismissed", "cancelled"],
+  ] as const)(
+    "settles a remote thread launch whose %s by that outcome and keeps its acknowledged thread",
+    ([, state, endReason, expected]) =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const sql = yield* SqlClient.SqlClient;
+        const admission = yield* admit("remote thread", { surface: "ssh_thread_launch" });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* Effect.scoped(
+          childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+        );
+        yield* sql`INSERT INTO remote_dispatches
+          (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state,
+            end_reason, ended_at, created_at, updated_at)
+          VALUES (${correlationId}, 'thread', ${admission.record.callerThreadId}, 'box', 'remote-thread',
+            'read-key', 'wake', ${state}, ${endReason}, ${NOW}, ${NOW}, ${NOW})`;
+        assert.strictEqual(yield* childWork.reconcile, 1);
+        const record = yield* store.get(taskId, admission.record.childWorkId);
+        assert.strictEqual(record?.state, expected);
+        assert.strictEqual(record?.destination?.threadId, "remote-thread");
+        const listed = yield* launchesStatement(sql, {
+          ownerId: admission.record.ownerId,
+          taskId,
+          limit: 21,
+        });
+        assert.lengthOf(listed, 1);
       }).pipe(Effect.provide(makeLayer())),
   );
 });

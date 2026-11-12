@@ -241,6 +241,8 @@ it.layer(layerTest)("CodexDriver", (it) => {
           );
           const snapshot = yield* instance.snapshot.refresh;
           expect(snapshot.installed).toBe(true);
+          // Managed setup runs GOAT's own release, never a codex on PATH.
+          expect(snapshot.cli).toBe("none");
           if (scenario === "ready") {
             expect(snapshot.status).toBe("ready");
             expect(snapshot.message).toBe(executable.startupWarning);

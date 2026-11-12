@@ -1,6 +1,6 @@
 #!/bin/sh
 # Three-node check: A founds, B joins A, C joins via B's invite; every ls lists 3; a pipe from B to an
-# echo port on A returns the same bytes; pen revoke c on A must reach a watch on B within 2 s.
+# echo port on A returns the same bytes, and both ends count them; pen revoke c on A must reach a watch on B within 2 s.
 # Without PEN_RELAY it runs two local "pen relay serve --plain" relays, stops the first one by its
 # PID after the first pipe, and repeats the pipe and the revoke through the second.
 #   apps/pen/scripts/threenode.sh
@@ -89,6 +89,25 @@ pipe_check() {
 	echo "ok: 1 MiB through pen pipe b -> a:$port matches ($took ms$1)"
 }
 pipe_check ""
+
+# The echo pipe moved 1 MiB each way: b's pipe reported it, and a counted the session it accepted.
+traffic_of() {
+	pen "$1" ls --json | python3 -c '
+import json, sys
+t = [m.get("traffic24h") or {} for m in json.load(sys.stdin)["members"] if m["name"] == sys.argv[1]][0]
+print(t.get("in", 0), t.get("out", 0))
+' "$2"
+}
+for pair in "b a" "a b"; do
+	from="${pair% *}"
+	to="${pair#* }"
+	got="$(traffic_of "$from" "$to")"
+	if [ "$got" != "1048576 1048576" ]; then
+		echo "FAIL: $from counts in/out $got for $to, want 1048576 1048576"
+		exit 1
+	fi
+done
+echo "ok: pen ls on b and on a count 1 MiB each way for the pipe"
 
 if [ -n "$r1_pid" ]; then
 	kill "$r1_pid"

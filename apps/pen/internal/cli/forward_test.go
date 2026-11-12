@@ -25,6 +25,10 @@ type forwardFixture struct {
 	connDone chan struct{}
 	stderr   bytes.Buffer
 	stop     func() int
+	// b is the forwarding member's state directory; rs the relay and aNode a's node id.
+	b     *state.Store
+	rs    *relaytest.Server
+	aNode string
 	// cut drops a's uplink, which ends its sessions the way a relay can: with no FIN.
 	cut func()
 }
@@ -69,7 +73,7 @@ func startForward(t *testing.T, svc net.Listener) *forwardFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &forwardFixture{addr: ln.Addr().String(), connDone: make(chan struct{}, 1)}
+	f := &forwardFixture{addr: ln.Addr().String(), connDone: make(chan struct{}, 1), b: b, rs: rs, aNode: aid.NodeID()}
 	f.cut = func() {
 		if !rs.DropUplink(aid.NodeID()) {
 			t.Error("a has no uplink to drop")

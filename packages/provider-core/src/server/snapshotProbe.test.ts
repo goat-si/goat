@@ -310,6 +310,13 @@ describe("parseGenericCliVersion", () => {
   it("parses a v-prefixed version", () => {
     expect(parseGenericCliVersion("opencode v2.0.3")).toBe("2.0.3");
     expect(parseGenericCliVersion("v22.19.0")).toBe("22.19.0");
+    // A pinned install compares the whole version, so a prerelease keeps its suffix.
+    expect(parseGenericCliVersion("pi 1.2.3-beta.1")).toBe("1.2.3-beta.1");
+    expect(parseGenericCliVersion("opencode v2.0.3-rc.2 (linux)")).toBe("2.0.3-rc.2");
+    // SemVer prerelease identifiers may contain hyphens.
+    expect(parseGenericCliVersion("opencode 1.2.3-beta-test.1")).toBe("1.2.3-beta-test.1");
+    expect(parseGenericCliVersion("pi 1.2.3-beta-")).toBe("1.2.3-beta-");
+    expect(parseGenericCliVersion("version 1.2.3.")).toBe("1.2.3");
   });
 
   it("parses a version embedded in other output", () => {
@@ -318,6 +325,14 @@ describe("parseGenericCliVersion", () => {
 
   it("ignores versions glued to other word characters", () => {
     expect(parseGenericCliVersion("build2.0.3artifact")).toBeNull();
+    // An underscore joins a token too; the real version later in the output is the one read.
+    expect(parseGenericCliVersion("build_1.2.3 pi 1.2.4")).toBe("1.2.4");
+    expect(parseGenericCliVersion("1.2.3_artifact pi 1.2.4")).toBe("1.2.4");
+  });
+
+  it("keeps build metadata so an exact pin can tell the builds apart", () => {
+    expect(parseGenericCliVersion("pi 1.2.3+build.4")).toBe("1.2.3+build.4");
+    expect(parseGenericCliVersion("pi 1.2.3-beta+build.4 (linux)")).toBe("1.2.3-beta+build.4");
   });
 });
 

@@ -19,7 +19,7 @@ func TestLsSaysWhenThisMachineIsNotAMember(t *testing.T) {
 	}{
 		{daemon.LsReply{Self: "selfnodeidaaaaaaaaaaaaaaaa", MeshID: "m", Members: []daemon.LsMember{other}}, "never took effect"},
 		{daemon.LsReply{Self: "selfnodeidaaaaaaaaaaaaaaaa", MeshID: "m", Members: []daemon.LsMember{other},
-			Revoked: []mesh.Member{{Name: "y", NodeID: "selfnodeidaaaaaaaaaaaaaaaa"}}}, "was revoked"},
+			Revoked: []daemon.LsRevoked{{Member: mesh.Member{Name: "y", NodeID: "selfnodeidaaaaaaaaaaaaaaaa"}}}}, "was revoked"},
 	} {
 		var w bytes.Buffer
 		printMembers(&w, c.ls)

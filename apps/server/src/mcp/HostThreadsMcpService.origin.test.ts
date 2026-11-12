@@ -102,7 +102,9 @@ it.effect(
                   calls.push(call);
                 }).pipe(Effect.andThen(authorize), Effect.as(remoteRead)),
             }),
-            Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+            Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
+              dismiss: () => Effect.succeed([]),
+            }),
             Layer.mock(ThreadManagementService.ThreadManagementService)({
               getThreadShell: () =>
                 Effect.succeed(liveThreadShell(threadId, { activeRunId: parentRunId })),

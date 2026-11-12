@@ -72,8 +72,8 @@ offers no compression, moves 1 MiB each way between a fresh node and a client, a
 served build with `curl -fsS .../dl/<version>/SHA256SUMS` against the local file.
 
 Rollback: `pnpm exec wrangler deployments list`, then `pnpm exec wrangler rollback <version-id>`. Static assets roll
-back with the version. Each node id's Durable Object keeps only its next session id beyond its sockets, so a rollback
-loses only open sockets, which reconnect.
+back with the version. Each node id's Durable Object keeps only its next session id beyond its sockets (and a listed node's traffic row), so a
+rollback loses only open sockets, which reconnect; an older version ignores the row and a later one adds to it.
 
 ## pen-login Worker
 
@@ -212,6 +212,72 @@ is not logged; the relay keeps serving the cached certificate until it expires, 
 fails until issuance succeeds. A failed first issuance does the same and the process keeps running. So the alarm is
 `pen relay check`, which fails 14 days before expiry. Issuance needs port 443 reachable from the internet
 (TLS-ALPN-01); restarting the service retries at once.
+
+## Relay traffic
+
+Both relays count the payload bytes they deliver for each session: toward the node (`toNode`) and toward its client
+(`fromNode`). A byte counts once the relay's write of it to the other end succeeded. They record nothing else: no
+address, no headers, nothing from a session. Anyone can mint a node id, so per-node numbers are kept only for the node
+ids the operator lists; the Go relay names them by their first 8 characters, as `pen ls` shows them.
+
+**Go relay.** `pen relay serve` writes JSON lines to stderr, so on the Seoul VM they are in the journal. List your nodes
+in `/etc/pen-relay.env` as `PEN_RELAY_TRAFFIC_NODES=<id>,<id>` (full ids from `pen ls --json`, at most 256; the unit
+passes them as `--traffic-nodes`) and restart the service. With no list the relay writes only its `relay` lines.
+
+- `session`, once per session a listed node answered, when it ends: `node`, `toNode`, `fromNode`, `ms`, `end`
+  (`client`, `node`, `relay` or `uplink`: which side ended it), the close `code` and `at`. Lines are limited to a burst
+  of 120, then one a second.
+- Every 10 minutes when something changed, a `node` line per listed node that changed (totals since `since`) and one
+  `relay` line: every session's bytes since the process started, plus `unanswered`, `linesDropped` and `nodes` (how many
+  listed nodes have numbers). Open sessions are counted as they go, so a tunnel open for days shows every 10 minutes.
+  On a clean stop the relay ends open sessions (`relay`, code 1001) and writes these lines once more.
+
+Lines wait in a queue of 1024 for the journal; a line that does not fit, or that the session line limit holds back, is
+dropped and counted in `linesDropped`, and the totals still hold its bytes. Totals live in memory and start from zero
+when the process restarts. The journal keeps the lines until its size cap (`journalctl --disk-usage`; `SystemMaxUse`
+in `journald.conf`).
+
+```sh
+journalctl -u pen-relay -o cat | grep '^{"event":"relay"' | tail -1
+journalctl -u pen-relay -o cat --since today | grep '^{"event":"session"' |
+  jq -s 'group_by(.node) | map({node: .[0].node, toNode: (map(.toNode) | add), fromNode: (map(.fromNode) | add), sessions: length})'
+```
+
+**Worker.** It logs nothing: Workers Logs would keep request URLs, which hold the full node id. List your nodes with
+`pnpm exec wrangler secret put TRAFFIC_NODES` in `infra/pen-relay` (full ids, comma-separated); a secret keeps the ids
+out of the repository and survives deploys. Each listed node's Durable Object keeps one row in a `traffic` table
+(`to_node`, `from_node`, `sessions`, `unanswered`, and `since` and `at` in ms since the epoch). Read it in the
+dashboard under Workers & Pages, Durable Objects, the `Room` namespace of `pen-relay`, Data
+Studio: enter the full node id and run `SELECT * FROM traffic`. Anyone on the Cloudflare account whose role can edit
+this Worker can read the row there, and those queries are billed as Durable Object use. The row stays as long as the
+object, across deploys and rollbacks.
+
+Taking a node off the list, or unsetting the secret, stops counting new traffic for it; rows already written stay. To
+remove one, take the node off the list first. A secret change deploys a new version, and an active Room can keep running
+the previous version for up to 5 minutes (Cloudflare's default deferral); a Room on the new version checks the list
+before every write and drops the counts of a node no longer listed. So wait at least 5 minutes, run
+`DROP TABLE traffic` in Data Studio for that node's object, and check a few minutes later that it stayed gone (drop it
+again if not). Data Studio needs Editor access to the Worker and records every query in the account's audit log. There
+is no other way to remove a row.
+
+The Room writes the row at most once a minute; Cloudflare may run the alarm that writes it up to a minute late during
+maintenance or failover, so the row can trail by about two minutes. Bytes not written yet ride on the node's uplink
+socket and survive hibernation; sessions that ended while the node had no uplink are lost if the object is evicted
+before the next write. A row costs one table page (4 KiB) per listed node.
+
+**After a deploy.** Run `pen relay check` against each relay. On the VM, the next `relay` line (within 10 minutes,
+`journalctl -u pen-relay -o cat -n 20`) counts the check's sessions, a listed node's sessions get `session` lines, and no
+line holds an address. For the Worker, read a listed node's row in Data Studio after it carried a session.
+
+**Check the numbers against the VM.** Each delivered byte was received once and sent once, so a day's growth of the
+`relay` line's `toNode` plus `fromNode` tracks the interface's `tx_bytes` growth over the same day; TCP, TLS and
+WebSocket overhead and the VM's own traffic make up the rest. On a relay carrying bulk sessions (model traffic, file
+copies) the gap is expected within about 10%; on a quiet relay, small messages, keepalives and the VM's other traffic
+can make it larger, so read a wider gap there as overhead before suspecting the counts. Right after a `relay` line, read
+`/sys/class/net/<interface>/statistics/tx_bytes` (the interface holding the private address, `ip -br addr`) and note
+the line; repeat a day later and compare the differences. The relay must not restart in between
+(`systemctl show pen-relay -p ExecMainStartTimestamp`). `rx_bytes` grows by the same amount plus scanners and refused
+data.
 
 ## Incidents
 

@@ -11,11 +11,11 @@ export {
   resolveFileDiffPath,
   resolveFileDiffPreviousPath,
 } from "@goat/client-runtime/work-log/file-change-diff";
-import { READABLE_LIGHT_THEME_NAME } from "./readableSyntaxTheme";
+import { READABLE_DARK_THEME_NAME, READABLE_LIGHT_THEME_NAME } from "./readableSyntaxTheme";
 
 export const DIFF_THEME_NAMES = {
   light: "pierre-light",
-  dark: "pierre-dark",
+  dark: READABLE_DARK_THEME_NAME,
   readableLight: READABLE_LIGHT_THEME_NAME,
 } as const;
 

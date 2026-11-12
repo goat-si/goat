@@ -5,6 +5,7 @@ import type {
   RuntimeMode,
   ServerProvider,
   ServerProviderAuth,
+  ServerProviderCli,
   ServerProviderSkill,
   ServerProviderSlashCommand,
   ServerProviderModel,
@@ -80,6 +81,8 @@ export interface ProviderProbeResult {
   readonly auth: ServerProviderAuth;
   readonly message?: string;
   readonly usageLimits?: ServerProviderUsageLimits;
+  /** Set only when this probe ran, or tried to run, the instance's CLI (ServerProvider.cli). */
+  readonly cli?: ServerProviderCli;
 }
 
 export interface ServerProviderPresentation {
@@ -182,8 +185,11 @@ export const spawnAndCollect = Effect.fn("snapshotProbe.spawnAndCollect")(functi
 }, Effect.scoped);
 
 export function parseGenericCliVersion(output: string): string | null {
-  // Consume v before the digits; v2 has no internal word boundary.
-  const match = output.match(/\bv?(\d+\.\d+\.\d+)\b/);
+  // Consume v before the digits; v2 has no internal word boundary. A prerelease and build keep
+  // their suffixes. Token edges, not \b: a prerelease may end in "-", and "_" joins a token.
+  const match = output.match(
+    /(?<![0-9A-Za-z_.+-])v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)(?![0-9A-Za-z_+-]|\.[0-9A-Za-z])/,
+  );
   return match?.[1] ?? null;
 }
 
@@ -317,6 +323,9 @@ export function buildServerProvider(input: {
     setup: { canAuthenticate: false, canInstall: false },
     checkedAt: input.checkedAt,
     ...(input.probe.message ? { message: input.probe.message } : {}),
+    ...(input.probe.cli === undefined
+      ? {}
+      : { cli: input.probe.cli, cliCheckedAt: input.checkedAt }),
     models: input.models,
     ...(input.updateRequiredModels?.length
       ? { updateRequiredModels: input.updateRequiredModels }
@@ -327,6 +336,13 @@ export function buildServerProvider(input: {
     ...(versionAdvisory ? { versionAdvisory } : {}),
   };
 }
+
+/** For an instance that runs no CLI from PATH (a managed release, a remote server). */
+export const withoutLocalCli = <Draft extends { readonly checkedAt: string }>(draft: Draft) => ({
+  ...draft,
+  cli: "none" as const,
+  cliCheckedAt: draft.checkedAt,
+});
 
 class ProcessOutputLimitError extends Schema.TaggedError<ProcessOutputLimitError>()(
   "ProcessOutputLimitError",

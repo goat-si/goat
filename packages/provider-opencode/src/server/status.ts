@@ -757,6 +757,8 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const customModels = openCodeSettings.customModels;
   const isExternalServer = openCodeSettings.serverUrl.trim().length > 0;
+  // A configured server URL means no local CLI runs; otherwise a version answer proves the CLI.
+  const answered = isExternalServer ? ("none" as const) : ("present" as const);
   const host = { env: yield* HostProcess.Environment, platform: yield* HostProcess.Platform };
 
   const fallback = (
@@ -772,6 +774,13 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       serverUrl: openCodeSettings.serverUrl,
       binaryPath: openCodeSettings.binaryPath,
     });
+    const cli = isExternalServer
+      ? ("none" as const)
+      : !failure.installed
+        ? ("missing" as const)
+        : phase === "inventory"
+          ? ("present" as const)
+          : undefined;
     return buildServerProvider({
       presentation: OPENCODE_PRESENTATION,
       enabled: openCodeSettings.enabled,
@@ -779,6 +788,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
       probe: {
         installed: failure.installed,
+        ...(cli === undefined ? {} : { cli }),
         version,
         status: "error",
         auth: { status: failure.authStatus ?? "unknown" },
@@ -822,13 +832,14 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   }
   const probed = probedExit.value;
   if (probed.generation === "v2") {
-    return yield* checkOpenCode2(
+    const draft = yield* checkOpenCode2(
       openCodeSettings,
       probed.version,
       checkedAt,
       loadOpenCode2Models,
       loadOpenCode2Skills,
     );
+    return { ...draft, cli: answered, cliCheckedAt: checkedAt };
   }
   if (compareSemverVersions(probed.version, OpenCodeRuntime.MINIMUM_OPENCODE_VERSION) < 0) {
     return buildServerProvider({
@@ -837,6 +848,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       checkedAt,
       models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
       probe: {
+        cli: answered,
         installed: true,
         version: probed.version,
         status: "error",
@@ -920,6 +932,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       skills,
       slashCommands: openCodeCommandsToServerProviderSlashCommands(inventoryExit.value.commands),
       probe: {
+        cli: answered,
         installed: true,
         version,
         status: catalogReady ? "ready" : "warning",
