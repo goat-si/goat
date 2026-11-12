@@ -361,6 +361,35 @@ exec /bin/mv "$@"
           );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
+
+    it.live(
+      "a drain that went unanswered and was force-stopped also reports an unknown outcome",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind: "managed",
+            oldVersion: OLDER,
+            drain: true,
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+          });
+          yield* f.fs.writeFileString(`${f.test}/drain`, "response-lost");
+          yield* failingNohup(f, "supervise");
+          const result = yield* f.run("launch", false, {
+            refreshOwnedRuntimeOnFirstConnection: true,
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: yield* approved(f),
+          });
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result))
+            assert.include(
+              String(result.failure),
+              "the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now",
+            );
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
   },
 );
 
