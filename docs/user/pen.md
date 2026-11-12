@@ -158,8 +158,8 @@ so its agents use the hub's accounts without a sign-in there. On the hub:
 
 To detach it, use **Leave** on its row, then remove the machine from the mesh (see
 [Remove a machine](#remove-a-machine)). Run `pen leave` from the machine's own console, such as
-your cloud platform's terminal: the other members close every connection to a machine as soon as
-it leaves, including the SSH session you would run `pen leave` in, so its output would be lost.
+your cloud platform's terminal: each member closes its connections to a machine once it learns the
+machine left, which can cut off the SSH session you would run `pen leave` in, and its output.
 
 GOAT turns the switch off by itself when the member leaves the mesh, when another machine later
 takes its name, or when its host key changes. Turn it on again after the machine joins again.
