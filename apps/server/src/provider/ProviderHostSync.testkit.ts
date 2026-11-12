@@ -15,6 +15,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -64,6 +65,7 @@ interface Harness {
   readonly spawned: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>;
   readonly handoffs: Array<unknown>;
   readonly diagnoses: Array<string>;
+  readonly downloads: Array<string>;
 }
 
 const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisReason) => ({
@@ -91,6 +93,8 @@ const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisR
 export const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
+  /** The body every download returns; none answers 404. */
+  readonly download?: Uint8Array;
   /** What the fake installer leaves on disk before it exits. */
   readonly onInstall?: Effect.Effect<void>;
   readonly providers?: ReadonlyArray<unknown>;
@@ -119,7 +123,21 @@ export const harness = (options: {
     readonly killed: Deferred.Deferred<void>;
   };
 }) => {
-  const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
+  const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [], downloads: [] };
+  const http = Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.sync(() => {
+        state.downloads.push(request.url);
+        return HttpClientResponse.fromWeb(
+          request,
+          options.download === undefined
+            ? new Response(null, { status: 404 })
+            : new Response(new Uint8Array(options.download), { status: 200 }),
+        );
+      }),
+    ),
+  );
   const spawner = Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
@@ -249,6 +267,7 @@ export const harness = (options: {
         }),
         options.cliGate ?? Layer.empty,
         spawner,
+        http,
       ),
     ),
     Layer.provide(NodeServices.layer),

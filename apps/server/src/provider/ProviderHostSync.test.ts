@@ -393,19 +393,29 @@ it.effect("installs with the official argv and never relays the installer's outp
   }).pipe(Effect.provide(layer));
 });
 
+/** Claude installs with npm; a stand-in npm first on PATH lets the fake installer run anywhere. */
 const installClaude = (options: Parameters<typeof harness>[0], environment: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
-    const sync = yield* HostSync.ProviderHostSync;
-    const started = yield* sync.sync(
-      { driver: "claudeAgent", login: false },
-      { kind: "client", sessionId: person },
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const tools = yield* fs.makeTempDirectoryScoped({ prefix: "goat-npm-" });
+    yield* fs.writeFileString(path.join(tools, "npm"), "#!/bin/sh\n", { mode: 0o755 });
+    return yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "claudeAgent", login: false },
+        { kind: "client", sessionId: person },
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
+    }).pipe(
+      Effect.provide(harness(options).layer),
+      Effect.provideService(HostProcess.Environment, {
+        ...environment,
+        PATH: `${tools}:${environment.PATH ?? ""}`,
+      }),
     );
-    if (started.kind !== "started") return expect.unreachable();
-    return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
-  }).pipe(
-    Effect.provide(harness(options).layer),
-    Effect.provideService(HostProcess.Environment, environment),
-  );
+  }).pipe(Effect.orDie, Effect.scoped);
 
 it.effect("reads a CLI as installed once its installer has put it in a folder on PATH", () =>
   Effect.gen(function* () {

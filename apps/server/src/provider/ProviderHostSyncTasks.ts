@@ -99,8 +99,6 @@ export interface SyncOperation {
   readonly hosts: Array<HostTask>;
   /** Callers who may cancel and see sign-in codes: requester, approver, outside client. */
   readonly owners: Set<string>;
-  /** Who started it; a direct install's thread cancels remotely under the check it started with. */
-  readonly launchedBy: SshHostCaller;
   fibers: Array<Fiber.Fiber<unknown, unknown>>;
   /** Done once every host finished and the settlers ran, cancels included. */
   readonly allFinished: Deferred.Deferred<void>;

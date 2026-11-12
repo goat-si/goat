@@ -41,6 +41,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import { HttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -76,6 +77,7 @@ import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydra
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { checksCli, ProviderCliGate } from "./ProviderCliGate.ts";
+import { installArtifact } from "./ProviderHostSyncArtifact.ts";
 import { installFailure, runInstaller, withProbedCli } from "./ProviderHostSyncInstall.ts";
 import {
   describeInstall,
@@ -174,7 +176,9 @@ const make = Effect.gen(function* () {
   const environment = yield* Environment.ServerEnvironmentIdentity;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Scope.Scope;
-  const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  const context = yield* Effect.context<
+    FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
+  >();
   const crypto = yield* Crypto.Crypto;
   const hostname = yield* HostProcess.Hostname;
   const runtimePlatform = yield* HostProcess.Platform;
@@ -191,15 +195,11 @@ const make = Effect.gen(function* () {
     );
 
   /**
-   * Installing software on a machine is a full-access act, so every caller
-   * needs a live providers:manage grant. Another machine's approved sync
-   * arrives as an outside client whose session carries that grant only
-   * because the person who approved it holds it there. Thread agents never
-   * pass: they get an approval handoff instead.
+   * Installing software needs a live providers:manage grant. An approved sync reaches another
+   * machine as an outside client holding the approver's grant there. Thread agents never pass,
+   * whatever their runtime mode: they get an approval handoff instead.
    */
   const writeCeiling = (caller: SshHostCaller): Effect.Effect<RuntimeMode, Failure> => {
-    if (caller.kind === "mcp" && caller.directInstall !== undefined)
-      return caller.directInstall.pipe(Effect.as("full-access" as RuntimeMode));
     if (caller.kind === "mcp" && (caller.scope.thread !== undefined || !caller.scope.client))
       return Effect.fail(
         new EnvironmentAuthorizationError({
@@ -479,7 +479,6 @@ const make = Effect.gen(function* () {
     login: boolean,
     hosts: ReadonlyArray<string | null>,
     owners: ReadonlyArray<string>,
-    launchedBy: SshHostCaller,
     settle?: SyncOperation["settlers"][number],
   ) =>
     Effect.gen(function* () {
@@ -519,7 +518,6 @@ const make = Effect.gen(function* () {
           finished: false,
         })),
         owners: new Set(owners),
-        launchedBy,
         fibers: [],
         allFinished: yield* Deferred.make<void>(),
         settlers: settle === undefined ? [] : [settle],
@@ -726,14 +724,16 @@ const make = Effect.gen(function* () {
               update(task, {
                 phase: "installing",
                 ran: describeInstall(command),
-                ...(command.latestOnly && operation.version !== null
-                  ? {
-                      message: `${recipe.displayName}'s installer always installs the latest release.`,
-                    }
-                  : {}),
               }),
             ),
-            Effect.andThen(runInstaller(spawner, command.command, command.args)),
+            Effect.andThen(
+              command.method === "npm"
+                ? runInstaller(spawner, command.command, command.args)
+                : installArtifact(spawner, command.displayName, command.artifact).pipe(
+                    Effect.as({ exitCode: 0 as number | null, output: "" }),
+                    Effect.provideContext(context),
+                  ),
+            ),
             Effect.result,
           ),
         );
@@ -900,7 +900,7 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const { driver, version, login, hosts } = request;
-      const created = yield* newOperation(driver, version, login, hosts, owners, caller, settle);
+      const created = yield* newOperation(driver, version, login, hosts, owners, settle);
       const { operation } = created;
       if (created.fresh)
         yield* Effect.forEach(
@@ -981,7 +981,7 @@ const make = Effect.gen(function* () {
     input: ProviderSyncInput,
     caller: SshHostCaller,
   ) {
-    if (caller.kind === "mcp" && caller.scope.thread !== undefined && !caller.directInstall)
+    if (caller.kind === "mcp" && caller.scope.thread !== undefined)
       return yield* requestApproval(input, caller);
     yield* writeCeiling(caller);
     return yield* start(input, caller);
@@ -1031,12 +1031,6 @@ const make = Effect.gen(function* () {
     else if (caller.kind === "mcp" && caller.scope.thread !== undefined)
       yield* authorizeApprovalRequest(caller.scope);
     else yield* authorizeSshHost(sessions, caller, "orchestration:operate");
-    // A direct install's own thread cancels there under the check it started with, rechecked on send.
-    const launcher = operation.launchedBy;
-    const remoteCaller =
-      launcher.kind === "mcp" && launcher.directInstall && callerKey(launcher) === callerKey(caller)
-        ? launcher
-        : caller;
     const stopping = yield* claimCancel(operation, scope, (pending) =>
       Effect.forEach(operation.fibers, Fiber.interrupt, { discard: true }).pipe(
         Effect.andThen(
@@ -1044,7 +1038,7 @@ const make = Effect.gen(function* () {
             pending,
             (task) =>
               cancelTask(task, operation, (host, syncId) =>
-                callRemote(remoteCaller, {
+                callRemote(caller, {
                   host,
                   tool: CANCEL_TOOL,
                   arguments: { syncId },

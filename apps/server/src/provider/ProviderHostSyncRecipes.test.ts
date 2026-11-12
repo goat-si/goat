@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  PROVIDER_HOST_SYNC_DRIVERS,
+  describeInstall,
   describeInstallFailure,
   installCommand,
   installMethod,
@@ -11,66 +13,67 @@ import {
 } from "./ProviderHostSyncRecipes.ts";
 
 describe("installCommand", () => {
-  it("pins npm installs to the requested version in one argument", () => {
-    expect(installCommand("opencode", "linux", "1.2.3")).toEqual({
-      method: "npm",
-      command: "npm",
-      args: ["install", "-g", "opencode-ai@1.2.3"],
-      latestOnly: false,
-    });
-    expect(installCommand("pi", "win32", null)?.args).toEqual([
-      "install",
-      "-g",
-      "@earendil-works/pi-coding-agent@latest",
-      "--ignore-scripts",
-    ]);
-  });
+  const npmCli = {
+    codex: "@openai/codex",
+    claudeAgent: "@anthropic-ai/claude-code",
+    grok: "@xai-official/grok",
+    opencode: "opencode-ai",
+    omo: "omo-ai",
+    pi: "@earendil-works/pi-coding-agent",
+  } as const;
 
-  it("installs Codex with OpenAI's installer, pinned on macOS and Linux, latest on Windows", () => {
-    for (const platform of ["darwin", "linux"] as const) {
-      expect(installCommand("codex", platform, "0.133.0")).toEqual({
-        method: "script",
-        command: "bash",
-        // pipefail: a download that fails must fail the install, not feed sh an empty script.
-        args: [
-          "-o",
-          "pipefail",
-          "-c",
-          'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh -s -- --release "$1"',
-          "goat-install",
-          "0.133.0",
-        ],
-        latestOnly: false,
+  it.each(["darwin", "linux", "win32"] as const)(
+    "installs every npm-published CLI on %s from npm at the requested version, as one argument",
+    (platform) => {
+      for (const [driver, pkg] of Object.entries(npmCli)) {
+        const command = installCommand(driver as keyof typeof npmCli, platform, "1.2.3");
+        expect(command).toMatchObject({ method: "npm", command: "npm" });
+        expect(command?.method === "npm" && command.args.slice(0, 3)).toEqual([
+          "install",
+          "-g",
+          `${pkg}@1.2.3`,
+        ]);
+      }
+      expect(installCommand("pi", platform, null)).toEqual({
+        method: "npm",
+        command: "npm",
+        args: ["install", "-g", "@earendil-works/pi-coding-agent@latest", "--ignore-scripts"],
       });
+    },
+  );
+
+  it("never pipes a downloaded script into a shell, for any provider, platform or version", () => {
+    for (const driver of PROVIDER_HOST_SYNC_DRIVERS)
+      for (const platform of ["darwin", "linux", "win32"] as const)
+        for (const version of [null, "1.2.3", "2026.11.11-b912975"]) {
+          const command = installCommand(driver, platform, version);
+          if (command === null) continue;
+          expect(["npm", "tar"]).toContain(command.command);
+          expect(describeInstall(command)).not.toMatch(/\|\s*(?:sh|bash|iex)\b|\birm\b|\bcurl\b/u);
+        }
+  });
+
+  it("installs Cursor on macOS and Linux only from its pinned, checksummed release", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      const command = installCommand("cursor", platform, null);
+      if (command?.method !== "script") return expect.unreachable();
+      expect(command.command).toBe("tar");
+      expect(command.artifact.assets).toHaveProperty(`${platform}-arm64`);
+      expect(command.artifact.assets).toHaveProperty(`${platform}-x64`);
+      for (const asset of Object.values(command.artifact.assets)) {
+        expect(asset.sha256).toMatch(/^[0-9a-f]{64}$/u);
+        expect(asset.bytes).toBeGreaterThan(0);
+      }
+      expect(command.artifact.url.startsWith("https://downloads.cursor.com/")).toBe(true);
+      expect(installCommand("cursor", platform, command.artifact.version)).toEqual(command);
+      // No pin for another version, so GOAT does not guess one.
+      expect(installCommand("cursor", platform, "1.0.0")).toBeNull();
     }
-    const windows = installCommand("codex", "win32", "0.133.0")!;
-    expect(windows.command).toBe("powershell.exe");
-    expect(windows.args.at(-1)).toBe(
-      "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
-    );
-    expect(windows.latestOnly).toBe(true);
   });
 
-  it("passes a script installer's version as its own argv entry, never inside the script", () => {
-    const command = installCommand("claudeAgent", "darwin", "2.0.1")!;
-    expect(command.command).toBe("bash");
-    expect(command.args.slice(0, 4)).toEqual([
-      "-o",
-      "pipefail",
-      "-c",
-      'curl -fsSL https://claude.ai/install.sh | bash -s -- "$1"',
-    ]);
-    expect(command.args.slice(4)).toEqual(["goat-install", "2.0.1"]);
-  });
-
-  it("uses each vendor's Windows installer and says when it cannot pin", () => {
-    const cursor = installCommand("cursor", "win32", "1.0.0")!;
-    expect(cursor.command).toBe("powershell.exe");
-    expect(cursor.args.at(-1)).toBe("irm 'https://cursor.com/install?win32=true' | iex");
-    expect(cursor.latestOnly).toBe(true);
-    expect(installCommand("claudeAgent", "win32", "2.0.1")!.args.at(-1)).toBe(
-      "& ([scriptblock]::Create((irm https://claude.ai/install.ps1))) 2.0.1",
-    );
+  it("leaves Cursor on Windows to a person, since it has no pinned Windows build", () => {
+    expect(installCommand("cursor", "win32", null)).toBeNull();
+    expect(installMethod("cursor", "win32")).toBe("manual");
   });
 
   it.each([
@@ -174,11 +177,9 @@ describe("pinned prerelease versions", () => {
     expect(versionCore("1.2.3+build.4")).toBeNull();
     expect(versionCore("build_1.2.3")).toBeNull();
     expect(versionCore("1.2.3_artifact")).toBeNull();
-    expect(installCommand("opencode", "linux", "1.2.3-beta-2")?.args).toEqual([
-      "install",
-      "-g",
-      "opencode-ai@1.2.3-beta-2",
-    ]);
+    expect(installCommand("opencode", "linux", "1.2.3-beta-2")).toMatchObject({
+      args: ["install", "-g", "opencode-ai@1.2.3-beta-2"],
+    });
   });
 });
 
