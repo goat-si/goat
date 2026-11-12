@@ -57,11 +57,11 @@ const ensureThread = (threadId: ThreadId) =>
     });
   });
 
-const createMember = (key: string, name: string) =>
+const createMember = (key: string, name: string, purpose = "") =>
   Effect.gen(function* () {
     const members = yield* ChannelBotMembers.ChannelBotMembers;
     const bot = yield* members.create(
-      { clientRequestId: key, name, avatar: null, purpose: "", defaultModelSelection: null },
+      { clientRequestId: key, name, avatar: null, purpose, defaultModelSelection: null },
       owner,
     );
     yield* ensureThread(bot.sessionThreadId);
@@ -250,6 +250,17 @@ describe("GOAT Bot event lines", () => {
       const member = yield* createMember("named", "Ada");
       assert.deepStrictEqual(yield* memberTexts(member.sessionThreadId), [
         "Hi, I'm Ada. What would you like me to start with?",
+      ]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a generated name still leaves the purpose it was set up for in the greeting", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const member = yield* createMember("nameless-purpose", "New bot 2", "Checks builds.");
+      assert.deepStrictEqual(yield* memberTexts(member.sessionThreadId), [
+        "Hi, I'm your new bot. You set me up for: Checks builds.\n\nGive me a name, or tell me what you'd like me to start with.",
       ]);
     }).pipe(Effect.provide(harness.layer));
   });
