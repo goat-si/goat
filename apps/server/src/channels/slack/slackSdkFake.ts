@@ -57,6 +57,8 @@ export function makeFakeSlackSdk() {
         });
   const sessions: FakeSlackSession[] = [];
   const posted: Array<Parameters<SlackBotApi["postMessage"]>[0]> = [];
+  const updated: Array<Parameters<SlackBotApi["updateMessage"]>[0]> = [];
+  const deleted: Array<Parameters<SlackBotApi["deleteMessage"]>[0]> = [];
   const pendingStarts: PendingStart[] = [];
   let disconnectGate: Promise<void> | undefined;
   const script = {
@@ -64,6 +66,8 @@ export function makeFakeSlackSdk() {
       Promise.resolve({ teamId: "T0TEAM", botUserId: "U0BOT", botId: "B0BOT" }),
     postMessage: (_input: Parameters<SlackBotApi["postMessage"]>[0]) =>
       Promise.resolve({ ts: "1760000001.000100" }),
+    updateMessage: (_input: Parameters<SlackBotApi["updateMessage"]>[0]) => Promise.resolve(),
+    deleteMessage: (_input: Parameters<SlackBotApi["deleteMessage"]>[0]) => Promise.resolve(),
     openConnection: () => Promise.resolve(),
     /** Default: the socket connects as soon as it starts. */
     start: (_session: FakeSlackSession): Promise<void> => Promise.resolve(),
@@ -140,6 +144,16 @@ export function makeFakeSlackSdk() {
           // oxlint-disable-next-line unicorn/require-post-message-target-origin -- the fake Slack chat.postMessage, not window.postMessage.
           return script.postMessage({ ...input });
         },
+        updateMessage: (input) => {
+          record("update");
+          updated.push({ ...input });
+          return script.updateMessage({ ...input });
+        },
+        deleteMessage: (input) => {
+          record("delete");
+          deleted.push({ ...input });
+          return script.deleteMessage({ ...input });
+        },
       }),
       appApi: () => ({
         openConnection: () => {
@@ -156,6 +170,8 @@ export function makeFakeSlackSdk() {
     waitForCall,
     sessions,
     posted,
+    updated,
+    deleted,
     script,
     /** Makes the next starts wait until the test settles them. */
     holdStarts: () => {
