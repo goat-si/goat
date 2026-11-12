@@ -521,7 +521,14 @@ export const supervise = Command.make("supervise", {
           };
         }
         const line = `${result.status} ${"pid" in result ? result.pid : 0} ${"version" in result ? result.version : "-"}\n`;
-        writeAtomically(resultFile, line);
+        try {
+          writeAtomically(resultFile, line);
+        } catch (cause) {
+          // The launch then reports an unknown outcome; the log keeps the real one.
+          process.stderr.write(
+            `Replacement supervisor could not record its result (${line.trim()}): ${cause instanceof Error ? cause.message : String(cause)}\n`,
+          );
+        }
         if ("reason" in result) process.stderr.write(result.reason + "\n");
         process.stdout.write(line);
       }),

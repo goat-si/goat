@@ -222,7 +222,7 @@ forced_supervise_start() {
     rolled-back)
       printf 'GOAT %s did not start on the remote host after the approved forced stop of PID %s; GOAT %s was started again. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$forced_new_version" "$LOG_FILE" >&2; exit 1 ;;
     absent)
-      printf 'GOAT %s did not start on the remote host: after the approved forced stop of PID %s, the detached supervisor did not run, so nothing was started and the stopped runtime was not started again. Update again to retry; no approval is needed. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
+      printf 'GOAT stopped PID %s on the remote host for the approved forced update, but the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now. Check the host and %s; if nothing runs, update again (no approval is needed).\\n' "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
     *)
       printf 'GOAT %s did not start on the remote host after the approved forced stop of PID %s, and no earlier runtime could be started again. Update again to retry; no approval is needed. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
   esac

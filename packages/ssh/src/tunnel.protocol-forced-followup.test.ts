@@ -344,7 +344,7 @@ exec /bin/mv "$@"
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live("a supervisor that never ran after the stop is reported as such", () =>
+    it.live("a supervisor that left no result after the stop is reported as unknown", () =>
       Effect.gen(function* () {
         const f = yield* makeProtocolFixture(unverified);
         yield* failingNohup(f, "supervise");
@@ -357,7 +357,7 @@ exec /bin/mv "$@"
         if (Result.isFailure(result))
           assert.include(
             String(result.failure),
-            "the detached supervisor did not run, so nothing was started and the stopped runtime was not started again",
+            "the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now",
           );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
