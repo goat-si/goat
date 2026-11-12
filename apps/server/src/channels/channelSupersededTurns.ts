@@ -12,7 +12,7 @@ import { taskEventIdFor } from "./channelIds.ts";
 import { prepareTransition } from "./channelTaskWrites.ts";
 
 /** What the closed question records instead of an answer the person never gave it. */
-export const SUPERSEDED_QUESTION_ANSWER = "(No answer; the conversation went on.)";
+const SUPERSEDED_QUESTION_ANSWER = "(No answer; the conversation went on.)";
 
 /**
  * A later turn from the asker that the session ran, finishing or asking again. One still queued
