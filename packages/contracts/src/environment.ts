@@ -306,9 +306,10 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   /** New for every server start. A replacement request names it so it never hits a successor. */
   instanceId: Schema.optionalKey(TrimmedNonEmptyString),
   /**
-   * The same for every GOAT server on one machine, whatever its base directory, so clients
-   * draw them as one machine. A hash of the OS machine identifier, absent when the OS hides it
-   * and on servers that predate it.
+   * The same for every GOAT server one OS account runs on one machine, whatever its base
+   * directory, so clients draw them as one machine. A hash of the OS machine identifier and a
+   * random value the account's servers share in ~/.goat, so machines cloned from one image
+   * differ. Absent when either is unavailable and on servers that predate it.
    */
   machineId: Schema.optionalKey(TrimmedNonEmptyString),
   /**

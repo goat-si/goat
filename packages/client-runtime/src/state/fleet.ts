@@ -191,9 +191,9 @@ export interface FleetEnvironment {
   readonly os?: ExecutionEnvironmentPlatformOs | null;
   readonly machineKind?: EnvironmentMachineKind | null;
   /**
-   * The server's physical machine. GOAT servers that report the same one, such as the desktop's
-   * own server and the headless server SSH launches keep beside it, are one Fleet machine.
-   * Absent on servers that predate it.
+   * The server's machine and OS account. GOAT servers that report the same one, such as the
+   * desktop's own server and the headless server SSH launches keep beside it, are one Fleet
+   * machine. Absent on servers that predate it.
    */
   readonly machineId?: string | null;
   /**
