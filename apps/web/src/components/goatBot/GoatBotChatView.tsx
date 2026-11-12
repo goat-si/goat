@@ -484,7 +484,12 @@ export function GoatBotChatView({
       )}
       {bot && narrow && (
         <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
-          <SheetPopup finalFocus={sheetFinalFocus}>
+          {/* A phone-width window gives the home the whole screen; wider, the chat stays beside it. */}
+          <SheetPopup
+            finalFocus={sheetFinalFocus}
+            showCloseButton={false}
+            className="max-sm:w-full max-sm:max-w-none"
+          >
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
               environmentId={bot.environmentId}

@@ -15,8 +15,10 @@ import type {
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode, useRef, useState } from "react";
+import { ArrowLeftIcon } from "~/components/solar";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
+import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotAvatar } from "./GoatBotAvatar";
 import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
@@ -56,7 +58,7 @@ export function GoatBotWorkPanel({
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
-  /** Called when a link leads back to the chat, so a sheet over it can close. */
+  /** Set only in a sheet over the chat: Back to chat and links to the chat call it to close it. */
   onShowChat?: (() => void) | undefined;
   /** Puts a message in this chat's composer; absent while the chat cannot send. */
   onDraft?: ((text: string) => void) | undefined;
@@ -144,6 +146,20 @@ export function GoatBotWorkPanel({
   };
   const work = groupBotWork(rows, [], environmentId);
   const tasks = [...work.inProgress, ...work.done];
+  // In the top padding Home and a task view both leave; inside the panel, so a routine landing
+  // still sees the sheet's opening focus as the panel's. A full-width sheet docks under the
+  // titlebar's sidebar control (z-sheet < z-modal), so there it starts just past that control.
+  const backToChat = onShowChat ? (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={onShowChat}
+      className="absolute start-2 top-2.5 max-sm:start-[calc(var(--workspace-controls-left)+2.5rem)]"
+    >
+      <ArrowLeftIcon aria-hidden />
+      Back to chat
+    </Button>
+  ) : null;
   const peeked =
     peek === null
       ? undefined
@@ -167,6 +183,7 @@ export function GoatBotWorkPanel({
           if (!event.currentTarget.contains(event.relatedTarget)) setPeekHasFocus(false);
         }}
       >
+        {backToChat}
         <GoatBotWorkPeek
           taskId={peek.taskId}
           title={peeked?.task.title ?? peek.title}
@@ -189,6 +206,7 @@ export function GoatBotWorkPanel({
   }
   return (
     <div ref={panelRef} className="flex min-h-0 min-w-0 flex-1 flex-col px-4 pb-4 text-sm">
+      {backToChat}
       <header className="flex flex-col items-center gap-2 pt-16 pb-4 text-center">
         <GoatBotAvatar size="lg" emoji={avatar} />
         <h2 className="max-w-full truncate text-base font-semibold">{botName}</h2>
