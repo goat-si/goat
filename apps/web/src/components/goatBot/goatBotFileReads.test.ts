@@ -1,5 +1,5 @@
-import { EnvironmentId } from "@goat/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS, EnvironmentId } from "@goat/contracts";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   afterLastChunkRequest,
@@ -12,6 +12,15 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => (resolve = done));
   return { promise, resolve };
 }
+
+function fakeTimers() {
+  vi.useFakeTimers();
+  return { [Symbol.dispose]: () => vi.useRealTimers() };
+}
+
+const throwsAtOnce = (): Promise<string> => {
+  throw new Error("thrown before any promise");
+};
 
 /** A read the test finishes by hand; `started` settles when the scheduler sends it. */
 function read(name: string, log: string[]) {
@@ -87,5 +96,67 @@ describe("Library reads on one server", () => {
     next.finish();
     await expect(staying.result).resolves.toBe("next");
     expect(log).toEqual(["running", "next"]);
+  });
+
+  it("R1: a chunk that never answers frees the lane at its bound; the next read runs; the late answer starts nothing", async () => {
+    using _timers = fakeTimers();
+    const server = EnvironmentId.make("reads-bound");
+    const log: string[] = [];
+    const stuck = read("stuck", log);
+    const next = read("next", log);
+    queuePreviewRead(server, stuck.request);
+    queuePreviewRead(server, next.request);
+    await vi.advanceTimersByTimeAsync(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS + 10_000);
+    expect(log).toEqual(["stuck", "next"]);
+  });
+
+  it("R2: waiting previews run newest first; past 32 only the oldest is skipped", async () => {
+    const server = EnvironmentId.make("reads-newest");
+    const log: string[] = [];
+    const running = read("running", log);
+    queuePreviewRead(server, running.request);
+    const results = Array.from(
+      { length: 33 },
+      (_, index) =>
+        queuePreviewRead(server, async () => {
+          log.push("preview-" + index);
+          return index;
+        }).result,
+    );
+    running.finish();
+    await Promise.all(results);
+    expect(log).toEqual([
+      "running",
+      ...Array.from({ length: 32 }, (_, index) => "preview-" + (32 - index)),
+    ]);
+  });
+
+  it("R4: a read that throws before returning a promise, started at once, settles its caller and frees the lane", async () => {
+    using _timers = fakeTimers();
+    const server = EnvironmentId.make("reads-throw-now");
+    const log: string[] = [];
+    const failing = queuePreviewRead(server, throwsAtOnce);
+    const after = read("after", log);
+    queuePreviewRead(server, after.request);
+    await expect(failing.result).rejects.toThrow("thrown before any promise");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log).toEqual(["after"]);
+  });
+
+  it("R4: a waiting read that throws before returning a promise settles its caller and frees the lane", async () => {
+    using _timers = fakeTimers();
+    const server = EnvironmentId.make("reads-throw-waiting");
+    const log: string[] = [];
+    const running = read("running", log);
+    queuePreviewRead(server, running.request);
+    const failed = expect(afterLastChunkRequest(server, throwsAtOnce)).rejects.toThrow(
+      "thrown before any promise",
+    );
+    const after = read("after", log);
+    queuePreviewRead(server, after.request);
+    running.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log).toEqual(["running", "after"]);
+    await failed;
   });
 });

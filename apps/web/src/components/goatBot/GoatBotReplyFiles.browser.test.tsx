@@ -21,6 +21,10 @@ const server = vi.hoisted(() => ({
   gate: null as Promise<void> | null,
   /** The next listing read fails. */
   failNext: false,
+  /** While set, a file read waits for it. */
+  readGate: null as Promise<void> | null,
+  /** Called as each file read reaches the server, before it waits. */
+  onRead: (() => {}) as () => void,
 }));
 const SUMMARY = { mimeType: "text/markdown", text: "# Weekly summary\nThree merged." };
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -77,8 +81,11 @@ vi.mock("~/state/channels", async (original) => {
         };
       }),
     [methods.readBotArtifact]: (input: { readonly relativePath: string }) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         server.reads.push(input.relativePath);
+        server.onRead();
+        const gate = server.readGate;
+        if (gate !== null) yield* Effect.promise(() => gate);
         const file = server.files.get(input.relativePath);
         if (file === undefined) return { status: "changed" as const };
         const bytes = new TextEncoder().encode(file.text);
@@ -196,6 +203,8 @@ function setup(
   server.root = root;
   server.gate = null;
   server.failNext = false;
+  server.readGate = null;
+  server.onRead = () => {};
   const registry = AtomRegistry.make({ scheduleTask });
   return {
     wrap: (ui: ReactNode) => (
@@ -399,6 +408,41 @@ it("an older server's listing keeps cards for relative names, extensionless too,
   await expect.element(screen.getByRole("button", { name: "Open README" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Open summary.md" }).elements()).toHaveLength(0);
   expect(server.reads).toEqual(["README"]);
+});
+
+it("six cards under one reply all show previews; the oldest waiting card is not dropped while the first read is out", async () => {
+  const notes = ["a", "b", "c", "d", "e", "f"];
+  using test = setup(
+    notes.map((note) => [
+      `notes/${note}.md`,
+      { mimeType: "text/markdown", text: `# Note ${note.toUpperCase()}` },
+    ]),
+  );
+  const held = Promise.withResolvers<void>();
+  const firstRead = Promise.withResolvers<void>();
+  server.readGate = held.promise;
+  server.onRead = firstRead.resolve;
+  await using screen = await render(
+    test.wrap(
+      <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+        <GoatBotTimeline
+          rows={[
+            reply("saved", `Saved ${notes.map((note) => `\`notes/${note}.md\``).join(", ")}.`),
+          ]}
+          onRetry={() => {}}
+        />
+      </GoatBotOpenFileContext>,
+    ),
+    { router: false }, // This reply has no links.
+  );
+  // Every card asks for its preview in the commit that mounts them all, so once one read is out,
+  // the other five are waiting behind it.
+  await firstRead.promise;
+  server.readGate = null;
+  held.resolve();
+  for (const note of notes)
+    await expect.element(screen.getByText(`Note ${note.toUpperCase()}`)).toBeInTheDocument();
+  expect(server.reads).toHaveLength(6);
 });
 
 const remote = "https://tracker.example.com";
