@@ -960,3 +960,27 @@ it.effect("an older GOAT that installs this CLI from npm at the version still ge
     expect(state.calls.map(({ call }) => call.tool)).toEqual(["goat_provider_sync"]);
   }),
 );
+
+it.effect.each([
+  { row: "an older runtime", status: "update_runtime", phase: "update_runtime" },
+  { row: "an unreachable host", status: "unreachable", phase: "failed" },
+] as const)("a preflight read that reports $row sends no install there", ({ status, phase }) =>
+  Effect.gen(function* () {
+    const { state, layer } = harness({
+      answer: () => Effect.succeed(finished),
+      remoteRow: { host: null, status, message: "GOAT on box could not be read.", providers: [] },
+    });
+    const host = yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", hosts: ["box"], login: false },
+        person,
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
+    }).pipe(Effect.provide(layer));
+    expect(state.preflights).toEqual(["box"]);
+    expect(state.calls).toEqual([]);
+    expect(host).toMatchObject({ host: "box", phase });
+  }),
+);
