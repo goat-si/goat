@@ -230,31 +230,51 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live("a start time in a file with an access list is not evidence", () =>
-      Effect.gen(function* () {
-        const f = yield* makeProtocolFixture(unverified);
-        const target = yield* approved(f);
-        // ls marks a file with an access list (which could let another user write) with a +.
-        yield* f.fs.writeFileString(
-          `${f.home}/.test/identity-bin/ls`,
-          `#!/bin/sh
+    it.live.each([
+      { mark: "+", acl: true },
+      { mark: "@", acl: true },
+      { mark: "@", acl: false },
+    ] as const)(
+      "a start time is evidence only without an access list; ls marks $mark, access list $acl",
+      ({ mark, acl }) =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture(unverified);
+          const target = yield* approved(f);
+          // ls marks an access list with +, or with @ when extended attributes are also present;
+          // on macOS ls -le lists the entries of the list.
+          yield* f.fs.writeFileString(
+            `${f.home}/.test/identity-bin/ls`,
+            `#!/bin/sh
 for last; do :; done
-if [ "$last" = '${f.state}/started' ]; then printf '%s\\n' '-rw-------+ 1 u g 25 Jan  1 00:00 started'; exit 0; fi
+if [ "$last" = '${f.state}/started' ]; then
+  printf '%s\\n' '-rw-------${mark} 1 u g 25 Jan  1 00:00 started'
+  case " $* " in *" -lde "*) ${acl ? "printf '%s\\\\n' ' 0: user:other allow write'" : ":"} ;; esac
+  exit 0
+fi
 exec /bin/ls "$@"
 `,
-        );
-        yield* f.fs.chmod(`${f.home}/.test/identity-bin/ls`, 0o700);
-        const result = yield* f.run("launch", false, {
-          confirmReplacement: true,
-          replacementGraceSeconds: 5,
-          forceReplace: target,
-        });
-        assert.isTrue(Result.isFailure(result));
-        if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
-        assert.isTrue(isAlive(f.pid));
-        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-        assert.deepEqual(replaceTargetOf(yield* statusProbe(f)), {});
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+          );
+          yield* f.fs.chmod(`${f.home}/.test/identity-bin/ls`, 0o700);
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: target,
+          });
+          if (!acl) {
+            // Extended attributes alone are common on macOS and prove nothing either way.
+            assert.isTrue(
+              Result.isSuccess(result),
+              String(Result.isFailure(result) && result.failure),
+            );
+            assert.isFalse(isAlive(f.pid));
+            return;
+          }
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+          assert.isTrue(isAlive(f.pid));
+          assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+          assert.deepEqual(replaceTargetOf(yield* statusProbe(f)), {});
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live("a launch replaces a started symlink instead of writing through it", () =>

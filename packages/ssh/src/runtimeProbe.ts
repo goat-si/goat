@@ -308,9 +308,14 @@ ${
 # the status probe asks, and only for a runtime that is not the requested one.
 replace_trusted() {
   [ -e "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -prune -user "$(id -u)" ! -perm -0020 ! -perm -0002 2>/dev/null)" ] || return 1
-  # A + after the mode marks an access list, which could let another user write.
+  # A + after the mode marks an access list, which could let another user write; with extended
+  # attributes too, macOS shows @ instead, and ls -le lists the access list's entries.
   replace_mode="$(LC_ALL=C ls -ld "$1" 2>/dev/null)" || return 1
-  case "$replace_mode" in ??????????+*|"") return 1 ;; esac
+  case "$replace_mode" in
+    ??????????+*|"") return 1 ;;
+    ??????????@*) replace_mode="$(LC_ALL=C ls -lde "$1" 2>/dev/null)" || return 1
+      printf '%s\\n' "$replace_mode" | awk 'END { exit NR > 1 }' || return 1 ;;
+  esac
 }
 replace_target() {
   # Records another user could change prove nothing about the process they name.
