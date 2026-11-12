@@ -68,6 +68,8 @@ export const approvalRequestDetail = Effect.fn("channel.approvalRequestDetail")(
   approval: ChannelTaskApprovalRef,
   threads: ThreadManagement.ThreadManagementService["Service"],
 ) {
+  // Another machine's request: a local thread with the same ids is not its record.
+  if (approval.host !== undefined) return { kind: undefined, prompt: undefined };
   const records = yield* recentRecords(threads, approval.threadId);
   const item = records?.turnItems.find(
     (entry) => entry.type === "approval_request" && entry.requestId === approval.requestId,

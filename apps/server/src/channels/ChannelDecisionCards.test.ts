@@ -20,7 +20,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { handleSlackEnvelope } from "./slack/SlackChannelAdapter.ts";
-import { formatSlackOutboundMessages, slackChoiceBlocks } from "./slack/slackMessageFormatting.ts";
+import { slackOutboundPosts } from "./slack/slackMessageFormatting.ts";
 import {
   defaultScript,
   linkSlackUser,
@@ -407,13 +407,14 @@ describe("decision cards", () => {
       yield* runtime.drain;
       const asked = resultsTo(harness.slackSent, "question").at(-1)?.message;
       assert.include(asked?.text ?? "", CHANNEL_COPY.approvalNeedsCode);
-      const parts = formatSlackOutboundMessages({ text: asked?.text ?? "" });
-      const blocks = slackChoiceBlocks(parts.at(-1) ?? "", asked?.options ?? []) ?? [];
-      const shown = [
-        ...parts.slice(0, -1),
-        ...blocks.flatMap((block) => (block.type === "section" ? [block.text.text] : [])),
-      ].join("\n");
-      assert.lengthOf(parts, 1);
+      // What Slack shows: a plain post's text, or the section of the post carrying the buttons.
+      const shown = slackOutboundPosts({ text: asked?.text ?? "", options: asked?.options })
+        .flatMap((post) =>
+          (post.blocks ?? [{ type: "section" as const, text: { text: post.text } }]).flatMap(
+            (block) => (block.type === "section" ? [block.text.text] : []),
+          ),
+        )
+        .join("\n");
       for (const prompt of prompts) assert.include(shown, prompt.replaceAll("&", "&amp;"));
     }).pipe(Effect.provide(harness.layer));
   });

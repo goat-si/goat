@@ -90,12 +90,14 @@ function fittingPieces(text: string, room: number, limit = SLACK_CHUNK_LIMIT): A
 export function formatSlackOutboundMessages(input: {
   readonly text: string;
   readonly mentionUserId?: string | undefined;
+  /** Formatted characters per message; a message carrying buttons must fit one section. */
+  readonly limit?: number | undefined;
 }): Array<string> {
   const mention =
     input.mentionUserId !== undefined && SLACK_USER_ID.test(input.mentionUserId)
       ? `<@${input.mentionUserId}> `
       : "";
-  const room = SLACK_TEXT_LIMIT - mention.length;
+  const room = (input.limit ?? SLACK_TEXT_LIMIT) - mention.length;
   const text = markdownTablesToLists(input.text.trim(), { bullet: "•", boldFirst: true });
   const pieces = fittingPieces(text, room);
   const kept =
@@ -145,28 +147,10 @@ const buttonText = (label: string) =>
     : label.slice(0, SLACK_BUTTON_TEXT_LIMIT - 1) + "…";
 
 /**
- * Splits text into Slack section texts at a line break or space, dropping none of it: a card's
- * buttons stay, so cutting the text could hide what a button would answer.
- */
-const sectionTexts = (text: string): Array<string> => {
-  const pieces: Array<string> = [];
-  let rest = text;
-  while (rest.length > SLACK_SECTION_TEXT_LIMIT) {
-    const window = rest.slice(0, SLACK_SECTION_TEXT_LIMIT);
-    const line = window.lastIndexOf("\n");
-    const cut = line > 0 ? line : window.lastIndexOf(" ");
-    const at = cut > 0 ? cut : SLACK_SECTION_TEXT_LIMIT;
-    pieces.push(rest.slice(0, at));
-    rest = rest.slice(at).replace(/^[\n ]/, "");
-  }
-  return rest === "" ? pieces : [...pieces, rest];
-};
-
-/**
- * Block Kit for a card or question: the text in sections, and one button per option. The button
+ * Block Kit for a card or question: the text in a section, and one button per option. The button
  * value is the option label, which reception reads as the person's reply.
  */
-export const slackChoiceBlocks = (
+const slackChoiceBlocks = (
   text: string,
   options: ReadonlyArray<string>,
 ): ReadonlyArray<SlackChoiceBlock> | undefined => {
@@ -183,11 +167,37 @@ export const slackChoiceBlocks = (
         ],
   );
   if (elements.length === 0) return undefined;
+  // slackOutboundPosts sizes these posts to one section; the cut only guards other callers.
+  const section =
+    text.length <= SLACK_SECTION_TEXT_LIMIT
+      ? text
+      : text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1) + "…";
   return [
-    ...sectionTexts(text).map((section) => ({
-      type: "section" as const,
-      text: { type: "mrkdwn" as const, text: section },
-    })),
+    { type: "section", text: { type: "mrkdwn", text: section } },
     { type: "actions", block_id: "goat_choices", elements },
   ];
 };
+
+/**
+ * The posts one outbound message becomes: its text parts, the last carrying the choice buttons.
+ * With buttons every part fits one section, split before escaping, so none is cut or broken.
+ */
+export function slackOutboundPosts(input: {
+  readonly text: string;
+  readonly mentionUserId?: string | undefined;
+  readonly options?: ReadonlyArray<string> | undefined;
+}): Array<{ readonly text: string; readonly blocks?: ReadonlyArray<SlackChoiceBlock> }> {
+  const options = input.options ?? [];
+  const parts = formatSlackOutboundMessages({
+    text: input.text,
+    mentionUserId: input.mentionUserId,
+    limit: options.length > 0 ? SLACK_SECTION_TEXT_LIMIT : SLACK_TEXT_LIMIT,
+  });
+  return parts.map((text, index) => {
+    const blocks =
+      index === parts.length - 1 && options.length > 0
+        ? slackChoiceBlocks(text, options)
+        : undefined;
+    return blocks === undefined ? { text } : { text, blocks };
+  });
+}
