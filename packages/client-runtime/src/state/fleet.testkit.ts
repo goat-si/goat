@@ -4,7 +4,7 @@ import type { FleetEnvironment, FleetShell } from "./fleet.ts";
 
 const codex = ProviderInstanceId.make("codex");
 
-type ShellOptions = {
+export type ShellOptions = {
   readonly status?: NonNullable<FleetShell["runtime"]>["status"] | null;
   readonly background?: boolean;
   readonly approval?: boolean;

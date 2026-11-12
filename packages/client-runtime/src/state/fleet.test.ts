@@ -18,7 +18,7 @@ import {
   type FleetRemoteSource,
   type FleetShell,
 } from "./fleet.ts";
-import { env, shell } from "./fleet.testkit.ts";
+import { env, shell, type ShellOptions } from "./fleet.testkit.ts";
 
 const local = EnvironmentId.make("local");
 const remote = EnvironmentId.make("remote");
