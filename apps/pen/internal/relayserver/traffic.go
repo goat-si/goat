@@ -26,6 +26,8 @@ const (
 	SessionLinesPerSecond = 1
 	// LogQueue is how many lines wait for a slow log; past it a line is dropped and counted.
 	LogQueue = 1024
+	// finalSummaries is how many times Close writes the totals while the log fails some of them.
+	finalSummaries = 3
 )
 
 type traffic struct {
@@ -429,11 +431,33 @@ func (s *Server) sessionDone(k *sock) {
 	t.release()
 }
 
-// trafficStop queues the totals one last time, stops the summary timer and waits for the log
-// writer at most WriteTimeout: a log that stopped reading must not hold the shutdown.
+// trafficStop writes the totals one last time, again while the log fails some of their lines (at
+// most finalSummaries times), stops the summary timer and waits for the log writer; all of it
+// within WriteTimeout, so a log that stopped reading does not hold the shutdown. Lines the log
+// still refuses after that are lost.
 func (s *Server) trafficStop() {
-	s.Summarize()
 	t := &s.traffic
+	after := t.after
+	if after == nil {
+		after = func(d time.Duration) (<-chan time.Time, func() bool) {
+			tm := time.NewTimer(d)
+			return tm.C, tm.Stop
+		}
+	}
+	deadline, stop := after(s.Limits.WriteTimeout)
+	defer stop()
+	for range finalSummaries {
+		s.Summarize()
+		if !t.flushed(deadline) {
+			break
+		}
+		t.mu.Lock()
+		again := t.changed
+		t.mu.Unlock()
+		if !again {
+			break
+		}
+	}
 	t.mu.Lock()
 	t.closed = true
 	if t.timer != nil {
@@ -445,6 +469,32 @@ func (s *Server) trafficStop() {
 	written := t.written
 	t.mu.Unlock()
 	if written != nil {
-		t.wait(written, s.Limits.WriteTimeout)
+		select {
+		case <-written:
+		case <-deadline:
+		}
+	}
+}
+
+// flushed reports whether the log writer took every line queued so far before deadline. It holds
+// no lock while it waits: the writer takes mu when a line fails.
+func (t *traffic) flushed(deadline <-chan time.Time) bool {
+	t.mu.Lock()
+	lines := t.lines
+	t.mu.Unlock()
+	if lines == nil {
+		return false
+	}
+	ack := make(chan struct{})
+	select {
+	case lines <- logItem{ack: ack}:
+	case <-deadline:
+		return false
+	}
+	select {
+	case <-ack:
+		return true
+	case <-deadline:
+		return false
 	}
 }

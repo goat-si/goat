@@ -740,3 +740,26 @@ func TestALineTheLogFailedToTakeIsCountedAndItsSummaryRetried(t *testing.T) {
 		t.Fatalf("relay lines %v, want one counting the 2 failed writes", relay)
 	}
 }
+
+// A final summary line the log fails to take is written again before Close returns.
+func TestAFinalLineTheLogFailedToTakeIsRetriedBeforeCloseReturns(t *testing.T) {
+	id := newID(t)
+	lv, _, _ := trafficLive(t, id)
+	log := &failingLog{}
+	log.srv = lv.s
+	lv.s.TrafficLog = log
+	lv.exchange(t, lv.uplink(id, true))
+	syncLog(lv.s)
+	log.mu.Lock()
+	log.fail = 1
+	log.mu.Unlock()
+	lv.s.Close()
+	raw := log.lineLog.raw()
+	if node := parse(t, raw, "node"); len(node) != 1 || node[0]["toNode"] != float64(1) {
+		t.Fatalf("node lines %v, want the failed final one written again", node)
+	}
+	relay := parse(t, raw, "relay")
+	if last := relay[len(relay)-1]; last["linesDropped"] != float64(1) {
+		t.Fatalf("last relay line %v, want the failed write counted", last)
+	}
+}
