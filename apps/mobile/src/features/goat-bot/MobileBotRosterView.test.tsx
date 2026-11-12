@@ -119,12 +119,14 @@ const members = vi.hoisted(() => ({
   >,
 }));
 vi.mock("./useMobileMemberStatus", () => ({
-  useMobileMemberStatus: (bot: { botId: string }) =>
-    members.status[bot.botId] ?? {
+  useMobileMemberStatus: (bot: { botId: string }) => {
+    const shown = members.status[bot.botId] ?? {
       waitingCount: bot.botId === "research" ? 2 : 0,
       latest: undefined,
       unread: false,
-    },
+    };
+    return { ...shown, status: { waitingCount: shown.waitingCount, latest: shown.latest } };
+  },
 }));
 vi.mock("../../state/use-thread-detail", () => ({
   useThreadVisibleTurnItems: () => face.items,
@@ -231,7 +233,7 @@ it("shows the waiting face on the main bot for a waiting task the roster hides",
         />,
       ),
     );
-    expect(container.querySelector('[aria-label="GOAT Bot, Waiting for you"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Waiting for you, GOAT Bot"]')).not.toBeNull();
   } finally {
     face.items = [];
   }
@@ -421,7 +423,7 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
       element.textContent?.includes(label),
     );
   expect(button("Research")?.getAttribute("aria-pressed")).toBe("true");
-  expect(button("Research")?.querySelector('[aria-label="2 waiting for you"]')).not.toBeNull();
+  expect(button("Research")?.getAttribute("aria-label")).toBe("2 waiting for you, Research");
   // A member without an emoji shows its initial, so it is told apart from the main bot's face.
   expect(button("Research")?.querySelector("[data-picture]")?.getAttribute("data-picture")).toBe(
     "R",
@@ -537,12 +539,12 @@ it("gives each member row its latest message, unread mark and state in one spoke
     );
     const row = (name: string) =>
       [...container.querySelectorAll("button")].find((element) =>
-        element.getAttribute("aria-label")?.startsWith(name),
+        element.getAttribute("aria-label")?.split(", ").includes(name),
       );
     // The second line is the newest message as plain words; the person's own is marked as theirs.
     expect(row("Scout")?.textContent).toContain("Which branch should I use?");
     expect(row("Scout")?.getAttribute("aria-label")).toBe(
-      "Scout, 1 waiting for you, unread, Which branch should I use?",
+      "1 waiting for you, Scout, unread, Which branch should I use?",
     );
     expect(row("Writer")?.textContent).toContain("You: Draft the release notes");
     expect(row("Writer")?.getAttribute("aria-label")).toBe("Writer, You: Draft the release notes");

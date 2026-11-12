@@ -4,6 +4,7 @@ import {
   FACE_MOTION_RANK,
   goatBotAvatarEmoji,
   goatBotFaceLabel,
+  goatBotFaceSpoken,
   goatBotPreviewText,
   goatBotAccent,
 } from "@goat/client-runtime/goatBot";
@@ -164,7 +165,13 @@ export function MobileBotRosterView(props: {
               onPress={() => props.onOpenBot(bot)}
               onLongPress={longPress}
               accessibilityState={{ selected }}
-              accessibilityLabel={`${bot.profile?.name ?? "GOAT Bot"}${mainFaceLabel ? `, ${mainFaceLabel}` : ""}${props.unread ? ", unread" : ""}`}
+              accessibilityLabel={[
+                mainFaceLabel,
+                bot.profile?.name ?? "GOAT Bot",
+                props.unread ? "unread" : null,
+              ]
+                .filter((part) => part !== null)
+                .join(", ")}
               className={
                 selected
                   ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
@@ -306,11 +313,11 @@ function MemberRow(props: {
   readonly onLongPress: (() => void) | undefined;
 }) {
   const { bot } = props;
-  const { waitingCount, latest, unread } = useMobileMemberStatus(bot);
+  const { waitingCount, latest, unread, status } = useMobileMemberStatus(bot);
   const face = useMobileGoatBotFace(
     null,
     { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
-    { waitingCount },
+    { status },
   );
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -319,10 +326,11 @@ function MemberRow(props: {
         ? `You: ${latestText}`
         : latestText
       : bot.purpose.trim();
+  // The state comes first and says waiting once, with its count; the badge stays silent.
   const label = [
+    goatBotFaceSpoken(face.state, waitingCount),
     bot.name,
     props.hidden ? "hidden" : null,
-    waitingCount > 0 ? `${waitingCount} waiting for you` : null,
     unread ? "unread" : null,
     line || null,
   ]
@@ -355,7 +363,8 @@ function MemberRow(props: {
           </Text>
           {waitingCount > 0 ? (
             <Text
-              accessibilityLabel={`${waitingCount} waiting for you`}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
               className="text-xs font-semibold text-foreground"
             >
               {waitingCount}
