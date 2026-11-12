@@ -76,6 +76,17 @@ const writeAtomically = (file: string, contents: string, mode = 0o600) => {
   NodeFS.renameSync(next, file);
 };
 
+// Runs after a runtime is ready and recorded: a leftover file is logged and never changes the result.
+const cleanUpAfterStart = (path: string) => {
+  try {
+    NodeFS.rmSync(path, { recursive: true, force: true });
+  } catch (cause) {
+    process.stderr.write(
+      `Replacement supervisor could not remove ${path}: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+    );
+  }
+};
+
 /**
  * The start time a launch records for a forced stop to compare, as `ps -o lstart=` prints it in
  * UTC, and on Linux the start tick from /proc; undefined where neither can be read.
@@ -440,8 +451,8 @@ const superviseReplacement = async (
   );
   if (typeof started === "object") return stuck(started.stuck, input.targetVersion);
   if (started !== undefined) {
-    NodeFS.rmSync(backup, { recursive: true, force: true });
-    if (input.previousRunnerFile) NodeFS.rmSync(input.previousRunnerFile, { force: true });
+    cleanUpAfterStart(backup);
+    if (input.previousRunnerFile) cleanUpAfterStart(input.previousRunnerFile);
     return { status: "replaced", pid: started, version: input.targetVersion };
   }
   const restoreLock = tryAcquireServerOwnerLock(userdata, sshSupervisorOwner(replacementId));
@@ -480,8 +491,8 @@ const superviseReplacement = async (
       status: "failed",
       reason: `GOAT ${input.targetVersion} and the previous ${input.previousVersion} both failed to start.`,
     };
-  NodeFS.rmSync(backup, { recursive: true, force: true });
-  NodeFS.rmSync(input.previousRunnerFile, { force: true });
+  cleanUpAfterStart(backup);
+  cleanUpAfterStart(input.previousRunnerFile);
   return { status: "rolled-back", pid: restored, version: input.previousVersion };
 };
 

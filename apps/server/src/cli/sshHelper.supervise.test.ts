@@ -510,6 +510,11 @@ it("rolls back to a previous version whose protocol does not overlap this build"
   const outside = NodePath.join(baseDir, "outside");
   NodeFS.writeFileSync(outside, "keep\n");
   NodeFS.symlinkSync(outside, NodePath.join(stateDir, `started.next.${process.pid}`));
+  // A backup that cannot be removed afterwards must not turn a running runtime into a failure.
+  const locked = NodePath.join(stateDir, "replacement-backup", "locked");
+  NodeFS.mkdirSync(locked, { recursive: true });
+  NodeFS.writeFileSync(NodePath.join(locked, "kept"), "");
+  NodeFS.chmodSync(locked, 0o500);
   try {
     const result = await superviseSshRuntimeReplacement({
       oldPid: deadPid(),
@@ -551,6 +556,11 @@ it("rolls back to a previous version whose protocol does not overlap this build"
     assert.equal(compat.serverVersion, previousVersion);
     assert.notEqual(compat.instanceId, "old");
   } finally {
+    NodeFS.chmodSync(locked, 0o700);
+    // A failing assertion must still stop the runtime the supervisor recorded.
+    const recorded = NodePath.join(stateDir, "pid");
+    if (restoredPid === 0 && NodeFS.existsSync(recorded))
+      restoredPid = Number(NodeFS.readFileSync(recorded, "utf8").trim());
     if (restoredPid !== 0) {
       try {
         process.kill(restoredPid, "SIGKILL");
