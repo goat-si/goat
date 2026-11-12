@@ -153,8 +153,8 @@ so its agents use the hub's accounts without a sign-in there. On the hub:
    and install OpenCodex on it (`goat opencodex install` there, or the server installer's
    `--opencodex` option).
 4. In **Settings → Hub → Hub devices**, turn on **Join as OpenCodex Child after each SSH setup** on
-   the member's row. GOAT links it with the host key Pen recorded for the member, installs Codex
-   there and marks it **Ready** once a model request goes through the hub.
+   the member's row. GOAT links it with the host key Pen recorded for the member and sets it up as
+   described in [Hub devices](./hub.md#add-repair-or-remove-a-device).
 
 To detach it, use **Leave** on its row, then remove the machine from the mesh (see
 [Remove a machine](#remove-a-machine)). Run `pen leave` from the machine's own console, such as
@@ -308,17 +308,17 @@ and the two push each other off the relays. If that happens, on the copy run `pe
 `~/.pen` and join again; `pen leave` there would remove the original machine too, since both hold
 the same keys.
 
-Platforms that put idle boxes to sleep do not count Pen traffic as activity. A boxes.dev box that
-you reach only through Pen goes to sleep a few minutes after it wakes, even while GOAT has it open;
-asleep, it is offline in Pen and GOAT reports it unreachable. Wake it on the platform first
-(`dvb wake <machine>` on boxes.dev), or turn on **Keep awake** in the box's status menu for as
-long as you need it. Both use box-hours.
+A platform that freezes idle boxes, such as boxes.dev, does not count Pen traffic as activity, and
+no loop or service on the box keeps it awake. A box you reach only through Pen freezes a few minutes
+after it wakes, even while GOAT has it open; frozen, it is offline in Pen and GOAT reports it
+unreachable. Wake it with the platform's own short command right before you use it
+(`dvb wake <machine>` on boxes.dev), and run it again each time the box has frozen since. An agent
+working on the box from GOAT does the same.
 
 ## Not supported
 
 - Direct connections between machines: all traffic goes through a relay.
 - Running Pen on Windows before anyone signs in: it runs as the signed-in user.
-- Waking a cloud box its platform has put to sleep.
 - Managing Pen from GOAT's settings; use the `pen` command or its dashboard.
 - Signing in with a Google account the Pen sign-in service does not allow yet. While the service is
   in testing, only listed accounts can sign in; invites work for everyone.
