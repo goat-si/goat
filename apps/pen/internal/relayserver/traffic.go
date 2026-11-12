@@ -446,9 +446,13 @@ func (s *Server) trafficStop() {
 	}
 	deadline, stop := after(s.Limits.WriteTimeout)
 	defer stop()
+	// A timer's channel fires once: expired remembers that it did.
+	expired := false
 	for range finalSummaries {
 		s.Summarize()
-		if !t.flushed(deadline) {
+		taken, late := t.flushed(deadline)
+		expired = late
+		if !taken {
 			break
 		}
 		t.mu.Lock()
@@ -468,7 +472,7 @@ func (s *Server) trafficStop() {
 	}
 	written := t.written
 	t.mu.Unlock()
-	if written != nil {
+	if written != nil && !expired {
 		select {
 		case <-written:
 		case <-deadline:
@@ -476,25 +480,25 @@ func (s *Server) trafficStop() {
 	}
 }
 
-// flushed reports whether the log writer took every line queued so far before deadline. It holds
-// no lock while it waits: the writer takes mu when a line fails.
-func (t *traffic) flushed(deadline <-chan time.Time) bool {
+// flushed reports whether the log writer took every line queued so far before deadline, and
+// whether deadline fired. It holds no lock while it waits: the writer takes mu when a line fails.
+func (t *traffic) flushed(deadline <-chan time.Time) (taken, expired bool) {
 	t.mu.Lock()
 	lines := t.lines
 	t.mu.Unlock()
 	if lines == nil {
-		return false
+		return false, false
 	}
 	ack := make(chan struct{})
 	select {
 	case lines <- logItem{ack: ack}:
 	case <-deadline:
-		return false
+		return false, true
 	}
 	select {
 	case <-ack:
-		return true
+		return true, false
 	case <-deadline:
-		return false
+		return false, true
 	}
 }

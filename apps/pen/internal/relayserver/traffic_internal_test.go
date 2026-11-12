@@ -514,15 +514,27 @@ func TestABlockedLogHoldsNoHandlerAndCloseStaysBounded(t *testing.T) {
 	lv.s.TrafficNodes = map[string]bool{id.NodeID(): true}
 	lv.s.traffic.burst = 1000
 	lv.s.traffic.queue = 8
-	fired := make(chan time.Time)
-	close(fired)
-	lv.s.traffic.after = func(time.Duration) (<-chan time.Time, func() bool) { return fired, func() bool { return false } }
+	// Each deadline fires once and at once, as an expired timer's channel does.
+	lv.s.traffic.after = func(time.Duration) (<-chan time.Time, func() bool) {
+		fired := make(chan time.Time, 1)
+		fired <- time.Time{}
+		return fired, func() bool { return false }
+	}
 	n := lv.uplink(id, true)
 	const sessions = 20
 	for range sessions {
 		lv.exchange(t, n)
 	}
-	lv.s.Close()
+	closed := make(chan struct{})
+	go func() {
+		lv.s.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(failsafe):
+		t.Fatal("Close did not return while the log was blocked")
+	}
 	release()
 	select {
 	case <-lv.s.traffic.written:
