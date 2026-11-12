@@ -110,13 +110,15 @@ export const fixture = Effect.fn(function* (
     failStopOnce?: boolean;
     /**
      * helperStart holds the first agent helper's start, checkStart the first readiness check
-     * helper's, until release or that host's stop.
+     * helper's, until release or that host's stop. helperStop holds the stop of a helper that
+     * exited on its own until release.
      */
     hold?:
       | "start"
       | "stop"
       | "monitor"
       | "helperStart"
+      | "helperStop"
       | "checkStart"
       | "agentManifest"
       | "manifestOnly"
@@ -184,6 +186,7 @@ export const fixture = Effect.fn(function* (
   const askingGrants = yield* Deferred.make<void>();
   let grantsCancelled = false;
   const stopping = yield* Deferred.make<void>();
+  const helperStopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
   const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
   const gate = Promise.withResolvers<void>();
@@ -336,6 +339,7 @@ export const fixture = Effect.fn(function* (
       const exit = Promise.withResolvers<void>();
       const stopped = Promise.withResolvers<boolean>();
       let running = false;
+      let exited = false;
       let readinessClient: ReturnType<typeof createClient> | undefined;
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
       const session = {
@@ -432,6 +436,10 @@ export const fixture = Effect.fn(function* (
         stop: async () => {
           stops++;
           running = false;
+          if (options.hold === "helperStop" && exited) {
+            Deferred.doneUnsafe(helperStopping, Exit.void);
+            await gate.promise;
+          }
           stopped.resolve(true);
           readinessClient?.uniffiDestroy?.();
           readinessClient = undefined;
@@ -439,6 +447,7 @@ export const fixture = Effect.fn(function* (
         },
         waitForExit: (_generation, operation) => {
           const crash = () => {
+            exited = true;
             exit.resolve();
             return exit.promise;
           };
@@ -738,6 +747,8 @@ export const fixture = Effect.fn(function* (
     askingGrants: Deferred.await(askingGrants),
     grantsCancelled: () => grantsCancelled,
     stopping: Deferred.await(stopping),
+    /** A crashed helper's stop has begun; with hold helperStop it waits for release. */
+    helperStopping: Deferred.await(helperStopping),
     destroyed: Queue.take(destroyed),
     nextAgentCrash: Queue.take(agentMonitors),
     release: Effect.sync(() => gate.resolve()),

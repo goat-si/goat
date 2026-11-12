@@ -975,6 +975,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
                 yield* forgetCrash(entry);
                 if (owned !== entry || entry.cleanup) return;
                 const request = currentRequest;
+                // Said before the cleanup it waits on, which can take seconds.
+                yield* noteHelper((state) => withRunning(state, false));
                 yield* stop;
                 if (request) yield* unavailable(request.requestId);
               }),

@@ -15,7 +15,7 @@ import { actionResultFromDriver, PRE_DISPATCH_CODES } from "@goat/shared/compute
 
 import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 
-export { driverExitReason } from "./ComputerUseDriverExit.ts";
+export { endForDriverExit } from "./ComputerUseDriverExit.ts";
 
 const STALL_CODE = "capture_backend_stalled";
 // The driver's refusal once native capture is off (cua-driver platform-macos capture.rs).

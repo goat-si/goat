@@ -10,6 +10,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -92,6 +93,39 @@ it.effect(
       });
       expect(yield* Queue.take(revisions)).toEqual({ revision: 5 });
     }).pipe(Effect.provide(Layer.mock(Handoffs.Handoffs)({})), Effect.scoped),
+);
+
+it.effect("invalidates host status when the desktop's telemetry stream stops (#1305)", () =>
+  Effect.gen(function* () {
+    const health =
+      yield* PubSub.unbounded<DesktopTelemetryReceiver.DesktopTelemetryReceiverHealth>();
+    const healthy: DesktopTelemetryReceiver.DesktopTelemetryReceiverHealth = {
+      status: "healthy",
+      lastSampleAt: Option.none(),
+      lastError: Option.none(),
+    };
+    const handlers = yield* makeComputerUseRpcHandlers(AuthSessionId.make("health-test")).pipe(
+      Effect.provide(
+        DesktopTelemetryReceiver.layerTest({
+          subscribeHealth: PubSub.subscribe(health).pipe(
+            Effect.map((subscription) => ({
+              latest: healthy,
+              changes: Stream.fromSubscription(subscription),
+            })),
+          ),
+        }),
+      ),
+    );
+    const revisions = yield* Queue.unbounded<{ readonly revision: number }>();
+    yield* handlers["computerUse.statusChanges"]({}).pipe(
+      Stream.runForEach((value) => Queue.offer(revisions, value)),
+      Effect.forkChild,
+    );
+    expect(yield* Queue.take(revisions)).toEqual({ revision: 0 });
+    // The receiver drops the desktop's readiness before it says the stream stopped.
+    yield* PubSub.publish(health, { ...healthy, status: "stopped" as const });
+    expect(yield* Queue.take(revisions)).toEqual({ revision: 1 });
+  }).pipe(Effect.provide(Layer.mock(Handoffs.Handoffs)({})), Effect.scoped),
 );
 
 it.effect("emits only the initial status revision when desktop telemetry is absent", () =>

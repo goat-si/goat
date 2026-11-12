@@ -405,6 +405,36 @@ describe("thread lease proxy", () => {
         assert.deepEqual(h.log, []);
       }),
   );
+
+  it.effect(
+    "a control whose driver exited on its own gets a new driver from the server's next update for it (#1348)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* threadHarness();
+        yield* h.push(snapshot("A"));
+        const first = yield* h.started;
+        yield* h.applied;
+        // The driver exits on its own: its output ends.
+        yield* Queue.end(first.replies);
+        yield* Deferred.await(first.killed);
+        yield* h.send(work(1));
+        assert.equal((yield* h.next).result?.structuredContent?.detail, "helper_restarted");
+        // The thread's next turn reuses the same control.
+        yield* h.push(snapshot("A"));
+        yield* h.applied;
+        yield* h.send(work(2));
+        const routed = yield* Effect.raceFirst(
+          h.next.pipe(
+            Effect.map((answer) => `refused: ${String(answer.result?.structuredContent?.detail)}`),
+          ),
+          h.started.pipe(
+            Effect.flatMap((driver) => Queue.take(driver.sent)),
+            Effect.map((line) => `driver: ${String((JSON.parse(line) as { id: number }).id)}`),
+          ),
+        );
+        assert.equal(routed, "driver: 2");
+      }),
+  );
 });
 
 it.effect.each(["eof", "error"] as const)(

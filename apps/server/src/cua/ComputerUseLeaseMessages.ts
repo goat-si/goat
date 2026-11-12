@@ -91,7 +91,7 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   transport_lost:
     "Computer use could not reach GOAT for two minutes, so this thread's control ended and this call did not run. It reconnects by itself; once GOAT answers, a later turn or approval restores control.",
   helper_restarted:
-    "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped, and that Restart agent session brings it back.",
+    "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use ended for this turn. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped. The thread's next turn starts it again; if it does not, Restart agent session brings it back.",
   // The helper exited 77: its parent check refused the process that started it.
   helper_refused:
     "GOAT Computer Use refused to start for this connection because it did not trust the process that launched it, so computer use is unavailable here. Nothing ran. Restarting the agent session will not fix it. Do not retry; end your turn and tell the person that GOAT Computer Use refused this GOAT's connection and GOAT needs an update.",

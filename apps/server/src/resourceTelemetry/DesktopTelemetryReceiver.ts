@@ -731,6 +731,8 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           ),
         );
       }),
+      // The stream that carried it ended or failed, so nothing may act on it.
+      Effect.ensuring(Ref.set(cuaReadiness, Option.none())),
       Effect.andThen(
         updateHealth((current): DesktopTelemetryReceiverHealth => ({
           ...current,
