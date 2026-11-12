@@ -803,4 +803,36 @@ describe("LaunchWatchService follower contact failures", () => {
         expect(world.hostCalls[1]?.at).toBeGreaterThanOrEqual(Number(warnings[0]?.nextRetryAt));
       }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("a conditional unwatch removes only the same watch, only while its host is away", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const hung = yield* Deferred.make<void>();
+      const retried = yield* Deferred.make<void>();
+      world.hostCall = (call) =>
+        call.tool === "goat_thread_wait"
+          ? Deferred.isDone(hung).pipe(
+              Effect.flatMap((again) => Deferred.succeed(again ? retried : hung, undefined)),
+              Effect.andThen(Effect.never),
+            )
+          : Effect.die(new Error("unexpected host call " + call.tool));
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          const registered = yield* watchRemote(service, run1);
+          const key = { launcherThreadId: launcher, host: "box", threadId: target };
+          const only = { incarnation: registered.incarnation };
+          // Its host has not failed yet: kept.
+          expect(yield* service.unwatch(key, only)).toBe(false);
+          yield* Deferred.await(hung);
+          yield* advanceUntil(Deferred.await(retried));
+          // Another incarnation of the watch than the one listed: kept.
+          expect(yield* service.unwatch(key, { incarnation: "re-registered" })).toBe(false);
+          expect(yield* service.list(launcher)).toHaveLength(1);
+          expect(yield* service.unwatch(key, only)).toBe(true);
+          expect(yield* service.list(launcher)).toEqual([]);
+        }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

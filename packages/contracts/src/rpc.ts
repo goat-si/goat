@@ -490,11 +490,7 @@ import {
   SshWorkspaceError,
 } from "./sshWorkspace.ts";
 import { VcsError } from "./vcs.ts";
-import {
-  RemoteLaunchesError,
-  RemoteLaunchesListInput,
-  RemoteLaunchesListResult,
-} from "./remoteReports.ts";
+import { REMOTE_LAUNCHES_WS_METHODS, RemoteLaunchesRpcs } from "./remoteLaunchesRpc.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 import {
   CloudMachine,
@@ -718,7 +714,7 @@ export const WS_METHODS = {
   ...NOTES_WS_METHODS,
 
   // Threads this environment launched or watches on other machines
-  remoteLaunchesList: "remoteLaunches.list",
+  remoteLaunchesList: REMOTE_LAUNCHES_WS_METHODS.list,
 
   // Boat cloud machines this environment manages as SSH hosts
   cloudMachinesList: "cloudMachines.list",
@@ -2331,12 +2327,6 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   error: Schema.Union([SecretRequestError, HandoffError, EnvironmentAuthorizationError]),
 });
 
-const WsRemoteLaunchesListRpc = Rpc.make(WS_METHODS.remoteLaunchesList, {
-  payload: RemoteLaunchesListInput,
-  success: RemoteLaunchesListResult,
-  error: Schema.Union([RemoteLaunchesError, EnvironmentAuthorizationError]),
-});
-
 /** Cloud agent runs this environment follows or links, for Fleet. */
 const WsCloudAgentsListRunsRpc = Rpc.make(WS_METHODS.cloudAgentsListRuns, {
   payload: CloudRunListInput,
@@ -2573,7 +2563,6 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsHandoffsRespondRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
-  WsRemoteLaunchesListRpc,
   WsCloudMachinesListRpc,
   WsCloudAgentsListRunsRpc,
   WsCloudAgentsListFolderTrustRpc,
@@ -2771,11 +2760,13 @@ export const WsNotesRpcGroup = NotesRpcs.middleware(RpcScopeAuthorization);
 export const WsDecisionRpcGroup = DecisionRpcs.middleware(RpcScopeAuthorization);
 export const WsBrowserClaimsRpcGroup = BrowserClaimsRpcs.middleware(RpcScopeAuthorization);
 export const WsGlobalSkillsRpcGroup = GlobalSkillsRpcs.middleware(RpcScopeAuthorization);
+export const WsRemoteLaunchesRpcGroup = RemoteLaunchesRpcs.middleware(RpcScopeAuthorization);
 export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsNotesRpcGroup)
   .merge(WsDecisionRpcGroup)
   .merge(WsBrowserClaimsRpcGroup)
-  .merge(WsGlobalSkillsRpcGroup);
+  .merge(WsGlobalSkillsRpcGroup)
+  .merge(WsRemoteLaunchesRpcGroup);
 
 export {
   WsMemoryProjectBindingGetRpc,

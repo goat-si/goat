@@ -52,6 +52,8 @@ import {
   retiredWorkerKeyFor,
 } from "./channelIds.ts";
 
+const FAILED_RUNS: ReadonlySet<string> = new Set(["failed", "interrupted", "rolled_back"]);
+
 /** At most this many active delegated subagents per channel task. */
 export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 8;
 
@@ -650,8 +652,14 @@ const make = Effect.gen(function* () {
   ) {
     // Read before the dispatch row, for the same reason as reconcileLocal.
     const launchEnded = record.state === "launched" && !isLaunching(record);
-    const rows = yield* sql<{ readonly state: string }>`
-      SELECT state FROM remote_dispatches WHERE correlation_id = ${correlationId}
+    const rows = yield* sql<{
+      readonly state: string;
+      readonly kind: string;
+      readonly known_run_status: string | null;
+      readonly end_reason: string | null;
+    }>`
+      SELECT state, kind, known_run_status, end_reason FROM remote_dispatches
+      WHERE correlation_id = ${correlationId}
     `.pipe(Effect.mapError(() => undefined));
     if (rows === undefined) return false;
     if (rows[0] === undefined) {
@@ -660,16 +668,24 @@ const make = Effect.gen(function* () {
       if (!launchEnded) return false;
       return yield* transition(record, ["launched"], "released");
     }
-    const state = rows[0].state;
+    const { state, kind, known_run_status: runStatus, end_reason: endReason } = rows[0];
     if (state === "running" || state === "idle") {
       if (record.state !== "bound")
         return yield* transition(record, ["launched", "unknown"], "bound");
       return false;
     }
+    // A task's row settles for every result; the run status it keeps says which.
     if (state === "settled")
-      return yield* transition(record, ["launched", "bound", "unknown"], "completed");
+      return yield* transition(
+        record,
+        ["launched", "bound", "unknown"],
+        kind === "task" && FAILED_RUNS.has(runStatus ?? "") ? "failed" : "completed",
+      );
     if (state === "cancelled")
       return yield* transition(record, ["launched", "bound", "unknown"], "cancelled");
+    // GOAT stopped tracking it after a day without contact; whatever ran there is not this slot's.
+    if (state === "lost" && endReason === "host_unreachable")
+      return yield* transition(record, ["launched", "bound", "unknown"], "failed");
     if (state === "lost") {
       // The outcome is uncertain until the coordinator's resolve pass settles the row with the
       // destination: rebound (running) or fenced (cancelled).

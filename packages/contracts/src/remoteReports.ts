@@ -268,6 +268,10 @@ export const RemoteLaunch = Schema.Struct({
   latest: RemoteDispatchView.fields.latest,
   hostUnavailableSince: Schema.NullOr(IsoDateTime),
   updatedAt: IsoDateTime,
+  /** True when GOAT can stop following it without its host (remoteLaunches.dismiss). Older servers omit it. */
+  dismissable: Schema.optionalKey(Schema.Boolean),
+  /** When a person or agent stopped following it. */
+  dismissedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
 });
 export type RemoteLaunch = typeof RemoteLaunch.Type;
 

@@ -60,6 +60,10 @@ export interface RemoteDispatchRecord {
   readonly pendingRequestIds: ReadonlyArray<RuntimeRequestId>;
   readonly observation: ChannelWorkerObservationType | null;
   readonly lastError: string | null;
+  /** Start of the current run of unreachable outcomes; kept when that run ended tracking. */
+  readonly hostUnavailableSince: string | null;
+  readonly endReason: RemoteDispatchRow.RemoteDispatchEndReason | null;
+  readonly endedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -90,6 +94,9 @@ export const publicRow = (r: RemoteDispatchRow.RemoteDispatchRow): RemoteDispatc
   pendingRequestIds: r.pending_request_ids ?? [],
   observation: r.observation ?? null,
   lastError: r.last_error,
+  hostUnavailableSince: r.host_unavailable_since ?? null,
+  endReason: r.end_reason ?? null,
+  endedAt: r.ended_at ?? null,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });

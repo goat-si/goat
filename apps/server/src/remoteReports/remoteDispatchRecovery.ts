@@ -19,6 +19,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { decodeRemoteDispatchRows, type RemoteDispatchRow } from "./remoteDispatchRow.ts";
+import { threadKnownRun } from "./remoteThreadObservation.ts";
 
 const decodeResolution = Schema.decodeUnknownEffect(RemoteResolveBindingResult);
 
@@ -127,4 +128,91 @@ export const resolveLostThreadLaunches = Effect.fn("remoteReports.resolveLostThr
     }
   },
   Effect.catchCause((cause) => Effect.logWarning("Lost remote launch pass failed.", { cause })),
+);
+
+// A thread lost to an unreachable host is asked again this often; any answer returns it to a drain.
+const PROBE_RETRY_MS = 30 * 60_000;
+
+/** Ends a host_unreachable loss so a drain can follow the thread again. False when nothing changed. */
+export const reopenUnreachable = Effect.fn("remoteReports.reopenUnreachable")(function* (
+  id: string,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const at = DateTime.formatIso(yield* DateTime.now);
+  const reopened = yield* sql`UPDATE remote_dispatches SET state = 'running', end_reason = NULL,
+      ended_at = NULL, host_unavailable_since = NULL, host_last_failed_at = NULL, last_error = NULL,
+      updated_at = ${at}
+      WHERE correlation_id = ${id} AND state = 'lost' AND end_reason = 'host_unreachable'
+      RETURNING correlation_id`;
+  return reopened.length > 0;
+});
+
+/**
+ * One pass over threads lost to an unreachable host, one call per host. A read-only report wait
+ * with timeoutMs 0 returns at once on every destination that served the dispatch; an answer or a
+ * refusal from the remote GOAT proves the host answers, and every thread lost there returns to a
+ * drain, which reads its own reports as it always does.
+ */
+export const probeUnreachableThreads = Effect.fn("remoteReports.probeUnreachableThreads")(
+  function* <E>(input: {
+    readonly retryAt: Map<string, number>;
+    readonly reopen: (id: string) => Effect.Effect<boolean, E>;
+    readonly start: (id: string) => Effect.Effect<unknown, E>;
+  }) {
+    const sql = yield* SqlClient.SqlClient;
+    const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
+    const nowMs = yield* Clock.currentTimeMillis;
+    const lost = yield* sql`SELECT * FROM remote_dispatches WHERE kind = 'thread'
+      AND state = 'lost' AND end_reason = 'host_unreachable'`.pipe(
+      Effect.flatMap(decodeRemoteDispatchRows),
+    );
+    const byHost = new Map<string, Array<(typeof lost)[number]>>();
+    for (const row of lost) byHost.set(row.host, [...(byHost.get(row.host) ?? []), row]);
+    for (const hostRows of byHost.values()) {
+      const row = hostRows.find((r) => (input.retryAt.get(r.correlation_id) ?? 0) <= nowMs);
+      if (row === undefined) continue;
+      const askAgainAt = nowMs + (yield* retryDelayMs(PROBE_RETRY_MS));
+      for (const r of hostRows) input.retryAt.set(r.correlation_id, askAgainAt);
+      const answer = yield* ssh
+        .callHostTool(
+          {
+            host: row.host,
+            tool: "goat_origin_reports_wait",
+            writes: false,
+            timeoutMs: 60_000,
+            arguments: {
+              correlationId: row.correlation_id,
+              readKey: row.read_key,
+              afterSequence: row.report_cursor,
+              watchRunId: null,
+              knownRun: threadKnownRun(row),
+              timeoutMs: 0,
+            },
+          },
+          Effect.succeed("approval-required" as const),
+        )
+        .pipe(Effect.result);
+      const answered =
+        answer._tag === "Success" ||
+        (answer.failure instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+          (answer.failure.reason === "remote_refused" ||
+            answer.failure.reason === "remote_outdated"));
+      if (!answered) continue;
+      for (const { correlation_id: id } of hostRows) {
+        input.retryAt.delete(id);
+        yield* input.reopen(id).pipe(
+          Effect.flatMap((reopened) => (reopened ? input.start(id) : Effect.void)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Unreachable remote thread not reopened.", {
+              correlationId: id,
+              cause,
+            }),
+          ),
+        );
+      }
+    }
+  },
+  Effect.catchCause((cause) =>
+    Effect.logWarning("Unreachable remote thread probe failed.", { cause }),
+  ),
 );

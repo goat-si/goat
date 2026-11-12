@@ -1824,6 +1824,7 @@ it.effect.each([
         claim: unused,
         completeRemote: unused,
         complete: unused,
+        correlate: unused,
         release: unused,
         bind: unused,
         nativeSubagentLimit: (threadId) =>

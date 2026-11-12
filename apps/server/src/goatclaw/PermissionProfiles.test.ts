@@ -370,6 +370,37 @@ it.effect("retains lost remote lanes until durable terminal evidence", () =>
   }).pipe(Effect.provide(fixture("manager"))),
 );
 
+it.effect(
+  "a remote lane frees once GOAT stops tracking its host, even if its launch never completed",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const sql = yield* SqlClient.SqlClient;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const policy = (yield* settings.getSettings).goatclaw;
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: { ...policy.profiles, manager: { ...policy.profiles.manager!, maxLanes: 1 } },
+        },
+      });
+      const another = () =>
+        profiles.claim(outside, { id: "another", host: "box", runtimeMode: "full-access" });
+      // The launch names its dispatch, binds the remote thread, and stops before complete.
+      yield* profiles.claim(outside, { id: "remote", host: "box", runtimeMode: "full-access" });
+      yield* profiles.correlate("remote", "rr-gone");
+      yield* sql`INSERT INTO remote_dispatches (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
+    VALUES ('rr-gone', 'thread', 'caller', 'box', 'child', 'test', 'wake', 'running', '2026-10-21', '2026-10-21')`;
+      expect((yield* another().pipe(Effect.flip)).code).toBe("capability_denied");
+      // A loss without a host outage keeps the lane: the outcome is unknown.
+      yield* sql`UPDATE remote_dispatches SET state = 'lost' WHERE correlation_id = 'rr-gone'`;
+      expect((yield* another().pipe(Effect.flip)).code).toBe("capability_denied");
+      yield* sql`UPDATE remote_dispatches SET end_reason = 'host_unreachable', ended_at = '2026-10-22'
+      WHERE correlation_id = 'rr-gone'`;
+      expect((yield* another()).enabled).toBe(true);
+    }).pipe(Effect.provide(fixture("manager"))),
+);
+
 it.effect("a follow-up send rides the remote lane it targets and frees an untracked one", () =>
   Effect.gen(function* () {
     const profiles = yield* PermissionProfiles;

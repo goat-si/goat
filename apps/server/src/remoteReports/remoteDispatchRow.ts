@@ -23,6 +23,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 
+/** Why GOAT stopped tracking a dispatch on its own or at a person's or agent's request. */
+export const RemoteDispatchEndReason = Schema.Literals(["host_unreachable", "dismissed"]);
+export type RemoteDispatchEndReason = typeof RemoteDispatchEndReason.Type;
+
 export const RemoteDispatchRow = Schema.Struct({
   memory_grant_ceiling: Schema.optional(MemoryTaskGrantCeiling),
   correlation_id: Schema.String,
@@ -51,6 +55,10 @@ export const RemoteDispatchRow = Schema.Struct({
   relay_attempted: Schema.Number,
   delete_requested_at: Schema.optional(Schema.NullOr(IsoDateTime)),
   delete_request_key: Schema.optional(Schema.NullOr(Schema.String)),
+  host_unavailable_since: Schema.optional(Schema.NullOr(IsoDateTime)),
+  host_last_failed_at: Schema.optional(Schema.NullOr(IsoDateTime)),
+  end_reason: Schema.optional(Schema.NullOr(RemoteDispatchEndReason)),
+  ended_at: Schema.optional(Schema.NullOr(IsoDateTime)),
   last_error: Schema.NullOr(Schema.String),
   created_at: IsoDateTime,
   updated_at: IsoDateTime,
@@ -60,6 +68,17 @@ export const RemoteDispatchRow = Schema.Struct({
 export type RemoteDispatchRow = typeof RemoteDispatchRow.Type;
 
 export const decodeRemoteDispatchRows = Schema.decodeUnknownEffect(Schema.Array(RemoteDispatchRow));
+
+/** One remote thread: the SSH alias and its thread id, joined by a character neither contains. */
+export const remoteThreadKey = (host: string, threadId: string) => `${host}\u001f${threadId}`;
+
+/** Every dispatch of the given remote threads, newest first, through the (host, thread) index. */
+export const selectForRemoteThreads = (sql: SqlClient.SqlClient, keys: ReadonlyArray<string>) =>
+  sql`SELECT * FROM remote_dispatches WHERE remote_thread_id IS NOT NULL
+    AND (host, remote_thread_id) IN (
+      SELECT substr(value, 1, instr(value, char(31)) - 1), substr(value, instr(value, char(31)) + 1)
+      FROM json_each(${JSON.stringify(keys)}))
+    ORDER BY updated_at DESC, correlation_id DESC`;
 
 /**
  * Which existing row a retried launch collided with: a task on its origin task key, a thread

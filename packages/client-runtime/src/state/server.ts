@@ -9,6 +9,7 @@ import {
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
   shouldRecommendDatabaseCompaction,
+  REMOTE_LAUNCHES_WS_METHODS,
   WS_METHODS,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -1237,6 +1238,13 @@ export function createServerEnvironmentAtoms<R, E>(
       },
       onSuccess: refreshCloudMachines,
     });
+  const remoteLaunches = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:remote-launches",
+    tag: WS_METHODS.remoteLaunchesList,
+    staleTimeMs: 5_000,
+    // A host can stop answering while the list is open; nothing pushes that change.
+    refreshIntervalMs: 60_000,
+  });
   return {
     cloudMachines,
     ...createOpenCodexSyncAtoms(runtime),
@@ -1392,10 +1400,13 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
     }),
-    remoteLaunches: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:remote-launches",
-      tag: WS_METHODS.remoteLaunchesList,
-      staleTimeMs: 5_000,
+    remoteLaunches,
+    /** Stops following a launch whose host no longer answers; the list then shows it dismissed. */
+    dismissRemoteLaunch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:dismiss-remote-launch",
+      tag: REMOTE_LAUNCHES_WS_METHODS.dismiss,
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => registry.refresh(remoteLaunches({ environmentId, input: {} }))),
     }),
     ...createDecisionEnvironmentAtoms(runtime),
     ...createProviderAuthCommands(runtime),

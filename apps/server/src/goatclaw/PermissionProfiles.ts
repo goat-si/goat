@@ -154,6 +154,11 @@ export class PermissionProfiles extends Context.Service<
       childThreadId?: string,
       correlationId?: string,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    /** Names a pending remote lane's dispatch before the launch, so a lost completion still settles. */
+    readonly correlate: (
+      id: string,
+      correlationId: string,
+    ) => Effect.Effect<void, OrchestratorMcpFailure>;
     /**
      * Settles a follow-up send's lane on the thread's remote dispatch, which counts while that
      * thread runs. A thread this machine never dispatched has no ledger here, so its slot frees.
@@ -533,9 +538,14 @@ export const layer = Layer.effect(
           AND (
             (l.host IS NULL AND (EXISTS (SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.thread_id = l.child_thread_id AND r.status IN ('preparing','queued','starting','running','waiting'))
               OR l.pending = 1))
-            OR (l.host IS NOT NULL AND (l.pending = 1 OR EXISTS (SELECT 1 FROM remote_dispatches d
-              WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
-              AND d.state IN ('launching','running','lost')))))`;
+            OR (l.host IS NOT NULL AND (
+              (l.pending = 1 AND NOT EXISTS (SELECT 1 FROM remote_dispatches d
+                WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
+                AND d.remote_thread_id IS NOT NULL
+                AND (d.end_reason IS NOT NULL OR d.state IN ('idle','settled','cancelled'))))
+              OR EXISTS (SELECT 1 FROM remote_dispatches d
+                WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
+                AND d.state IN ('launching','running','lost') AND d.end_reason IS NULL))))`;
               // Keep reservation ownership on the actual caller for retries. Its delegation
               // family shares capacity, including natives below delegated children; UNION
               // keeps both ancestry walks finite even if a projection contains a cycle.
@@ -630,6 +640,14 @@ export const layer = Layer.effect(
         Effect.mapError(storageFailure),
       );
     });
+    const correlate = Effect.fn("PermissionProfiles.correlate")(function* (
+      id: string,
+      correlationId: string,
+    ) {
+      if (Option.isNone(database)) return;
+      yield* database.value`UPDATE goatclaw_lane_reservations SET correlation_id = ${correlationId}
+      WHERE id = ${id} AND pending = 1`.pipe(Effect.mapError(storageFailure));
+    });
     const release = Effect.fn("PermissionProfiles.release")(function* (
       id: string,
       onlyIfNoLocalThread = false,
@@ -696,6 +714,7 @@ export const layer = Layer.effect(
       requireCloudApproval,
       claim,
       complete,
+      correlate,
       completeRemote,
       release,
       bind,

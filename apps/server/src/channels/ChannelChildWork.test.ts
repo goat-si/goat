@@ -261,6 +261,47 @@ describe("ChannelChildWork reconcile", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
+  it.effect.each([
+    [
+      "a thread GOAT stopped following after a day without contact",
+      "thread",
+      "lost",
+      "host_unreachable",
+      null,
+      "failed",
+    ],
+    ["a dismissed thread", "thread", "cancelled", "dismissed", null, "cancelled"],
+    ["a task whose run failed", "task", "settled", null, "failed", "failed"],
+    ["a task whose run was interrupted", "task", "settled", null, "interrupted", "failed"],
+    ["a task whose run completed", "task", "settled", null, "completed", "completed"],
+  ] as const)(
+    "settles the remote child of %s by its own outcome",
+    ([, kind, state, endReason, runStatus, expected]) =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const sql = yield* SqlClient.SqlClient;
+        const admission = yield* admit("remote work", { surface: "delegate_remote" });
+        if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* Effect.scoped(
+          childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+        );
+        yield* sql`INSERT INTO remote_dispatches
+          (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, task_id, parent_run_id,
+            known_run_status, end_reason, ended_at, created_at, updated_at)
+          VALUES (${correlationId}, ${kind}, ${admission.record.callerThreadId}, 'box', 'read-key', 'wake',
+            ${state}, ${kind === "task" ? "task" : null}, ${kind === "task" ? "parent" : null}, ${runStatus},
+            ${endReason}, ${endReason === null ? null : NOW}, ${NOW}, ${NOW})`;
+        assert.strictEqual(yield* childWork.reconcile, 1);
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        assert.strictEqual(
+          (yield* store.get(taskId, admission.record.childWorkId))?.state,
+          expected,
+        );
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
   it.effect(
     "keeps a launched remote record without a dispatch row while its launch is in flight, even once the task settles",
     () =>

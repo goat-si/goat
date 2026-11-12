@@ -23,12 +23,14 @@ const NO_PRIMARY_ENVIRONMENT = Atom.make<EnvironmentId | null>(null);
 // hides, so a reconnect cannot run them again behind its back.
 const fleetQuery = <Tag extends Parameters<typeof createEnvironmentRpcQueryAtomFamily>[1]["tag"]>(
   tag: Tag,
+  refreshIntervalMs?: number,
 ) =>
   createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
     label: `mobile-fleet:${tag}`,
     tag,
     staleTimeMs: 5_000,
     idleTtlMs: 0,
+    ...(refreshIntervalMs === undefined ? {} : { refreshIntervalMs }),
   });
 
 export const mobileFleet = createFleetPageAtoms({
@@ -39,7 +41,8 @@ export const mobileFleet = createFleetPageAtoms({
   serverConfigsAtom: environmentServerConfigsAtom,
   primaryEnvironmentIdAtom: NO_PRIMARY_ENVIRONMENT,
   threadShellsAtom: environmentThreadShells.threadShellsAtom,
-  remoteLaunches: fleetQuery(WS_METHODS.remoteLaunchesList),
+  // A host can stop answering while Fleet is open; nothing pushes that change.
+  remoteLaunches: fleetQuery(WS_METHODS.remoteLaunchesList, 60_000),
   cloudMachines: fleetQuery(WS_METHODS.cloudMachinesList),
   cloudAgentRuns: fleetQuery(WS_METHODS.cloudAgentsListRuns),
   labelPrefix: "mobile-",

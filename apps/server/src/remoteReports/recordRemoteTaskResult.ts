@@ -15,6 +15,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { isTerminalDelegatedTaskStatus } from "../orchestration-v2/goat/OrchestratorRunState.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 
@@ -54,6 +55,17 @@ export const recordRemoteTaskResult = Effect.fn("remoteReports.recordRemoteTaskR
       .pipe(Effect.mapError((cause) => new RemoteTaskError({ stage: "delivery", cause })));
   },
 );
+/** The parent keeps the first terminal result, so after recording one this is the one that won. */
+export const committedTaskResult = Effect.fn("remoteReports.committedTaskResult")(function* (
+  row: Pick<TaskDispatch, "originThreadId" | "task">,
+) {
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const { subagents } = yield* threads
+    .getThreadRecords(row.originThreadId, ["subagents"])
+    .pipe(Effect.mapError((cause) => new RemoteTaskError({ stage: "storage", cause })));
+  const task = subagents.find((candidate) => candidate.id === row.task.taskId);
+  return task !== undefined && isTerminalDelegatedTaskStatus(task.status) ? task : null;
+});
 export const recordRemoteTaskProgress = Effect.fn("remoteReports.recordRemoteTaskProgress")(
   function* (row: TaskDispatch, key: string, summary: string) {
     const threads = yield* ThreadManagementService.ThreadManagementService;

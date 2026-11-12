@@ -535,9 +535,9 @@ export const threadEntries = {
     toolkit: "orchestrator",
     summary: "Stop watching a GOAT thread",
     description:
-      "Remove the calling thread’s launch watch, stopping its run and host reports. The watched thread keeps running. Local user-input questions can still reach the launcher through separate escalation.",
+      "Remove the calling thread’s launch watch, stopping its run and host reports. With host, it also stops this thread's report tracking of that thread once the host has not answered for 15 minutes (reportsStopped). The watched thread keeps running. Local user-input questions can still reach the launcher through separate escalation.",
     guide:
-      "Remove this caller’s watch on the target GOAT thread. removed is false if no watch exists. Unwatching does not stop the target thread.\n\nThe removed watch no longer reports runs, questions, or host outages. Local user-input questions can still reach the launcher through the independent question escalation service.",
+      "Remove this caller’s watch on the target GOAT thread. removed is false if no watch exists. Unwatching does not stop the target thread.\n\nThe removed watch no longer reports runs, questions, or host outages. Local user-input questions can still reach the launcher through the independent question escalation service.\n\nWith host, a thread this caller launched there whose host has not answered for 15 minutes, or that GOAT already stopped following after a day without contact, is dismissed too: reportsStopped is true and its agent reports stop. Reports from a host that still answers, or only blipped, keep arriving. A later goat_thread_send to that thread follows it again.",
     idempotencyReason:
       "LaunchWatchService.unwatch removes the same caller/host/target watch or marks an in-flight recovery detached; a repeat creates no watch or work, and an absent watch returns removed:false.",
     parameters: {
