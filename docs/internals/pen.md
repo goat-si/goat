@@ -188,10 +188,11 @@ these may look like success to a local program.
   kept when only the other direction failed. Stopping a forward or a daemon therefore resets connections still open.
   `pen pipe` reports a cut through its exit status.
 - **A node bounds its sessions itself.** A relay that keeps the contract holds at most 8 pending and 32 active sessions
-  per node and sends a session's CLOSE before any later OPEN on the same uplink, while the node forgets a session as
-  it sends its own CLOSE, so the node never counts more than the relay does and stays below the uplink's 64. Past
-  64 the node answers OPEN with CLOSE 4429 and stores nothing, so a relay that ignores its caps cannot make the node
-  hold a session for every OPEN it sends.
+  per node, and it sends a session's CLOSE before any later OPEN on the same uplink. The node forgets a session as it
+  sends its own CLOSE, so when an OPEN arrives the node holds no more sessions than the relay did when it sent that
+  OPEN, well below the uplink's 64 (the node can briefly hold more than the relay does now, until a queued CLOSE
+  arrives). Past 64 the node answers OPEN with CLOSE 4429 and stores nothing, so a relay that ignores its caps
+  cannot make the node hold a session for every OPEN it sends.
 - **Only the `pen-*` fallback guards the typed name.** Unix ssh replaces `%n` with the name as typed and runs
   ProxyCommand in a shell, and before OpenSSH 9.6 it accepts any name. The fallback single-quotes `%n` and its
   `"!*'*"` pattern skips names holding a quote, so the name reaches `pen pipe` as one word. Member blocks match an

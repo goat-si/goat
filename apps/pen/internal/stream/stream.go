@@ -44,7 +44,9 @@ func (e *deliveredError) Error() string { return e.err.Error() }
 func (e *deliveredError) Unwrap() error { return e.err }
 
 // Delivered reports whether err is from a Splice that had already written everything the peer
-// sent, up to its FIN, to w: what w's reader holds is complete, and only the other direction was cut.
+// sent, up to its FIN, to w: what w's reader holds is complete, and only the other direction was cut. A write still
+// in progress when the error arrived counts as not delivered: Splice cannot wait on a reader that may never read, so
+// it errs toward a reset, which loses only bytes it could not confirm and never ends a short stream cleanly.
 func Delivered(err error) bool {
 	var d *deliveredError
 	return errors.As(err, &d)
