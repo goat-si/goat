@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import { BotThreadRow } from "@goat/contracts";
-import { botThreadKey, selectBotChildren } from "./taskVisibility.ts";
+import { botRowRetiresAt, botThreadKey, selectBotChildren } from "./taskVisibility.ts";
 
 const decodeRow = Schema.decodeSync(BotThreadRow);
 const now = Date.parse("2026-11-04T12:00:00.000Z");
@@ -62,5 +62,16 @@ describe("bot task visibility", () => {
     const rows = Array.from({ length: 6 }, (_, i) => row(String(i), i, { done: true }));
     expect(select(rows)).toEqual({ rows: rows.slice(0, 5), hasMore: true });
     expect(select(rows, null, true)).toEqual({ rows, hasMore: false });
+  });
+});
+
+describe("a history row's capped main-message count", () => {
+  it("retires a row exactly when the exact count would", () => {
+    for (const terminal of [false, true])
+      for (const done of [false, true])
+        for (let exact = 0; exact <= 30; exact++)
+          expect(
+            botRowRetiresAt(row("t", 1, { terminal, done, messages: Math.min(exact, 10) })),
+          ).toBe(botRowRetiresAt(row("t", 1, { terminal, done, messages: exact })));
   });
 });

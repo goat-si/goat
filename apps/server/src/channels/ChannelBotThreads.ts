@@ -35,6 +35,7 @@ import { listChildWork } from "./listChildWork.ts";
 import {
   decodeHistoryCursor,
   launchesStatement,
+  quietMessagesStatement,
   readHistoryPage,
 } from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
@@ -49,15 +50,10 @@ const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 interface ChildRow {
   readonly key?: string;
   readonly value_json: string;
-  readonly rank?: number;
   readonly title: string | null;
   readonly project_id: string | null;
   readonly work_kind: unknown;
 }
-/** clients read a row's main-message count only against 10 (taskVisibility.botRowRetiresAt). */
-const HISTORY_QUIET_MESSAGES_CAP = 10;
-/** The inbox entries after a task went quiet that a history row's count reads. */
-const HISTORY_QUIET_MESSAGES_WINDOW = 50;
 
 export class ChannelBotThreads extends Context.Service<
   ChannelBotThreads,
@@ -118,22 +114,14 @@ const make = Effect.gen(function* () {
         AND json_extract(i.message_json, '$.taskId') IS NULL
         AND json_extract(i.message_json, '$.actor.senderThreadId') IS NULL
       GROUP BY json_extract(target.value, '$.taskId')`
-        : // History reads a fixed window of each task's chat, so an old task costs no more than a new one.
-          sql<{ readonly task_id: string; readonly count: number }>`SELECT
-      json_extract(target.value, '$.taskId') AS task_id, min(${HISTORY_QUIET_MESSAGES_CAP}, (
-        SELECT count(*) FROM (SELECT i.owner_id, i.state, i.message_json FROM channel_inbox i
-          WHERE i.conversation_id = json_extract(target.value, '$.conversationId')
-            AND i.accepted_at > json_extract(target.value, '$.quiet')
-          ORDER BY i.accepted_at LIMIT ${HISTORY_QUIET_MESSAGES_WINDOW}) w
-        WHERE w.owner_id = ${owner.ownerId} AND w.state != 'rejected'
-          AND json_extract(w.message_json, '$.intent') = 'message'
-          AND json_extract(w.message_json, '$.taskId') IS NULL
-          AND json_extract(w.message_json, '$.actor.senderThreadId') IS NULL)) AS count
-      FROM json_each(${countInputs}) target`
+        : quietMessagesStatement(sql, { ownerId: owner.ownerId, inputs: countInputs })
     ).pipe(Effect.mapError(failed));
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
     const launchLimit = options.launchLimit;
+    // Truncation comes from the raw lookahead, before decoding, so a record that fails to decode
+    // cannot hide that a task has more launches than the page lists.
+    const truncated = new Set<string>();
     const childRows: ReadonlyArray<ChildRow> =
       launchLimit === undefined
         ? yield* sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
@@ -155,7 +143,10 @@ const make = Effect.gen(function* () {
               taskId: task.taskId,
               limit: launchLimit + 1,
             }).pipe(
-              Effect.map((rows) => rows.map((row, index) => ({ ...row, rank: index + 1 }))),
+              Effect.map((rows) => {
+                if (rows.length > launchLimit) truncated.add(task.taskId);
+                return rows.slice(0, launchLimit);
+              }),
               Effect.mapError(failed),
             ),
           ))
@@ -163,22 +154,21 @@ const make = Effect.gen(function* () {
             .toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const decodeRow = (item: ChildRow) => ({
       child: decodeChild(item.value_json),
-      rank: item.rank ?? 0,
       title: item.title,
       projectId: item.project_id,
       recordedKind: isWorkKind(item.work_kind) ? item.work_kind : undefined,
     });
+    let skippedLaunches = 0;
     const children =
       launchLimit === undefined
         ? yield* Effect.try(() => childRows.map(decodeRow)).pipe(Effect.mapError(failed))
-        : // History leaves out a record it cannot read rather than failing the page for everyone.
+        : // History leaves out and counts a record it cannot read rather than failing the page.
           (yield* Effect.forEach(childRows, (item) =>
             Effect.try(() => [decodeRow(item)]).pipe(
-              Effect.catch(() =>
-                Effect.logWarning("GOAT Bot task history skips a launch it cannot read", {
-                  key: item.key,
-                }).pipe(Effect.as([])),
-              ),
+              Effect.orElseSucceed(() => {
+                skippedLaunches += 1;
+                return [];
+              }),
             ),
           )).flat();
     // Launches from before work kinds were recorded: one in Scratch was a chore.
@@ -192,7 +182,9 @@ const make = Effect.gen(function* () {
     const rows: Array<BotThreadRow> = [];
     const remoteWork: Array<BotRemoteWork> = [];
     const seen = new Set<string>();
-    const launchesTruncated: Array<ChannelTask["taskId"]> = [];
+    const launchesTruncated = tasks.flatMap((task) =>
+      truncated.has(task.taskId) ? [task.taskId] : [],
+    );
     for (const task of tasks) {
       const view = viewsByTask.get(task.taskId) ?? {
         taskId: task.taskId,
@@ -226,12 +218,8 @@ const make = Effect.gen(function* () {
                 },
               }),
         });
-      for (const { child, rank, title, projectId, recordedKind } of children) {
+      for (const { child, title, projectId, recordedKind } of children) {
         if (child.ownerId !== owner.ownerId || child.taskId !== task.taskId) continue;
-        if (launchLimit !== undefined && rank > launchLimit) {
-          launchesTruncated.push(task.taskId);
-          continue;
-        }
         const destination = child.destination;
         // Work on another machine is listed by its record alone; one never launched ran nothing.
         if (child.surface === "ssh_thread_launch") {
@@ -271,7 +259,7 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    return { rows, remoteWork, launchesTruncated };
+    return { rows, remoteWork, launchesTruncated, skippedLaunches };
   });
   const mainMessageCount = Effect.fn("ChannelBotThreads.mainMessageCount")(function* (
     owner: ChannelConnectionOwner,
@@ -373,6 +361,13 @@ const make = Effect.gen(function* () {
       threadsOnly: page.threadsOnly,
       launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
     });
+    const partial = page.skippedTasks > 0 || built.skippedLaunches > 0;
+    if (partial)
+      yield* Effect.logWarning("GOAT Bot task history left out records it could not read", {
+        botId,
+        skippedTasks: page.skippedTasks,
+        skippedLaunches: built.skippedLaunches,
+      });
     return {
       rows: built.rows,
       // The bot's count belongs to the current list, which a walk always reads first.
@@ -382,8 +377,9 @@ const make = Effect.gen(function* () {
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
         ...(built.launchesTruncated.length === 0
           ? {}
-          : { launchesTruncated: [...new Set(built.launchesTruncated)] }),
+          : { launchesTruncated: built.launchesTruncated }),
         ...(page.endedEarly === true ? { endedEarly: true } : {}),
+        ...(partial ? { partial: true } : {}),
       },
     };
   });

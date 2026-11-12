@@ -5,6 +5,7 @@ import * as SqlClient from "effect/sql/SqlClient";
  * A bot's task history pages tasks by creation and each task's launches by creation; none of
  * these change once written. The launch index holds only launches with a thread, and its
  * expressions and terms must match the history queries', which name it with INDEXED BY.
+ * The inbox index holds only main messages, so a history row's count stops at its tenth.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -17,4 +18,9 @@ export default Effect.gen(function* () {
       AND json_extract(value_json, '$.destination.threadId') IS NOT NULL
       AND (json_extract(value_json, '$.surface') = 'ssh_thread_launch'
         OR json_extract(value_json, '$.state') IN ('bound', 'completed', 'failed', 'cancelled'))`;
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_inbox_main_messages
+    ON channel_inbox(owner_id, conversation_id, accepted_at)
+    WHERE state != 'rejected' AND json_extract(message_json, '$.intent') = 'message'
+      AND json_extract(message_json, '$.taskId') IS NULL
+      AND json_extract(message_json, '$.actor.senderThreadId') IS NULL`;
 });

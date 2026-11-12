@@ -21,11 +21,14 @@ const decodeBody = Schema.decodeUnknownEffect(CursorBody);
 const MAX_CREATED_AT = 64;
 const MAX_TASK_ID = 200;
 /**
- * The most tasks one history request examines, listed or not, so a bot with a long chat of turns
- * that launched nothing cannot make one page read its whole history. Small enough to cost a few
- * thousand index steps, large enough that most pages fill.
+ * The most tasks one history request examines, listed or not, plus one lookahead row that only
+ * tells whether the walk goes on; a long chat of turns that launched nothing cannot make one page
+ * read a bot's whole history. Small enough to cost a few thousand index steps, large enough that
+ * most pages fill.
  */
 export const CHANNEL_BOT_THREADS_HISTORY_EXAMINED = 500;
+/** Clients compare a row's main-message count only with 10 (botRowRetiresAt), so history stops there. */
+const HISTORY_QUIET_MESSAGES_CAP = 10;
 const invalid = () => new ChannelGatewayError({ reason: "invalid_input" });
 
 interface HistoryKey {
@@ -111,8 +114,8 @@ export const launchesStatement = (
 /**
  * A bot's tasks by creation, newest first, one row per task examined; created_at and task_id never
  * change, so a task keeps its place between pages. task_json is set only for a task history lists:
- * a turn joins once a launch has a thread, and never leaves. The redundant "<=" makes the cursor a
- * seek.
+ * a turn joins once a launch has a thread, and never leaves. The row value makes the cursor one
+ * range on the index's four columns, so a page costs the same anywhere inside a tie.
  */
 export const historyStatement = (
   sql: SqlClient.SqlClient,
@@ -121,8 +124,7 @@ export const historyStatement = (
   const after =
     input.after === undefined
       ? sql``
-      : sql`AND t.created_at <= ${input.after.createdAt}
-        AND (t.created_at < ${input.after.createdAt} OR t.task_id < ${input.after.taskId})`;
+      : sql`AND (t.created_at, t.task_id) < (${input.after.createdAt}, ${input.after.taskId})`;
   return sql<{
     readonly task_id: string;
     readonly created_at: string;
@@ -169,16 +171,14 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
       ? encodeHistoryCursor(scope, { createdAt: last.created_at, taskId: last.task_id })
       : undefined;
   const tasks: Array<ChannelTask> = [];
+  // One unreadable task is left out and counted, so it marks the page partial instead of failing it.
+  let skippedTasks = 0;
   for (const row of listed) {
-    // One unreadable task is left out with a warning rather than failing every page that holds it.
     const task = yield* Effect.try(() => decodeTask(row.json)).pipe(
-      Effect.catch(() =>
-        Effect.logWarning("GOAT Bot task history skips a task it cannot read", {
-          taskId: row.taskId,
-        }).pipe(Effect.as(undefined)),
-      ),
+      Effect.orElseSucceed(() => undefined),
     );
-    if (task !== undefined) tasks.push(task);
+    if (task === undefined) skippedTasks += 1;
+    else tasks.push(task);
   }
   // Ids GOAT generates are short digests; a cursor the decoder would refuse is never issued.
   const endedEarly =
@@ -193,6 +193,7 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
     });
   return {
     tasks,
+    skippedTasks,
     // A turn's answer is in the chat; it is listed by the threads it launched.
     threadsOnly: new Set<ChannelTaskId>(
       tasks.flatMap((task) => (task.kind === "turn" ? [task.taskId] : [])),
@@ -201,3 +202,24 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
     ...(endedEarly ? { endedEarly } : {}),
   };
 });
+
+/**
+ * Up to 10 of each task's main messages since it went quiet, a min of the exact count, so any
+ * comparison with 10 decides as the exact count would. The partial index holds only main
+ * messages, so the work stops at the tenth; its terms must match the index's.
+ */
+export const quietMessagesStatement = (
+  sql: SqlClient.SqlClient,
+  input: { readonly ownerId: string; readonly inputs: string },
+) =>
+  sql<{ readonly task_id: string; readonly count: number }>`SELECT
+    json_extract(target.value, '$.taskId') AS task_id, (SELECT count(*) FROM (
+      SELECT 1 FROM channel_inbox i INDEXED BY channel_inbox_main_messages
+      WHERE i.owner_id = ${input.ownerId}
+        AND i.conversation_id = json_extract(target.value, '$.conversationId')
+        AND i.accepted_at > json_extract(target.value, '$.quiet')
+        AND i.state != 'rejected' AND json_extract(i.message_json, '$.intent') = 'message'
+        AND json_extract(i.message_json, '$.taskId') IS NULL
+        AND json_extract(i.message_json, '$.actor.senderThreadId') IS NULL
+      LIMIT ${HISTORY_QUIET_MESSAGES_CAP})) AS count
+    FROM json_each(${input.inputs}) target`;

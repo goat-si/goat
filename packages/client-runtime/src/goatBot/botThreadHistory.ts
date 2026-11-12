@@ -63,6 +63,7 @@ export function mergeBotThreadHistory(
     // launches can bind between the two reads, so its copy does not prove the set complete.
     launchesTruncated: new Set(pages.flatMap((page) => page.history?.launchesTruncated ?? [])),
     endedEarly: pages.some((page) => page.history?.endedEarly === true),
+    partial: pages.some((page) => page.history?.partial === true),
     ...(nextCursor === undefined ? {} : { nextCursor }),
   };
 }
@@ -80,6 +81,8 @@ export type BotThreadHistoryMerge =
       readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
       /** The walk stopped at a task the server could not name in a cursor. */
       readonly endedEarly: boolean;
+      /** A page left out stored records it could not read, so the walk is not complete. */
+      readonly partial: boolean;
       /** The last page's cursor; the walk is finished only when it is absent. */
       readonly nextCursor?: string;
     };

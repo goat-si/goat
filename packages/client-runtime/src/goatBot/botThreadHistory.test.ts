@@ -132,6 +132,20 @@ describe("mergeBotThreadHistory", () => {
     ).toBeUndefined();
   });
 
+  it("says the walk is partial when any page left out a record it could not read", () => {
+    const current = { rows: [task("a")], mainMessageCount: 0 };
+    const first = { rows: [task("b")], mainMessageCount: 0, history: { nextCursor: "v1.x" } };
+    expect(merge(current, [first, { rows: [], mainMessageCount: 0, history: {} }]).partial).toBe(
+      false,
+    );
+    expect(
+      merge(current, [
+        { ...first, history: { nextCursor: "v1.x", partial: true } },
+        { rows: [], mainMessageCount: 0, history: {} },
+      ]).partial,
+    ).toBe(true);
+  });
+
   it("says the walk ended early when a page could not name its next task", () => {
     const current = { rows: [task("a")], mainMessageCount: 0 };
     const first = { rows: [task("b")], mainMessageCount: 0, history: { nextCursor: "v1.x" } };

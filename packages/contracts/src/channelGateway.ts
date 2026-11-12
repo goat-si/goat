@@ -530,20 +530,26 @@ export const ChannelListBotThreadsResult = Schema.Struct({
   remoteWork: Schema.optional(Schema.Array(BotRemoteWork)),
   /**
    * Present when the input asked for history; an answer without it came from a server that does
-   * not walk history. A history row's mainMessagesSinceQuiet stops counting at 10.
+   * not walk history. A history row's mainMessagesSinceQuiet is the exact count capped at 10, the
+   * only value clients compare it with, so a ">= 10" decision matches the current list's.
    */
   history: Schema.optionalKey(
     Schema.Struct({
       /**
        * The next page's start; absent once the walk reached the bot's oldest task. One request
-       * examines a bounded number of tasks, so a page can be short or empty and still carry it:
-       * keep reading until it is absent.
+       * examines at most 500 tasks plus one lookahead, so a page can be short or empty and still
+       * carry it: keep reading until it is absent.
        */
       nextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
       /** Tasks that launched more threads than this page lists; the rest stay in Threads. */
       launchesTruncated: Schema.optionalKey(Schema.Array(ChannelTaskId)),
       /** The walk cannot go on: the next task's stored id cannot be named in a cursor. */
       endedEarly: Schema.optionalKey(Schema.Boolean),
+      /**
+       * This page left out stored tasks or launches it could not read. Its rows are still right,
+       * but the walk is not a complete account of the bot's work.
+       */
+      partial: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 });
