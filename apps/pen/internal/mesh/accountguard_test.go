@@ -300,9 +300,25 @@ func TestAnInviteJoinToAStoreRetiredMeanwhileIsRefused(t *testing.T) {
 	}
 }
 
+// Concurrency invariant: retirement takes effect only under the store's lock, so it cannot land inside an
+// admission between the burn and the signature; an admission already under way finishes first.
 func TestInviteBurnSerializesWithRetire(t *testing.T) {
 	f, j := detID(1), detID(3)
 	b, found := newMesh(t, f)
+	// Nothing else holds r.mu, so TryLock fails inside the hook only if Retire holds it while it sets the flag.
+	r := NewStore(nil, b.meshID)
+	sets, unlocked := 0, false
+	r.retireSets = func() {
+		sets++
+		if r.mu.TryLock() {
+			r.mu.Unlock()
+			unlocked = true
+		}
+	}
+	r.Retire()
+	if sets != 1 || unlocked {
+		t.Fatalf("Retire reached the flag %d time(s), want 1; the store's lock was free there: %v", sets, unlocked)
+	}
 	s := NewStore(nil, b.meshID)
 	if _, err := s.Merge([]*Record{found}); err != nil {
 		t.Fatal(err)
@@ -315,9 +331,8 @@ func TestInviteBurnSerializesWithRetire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entered, release, retiring := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	entered, release := make(chan struct{}), make(chan struct{})
 	s.burnGate = func() { close(entered); <-release }
-	s.retireReached = func() { close(retiring) }
 	srv, cli := pipe()
 	served := make(chan error, 1)
 	joined := make(chan error, 1)
@@ -327,9 +342,9 @@ func TestInviteBurnSerializesWithRetire(t *testing.T) {
 	}()
 	go func() { _, _, err := Join(context.Background(), cli, j, "j"); joined <- err }()
 	<-entered
-	retired := make(chan struct{})
-	go func() { s.Retire(); close(retired) }()
-	<-retiring
+	started, retired := make(chan struct{}), make(chan struct{})
+	go func() { close(started); s.Retire(); close(retired) }()
+	<-started
 	close(release)
 	serveErr, joinErr := <-served, <-joined
 	<-retired
