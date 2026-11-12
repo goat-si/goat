@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -70,6 +71,11 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, m mesh.Member, port int, stdout, stderr io.Writer, connDone func()) int {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Each connection sends its last traffic report as it ends: wait for them before returning (and exiting),
+	// cancelling first so they end.
+	var conns sync.WaitGroup
+	defer waitConns(&conns)
+	defer cancel()
 	self := p.id.NodeID()
 	revoked, stopWatch, err := watchRevoked(st, p, m)
 	if err != nil {
@@ -111,7 +117,9 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 			}
 			return fail(stderr, err)
 		}
+		conns.Add(1)
 		go func() {
+			defer conns.Done()
 			if connDone != nil {
 				defer connDone()
 			}
@@ -151,5 +159,22 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 			tc.Close()
 			counted.finish()
 		}()
+	}
+}
+
+// forwardDrain bounds how long a stopping forward waits for its connections' last reports.
+const forwardDrain = 3 * time.Second
+
+func waitConns(conns *sync.WaitGroup) {
+	done := make(chan struct{})
+	go func() {
+		conns.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(forwardDrain)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
 	}
 }

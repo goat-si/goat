@@ -798,7 +798,8 @@ member's sessions load which relay.
   older than this answers that it does not know the op; the session goes on unchanged, and it prints nothing either
   way.
 - Window: 96 buckets of 15 minutes by the node's wall clock, so bytes leave the total between 23 h 45 min and 24 h
-  after they were counted. A node holds at most 512 (member, relay) pairs; a new pair past that is refused until a
+  after they were counted. A wall clock set back by less than 24 hours keeps every count; set back by 24 hours or
+  more, it drops the counts of the buckets it skips. A node holds at most 512 (member, relay) pairs; a new pair past that is refused until a
   pair's window is empty. The counts live only in the daemon's memory, and a restart starts them at zero.
 - `pen ls --json` adds `traffic24h` (`{"in","out","relays":[{"url","in","out"}]}`) to each member with bytes in the
   window, and `relays24h` (`[{"url","in","out"}]`) and `trafficSince` (milliseconds since the Unix epoch, where the

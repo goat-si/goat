@@ -40,6 +40,7 @@ type sessionTraffic struct {
 	st          *state.Store
 	node, relay string
 	in, out     atomic.Uint64
+	metered     *traffic.Metered
 	// sentIn and sentOut are what the daemon acknowledged; only report and finish touch them, one at a time.
 	sentIn, sentOut uint64
 	stop, done      chan struct{}
@@ -63,18 +64,22 @@ func startTraffic(st *state.Store, node, relay string) *sessionTraffic {
 	return s
 }
 
-// link counts the stream bytes l carries.
+// link counts the stream bytes l carries; call it once per session.
 func (s *sessionTraffic) link(l stream.Link) stream.Link {
-	return traffic.Meter(l, func(in, out uint64) {
+	s.metered = traffic.Meter(l, func(in, out uint64) {
 		s.in.Add(in)
 		s.out.Add(out)
 	})
+	return s.metered
 }
 
-// finish stops the ticks and sends the last report.
+// finish stops the ticks, lets sends and receives still returning count, and sends the last report.
 func (s *sessionTraffic) finish() {
 	close(s.stop)
 	<-s.done
+	if s.metered != nil {
+		s.metered.Settle(trafficWithin)
+	}
 	s.report()
 }
 

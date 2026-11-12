@@ -432,3 +432,34 @@ func TestPipeDoesNotReportBytesTwiceWhenAnAnswerIsLost(t *testing.T) {
 		t.Fatalf("reports %+v sum to in %d out %d; want two reports summing to the 150 bytes each way the pipe carried", reports, sumIn, sumOut)
 	}
 }
+
+// Stopping pen forward must not drop the last report of a connection still open: the command waits for its
+// connections to end and report before it returns.
+func TestStoppingForwardReportsItsOpenConnections(t *testing.T) {
+	svc, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	const sent = 40_000
+	got := make(chan struct{})
+	go func() {
+		c, err := svc.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		io.ReadFull(c, make([]byte, sent))
+		close(got)
+		io.Copy(io.Discard, c)
+	}()
+	f := startForward(t, svc)
+	c := dialTCP(t, f.addr)
+	defer c.Close()
+	c.Write(make([]byte, sent))
+	<-got
+	if code := f.stop(); code != 0 {
+		t.Fatalf("forward exit %d", code)
+	}
+	wantTraffic(t, "b's count for a right after pen forward stopped", trafficOf(t, f.b, "a"), 0, sent)
+}
