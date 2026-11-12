@@ -11,6 +11,7 @@ import { claimDueStatement } from "./channelDeliveryLedger.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { progressStatements } from "./channelProgressMessages.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelWake from "./ChannelWake.ts";
 import {
   makeProgressHarness,
   startSlackTask,
@@ -299,6 +300,108 @@ describe("one Slack write per progress message at a time", () => {
   });
 });
 
+describe("progress writes in flight across messages", () => {
+  it.effect(
+    "at most the cap of progress writes run at once, posts still go, and the next write starts when one settles",
+    () => {
+      const h = makeProgressHarness();
+      return Effect.gen(function* () {
+        const t = yield* startSlackTask(h, "cap");
+        const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+        const wake = yield* ChannelWake.ChannelWake;
+        const cap = ChannelDeliveryWorker.PROGRESS_WRITES_IN_FLIGHT;
+        const base = JSON.parse(t.ack.message_json);
+        const row = (fields: Record<string, unknown>) => ({
+          input_id: null,
+          kind: "receipt",
+          destination_kind: "slack",
+          attempts: 0,
+          next_attempt_at: "1970-01-01T00:00:00.000Z",
+          created_at: "1970-01-01T00:00:00.000Z",
+          updated_at: "1970-01-01T00:00:00.000Z",
+          ...fields,
+        });
+        const holds = [];
+        // One more due edit than the cap, each on its own message of its own task.
+        for (let index = 0; index <= cap; index += 1) {
+          holds.push(yield* h.hold);
+          const taskId = "channel-task:cap-" + index;
+          yield* t.copyTask(taskId);
+          const target = "cap-target-" + index;
+          yield* t.sql`INSERT INTO channel_outbox ${t.sql.insert(
+            row({
+              delivery_id: target,
+              cause_key: "test:" + target,
+              task_id: taskId,
+              message_json: JSON.stringify({
+                ...base,
+                deliveryId: target,
+                text: "Message " + index,
+              }),
+              state: "delivered",
+              external_message_id: "1760000009." + String(index).padStart(6, "0"),
+            }),
+          )}`;
+          const edit = "cap-edit-" + index;
+          yield* t.sql`INSERT INTO channel_outbox ${t.sql.insert(
+            row({
+              delivery_id: edit,
+              cause_key: "test:" + edit,
+              task_id: taskId,
+              message_json: JSON.stringify({
+                ...base,
+                deliveryId: edit,
+                text: "Step " + index,
+                interim: true,
+              }),
+              state: "pending",
+              operation: "edit",
+              target_delivery_id: target,
+            }),
+          )}`;
+        }
+        yield* t.sql`INSERT INTO channel_outbox ${t.sql.insert(
+          row({
+            delivery_id: "cap-post",
+            cause_key: "test:cap-post",
+            task_id: t.task.taskId,
+            kind: "question",
+            message_json: JSON.stringify({
+              ...base,
+              deliveryId: "cap-post",
+              kind: "question",
+              text: "Delete the old images?",
+            }),
+            state: "pending",
+          }),
+        )}`;
+        const editStates = t.sql<{ readonly state: string }>`SELECT state FROM channel_outbox
+          WHERE delivery_id LIKE 'cap-edit-%' ORDER BY rowid`.pipe(
+          Effect.map((rows) => rows.map((found) => found.state)),
+        );
+        yield* worker.deliverDue(t.runtime.ownerToken);
+        for (const hold of holds.slice(0, cap)) yield* Deferred.await(hold.reached);
+        assert.deepStrictEqual(yield* editStates, [
+          ...Array.from({ length: cap }, () => "delivering"),
+          "pending",
+        ]);
+        assert.lengthOf(h.calls, cap);
+        assert.strictEqual(h.posts.at(-1)?.text, "Delete the old images?");
+        // Empty the wake signal, so the next one is the settled write's.
+        yield* wake.wake;
+        yield* wake.next;
+        yield* Deferred.succeed(holds[0]!.open, undefined);
+        yield* wake.next;
+        yield* worker.deliverDue(t.runtime.ownerToken);
+        yield* Deferred.await(holds[cap]!.reached);
+        assert.lengthOf(h.calls, cap + 1);
+        for (const hold of holds) yield* Deferred.succeed(hold.open, undefined);
+        yield* worker.settleReceipts;
+      }).pipe(Effect.provide(h.layer));
+    },
+  );
+});
+
 describe("channels without edits", () => {
   it.effect("an iMessage task keeps one message before the answer and is never edited", () => {
     const h = makeProgressHarness();
@@ -351,9 +454,22 @@ describe("progress queries read the outbox through its indexes", () => {
       const t = yield* startSlackTask(h, "plans");
       const q = progressStatements(t.sql);
       const now = yield* nowIso;
+      // Many terminal narrations of another task wait; the end row's guard must not walk them.
+      yield* t.copyTask("channel-task:other");
+      yield* t.sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500)
+        INSERT INTO channel_task_events (event_id, task_id, task_version, type, event_json,
+          occurred_at, narration_state)
+        SELECT 'other-end-' || i, 'channel-task:other', 1000 + i, 'task.completed', '{}',
+          '1970-01-01T00:00:00.000Z', 'pending' FROM n`;
       const statements = {
         claim: claimDueStatement(t.sql, { now, limit: 1, receiptsOnly: false }),
         claimAll: claimDueStatement(t.sql, { now, limit: 1, receiptsOnly: undefined }),
+        claimPostsOnly: claimDueStatement(t.sql, {
+          now,
+          limit: 1,
+          receiptsOnly: false,
+          postsOnly: true,
+        }),
         replyRow: q.replyRow("input-1"),
         firstInterim: q.firstInterim("task-1"),
         targetEnded: q.targetEnded("target-1"),
@@ -395,6 +511,11 @@ describe("progress queries read the outbox through its indexes", () => {
           details.some((detail) => detail.startsWith("SCAN") && detail !== "SCAN CONSTANT ROW"),
           lines,
         );
+        if (name.startsWith("claim")) {
+          const told = details.find((detail) => detail.startsWith("SEARCH told "));
+          assert.include(told, "(task_id=?", lines);
+          assert.notInclude(told, "narration_idx", lines);
+        }
         // Only the claim sorts, and only its own due rows, oldest first, as it did before.
         const dueSelection = plan
           .filter((row) => name.startsWith("claim") && row.detail.startsWith("LIST SUBQUERY"))

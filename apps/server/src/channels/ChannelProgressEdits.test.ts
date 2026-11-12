@@ -170,6 +170,39 @@ describe("Slack keeps one progress message and edits it", () => {
   );
 });
 
+describe("an edit Slack keeps rate limiting", () => {
+  it.effect(
+    "stops after ten 429s as failed rate_limited, and the message still takes a later edit",
+    () => {
+      const h = makeProgressHarness();
+      return Effect.gen(function* () {
+        const t = yield* startSlackTask(h, "edit-429-ten");
+        yield* t.milestone("Step one.");
+        yield* TestClock.adjust("15 seconds");
+        for (let attempt = 1; attempt <= 10; attempt += 1) {
+          h.results.push({ _tag: "rate_limited", retryAfterSeconds: 30 });
+          yield* t.runtime.drain;
+          assert.lengthOf(h.calls, attempt);
+          yield* TestClock.adjust("30 seconds");
+        }
+        yield* t.runtime.drain;
+        assert.lengthOf(h.calls, 10);
+        const [limited] = yield* t.ofOperation("edit");
+        assert.deepStrictEqual(
+          [limited?.state, limited?.last_error_code],
+          ["failed", "rate_limited"],
+        );
+        yield* t.milestone("Step two.");
+        yield* TestClock.adjust("15 seconds");
+        yield* t.runtime.drain;
+        assert.deepStrictEqual(h.calls.slice(10), [
+          { operation: "edit", ts: t.ack.ts!, text: t.ack.text + "\n\nStep two." },
+        ]);
+      }).pipe(Effect.provide(h.layer));
+    },
+  );
+});
+
 describe("a refused or failed write ends the progress message quietly", () => {
   it.effect.each(["refused", "unknown"] as const)(
     "after an edit comes back %s, the message takes no more edits and nothing restores or deletes it",
@@ -453,21 +486,24 @@ describe("when there is no progress message to edit", () => {
     }).pipe(Effect.provide(h.layer));
   });
 
-  it.effect("sibling tasks of one request never edit the reply they share", () => {
-    const h = makeProgressHarness();
-    return Effect.gen(function* () {
-      const t = yield* startSlackTask(h, "none-siblings");
-      const sibling = taskIdFor(t.task.originInputId, 1);
-      yield* t.copyTask(sibling);
-      yield* t.milestone("Checking images.");
-      yield* TestClock.adjust("15 seconds");
-      yield* t.finish("Docker images take 41 GB.");
-      assert.deepStrictEqual(h.calls, []);
-      assert.deepStrictEqual(yield* t.ofOperation("end"), []);
-      const [milestone] = (yield* t.rows).filter((row) => textOf(row) === "Checking images.");
-      assert.deepStrictEqual([milestone?.operation, milestone?.state], ["post", "superseded"]);
-    }).pipe(Effect.provide(h.layer));
-  });
+  it.effect(
+    "sibling tasks of one request get no edits and no end row when their shared reply was delivered",
+    () => {
+      const h = makeProgressHarness();
+      return Effect.gen(function* () {
+        const t = yield* startSlackTask(h, "none-siblings");
+        const sibling = taskIdFor(t.task.originInputId, 1);
+        yield* t.copyTask(sibling);
+        yield* t.milestone("Checking images.");
+        yield* TestClock.adjust("15 seconds");
+        yield* t.finish("Docker images take 41 GB.");
+        assert.deepStrictEqual(h.calls, []);
+        assert.deepStrictEqual(yield* t.ofOperation("end"), []);
+        const [milestone] = (yield* t.rows).filter((row) => textOf(row) === "Checking images.");
+        assert.deepStrictEqual([milestone?.operation, milestone?.state], ["post", "superseded"]);
+      }).pipe(Effect.provide(h.layer));
+    },
+  );
 
   it.effect(
     "after its end, a task's later milestones are set aside and a second ending adds no end",
