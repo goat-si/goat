@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
 	"github.com/goat-si/goat/apps/pen/internal/state"
+	"github.com/goat-si/goat/apps/pen/internal/traffic"
 )
 
 // trafficOf reads st's pen ls as JSON and returns traffic24h of the member called name (nil when absent).
@@ -298,7 +300,11 @@ func fakeDaemonFunc(t *testing.T, st *state.Store, answer func(line []byte) stri
 					io.Copy(io.Discard, c)
 					return
 				}
-				if a := answer(line); a != "" {
+				switch a := answer(line); a {
+				case "":
+				case "hold":
+					io.Copy(io.Discard, c)
+				default:
 					c.Write([]byte(a + "\n"))
 				}
 			}()
@@ -492,5 +498,152 @@ func TestStoppingForwardDuringASessionOpenIsQuiet(t *testing.T) {
 	}
 	if strings.Contains(f.stderr.String(), "pen forward:") {
 		t.Fatalf("stopping pen forward while a session was opening printed an error: %q", f.stderr.String())
+	}
+}
+
+// holdingDaemon answers watch like a daemon and holds every other request unanswered until its connection closes;
+// got receives each request line it holds.
+func holdingDaemon(t *testing.T, st *state.Store) <-chan []byte {
+	t.Helper()
+	got := make(chan []byte, 8)
+	fakeDaemonFunc(t, st, func(line []byte) string {
+		got <- line
+		return "hold"
+	})
+	return got
+}
+
+// pen pipe is ssh's ProxyCommand: when the daemon takes reports and never answers, the whole end of the session (the
+// periodic report in flight, settling the meter and the last report) must end at one shutdown deadline.
+func TestPipeShutdownEndsAtOneDeadlineWhenTheDaemonHoldsItsAnswers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	got := holdingDaemon(t, b)
+	ticks := make(chan time.Time)
+	setTrafficHooks(t, ticks, nil)
+	shutdown, endShutdown := context.WithCancel(context.Background())
+	oldShutdown := trafficShutdown
+	t.Cleanup(func() { trafficShutdown = oldShutdown })
+	trafficShutdown = func() (context.Context, context.CancelFunc) { return shutdown, func() {} }
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	in, inW := io.Pipe()
+	defer inW.Close()
+	Stdin = in
+	defer func() { Stdin = os.Stdin }()
+	out := newSignalWriter()
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
+	inW.Write(make([]byte, 100))
+	out.wait(100)
+	ticks <- time.Now()
+	<-got
+	// More bytes after the periodic report took its count, so the end has a report of its own to send.
+	inW.Write(make([]byte, 50))
+	out.wait(150)
+	inW.Close()
+	endShutdown()
+	if c := <-code; c != 0 || errOut.Len() != 0 {
+		t.Fatalf("pipe exit %d, stderr %q; want 0 and nothing", c, errOut.String())
+	}
+}
+
+// Bytes a report certainly did not deliver wait at most one bucket: after that they are dropped, so a daemon that
+// comes back never receives old bytes as new ones.
+func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	var mu sync.Mutex
+	var reports []daemon.TrafficReport
+	fakeDaemonFunc(t, b, func(line []byte) string {
+		var r daemon.TrafficReport
+		json.Unmarshal(line, &r)
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, r)
+		if len(reports) <= 2 {
+			return `{"error":"unknown op \"traffic.report\""}`
+		}
+		return `{"t":"counted"}`
+	})
+	var now atomic.Int64
+	start := time.Unix(1_800_000_000, 0)
+	now.Store(start.UnixNano())
+	oldNow := trafficNow
+	t.Cleanup(func() { trafficNow = oldNow })
+	trafficNow = func() time.Time { return time.Unix(0, now.Load()) }
+	ticks := make(chan time.Time)
+	reported := make(chan error, 8)
+	setTrafficHooks(t, ticks, func(err error) { reported <- err })
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	in, inW := io.Pipe()
+	defer inW.Close()
+	Stdin = in
+	defer func() { Stdin = os.Stdin }()
+	out := newSignalWriter()
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
+	inW.Write(make([]byte, 100))
+	out.wait(100)
+	now.Store(start.Add(2 * time.Minute).UnixNano())
+	ticks <- time.Now()
+	<-reported // refused: kept
+	now.Store(start.Add(traffic.Span + time.Minute).UnixNano())
+	ticks <- time.Now()
+	<-reported // refused again, a bucket after those bytes: dropped
+	inW.Write(make([]byte, 50))
+	out.wait(150)
+	now.Store(start.Add(traffic.Span + 2*time.Minute).UnixNano())
+	ticks <- time.Now()
+	if err := <-reported; err != nil {
+		t.Fatalf("third report: %v", err)
+	}
+	inW.Close()
+	if c := <-code; c != 0 {
+		t.Fatalf("pipe exit %d, stderr %q", c, errOut.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reports) != 3 || reports[2].In != 50 || reports[2].Out != 50 {
+		t.Fatalf("reports %+v; want the counted third report to carry only the 50 new bytes each way", reports)
+	}
+}
+
+func TestPipeShutdownEndsAtOneDeadlineWhenTheDaemonHoldsTheLastReport(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	got := holdingDaemon(t, b)
+	setTrafficHooks(t, make(chan time.Time), nil)
+	shutdown, endShutdown := context.WithCancel(context.Background())
+	oldShutdown := trafficShutdown
+	t.Cleanup(func() { trafficShutdown = oldShutdown })
+	trafficShutdown = func() (context.Context, context.CancelFunc) { return shutdown, func() {} }
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	msg := bytes.Repeat([]byte("x"), 300)
+	Stdin = bytes.NewReader(msg)
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, &out, &errOut) }()
+	<-got // the last report reached the daemon, which holds it
+	endShutdown()
+	if c := <-code; c != 0 || !bytes.Equal(out.Bytes(), msg) || errOut.Len() != 0 {
+		t.Fatalf("pipe exit %d, %d bytes out, stderr %q; want 0, the echo and nothing", c, out.Len(), errOut.String())
 	}
 }

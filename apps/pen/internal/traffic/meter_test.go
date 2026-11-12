@@ -3,7 +3,6 @@ package traffic
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/stream"
 )
@@ -32,7 +31,7 @@ func TestSettleWaitsForASendStillInFlight(t *testing.T) {
 	old := settleWaiting
 	settleWaiting = func() { close(l.release) }
 	defer func() { settleWaiting = old }()
-	m.Settle(time.Hour)
+	m.Settle(context.Background())
 	if out != 10 {
 		t.Fatalf("counted %d bytes out after Settle, want the 10 the send in flight carried", out)
 	}

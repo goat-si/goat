@@ -3,7 +3,6 @@ package traffic
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/stream"
 )
@@ -63,9 +62,9 @@ func (m *Metered) Recv(ctx context.Context) ([]byte, error) {
 	return p, err
 }
 
-// Settle waits, at most d, until no Send or Recv is in progress. stream.Splice returns on an error without waiting
+// Settle waits, until ctx ends, until no Send or Recv is in progress. stream.Splice returns on an error without waiting
 // for its workers, so a send that completed just before the end is counted only once its call returns.
-func (m *Metered) Settle(d time.Duration) {
+func (m *Metered) Settle(ctx context.Context) {
 	m.mu.Lock()
 	if m.inflight == 0 {
 		m.mu.Unlock()
@@ -77,10 +76,8 @@ func (m *Metered) Settle(d time.Duration) {
 	if settleWaiting != nil {
 		settleWaiting()
 	}
-	t := time.NewTimer(d)
-	defer t.Stop()
 	select {
 	case <-ch:
-	case <-t.C:
+	case <-ctx.Done():
 	}
 }
