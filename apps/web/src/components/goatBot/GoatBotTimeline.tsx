@@ -1,15 +1,16 @@
 import {
   GOAT_BOT_READING_LIMIT_MS,
   goatBotActivity,
-  goatBotFirstUnread,
   goatBotPreviewText,
   goatBotStampParts,
   goatBotReceiptLabel,
   goatBotRejectionText,
+  goatBotUnreadIds,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
+import { flushSync } from "react-dom";
 import { ArrowUpLeftIcon, CopyIcon, CircleAlertIcon, XIcon } from "~/components/solar";
 import {
   createContext,
@@ -35,6 +36,7 @@ import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
+import { GoatBotReplyFiles } from "./GoatBotReplyFiles";
 import {
   GoatBotActivityLine,
   GoatBotMessageTime,
@@ -44,6 +46,9 @@ import {
 } from "./GoatBotMessageParts";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
 import { GoatBotEventText } from "./GoatBotEventText";
+import { GoatBotReplyCards } from "./GoatBotReplyCards";
+import { goatBotReplySplit } from "./goatBotReplyParts";
+import { GoatBotStepsContext, GoatBotStepsMark } from "./GoatBotStepsLine";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -61,6 +66,9 @@ interface UnreadDivider {
 }
 const UNREAD_DIVIDER: UnreadDivider = { kind: "unread", id: "unread", firstInGroup: true };
 const UNREAD_JUMP_MARGIN_PX = 24;
+/** A row the server sent; a message still being sent can show before the history has loaded. */
+const isHistoryRow = (row: GoatBotRow) =>
+  row.kind !== "day" && !(row.kind === "user" && row.sendKey !== null);
 
 export function GoatBotTimeline({
   rows,
@@ -93,7 +101,7 @@ export function GoatBotTimeline({
   readonly onOpenHome?: (() => void) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
+  readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
 }) {
   const { copyToClipboard } = useCopyToClipboard();
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
@@ -137,10 +145,14 @@ export function GoatBotTimeline({
   const [nowMs] = useState(() => Date.now());
   const replying = useReplying(replyingSince);
   const working = useContext(GoatBotActivityContext);
+  const steps = useContext(GoatBotStepsContext);
   const activity: GoatBotTimelineActivity | null = replying
     ? goatBotActivity({ reading: true, task: null, worker: null })
     : working;
   const activityText = activity?.text ?? null;
+  // The transcript's height right after a line opened or closed in place and resized the list;
+  // the one resize that reaches it is that toggle's own and does not follow the newest message.
+  const toggledHeight = useRef<number | null>(null);
   const updateEdges = useStableCallback(() => {
     const scroll = scrollRef.current;
     const wrapper = wrapperRef.current;
@@ -167,7 +179,11 @@ export function GoatBotTimeline({
   // column can get its height after mounting; a reader following the newest message stays there.
   const followResize = useStableCallback(() => {
     const scroll = scrollRef.current;
-    if (scroll !== null && followingRef.current) {
+    const toggled = toggledHeight.current;
+    toggledHeight.current = null;
+    if (scroll !== null && toggled !== null && scroll.scrollHeight === toggled) {
+      lastScrollTopRef.current = scroll.scrollTop;
+    } else if (scroll !== null && followingRef.current) {
       scroll.scrollTop = scroll.scrollHeight;
       lastScrollTopRef.current = scroll.scrollTop;
     }
@@ -191,11 +207,18 @@ export function GoatBotTimeline({
     updateEdges();
   }, [rows, activityText, updateEdges]);
 
-  // The divider's place is decided once, from the first rows and the visit before this open.
-  const [unread, setUnread] = useState<ReturnType<typeof goatBotFirstUnread> | undefined>();
-  if (unread === undefined && unreadSince !== undefined && rows.length > 0) {
-    setUnread(goatBotFirstUnread(rows, unreadSince));
+  // Which rows are new is decided once, from the first history and the visit before this open.
+  // The divider sits above the first of them still shown, and the pill counts those shown.
+  const [unreadIds, setUnreadIds] = useState<ReadonlySet<string> | undefined>();
+  if (unreadIds === undefined && unreadSince !== undefined && rows.some(isHistoryRow)) {
+    setUnreadIds(goatBotUnreadIds(rows, unreadSince));
   }
+  const unreadRows =
+    unreadIds === undefined || unreadIds.size === 0
+      ? []
+      : rows.filter((row) => unreadIds.has(row.id));
+  const firstUnread = unreadRows[0];
+  const firstUnreadId = firstUnread?.id;
   const dividerRef = useRef<HTMLLIElement>(null);
   const [dividerAbove, setDividerAbove] = useState(false);
   const [pillDismissed, setPillDismissed] = useState(false);
@@ -203,7 +226,7 @@ export function GoatBotTimeline({
   useEffect(() => {
     const divider = dividerRef.current;
     const root = scrollRef.current;
-    if (!unread || divider === null || root === null) return;
+    if (firstUnreadId === undefined || divider === null || root === null) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry === undefined) return;
@@ -215,20 +238,348 @@ export function GoatBotTimeline({
     );
     observer.observe(divider);
     return () => observer.disconnect();
-  }, [unread]);
-  const unreadAt = unread ? rows.findIndex((row) => row.id === unread.rowId) : -1;
+  }, [firstUnreadId]);
+  const unreadAt = firstUnread === undefined ? -1 : rows.indexOf(firstUnread);
   // Scrolls the transcript alone; scrollIntoView would also shift the page and hide the header.
+  // Focus follows, since the pill that held it goes away once the divider is in view.
   const jumpToUnread = () => {
     const divider = dividerRef.current;
     const root = scrollRef.current;
     if (divider === null || root === null) return;
     const offset = divider.getBoundingClientRect().top - root.getBoundingClientRect().top;
     root.scrollTo({ top: root.scrollTop + offset - UNREAD_JUMP_MARGIN_PX });
+    divider.focus({ preventScroll: true });
   };
   const shownRows: ReadonlyArray<GoatBotRow | UnreadDivider> =
     unreadAt < 0 ? rows : [...rows.slice(0, unreadAt), UNREAD_DIVIDER, ...rows.slice(unreadAt)];
 
   const time = (iso: string) => formatShortTimestamp(iso, timestampFormat);
+  // Opening a line keeps the conversation where it is instead of following it.
+  const keepPlace = (toggle: () => void) => {
+    const scroll = scrollRef.current;
+    const top = scroll?.scrollTop;
+    const listHeight = listRef.current?.getBoundingClientRect().height;
+    flushSync(toggle);
+    if (scroll === null || top === undefined) return;
+    scroll.scrollTop = top;
+    lastScrollTopRef.current = scroll.scrollTop;
+    // A toggle that left the list's height alone gets no resize to absorb.
+    toggledHeight.current =
+      listRef.current?.getBoundingClientRect().height === listHeight ? null : scroll.scrollHeight;
+  };
+  const trailingMark = steps?.trailing ?? null;
+  const renderRow = (row: GoatBotRow | UnreadDivider, index: number) => {
+    const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-4" : "mt-1.5");
+    switch (row.kind) {
+      case "unread":
+        // A list item, so it can take focus; a focusable separator would be announced as a splitter.
+        return (
+          <li
+            key={row.id}
+            ref={dividerRef}
+            tabIndex={-1}
+            aria-label="New messages"
+            className="mt-4 flex items-center gap-3 rounded-sm text-xs leading-4 text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          >
+            New
+          </li>
+        );
+      case "day": {
+        const stamp = goatBotStampParts(row.at, nowMs, time);
+        return (
+          <li
+            key={row.id}
+            className="mt-6 mb-2 text-center text-xs leading-4 text-muted-foreground first:mt-2"
+          >
+            <span className="font-medium">{stamp.lead}</span>{" "}
+            <span className="font-normal">{stamp.time}</span>
+          </li>
+        );
+      }
+      case "event":
+        return (
+          <li
+            key={row.id}
+            role="note"
+            className="my-3 text-center text-xs leading-4 text-muted-foreground"
+          >
+            <GoatBotEventText row={row} onOpenHome={onOpenHome} />
+          </li>
+        );
+      case "user": {
+        const delivery = row.delivery;
+        const failed = delivery.state === "failed";
+        const retryable = failed && delivery.rejectionReason === undefined;
+        const timeId = `${timePrefix}-time-${row.id}`;
+        const sendKey =
+          row.sendKey ??
+          (row.requestKey === null ? undefined : sendKeyByRequest.get(row.requestKey));
+        const arrives = sendKey !== undefined;
+        const receipt =
+          row.showReceipt && (delivery.state === "queued" || delivery.state === "sending")
+            ? goatBotReceiptLabel(delivery, time, botName)
+            : null;
+        return (
+          <li
+            key={sendKey === undefined ? row.id : `send:${sendKey}`}
+            tabIndex={failed ? undefined : 0}
+            aria-describedby={failed ? undefined : timeId}
+            className={cn(
+              "goat-message-row group/message flex flex-col items-end gap-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              arrives && "goat-arrive",
+              index > 0 && (row.firstInGroup ? "mt-4" : "mt-1.5"),
+            )}
+          >
+            <span className="sr-only">You</span>
+            {row.quote
+              ? (() => {
+                  const prefix = normalize(row.quote).slice(0, 60);
+                  const source =
+                    prefix &&
+                    rows.find(
+                      (candidate) =>
+                        candidate.kind === "bot" && normalize(candidate.text).startsWith(prefix),
+                    );
+                  const style =
+                    "max-w-[min(80%,34rem)] truncate rounded-md border border-border px-2 py-1 text-xs text-muted-foreground";
+                  return source ? (
+                    <button
+                      type="button"
+                      className={style}
+                      onClick={() => {
+                        const element = Array.from(
+                          listRef.current?.querySelectorAll<HTMLElement>("[data-bot-row]") ?? [],
+                        ).find((node) => node.dataset.botRow === source.id);
+                        element?.scrollIntoView({ block: "center" });
+                        element?.focus({ preventScroll: true });
+                      }}
+                    >
+                      {goatBotPreviewText(row.quote)}
+                    </button>
+                  ) : (
+                    <span className={style}>{goatBotPreviewText(row.quote)}</span>
+                  );
+                })()
+              : null}
+            {row.attachments && row.attachments.length > 0 ? (
+              <GoatBotSentAttachments attachments={row.attachments} environmentId={environmentId} />
+            ) : null}
+            {(row.reply ?? row.text).trim().length > 0 || retryable ? (
+              <div className="flex w-full items-center justify-end gap-2">
+                {!failed ? (
+                  <GoatBotMessageTime
+                    id={timeId}
+                    createdAt={row.createdAt}
+                    time={time(row.createdAt)}
+                  />
+                ) : null}
+                {retryable ? (
+                  <button
+                    type="button"
+                    aria-label="Retry sending"
+                    onClick={() => onRetry(delivery.clientKey)}
+                    className="flex size-6 shrink-0 items-center justify-center rounded-full text-destructive-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    <CircleAlertIcon className="size-4" />
+                    <span className="sr-only">Retry</span>
+                  </button>
+                ) : null}
+                {(row.reply ?? row.text).trim().length > 0 ? (
+                  <div className="goat-person-pill w-fit max-w-[min(80%,34rem)]">
+                    {row.reply ?? row.text}
+                  </div>
+                ) : null}
+              </div>
+            ) : !failed ? (
+              <time id={timeId} dateTime={row.createdAt} className="sr-only">
+                {time(row.createdAt)}
+              </time>
+            ) : null}
+            {failed ? (
+              <div className="flex items-center gap-2 text-xs leading-4 font-medium text-destructive-foreground">
+                <span>{goatBotRejectionText(delivery.rejectionReason, botName)}</span>
+                {onDiscard ? (
+                  <button
+                    type="button"
+                    onClick={() => onDiscard(delivery.clientKey)}
+                    className="hover:underline"
+                  >
+                    Discard
+                  </button>
+                ) : null}
+              </div>
+            ) : receipt !== null ? (
+              <span
+                className="text-xs leading-4 text-muted-foreground"
+                aria-label={receipt.accessibleText}
+              >
+                {receipt.text}
+              </span>
+            ) : null}
+          </li>
+        );
+      }
+      case "bot": {
+        const timeId = `${timePrefix}-time-${row.id}`;
+        const toneIcon =
+          row.tone === "failure" ? (
+            <CircleAlertIcon
+              aria-label="Failed"
+              className="mt-0.5 size-4 shrink-0 text-destructive-foreground"
+            />
+          ) : null;
+        const memory = row.memory ? (
+          <MemorySettingsEntry
+            environmentId={row.memory.environmentId}
+            reference={row.memory}
+            label="View memory details"
+          />
+        ) : null;
+        const body = (
+          <>
+            {toneIcon}
+            <div className="min-w-0 flex-1">
+              <GoatBotLinkedText text={row.text} environmentId={environmentId} />
+              {memory}
+            </div>
+          </>
+        );
+        // An answer with a table reads as cards: its text, each table, and the rest.
+        // The splitter caches by text, so only a row whose text changed is parsed.
+        const reply = toneIcon === null ? goatBotReplySplit(row.text, rows.length) : null;
+        const card = (
+          <div className="flex w-full min-w-0 items-end gap-2">
+            {reply !== null && reply.parts.some((part) => part.kind === "table") ? (
+              <GoatBotReplyCards reply={reply} environmentId={environmentId} trail={memory} />
+            ) : (
+              <div className="goat-bot-prose goat-bot-card flex w-fit max-w-[min(100%,34rem)] min-w-0 gap-2">
+                {body}
+              </div>
+            )}
+            <GoatBotMessageTime id={timeId} createdAt={row.createdAt} time={time(row.createdAt)} />
+          </div>
+        );
+        return (
+          <li
+            key={row.id}
+            data-bot-row={row.id}
+            tabIndex={0}
+            aria-describedby={timeId}
+            className={cn(
+              "goat-message-row group/message flex flex-col items-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              gap,
+            )}
+          >
+            {row.proactive && row.firstInGroup ? <GoatBotUpdateLabel name={botName} /> : null}
+            {row.replyTo ? (
+              <blockquote className="ms-3.5 mb-1 max-w-[min(100%,32rem)] border-s-2 border-border ps-2 text-xs leading-5 text-muted-foreground">
+                <span className="block truncate">{row.replyTo}</span>
+              </blockquote>
+            ) : null}
+            <div className="flex w-full items-end gap-1">
+              {(row.choices ?? row.options).length > 0 ? (
+                <div className="flex w-full min-w-0 items-end gap-2">
+                  <GoatBotQuestionCard row={row} body={body} onPick={onPick} />
+                  <GoatBotMessageTime
+                    id={timeId}
+                    createdAt={row.createdAt}
+                    time={time(row.createdAt)}
+                  />
+                </div>
+              ) : (
+                card
+              )}
+              <div className="flex shrink-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 pointer-coarse:opacity-100">
+                {onReply ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Reply"
+                          onClick={() => onReply(row.text)}
+                        />
+                      }
+                    >
+                      <ArrowUpLeftIcon className="size-4" />
+                    </TooltipTrigger>
+                    <TooltipPopup>Reply</TooltipPopup>
+                  </Tooltip>
+                ) : null}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label="Copy"
+                        onClick={() => copyToClipboard(row.text, undefined)}
+                      />
+                    }
+                  >
+                    <CopyIcon className="size-4" />
+                  </TooltipTrigger>
+                  <TooltipPopup>Copy</TooltipPopup>
+                </Tooltip>
+              </div>
+            </div>
+            <GoatBotReplyFiles text={row.text} />
+          </li>
+        );
+      }
+      case "task":
+        return (
+          <li key={row.id} className={cn("flex", gap)}>
+            {taskDetails || !taskThreads ? (
+              <GoatBotTaskChip
+                card={row.card}
+                retryEnvironmentId={taskDetails ? null : retryEnvironmentId}
+              />
+            ) : (
+              <div className="flex max-w-[44rem] min-w-0 flex-col items-start gap-1">
+                <Link
+                  to="/bot"
+                  search={{
+                    task: ChannelTaskId.make(row.card.key),
+                    ...goatBotSearch(member),
+                  }}
+                  data-task-opener={`pill:${row.id}`}
+                  onClick={(event) => {
+                    if (
+                      !event.metaKey &&
+                      !event.ctrlKey &&
+                      !event.shiftKey &&
+                      !event.altKey &&
+                      event.button === 0
+                    )
+                      recordTaskOpener(
+                        taskFocus,
+                        event.currentTarget,
+                        row.card.key,
+                        `pill:${row.id}`,
+                      );
+                  }}
+                  className="inline-flex max-w-full rounded-full border border-border px-3 py-1.5 text-sm whitespace-normal break-words hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  Task thread · {row.card.title}
+                </Link>
+                <details className="w-full">
+                  <summary className="cursor-default text-xs text-muted-foreground">
+                    Task details
+                  </summary>
+                  <div className="mt-1">
+                    <GoatBotTaskChip card={row.card} retryEnvironmentId={retryEnvironmentId} />
+                  </div>
+                </details>
+              </div>
+            )}
+          </li>
+        );
+    }
+  };
   return (
     <div
       ref={wrapperRef}
@@ -246,334 +597,49 @@ export function GoatBotTimeline({
           aria-label={`Conversation with ${botName}`}
           className="mx-auto flex w-full max-w-3xl flex-col px-4 py-4"
         >
-          {shownRows.map((row, index) => {
-            const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-4" : "mt-1.5");
-            switch (row.kind) {
-              case "unread":
-                return (
+          {[
+            ...shownRows.flatMap((row, index) => {
+              const mark =
+                row.kind === "day" || row.kind === "unread"
+                  ? undefined
+                  : steps?.beforeRow.get(row.id);
+              const rendered = renderRow(row, index);
+              return mark === undefined
+                ? [rendered]
+                : [
+                    <li
+                      key={mark.kind === "steps" ? mark.line.key : "elsewhere:" + row.id}
+                      className={cn("flex", index > 0 && "mt-4")}
+                    >
+                      <GoatBotStepsMark mark={mark} onToggle={keepPlace} />
+                    </li>,
+                    rendered,
+                  ];
+            }),
+            ...(trailingMark === null
+              ? []
+              : [
                   <li
-                    key={row.id}
-                    ref={dividerRef}
-                    role="separator"
-                    aria-label="New messages"
-                    className="mt-4 flex items-center gap-3 text-xs leading-4 text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border"
+                    key={
+                      trailingMark.kind === "steps" ? trailingMark.line.key : "elsewhere:trailing"
+                    }
+                    className={cn("flex", rows.length > 0 && "mt-4")}
                   >
-                    New
-                  </li>
-                );
-              case "day": {
-                const stamp = goatBotStampParts(row.at, nowMs, time);
-                return (
-                  <li
-                    key={row.id}
-                    className="mt-6 mb-2 text-center text-xs leading-4 text-muted-foreground first:mt-2"
-                  >
-                    <span className="font-medium">{stamp.lead}</span>{" "}
-                    <span className="font-normal">{stamp.time}</span>
-                  </li>
-                );
-              }
-              case "event":
-                return (
-                  <li
-                    key={row.id}
-                    role="note"
-                    className="my-3 text-center text-xs leading-4 text-muted-foreground"
-                  >
-                    <GoatBotEventText row={row} onOpenHome={onOpenHome} />
-                  </li>
-                );
-              case "user": {
-                const delivery = row.delivery;
-                const failed = delivery.state === "failed";
-                const retryable = failed && delivery.rejectionReason === undefined;
-                const timeId = `${timePrefix}-time-${row.id}`;
-                const sendKey =
-                  row.sendKey ??
-                  (row.requestKey === null ? undefined : sendKeyByRequest.get(row.requestKey));
-                const arrives = sendKey !== undefined;
-                const receipt =
-                  row.showReceipt && (delivery.state === "queued" || delivery.state === "sending")
-                    ? goatBotReceiptLabel(delivery, time, botName)
-                    : null;
-                return (
-                  <li
-                    key={sendKey === undefined ? row.id : `send:${sendKey}`}
-                    tabIndex={failed ? undefined : 0}
-                    aria-describedby={failed ? undefined : timeId}
-                    className={cn(
-                      "goat-message-row group/message flex flex-col items-end gap-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                      arrives && "goat-arrive",
-                      index > 0 && (row.firstInGroup ? "mt-4" : "mt-1.5"),
-                    )}
-                  >
-                    <span className="sr-only">You</span>
-                    {row.quote
-                      ? (() => {
-                          const prefix = normalize(row.quote).slice(0, 60);
-                          const source =
-                            prefix &&
-                            rows.find(
-                              (candidate) =>
-                                candidate.kind === "bot" &&
-                                normalize(candidate.text).startsWith(prefix),
-                            );
-                          const style =
-                            "max-w-[min(80%,34rem)] truncate rounded-md border border-border px-2 py-1 text-xs text-muted-foreground";
-                          return source ? (
-                            <button
-                              type="button"
-                              className={style}
-                              onClick={() => {
-                                const element = Array.from(
-                                  listRef.current?.querySelectorAll<HTMLElement>(
-                                    "[data-bot-row]",
-                                  ) ?? [],
-                                ).find((node) => node.dataset.botRow === source.id);
-                                element?.scrollIntoView({ block: "center" });
-                                element?.focus({ preventScroll: true });
-                              }}
-                            >
-                              {goatBotPreviewText(row.quote)}
-                            </button>
-                          ) : (
-                            <span className={style}>{goatBotPreviewText(row.quote)}</span>
-                          );
-                        })()
-                      : null}
-                    {row.attachments && row.attachments.length > 0 ? (
-                      <GoatBotSentAttachments
-                        attachments={row.attachments}
-                        environmentId={environmentId}
-                      />
-                    ) : null}
-                    {(row.reply ?? row.text).trim().length > 0 || retryable ? (
-                      <div className="flex w-full items-center justify-end gap-2">
-                        {!failed ? (
-                          <GoatBotMessageTime
-                            id={timeId}
-                            createdAt={row.createdAt}
-                            time={time(row.createdAt)}
-                          />
-                        ) : null}
-                        {retryable ? (
-                          <button
-                            type="button"
-                            aria-label="Retry sending"
-                            onClick={() => onRetry(delivery.clientKey)}
-                            className="flex size-6 shrink-0 items-center justify-center rounded-full text-destructive-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
-                          >
-                            <CircleAlertIcon className="size-4" />
-                            <span className="sr-only">Retry</span>
-                          </button>
-                        ) : null}
-                        {(row.reply ?? row.text).trim().length > 0 ? (
-                          <div className="goat-person-pill w-fit max-w-[min(80%,34rem)]">
-                            {row.reply ?? row.text}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : !failed ? (
-                      <time id={timeId} dateTime={row.createdAt} className="sr-only">
-                        {time(row.createdAt)}
-                      </time>
-                    ) : null}
-                    {failed ? (
-                      <div className="flex items-center gap-2 text-xs leading-4 font-medium text-destructive-foreground">
-                        <span>{goatBotRejectionText(delivery.rejectionReason, botName)}</span>
-                        {onDiscard ? (
-                          <button
-                            type="button"
-                            onClick={() => onDiscard(delivery.clientKey)}
-                            className="hover:underline"
-                          >
-                            Discard
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : receipt !== null ? (
-                      <span
-                        className="text-xs leading-4 text-muted-foreground"
-                        aria-label={receipt.accessibleText}
-                      >
-                        {receipt.text}
-                      </span>
-                    ) : null}
-                  </li>
-                );
-              }
-              case "bot": {
-                const timeId = `${timePrefix}-time-${row.id}`;
-                const toneIcon =
-                  row.tone === "failure" ? (
-                    <CircleAlertIcon
-                      aria-label="Failed"
-                      className="mt-0.5 size-4 shrink-0 text-destructive-foreground"
-                    />
-                  ) : null;
-                const body = (
-                  <>
-                    {toneIcon}
-                    <div className="min-w-0 flex-1">
-                      <GoatBotLinkedText text={row.text} environmentId={environmentId} />
-                      {row.memory ? (
-                        <MemorySettingsEntry
-                          environmentId={row.memory.environmentId}
-                          reference={row.memory}
-                          label="View memory details"
-                        />
-                      ) : null}
-                    </div>
-                  </>
-                );
-                const card = (
-                  <div className="flex w-full min-w-0 items-end gap-2">
-                    <div className="goat-bot-prose goat-bot-card flex w-fit max-w-[min(100%,34rem)] min-w-0 gap-2">
-                      {body}
-                    </div>
-                    <GoatBotMessageTime
-                      id={timeId}
-                      createdAt={row.createdAt}
-                      time={time(row.createdAt)}
-                    />
-                  </div>
-                );
-                return (
-                  <li
-                    key={row.id}
-                    data-bot-row={row.id}
-                    tabIndex={0}
-                    aria-describedby={timeId}
-                    className={cn(
-                      "goat-message-row group/message flex flex-col items-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                      gap,
-                    )}
-                  >
-                    {row.proactive && row.firstInGroup ? (
-                      <GoatBotUpdateLabel name={botName} />
-                    ) : null}
-                    {row.replyTo ? (
-                      <blockquote className="ms-3.5 mb-1 max-w-[min(100%,32rem)] border-s-2 border-border ps-2 text-xs leading-5 text-muted-foreground">
-                        <span className="block truncate">{row.replyTo}</span>
-                      </blockquote>
-                    ) : null}
-                    <div className="flex w-full items-end gap-1">
-                      {(row.choices ?? row.options).length > 0 ? (
-                        <div className="flex w-full min-w-0 items-end gap-2">
-                          <GoatBotQuestionCard row={row} body={body} onPick={onPick} />
-                          <GoatBotMessageTime
-                            id={timeId}
-                            createdAt={row.createdAt}
-                            time={time(row.createdAt)}
-                          />
-                        </div>
-                      ) : (
-                        card
-                      )}
-                      <div className="flex shrink-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 pointer-coarse:opacity-100">
-                        {onReply ? (
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  aria-label="Reply"
-                                  onClick={() => onReply(row.text)}
-                                />
-                              }
-                            >
-                              <ArrowUpLeftIcon className="size-4" />
-                            </TooltipTrigger>
-                            <TooltipPopup>Reply</TooltipPopup>
-                          </Tooltip>
-                        ) : null}
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label="Copy"
-                                onClick={() => copyToClipboard(row.text, undefined)}
-                              />
-                            }
-                          >
-                            <CopyIcon className="size-4" />
-                          </TooltipTrigger>
-                          <TooltipPopup>Copy</TooltipPopup>
-                        </Tooltip>
-                      </div>
-                    </div>
-                  </li>
-                );
-              }
-              case "task":
-                return (
-                  <li key={row.id} className={cn("flex", gap)}>
-                    {taskDetails || !taskThreads ? (
-                      <GoatBotTaskChip
-                        card={row.card}
-                        retryEnvironmentId={taskDetails ? null : retryEnvironmentId}
-                      />
-                    ) : (
-                      <div className="flex max-w-[44rem] min-w-0 flex-col items-start gap-1">
-                        <Link
-                          to="/bot"
-                          search={{
-                            task: ChannelTaskId.make(row.card.key),
-                            ...goatBotSearch(member),
-                          }}
-                          data-task-opener={`pill:${row.id}`}
-                          onClick={(event) => {
-                            if (
-                              !event.metaKey &&
-                              !event.ctrlKey &&
-                              !event.shiftKey &&
-                              !event.altKey &&
-                              event.button === 0
-                            )
-                              recordTaskOpener(
-                                taskFocus,
-                                event.currentTarget,
-                                row.card.key,
-                                `pill:${row.id}`,
-                              );
-                          }}
-                          className="inline-flex max-w-full rounded-full border border-border px-3 py-1.5 text-sm whitespace-normal break-words hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
-                        >
-                          Task thread · {row.card.title}
-                        </Link>
-                        <details className="w-full">
-                          <summary className="cursor-default text-xs text-muted-foreground">
-                            Task details
-                          </summary>
-                          <div className="mt-1">
-                            <GoatBotTaskChip
-                              card={row.card}
-                              retryEnvironmentId={retryEnvironmentId}
-                            />
-                          </div>
-                        </details>
-                      </div>
-                    )}
-                  </li>
-                );
-            }
-          })}
+                    <GoatBotStepsMark mark={trailingMark} onToggle={keepPlace} />
+                  </li>,
+                ]),
+          ]}
           {activity !== null ? (
             <li className={cn("flex", rows.length > 0 && "mt-6")}>
-              <GoatBotActivityLine activity={activity} />
+              <GoatBotActivityLine activity={activity} onToggle={keepPlace} />
             </li>
           ) : null}
         </ol>
       </div>
-      {unread && dividerAbove && !pillDismissed ? (
+      {unreadAt >= 0 && dividerAbove && !pillDismissed ? (
         <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm ring-2 ring-background">
           <Button size="sm" onClick={jumpToUnread}>
-            {unread.count === 1 ? "1 new message" : `${unread.count} new messages`}
+            {unreadRows.length === 1 ? "1 new message" : `${unreadRows.length} new messages`}
           </Button>
           <Button
             size="icon-sm"

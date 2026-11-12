@@ -29,20 +29,28 @@ export function goatBotTime(iso: string): string {
 export const goatBotRowGap = (position: GoatBotGroupPosition) =>
   position === "single" || position === "first" ? 16 : 6;
 
-/** The bot's small avatar: its chosen emoji, else the goat mark on the neutral avatar circle. */
-function GoatBotAvatar(props: { readonly emoji?: string | null | undefined }) {
+/**
+ * The bot's small avatar: its chosen emoji or initial, on its color when it has one, else the goat
+ * mark on the neutral avatar circle.
+ */
+function GoatBotAvatar(props: {
+  readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
+}) {
   const emoji = goatBotAvatarEmoji(props.emoji);
+  const accent = emoji !== null ? (props.accent ?? null) : null;
   return (
     <View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       className="h-5 w-5 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar"
+      style={accent ? { backgroundColor: accent.background } : undefined}
     >
       {emoji !== null ? (
         <Text
           allowFontScaling={false}
           className="text-goat-avatar-foreground"
-          style={{ fontSize: 11, lineHeight: 14 }}
+          style={{ fontSize: 11, lineHeight: 14, ...(accent ? { color: accent.foreground } : {}) }}
         >
           {emoji}
         </Text>
@@ -58,12 +66,13 @@ export function GoatBotUpdateLabel(props: {
   readonly at: string;
   readonly name: string;
   readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const caption = useScaledTextRole("label");
   const time = goatBotTime(props.at);
   return (
     <View className="flex-row items-center gap-2" style={{ marginLeft: 14 }}>
-      <GoatBotAvatar emoji={props.emoji} />
+      <GoatBotAvatar emoji={props.emoji} accent={props.accent} />
       <Text className="text-foreground-muted" style={caption}>
         {`${props.name} · Update${time ? ` · ${time}` : ""}`}
       </Text>
@@ -198,7 +207,12 @@ export function GoatBotPersonCaption(props: {
   );
 }
 
-const PERSON_WAITS = /^(Waiting|Paused)/u;
+// What a screen reader hears for a wait, one phrase per kind, so a wait reworded as more is known
+// is heard once. Waiting on other work reads as working, as on web: nothing for the person to do.
+const SPOKEN_WAIT = {
+  you: "is waiting for you",
+  usage_limit: "is paused on a usage limit",
+} as const;
 
 /**
  * What the bot is doing now, under the last message: its face and one muted line. The words get the
@@ -210,19 +224,24 @@ export function GoatBotActivityLine(props: {
   readonly botName: string;
   /** The bot's profile avatar; an emoji replaces the drawn face. */
   readonly emoji?: string | null | undefined;
+  readonly accent?: GoatBotAccent | null | undefined;
   /** Whether enough of the line shows on screen for its motion to run. */
   readonly inView: boolean;
 }) {
   const label = useScaledTextRole("label");
   const { activity } = props;
-  const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
+  const wait =
+    activity.state === "working" && (activity.wait === "you" || activity.wait === "usage_limit")
+      ? activity.wait
+      : null;
+  const waits = wait !== null;
   const face: GoatBotFaceState =
     activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
-  // Screen readers hear when the bot starts or reads, not each working step, and what it waits on:
-  // the live part says only that, and a working step is plain text beside it.
-  const status = waits
-    ? `${props.botName}: ${activity.text}`
-    : `${props.botName} is ${face === "reading" ? "reading" : "working"}`;
+  // Screen readers hear when the bot starts or reads, not each working step, and what kind of wait
+  // it is in: the live part says only that, and the step's own words are plain text beside it.
+  const status = `${props.botName} ${
+    wait !== null ? SPOKEN_WAIT[wait] : face === "reading" ? "is reading" : "is working"
+  }`;
   const waitStatus = waits ? status : null;
   // oxlint-disable-next-line goat/react-effect-budget -- iOS has no live regions; VoiceOver hears each new wait from here.
   useEffect(() => {
@@ -232,7 +251,12 @@ export function GoatBotActivityLine(props: {
   return (
     <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
       <View accessible accessibilityLiveRegion="polite" accessibilityLabel={status}>
-        <GoatBotProgressFace state={face} emoji={props.emoji} inView={props.inView} />
+        <GoatBotProgressFace
+          state={face}
+          emoji={props.emoji}
+          accent={props.accent}
+          inView={props.inView}
+        />
       </View>
       <View
         accessible
@@ -252,24 +276,38 @@ export function GoatBotActivityLine(props: {
   );
 }
 
-/** A round letter for one choice; filled in the person's colours once it is their answer. */
-function GoatBotChoiceBadge(props: { readonly letter: string; readonly chosen?: boolean }) {
+/**
+ * A round letter for one choice; filled in the person's colours once it is their answer, a member
+ * bot's colour in its chat.
+ */
+function GoatBotChoiceBadge(props: {
+  readonly letter: string;
+  readonly chosen?: boolean;
+  readonly accent?: GoatBotAccent | null | undefined;
+}) {
+  const accent = props.chosen ? (props.accent ?? null) : null;
   return (
     <View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       className={
-        props.chosen
-          ? "h-[26px] w-[26px] items-center justify-center rounded-full bg-goat-person-message"
-          : "h-[26px] w-[26px] items-center justify-center rounded-full border border-foreground-muted"
+        accent
+          ? "h-[26px] w-[26px] items-center justify-center rounded-full"
+          : props.chosen
+            ? "h-[26px] w-[26px] items-center justify-center rounded-full bg-goat-person-message"
+            : "h-[26px] w-[26px] items-center justify-center rounded-full border border-foreground-muted"
       }
+      style={accent ? { backgroundColor: accent.background } : undefined}
     >
       <Text
         className={
-          props.chosen
-            ? "text-xs font-semibold text-goat-person-message-foreground"
-            : "text-xs font-semibold text-foreground-muted"
+          accent
+            ? "text-xs font-semibold"
+            : props.chosen
+              ? "text-xs font-semibold text-goat-person-message-foreground"
+              : "text-xs font-semibold text-foreground-muted"
         }
+        style={accent ? { color: accent.foreground } : undefined}
       >
         {props.letter}
       </Text>
@@ -280,13 +318,16 @@ function GoatBotChoiceBadge(props: { readonly letter: string; readonly chosen?: 
 /**
  * A bot question with choices: one card, the question and its lettered choices. Once answered it
  * keeps the question, dimmed, and only the picked choice; a typed answer stays the person's own
- * message, so the card keeps just the question.
+ * message, so the card keeps just the question. The last row hands over to the composer.
  */
 export function GoatBotQuestionCard(props: {
   readonly children: ReactNode;
   readonly row: Extract<GoatBotRow, { kind: "bot" }>;
   readonly canAnswer: boolean;
   readonly onPick: (answer: string) => void;
+  readonly onSomethingElse?: (() => void) | undefined;
+  /** A member bot's colour for the picked answer's badge. */
+  readonly accent?: GoatBotAccent | null | undefined;
 }) {
   const { row } = props;
   const label = useScaledTextRole("label");
@@ -319,6 +360,21 @@ export function GoatBotQuestionCard(props: {
               </Text>
             </Pressable>
           ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Something else"
+            accessibilityHint="Type your own answer in the message field"
+            accessibilityState={{ disabled: !props.canAnswer }}
+            disabled={!props.canAnswer}
+            onPress={props.onSomethingElse}
+            className="min-h-[44px] flex-row items-center gap-2.5 rounded-xl px-1.5 py-1.5"
+            style={props.canAnswer ? undefined : { opacity: 0.5 }}
+          >
+            <GoatBotChoiceBadge letter={goatBotChoiceLetter(row.options.length)} />
+            <Text className="shrink text-foreground-muted" style={label}>
+              Something else
+            </Text>
+          </Pressable>
         </View>
       ) : picked !== undefined && row.answerIndex !== undefined ? (
         <View
@@ -329,7 +385,11 @@ export function GoatBotQuestionCard(props: {
           className="mt-1.5 min-h-[44px] flex-row items-center gap-2.5"
           style={{ marginHorizontal: -6, paddingHorizontal: 6 }}
         >
-          <GoatBotChoiceBadge letter={goatBotChoiceLetter(row.answerIndex)} chosen />
+          <GoatBotChoiceBadge
+            letter={goatBotChoiceLetter(row.answerIndex)}
+            chosen
+            accent={props.accent}
+          />
           <Text className="shrink text-foreground" style={label}>
             {picked}
           </Text>

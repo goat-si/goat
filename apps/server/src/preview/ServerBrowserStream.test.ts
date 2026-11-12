@@ -44,6 +44,7 @@ const makeAuth = (
             subject: "stream-test",
             method: "bearer-access-token",
             scopes,
+            principalKind: "person",
           });
     },
   });

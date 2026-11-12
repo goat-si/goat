@@ -58,6 +58,7 @@ export const AUXILIARY_PANE_MAX_WIDTH = 480;
 const AUXILIARY_PANE_DEFAULT_MAX_WIDTH = 320;
 const FILE_INSPECTOR_MIN_VIEWPORT_WIDTH = 820;
 const FILE_INSPECTOR_MIN_MAIN_WIDTH = 560;
+export const NATIVE_INSPECTOR_MIN_MAIN_WIDTH = 320;
 
 export type LayoutVariant = "compact" | "split";
 
@@ -204,6 +205,8 @@ export function isPrimarySidebarPinned(input: {
 export function deriveWorkspacePaneLayout(input: {
   readonly layout: Layout;
   readonly viewportWidth: number;
+  readonly horizontalSafeArea?: number;
+  readonly nativeInspectorWidth?: number;
   readonly nativeWorkspace?: boolean;
   readonly primarySidebarPreferredVisible: boolean;
   readonly auxiliaryPanePreferredVisible: boolean;
@@ -228,17 +231,21 @@ export function deriveWorkspacePaneLayout(input: {
     });
     const auxiliaryPaneVisible = fileInspector.supported && input.auxiliaryPanePreferredVisible;
     const primarySidebarSuppressedByAuxiliary =
-      !input.nativeWorkspace &&
       preferredPrimarySidebarVisible &&
       !input.layout.primarySidebarOverlaysContent &&
       auxiliaryPaneVisible &&
-      fileInspector.width !== null &&
+      (input.nativeWorkspace
+        ? (input.nativeInspectorWidth ?? fileInspector.width)
+        : fileInspector.width) !== null &&
       input.layout.listPaneWidth !== null &&
       viewportWidth -
+        (input.nativeWorkspace ? (input.horizontalSafeArea ?? 0) : 0) -
         input.layout.listPaneWidth -
         (input.layout.listPaneGap ?? 0) -
-        fileInspector.width <
-        FILE_INSPECTOR_MIN_MAIN_WIDTH;
+        (input.nativeWorkspace
+          ? (input.nativeInspectorWidth ?? fileInspector.width ?? 0)
+          : (fileInspector.width ?? 0)) <
+        (input.nativeWorkspace ? NATIVE_INSPECTOR_MIN_MAIN_WIDTH : FILE_INSPECTOR_MIN_MAIN_WIDTH);
     const primarySidebarVisible =
       preferredPrimarySidebarVisible && !primarySidebarSuppressedByAuxiliary;
     const primarySidebarWidth = primarySidebarVisible ? preferredPrimarySidebarWidth : 0;
@@ -278,6 +285,18 @@ export function deriveWorkspacePaneLayout(input: {
         })
       : null,
   };
+}
+
+export function nativeInspectorColumnWidth(input: {
+  readonly viewportWidth: number;
+  readonly horizontalSafeArea: number;
+  readonly fraction: number;
+}) {
+  const maxWidth = Math.min(
+    input.viewportWidth * 0.6,
+    input.viewportWidth - input.horizontalSafeArea - NATIVE_INSPECTOR_MIN_MAIN_WIDTH,
+  );
+  return Math.max(260, Math.min(maxWidth, input.viewportWidth * input.fraction));
 }
 
 export function deriveFileInspectorPaneLayout(input: {

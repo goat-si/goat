@@ -172,7 +172,13 @@ export const makeCloudLaunchConsent = Effect.gen(function* () {
         targetPath: CLOUD_AGENT_LAUNCH_HANDOFF_PATH,
         binding: { launch: digest },
       });
-      yield* consume(input.handoffId);
+      // A launch may bill even when it fails, so its approval is spent as the launch starts.
+      yield* approvals.markUsed({
+        threadId: scope.thread.threadId,
+        handoffId: input.handoffId,
+        action: "cloud.launch",
+        once: true,
+      });
       const time = DateTime.formatIso(yield* DateTime.now);
       yield* sql`INSERT INTO audit_events (time, actor, profile, action, target, outcome, decision_id)
         VALUES (${time}, ${`thread:${scope.thread.threadId}`}, ${effective.profile.id}, 'cloud.launch',

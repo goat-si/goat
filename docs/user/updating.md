@@ -117,6 +117,12 @@ to finish before the restart; cancelling leaves the runtime running. Removing a
 saved connection also leaves it running. To remove GOAT's managed host entry and
 stop an idle runtime GOAT owns, use **Forget host**; remote projects and files stay.
 
+When the running runtime is too old to hand over or cannot be verified, the
+approval in the requesting thread names its process ID, start time and port.
+Approving it lets GOAT stop that process and its child processes and start the
+new runtime. If a different process is running by then, GOAT stops nothing and
+asks again.
+
 ## Desktop app updates
 
 GOAT (Nightly) downloads each new nightly by itself, and GOAT downloads each

@@ -15,7 +15,24 @@ vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }
 vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
 vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 
+import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+
+/** The chat view's pair: the status region mounts with the chat, the timeline beside it. */
+function Chat({
+  rows = [],
+  replyingSince = null,
+}: {
+  readonly rows?: Parameters<typeof GoatBotTimeline>[0]["rows"];
+  readonly replyingSince?: string | null;
+}) {
+  return (
+    <>
+      <GoatBotActivityStatus replyingSince={replyingSince} />
+      <GoatBotTimeline rows={rows} replyingSince={replyingSince} onRetry={() => {}} />
+    </>
+  );
+}
 
 const now = Date.parse("2026-10-15T00:00:00Z");
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -26,7 +43,7 @@ function clock(): Disposable {
   return timers;
 }
 
-it.each([90_000, 91_000])("never mounts the reading status when already %i ms old", async (age) => {
+it.each([90_000, 91_000])("never says it is reading a message already %i ms old", async (age) => {
   using _timers = clock();
   const added: Element[] = [];
   const container = document.createElement("div");
@@ -41,13 +58,16 @@ it.each([90_000, 91_000])("never mounts the reading status when already %i ms ol
   });
   observer.observe(container, { childList: true, subtree: true });
   try {
-    await using screen = await render(
-      <GoatBotTimeline rows={[]} replyingSince={ago(age)} onRetry={() => {}} />,
-      { container, router: false },
-    );
-    expect(screen.container.querySelector('[role="status"]')).toBeNull();
+    await using screen = await render(<Chat replyingSince={ago(age)} />, {
+      container,
+      router: false,
+    });
+    // The one status region is mounted empty; it never says it is reading an old message.
+    const status = screen.container.querySelector('[role="status"]');
+    expect(status?.textContent).toBe("");
     await act(() => vi.runAllTimers());
-    expect(added).toEqual([]);
+    expect(added.map((node) => node.textContent)).toEqual([""]);
+    expect(status?.textContent).toBe("");
   } finally {
     observer.disconnect();
   }
@@ -56,32 +76,25 @@ it.each([90_000, 91_000])("never mounts the reading status when already %i ms ol
 it("says it is reading until the limit and reads again for a newer message", async () => {
   using _timers = clock();
   // Router off: the timeline has no links and fake timers would stall the router's loader.
-  await using screen = await render(
-    <GoatBotTimeline rows={[]} replyingSince={ago(89_000)} onRetry={() => {}} />,
-    { router: false },
-  );
+  await using screen = await render(<Chat replyingSince={ago(89_000)} />, { router: false });
   const status = () => screen.container.querySelector('[role="status"]');
   expect(status()?.textContent).toBe("Reading your message");
   await act(() => vi.advanceTimersByTime(1_000));
-  expect(status()).toBeNull();
-  await screen.rerender(
-    <GoatBotTimeline rows={[]} replyingSince={ago(-1_000)} onRetry={() => {}} />,
-  );
+  expect(status()?.textContent).toBe("");
+  await screen.rerender(<Chat replyingSince={ago(-1_000)} />);
   expect(status()?.textContent).toBe("Reading your message");
 });
 
 it.each([null, "invalid timestamp", ago(91_000)])(
-  "removes the reading status as soon as replyingSince changes to %s",
+  "clears the reading status as soon as replyingSince changes to %s",
   async (since) => {
     using _timers = clock();
     // Router off: the timeline has no links and fake timers would stall the router's loader.
-    await using screen = await render(
-      <GoatBotTimeline rows={[]} replyingSince={ago(0)} onRetry={() => {}} />,
-      { router: false },
-    );
-    expect(screen.container.querySelector('[role="status"]')).not.toBeNull();
-    await screen.rerender(<GoatBotTimeline rows={[]} replyingSince={since} onRetry={() => {}} />);
-    expect(screen.container.querySelector('[role="status"]')).toBeNull();
+    await using screen = await render(<Chat replyingSince={ago(0)} />, { router: false });
+    const status = () => screen.container.querySelector('[role="status"]')?.textContent;
+    expect(status()).toBe("Reading your message");
+    await screen.rerender(<Chat replyingSince={since} />);
+    expect(status()).toBe("");
   },
 );
 
@@ -89,7 +102,7 @@ it("shows the acknowledged work's step after reading, past the reading limit", a
   using _timers = clock();
   const timeline = (since: string | null) => (
     <GoatBotActivityContext value={{ state: "working", text: "Run df -h" }}>
-      <GoatBotTimeline rows={[]} replyingSince={since} onRetry={() => {}} />
+      <Chat replyingSince={since} />
     </GoatBotActivityContext>
   );
   // Router off: the timeline has no links and fake timers would stall the router's loader.
@@ -119,7 +132,7 @@ it("draws both activity states without any running animation", async () => {
     <>
       <span data-testid="control" className="animate-spin" />
       <GoatBotActivityContext value={{ state: "working", text: "Working" }}>
-        <GoatBotTimeline rows={[]} replyingSince={ago(0)} onRetry={() => {}} />
+        <Chat replyingSince={ago(0)} />
       </GoatBotActivityContext>
     </>,
     { router: false },
@@ -130,7 +143,7 @@ it("draws both activity states without any running animation", async () => {
     const status = screen.container.querySelector('[role="status"]');
     expect(status?.textContent).toBe(text);
     // The step and its live status hold still; the face may fade once when its state changes.
-    const step = status?.parentElement?.querySelector("button[aria-expanded]");
+    const step = screen.container.querySelector("button[aria-expanded]");
     if (!(status instanceof HTMLElement) || !(step instanceof HTMLElement))
       throw new Error("expected the activity line");
     expect([
@@ -148,7 +161,7 @@ it("draws both activity states without any running animation", async () => {
     <>
       <span data-testid="control" className="animate-spin" />
       <GoatBotActivityContext value={{ state: "working", text: "Working" }}>
-        <GoatBotTimeline rows={[]} replyingSince={null} onRetry={() => {}} />
+        <Chat replyingSince={null} />
       </GoatBotActivityContext>
     </>,
   );
@@ -159,7 +172,7 @@ it("shows the bot's still face and the step it is on, announcing work once acros
   using _timers = clock();
   const line = (text: string) => (
     <GoatBotActivityContext value={{ state: "working", text, title: "Fix the login flow" }}>
-      <GoatBotTimeline rows={[]} onRetry={() => {}} />
+      <Chat />
     </GoatBotActivityContext>
   );
   // Router off: the timeline has no links and fake timers would stall the router's loader.
@@ -185,7 +198,7 @@ it("opens a cut-off step to its full text from the keyboard", async () => {
   await using screen = await render(
     <div style={{ width: 240 }}>
       <GoatBotActivityContext value={{ state: "working", text: long, title: "Draft the notes" }}>
-        <GoatBotTimeline rows={[]} onRetry={() => {}} />
+        <Chat />
       </GoatBotActivityContext>
     </div>,
     { router: false },
@@ -201,14 +214,263 @@ it("opens a cut-off step to its full text from the keyboard", async () => {
 });
 
 it("shows the waiting face and says so when the work is paused or waits on the person", async () => {
-  for (const text of ["Paused on a usage limit", "Waiting for your approval"]) {
+  for (const [text, attention, wait, heard] of [
+    ["Paused on a usage limit", "paused", "usage_limit", "GOAT Bot is paused on a usage limit"],
+    ["Waiting for your approval", "waiting", "you", "GOAT Bot is waiting for you"],
+  ] as const) {
     await using screen = await render(
-      <GoatBotActivityContext value={{ state: "working", text }}>
-        <GoatBotTimeline rows={[]} onRetry={() => {}} />
+      <GoatBotActivityContext value={{ state: "working", text, attention, wait }}>
+        <Chat />
       </GoatBotActivityContext>,
       { router: false },
     );
     expect(screen.container.querySelector('[data-face="waiting"]'), text).not.toBeNull();
-    expect(screen.container.querySelector('[role="status"]')?.textContent).toBe(text);
+    expect(screen.container.querySelector('[role="status"]')?.textContent).toBe(heard);
   }
+});
+
+it("says a wait on the person once while its wording changes", async () => {
+  const timeline = (text: string) => (
+    <GoatBotActivityContext value={{ state: "working", text, attention: "waiting", wait: "you" }}>
+      <Chat />
+    </GoatBotActivityContext>
+  );
+  await using screen = await render(timeline("Waiting for you"), { router: false });
+  const region = screen.container.querySelector('[role="status"]');
+  await vi.waitFor(() => expect(region?.textContent).not.toBe(""));
+  const heard = region?.textContent;
+  await screen.rerender(timeline("Waiting for your answer"));
+  await expect
+    .element(screen.getByRole("button", { name: "Waiting for your answer" }))
+    .toBeVisible();
+  expect(region?.textContent).toBe(heard);
+});
+
+it("keeps one status region and says when the work starts, waits, pauses and ends", async () => {
+  using _timers = clock();
+  const timeline = (
+    activity: {
+      state: "working";
+      text: string;
+      attention?: "waiting" | "paused";
+      wait?: "you" | "other_work" | "usage_limit";
+    } | null,
+  ) => (
+    <GoatBotActivityContext value={activity}>
+      <Chat />
+    </GoatBotActivityContext>
+  );
+  // Router off: the timeline has no links and fake timers would stall the router's loader.
+  await using screen = await render(timeline(null), { router: false });
+  const region = screen.container.querySelector('[role="status"]');
+  expect(region?.textContent).toBe("");
+  await screen.rerender(timeline({ state: "working", text: "Running the tests" }));
+  expect(region?.textContent).toBe("GOAT Bot is working");
+  await screen.rerender(
+    timeline({ state: "working", text: "Waiting on other work", wait: "other_work" }),
+  );
+  // Waiting on other work needs nothing from the person.
+  expect(region?.textContent).toBe("GOAT Bot is working");
+  expect(screen.container.querySelector('[data-face="working"]')).not.toBeNull();
+  await screen.rerender(
+    timeline({
+      state: "working",
+      text: "Waiting for your approval",
+      attention: "waiting",
+      wait: "you",
+    }),
+  );
+  expect(region?.textContent).toBe("GOAT Bot is waiting for you");
+  expect(screen.container.querySelector('[data-face="waiting"]')).not.toBeNull();
+  await screen.rerender(
+    timeline({
+      state: "working",
+      text: "Paused on a usage limit",
+      attention: "paused",
+      wait: "usage_limit",
+    }),
+  );
+  expect(region?.textContent).toBe("GOAT Bot is paused on a usage limit");
+  await screen.rerender(timeline(null));
+  expect(region?.textContent).toBe("GOAT Bot is done");
+  // The same element carried every change, so a screen reader heard each one.
+  expect(screen.container.querySelector('[role="status"]')).toBe(region);
+});
+
+it("opens a long step to its whole text and keeps the conversation where it was", async () => {
+  const whole = "Comparing ".repeat(20) + "the end";
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    kind: "bot" as const,
+    id: "m" + index,
+    text: "Message " + index,
+    createdAt: "2026-10-15T00:00:00.000Z",
+    tone: "reply" as const,
+    proactive: false,
+    replyTo: null,
+    options: [],
+    firstInGroup: true,
+    groupPosition: "single" as const,
+  }));
+  await using screen = await render(
+    <div style={{ height: 300, display: "flex" }}>
+      <GoatBotActivityContext
+        value={{ state: "working", text: whole.slice(0, 119) + "…", fullText: whole }}
+      >
+        <GoatBotTimeline rows={rows} onRetry={() => {}} />
+      </GoatBotActivityContext>
+    </div>,
+    { router: false },
+  );
+  const step = screen.getByRole("button", { name: /Comparing/ });
+  await expect.element(step).toBeVisible();
+  const scroller = step.element().closest(".overflow-y-auto") as HTMLElement;
+  // A reader following the newest message sits at the bottom.
+  await expect
+    .poll(() => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight)
+    .toBeLessThan(2);
+  const before = scroller.scrollTop;
+  (step.element() as HTMLElement).focus({ preventScroll: true });
+  await userEvent.keyboard("{Enter}");
+  await expect.poll(() => step.element().textContent ?? "").toContain("the end");
+  // The line grew, and the conversation stayed where it was instead of following the growth.
+  expect(scroller.scrollHeight - scroller.clientHeight).toBeGreaterThan(before);
+  expect(scroller.scrollTop).toBe(before);
+});
+
+it("opens an already-working chat with its status region empty, then says it is working", async () => {
+  const container = document.createElement("div");
+  const records: MutationRecord[] = [];
+  const observer = new MutationObserver((batch) => records.push(...batch));
+  observer.observe(container, { childList: true, subtree: true, characterData: true });
+  try {
+    await using screen = await render(
+      <GoatBotActivityContext value={{ state: "working", text: "Running the tests" }}>
+        <Chat />
+      </GoatBotActivityContext>,
+      { container, router: false },
+    );
+    const region = screen.container.querySelector('[role="status"]');
+    await expect.poll(() => region?.textContent).toBe("GOAT Bot is working");
+    records.push(...observer.takeRecords());
+    // The words arrived as a change to the region already in the page, not inside its insertion.
+    expect(
+      records.some((record) => record.target === region || record.target.parentNode === region),
+    ).toBe(true);
+  } finally {
+    observer.disconnect();
+  }
+});
+
+it("says the work is done when it ends while a newer message is being read", async () => {
+  using _timers = clock();
+  const chat = (work: boolean, since: string | null) => (
+    <GoatBotActivityContext value={work ? { state: "working", text: "Running the tests" } : null}>
+      <Chat replyingSince={since} />
+    </GoatBotActivityContext>
+  );
+  // Router off: the timeline has no links and fake timers would stall the router's loader.
+  await using screen = await render(chat(true, null), { router: false });
+  const status = () => screen.container.querySelector('[role="status"]')?.textContent;
+  expect(status()).toBe("GOAT Bot is working");
+  // The person sends another message while the work runs.
+  await screen.rerender(chat(true, ago(0)));
+  expect(status()).toBe("Reading your message");
+  await screen.rerender(chat(false, ago(0)));
+  expect(status()).toBe("Reading your message");
+  await screen.rerender(chat(false, null));
+  expect(status()).toBe("GOAT Bot is done");
+  // A later reply with no work behind it says nothing more once it is read.
+  await screen.rerender(chat(false, ago(-1_000)));
+  expect(status()).toBe("Reading your message");
+  await screen.rerender(chat(false, null));
+  expect(status()).toBe("");
+});
+
+/** Resolves on each size change of the element, after the timeline's own observer handled it. */
+function resizes(element: Element) {
+  let seen = 0;
+  const waiting: Array<{ readonly at: number; readonly resolve: () => void }> = [];
+  const observer = new ResizeObserver(() => {
+    seen += 1;
+    for (const waiter of waiting.filter((entry) => entry.at <= seen)) waiter.resolve();
+  });
+  observer.observe(element);
+  return {
+    next: () => new Promise<void>((resolve) => waiting.push({ at: seen + 1, resolve })),
+    [Symbol.dispose]: () => observer.disconnect(),
+  };
+}
+
+const botRows = (count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    kind: "bot" as const,
+    id: "m" + index,
+    text: "Message " + index,
+    createdAt: "2026-10-15T00:00:00.000Z",
+    tone: "reply" as const,
+    proactive: false,
+    replyTo: null,
+    options: [],
+    firstInGroup: true,
+    groupPosition: "single" as const,
+  }));
+
+const shortLineChat = (count: number) => (
+  <div style={{ height: 300, display: "flex" }}>
+    <GoatBotActivityContext value={{ state: "working", text: "Running the tests" }}>
+      <GoatBotTimeline rows={botRows(count)} onRetry={() => {}} />
+    </GoatBotActivityContext>
+  </div>
+);
+
+async function toggleShortLine(screen: Awaited<ReturnType<typeof render>>) {
+  const step = screen.getByRole("button", { name: "Running the tests" });
+  await expect.element(step).toBeVisible();
+  const scroller = step.element().closest(".overflow-y-auto") as HTMLElement;
+  const list = scroller.querySelector("ol") as HTMLElement;
+  await expect
+    .poll(() => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight)
+    .toBeLessThan(2);
+  const heightBefore = scroller.scrollHeight;
+  (step.element() as HTMLElement).focus({ preventScroll: true });
+  await userEvent.keyboard("{Enter}");
+  await expect.element(step).toHaveAttribute("aria-expanded", "true");
+  // A short line opens without changing the conversation's height.
+  expect(scroller.scrollHeight).toBe(heightBefore);
+  const reply = async () => {
+    using sizes = resizes(list);
+    await sizes.next();
+    await screen.rerender(shortLineChat(31));
+    await sizes.next();
+  };
+  return { scroller, reply };
+}
+
+it("lets the reader's own scroll stand after a short line toggles, when a reply arrives", async () => {
+  await using screen = await render(shortLineChat(30), { router: false });
+  const { scroller, reply } = await toggleShortLine(screen);
+  scroller.scrollTop = 0;
+  await act(() => scroller.dispatchEvent(new Event("scroll")));
+  await reply();
+  expect(scroller.scrollTop).toBe(0);
+});
+
+it("still follows a reply after a short line toggles for a reader at the bottom", async () => {
+  await using screen = await render(shortLineChat(30), { router: false });
+  const { reply, scroller } = await toggleShortLine(screen);
+  await reply();
+  expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBeLessThan(2);
+});
+
+it("still follows the newest message when the chat gets shorter after a short line toggled", async () => {
+  await using screen = await render(shortLineChat(30), { router: false });
+  const { scroller } = await toggleShortLine(screen);
+  using sizes = resizes(scroller);
+  await sizes.next();
+  // The window gets shorter or a keyboard opens: the content keeps its height, the view shrinks.
+  const frame = scroller.closest<HTMLElement>(".goat-timeline")?.parentElement;
+  if (!frame) throw new Error("missing chat frame");
+  frame.style.height = "200px";
+  await sizes.next();
+  expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBeLessThan(2);
 });

@@ -73,7 +73,12 @@ export interface TimelineRowSharedState {
   workflowOpening: WorkflowOpening | null;
   /** Absent hides "Fork from this response", as in the guest view. */
   onForkFromRun:
-    | ((input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => Promise<void>)
+    | ((input: {
+        readonly sourceThreadId: ThreadId;
+        readonly runId: RunId;
+        /** Where the destination menu opens. */
+        readonly anchor?: { readonly x: number; readonly y: number };
+      }) => Promise<void>)
     | undefined;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;

@@ -43,6 +43,10 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 				return nil, errNotAdmitted
 			}
 		case "mesh":
+		case "service":
+			if !ValidServiceName(p.Name) {
+				return nil, errNotAdmitted
+			}
 		default:
 			return nil, errNotAdmitted
 		}
@@ -83,7 +87,7 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		return
 	}
 	switch sec.Payload.Stream {
-	case "tcp", "mesh":
+	case "tcp", "mesh", "service":
 		// The peer may have been revoked between message 1 and its confirmation.
 		l := &live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec}
 		k, ok := d.register(l)
@@ -93,9 +97,12 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		}
 		defer d.unregister(k)
 		d.markSeen(sec.RemoteStatic, true, relayOf(c))
-		if sec.Payload.Stream == "tcp" {
+		switch sec.Payload.Stream {
+		case "tcp":
 			d.serveTCP(ctx, sec)
-		} else {
+		case "service":
+			d.serveService(ctx, sec)
+		default:
 			d.serveMesh(ctx, sec, l)
 		}
 	case "join":

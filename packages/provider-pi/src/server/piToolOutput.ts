@@ -22,6 +22,8 @@ export const PiProviderCapabilitiesV2 = {
     canForkFromTurn: true,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
+    // `--fork` launches in the session's cwd, which is the target thread's.
+    forkHonorsTargetCwd: true,
   },
   turns: {
     exposesNativeTurnId: false,

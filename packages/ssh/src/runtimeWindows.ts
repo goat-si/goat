@@ -210,6 +210,7 @@ export const statusRuntimeProbe = Effect.fn("ssh.windows.statusRuntimeProbe")(fu
       false,
       false,
       ownRuntimeVersion,
+      true,
     ),
     timeoutMs: SSH_READY_TIMEOUT_MS,
   }).pipe(

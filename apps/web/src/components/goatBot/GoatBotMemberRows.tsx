@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   botManageFailure,
+  goatBotAccent,
   goatBotMemberPicture,
   goatBotPreviewText,
 } from "@goat/client-runtime/goatBot";
@@ -160,7 +161,8 @@ function GoatBotMemberRow({
   readonly onHide: (bot: BotProfile, hidden: boolean) => void;
   readonly onDelete: (bot: BotProfile) => void;
 }) {
-  const { waitingCount: count, latest } = useGoatBotMemberStatus(bot);
+  const status = useGoatBotMemberStatus(bot);
+  const { waitingCount: count, latest } = status;
   // The row's second line is what the bot last said or was asked; a new bot shows its purpose.
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -185,20 +187,24 @@ function GoatBotMemberRow({
           />
         }
       >
-        {/* The same slots as the main bot's row: unread mark, avatar, name over a second line. */}
+        {/* The same slots as the main bot's row: unread mark, avatar, name over a second line.
+            The avatar's label leads the link's name with the bot's state and its waiting count. */}
         <span aria-hidden className="size-2.5 shrink-0 group-data-[collapsible=icon]:hidden" />
         <GoatBotSessionAvatar
           size="md"
           place="list"
           waitingCount={count}
+          row={status}
+          countInLabel
           emoji={goatBotMemberPicture(bot)}
+          accent={goatBotAccent(bot)}
           threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
           <span className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 flex-1 truncate">{bot.name}</span>
             {count > 0 ? (
-              <Badge size="sm" variant="secondary" aria-label={`${count} waiting for you`}>
+              <Badge size="sm" variant="secondary" aria-hidden>
                 {count}
               </Badge>
             ) : null}

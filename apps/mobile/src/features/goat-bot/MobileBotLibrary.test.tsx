@@ -63,9 +63,10 @@ vi.mock("expo-file-system", () => {
 });
 vi.mock("expo-sharing", () => ({ isAvailableAsync: state.available, shareAsync: state.share }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "00000000-0000-4000-8000-000000000000" }));
-// A fixed "now", so the day headings do not depend on when the test runs.
+// A fixed "now", so the day headings do not depend on when the test runs; a test may move it.
 const LIBRARY_NOW = Date.parse("2026-11-08T12:00:00.000Z");
-vi.mock("../../lib/clock", () => ({ useNowMinuteMs: () => LIBRARY_NOW }));
+const clock = vi.hoisted(() => ({ now: 0 }));
+vi.mock("../../lib/clock", () => ({ useNowMinuteMs: () => clock.now || LIBRARY_NOW }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -180,6 +181,7 @@ function setup(options: { data?: unknown; cause?: unknown } = {}) {
   fs.directories.clear();
   fs.written.clear();
   fs.deleted = [];
+  clock.now = 0;
 }
 type Props = Partial<Parameters<typeof MobileBotLibrary>[0]>;
 async function render(props: Props = {}) {
@@ -329,12 +331,13 @@ it("leaving with an image preview open deletes the copy", async () => {
   expect(kept()).toEqual([]);
 });
 
-it("says why a file did not open", async () => {
+it("says a file did not open, never that another file is still opening, since opens take turns", async () => {
   setup();
   state.files.delete("deck.pdf");
   await render();
   await press("Open deck.pdf");
-  expect(container.textContent).toContain("Another file is still opening. Try again in a moment.");
+  expect(container.textContent).toContain("Couldn't open deck.pdf. Try again.");
+  expect(container.textContent).not.toContain("still opening");
 });
 
 it("says when this device cannot share files", async () => {
@@ -360,15 +363,67 @@ it("an image preview says why sharing did not start", async () => {
   expect(container.textContent).toContain("Could not open the share sheet. Try again.");
 });
 
-it("puts the files under a heading for each day they were saved", async () => {
-  setup();
+const file = (relativePath: string, modifiedAt: string) => ({ relativePath, size: 4, modifiedAt });
+const headings = () =>
+  [...container.querySelectorAll("span")]
+    .filter((span) => span.parentElement?.firstElementChild === span && !span.closest("button"))
+    .map((span) => span.textContent ?? "");
+
+it("puts the files under a heading for each day they were saved, the same date in another year apart", async () => {
+  // Noon UTC keeps each file on the same calendar day in every test time zone.
+  setup({
+    data: {
+      artifacts: [
+        file("today.md", "2026-11-08T12:00:00.000Z"),
+        file("yesterday.md", "2026-11-07T12:00:00.000Z"),
+        file("wednesday.md", "2026-11-04T12:00:00.000Z"),
+        file("last-week.md", "2026-10-30T12:00:00.000Z"),
+        file("two-years-ago.md", "2024-11-08T12:00:00.000Z"),
+      ],
+      truncated: false,
+    },
+  });
   await render();
-  const { goatBotDayLabel } = await import("@goat/client-runtime/goatBot");
   const text = container.textContent ?? "";
-  const first = goatBotDayLabel("2026-11-07T10:00:00.000Z", LIBRARY_NOW);
-  const second = goatBotDayLabel("2026-11-06T10:00:00.000Z", LIBRARY_NOW);
-  expect(first).not.toBe(second);
-  const order = [first, "deck.pdf", second, "chart.png"].map((part) => text.indexOf(part));
+  const order = [
+    "Today",
+    "today.md",
+    "Yesterday",
+    "yesterday.md",
+    "wednesday.md",
+    "last-week.md",
+    "two-years-ago.md",
+  ].map((part) => text.indexOf(part));
   expect(order.every((at) => at >= 0)).toBe(true);
-  expect(order).toEqual([...order].sort((a, b) => a - b));
+  expect(order).toEqual([...order].sort((x, y) => x - y));
+  // Five days, five headings: the same date two years back is its own group, with its year.
+  const shown = headings();
+  expect(shown).toHaveLength(5);
+  expect(shown.slice(0, 2)).toEqual(["Today", "Yesterday"]);
+  expect(shown[4]).toContain("2024");
+  expect(shown.slice(0, 4).some((label) => label.includes("2026"))).toBe(false);
+});
+
+it("keeps the focused row when Today becomes Yesterday at midnight", async () => {
+  // Local times, so midnight is the device's midnight whatever the test time zone.
+  setup({
+    data: {
+      artifacts: [file("deck.pdf", new Date(2026, 10, 8, 10, 0).toISOString())],
+      truncated: false,
+    },
+  });
+  clock.now = new Date(2026, 10, 8, 23, 59).getTime();
+  await render();
+  expect(headings()).toEqual(["Today"]);
+  const row = button("Open deck.pdf");
+  act(() => row?.focus());
+  expect(document.activeElement).toBe(row);
+  clock.now = new Date(2026, 10, 9, 0, 1).getTime();
+  // The minute clock ticks over; the list draws again in place.
+  await act(async () =>
+    root?.render(<MobileBotLibrary environmentId={environmentId} connected supported />),
+  );
+  expect(headings()).toEqual(["Yesterday"]);
+  expect(button("Open deck.pdf")).toBe(row);
+  expect(document.activeElement).toBe(row);
 });

@@ -105,9 +105,28 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "bot" } }),
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
-// Each member's own waiting count, as channel.getBotStatus answers it for that bot.
+// The strip has its own tests and reads the server's open asks.
+vi.mock("./MobileNeedsYouStrip", () => ({ MobileNeedsYouStrip: () => null }));
+// Each member's own status, as channel.getBotStatus answers it for that bot.
+const members = vi.hoisted(() => ({
+  status: {} as Record<
+    string,
+    {
+      waitingCount: number;
+      latest?: { text: string; at: string; author: "bot" | "person" };
+      unread: boolean;
+    }
+  >,
+}));
 vi.mock("./useMobileMemberStatus", () => ({
-  useMobileMemberWaitingCount: (bot: { botId: string }) => (bot.botId === "research" ? 2 : 0),
+  useMobileMemberStatus: (bot: { botId: string }) => {
+    const shown = members.status[bot.botId] ?? {
+      waitingCount: bot.botId === "research" ? 2 : 0,
+      latest: undefined,
+      unread: false,
+    };
+    return { ...shown, status: { waitingCount: shown.waitingCount, latest: shown.latest } };
+  },
 }));
 vi.mock("../../state/use-thread-detail", () => ({
   useThreadVisibleTurnItems: () => face.items,
@@ -214,7 +233,7 @@ it("shows the waiting face on the main bot for a waiting task the roster hides",
         />,
       ),
     );
-    expect(container.querySelector('[aria-label="GOAT Bot, Waiting for you"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Waiting for you, GOAT Bot"]')).not.toBeNull();
   } finally {
     face.items = [];
   }
@@ -404,7 +423,7 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
       element.textContent?.includes(label),
     );
   expect(button("Research")?.getAttribute("aria-pressed")).toBe("true");
-  expect(button("Research")?.querySelector('[aria-label="2 waiting for you"]')).not.toBeNull();
+  expect(button("Research")?.getAttribute("aria-label")).toBe("2 waiting for you, Research");
   // A member without an emoji shows its initial, so it is told apart from the main bot's face.
   expect(button("Research")?.querySelector("[data-picture]")?.getAttribute("data-picture")).toBe(
     "R",
@@ -473,4 +492,66 @@ it("offers no restore on a deleted bot to someone who cannot manage bots", async
   expect(deletedRow).toBeDefined();
   expect(container.querySelector('button[aria-label="Restore Gone"]')).toBeNull();
   expect(container.textContent).not.toContain("Restore");
+});
+it("gives each member row its latest message, unread mark and state in one spoken label", async () => {
+  const member = (botId: string, name: string, purpose = "") =>
+    decodeProfile({
+      botId,
+      role: "member",
+      name,
+      avatar: null,
+      purpose,
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: "env",
+      sessionThreadId: `thread-${botId}`,
+      createdAt: at,
+      updatedAt: at,
+    });
+  members.status = {
+    scout: {
+      waitingCount: 1,
+      latest: { text: "**Which** branch should I use?", at, author: "bot" },
+      unread: true,
+    },
+    writer: {
+      waitingCount: 0,
+      latest: { text: "Draft the release notes", at, author: "person" },
+      unread: false,
+    },
+    fresh: { waitingCount: 0, unread: false },
+  };
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[
+            { kind: "main", profile: null },
+            { kind: "member", profile: member("scout", "Scout") },
+            { kind: "member", profile: member("writer", "Writer") },
+            { kind: "member", profile: member("fresh", "Fresh", "Watches the disks") },
+          ]}
+          slackEnabled={false}
+          onOpenBot={() => {}}
+        />,
+      ),
+    );
+    const row = (name: string) =>
+      [...container.querySelectorAll("button")].find((element) =>
+        element.getAttribute("aria-label")?.split(", ").includes(name),
+      );
+    // The second line is the newest message as plain words; the person's own is marked as theirs.
+    expect(row("Scout")?.textContent).toContain("Which branch should I use?");
+    expect(row("Scout")?.getAttribute("aria-label")).toBe(
+      "1 waiting for you, Scout, unread, Which branch should I use?",
+    );
+    expect(row("Writer")?.textContent).toContain("You: Draft the release notes");
+    expect(row("Writer")?.getAttribute("aria-label")).toBe("Writer, You: Draft the release notes");
+    // A bot that has not talked yet shows what it is for.
+    expect(row("Fresh")?.textContent).toContain("Watches the disks");
+    expect(row("Fresh")?.getAttribute("aria-label")).toBe("Fresh, Watches the disks");
+  } finally {
+    members.status = {};
+  }
 });

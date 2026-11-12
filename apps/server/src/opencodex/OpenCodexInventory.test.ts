@@ -183,6 +183,23 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
   };
 });
 
+it.effect("probes OpenCodex shims offline without mistaking a missing CLI for installed", () =>
+  Effect.gen(function* () {
+    let installAttempted = false;
+    const { inventory, commands } = yield* setup({
+      binaries: [{ path: "/shim/ocx", output: "mise ERROR not installed", code: 1 }],
+      versionProbe: (input) =>
+        Effect.sync(() => {
+          if (input.env?.MISE_OFFLINE !== "1") installAttempted = true;
+          return "mise ERROR not installed";
+        }),
+    });
+    expect((yield* inventory.read).installed).toBe(false);
+    expect(installAttempted).toBe(false);
+    expect(commands[0]?.env?.MISE_OFFLINE).toBe("1");
+  }),
+);
+
 it.effect("Home 2.89.0 has no health role and reports all five Home-owned links", () =>
   Effect.gen(function* () {
     const { inventory, commands } = yield* setup({ fixture: fleet.home });

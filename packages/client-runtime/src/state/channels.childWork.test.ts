@@ -13,6 +13,7 @@ vi.mock("./session.ts", () => ({
 vi.mock("./runtime.ts", () => ({
   createEnvironmentRpcCommand: () => ({}),
   createEnvironmentRpcSubscriptionAtomFamily: () => () => Atom.make(null),
+  createEnvironmentSubscriptionAtomFamily: () => () => Atom.make(null),
   createEnvironmentRpcQueryAtomFamily: () => () =>
     Atom.make(() => {
       calls.count++;

@@ -4,6 +4,8 @@ import * as NodeHttp from "node:http";
 import type * as NodeStream from "node:stream";
 import { guardErrors } from "@goat/shared/errorGuards";
 
+import { attachMainListener } from "./auth/connectionContext.ts";
+
 export function guardHttpResponseWriteErrors<T extends NodeHttp.Server>(
   server: T,
   onError?: (error: unknown) => void,
@@ -21,11 +23,17 @@ export function guardHttpResponseWriteErrors<T extends NodeHttp.Server>(
   return server;
 }
 
-/** The server's own 'error' is heard by NodeHttpServer, which listens before it calls listen(). */
-export const createGuardedHttpServer = () =>
-  rejectRequestsUntilServing(
+/**
+ * The main server. Its own 'error' is heard by NodeHttpServer, which listens before it calls
+ * listen(). Sockets it accepts carry the main connection context; no other socket does.
+ */
+export const createGuardedHttpServer = () => {
+  const server = rejectRequestsUntilServing(
     guardHttpResponseWriteErrors(guardErrors(NodeHttp.createServer(), () => {})),
   );
+  attachMainListener(server);
+  return server;
+};
 
 /**
  * NodeHttpServer listens before serve() attaches its handlers, so requests in

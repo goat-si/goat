@@ -9,10 +9,12 @@ import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
 import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
+import { useGoatBotTaskChanges } from "./useGoatBotTaskChanges";
 import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 
 /** The machines GOAT Bot's running work uses, from its task list. */
 export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentId }) {
+  const changes = useGoatBotTaskChanges(environmentId);
   const member = useGoatBotMember();
   const botName = useGoatBotName();
   const tasks = useEnvironmentQuery(
@@ -28,8 +30,8 @@ export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentI
   const refresh = tasks.refresh;
   // oxlint-disable-next-line goat/react-effect-budget -- Work starts and moves between machines on the server; read the list again each time the tab opens.
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (changes) refresh();
+  }, [refresh, changes]);
   if (tasks.failure !== null)
     return (
       <div className="space-y-2">

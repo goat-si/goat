@@ -47,6 +47,7 @@ import * as ConnectRuntime from "../auth/ConnectHubRuntime.testkit.ts";
 import * as SettingsRpc from "../auth/SettingsRpc.ts";
 import * as Routes from "../provider/CodexRouteService.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 const decodePersistedSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeGoatclaw = Schema.decodeEffect(GoatclawSettings);
 const decodeListInput = Schema.decodeEffect(AgentWorkspaceListInput);
@@ -735,7 +736,7 @@ it.effect(
           scopes: ["settings:write", "hub:proxy"],
           connectAccessGeneration: (yield* runtime.access.current).generation,
         })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       yield* Effect.gen(function* () {
         const update = yield* SettingsRpc.make(session);
         yield* update({ patch: { agentWorkspaceAccess: "read" } });
@@ -771,7 +772,7 @@ it.effect.each(["enabled", "connectDevicesHubProxy"] as const)(
           scopes: ["hub:proxy", "settings:write"],
           connectAccessGeneration: (yield* runtime.access.current).generation,
         })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       yield* Effect.gen(function* () {
         const update = yield* SettingsRpc.make(caller);
         yield* update({ patch: { hub: { [key]: false } } });

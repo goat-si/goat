@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  draftContextPlacement,
   fillNewTaskWorkspaceBranch,
   resolveNewTaskWorkspaceLabel,
   resolveNewTaskBranchLabel,
@@ -8,6 +9,12 @@ import {
   resolveNewTaskLocalWorkspaceSelection,
   resolveNewTaskWorkspaceSelection,
 } from "./new-task-context-presentation";
+
+it("keeps project and environment controls reachable in a short viewport", () => {
+  expect(draftContextPlacement(380)).toBe("hero");
+  expect(draftContextPlacement(379)).toBe("compact");
+  expect(draftContextPlacement(100)).toBe("compact");
+});
 
 describe("resolveNewTaskWorkspaceSelection", () => {
   const fallback = { mode: "worktree", branch: null, worktreePath: null } as const;

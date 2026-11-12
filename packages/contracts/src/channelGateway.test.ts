@@ -5,6 +5,7 @@ import {
   BotProfile,
   ChannelGatewayError,
   ChannelCreateBotInput,
+  ChannelGetBotStatusResult,
   ChannelIdentityLinkConsumeInput,
   ChannelIngestInput,
   ChannelIngestResult,
@@ -104,6 +105,20 @@ describe("channel.updateBot input", () => {
     const { color: _stored, ...legacy } = profile;
     expect(decodeProfile(legacy)._tag).toBe("Success");
   });
+
+  it("keeps a bot status with tasks readable by a client that predates tasks, and the reverse", () => {
+    const { tasks: _tasks, ...olderFields } = ChannelGetBotStatusResult.fields;
+    const older = Schema.decodeUnknownExit(Schema.Struct(olderFields));
+    const current = Schema.decodeUnknownExit(ChannelGetBotStatusResult);
+    const status = { bot: null, waitingCount: 0, tasks: { active: true } };
+    expect(older(status)._tag).toBe("Success");
+    const decoded = current(status);
+    expect(decoded._tag === "Success" ? decoded.value.tasks : undefined).toEqual({ active: true });
+    const { tasks: _sent, ...fromOlderServer } = status;
+    const withoutTasks = current(fromOlderServer);
+    expect(withoutTasks._tag).toBe("Success");
+    expect(withoutTasks._tag === "Success" ? withoutTasks.value : null).not.toHaveProperty("tasks");
+  });
 });
 
 describe("channel ingest", () => {
@@ -156,6 +171,22 @@ describe("channel ingest", () => {
         Schema.encodeSync(json(ChannelOutboundMessage))(outbound),
       ),
     ).toEqual(outbound);
+    // An interim mark survives storage, and a stored message without one still reads.
+    const interim = { ...outbound, interim: true as const };
+    expect(
+      Schema.decodeSync(json(ChannelOutboundMessage))(
+        Schema.encodeSync(json(ChannelOutboundMessage))(interim),
+      ),
+    ).toEqual(interim);
+    // So does reception's decision about a person's answer, taken or refused.
+    for (const answersQuestionId of ["question-1", null]) {
+      const decided = { ...outbound, personAnswer: { answersQuestionId } };
+      expect(
+        Schema.decodeSync(json(ChannelOutboundMessage))(
+          Schema.encodeSync(json(ChannelOutboundMessage))(decided as never),
+        ),
+      ).toEqual(decided);
+    }
   });
   const input = {
     kind: "slack",

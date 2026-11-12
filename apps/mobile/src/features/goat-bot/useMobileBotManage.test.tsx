@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
 const rn = vi.hoisted(() => ({ alert: vi.fn() }));
-const rpc = vi.hoisted(() => ({ result: { _tag: "Success" } as object }));
+const rpc = vi.hoisted(() => ({ result: { _tag: "Success" } as object, inputs: [] as unknown[] }));
 vi.mock("react-native", () => ({ Alert: { alert: rn.alert } }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
@@ -21,7 +21,10 @@ vi.mock("../../state/channels", () => ({
 // The RPC boundary: what the server answered to restoreBot.
 vi.mock("@goat/client-runtime/state/runtime", async (original) => ({
   ...(await original<typeof import("@goat/client-runtime/state/runtime")>()),
-  runAtomCommand: async () => rpc.result,
+  runAtomCommand: async (_registry: unknown, _command: unknown, args: { input: unknown }) => {
+    rpc.inputs.push(args.input);
+    return rpc.result;
+  },
 }));
 
 import { useMobileBotManage } from "./useMobileBotManage";
@@ -70,4 +73,37 @@ it("a successful restore shows no alert", async () => {
   rpc.result = { _tag: "Success", value: { bot: scout } };
   expect(await restoreScout()).toBe(true);
   expect(rn.alert).not.toHaveBeenCalled();
+});
+
+it("sends a new bot's colour when one was chosen, and no colour key otherwise", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  let manage: ReturnType<typeof useMobileBotManage> | null = null;
+  function Probe() {
+    manage = useMobileBotManage(scout.environmentId);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Probe />));
+  rpc.result = { _tag: "Success", value: { bot: scout } };
+  rpc.inputs.length = 0;
+  await manage!.create({ name: "Scout", avatar: null, purpose: "", color: "#0F766E" }, null, "r1");
+  await manage!.create({ name: "Scout", avatar: null, purpose: "" }, null, "r2");
+  expect(rpc.inputs).toEqual([
+    {
+      clientRequestId: "r1",
+      name: "Scout",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      color: "#0F766E",
+    },
+    {
+      clientRequestId: "r2",
+      name: "Scout",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    },
+  ]);
+  await act(async () => root.unmount());
 });

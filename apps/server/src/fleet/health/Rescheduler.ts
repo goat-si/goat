@@ -15,7 +15,10 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
+import * as Option from "effect/Option";
 import { FleetRescheduleClaims } from "./FleetHostStates.ts";
+import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
+import { PlacementPlacer } from "../admission/PlacementPlacer.ts";
 import { isStopped, probeRemoteStatus, readLocalStatus, type FleetThreadRef } from "./Health.ts";
 import { HostHealthMonitor } from "./HostHealthMonitor.ts";
 import { Placement } from "../resources/Placement.ts";
@@ -197,6 +200,11 @@ const shortHash = (text: string) => {
 export const attemptTitle = (owner: string, clientRequestId: string, branch: string) =>
   "Resume " + branch + " · " + shortHash(owner + "\n" + clientRequestId);
 
+const describePlacementFailure = (cause: unknown) =>
+  typeof cause === "object" && cause !== null && "message" in cause
+    ? String(cause.message)
+    : String(cause);
+
 const unconfirmed = (host: string, message: string): RescheduleResult => ({
   _tag: "Unconfirmed",
   host,
@@ -219,6 +227,11 @@ const make = Effect.gen(function* () {
   const monitor = yield* HostHealthMonitor;
   const claims = yield* FleetRescheduleClaims;
   const placement = yield* Placement;
+  // Placement admission (off until enabled): the attempt history decides retries, not titles.
+  const placer = (yield* PlacementAdmissionEnabled)
+    ? yield* Effect.serviceOption(PlacementPlacer)
+    : Option.none<PlacementPlacer["Service"]>();
+  const placedOwner = (request: RescheduleRequest) => "reschedule:" + request.clientRequestId;
   const context = yield* Effect.context<
     | SshRemoteDispatch.SshRemoteDispatch
     | HostHealthMonitor
@@ -469,6 +482,93 @@ const make = Effect.gen(function* () {
       const ceiling = request.permissionProfileCeiling;
       if (ceiling !== undefined && request.prepareCeiling !== undefined)
         yield* request.prepareCeiling(target);
+      if (Option.isSome(placer)) {
+        const placed = yield* placer.value
+          .placeRemote({
+            ownerKey: placedOwner(request),
+            host: target,
+            launch: {
+              cwd,
+              workspace: {
+                type: "worktree",
+                branch,
+                baseRef: request.previousBranch ?? request.workspace.baseRef,
+                startFromOrigin: request.workspace.startFromOrigin,
+              },
+              title,
+              message: [
+                request.prompt,
+                "",
+                resumeNote({
+                  fromHost: request.ref.host ?? "this machine",
+                  fromThreadId: request.ref.threadId,
+                  fromBranch: request.previousBranch,
+                  resumedFrom,
+                  newBranch: branch,
+                  reason: request.reason,
+                }),
+              ].join("\n"),
+              modelSelection,
+              runtimeMode: request.runtimeMode,
+              callerRuntimeMode: request.callerRuntimeMode ?? request.runtimeMode,
+              ...(ceiling === undefined ? {} : { permissionProfileCeiling: ceiling }),
+            },
+            authorize: (request.reason === "drain"
+              ? drainReady(request).pipe(
+                  Effect.flatMap((why) =>
+                    why === null ? Effect.void : Effect.fail(new DrainCalledOff({ message: why })),
+                  ),
+                )
+              : Effect.void
+            ).pipe(Effect.andThen(recheck(request))),
+          })
+          .pipe(Effect.result);
+        if (placed._tag === "Failure") {
+          // Only a request that never had an attempt is free: after one exists the failure may follow a
+          // delivery (a lost record write, say), so the claim stays and the key is resent.
+          const sent = yield* placer.value
+            .hasAttempt(placedOwner(request))
+            .pipe(Effect.orElseSucceed(() => true));
+          if (sent)
+            return unconfirmed(
+              target,
+              "Launch on " +
+                target +
+                " has an unknown outcome (" +
+                clip(describePlacementFailure(placed.failure)) +
+                ").",
+            );
+          yield* claims.release(request.clientRequestId);
+          return refused("not_allowed", describePlacementFailure(placed.failure));
+        }
+        const outcome = placed.success;
+        if (outcome._tag === "Started") {
+          const threadId = ThreadId.make(outcome.threadId);
+          yield* claims.settle(request.clientRequestId, threadId);
+          return {
+            _tag: "Rescheduled",
+            host: target,
+            threadId,
+            branch,
+            resumedFrom,
+          } satisfies RescheduleResult;
+        }
+        if (outcome._tag === "NotStarted") {
+          yield* claims.release(request.clientRequestId);
+          return refused(
+            "no_capacity",
+            target + " did not start the work: " + clip(outcome.message),
+          );
+        }
+        return unconfirmed(
+          target,
+          "Launch on " +
+            target +
+            " has an unknown outcome (" +
+            clip(outcome.message) +
+            "); it is retried there and nothing else is launched for it.",
+        );
+      }
       const launched = yield* dispatch
         .launchThread(
           {
@@ -650,7 +750,16 @@ const make = Effect.gen(function* () {
             } satisfies RescheduleResult;
           }
           let pinned: string | null = null;
-          if (claim !== null) {
+          const placedBefore =
+            claim !== null &&
+            Option.isSome(placer) &&
+            (yield* placer.value
+              .hasAttempt(placedOwner(request))
+              // An unreadable history counts as sent: the key goes back to its target.
+              .pipe(Effect.orElseSucceed(() => true)));
+          // A placed key goes back to its own target, which answers from its record; no title decides it.
+          if (claim !== null && placedBefore) pinned = claim.targetHost;
+          if (claim !== null && !placedBefore) {
             const found = yield* findOnHost(claim.targetHost, claim.title);
             if (found === null && request.holdUnconfirmed)
               return unconfirmed(
@@ -688,15 +797,20 @@ const make = Effect.gen(function* () {
                   " is not listed there; nothing else is launched for it.",
               );
             pinned = claim.targetHost;
-            // The pin outranks placement, so it must also pass the caller's allowlist.
-            if (request.allowedHosts !== undefined && !request.allowedHosts.includes(pinned))
-              return refused(
-                "not_allowed",
-                "An earlier attempt of this move was placed on " +
-                  pinned +
-                  ", which the caller's goatclaw profile does not allow; nothing is launched.",
-              );
           }
+          // The pin outranks placement, so it must also pass the caller's allowlist as it is now. A
+          // placed attempt keeps its claim, so its outcome stays unknown rather than read as free.
+          if (
+            pinned !== null &&
+            request.allowedHosts !== undefined &&
+            !request.allowedHosts.includes(pinned)
+          )
+            return refused(
+              "not_allowed",
+              "An earlier attempt of this move was placed on " +
+                pinned +
+                ", which the caller's goatclaw profile does not allow; nothing is launched.",
+            );
 
           const cap = request.maxAttempts ?? MAX_ATTEMPTS_PER_WORKER;
           if (request.attempt >= cap) {
@@ -714,6 +828,16 @@ const make = Effect.gen(function* () {
             );
           const blocked = yield* gate(request);
           if (blocked !== null) return blocked;
+          // A placed key goes straight back to its target, which answers from its record: this
+          // machine's capacity view must not refuse a retry of a slot the first send may hold.
+          if (placedBefore && pinned !== null)
+            return yield* launchOn(
+              request,
+              pinned,
+              title,
+              resumedFrom === "replica" ? "base" : resumedFrom,
+              request.modelSelection,
+            );
           if (resumedFrom === "replica") {
             // Goal attempts on this machine recover from their replicas in GoalRecovery; importing a
             // replica on another host waits for remote goal workers (#576).
@@ -783,7 +907,28 @@ const make = Effect.gen(function* () {
             } as const;
           const settled =
             claim.threadId === null ? null : { threadId: ThreadId.make(claim.threadId) };
-          const found = settled ?? (yield* findOnHost(claim.targetHost, claim.title));
+          // A placed move is answered by its attempt record, never by a title on the target; a
+          // missing record of an allocated attempt answers nothing.
+          const lookup =
+            settled === null && Option.isSome(placer)
+              ? yield* placer.value
+                  .lookup("reschedule:" + clientRequestId)
+                  .pipe(Effect.orElseSucceed(() => undefined))
+              : null;
+          const attempt = lookup?._tag === "Found" ? lookup.attempt : null;
+          if (lookup === undefined || lookup?._tag === "Gap" || attempt?.state === "unknown")
+            return {
+              _tag: "Unknown",
+              host: claim.targetHost,
+              message:
+                "The move's placed launch on " + claim.targetHost + " has an unknown outcome.",
+            } as const;
+          if (attempt?.state === "not_started") return { _tag: "NotLaunched" } as const;
+          const found =
+            settled ??
+            (attempt?.threadId != null
+              ? { threadId: ThreadId.make(attempt.threadId) }
+              : yield* findOnHost(claim.targetHost, claim.title));
           if (found === null || found.threadId === null)
             return {
               _tag: "Unknown",

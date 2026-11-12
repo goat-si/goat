@@ -1057,6 +1057,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     outline-offset: -2px;
   }
   [data-workspace-area]:focus-visible {
+    outline: none;
+  }
+  [data-workspace-keyboard-focus]:focus {
     outline: 2px solid var(--ring);
     outline-offset: -2px;
   }
@@ -2535,6 +2538,52 @@ code {
   max-width: none;
 }
 
+/* A bot reply's table on its own card: the table reaches the card's edges under a tinted header,
+   and Copy table shows on the card's corner while it is hovered or focused. */
+.goat-bot-table {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+}
+
+.goat-bot-table .chat-markdown .chat-markdown-table-container {
+  margin: 0;
+}
+
+.goat-bot-table .chat-markdown :is(th, td) {
+  padding-inline: 14px;
+}
+
+.goat-bot-table .chat-markdown thead th {
+  padding-block: 0.7rem;
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  font-weight: 500;
+}
+
+/* Room for the copy control, so it never covers the last heading. */
+.goat-bot-table .chat-markdown thead th:last-child {
+  padding-inline-end: 2.75rem;
+}
+
+.goat-bot-table .chat-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.goat-table-card-copy {
+  opacity: 0;
+}
+
+.goat-bot-table:is(:hover, :focus-within) .goat-table-card-copy,
+.goat-table-card-copy:has([data-popup-open]) {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .goat-table-card-copy {
+    opacity: 1;
+  }
+}
+
 :root {
   --diff-addition: var(--success);
   --diff-deletion: var(--destructive);
@@ -2575,12 +2624,13 @@ code {
   color: var(--code-foreground);
 }
 
-/* Pierre's find panel and match highlights read these. */
-.diff-render-surface {
+/* Pierre's find panel sits beside the diff containers. */
+.diff-render-surface > [data-search-panel] {
   --diffs-search-panel-bg: var(--popover);
   --diffs-search-panel-fg: var(--popover-foreground);
-  --diffs-search-panel-accent: var(--primary);
-  --diffs-search-panel-font: var(--font-sans);
+  --diffs-search-panel-modified: var(--primary);
+  --diffs-header-font-fallback: var(--font-sans);
+  --diffs-search-panel-inset-top: 40px;
 }
 
 /* Pierre's file renderer owns its own surface tokens. Keep the root of a file

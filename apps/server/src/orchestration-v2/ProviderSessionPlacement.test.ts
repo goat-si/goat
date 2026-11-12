@@ -15,6 +15,7 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { CODEX_TRANSPORT_ENV } from "../provider/CodexDetachedAppServerLive.ts";
@@ -223,3 +224,47 @@ it("adapters with one thread per session still replace a released session", () =
     stored,
   );
 });
+it.effect("a new thread on a model the shared Codex process predates opens its own process", () =>
+  Effect.gen(function* () {
+    const addedModel = "combo/deepseek-flash-pool";
+    const { providerSessionIdFor } = yield* IdAllocator.IdAllocatorV2.pipe(
+      Effect.flatMap((idAllocator) =>
+        makeProviderSessionPlacement({
+          idAllocator,
+          settings: Effect.succeed({ codexAppServerIsolation: "shared" }),
+          // The shared process started before the model was added to Codex's catalog.
+          sessions: {
+            get: (id) =>
+              Effect.succeed(
+                id === sharedId
+                  ? Option.some({
+                      // Placement runs on the serial dispatch path, so it may only read memory.
+                      modelStatus: (model, options) =>
+                        options?.cachedOnly === true
+                          ? Effect.succeed(model === addedModel ? "predated" : "ready")
+                          : Effect.die("placement asked the process"),
+                    })
+                  : Option.none(),
+              ),
+          },
+        }),
+      ),
+      Effect.provide(IdAllocator.layer),
+    );
+    const placeOn = (threadId: ThreadId, model: string) =>
+      providerSessionIdFor({
+        adapter: adapterWith(CodexProviderCapabilitiesV2) as never,
+        providerInstanceId: instanceId,
+        threadId,
+        model,
+      });
+    assert.strictEqual(
+      yield* placeOn(threadA, addedModel),
+      IdAllocator.derive.providerSession({ providerInstanceId: instanceId, threadId: threadA }),
+    );
+    assert.strictEqual(yield* placeOn(threadB, "gpt-5.4"), sharedId);
+  }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(HostProcess.Environment, {}),
+  ),
+);

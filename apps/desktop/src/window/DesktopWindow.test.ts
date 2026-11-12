@@ -187,6 +187,61 @@ describe("DesktopWindow", () => {
       }),
   );
 
+  it.effect("leaves Cmd+W to the renderer and blocks repeated presses", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
+        if (!beforeInput) {
+          return yield* Effect.die("before-input-event listener was not registered");
+        }
+
+        let prevented = false;
+        const event = { preventDefault: () => (prevented = true) };
+        const input = {
+          type: "keyDown",
+          isAutoRepeat: true,
+          key: "W",
+          meta: true,
+          control: false,
+          alt: false,
+          shift: false,
+        };
+        beforeInput(event, input);
+        assert.isTrue(prevented);
+
+        prevented = false;
+        beforeInput(event, { ...input, isAutoRepeat: false });
+        assert.isFalse(prevented);
+
+        prevented = false;
+        beforeInput(event, { ...input, meta: false });
+        assert.isFalse(prevented);
+
+        assert.deepEqual(
+          fakeWindow.setIgnoreMenuShortcuts.mock.calls.map(([ignore]) => ignore),
+          [true, true, false],
+        );
+        beforeInput(event, { ...input, key: "r", isAutoRepeat: false });
+        assert.isFalse(fakeWindow.setIgnoreMenuShortcuts.mock.lastCall?.[0]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  // Chromium hands the main window's zoom level down to embedded preview
+  // guests, so every app zoom has to put the preview browser back at its own
+  // zoom or zooming the UI drags the previewed page with it.
   it.effect("zooms main with a focused popup and reapplies preview zoom", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();

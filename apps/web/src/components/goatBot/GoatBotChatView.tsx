@@ -1,5 +1,10 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { type ChannelBotArtifact, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import {
+  type ChannelBotArtifact,
+  ChannelQuestionId,
+  ChannelTaskId,
+  type EnvironmentId,
+} from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
 
@@ -8,6 +13,7 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
 import { cn } from "~/lib/utils";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { GoatBotFileViewer } from "./GoatBotFileViewer";
+import { GoatBotOpenFileContext } from "./GoatBotReplyFiles";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 import { APP_DISPLAY_NAME } from "~/branding";
@@ -36,6 +42,8 @@ import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
+import { GoatBotStepsReader } from "./GoatBotStepsProvider";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -73,7 +81,14 @@ export interface GoatBotChatViewProps {
     attachments?: ReadonlyArray<GoatBotDraftAttachment>,
   ) => boolean | void;
   /** Sends an answer to the task whose question offered it. */
-  readonly onSendToTask?: ((taskId: ChannelTaskId, text: string) => boolean | void) | undefined;
+  readonly onSendToTask?:
+    | ((
+        taskId: ChannelTaskId,
+        text: string,
+        attachments?: ReadonlyArray<never>,
+        questionId?: ChannelQuestionId,
+      ) => boolean | void)
+    | undefined;
   /** What GOAT Bot's server takes with a message; null when it takes no files. */
   readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
   readonly onRetryInput: (clientKey: string) => void;
@@ -210,6 +225,11 @@ export function GoatBotChatView({
       ? viewing
       : null;
   const [dragActive, setDragActive] = useState(false);
+  // One value per bot server, so the reply file cards under every message skip re-rendering.
+  const openFileStable = useStableCallback(openFile);
+  const botEnvironmentId = bot?.environmentId ?? null;
+  const fileOpening =
+    botEnvironmentId === null ? null : { environmentId: botEnvironmentId, open: openFileStable };
   if (!acceptsFiles && dragActive) setDragActive(false);
   const addDroppedFiles = useStableCallback((files: File[]) =>
     composerRef.current?.addFiles(files),
@@ -340,59 +360,77 @@ export function GoatBotChatView({
           ) : null}
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
-            {rows.length > 0 ? (
-              // History stays readable while the bot is unavailable; only sending stops.
-              <GoatBotTimeline
-                rows={rows}
-                unreadSince={unreadSince}
-                onReply={
-                  canSend
-                    ? (text) => {
-                        setReplyState({ botIdentity, text });
-                        composerRef.current?.focus();
-                      }
-                    : undefined
-                }
-                environmentId={environmentId}
-                onOpenHome={bot ? () => setPanelOpen(true) : undefined}
-                taskThreads={supportsTaskThreads}
-                retryEnvironmentId={supportsTaskRetry ? environmentId : null}
-                replyingSince={removed ? null : replyingSince}
-                onRetry={onRetryInput}
-                onDiscard={onDiscardInput}
-                onPick={
-                  canSend
-                    ? (answer, taskId) =>
-                        taskId !== undefined && onSendToTask !== undefined
-                          ? onSendToTask(ChannelTaskId.make(taskId), answer)
-                          : onSend(answer)
-                    : undefined
-                }
-              />
-            ) : removal !== null ? (
-              <GoatBotRemovedNotice
-                removal={removal}
-                availability={availability}
-                onRetryAvailability={onRetryAvailability}
-                canOpenCurrentBot={canOpenCurrentBot}
-                onUnarchive={onUnarchive}
-                onRestore={member ? onRestore : undefined}
-                memberName={member?.name ?? null}
-                onCheckAgain={onCheckAgain}
-              />
-            ) : (
-              <GoatBotNotice
-                availability={availability}
-                homeMove={homeMove}
-                onRetryAvailability={onRetryAvailability}
-                legacyAgentRoute={legacyAgentRoute}
-                onSelectExample={
-                  canSend
-                    ? (text) => setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
-                    : undefined
-                }
-              />
-            )}
+            {/* Mounted before the first message, so the chat's first status is heard. */}
+            <GoatBotActivityStatus
+              key={botIdentity}
+              replyingSince={removed ? null : replyingSince}
+            />
+            {/* An open file covers the conversation, so its activity lines stop reading. */}
+            <GoatBotStepsReader rows={rows} paused={shownFile !== null}>
+              <GoatBotOpenFileContext value={fileOpening}>
+                {rows.length > 0 ? (
+                  // History stays readable while the bot is unavailable; only sending stops.
+                  <GoatBotTimeline
+                    rows={rows}
+                    unreadSince={unreadSince}
+                    onReply={
+                      canSend
+                        ? (text) => {
+                            setReplyState({ botIdentity, text });
+                            composerRef.current?.focus();
+                          }
+                        : undefined
+                    }
+                    environmentId={environmentId}
+                    onOpenHome={bot ? () => setPanelOpen(true) : undefined}
+                    taskThreads={supportsTaskThreads}
+                    retryEnvironmentId={supportsTaskRetry ? environmentId : null}
+                    replyingSince={removed ? null : replyingSince}
+                    onRetry={onRetryInput}
+                    onDiscard={onDiscardInput}
+                    onPick={
+                      canSend
+                        ? (answer, taskId, questionId) =>
+                            taskId !== undefined && onSendToTask !== undefined
+                              ? onSendToTask(
+                                  ChannelTaskId.make(taskId),
+                                  answer,
+                                  [],
+                                  questionId === undefined
+                                    ? undefined
+                                    : ChannelQuestionId.make(questionId),
+                                )
+                              : onSend(answer)
+                        : undefined
+                    }
+                  />
+                ) : removal !== null ? (
+                  <GoatBotRemovedNotice
+                    removal={removal}
+                    availability={availability}
+                    onRetryAvailability={onRetryAvailability}
+                    canOpenCurrentBot={canOpenCurrentBot}
+                    onUnarchive={onUnarchive}
+                    onRestore={member ? onRestore : undefined}
+                    memberName={member?.name ?? null}
+                    onCheckAgain={onCheckAgain}
+                  />
+                ) : (
+                  <GoatBotNotice
+                    availability={availability}
+                    homeMove={homeMove}
+                    onRetryAvailability={onRetryAvailability}
+                    legacyAgentRoute={legacyAgentRoute}
+                    onSelectExample={
+                      canSend
+                        ? (text) =>
+                            setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                        : undefined
+                    }
+                  />
+                )}
+              </GoatBotOpenFileContext>
+            </GoatBotStepsReader>
           </div>
           {ready && !canOperate ? (
             <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">

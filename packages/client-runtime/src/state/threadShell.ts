@@ -8,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import {
   isGoatBotConversationThreadId,
+  isPendingApprovalRequest,
   isProviderNativeSubagentThread,
   isSideChatThread,
   OrchestrationV2ThreadShell,
@@ -55,7 +56,7 @@ const isChildRunLive = (
 
 /** Provider-native
     subagents ask on their parent, so they are skipped. */
-function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {
+export function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {
   const kind = thread.pendingRuntimeRequest?.kind;
   if (
     kind === undefined ||
@@ -66,7 +67,7 @@ function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentReq
   ) {
     return null;
   }
-  return kind === "user_input" ? "user_input" : "approval";
+  return isPendingApprovalRequest(thread.pendingRuntimeRequest) ? "approval" : "user_input";
 }
 
 export function pendingSubagentRequestsByThread(

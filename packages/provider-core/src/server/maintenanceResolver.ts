@@ -20,6 +20,7 @@ import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import { providerProbeEnvironment } from "./probeEnvironment.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -287,7 +288,6 @@ export function parseHomebrewLatestVersion(
   const version = nonEmptyString(raw);
   return version === "latest" ? null : version;
 }
-
 const runProbe = Effect.fn("runProbe")(function* (
   command: string,
   args: ReadonlyArray<string>,
@@ -297,10 +297,11 @@ const runProbe = Effect.fn("runProbe")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const collect = Effect.gen(function* () {
     // Windows package managers are `.cmd` shims that need the shell.
-    const resolved = yield* resolveSpawnCommand(command, args, { env, extendEnv: true });
+    const probeEnv = providerProbeEnvironment(env);
+    const resolved = yield* resolveSpawnCommand(command, args, { env: probeEnv, extendEnv: true });
     const child = yield* spawner.spawn(
       ChildProcess.make(resolved.command, resolved.args, {
-        env,
+        env: probeEnv,
         extendEnv: true,
         shell: resolved.shell,
       }),
@@ -330,7 +331,6 @@ const runProbe = Effect.fn("runProbe")(function* (
     ),
   );
 });
-
 const decodePnpmOutdated = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Record(Schema.String, Schema.Struct({ latest: Schema.optional(Schema.String) })),

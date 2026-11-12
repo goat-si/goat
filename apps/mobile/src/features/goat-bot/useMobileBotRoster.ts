@@ -46,6 +46,12 @@ export function useMobileBotRoster() {
     environmentId,
     slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
     error: profiles.error,
+    /** Every bot the list holds, hidden and deleted included; null before it has answered. */
+    listedBots: bots ?? null,
+    /** Reads the bot list again; null while a read is under way or none has answered yet. */
+    refreshBots: profiles.data !== null && !profiles.isPending ? profiles.refresh : null,
+    /** Reads the bot list again after it failed; always offered beside its error. */
+    retryBots: profiles.refresh,
   };
 }
 

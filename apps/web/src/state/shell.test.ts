@@ -14,8 +14,11 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createAllEnvironmentProjectSnapshotsReadyAtom,
   createPendingEnvironmentShellIdsAtom,
+  environmentShell,
   requiresPrimaryEnvironment,
 } from "./shell";
+import { environmentCatalog } from "../connection/catalog";
+import { defaultProjectFallbackReadyAtom } from "./projects";
 
 describe("requiresPrimaryEnvironment", () => {
   it("does not wait for a primary environment on a desktop whose local server is off", () => {
@@ -212,3 +215,29 @@ describe("pending environment shells", () => {
     registry.dispose();
   });
 });
+
+it.each([undefined, "", "Server update required"])(
+  "settles fallback for an unsupported remembered environment: %s",
+  (unsupportedReason) => {
+    const catalog = catalogState([LOCAL, REMOTE]);
+    const entries = new Map(catalog.entries);
+    entries.set(REMOTE, {
+      ...entries.get(REMOTE)!,
+      ...(unsupportedReason === undefined ? {} : { unsupportedReason }),
+    });
+    const registry = AtomRegistry.make({
+      initialValues: [
+        [environmentCatalog.catalogValueAtom, { ...catalog, entries }],
+        [environmentShell.statusAtom(REMOTE), "empty"],
+        [environmentCatalog.stateAtom(REMOTE), AsyncResult.success(AVAILABLE_CONNECTION_STATE)],
+      ],
+    });
+    try {
+      expect(registry.get(defaultProjectFallbackReadyAtom("remote:project"))).toBe(
+        unsupportedReason !== undefined,
+      );
+    } finally {
+      registry.dispose();
+    }
+  },
+);

@@ -206,7 +206,9 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
             setActiveMenu({ url, menu });
             openAndroidMenu?.();
           }
-        : undefined;
+        : Platform.OS === "android" && props.onLinkLongPress
+          ? ({ url }: { url: string }) => props.onLinkLongPress?.(url)
+          : undefined;
 
     return (
       <View

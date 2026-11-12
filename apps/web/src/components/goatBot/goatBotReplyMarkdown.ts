@@ -28,7 +28,7 @@ function linkUrls(node: MarkdownNode, into: string[] = []): string[] {
  * reference links to the reply's one repository. Both stay ordinary links, so they keep the
  * host's icon and open the way every chat link does.
  */
-function remarkGoatBotChangeRequests() {
+function remarkGoatBotChangeRequests(options?: { readonly replyLinkUrls?: ReadonlyArray<string> }) {
   const visit = (node: MarkdownNode, repository: GoatBotReplyRepository | null): void => {
     const children = node.children;
     if (children === undefined) return;
@@ -69,8 +69,29 @@ function remarkGoatBotChangeRequests() {
       index += replacements.length - 1;
     }
   };
-  return (tree: MarkdownNode) => visit(tree, goatBotReplyRepository(linkUrls(tree)));
+  return (tree: MarkdownNode) =>
+    visit(tree, goatBotReplyRepository(options?.replyLinkUrls ?? linkUrls(tree)));
 }
 
 /** One shared plugin list, so replies share ChatMarkdown's parse cache. */
 export const GOAT_BOT_REPLY_MARKDOWN_PLUGINS: PluggableList = [remarkGoatBotChangeRequests];
+
+const MAX_REPLY_CONTEXTS = 64;
+const contextPlugins = new Map<string, PluggableList>();
+
+/**
+ * The plugins for one card of a reply split across cards: bare references read against the whole
+ * reply's links. Cards of the same reply share one list, which keeps ChatMarkdown's cache.
+ */
+export function goatBotReplyMarkdownPlugins(replyLinkUrls: ReadonlyArray<string>): PluggableList {
+  const key = replyLinkUrls.join("\n");
+  const known = contextPlugins.get(key);
+  if (known !== undefined) return known;
+  const plugins: PluggableList = [[remarkGoatBotChangeRequests, { replyLinkUrls }]];
+  contextPlugins.set(key, plugins);
+  if (contextPlugins.size > MAX_REPLY_CONTEXTS) {
+    const oldest = contextPlugins.keys().next().value;
+    if (oldest !== undefined) contextPlugins.delete(oldest);
+  }
+  return plugins;
+}

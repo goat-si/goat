@@ -2,6 +2,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
+  HandoffError,
   CodexSettings,
   EnvironmentAuthorizationError,
   MessageId,
@@ -58,6 +59,8 @@ const approval = (
     };
     readonly homeRoute?: HomeRoute.OpenCodexRoute["Service"];
     readonly openCodex?: Layer.Layer<Inventory.OpenCodexInventory | Runner.ProcessRunner>;
+    /** Asking for an approval is refused, as when another approval holds the thread. */
+    readonly askRefused?: HandoffError;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -153,16 +156,18 @@ const approval = (
       }),
       Layer.mock(Handoffs.Handoffs)({
         create: (input) =>
-          Effect.sync(() => {
-            created.push(input);
-            return handoffSummary({
-              ...handoff,
-              kind: input.kind,
-              title: input.title,
-              state: "pending",
-              expiresAt: input.expiresAt ?? null,
-            });
-          }),
+          options.askRefused !== undefined
+            ? Effect.fail(options.askRefused)
+            : Effect.sync(() => {
+                created.push(input);
+                return handoffSummary({
+                  ...handoff,
+                  kind: input.kind,
+                  title: input.title,
+                  state: "pending",
+                  expiresAt: input.expiresAt ?? null,
+                });
+              }),
         completedProviderHomeContinuations: Effect.succeed([
           { handoff, args, approvedBySessionId: sessionId },
         ]),
@@ -318,6 +323,22 @@ it.effect.each(["connect", "disconnect"] as const)(
     }).pipe(Effect.provide(layer)),
 );
 
+it.effect("a route change asked while another approval holds the thread names that approval", () =>
+  Effect.gen(function* () {
+    const held = new HandoffError({
+      reason: "limit_reached",
+      detail:
+        'This thread is waiting for a person to answer the approval "Join lidge" (handoff:1).',
+    });
+    const f = yield* approval("disconnect", "codex", { askRefused: held });
+    const result = yield* f.requests.request(
+      { instanceId, action: "connect" },
+      liveThread("held-thread"),
+    );
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") assert.equal(result.message, held.message);
+  }).pipe(Effect.provide(layer)),
+);
 it.effect("refuses a read-only thread and a thread whose turn is no longer live", () =>
   Effect.gen(function* () {
     const f = yield* approval("connect");

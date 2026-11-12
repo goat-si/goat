@@ -163,6 +163,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     pullRequests: pullRequestLinks(chip),
     ...(chip.askInChat === true ? { askInChat: true } : {}),
     ...(chip.openQuestionIds === undefined ? {} : { openQuestionIds: chip.openQuestionIds }),
+    ...(chip.answeredQuestions === undefined ? {} : { answeredQuestions: chip.answeredQuestions }),
     target:
       chip.worker === undefined
         ? { kind: "none", label: workerlessLabel(chip.status) }
@@ -196,6 +197,10 @@ export const goatBotItemReaders: GoatBotItemReaders = {
       ...(meta.taskGeneration === undefined ? {} : { taskGeneration: meta.taskGeneration }),
       ...(meta.options === undefined || meta.options.length === 0 ? {} : { options: meta.options }),
       ...(meta.questionId === undefined ? {} : { questionId: meta.questionId }),
+      ...(meta.questionKind === undefined ? {} : { questionKind: meta.questionKind }),
+      ...(meta.answersQuestionId === undefined
+        ? {}
+        : { answersQuestionId: meta.answersQuestionId }),
     };
   },
   taskCard: (item) =>
@@ -205,7 +210,7 @@ export const goatBotItemReaders: GoatBotItemReaders = {
 };
 
 /** GOAT Bot answering in its own session; the conversation already shows that as its reply. */
-function isGoatBotTurn(chip: ChannelTaskChip): boolean {
+export function isGoatBotTurn(chip: ChannelTaskChip): boolean {
   // Older chips lack their kind, but a turn's worker is always the bot's session thread.
   return (
     chip.kind === "turn" ||

@@ -298,7 +298,8 @@ export function HomeRouteScreen() {
           />
         )}
         {homeHeader}
-        <MobileBotList showSegments={Platform.OS !== "android"} />
+        {/* On screen, tab included: the roster's refreshes and a New bot's chat follow real visibility. */}
+        <MobileBotList showSegments={Platform.OS !== "android"} visible={visible} />
       </>
     );
 

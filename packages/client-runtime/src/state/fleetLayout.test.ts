@@ -4,6 +4,8 @@ import {
   COMPACT_GRAPH_NODES,
   compactGraphHeight,
   compactGraphLimits,
+  DENSE_GRAPH_NODES,
+  fleetGraphSize,
   MAX_GRAPH_AGENTS,
   MAX_GRAPH_MACHINES,
   layoutFleet,
@@ -52,25 +54,104 @@ describe("layoutFleet", () => {
   });
 
   it("folds extra machines into one node that keeps their work, showing busy ones first", () => {
-    const machines = Array.from({ length: 20 }, (_, index) =>
-      machine("m" + index, index === 19 ? { running: 2, attention: 1, reported: 0 } : idle),
+    const machines = Array.from({ length: 48 }, (_, index) =>
+      machine("m" + index, index === 47 ? { running: 2, attention: 1, reported: 0 } : idle),
     );
     machines[15] = machine("m15", { running: 0, attention: 0, reported: 3 });
-    const layout = layoutFleet(machines, 1000, 560);
+    const layout = layoutFleet(machines, 1100, 900);
     expect(layout.machines).toHaveLength(MAX_GRAPH_MACHINES);
-    expect(layout.machines.map((node) => node.id)).toContain("m19");
+    expect(layout.machines.map((node) => node.id)).toContain("m47");
     const folded = layout.machines.at(-1)!;
     expect(folded.id).toBeNull();
     expect(folded.aggregate).toEqual({ count: 9, running: 0, attention: 0, reported: 0 });
 
-    const allBusy = Array.from({ length: 14 }, (_, index) =>
+    const allBusy = Array.from({ length: 42 }, (_, index) =>
       machine("m" + index, { running: 1, attention: index % 2, reported: 0 }),
     );
-    const busyLayout = layoutFleet(allBusy, 1000, 560);
+    const busyLayout = layoutFleet(allBusy, 1100, 900);
     const shown = busyLayout.machines.filter((node) => node.id !== null).length;
-    expect(shown + busyLayout.machines.at(-1)!.aggregate!.count).toBe(14);
-    // m11, m12 and m13 fold; m11 and m13 each need the user.
+    expect(shown + busyLayout.machines.at(-1)!.aggregate!.count).toBe(42);
+    // m39, m40 and m41 fold; m39 and m41 each need the user.
     expect(busyLayout.machines.at(-1)!.aggregate).toMatchObject({ running: 3, attention: 2 });
+  });
+
+  it("draws every machine up to forty, each machine node and label apart, on screen and clear of Main", () => {
+    const nodes = DENSE_GRAPH_NODES;
+    // Graph widths on a phone, a narrow window, a laptop and a wide desktop.
+    for (const containerWidth of [360, 640, 960, 1100]) {
+      for (let count = 13; count <= 40; count++) {
+        const { width, height } = fleetGraphSize(count, containerWidth);
+        expect(width).toBeGreaterThanOrEqual(containerWidth);
+        const layout = layoutFleet(
+          Array.from({ length: count }, (_, index) => machine("m" + index, idle, 8)),
+          width,
+          height,
+        );
+        expect(layout.machines.map((node) => node.id)).toEqual(
+          Array.from({ length: count }, (_, index) => "m" + index),
+        );
+        expect(layout.labelChars.name).toBeLessThan(18);
+        expect(layout.labelChars.keepNameEnds).toBe(true);
+        const label = nodes.labelWidth / 2;
+        const boxes = [
+          { owner: "main", ...square(layout.center, 36) },
+          ...layout.machines.flatMap((node, index) => [
+            { owner: "m" + index, ...square(node, nodes.machineReach) },
+            {
+              owner: "m" + index,
+              left: node.x - label,
+              right: node.x + label,
+              top: node.y + nodes.labelTop,
+              bottom: node.y + nodes.labelBottom,
+            },
+            ...node.agents.flatMap((agent) => {
+              const top = agent.labelBelow
+                ? agent.y + nodes.agentReach + 1
+                : agent.y - nodes.agentReach - 1 - nodes.agentLabelHeight;
+              return [
+                { owner: agent.key, ...square(agent, nodes.agentReach) },
+                {
+                  owner: agent.key,
+                  left: agent.x - nodes.agentLabelWidth / 2,
+                  right: agent.x + nodes.agentLabelWidth / 2,
+                  top,
+                  bottom: top + nodes.agentLabelHeight,
+                },
+              ];
+            }),
+          ]),
+        ];
+        const offscreen = boxes.filter(
+          (box) => box.left < 0 || box.right > width || box.top < 0 || box.bottom > height,
+        );
+        expect(offscreen, JSON.stringify({ containerWidth, count, width, height })).toEqual([]);
+        const overlapping = boxes.flatMap((a, index) =>
+          boxes
+            .slice(index + 1)
+            .filter(
+              (b) =>
+                a.owner !== b.owner &&
+                a.left < b.right &&
+                b.left < a.right &&
+                a.top < b.bottom &&
+                b.top < a.bottom,
+            )
+            .map((b) => [a, b]),
+        );
+        expect(overlapping, JSON.stringify({ containerWidth, count })).toEqual([]);
+      }
+    }
+  });
+
+  it("keeps twelve machines on one orbit at the container's width and height", () => {
+    expect(fleetGraphSize(12, 1100)).toEqual({ width: 1100, height: 420 });
+    expect(fleetGraphSize(12, 360)).toEqual({ width: 360, height: 360 });
+    expect(layoutFleet([machine("a")], 1100, 420).labelChars).toEqual({
+      name: 18,
+      subtitle: 22,
+      agent: 18,
+      keepNameEnds: false,
+    });
   });
 
   it("folds extra agents on a machine into a +N node", () => {

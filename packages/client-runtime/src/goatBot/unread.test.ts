@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { GoatBotRow } from "./rows.ts";
-import { goatBotFirstUnread } from "./unread.ts";
+import { goatBotUnreadIds } from "./unread.ts";
 
 const bot = (id: string, createdAt: string): GoatBotRow => ({
   kind: "bot",
@@ -35,13 +35,13 @@ const task: GoatBotRow = {
   },
 };
 const visit = "2026-01-02T00:00:00Z";
-describe("goatBotFirstUnread", () => {
-  it("returns null when nothing is unread", () => {
-    expect(goatBotFirstUnread([bot("old", visit)], visit)).toBeNull();
+describe("goatBotUnreadIds", () => {
+  it("is empty when nothing is unread", () => {
+    expect([...goatBotUnreadIds([bot("old", visit)], visit)]).toEqual([]);
   });
-  it("finds and counts unread bot rows", () => {
-    expect(
-      goatBotFirstUnread(
+  it("finds unread bot rows in order", () => {
+    expect([
+      ...goatBotUnreadIds(
         [
           bot("old", visit),
           bot("new", "2026-01-03T00:00:00Z"),
@@ -49,15 +49,12 @@ describe("goatBotFirstUnread", () => {
         ],
         visit,
       ),
-    ).toEqual({ rowId: "new", count: 2 });
+    ]).toEqual(["new", "next"]);
   });
   it("uses the task revision time", () => {
-    expect(goatBotFirstUnread([task], visit)).toEqual({ rowId: "task", count: 1 });
+    expect([...goatBotUnreadIds([task], visit)]).toEqual(["task"]);
   });
   it("treats a missing visit as unread", () => {
-    expect(goatBotFirstUnread([task, bot("new", visit)], null)).toEqual({
-      rowId: "task",
-      count: 2,
-    });
+    expect([...goatBotUnreadIds([task, bot("new", visit)], null)]).toEqual(["task", "new"]);
   });
 });

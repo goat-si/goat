@@ -45,10 +45,28 @@ const REFUSED_BEFORE_CREATE = new Set([
  * was created (its projection reads and bookkeeping run after the create commits), so only a
  * refusal it raises before creating anything says the launch never started.
  */
-export const toolRefusal = (tool: string, result: { readonly code?: string | undefined }) => ({
-  ...(result.code === undefined ? {} : { remoteCode: result.code }),
-  ...(tool === "goat_thread_launch" &&
-  (result.code === undefined || !REFUSED_BEFORE_CREATE.has(result.code))
-    ? { launchMayHaveStarted: true }
-    : {}),
-});
+export const toolRefusal = (
+  tool: string,
+  result: {
+    readonly code?: string | undefined;
+    readonly classification?: string | undefined;
+    readonly mayHaveStarted?: boolean | undefined;
+    readonly threadId?: string | undefined;
+  },
+) => {
+  // A placement answer says itself whether the work may have started; absent, it may have.
+  if (tool === "goat_thread_launch" && result.classification?.startsWith("placement_") === true)
+    return {
+      ...(result.code === undefined ? {} : { remoteCode: result.code }),
+      remoteClassification: result.classification,
+      ...(result.threadId === undefined ? {} : { remoteThreadId: result.threadId }),
+      launchMayHaveStarted: result.mayHaveStarted !== false,
+    };
+  return {
+    ...(result.code === undefined ? {} : { remoteCode: result.code }),
+    ...(tool === "goat_thread_launch" &&
+    (result.code === undefined || !REFUSED_BEFORE_CREATE.has(result.code))
+      ? { launchMayHaveStarted: true }
+      : {}),
+  };
+};

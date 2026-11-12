@@ -74,11 +74,21 @@ export function resolveProjectAutoPull(
   );
 }
 
+// Settings from an older server, or partial test settings, may lack textGenerators.
+function textGenerator(settings: ServerSettings, instanceId: ModelSelection["instanceId"]) {
+  const generators = settings.textGenerators ?? {};
+  return Object.hasOwn(generators, instanceId) ? generators[instanceId] : undefined;
+}
+
 export function isModelSelectionProviderEnabled(
   settings: ServerSettings,
   selection: ModelSelection,
 ): boolean {
-  const instanceConfig = settings.providerInstances[selection.instanceId];
+  const generator = textGenerator(settings, selection.instanceId);
+  if (generator !== undefined) return generator.enabled;
+  const instanceConfig = Object.hasOwn(settings.providerInstances, selection.instanceId)
+    ? settings.providerInstances[selection.instanceId]
+    : undefined;
   if (instanceConfig !== undefined) {
     return resolveProviderInstanceEnabled(instanceConfig);
   }
@@ -145,6 +155,11 @@ export function resolveSourceControlWriterModelSelection(
   projectId: ProjectId | null,
 ): ModelSelection {
   const selection = settings.sourceControlWriterModelSelection;
+  const generator = selection ? textGenerator(settings, selection.instanceId) : undefined;
+  if (generator !== undefined)
+    return generator.enabled
+      ? (selection ?? settings.textGenerationModelSelection)
+      : settings.textGenerationModelSelection;
   if (
     !selection ||
     !resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
@@ -171,10 +186,41 @@ export function resolveMemoryModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,
 ): ModelSelection {
-  return resolveSourceControlWriterModelSelection(
+  const selection = resolveSourceControlWriterModelSelection(
     { ...settings, sourceControlWriterModelSelection: settings.memoryModelSelection },
     providers,
     null,
+  );
+  return agentOnlySelection(settings, providers, null, selection, false);
+}
+
+function agentOnlySelection(
+  settings: ServerSettings,
+  providers: ReadonlyArray<ServerProvider> | undefined,
+  projectId: ProjectId | null,
+  selection: ModelSelection,
+  investigate: boolean,
+): ModelSelection {
+  const instanceId = selection?.instanceId;
+  if (instanceId === undefined || textGenerator(settings, instanceId) === undefined)
+    return selection;
+  return (
+    fallbackTextGenerationModelSelection(
+      settings.providerInstances,
+      (id, driver) => {
+        if (textGenerator(settings, id) !== undefined) return false;
+        if (investigate && driver !== "codex" && driver !== "claudeAgent") return false;
+        if (!resolveProjectProviderInstanceEnabled(settings, projectId, id)) return false;
+        if (providers === undefined) return true;
+        const provider = providers.find((candidate) => candidate.instanceId === id);
+        return (
+          provider?.enabled === true &&
+          isProviderAvailable(provider) &&
+          isProviderTextGenerationCapable(provider)
+        );
+      },
+      { includeConfiguredInstances: true },
+    ) ?? selection
   );
 }
 
@@ -186,6 +232,7 @@ export function resolveReviewGuideModelSelection(
   const selection = settings.reviewGuideModelSelection;
   if (
     selection &&
+    textGenerator(settings, selection.instanceId) === undefined &&
     resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
   ) {
     const provider = providers?.find((candidate) => candidate.instanceId === selection.instanceId);
@@ -198,7 +245,13 @@ export function resolveReviewGuideModelSelection(
       return selection;
     }
   }
-  return resolveSourceControlWriterModelSelection(settings, providers, projectId);
+  return agentOnlySelection(
+    settings,
+    providers,
+    projectId,
+    resolveSourceControlWriterModelSelection(settings, providers, projectId),
+    true,
+  );
 }
 
 export interface PersistedServerObservabilitySettings {
@@ -476,6 +529,7 @@ export function applyServerSettingsPatch(
     // Merged per entry below; its `null` removals must not reach deepMerge.
     mcpServers: mcpServersPatch,
     usageLimitSources: usageLimitSourcesPatch,
+    textGenerators: textGeneratorsPatch,
     easDeviceHosts: easDeviceHostsPatch,
     secretProviders: secretProvidersPatch,
     sourceControlHosts: sourceControlHostsPatch,
@@ -695,6 +749,9 @@ export function applyServerSettingsPatch(
             usageLimitSourcesPatch,
           ),
         }
+      : {}),
+    ...(textGeneratorsPatch !== undefined
+      ? { textGenerators: mergeSettingsEntries(current.textGenerators, textGeneratorsPatch) }
       : {}),
     ...(easDeviceHostsPatch === undefined
       ? {}

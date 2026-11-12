@@ -33,11 +33,13 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const forkCases = (
   [
-    ["codex", "interrupted"],
-    ["claudeAgent", "failed"],
-    ["codex", "completed"],
+    ["codex", "interrupted", ""],
+    ["claudeAgent", "failed", ""],
+    ["codex", "completed", ""],
+    // Claude's native fork looks up its session under the source's project directory.
+    ["claudeAgent", "completed", " into another checkout"],
   ] as const
-).map(([driverName, status]) => {
+).map(([driverName, status, checkout]) => {
   const driver = ProviderDriverKind.make(driverName);
   const instanceId = ProviderInstanceId.make(driver);
   const modelSelection = { instanceId, model: "test-model" };
@@ -57,7 +59,7 @@ const forkCases = (
     { runEffectWorker: false },
   );
 
-  return { driver, status, instanceId, modelSelection, layer };
+  return { driver, status, checkout, instanceId, modelSelection, layer };
 });
 
 it.effect("a persisted fork leaves PR watching with its parent until explicitly opted in", () =>
@@ -261,9 +263,13 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
 );
 
 it.effect.each(forkCases)(
-  "bounds $driver context when continuing a fork of a $status run",
-  ({ driver, status, instanceId, modelSelection, layer }) =>
+  "bounds $driver context when continuing a fork of a $status run$checkout",
+  ({ driver, status, checkout, instanceId, modelSelection, layer }) =>
     Effect.gen(function* () {
+      const workspace =
+        checkout === ""
+          ? undefined
+          : { branch: "goat/fork-elsewhere", worktreePath: "/tmp/goat-fork-elsewhere" };
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const eventSink = yield* EventSink.EventSinkV2;
       const now = yield* DateTime.now;
@@ -428,7 +434,11 @@ it.effect.each(forkCases)(
         sourceThreadId,
         targetThreadId,
         sourcePoint: { type: "run", runId: sourceRunId },
-        ...(status === "completed" ? { sideChat: true } : {}),
+        ...(workspace !== undefined
+          ? { workspace }
+          : status === "completed"
+            ? { sideChat: true }
+            : {}),
         createdBy: "user",
         creationSource: "web",
       });
@@ -440,12 +450,20 @@ it.effect.each(forkCases)(
         text: "Continue from the selected source run",
         attachments: [],
         modelSelection:
-          status === "completed" ? { ...modelSelection, model: "other-model" } : modelSelection,
+          status === "completed" && workspace === undefined
+            ? { ...modelSelection, model: "other-model" }
+            : modelSelection,
         dispatchMode: { type: "start_immediately" },
         createdBy: "user",
         creationSource: "web",
       });
       const target = yield* orchestrator.getThreadProjection(targetThreadId);
+      if (workspace !== undefined) {
+        assert.equal(target.thread.worktreePath, workspace.worktreePath);
+        assert.isTrue(target.contextTransfers[0]?.crossWorkspace);
+        assert.equal(target.contextTransfers[0]?.resolution?.strategy, "portable_context");
+        return;
+      }
       if (status === "completed") {
         assert.isFalse(
           target.turnItems.some((item) => item.type === "user_message" && item.modelSwitch),

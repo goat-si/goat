@@ -92,6 +92,9 @@ export const SETTINGS_ACCESS = {
   fleet: path("fallback_chain.set"),
   goatclaw: person("It is the permission policy that bounds agents."),
   hub: person("It links this machine with other machines."),
+  pen: person(
+    "It pins the Pen this machine trusts and delegates the owner's authority to mesh members; a person confirms it.",
+  ),
   guestSharingEnabled: person("It lets guests reach this environment."),
   backgroundActivity: agent,
   automaticGitFetchInterval: agent,
@@ -122,6 +125,7 @@ export const SETTINGS_ACCESS = {
   completionWebhook: person("It sends reports to an outside address and holds a signing secret."),
   providerInstances: path("provider.update"),
   usageLimitSources: person(HOLDS_SECRETS),
+  textGenerators: person(HOLDS_SECRETS),
   secretProviders: person(HOLDS_SECRETS),
   cursorKeychainUsageEnabled: person("It reads the system keychain."),
   usagePriceOverrides: agent,

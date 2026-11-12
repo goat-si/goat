@@ -3,6 +3,7 @@ import {
   type DecisionItem,
   durableDecisionAnswer,
   isDecisionItemRemoved,
+  isDecisionItemWaiting,
   orderDecisionQueue,
 } from "@goat/client-runtime/state/decision-inbox";
 import {
@@ -32,7 +33,13 @@ const sameRef = (a: DecisionItem["ref"], b: DecisionItem["ref"]) =>
   a.environmentId === b.environmentId && a.threadId === b.threadId;
 /** What an item asks; it changes identity when the asking side updates the request. */
 const payloadOf = (item: DecisionItem | null) =>
-  item === null ? null : item.kind === "decision" ? item.decision : item.request;
+  item === null
+    ? null
+    : item.kind === "decision"
+      ? item.decision
+      : item.kind === "handoff"
+        ? item.handoff
+        : item.request;
 
 function prune<A>(values: Record<string, A>, keep: (id: string) => boolean) {
   const entries = Object.entries(values);
@@ -96,13 +103,8 @@ export function useDecisionInbox(
     [state.items, skippedIds],
   );
   const unresolved = useCallback(
-    (item: DecisionItem) =>
-      // Durable decisions come from the environment's feed, not the thread's detail.
-      item.kind === "decision"
-        ? !state.feedEnvironments.includes(item.ref.environmentId)
-        : state.loadingRefs.some((ref) => sameRef(ref, item.ref)) ||
-          state.errors.some(({ ref }) => sameRef(ref, item.ref)),
-    [state.loadingRefs, state.errors, state.feedEnvironments],
+    (item: DecisionItem) => isDecisionItemWaiting(state, item),
+    [state],
   );
   const liveSelected =
     selected === null ? undefined : queue.find((item) => item.id === selected.id);
@@ -175,6 +177,8 @@ export function useDecisionInbox(
     const item = latest.items.find((entry) => entry.id === id);
     if (
       !item ||
+      // A handoff card answers its own handoff; this hook never submits one.
+      item.kind === "handoff" ||
       (item.kind === "decision"
         ? !latest.feedEnvironments.includes(item.ref.environmentId)
         : latest.loadingRefs.some((ref) => sameRef(ref, item.ref)) ||

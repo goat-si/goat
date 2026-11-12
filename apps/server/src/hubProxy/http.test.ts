@@ -33,7 +33,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { openUpstreamSocket } from "./http.ts";
-
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 import {
   authLayer,
   makeRpcClient,
@@ -248,7 +248,7 @@ it.effect(
       expect(ticket.status).toBe(200);
       const ticketBody = JSON.parse(ticket.text);
       const store = hub.sessionStore;
-      expect((yield* store.verifyWebSocketToken(ticketBody.ticket)).sessionId).toBe(
+      expect((yield* store.verifyWebSocketToken(ticketBody.ticket, MAIN_LISTENER)).sessionId).toBe(
         session.sessionId,
       );
       expect(hub.node.requests.map((request) => request.url)).toEqual(["/api/orchestration/shell"]);
@@ -901,7 +901,7 @@ it.effect(
         return yield* decodeTicket(yield* response.json);
       }).pipe(Effect.provide(FetchHttpClient.layer));
       expect(
-        yield* hub.sessionStore.verifyWebSocketToken(Redacted.value(issued.ticket)),
+        yield* hub.sessionStore.verifyWebSocketToken(Redacted.value(issued.ticket), MAIN_LISTENER),
       ).toMatchObject({
         audience: "rpc",
         proofKeyThumbprint: thumbprint,

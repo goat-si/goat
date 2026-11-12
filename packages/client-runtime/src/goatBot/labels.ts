@@ -51,9 +51,18 @@ const older = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
 });
+const olderWithYear = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
 
 /** Whole local-calendar days from `iso` to now; null for an unreadable time. */
-function calendarDaysAgo(iso: string, nowMs: number): { date: Date; days: number } | null {
+function calendarDaysAgo(
+  iso: string,
+  nowMs: number,
+): { date: Date; now: Date; days: number } | null {
   // @effect-diagnostics-next-line globalDate:off - stamps follow the device's local calendar.
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
@@ -61,17 +70,35 @@ function calendarDaysAgo(iso: string, nowMs: number): { date: Date; days: number
   const now = new Date(nowMs);
   const calendarDay = (value: Date) =>
     Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
-  return { date, days: Math.round((calendarDay(now) - calendarDay(date)) / 86_400_000) };
+  return { date, now, days: Math.round((calendarDay(now) - calendarDay(date)) / 86_400_000) };
 }
 
-/** "Today", "Yesterday", a weekday within the week, or the date, on the device's calendar. */
-export function goatBotDayLabel(iso: string, nowMs: number): string {
+/**
+ * "Today", "Yesterday", a weekday within the week, or the date, on the device's calendar.
+ * `yearWhenOther` adds the year to a date from another year.
+ */
+export function goatBotDayLabel(
+  iso: string,
+  nowMs: number,
+  options?: { readonly yearWhenOther?: boolean },
+): string {
   const at = calendarDaysAgo(iso, nowMs);
   if (at === null) return "";
   if (at.days === 0) return "Today";
   if (at.days === 1) return "Yesterday";
   if (at.days > 1 && at.days <= 6) return weekday.format(at.date);
-  return older.format(at.date);
+  return options?.yearWhenOther === true && at.date.getFullYear() !== at.now.getFullYear()
+    ? olderWithYear.format(at.date)
+    : older.format(at.date);
+}
+
+/** The local calendar date of `iso` as YYYY-MM-DD; empty for an unreadable time. */
+export function goatBotLocalDate(iso: string): string {
+  // @effect-diagnostics-next-line globalDate:off - days follow the device's local calendar.
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 /** A local-calendar stamp, repeated after a long pause even on the same day. */

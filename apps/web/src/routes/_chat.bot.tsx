@@ -16,6 +16,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 
 import { validateBotTaskSearch } from "../components/goatBot/botTaskSearch";
 import { GoatBotChatView } from "../components/goatBot/GoatBotChatView";
+import { GoatBotStepsProvider } from "../components/goatBot/GoatBotStepsProvider";
 import { GoatBotChannelContext } from "../components/goatBot/goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
 import {
@@ -97,29 +98,31 @@ function GoatBotRouteSession() {
     <GoatBotMainProfileContext value={main}>
       <GoatBotMemberContext value={member}>
         <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-          <GoatBotChatView
-            {...session}
-            {...(memberResolving && roster.environmentId !== null
-              ? {
-                  availability: {
-                    kind: "connecting" as const,
-                    environmentId: roster.environmentId,
-                  },
-                }
-              : {})}
-            environmentId={bot?.environmentId ?? null}
-            legacyAgentRoute={legacyAgentRoute}
-            homeMove={
-              moveTarget
+          <GoatBotStepsProvider visibleTurnItems={items} environmentId={bot?.environmentId ?? null}>
+            <GoatBotChatView
+              {...session}
+              {...(memberResolving && roster.environmentId !== null
                 ? {
-                    label: moveTarget.label,
-                    busy: homeSettings.busy,
-                    onMove: () => homeSettings.changeHome(moveTarget.environmentId),
+                    availability: {
+                      kind: "connecting" as const,
+                      environmentId: roster.environmentId,
+                    },
                   }
-                : undefined
-            }
-            homeMoveError={homeSettings.error}
-          />
+                : {})}
+              environmentId={bot?.environmentId ?? null}
+              legacyAgentRoute={legacyAgentRoute}
+              homeMove={
+                moveTarget
+                  ? {
+                      label: moveTarget.label,
+                      busy: homeSettings.busy,
+                      onMove: () => homeSettings.changeHome(moveTarget.environmentId),
+                    }
+                  : undefined
+              }
+              homeMoveError={homeSettings.error}
+            />
+          </GoatBotStepsProvider>
         </SidebarInset>
       </GoatBotMemberContext>
     </GoatBotMainProfileContext>
@@ -168,15 +171,20 @@ export function GoatBotTaskRoute({
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1">
         {!narrow && (
-          <GoatBotChatView
-            {...session}
-            environmentId={environmentId}
-            legacyAgentRoute={legacyAgentRoute}
-            removal={memberDeleted ? "deleted" : null}
-            onRestore={
-              memberDeleted && manage.canManage ? () => void manage.restore(member) : undefined
-            }
-          />
+          <GoatBotStepsProvider
+            visibleTurnItems={session.visibleTurnItems}
+            environmentId={memberDeleted ? null : environmentId}
+          >
+            <GoatBotChatView
+              {...session}
+              environmentId={environmentId}
+              legacyAgentRoute={legacyAgentRoute}
+              removal={memberDeleted ? "deleted" : null}
+              onRestore={
+                memberDeleted && manage.canManage ? () => void manage.restore(member) : undefined
+              }
+            />
+          </GoatBotStepsProvider>
         )}
         <GoatBotTaskPane
           narrow={narrow}

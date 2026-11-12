@@ -5,6 +5,8 @@ import {
   type ChannelTaskStatus,
   EnvironmentId,
 } from "@goat/contracts";
+import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import type { ReactNode } from "react";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -29,6 +31,7 @@ const state = vi.hoisted(() => ({
   refresh: vi.fn(),
   session: vi.fn(),
   lists: [] as Array<string | null>,
+  rows: [] as ReadonlyArray<GoatBotRow>,
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
@@ -51,8 +54,30 @@ vi.mock("~/hooks/useResizableWidth", () => ({
   useResizableWidth: () => ({ width: 480, handlers: {} }),
 }));
 vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
+vi.mock("./GoatBotStepsProvider", () => ({
+  GoatBotStepsProvider: ({ children }: { children: ReactNode }) => children,
+  GoatBotStepsReader: ({ children }: { children: ReactNode }) => children,
+}));
 const decodeBotThreadRow = Schema.decodeSync(BotThreadRow);
-vi.mock("./GoatBotTimeline", () => ({ GoatBotTimeline: () => <div>Task timeline</div> }));
+// The task's questions keep their real card, so a pick goes through the pane's send.
+vi.mock("./GoatBotTimeline", async () => {
+  const { GoatBotQuestionCard } = await import("./GoatBotQuestionCard");
+  return {
+    GoatBotTimeline: (props: {
+      readonly rows: ReadonlyArray<GoatBotRow>;
+      readonly onPick?: (answer: string, taskId?: string, questionId?: string) => void;
+    }) => (
+      <div>
+        Task timeline
+        {props.rows.map((row) =>
+          row.kind === "bot" ? (
+            <GoatBotQuestionCard key={row.id} row={row} body={row.text} onPick={props.onPick} />
+          ) : null,
+        )}
+      </div>
+    ),
+  };
+});
 // Each bot's own task list: main's, or the member's when a member's pane is open.
 vi.mock("./useBotRoster", () => ({
   useBotThreads: (_environmentId: string, bot: { botId: string } | null) => {
@@ -85,9 +110,10 @@ vi.mock("./useGoatBotSession", () => ({
       availability: { kind: "ready" },
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
+      visibleTurnItems: [],
       rowsForTask: (id: string) => {
         state.session(id);
-        return [];
+        return state.rows;
       },
       attachmentSupport: null,
       onSendToTask: state.send,
@@ -130,6 +156,42 @@ it("opens the scoped task and acknowledges it, then sends and closes", async () 
   expect(state.send).toHaveBeenCalledWith("task-1", "hello", []);
   await userEvent.click(screen.getByRole("button", { name: "Back to Tasks" }));
   expect(close).toHaveBeenCalledOnce();
+});
+
+/** The task view's rows while the test runs. */
+const showingRows = (rows: ReadonlyArray<GoatBotRow>) => {
+  state.rows = rows;
+  return {
+    [Symbol.dispose]: () => {
+      state.rows = [];
+    },
+  };
+};
+
+it("answers its task's question with the question, picked or typed as something else (#2977)", async () => {
+  state.send.mockClear();
+  using _rows = showingRows([
+    {
+      kind: "bot",
+      id: "b1",
+      text: "Which cache should the build use?",
+      createdAt: "2026-11-04T10:00:00.000Z",
+      tone: "question",
+      proactive: true,
+      replyTo: null,
+      options: ["Keep", "Clear"],
+      choices: ["Keep", "Clear"],
+      answerTaskId: "task-1",
+      answerQuestionId: "q1",
+      firstInGroup: true,
+      groupPosition: "single",
+    },
+  ]);
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await screen.getByRole("button", { name: "A. Keep" }).click();
+  expect(state.send).toHaveBeenLastCalledWith("task-1", "Keep", [], "q1");
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Both{Enter}");
+  expect(state.send).toHaveBeenLastCalledWith("task-1", "Both", [], "q1");
 });
 
 const decodeProfile = Schema.decodeSync(BotProfile);

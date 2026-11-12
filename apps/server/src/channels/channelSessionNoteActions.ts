@@ -49,7 +49,8 @@ export type NotesChangeRefusal =
   | "not_allowed"
   | "quote_not_in_input"
   | "task_finished"
-  | "not_saved";
+  | "not_saved"
+  | "notes_alike";
 
 export interface NotesChangeResult {
   readonly outcome: "saved" | "granted" | "refused";
@@ -281,6 +282,8 @@ const make = Effect.gen(function* () {
               ? yield* refuse("busy", CHANNEL_COPY.noteEditBusy)
               : yield* refuse("task_finished", CHANNEL_COPY.noteEditTaskDone);
           const notice = written.notice;
+          if (written.held === true && notice !== undefined)
+            return yield* refuse("notes_alike", notice);
           if (notice === CHANNEL_COPY.noteNotSaved)
             return yield* refuse("not_saved", CHANNEL_COPY.noteNotSaved);
           if (notice !== undefined) {

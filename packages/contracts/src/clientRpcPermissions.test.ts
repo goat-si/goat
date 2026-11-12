@@ -41,6 +41,13 @@ it("a desktop window's live picture needs the same read grant as a browser tab's
   ]);
 });
 describe("memory client guards", () => {
+  it("GOAT Bot's open asks need the orchestration read grant the server checks", () => {
+    expect(clientRpcRequiredScopes("channel.listOpenAsks", {})).toEqual(["orchestration:read"]);
+    expect(clientRpcRequiredScopes("channel.subscribeTaskChanges", {})).toEqual([
+      "orchestration:read",
+    ]);
+  });
+
   it("GOAT Bot's notes need the memory read grant before the client asks", () => {
     expect(clientRpcRequiredScopes("channel.listBotNotes", {})).toEqual(["memory:read"]);
   });
@@ -299,5 +306,10 @@ it("requires settings authority only when a person widens browser access", () =>
   expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsList, {})).toEqual(["orchestration:read"]);
   expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsSubscribe, {})).toEqual([
     "orchestration:read",
+  ]);
+});
+it("forking a thread needs the operate grant the server checks", () => {
+  expect(clientRpcRequiredScopes(ORCHESTRATION_V2_WS_METHODS.forkThread, {})).toEqual([
+    "orchestration:operate",
   ]);
 });

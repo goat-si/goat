@@ -12,6 +12,7 @@ import * as Routes from "../provider/CodexRouteService.ts";
 import * as Runtime from "./ConnectHubRuntime.testkit.ts";
 import * as Authorization from "./RpcAuthorization.ts";
 import * as Write from "./SettingsRpc.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 
 const method = WS_METHODS.serverUpdateSettings;
 const tags = [...Authorization.AuthorizedWsRpcGroup.requests.values()].map((rpc) => rpc._tag);
@@ -41,7 +42,7 @@ it.effect.each([false, true])(
       });
       const session = yield* runtime.sessions
         .issue({ scopes: ["settings:write", "providers:manage"] })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       const held = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const queued = yield* Deferred.make<void>();
@@ -112,7 +113,7 @@ it.effect(
       });
       const session = yield* runtime.sessions
         .issue({ scopes: ["providers:manage"] })
-        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
       yield* Effect.gen(function* () {
         const write = yield* Write.make(session);
         const client = yield* RpcTest.makeClient(group).pipe(
@@ -164,7 +165,7 @@ it.effect(
         scopes: ["hub:proxy", "settings:write", "providers:manage"],
         connectAccessGeneration: (yield* runtime.access.current).generation,
       });
-      const session = yield* runtime.sessions.verify(issued.token);
+      const session = yield* runtime.sessions.verify(issued.token, MAIN_LISTENER);
       const held = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const queued = yield* Deferred.make<void>();
@@ -220,6 +221,48 @@ it.effect(
           ),
         ),
         Effect.provideService(Settings.ServerSettingsService, observed),
+        Effect.provideContext(runtime.context),
+      );
+    }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
+);
+
+it.effect.each([false, true])(
+  "a person's settings write cannot set the Pen trust root, which only its confirmation writes (provider mutation=%s)",
+  (mixed) =>
+    Effect.gen(function* () {
+      const watch = yield* Runtime.watcher;
+      const runtime = yield* Runtime.open({ fs: watch.fs });
+      yield* runtime.settings.start;
+      yield* runtime.settings.updateSettings({
+        hub: { enabled: true, connectDevicesHubProxy: true },
+      });
+      const session = yield* runtime.sessions
+        .issue({ scopes: ["settings:write", "providers:manage"] })
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token, MAIN_LISTENER)));
+      yield* Effect.gen(function* () {
+        const write = yield* Write.make(session);
+        const result = yield* write({
+          patch: {
+            pen: {
+              executablePath: "/usr/local/bin/pen",
+              stateDir: "/Users/someone/.pen",
+              meshId: "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+              nodeId: "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+            },
+          },
+          ...(mixed ? { providerInstanceMutation: mutation } : {}),
+        }).pipe(Effect.result);
+        expect(result).toMatchObject({ _tag: "Failure" });
+        const settings = yield* runtime.settings.getSettings;
+        expect(settings.pen).toBeNull();
+        expect(settings.providerInstances[mutation.instanceId]).toBeUndefined();
+      }).pipe(
+        Effect.provide(
+          Routes.layer.pipe(
+            Layer.provide(Routes.layerState),
+            Layer.provide(Environment.layerIdentity),
+          ),
+        ),
         Effect.provideContext(runtime.context),
       );
     }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),

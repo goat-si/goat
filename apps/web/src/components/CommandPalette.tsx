@@ -144,6 +144,7 @@ import {
 } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useCanPromoteThread, usePromoteThread } from "./promoteThread";
+import { useForkPaletteItems } from "../hooks/useForkPaletteItems";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -219,6 +220,7 @@ import {
   reduceCommandPaletteSearchState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
+import { childSearchEscape, useChildSearchEscape } from "./CommandPalette.escape";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteDialogFrame } from "./CommandPaletteDialogFrame";
@@ -310,17 +312,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       ? selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview"
       : false,
   );
-  useEffect(() => {
-    if (!state.open || state.mode === "command") return;
-    const onEscapeKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.isComposing || event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      dispatch({ _tag: "BackToCommand" });
-    };
-    window.addEventListener("keydown", onEscapeKeyDown, true);
-    return () => window.removeEventListener("keydown", onEscapeKeyDown, true);
-  }, [state.mode, state.open]);
+  useChildSearchEscape(state.open, state.mode, dispatch);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -423,9 +415,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
-          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
+          const escape = childSearchEscape(eventDetails, open, state.mode);
+          if (escape !== "ignore") {
             eventDetails.cancel();
-            dispatch({ _tag: "BackToCommand" });
+            if (escape === "back-to-command") dispatch({ _tag: "BackToCommand" });
             return;
           }
           setOpen(open);
@@ -567,6 +560,7 @@ function OpenCommandPaletteDialog(props: {
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
   const canPromoteActiveThread = useCanPromoteThread(activeThread);
+  const forkPaletteItems = useForkPaletteItems(activeThread ?? null);
   const promoteThread = usePromoteThread();
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
@@ -1421,6 +1415,7 @@ function OpenCommandPaletteDialog(props: {
     icon: <CloudDownloadIcon className={ITEM_ICON_CLASS} />,
   });
   if (sshFetchBackItem !== null) actionItems.push(sshFetchBackItem);
+  actionItems.push(...forkPaletteItems);
 
   if (
     activeThread !== null &&

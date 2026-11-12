@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { onMainListener } from "./auth/connectionContext.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   AuthSessionId,
@@ -106,7 +107,7 @@ it.layer(NodeServices.layer)("runtime session route", (it) => {
         };
         expect(issued.subject).toBe("mcp-client");
         expect(issued.scopes).toEqual(["orchestration:read", "orchestration:operate"]);
-        const accepted = yield* auth.authenticateMcpClient(bearer(issued.token));
+        const accepted = yield* auth.authenticateMcpClient(onMainListener(bearer(issued.token)));
         expect(accepted.label).toBe("hub");
         expect(accepted.approvals).toBe(false);
 
@@ -144,9 +145,9 @@ it.layer(NodeServices.layer)("runtime session route", (it) => {
         const body = { kind: "revoke", sessionId: issued.sessionId };
         expect((yield* send({ peer: "192.0.2.10", token: "secret", body })).status).toBe(403);
         expect((yield* send({ peer: "127.0.0.1", token: "wrong", body })).status).toBe(403);
-        expect((yield* auth.authenticateMcpClient(bearer(issued.token))).sessionId).toBe(
-          issued.sessionId,
-        );
+        expect(
+          (yield* auth.authenticateMcpClient(onMainListener(bearer(issued.token)))).sessionId,
+        ).toBe(issued.sessionId);
         const response = yield* send({ peer: "127.0.0.1", token: "secret", body });
         expect(response.status).toBe(200);
         const result = yield* Effect.promise(() => response.json()).pipe(
@@ -158,7 +159,9 @@ it.layer(NodeServices.layer)("runtime session route", (it) => {
         );
         expect(result).toEqual({ sessionId: issued.sessionId, revoked: true });
         expect(
-          (yield* auth.authenticateMcpClient(bearer(issued.token)).pipe(Effect.result))._tag,
+          (yield* auth
+            .authenticateMcpClient(onMainListener(bearer(issued.token)))
+            .pipe(Effect.result))._tag,
         ).toBe("Failure");
       }).pipe(Effect.scoped, Effect.provide(layerAuth)),
   );
@@ -214,7 +217,7 @@ it.live("preserves the Child setup purpose through runtime session issuance", ()
     };
     expect(issued.childSetupPurpose).toEqual(purpose);
     expect(Date.parse(issued.expiresAt)).toBeLessThanOrEqual(purpose.expiresAt);
-    const accepted = yield* auth.authenticateMcpClient(bearer(issued.token));
+    const accepted = yield* auth.authenticateMcpClient(onMainListener(bearer(issued.token)));
     expect(accepted.childSetupPurpose).toEqual(purpose);
     expect(accepted.access).toBe("read-only");
 

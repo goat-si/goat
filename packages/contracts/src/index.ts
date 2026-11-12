@@ -92,6 +92,7 @@ export * from "./pullRequestReviewGuide.ts";
 export * from "./orchestrationDispatch.ts";
 export * from "./orchestrationProject.ts";
 export * from "./orchestrationV2.ts";
+export * from "./threadFork.ts";
 export * from "./guestShare.ts";
 export * from "./guestStream.ts";
 export * from "./applicationEvent.ts";
@@ -132,6 +133,7 @@ export * from "./serverActivity.ts";
 export * from "./repositoryInventory.ts";
 export * from "./repositoryReference.ts";
 export * from "./opencodex.ts";
+export * from "./penSettings.ts";
 export * from "./opencodexChildReady.ts";
 export * from "./hubParity.ts";
 export * from "./hubSettings.ts";
@@ -161,6 +163,7 @@ export * from "./memoryMcpTools.ts";
 export * from "./memoryGeneration.ts";
 
 export * from "./handoff.ts";
+export * from "./pendingRequestKind.ts";
 export * from "./humanStepResult.ts";
 
 export * from "./permissionProfiles.ts";

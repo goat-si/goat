@@ -27,30 +27,35 @@ const NONE: ReadonlySet<string> = new Set();
 
 /**
  * The conversation with the "New" divider before what the bot said since the person last read it,
- * and whether the pill pointing up to it shows. Both last until the person sends a message.
+ * and whether the pill pointing up to it shows. Sending clears what was marked; a moment away
+ * after that marks what comes in it again.
  */
 export function useGoatBotUnread(
   rows: ReadonlyArray<GoatBotRow>,
   snapshot: GoatBotVisitSnapshot | null | undefined,
 ) {
   const visit = snapshot?.key ?? null;
-  const [cleared, setCleared] = useState<string | null>(null);
-  const [settled, setSettled] = useState<string | null>(null);
+  // Sending clears the opening boundary and the moments away so far, for this visit.
+  const [cleared, setCleared] = useState<{ visit: string | null; away: number } | null>(null);
+  const clearedNow = cleared?.visit === visit ? cleared : null;
+  // The divider the person has seen or dismissed; a later, different one can show the pill again.
+  const [settled, setSettled] = useState<{ visit: string | null; firstId: string } | null>(null);
   const [above, setAbove] = useState(false);
   const [focusDivider, setFocusDivider] = useState(false);
+  const [dividerShown, setDividerShown] = useState(false);
   // Rows marked in this visit, so a card that changes again stays marked where it was.
   const [kept, setKept] = useState<{ visit: string | null; ids: ReadonlySet<string> }>({
     visit: null,
     ids: NONE,
   });
   const keptIds = kept.visit === visit ? kept.ids : NONE;
-  const mark = useMemo(
-    () =>
-      snapshot && cleared !== visit
-        ? goatBotUnreadMark(rows, snapshot.readUpTo, snapshot.newestAtOpen, keptIds)
-        : null,
-    [rows, snapshot, cleared, visit, keptIds],
-  );
+  const mark = useMemo(() => {
+    if (!snapshot) return null;
+    const away = (snapshot.away ?? []).slice(clearedNow?.away ?? 0);
+    return clearedNow === null
+      ? goatBotUnreadMark(rows, snapshot.readUpTo, snapshot.newestAtOpen, keptIds, away)
+      : goatBotUnreadMark(rows, null, null, keptIds, away);
+  }, [rows, snapshot, clearedNow, keptIds]);
   if (mark !== null && mark.ids.some((id) => !keptIds.has(id))) {
     setKept({ visit, ids: new Set([...keptIds, ...mark.ids]) });
   }
@@ -65,37 +70,47 @@ export function useGoatBotUnread(
     return [...rows.slice(0, at), divider, ...rows.slice(at)];
   }, [rows, mark]);
   const dividerIndex = mark === null ? -1 : items.findIndex((item) => item.kind === "unread");
+  const firstId = mark?.firstId ?? null;
+  const settleHere = useCallback(() => {
+    if (firstId !== null) setSettled({ visit, firstId });
+  }, [visit, firstId]);
   /** Called with the list's viewable indexes; the divider is above when it lies before them. */
   const onViewable = useCallback(
     (indexes: ReadonlyArray<number>) => {
       if (dividerIndex < 0 || indexes.length === 0) return;
+      setDividerShown(indexes.includes(dividerIndex));
       if (indexes.includes(dividerIndex)) {
         setAbove(false);
-        setSettled(visit);
+        settleHere();
       } else setAbove(dividerIndex < Math.min(...indexes));
     },
-    [dividerIndex, visit],
+    [dividerIndex, settleHere],
   );
-  /** The pill was used or dismissed: it stays away this visit. */
-  const settle = useCallback(() => setSettled(visit), [visit]);
+  /** The pill was used or dismissed: it stays away while this divider stands. */
+  const settle = settleHere;
   /** The pill was used: the list scrolls to the divider and VoiceOver follows it there. */
   const jump = useCallback(() => {
-    setSettled(visit);
+    settleHere();
     setFocusDivider(true);
-  }, [visit]);
+  }, [settleHere]);
   const dividerFocused = useCallback(() => setFocusDivider(false), []);
-  /** The person sent a message: they have caught up. */
-  const clear = useCallback(() => setCleared(visit), [visit]);
+  /** The person sent a message: they have caught up with everything marked so far. */
+  const awaySoFar = snapshot?.away?.length ?? 0;
+  const clear = useCallback(() => {
+    setCleared({ visit, away: awaySoFar });
+    setKept({ visit, ids: NONE });
+  }, [visit, awaySoFar]);
+  const seenDivider = settled !== null && settled.visit === visit && settled.firstId === firstId;
   return {
     items,
     dividerIndex,
-    /** The pill: unread above the screen, not yet seen or dismissed this visit. */
-    pill: mark !== null && above && settled !== visit ? mark.count : null,
+    /** The pill: unread above the screen, its divider not yet seen or dismissed. */
+    pill: mark !== null && above && !seenDivider ? mark.count : null,
     onViewable,
     settle,
     jump,
-    /** The divider takes accessibility focus once it is on screen after a jump. */
-    focusDivider,
+    /** The divider takes accessibility focus after a jump, once the list shows it. */
+    focusDivider: focusDivider && dividerShown,
     dividerFocused,
     clear,
   };

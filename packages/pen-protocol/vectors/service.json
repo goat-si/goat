@@ -1,0 +1,218 @@
+{
+  "note": "go test ./internal/daemon -run TestServiceVectors -update-service. Bytes are base64url without padding; lines are exact wire bytes. Each reject line must be refused by the reader of that line.",
+  "key": "ERERERERERERERERERERERERERERERERERERERERERE",
+  "name": "goat",
+  "nd": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+  "ng": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+  "mesh": "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+  "self": "ssssssssssssssssssssssssss",
+  "caller": {
+    "nodeId": "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "signPub": "REREREREREREREREREREREREREREREREREREREREREQ",
+    "noisePub": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU",
+    "name": "caller-1"
+  },
+  "line1": "PENSVC/1 IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI\n",
+  "answer": "HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0Y",
+  "line2": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0Y\n",
+  "identity": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"}",
+  "proof": "8cYgbbNWYxLWLL7ebcZCYjQQx1zcUBzEeNajrE6rgT4",
+  "line3": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"} 8cYgbbNWYxLWLL7ebcZCYjQQx1zcUBzEeNajrE6rgT4\n",
+  "rejectLine1": [
+    {
+      "line": "PENSVC/2 IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI\n",
+      "why": "wrong prefix"
+    },
+    {
+      "line": "PENSVC/1 IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI\r\n",
+      "why": "CR"
+    },
+    {
+      "line": "PENSVC/1 IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi\n",
+      "why": "short nonce"
+    },
+    {
+      "line": "PENSVC/1 IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiJ\n",
+      "why": "non-canonical base64url"
+    },
+    {
+      "line": "PENSVC/1 IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+      "why": "no LF"
+    }
+  ],
+  "rejectLine2": [
+    {
+      "line": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0Y\r\n",
+      "why": "CR"
+    },
+    {
+      "line": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM  HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0Y\n",
+      "why": "two spaces"
+    },
+    {
+      "line": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0Y=\n",
+      "why": "padding"
+    },
+    {
+      "line": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzN HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0Y\n",
+      "why": "non-canonical base64url"
+    },
+    {
+      "line": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0\n",
+      "why": "short MAC"
+    },
+    {
+      "line": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM HrULBWvcyiaj8itMcQrZjfZc5ZU88xHxiwp1EC-6C0Y \n",
+      "why": "trailing space"
+    }
+  ],
+  "rejectLine3": [
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"} 8cYgbbNWYxLWLL7ebcZCYjQQx1zcUBzEeNajrE6rgTA\n",
+      "why": "wrong MAC"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"} 8cYgbbNWYxLWLL7ebcZCYjQQx1zcUBzEeNajrE6rgT4\r\n",
+      "why": "CR"
+    },
+    {
+      "line": "{\"v\":1, \"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"} V_BZG1tWMton3rbwtaXeqxG3x8lRcTs53OV1mRzRBvE\n",
+      "why": "whitespace in J"
+    },
+    {
+      "line": "{\"v\":\"1\",\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"} lXpoNJv3rMUewkKUSGxfhBGMN02xSu1DVhuhTOhsR_M\n",
+      "why": "v is not a number"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\",\"extra\":\"x\"} GfhTc0j2Dh1IFq1jw17Q5c3i33ZS2b6fFRJ20m-d0ZQ\n",
+      "why": "unknown member"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\",\"stream\":\"goat\"} 0S2cHCt-wV5QoBTPRC_fFC6JSeLy6JzDmUK_NmmvYfE\n",
+      "why": "duplicate member"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"}} rHIsIprfbGWvx6i5PFzWlcR6wQ3UOmmMdS1S_B4LAI0\n",
+      "why": "missing member"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\",\"x\":1},\"stream\":\"goat\"} CL0P20joBgswWPI7LaD4K7T3wUs-i7YpbZ562MtwOvk\n",
+      "why": "unknown caller member"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"nnnnnnnnnnnnnnnnnnnnnnnnnn\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"} vTcsI43IeW1LQE8UsLAe8C2ln1l9E36h6kBbeyUb-x8\n",
+      "why": "mesh is not the pinned mesh"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"tttttttttttttttttttttttttt\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"goat\"} zHMeqmSH67tOazDEHuLVvWXV7veE0m4Mr455KE70pP0\n",
+      "why": "self is not the pinned node"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"stream\":\"other\"} cZUUsDtYmvk1WfozudGpcG8W5uPK3SanXhLsZXArepY\n",
+      "why": "stream is not this service"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"},\"stream\":\"goat\"} RIyMi96SQd3BkdjAXmeXpcLfCvshhMPhUb0Qn-RhquA\n",
+      "why": "over 2,200 bytes"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"} UOwn4R102HwcxjzxP3HGs_nMc2kD_LBo0VY058Zb-z0\n",
+      "why": "a client line, which a member-only (v1.2) reader refuses"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} PN8Sj8CRqxnxpheSULAEHoWttq7QYa28zsOMd5k3p4k\n",
+      "why": "a pairing line, which a member-only (v1.2) reader refuses"
+    }
+  ],
+  "client": {
+    "id": "dddddddddddddddddddddddddd",
+    "noisePub": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY"
+  },
+  "clientIdentity": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"}",
+  "clientProof": "UOwn4R102HwcxjzxP3HGs_nMc2kD_LBo0VY058Zb-z0",
+  "clientLine3": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"} UOwn4R102HwcxjzxP3HGs_nMc2kD_LBo0VY058Zb-z0\n",
+  "pairing": {
+    "invite": "0Fh_z1uKAGoODu_-",
+    "noisePub": "iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg",
+    "sas": "LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU"
+  },
+  "pairingIdentity": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"}",
+  "pairingProof": "PN8Sj8CRqxnxpheSULAEHoWttq7QYa28zsOMd5k3p4k",
+  "pairingLine3": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} PN8Sj8CRqxnxpheSULAEHoWttq7QYa28zsOMd5k3p4k\n",
+  "rejectClientLine3": [
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"} UOwn4R102HwcxjzxP3HGs_nMc2kD_LBo0VY058Zb-zA\n",
+      "why": "wrong MAC"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"} l3QT0H5ti6Up66jsf7RHoXpp3hhMvqnNekOVXkLoA-A\n",
+      "why": "both caller and client"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} blnYKQiSPlVuTKatvudvec8p7vBnrKWNaYOWG_SdjZQ\n",
+      "why": "both client and pairing"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"} M0Ihbd-YY5FfG65jiA2035AAE8U_zge6PwXWg9q8qV8\n",
+      "why": "client without id"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\",\"x\":\"y\"},\"stream\":\"goat\"} a9kpfjBHnb5p2NSw6BsQ1hzngJWyPBnDmQS7Z5SH6V4\n",
+      "why": "unknown client member"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"DDDDDDDDDDDDDDDDDDDDDDDDDD\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"} PIZS37bWWd6RhHVI8KtQKCPepvzzSKnQUOWHOEWKJn0\n",
+      "why": "id is not lowercase base32"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZ\"},\"stream\":\"goat\"} 1lxbN-xtIu6aB1lOJLIvYC6Z3x1Oe3klbmUj5UqQYG4\n",
+      "why": "non-canonical client key"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\",\"id\":\"dddddddddddddddddddddddddd\"},\"stream\":\"goat\"} 1ayK6i2bjBGIWQG_HYSmN0DgfQZz1dP4LCAvfs9U9C8\n",
+      "why": "client members out of order"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"other\"} TBeWXaGlSaUVutokAeFAJm-0iC_HdhSQAxY9DuPlg8g\n",
+      "why": "stream is not this service"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"nnnnnnnnnnnnnnnnnnnnnnnnnn\",\"self\":\"ssssssssssssssssssssssssss\",\"client\":{\"id\":\"dddddddddddddddddddddddddd\",\"noisePub\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY\"},\"stream\":\"goat\"} VEegAxo82W6svNTVIuaKIfv_NxiEzva_x_-ygNBLlUg\n",
+      "why": "mesh is not the pinned mesh"
+    }
+  ],
+  "rejectPairingLine3": [
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} PN8Sj8CRqxnxpheSULAEHoWttq7QYa28zsOMd5k3p4A\n",
+      "why": "wrong MAC"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"caller\":{\"nodeId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signPub\":\"REREREREREREREREREREREREREREREREREREREREREQ\",\"noisePub\":\"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU\",\"name\":\"caller-1\"},\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} 7LQIlf4DIsjff-zhtxjT4Yi7GH6ngMvI3luNGbkOTLg\n",
+      "why": "both caller and pairing"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZD\"},\"stream\":\"goat\"} 6vgDY20_Cb--OoVx4I2GY7FzhtrKj6BSDSL0qqnV5nw\n",
+      "why": "sas is 42 characters"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} NMIy2FcILb9wuNd1P4MMcGw6n8ran55eoZ2jvB4zGxQ\n",
+      "why": "invite is 15 characters"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"x\":\"y\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} 1tKgJUaEF41rirAiVxFO7PPuhvPukYwIc-juWRZNsfs\n",
+      "why": "unknown pairing member"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\"},\"stream\":\"goat\"} J3DcLSzsFiX5Zz_jtr12peiczkzRGrY-H-CpqAw1xls\n",
+      "why": "pairing without sas"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"ssssssssssssssssssssssssss\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIh\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} 1k7ulPDbChFjdXD3rUiljiL837Rlx5JEV6KSbd8LSTo\n",
+      "why": "non-canonical pairing key"
+    },
+    {
+      "line": "{\"v\":1,\"mesh\":\"mmmmmmmmmmmmmmmmmmmmmmmmmm\",\"self\":\"tttttttttttttttttttttttttt\",\"pairing\":{\"invite\":\"0Fh_z1uKAGoODu_-\",\"noisePub\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\",\"sas\":\"LLNugAvy9jKgjW-8ckMsz2gAQJUBXb9TUe72H-_PZDU\"},\"stream\":\"goat\"} zgTcTPznc30yEqsJLPs9Wx2BpAv168VB57_nAHxSIPs\n",
+      "why": "self is not the pinned node"
+    }
+  ]
+}

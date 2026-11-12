@@ -259,6 +259,9 @@ speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
 download, select, or remove models from **Manage voice models** in the same menu.
 Connections through a hub do not currently support this option.
+Model speed figures are CPU and GPU reference measurements, not timings from your
+environment. When acceleration is automatic, both are shown because transcription
+may fall back to the CPU.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.
 
@@ -351,19 +354,47 @@ Claude instances can also compact idle threads for you. See
 
 ## Side chat
 
-On web and desktop, send `/side <question>` to ask about the current thread without
-adding to it. The question opens in a **Side chat** tab in the right panel, and its
-answers never enter the thread's history. Send `/side` alone, use the side chat button
-in the thread header, or press `Mod+/` to open or close the tab.
+Send `/side <question>` to ask about the current thread without adding to it. Its
+answers never enter the thread's history. On web and desktop, the question opens
+in a **Side chat** tab in the right panel. Send `/side` alone, use the side chat button
+in the thread header, or press `Mod+/` to open or close the tab. On mobile, `/side` is
+in the `/` menu at the start of a message in an existing thread, and the side chat opens
+as its own screen that names the thread it belongs to; tap that name to open the thread.
+`/side` alone opens it without asking anything, and `/btw` works the same way.
 
 The side chat starts from the conversation up to the last finished turn, and every
 question you send it also carries the thread's current state: whether it is working,
 interrupted, or waiting on you, its goal, its task list, and its latest messages. You can
-ask what the thread is doing while the agent is still working, and the side chat header
-shows the thread's status. It has the full composer, with the thread's model, workspace,
-and permission mode. It is meant for questions and leaves files alone unless you ask it
-to change something. Use **Start a new side chat** to discard it, or **Open as a full
-thread** to continue it on its own.
+ask what the thread is doing while the agent is still working. It has the full composer,
+with the thread's model, workspace, and permission mode. It is meant for questions and
+leaves files alone unless you ask it to change something. On web and desktop, the side
+chat header shows the thread's status; use **Start a new side chat** to discard it, or
+**Open as a full thread** to continue it on its own.
+
+## Fork a thread
+
+A fork is a new thread that starts with a copy of this thread's conversation. The original
+thread is unchanged.
+
+Type `/fork` in the composer, or choose **Fork thread** from the thread's menu in the chat header
+or the sidebar. The command palette also has **Fork thread**. A response's fork button forks from
+that response instead of the latest turn and offers the same choice.
+
+- **Fork thread** uses the original checkout. When the thread already lives in a worktree, the
+  choice reads **Fork thread in same worktree**.
+- **Fork thread in new worktree** creates a GOAT-managed worktree on its own branch, started from
+  the original checkout's last commit, and brings the original's uncommitted changes along.
+  Ignored files such as `.env` stay behind, and edits made while the fork is being created may
+  be missed. If GOAT cannot copy the uncommitted changes, it offers to fork without them.
+
+The new-worktree choice needs a Git project. A scratch session or a cloud agent cannot use it, and
+GOAT explains why if you pick it there. A server that has not been updated offers only the
+same-checkout fork, and through another GOAT server it shows **Fork thread** disabled until it is
+updated.
+
+Some providers cannot continue a conversation natively in another checkout. There the fork starts
+from a handoff of the conversation, as described in
+[Context in portable handoffs](./portable-handoffs.md).
 
 ## Goals
 
@@ -383,6 +414,9 @@ row above the composer shows the goal and its progress.
   the turn to end.
 
 ## Context in your message
+
+Type `@` and a model or provider name to name a model for the agent, for example when delegating.
+This adds a model reference to the message; it does not change the thread's model.
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,
 a review comment from a diff or file, a preview annotation, or a file. You can type before and

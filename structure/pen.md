@@ -2,7 +2,9 @@
 
 Pen is a mesh of machines that reach each other's loopback ports through relays, outside the GOAT server. GOAT
 consumes it only through OpenSSH: `pen ssh-config --install` writes `Host pen-<name>` entries that
-[SSH](ssh.md) discovers like any other alias. Decisions and traps are in
+[SSH](ssh.md) discovers like any other alias. Contract v1.2 adds service streams (a program registers a name over
+the control socket and learns, through a loopback proof, which member calls) and the exact
+`pen pipe --node --noise` form; no GOAT code uses them yet. Decisions and traps are in
 [docs/internals/pen.md](../docs/internals/pen.md); the normative wire rules are
 `packages/pen-protocol/CONTRACT.md`, which wins over every implementation.
 
@@ -21,6 +23,8 @@ consumes it only through OpenSSH: `pen ssh-config --install` writes `Host pen-<n
   hibernation. It also serves `install.sh` and the binaries from `public/`, which `apps/pen/scripts/build.sh` writes.
 - `infra/pen-login` is the Google sign-in service: a Worker and one global Durable Object holding device codes and
   the account-to-mesh registry. It signs 10-minute assertions with `LOGIN_SIGNING_KEY`.
+
+> Decision record: [ADR-0026](decisions/ADR-0026-pen-record-quotas.md) (a mesh's record space is shared out by admission lineage; planned)
 
 ## State
 

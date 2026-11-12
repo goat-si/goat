@@ -128,6 +128,21 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   host_pressure: before("resource_exhausted"),
   // A channel workstream's descendant budget is full; admission refused before any launch.
   capacity_exceeded: before("resource_exhausted"),
+  // Placement admission (goat_thread_launch with placement). Only a refusal decided from the
+  // target's reservation row, or of a key it never admitted, proves nothing ran.
+  placement_full: before("resource_exhausted"),
+  placement_cordoned: before("unavailable"),
+  placement_placer_bound: before("resource_exhausted"),
+  placement_future: before("invalid_request"),
+  placement_invalid: before("invalid_request"),
+  placement_no_message: before("invalid_request"),
+  placement_off: before("failed_precondition"),
+  placement_not_started: before("failed_precondition"),
+  placement_expired: c("unknown_outcome"),
+  placement_conflicting: c("unknown_outcome"),
+  placement_pending: c("unknown_outcome"),
+  placement_attachment_unavailable: c("unknown_outcome"),
+  placement_store_unavailable: c("unknown_outcome"),
   // Automatic memory cleanup already ran; repeating fails until a person frees space.
   memory_store_full: before("failed_precondition"),
   invalid_request: before("invalid_request"),

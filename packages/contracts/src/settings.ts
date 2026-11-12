@@ -1,7 +1,10 @@
+import { TextGeneratorConfig, TextGenerators } from "./textGenerators.ts";
+export * from "./textGenerators.ts";
 import { GoatSettingsFields, GoatSettingsPatchFields } from "./goatSettingsFields.ts";
 import { StandingInstructions } from "./standingInstructions.ts";
 import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
 import { SpeechSettingsFields, SpeechSettingsPatchFields } from "./speech.ts";
+import { PenTrustRoot } from "./penSettings.ts";
 import {
   SidebarProjectSortOrder,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
@@ -1382,6 +1385,7 @@ export const ServerSettings = Schema.Struct({
   goatclaw: GoatclawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   hub: HubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   fleet: FleetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  pen: Schema.NullOr(PenTrustRoot).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
   guestSharingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
@@ -1459,11 +1463,9 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   reviewGuideInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-
   pullRequestMergeMethod: Schema.NullOr(PullRequestMergeMethod).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-
   // Schema.Unknown preserves unknown-driver configs across versions; see providerInstance.ts.
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1477,17 +1479,16 @@ export const ServerSettings = Schema.Struct({
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  textGenerators: TextGenerators.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
-
   usageModelAliases: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1830,6 +1831,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   fleet: Schema.optionalKey(FleetSettings),
   goatclaw: Schema.optionalKey(GoatclawSettingsPatch),
   hub: Schema.optionalKey(HubSettingsPatch),
+  pen: Schema.optionalKey(Schema.NullOr(PenTrustRoot)),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
@@ -1917,6 +1919,9 @@ const ServerSettingsPatchFields = Schema.Struct({
   // Merge per source to avoid racing other edits; null removes an entry.
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
+  ),
+  textGenerators: Schema.optionalKey(
+    Schema.Record(ProviderInstanceId, Schema.NullOr(TextGeneratorConfig)),
   ),
   secretProviders: Schema.optionalKey(
     Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),

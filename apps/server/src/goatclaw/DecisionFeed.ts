@@ -35,7 +35,9 @@ const invalidates = (event: OrchestrationV2DomainEvent) => {
       return true;
     case "turn-item.updated":
       return (
-        event.payload.type === "user_input_request" || event.payload.type === "approval_request"
+        event.payload.type === "user_input_request" ||
+        event.payload.type === "approval_request" ||
+        event.payload.type === "human_handoff"
       );
     case "message.updated":
       return (

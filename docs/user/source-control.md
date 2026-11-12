@@ -346,7 +346,8 @@ turn off automatic watching. Automatic watches can wake the agent without keepin
 **Working**. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
 with `goat_call {path:"pull_request.watch"}` and keep the thread working between wakes.
 
-The server checks every two minutes. By default, failed checks, passing required checks, and other
+The server checks every two minutes. Checks waiting for workflow approval are reported once and
+follow the failed-check notification setting. By default, failed checks, passing required checks, and other
 people's comments or reviews wake the agent. Your own comments do not. Bot comments are ignored
 unless the bot is listed in **Bots that count as people**. Merge conflicts do not wake a thread idle
 for more than 3 days. In **Settings → Organization**, choose **React** to wake the agent immediately,

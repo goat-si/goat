@@ -1,0 +1,621 @@
+{
+  "description": "Atomic rules of design 014 section 10.2 (HTTP/1.1 client side), written before the parser. Each id is one condition; '+' ids are accepting boundaries. 'error' is the PenError code a refusal carries; 'where' names what enforces it: the response parser (cases in http1-malformed.json) or the fetch adapter (a test titled with the id in penFetch.test.ts).",
+  "rules": [
+    {
+      "id": "H01a",
+      "accepts": true,
+      "text": "status line of 1,024 bytes accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H01b",
+      "accepts": false,
+      "text": "status line of 1,025 bytes",
+      "where": "parser",
+      "error": "http1/H01"
+    },
+    {
+      "id": "H02a",
+      "accepts": false,
+      "text": "version other than HTTP/1.1",
+      "where": "parser",
+      "error": "http1/H02"
+    },
+    {
+      "id": "H02b",
+      "accepts": false,
+      "text": "missing SP after the version",
+      "where": "parser",
+      "error": "http1/H02"
+    },
+    {
+      "id": "H02c",
+      "accepts": false,
+      "text": "status code not exactly three digits",
+      "where": "parser",
+      "error": "http1/H02"
+    },
+    {
+      "id": "H02d",
+      "accepts": false,
+      "text": "missing SP after the status code",
+      "where": "parser",
+      "error": "http1/H02"
+    },
+    {
+      "id": "H02e",
+      "accepts": false,
+      "text": "control character in the reason",
+      "where": "parser",
+      "error": "http1/H02"
+    },
+    {
+      "id": "H02f",
+      "accepts": true,
+      "text": "empty reason after SP accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H03a",
+      "accepts": false,
+      "text": "status 199",
+      "where": "parser",
+      "error": "http1/H05"
+    },
+    {
+      "id": "H03b",
+      "accepts": false,
+      "text": "status 600",
+      "where": "parser",
+      "error": "http1/H03"
+    },
+    {
+      "id": "H03c",
+      "accepts": true,
+      "text": "statuses 200 and 599 accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H04",
+      "accepts": false,
+      "text": "101 without an upgrade request",
+      "where": "parser",
+      "error": "http1/H04"
+    },
+    {
+      "id": "H05a",
+      "accepts": false,
+      "text": "100 Continue",
+      "where": "parser",
+      "error": "http1/H05"
+    },
+    {
+      "id": "H05b",
+      "accepts": false,
+      "text": "102 Processing",
+      "where": "parser",
+      "error": "http1/H05"
+    },
+    {
+      "id": "H05c",
+      "accepts": false,
+      "text": "103 Early Hints",
+      "where": "parser",
+      "error": "http1/H05"
+    },
+    {
+      "id": "H06a",
+      "accepts": true,
+      "text": "header line of 8,192 bytes accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H06b",
+      "accepts": false,
+      "text": "header line of 8,193 bytes",
+      "where": "parser",
+      "error": "http1/H06"
+    },
+    {
+      "id": "H07",
+      "accepts": false,
+      "text": "header block over 32 KiB",
+      "where": "parser",
+      "error": "http1/H07"
+    },
+    {
+      "id": "H07a",
+      "accepts": true,
+      "text": "a header block of exactly 32 KiB (header lines, their CRLFs and the terminating empty line) accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H07b",
+      "accepts": false,
+      "text": "a header block of 32 KiB + 1, including when the excess is in CRLF bytes",
+      "where": "parser",
+      "error": "http1/H07"
+    },
+    {
+      "id": "H08a",
+      "accepts": true,
+      "text": "64 fields accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H08b",
+      "accepts": false,
+      "text": "65 fields",
+      "where": "parser",
+      "error": "http1/H08"
+    },
+    {
+      "id": "H09a",
+      "accepts": false,
+      "text": "empty field name",
+      "where": "parser",
+      "error": "http1/H09"
+    },
+    {
+      "id": "H09b",
+      "accepts": false,
+      "text": "whitespace before the colon",
+      "where": "parser",
+      "error": "http1/H09"
+    },
+    {
+      "id": "H09c",
+      "accepts": false,
+      "text": "separator in a field name",
+      "where": "parser",
+      "error": "http1/H09"
+    },
+    {
+      "id": "H10",
+      "accepts": false,
+      "text": "obsolete line folding",
+      "where": "parser",
+      "error": "http1/H10"
+    },
+    {
+      "id": "H11",
+      "accepts": false,
+      "text": "CR not followed by LF",
+      "where": "parser",
+      "error": "http1/H11"
+    },
+    {
+      "id": "H12",
+      "accepts": false,
+      "text": "LF without CR as a line end",
+      "where": "parser",
+      "error": "http1/H12"
+    },
+    {
+      "id": "H13",
+      "accepts": false,
+      "text": "NUL in the head",
+      "where": "parser",
+      "error": "http1/H13"
+    },
+    {
+      "id": "H14a",
+      "accepts": false,
+      "text": "control character in a field value",
+      "where": "parser",
+      "error": "http1/H14"
+    },
+    {
+      "id": "H14b",
+      "accepts": true,
+      "text": "HTAB in a field value accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H15a",
+      "accepts": false,
+      "text": "Content-Length with a sign",
+      "where": "parser",
+      "error": "http1/H15"
+    },
+    {
+      "id": "H15b",
+      "accepts": false,
+      "text": "Content-Length with inner space",
+      "where": "parser",
+      "error": "http1/H15"
+    },
+    {
+      "id": "H15c",
+      "accepts": false,
+      "text": "empty Content-Length",
+      "where": "parser",
+      "error": "http1/H15"
+    },
+    {
+      "id": "H15d",
+      "accepts": false,
+      "text": "Content-Length comma list",
+      "where": "parser",
+      "error": "http1/H15"
+    },
+    {
+      "id": "H16a",
+      "accepts": true,
+      "text": "Content-Length of 15 digits within the cap accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H16b",
+      "accepts": false,
+      "text": "Content-Length of 16 digits",
+      "where": "parser",
+      "error": "http1/H16"
+    },
+    {
+      "id": "H17",
+      "accepts": false,
+      "text": "Content-Length over the body cap, refused before allocation",
+      "where": "parser",
+      "error": "http1/H17"
+    },
+    {
+      "id": "H18",
+      "accepts": false,
+      "text": "two equal Content-Length fields",
+      "where": "parser",
+      "error": "http1/H18"
+    },
+    {
+      "id": "H19",
+      "accepts": false,
+      "text": "two different Content-Length fields",
+      "where": "parser",
+      "error": "http1/H18"
+    },
+    {
+      "id": "H20",
+      "accepts": false,
+      "text": "Content-Length with Transfer-Encoding",
+      "where": "parser",
+      "error": "http1/H20"
+    },
+    {
+      "id": "H21a",
+      "accepts": false,
+      "text": "Transfer-Encoding list (gzip, chunked)",
+      "where": "parser",
+      "error": "http1/H21"
+    },
+    {
+      "id": "H21b",
+      "accepts": false,
+      "text": "Transfer-Encoding gzip",
+      "where": "parser",
+      "error": "http1/H21"
+    },
+    {
+      "id": "H21c",
+      "accepts": false,
+      "text": "Transfer-Encoding with parameters",
+      "where": "parser",
+      "error": "http1/H21"
+    },
+    {
+      "id": "H21d",
+      "accepts": true,
+      "text": "Transfer-Encoding CHUNKED accepted (case-insensitive)",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H22",
+      "accepts": false,
+      "text": "two Transfer-Encoding fields",
+      "where": "parser",
+      "error": "http1/H22"
+    },
+    {
+      "id": "H23a",
+      "accepts": true,
+      "text": "longest reachable valid size line (8 hex digits) accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H23b",
+      "accepts": false,
+      "text": "a size line over 16 bytes; per-byte checks reject it earlier (17 hex digits fail at the ninth: H24)",
+      "where": "parser",
+      "error": "http1/H24"
+    },
+    {
+      "id": "H24a",
+      "accepts": false,
+      "text": "a ninth hex digit",
+      "where": "parser",
+      "error": "http1/H24"
+    },
+    {
+      "id": "H24b",
+      "accepts": false,
+      "text": "non-hex in a size line",
+      "where": "parser",
+      "error": "http1/H24"
+    },
+    {
+      "id": "H24c",
+      "accepts": false,
+      "text": "empty size line",
+      "where": "parser",
+      "error": "http1/H24"
+    },
+    {
+      "id": "H25",
+      "accepts": false,
+      "text": "chunk extension",
+      "where": "parser",
+      "error": "http1/H25"
+    },
+    {
+      "id": "H26a",
+      "accepts": false,
+      "text": "one chunk over the body cap",
+      "where": "parser",
+      "error": "http1/H26"
+    },
+    {
+      "id": "H26b",
+      "accepts": false,
+      "text": "running chunk total over the body cap",
+      "where": "parser",
+      "error": "http1/H26"
+    },
+    {
+      "id": "H27",
+      "accepts": false,
+      "text": "missing CRLF after chunk data",
+      "where": "parser",
+      "error": "http1/H27"
+    },
+    {
+      "id": "H28",
+      "accepts": false,
+      "text": "trailers after the last chunk",
+      "where": "parser",
+      "error": "http1/H28"
+    },
+    {
+      "id": "H29a",
+      "accepts": false,
+      "text": "Content-Encoding gzip",
+      "where": "parser",
+      "error": "http1/H29"
+    },
+    {
+      "id": "H29b",
+      "accepts": true,
+      "text": "Content-Encoding identity accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H30",
+      "accepts": false,
+      "text": "101 without Upgrade: websocket",
+      "where": "parser",
+      "error": "http1/H30"
+    },
+    {
+      "id": "H31",
+      "accepts": false,
+      "text": "101 without Connection: upgrade",
+      "where": "parser",
+      "error": "http1/H31"
+    },
+    {
+      "id": "H32a",
+      "accepts": false,
+      "text": "101 without Sec-WebSocket-Accept",
+      "where": "parser",
+      "error": "http1/H32"
+    },
+    {
+      "id": "H32b",
+      "accepts": false,
+      "text": "101 with a wrong Sec-WebSocket-Accept",
+      "where": "parser",
+      "error": "http1/H32"
+    },
+    {
+      "id": "H33",
+      "accepts": false,
+      "text": "101 with Sec-WebSocket-Extensions",
+      "where": "parser",
+      "error": "http1/H33"
+    },
+    {
+      "id": "H34a",
+      "accepts": false,
+      "text": "101 with an unrequested Sec-WebSocket-Protocol",
+      "where": "parser",
+      "error": "http1/H34"
+    },
+    {
+      "id": "H34b",
+      "accepts": false,
+      "text": "101 with a different Sec-WebSocket-Protocol",
+      "where": "parser",
+      "error": "http1/H34"
+    },
+    {
+      "id": "H35a",
+      "accepts": false,
+      "text": "an empty line before the status line",
+      "where": "parser",
+      "error": "http1/H35"
+    },
+    {
+      "id": "H35b",
+      "accepts": false,
+      "text": "101 with Content-Length",
+      "where": "parser",
+      "error": "http1/H35"
+    },
+    {
+      "id": "H35c",
+      "accepts": false,
+      "text": "101 with Transfer-Encoding",
+      "where": "parser",
+      "error": "http1/H35"
+    },
+    {
+      "id": "H35d",
+      "accepts": true,
+      "text": "101 head and the first WebSocket frame in one chunk: the frame bytes are left over",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H36a",
+      "accepts": true,
+      "text": "buffered body of exactly 8 MiB accepted",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H36b",
+      "accepts": false,
+      "text": "8 MiB + 1 by Content-Length, chunked or close-delimited",
+      "where": "parser",
+      "error": "http1/H36"
+    },
+    {
+      "id": "H37",
+      "accepts": false,
+      "text": "attachment over its cap",
+      "where": "fetch",
+      "error": "http1/H37"
+    },
+    {
+      "id": "H38",
+      "accepts": false,
+      "text": "no head within 30 s of the request's end",
+      "where": "fetch",
+      "error": "http1/H38"
+    },
+    {
+      "id": "H39",
+      "accepts": false,
+      "text": "60 s with no body byte",
+      "where": "fetch",
+      "error": "http1/H39"
+    },
+    {
+      "id": "H40",
+      "accepts": true,
+      "text": "stream reused after a complete length- or chunk-delimited response",
+      "where": "fetch",
+      "error": null
+    },
+    {
+      "id": "H41",
+      "accepts": false,
+      "text": "a close-delimited response ends the stream",
+      "where": "fetch",
+      "error": null
+    },
+    {
+      "id": "H42",
+      "accepts": false,
+      "text": "unsolicited bytes after a response: response delivered, stream closed",
+      "where": "fetch",
+      "error": null
+    },
+    {
+      "id": "H43",
+      "accepts": false,
+      "text": "no reuse after an error and no automatic retry",
+      "where": "fetch",
+      "error": null
+    },
+    {
+      "id": "H44a",
+      "accepts": true,
+      "text": "HEAD with Content-Length: no body read",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H44b",
+      "accepts": true,
+      "text": "204 with Content-Length: no body read",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H44c",
+      "accepts": true,
+      "text": "304 with Content-Length: no body read",
+      "where": "parser",
+      "error": null
+    },
+    {
+      "id": "H45a",
+      "accepts": false,
+      "text": "EOF before the head completes",
+      "where": "parser",
+      "error": "http1/H45"
+    },
+    {
+      "id": "H45b",
+      "accepts": false,
+      "text": "EOF inside a length- or chunk-delimited body",
+      "where": "parser",
+      "error": "http1/H45"
+    },
+    {
+      "id": "H46a",
+      "accepts": true,
+      "text": "request carries Accept-Encoding: identity",
+      "where": "fetch",
+      "error": null
+    },
+    {
+      "id": "H46b",
+      "accepts": false,
+      "text": "caller Expect refused",
+      "where": "fetch",
+      "error": "http1/H46"
+    },
+    {
+      "id": "H46c",
+      "accepts": false,
+      "text": "caller Transfer-Encoding refused",
+      "where": "fetch",
+      "error": "http1/H46"
+    },
+    {
+      "id": "H46d",
+      "accepts": false,
+      "text": "CR, LF or NUL in a request name or value refused",
+      "where": "fetch",
+      "error": "http1/H46"
+    },
+    {
+      "id": "H47",
+      "accepts": false,
+      "text": "request to another origin refused before any byte",
+      "where": "fetch",
+      "error": "http1/H47"
+    }
+  ]
+}

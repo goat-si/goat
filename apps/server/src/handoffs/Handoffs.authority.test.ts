@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { defaultPrincipalKind } from "../auth/sessionBinding.ts";
 import { expect, it } from "@effect/vitest";
 import {
   AuthSessionId,
@@ -108,6 +109,8 @@ const session = (
 ): AuthClientSession => ({
   sessionId,
   subject,
+  // As issued: an MCP client is an outside client, every other subject a person.
+  principalKind: defaultPrincipalKind(subject),
   method: "bearer-access-token",
   scopes,
   client: { label: "Client", deviceType: "unknown" },

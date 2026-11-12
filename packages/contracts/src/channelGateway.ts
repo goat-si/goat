@@ -140,6 +140,20 @@ export const ChannelOutboundMessage = Schema.Struct({
   /** Answers a question offers; transports without buttons list them in the text. */
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   questionId: Schema.optional(ChannelQuestionId),
+  /**
+   * Progress before the answer, such as a milestone or where the work runs. Channels that keep
+   * every message send only one such message; anything else always goes.
+   */
+  interim: Schema.optional(Schema.Literal(true)),
+  /** See ChannelMessageMeta.questionKind. */
+  questionKind: Schema.optional(Schema.Literal("task")),
+  /**
+   * Reception's committed decision about a person's answer from a task question's card, for the
+   * GOAT bot to record on that person's message (ChannelMessageMeta.answersQuestionId).
+   */
+  personAnswer: Schema.optional(
+    Schema.Struct({ answersQuestionId: Schema.NullOr(ChannelQuestionId) }),
+  ),
 });
 export type ChannelOutboundMessage = typeof ChannelOutboundMessage.Type;
 
@@ -243,6 +257,7 @@ const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   not_home: "GOAT Bot runs on another machine in this cluster.",
   bot_busy: "This bot still has work in progress.",
   bot_limit: "This owner already has the most bots allowed.",
+  stream_unavailable: "Task changes are not streaming here; read again when you return.",
 } as const;
 
 export const ChannelGatewayErrorReason = Schema.Literals(
@@ -301,8 +316,10 @@ export const ChannelGetBotStatusResult = Schema.Struct({
   bot: Schema.NullOr(ChannelBotRef),
   waitingCount: NonNegativeInt,
   /**
-   * The newest message in the bot's conversation, shortened, for a roster row. Absent from
-   * servers before it existed and while the conversation is empty.
+   * The newest message the bot's main chat shows, as one plain line, for a roster row: a task's
+   * own messages stay out as they stay in its view, and a message of only files reads as their
+   * names. Older servers sent the raw text of any message. Absent from servers before it existed
+   * and while the conversation is empty.
    */
   latest: Schema.optionalKey(
     Schema.Struct({
@@ -311,8 +328,55 @@ export const ChannelGetBotStatusResult = Schema.Struct({
       author: Schema.Literals(["bot", "person"]),
     }),
   ),
+  /**
+   * Whether the bot's tasks are going, for a roster row. `active`: a task is received,
+   * dispatching or running and the chat would not say it waits on the person; an automatic
+   * usage-limit pause is not active. Absent from servers before it existed.
+   */
+  tasks: Schema.optionalKey(Schema.Struct({ active: Schema.Boolean })),
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
+
+/**
+ * One thing a bot waits on the person for, across all of the owner's bots: an open question, an
+ * approval, a sign-in or a usage-limit pause, with the words its card shows. `taskId` (with
+ * `questionId` or `requestId` when there is one) is the card or task view it opens.
+ */
+export const ChannelOpenAsk = Schema.Struct({
+  botId: BotId,
+  taskId: ChannelTaskId,
+  kind: Schema.Literals(["question", "approval", "sign_in", "usage_limit"]),
+  text: Schema.String,
+  askedAt: IsoDateTime,
+  questionId: Schema.optionalKey(ChannelQuestionId),
+  requestId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ChannelOpenAsk = typeof ChannelOpenAsk.Type;
+/** How many asks a read returns unless it asks for more. */
+export const CHANNEL_OPEN_ASKS_DEFAULT_LIMIT = 50;
+export const CHANNEL_OPEN_ASKS_MAX_LIMIT = 500;
+/** Servers with the goatBotOpenAsksLimit capability honour `limit`; older ones return the default. */
+export const ChannelListOpenAsksInput = Schema.Struct({
+  limit: Schema.optionalKey(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(CHANNEL_OPEN_ASKS_MAX_LIMIT)),
+  ),
+});
+export type ChannelListOpenAsksInput = typeof ChannelListOpenAsksInput.Type;
+/** The newest asks; `total` counts them all, and `truncated` says it is a lower bound. */
+export const ChannelListOpenAsksResult = Schema.Struct({
+  asks: Schema.Array(ChannelOpenAsk),
+  total: NonNegativeInt,
+  truncated: Schema.Boolean,
+});
+export type ChannelListOpenAsksResult = typeof ChannelListOpenAsksResult.Type;
+export const ChannelSubscribeTaskChangesInput = Schema.Struct({});
+export type ChannelSubscribeTaskChangesInput = typeof ChannelSubscribeTaskChangesInput.Type;
+/**
+ * Revision 0 when the subscription starts, then a higher one after each change to the owner's
+ * tasks or bots (several close together arrive as one). It says only "read again".
+ */
+export const ChannelTaskChangesEvent = Schema.Struct({ revision: NonNegativeInt });
+export type ChannelTaskChangesEvent = typeof ChannelTaskChangesEvent.Type;
 
 /** Main first; never creates a bot. Deleted members only when asked for. */
 export const ChannelListBotsInput = Schema.Struct({
@@ -565,6 +629,8 @@ export type ChannelBotHomeClaimResult = typeof ChannelBotHomeClaimResult.Type;
 export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
+  listOpenAsks: "channel.listOpenAsks",
+  subscribeTaskChanges: "channel.subscribeTaskChanges",
   listBots: "channel.listBots",
   updateBot: "channel.updateBot",
   createBot: "channel.createBot",

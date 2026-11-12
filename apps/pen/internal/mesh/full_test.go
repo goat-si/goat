@@ -45,10 +45,47 @@ func TestASyncIntoAFullMeshFailsForTheSender(t *testing.T) {
 	}
 }
 
-// Q3 (stated limit, CONTRACT.md "Records"): the record space has no per-signer share. One member can
-// fill it with valid records (ordinary ones to 3840, then revokes to 4096), after which no member can
-// record anything, not even the revoke of that member; the remedy is a new mesh.
-func TestOneMemberCanFillTheRecordSpaceSoEvenItsOwnRevokeIsRefused(t *testing.T) {
+// #2864: in a mesh of the shared epoch (ADR-0026) a member that fills the record space fills only its own
+// lineage's share, and a member of another lineage records its revoke, which every node applies.
+func TestInASharedMeshAFillersRevokeIsRecordedAndEveryNodeAppliesIt(t *testing.T) {
+	f, h, o, x := detID(1), detID(2), detID(3), detID(4)
+	b, found := newMesh(t, f)
+	ah := b.admit(f, h, found)
+	ao := b.admit(f, o, ah)
+	ax := b.admit(h, x, ao)
+	last := ax
+	for i := 0; i < MaxOrdinary; i++ {
+		last = b.sign(h, TypeName, []*Record{last}, Fields{Subject: pub(h), Name: fmt.Sprintf("n%d", i)})
+	}
+	for i := 0; i < MaxRecords-MaxOrdinary; i++ {
+		last = b.sign(h, TypeRevoke, []*Record{last}, Fields{Subjects: []string{pub(x)}})
+	}
+	first, second := sharedStore(b), sharedStore(b)
+	if _, err := first.Merge(b.recs); err != nil {
+		t.Fatal(err)
+	}
+	removal := b.sign(o, TypeRevoke, []*Record{ao}, Fields{Subjects: []string{pub(h)}})
+	if added, err := first.Merge([]*Record{removal}); err != nil || len(added) != 1 {
+		t.Fatalf("the revoke of the filler: stored %d, %v", len(added), err)
+	}
+	srv, cli := pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go SyncRespond(ctx, srv, first, nil, nil)
+	if err := SyncInitiate(ctx, cli, second, nil, nil); err != nil {
+		t.Fatalf("sync to a second node: %v", err)
+	}
+	for i, s := range []*Store{first, second} {
+		if _, ok := s.View().Revoked[pub(h)]; !ok {
+			t.Fatalf("node %d still counts the filler as a member", i+1)
+		}
+	}
+}
+
+// Q3 (stated limit of version 1 meshes, CONTRACT.md "Records"): the record space has no per-signer share.
+// One member can fill it with valid records (ordinary ones to 3840, then revokes to 4096), after which no
+// member can record anything, not even the revoke of that member; the remedy is a mesh of the shared epoch.
+func TestInAVersionOneMeshOneMemberCanFillTheRecordSpaceSoEvenItsOwnRevokeIsRefused(t *testing.T) {
 	f, h, x := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, f)
 	ah := b.admit(f, h, found)

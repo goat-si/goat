@@ -22,6 +22,46 @@ export function changeNoteDraft(note: ChannelBotNote, newText: string): string |
     : goatBotChangeNoteMessage(note.text, wording);
 }
 
+/** Why a note's change or forget request is held back; see goatBotNotesHeldBack. */
+export type GoatBotNoteHeldBack = "alike" | "truncated";
+
+// The server compares a request's words this way (collapseNoteText in apps/server).
+const noteWords = (text: string) => text.replace(/\s+/gu, " ").trim();
+
+/**
+ * Current notes whose change or forget request must not be drafted, by index. A request names its
+ * note by its words: "alike" notes share them with another current note once spacing is collapsed,
+ * and on a list cut to the newest part of the file every other note is "truncated", since a note
+ * out of view may share them. The server refuses such a request; an older one acts on one of them.
+ */
+export function goatBotNotesHeldBack(result: {
+  readonly notes: ReadonlyArray<ChannelBotNote>;
+  readonly truncated: boolean;
+}): ReadonlyMap<number, GoatBotNoteHeldBack> {
+  const current = result.notes.filter((note) => note.replacedBy === undefined);
+  const count = new Map<string, number>();
+  for (const note of current) {
+    const words = noteWords(note.text);
+    count.set(words, (count.get(words) ?? 0) + 1);
+  }
+  const held = new Map<number, GoatBotNoteHeldBack>();
+  for (const note of current) {
+    if ((count.get(noteWords(note.text)) ?? 0) > 1) held.set(note.index, "alike");
+    else if (result.truncated) held.set(note.index, "truncated");
+  }
+  return held;
+}
+
+/** What a held-back note says in place of drafting its request. */
+export const goatBotNoteHeldBackCopy = (
+  reason: GoatBotNoteHeldBack,
+  text: string,
+  botName = "GOAT Bot",
+) =>
+  reason === "alike"
+    ? `More than one note reads “${text}”, so ${botName} can't tell which one you mean.`
+    : `This list shows only the newest part of memory.md, so another note may also read “${text}” and ${botName} can't tell which one you mean.`;
+
 /** A moment's calendar day as YYYY-MM-DD in the given time zone (the device's when absent). */
 const localDay = (epochMs: number, timeZone: string | undefined) => {
   const parts = new Intl.DateTimeFormat("en-US", {

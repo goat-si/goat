@@ -1,6 +1,42 @@
 import { expect, it } from "vite-plus/test";
 import { filterSpeechModels } from "./speechModelBrowser";
 
+it("sorts speed against the requested hardware reference", () => {
+  const models = [
+    {
+      id: "a",
+      name: "Alpha",
+      description: "",
+      size: 1,
+      installed: false,
+      selected: false,
+      benchmark: { cpu: 10, accelerated: 1 },
+    },
+    {
+      id: "b",
+      name: "Beta",
+      description: "",
+      size: 1,
+      installed: false,
+      selected: false,
+      benchmark: { cpu: 2, accelerated: 8 },
+    },
+  ];
+  expect(filterSpeechModels(models, "", false, "speed", "cpu").map((model) => model.id)).toEqual([
+    "b",
+    "a",
+  ]);
+  expect(
+    filterSpeechModels(models, "", false, "speed", "accelerated").map((model) => model.id),
+  ).toEqual(["a", "b"]);
+  const withoutCpu = { ...models[1]!, name: "Missing", benchmark: { cpu: null, accelerated: 0.1 } };
+  expect(
+    filterSpeechModels([withoutCpu, models[0]!], "", false, "speed", "cpu").map(
+      (model) => model.name,
+    ),
+  ).toEqual(["Alpha", "Missing"]);
+});
+
 it("filters models and orders them by the selected criterion", () => {
   const models = [
     {

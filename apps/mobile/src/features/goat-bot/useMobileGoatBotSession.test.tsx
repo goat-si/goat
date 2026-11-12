@@ -2,12 +2,14 @@ import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import {
+  goatBotActivitySources,
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
 } from "@goat/client-runtime/goatBot";
 import {
   BotProfile,
   EnvironmentId,
+  ChannelQuestionId,
   ChannelTaskId,
   ProjectId,
   ThreadId,
@@ -26,6 +28,8 @@ const harness = vi.hoisted(() => ({
   run: vi.fn(),
   save: vi.fn(),
   items: [] as ReadonlyArray<unknown>,
+  itemReads: [] as Array<string | null>,
+  openAsks: false,
   workerShell: null as object | null,
   shellReads: [] as Array<string | null>,
   upload: vi.fn(),
@@ -102,7 +106,10 @@ vi.mock("../../state/channels", () => ({
 }));
 vi.mock("../../state/preferences", () => ({ updateMobilePreferencesAtom: {} }));
 vi.mock("../../state/use-thread-detail", () => ({
-  useThreadVisibleTurnItems: () => harness.items,
+  useThreadVisibleTurnItems: (target: { threadId: string | null }) => {
+    harness.itemReads.push(target.threadId);
+    return harness.items;
+  },
 }));
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) => {
@@ -115,7 +122,14 @@ vi.mock("../../state/entities", () => ({
     new Map(
       harness.environments.map(({ environmentId }) => [
         environmentId,
-        { environment: { capabilities: { goatBotTaskThreads: harness.supportsTaskThreads } } },
+        {
+          environment: {
+            capabilities: {
+              goatBotTaskThreads: harness.supportsTaskThreads,
+              goatBotOpenAsks: harness.openAsks,
+            },
+          },
+        },
       ]),
     ),
 }));
@@ -130,7 +144,7 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   }),
 }));
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
-import { conversation, detail } from "./useMobileGoatBotSession.fixtures";
+import { conversation, detail, typedAnswer } from "./useMobileGoatBotSession.fixtures";
 import * as botSessions from "./useMobileGoatBotSession";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 import * as fileOwnership from "../../lib/composerAttachmentFiles";
@@ -145,7 +159,7 @@ const registry = Object.assign(AtomRegistry.make(), {
 });
 let root: Root | null = null;
 let session: ReturnType<typeof useMobileGoatBotSession>;
-let taskId: ChannelTaskId | undefined;
+let taskId: ChannelTaskId | null | undefined;
 let member: BotProfile | null = null;
 function Consumer() {
   const value = useMobileGoatBotSession(true, taskId, member);
@@ -179,7 +193,7 @@ beforeEach(() => {
   harness.environments = [];
   harness.botRef = null;
   harness.loaded = true;
-  harness.supportsTaskThreads = false;
+  harness.supportsTaskThreads = harness.openAsks = false;
   harness.listedTaskIds = [];
   harness.save.mockReset();
   harness.release.mockReset().mockResolvedValue(undefined);
@@ -871,6 +885,72 @@ it("sends a member's message to the member's own conversation, and stops once it
   await render();
   expect(session.canSend).toBe(false);
   expect(session.onSend("still there?")).toBe(false);
+  await botSessions.disposeMobileGoatBotEnvironment(env);
+});
+
+it("hands a member's chat its own conversation and session, so its activity line reads the member's steps", async () => {
+  const env = EnvironmentId.make("member-steps");
+  harness.environments = [environment(env)];
+  harness.botRef = bot(env);
+  harness.openAsks = true;
+  const at = "2026-11-12T03:00:01.000Z";
+  const worker = { environmentId: env, threadId: "goat-bot-session:scout", runId: "run-1" };
+  const ledgerTask = {
+    taskId: "turn-1",
+    kind: "turn",
+    taskVersion: 1,
+    status: "completed",
+    worker,
+  };
+  const chip = { id: "chip", type: "notification", startedAt: at, source: { kind: "x" } };
+  harness.items = [{ item: { ...chip, ledgerTask: { ...ledgerTask, createdAt: at } } }];
+  const scout = { botId: "scout", role: "member", name: "Scout", environmentId: env };
+  member = { ...scout, sessionThreadId: "thread-scout", state: "active" } as unknown as BotProfile;
+  await render();
+  expect(harness.itemReads.at(-1)).toBe("thread-scout");
+  const sources = goatBotActivitySources({ ...session, botEnvironmentId: env, taskId: null });
+  expect(sources).toMatchObject([{ kind: "local", refs: [{ threadId: worker.threadId }] }]);
+  await botSessions.disposeMobileGoatBotEnvironment(env);
+});
+
+it("reads answers as the server recorded them, and sends a card's answer with its task and question", async () => {
+  const env = EnvironmentId.make("answer-references");
+  harness.environments = [environment(env)];
+  harness.botRef = bot(env);
+  harness.supportsTaskThreads = true;
+  // The main chat, as the screen opens it.
+  taskId = null;
+  harness.listedTaskIds = ["task-1"];
+  harness.items = typedAnswer("q1");
+  const sent: unknown[] = [];
+  harness.run.mockImplementation(async (_registry, _command, args) => {
+    if (args.input?.text === "Clear") sent.push(args.input);
+    return { _tag: "Success", value: bot(env) };
+  });
+  await render();
+  // The task's card names the typed message as the question's answer.
+  expect(
+    session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
+  ).toMatchObject({
+    answer: "Use the staging cache",
+  });
+  // A refused pick stays what the person said, though it reads as a choice, and the question
+  // keeps its choices.
+  harness.items = typedAnswer(null, "Keep");
+  await render();
+  expect(
+    session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
+  ).toMatchObject({
+    options: ["Keep", "Clear"],
+  });
+  expect(session.rows.some((row) => row.kind === "user" && row.text === "Keep")).toBe(true);
+  await act(async () => {
+    expect(
+      session.onAnswer("Clear", ChannelTaskId.make("task-1"), ChannelQuestionId.make("q1")),
+    ).toBe(true);
+  });
+  await act(async () => {});
+  expect(sent).toMatchObject([{ intent: "answer", taskId: "task-1", questionId: "q1" }]);
   await botSessions.disposeMobileGoatBotEnvironment(env);
 });
 

@@ -285,6 +285,45 @@ describe("PiProvider", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("offers advertised Pi service tiers beside thinking", () =>
+    Effect.gen(function* () {
+      const spawner = yield* piDiscoverySpawner({
+        models: [
+          {
+            provider: "openai",
+            id: "test-model",
+            reasoning: true,
+            serviceTiers: [
+              { id: "priority", name: "Fast" },
+              { id: "ultrafast", name: "Ultrafast" },
+            ],
+          },
+        ],
+      });
+      const snapshot = yield* checkPiProviderStatus(settings).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const descriptors =
+        snapshot.models.find((model) => model.slug === "openai/test-model")?.capabilities
+          ?.optionDescriptors ?? [];
+      assert.deepEqual(
+        descriptors.map((descriptor) => descriptor.id),
+        ["thinking", "serviceTier"],
+      );
+      assert.deepEqual(descriptors[1], {
+        id: "serviceTier",
+        label: "Service Tier",
+        type: "select",
+        options: [
+          { id: "default", label: "Standard", isDefault: true },
+          { id: "priority", label: "Fast" },
+          { id: "ultrafast", label: "Ultrafast" },
+        ],
+        currentValue: "default",
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("reports a known unauthenticated inventory when Pi returns no usable models", () =>
     Effect.gen(function* () {
       const spawner = yield* piDiscoverySpawner({ models: [] });

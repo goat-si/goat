@@ -17,23 +17,16 @@ import {
   type ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
-import { extractToolActivityPresentation } from "@goat/client-runtime/work-log/tool-presentation";
 import { providerErrorPresentation } from "@goat/client-runtime/work-log/provider-error";
 import {
-  classifyToolActivity,
-  collectToolFilePaths,
-  formatReadToolLabel,
-  formatSearchToolLabel,
-} from "@goat/shared/toolActivity";
+  turnItemCreatedAt,
+  turnItemWorkLogEntry,
+} from "@goat/client-runtime/work-log/turn-item-entry";
 import type { HtmlRenderReference } from "@goat/shared/htmlRender";
-import { resolveGoatMcpItemCall } from "@goat/shared/goatMcpToolPresentation";
 import { turnItemDetailRevision } from "@goat/client-runtime/work-log/item-detail";
 import type { McpAppReference } from "@goat/shared/mcpApp";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@goat/shared/toolOutput";
-import {
-  contextCompactionLabel,
-  workEntryIndicatesToolFailure,
-} from "@goat/client-runtime/work-log/presentation";
+import { workEntryIndicatesToolFailure } from "@goat/client-runtime/work-log/presentation";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import type {
   ThreadPendingApproval,
@@ -397,191 +390,12 @@ export function timelineEntryIsPersistentResourceCard(entry: TimelineEntry): boo
   );
 }
 
-function projectedItemCreatedAt(row: OrchestrationV2ProjectedTurnItem): string {
-  return DateTime.formatIso(row.item.startedAt ?? row.item.updatedAt);
-}
-
-function projectedWorkEntryStatus(
-  item: OrchestrationV2TurnItem,
-): NonNullable<WorkLogEntry["toolLifecycleStatus"]> {
-  switch (item.status) {
-    case "pending":
-    case "running":
-    case "waiting":
-      return "inProgress";
-    case "completed":
-      return "completed";
-    case "idle":
-      return "idle";
-    case "failed":
-      return "failed";
-    case "cancelled":
-    case "interrupted":
-      return "stopped";
-  }
-}
-
-function projectedWorkEntryTone(item: OrchestrationV2TurnItem): WorkLogEntry["tone"] {
-  if (item.type === "error") return "info";
-  if (item.type === "reasoning") return "thinking";
-  switch (item.type) {
-    case "command_execution":
-    case "file_change":
-    case "file_search":
-    case "web_search":
-    case "dynamic_tool":
-    case "subagent":
-    case "thread_created":
-    case "user_input_request":
-    case "approval_request":
-      return "tool";
-    default:
-      return "info";
-  }
-}
-
 export { providerErrorPresentation };
 
-function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry {
-  const { item } = row;
-  const title = item.title?.trim() || null;
-  const common = {
-    id: item.id,
-    createdAt: projectedItemCreatedAt(row),
-    runId: item.runId,
-    tone: projectedWorkEntryTone(item),
-    itemType: item.type,
-    toolLifecycleStatus: projectedWorkEntryStatus(item),
-    structuredPayload: item,
-    projectedItem: row,
-    ...extractToolActivityPresentation(item),
-  } as const;
+const projectedItemCreatedAt = turnItemCreatedAt;
 
-  switch (item.type) {
-    case "thread_created":
-      return {
-        ...common,
-        label: "Created thread",
-      };
-    case "compaction":
-      return {
-        ...common,
-        label: contextCompactionLabel(item),
-        sourceActivityKind: "context-compaction",
-        ...(item.summary ? { detail: item.summary } : {}),
-      };
-    case "reasoning":
-      return {
-        ...common,
-        label: title ?? "Thinking",
-        ...(item.text ? { detail: item.text } : {}),
-      };
-    case "command_execution":
-      return {
-        ...common,
-        label: title ?? "Ran command",
-        command: item.input,
-        rawCommand: item.input,
-        toolTitle: title ?? "Command",
-        toolData: item,
-      };
-    case "file_change": {
-      return {
-        ...common,
-        label:
-          title ??
-          (item.changes !== undefined && item.changes.length > 1
-            ? `Changed ${item.changes.length} files`
-            : `Changed ${item.fileName}`),
-        changedFiles: item.changes?.map((change) => change.path) ?? [item.fileName],
-        toolTitle: title ?? "File change",
-        toolData: item,
-      };
-    }
-    case "file_search":
-      return {
-        ...common,
-        label: title ?? formatSearchToolLabel(item) ?? "Searched files",
-        ...(item.pattern ? { detail: item.pattern } : {}),
-        toolTitle: title ?? "File search",
-        toolData: item,
-      };
-    case "web_search":
-      return {
-        ...common,
-        label: title ?? "Searched the web",
-        ...(item.patterns?.length ? { detail: item.patterns.join(", ") } : {}),
-        toolTitle: title ?? "Web search",
-        toolData: item,
-      };
-    case "checkpoint":
-      return {
-        ...common,
-        label: title ?? "Checkpoint captured",
-        changedFiles: item.files.map((file) => file.path),
-        toolData: item,
-      };
-    case "system_notice": {
-      // The first line is the row; the rest opens with it, so a long notice stays one line.
-      const [headline = "", ...rest] = item.message.split("\n");
-      const detail = rest.join("\n").trim();
-      return {
-        ...common,
-        label: headline,
-        ...(detail.length > 0 ? { detail } : {}),
-        ...(item.severity === "info" ? {} : { sourceActivityKind: "runtime.warning" }),
-      };
-    }
-    case "error": {
-      const presentation = providerErrorPresentation(item);
-      return {
-        ...common,
-        ...presentation,
-        ...(item.failure.class === "usage_limit" && item.status !== "completed"
-          ? { sourceActivityKind: "runtime.warning" }
-          : item.retry === undefined
-            ? { sourceActivityKind: "runtime.error" }
-            : {}),
-        toolData: item,
-      };
-    }
-    case "dynamic_tool": {
-      const call = resolveGoatMcpItemCall(item);
-      const classified = classifyToolActivity({ itemType: "dynamic_tool_call", data: call });
-      return {
-        ...common,
-        label:
-          title ??
-          (classified === "read"
-            ? formatReadToolLabel(collectToolFilePaths({ input: call.input })[0] ?? "")
-            : classified === "search"
-              ? (formatSearchToolLabel({ input: call.input }) ?? call.toolName ?? "Tool call")
-              : (call.toolName ?? "Tool call")),
-        toolTitle: title ?? call.toolName ?? "Tool",
-        toolData: { input: item.input, output: item.output },
-      };
-    }
-    case "approval_request":
-      return {
-        ...common,
-        label: title ?? "Approval requested",
-        detail: item.prompt ?? item.requestKind,
-        toolData: item,
-      };
-    case "user_input_request":
-      return {
-        ...common,
-        label: title ?? (item.questionAnswer ? "Answered questions" : "Input requested"),
-        ...(item.questionAnswer ? { questionAnswer: item.questionAnswer } : {}),
-        toolData: item,
-      };
-    default:
-      return {
-        ...common,
-        label: title ?? item.type.replaceAll("_", " "),
-        toolData: item,
-      };
-  }
+function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry {
+  return { ...turnItemWorkLogEntry(row), projectedItem: row };
 }
 
 /** Preserve visibleTurnItems' committed order; interleave client messages by timestamp. */

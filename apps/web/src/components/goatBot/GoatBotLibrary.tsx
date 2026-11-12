@@ -70,7 +70,7 @@ export function GoatBotLibrary({
         <p className="text-xs text-muted-foreground">Showing the newest files only.</p>
       )}
       {goatBotArtifactDays(files.data.artifacts, nowMs).map((day) => (
-        <section key={day.label} aria-label={day.label} className="space-y-1.5">
+        <section key={day.key} aria-label={day.label} className="space-y-1.5">
           <h3 className="text-xs font-medium text-muted-foreground">{day.label}</h3>
           <ul className="overflow-hidden rounded-xl border border-border">
             {day.files.map((file) => {

@@ -184,28 +184,36 @@ const make = Effect.gen(function* () {
       const run = view.projection.runs.at(-1);
       if (!run || run.rootNodeId === null)
         return error("unsupported", "Ask again from a thread with an active turn.");
-      const handoff = yield* handoffs.create({
-        kind: "approval",
-        title: copy.title,
-        reason: copy.reason,
-        requestedBy: {
-          threadId: scope.thread.threadId,
-          providerInstanceId: scope.thread.providerInstanceId,
-          path: PROVIDER_SETUP_HANDOFF_PATH,
-        },
-        target: { environmentId: scope.environmentId, path: PROVIDER_SETUP_HANDOFF_PATH },
-        runId: run.id,
-        nodeId: run.rootNodeId,
-        human: {
-          location: copy.location,
-          providerSetup: {
-            ...(intent.driver === undefined ? {} : { driver: intent.driver }),
-            ...(intent.instanceId === undefined ? {} : { instanceId: intent.instanceId }),
+      const asked = yield* handoffs
+        .create({
+          kind: "approval",
+          title: copy.title,
+          reason: copy.reason,
+          requestedBy: {
+            threadId: scope.thread.threadId,
+            providerInstanceId: scope.thread.providerInstanceId,
+            path: PROVIDER_SETUP_HANDOFF_PATH,
           },
-        },
-        args: { version: 1, ...intent },
-        expiresAt: DateTime.add(yield* DateTime.now, { minutes: 30 }),
-      });
+          target: { environmentId: scope.environmentId, path: PROVIDER_SETUP_HANDOFF_PATH },
+          runId: run.id,
+          nodeId: run.rootNodeId,
+          human: {
+            location: copy.location,
+            providerSetup: {
+              ...(intent.driver === undefined ? {} : { driver: intent.driver }),
+              ...(intent.instanceId === undefined ? {} : { instanceId: intent.instanceId }),
+            },
+          },
+          args: { version: 1, ...intent },
+          expiresAt: DateTime.add(yield* DateTime.now, { minutes: 30 }),
+        })
+        .pipe(Effect.result);
+      // An open approval holds the thread; its refusal names that card.
+      if (asked._tag === "Failure")
+        return asked.failure.reason === "limit_reached"
+          ? error("request_failed", asked.failure.message)
+          : yield* asked.failure;
+      const handoff = asked.success;
       return {
         kind: "needs_human" as const,
         handoff,

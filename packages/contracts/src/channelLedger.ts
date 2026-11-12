@@ -164,6 +164,15 @@ export const ChannelOpenQuestion = Schema.Struct({
 });
 export type ChannelOpenQuestion = typeof ChannelOpenQuestion.Type;
 
+/** A question the task recorded an answer to, and the person's input that answered it. */
+export const ChannelAnsweredQuestion = Schema.Struct({
+  questionId: ChannelQuestionId,
+  inputId: Schema.optional(ChannelInputId),
+});
+export type ChannelAnsweredQuestion = typeof ChannelAnsweredQuestion.Type;
+/** The newest answers a task keeps; an older one's pick shows as a plain message. */
+export const CHANNEL_ANSWERED_QUESTIONS_KEPT = 100;
+
 /** A worker said it finished before its run did; held until the run settles. */
 export const ChannelProposedCompletion = Schema.Struct({
   eventId: ChannelTaskEventId,
@@ -260,6 +269,8 @@ export const ChannelTask = Schema.Struct({
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
   skillProposal: Schema.optional(ChannelTaskSkillProposal),
   openQuestions: Schema.Array(ChannelOpenQuestion),
+  /** Answers recorded for the task's questions, oldest first; absent on older servers. */
+  answeredQuestions: Schema.optional(Schema.Array(ChannelAnsweredQuestion)),
   /** The worker thread's pull requests, pending native requests and usage-limit wait. */
   observed: Schema.optional(ChannelWorkerObservation),
   /** Set when the task continued here from a machine that stopped answering. */
@@ -363,6 +374,8 @@ export const ChannelTaskEvent = Schema.Union([
   taskEvent("task.question.answered", {
     questionId: ChannelQuestionId,
     answer: Schema.String,
+    /** The person's input that answered; absent for agents and on older servers. */
+    inputId: Schema.optional(ChannelInputId),
     projectChoice: Schema.optional(ChannelAnswerProjectChoice),
     sender: Schema.optional(ChannelTaskSender),
   }),
@@ -457,6 +470,8 @@ export const ChannelTaskChip = Schema.Struct({
   askInChat: Schema.optional(Schema.Literal(true)),
   /** Ids of the task's open questions; a question's buttons retire once its id is gone. */
   openQuestionIds: Schema.optional(Schema.Array(ChannelQuestionId)),
+  /** Which input answered which question; present (possibly empty) on servers that record it. */
+  answeredQuestions: Schema.optional(Schema.Array(ChannelAnsweredQuestion)),
 });
 export type ChannelTaskChip = typeof ChannelTaskChip.Type;
 
@@ -489,6 +504,11 @@ export const ChannelTimelineRecord = Schema.Struct({
       text: Schema.String,
       /** Files the person sent with the message, already stored for the bot thread. */
       attachments: Schema.optional(Schema.Array(ChatAttachment)),
+      /**
+       * Carries reception's committed answer decision: only this record may replace a person's
+       * `answersQuestionId` once one is set.
+       */
+      answerDecided: Schema.optional(Schema.Literal(true)),
       meta: ChannelMessageMeta,
     }),
     Schema.Struct({

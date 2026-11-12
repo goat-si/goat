@@ -9,9 +9,12 @@ import {
   goatBotFaceTasks,
   goatBotItemReaders,
   goatBotReplyingSince,
+  goatBotRowFaceSignals,
+  goatBotRowReadingUntil,
   type FaceMotion,
   type GoatBotFaceInput,
   type GoatBotFaceState,
+  type GoatBotRowStatus,
 } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useIsFocused } from "@react-navigation/native";
@@ -19,7 +22,7 @@ import * as DateTime from "effect/DateTime";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { useAppActive, useReduceMotionEnabled } from "../../lib/appState";
-import { useDeadlinePassed } from "../../lib/clock";
+import { useDeadlinePassed, useNowAfter } from "../../lib/clock";
 import { useThreadShell } from "../../state/entities";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
@@ -32,8 +35,11 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 export function useMobileGoatBotFace(
   activity: GoatBotFaceInput["activity"],
   conversation?: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
-  /** For a roster row: the bot's own waiting count, and the shell alone, without its detail. */
-  row?: { readonly waitingCount: number },
+  /**
+   * For a roster row: its bot status (null until it loads) and the shell alone, without the
+   * conversation's detail. The status says what waits, whether the bot is reading, and its work.
+   */
+  row?: { readonly status: GoatBotRowStatus | null },
 ): {
   readonly state: GoatBotFaceState;
   readonly since: number | null;
@@ -56,10 +62,15 @@ export function useMobileGoatBotFace(
     replyingSince === null ? Number.NaN : Date.parse(replyingSince) + GOAT_BOT_READING_LIMIT_MS;
   const readingOver = useDeadlinePassed(Number.isFinite(readingUntil) ? readingUntil : null);
   const reading = Number.isFinite(readingUntil) && !readingOver;
-  const tasks = goatBotFaceTasks(items);
+  // One timeout: the clock is read again when the row's reading window closes.
+  const rowStatus = row?.status ?? null;
+  const now = useNowAfter(rowStatus === null ? null : goatBotRowReadingUntil(rowStatus));
+  const signals = rowStatus === null ? null : goatBotRowFaceSignals(rowStatus, now);
+  // A loaded status without tasks (an older server) leaves the work to the shell, as before.
+  const tasks = signals === null ? goatBotFaceTasks(items) : signals.tasks;
   const input: GoatBotFaceInput = {
-    activity: activity ?? (reading ? READING : null),
-    waitingCount: row?.waitingCount ?? 0,
+    activity: activity ?? (reading ? READING : (signals?.activity ?? null)),
+    waitingCount: rowStatus?.waitingCount ?? 0,
     shell: shell?.source ?? null,
     tasks,
   };
@@ -73,10 +84,12 @@ export function useMobileGoatBotFace(
   const state = track.hold.shown;
   const runStartedAt = (shell?.source ?? null)?.activityRunStartedAt;
   // Which work started last decides which of several working faces moves.
+  const readingSince =
+    replyingSince ?? (signals?.activity ? (rowStatus?.latest?.at ?? null) : null);
   const since =
-    state === "reading" && replyingSince !== null
-      ? Date.parse(replyingSince)
-      : (tasks.activeSince ??
+    state === "reading" && readingSince !== null
+      ? Date.parse(readingSince)
+      : (tasks?.activeSince ??
         (runStartedAt === null || runStartedAt === undefined
           ? null
           : DateTime.toEpochMillis(runStartedAt)));

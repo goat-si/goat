@@ -9,7 +9,12 @@ import type {
 import * as DateTime from "effect/DateTime";
 
 import { parseGoatBotQuote } from "./quote.ts";
-import { goatBotPreviewText } from "./previewText.ts";
+import { goatBotPreviewText } from "@goat/shared/goatBotPreviewText";
+import {
+  answerReferenceOf,
+  decidedAnswerInputs,
+  foldTaskQuestionAnswer,
+} from "./rowsAnswerReferences.ts";
 
 /** The quote and the person's words of a reply; nothing for a message that quotes nothing. */
 const quotedParts = (text: string): { readonly quote?: string; readonly reply?: string } => {
@@ -19,8 +24,10 @@ const quotedParts = (text: string): { readonly quote?: string; readonly reply?: 
 
 /**
  * GOAT Bot's messenger timeline. Only conversation survives: the user's
- * messages, the bot's replies and one card per piece of work. Tool calls,
- * reasoning, plans and the rest of a coding run stay in the worker thread.
+ * messages, the bot's replies and one card per piece of work. The bot thread
+ * holds no tool calls; activitySteps.ts reads them from the session and worker
+ * threads and places a collapsed line between these rows, which it leaves as
+ * they are.
  *
  * The types here are display models with finished labels. Channel metadata
  * reaches them through readers. A turn is not a card, but its chip still says
@@ -74,6 +81,13 @@ export interface GoatBotTaskCard {
   readonly askInChat?: boolean;
   /** The task's open questions; absent on cards from servers that did not send them. */
   readonly openQuestionIds?: ReadonlyArray<string>;
+  /** Which input answered which of the task's questions; absent from older servers. */
+  readonly answeredQuestions?: ReadonlyArray<GoatBotAnsweredQuestion>;
+}
+
+export interface GoatBotAnsweredQuestion {
+  readonly questionId: string;
+  readonly inputId?: string | undefined;
 }
 
 export interface GoatBotPullRequestLink {
@@ -100,6 +114,11 @@ export interface GoatBotMessagePresentation {
   readonly options?: ReadonlyArray<string>;
   /** The question those answers belong to. */
   readonly questionId?: string;
+  /** "task" when that question is the task's own, which the server records answers to. */
+  readonly questionKind?: "task";
+  /** On a person's message sent from a task question's card: the question when the server took
+   *  the answer, null when it refused it. */
+  readonly answersQuestionId?: string | null;
   readonly memory?: MemoryReportReference;
 }
 
@@ -117,6 +136,8 @@ export interface GoatBotPendingInput {
   /** The bot conversation it goes to; each bot's chat shows only its own. */
   readonly threadId?: string;
   readonly taskId?: string;
+  /** The task question this send answers, from its card. */
+  readonly questionId?: string;
   readonly text: string;
   readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel>;
   readonly createdAt: string;
@@ -192,6 +213,8 @@ export type GoatBotRow =
       readonly answeredAt?: string;
       /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
       readonly answerTaskId?: string;
+      /** The task question a pick answers, sent so the server records which message answered. */
+      readonly answerQuestionId?: string;
       readonly memory?: MemoryReportReference;
       readonly firstInGroup: boolean;
       readonly groupPosition: GoatBotGroupPosition;
@@ -290,6 +313,7 @@ interface GoatBotQuestionState {
   readonly updatedAt?: string;
   readonly askInChat?: boolean;
   readonly openQuestionIds?: ReadonlyArray<string>;
+  readonly answeredQuestions?: ReadonlyArray<GoatBotAnsweredQuestion>;
 }
 
 const questionStateFromChip = (
@@ -304,6 +328,9 @@ const questionStateFromChip = (
       updatedAt: chip.updatedAt,
       ...(chip.askInChat === true ? { askInChat: true } : {}),
       ...(chip.openQuestionIds === undefined ? {} : { openQuestionIds: chip.openQuestionIds }),
+      ...(chip.answeredQuestions === undefined
+        ? {}
+        : { answeredQuestions: chip.answeredQuestions }),
     },
   };
 };
@@ -374,6 +401,12 @@ export function buildGoatBotTimeline(input: {
    * bot's work list (`knownTaskIds`) can open it; cards of tasks outside that list still show.
    */
   readonly conversationOnly?: boolean;
+  /**
+   * The main chat, and a task's view for that task's own questions, show which message answered
+   * a task question from what the server recorded, never by guessing from times or words. On only
+   * where the client's card sends answers with their question; off keeps the older matching.
+   */
+  readonly answerReferences?: boolean;
 }): GoatBotRow[] {
   const knownTasks = new Set(input.knownTaskIds ?? []);
   const listedTasks = new Set(input.knownTaskIds ?? []);
@@ -395,6 +428,18 @@ export function buildGoatBotTimeline(input: {
     const newest = newestCards.get(card.key);
     if (newest === undefined || card.revision > newest.revision) newestCards.set(card.key, card);
   }
+  const references = input.answerReferences === true && input.taskId !== undefined;
+  // A task's own view takes references for that task only.
+  const referencesFor = (taskId: string | null | undefined) =>
+    references && (input.taskId === null || taskId === input.taskId);
+  const decidedInputs = references
+    ? decidedAnswerInputs([...newestCards.values(), ...newestQuestionChips.values()])
+    : new Map<string, string>();
+  const answerReference = answerReferenceOf(decidedInputs);
+  // Sends a task question's record or card governs; the older matching never takes them.
+  const referenceSends = new Set<string>();
+  const taskQuestions = new Map<string, string>();
+  const answerRowByQuestion = new Map<string, number>();
   const isOutcome = (presentation: GoatBotMessagePresentation | null) =>
     presentation?.tone === "result" || presentation?.tone === "failure";
   const mainChat = input.conversationOnly === true && input.taskId == null;
@@ -484,17 +529,34 @@ export function buildGoatBotTimeline(input: {
         inputTexts.set(presentation.requestKey, item.text);
       }
       if (presentation?.clientKey) committedRequestKeys.add(presentation.clientKey);
+      const verdict = referencesFor(presentation?.taskId)
+        ? answerReference(presentation?.answersQuestionId, presentation?.requestKey)
+        : undefined;
+      // Sent from a question's card and refused: it stays here as what the person said, and
+      // never answers another question.
+      const refusedAnswer = verdict === null;
+      const referenced = refusedAnswer ? undefined : verdict;
       // The option they pressed stays beside the question, including after its buttons close.
       const answersShownQuestion =
-        input.taskId === null &&
-        presentation?.taskId != null &&
-        shownQuestionOptions.get(presentation.taskId)?.has(item.text) === true;
+        refusedAnswer ||
+        referenced !== undefined ||
+        (input.taskId === null &&
+          presentation?.taskId != null &&
+          shownQuestionOptions.get(presentation.taskId)?.has(item.text) === true);
       if (!includesMessage(presentation?.taskId) && !answersShownQuestion) continue;
       if (answersShownQuestion && presentation?.requestKey != null) {
         answeredRequestKeys.add(presentation.requestKey);
       }
       previousInputKey = presentation?.requestKey ?? null;
       sentTasks.set(item.id, presentation?.taskId ?? null);
+      if (refusedAnswer) referenceSends.add(item.id);
+      if (referenced !== undefined) {
+        referenceSends.add(item.id);
+        const decided = presentation?.requestKey
+          ? decidedInputs.get(presentation.requestKey)
+          : undefined;
+        if (decided !== undefined) answerRowByQuestion.set(decided, committed.length);
+      }
       if (input.taskId == null && presentation?.requestKey) mainInputs.add(presentation.requestKey);
       committed.push({
         kind: "user",
@@ -535,12 +597,29 @@ export function buildGoatBotTimeline(input: {
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
       if (open === true) openOnCard.add(item.id);
-      if (input.taskId === null && hasOptions && presentation?.taskId != null) {
+      const taskQuestion =
+        referencesFor(presentation?.taskId) &&
+        presentation?.questionKind === "task" &&
+        presentation.questionId
+          ? presentation.questionId
+          : undefined;
+      if (taskQuestion !== undefined) taskQuestions.set(item.id, taskQuestion);
+      if (
+        taskQuestion === undefined &&
+        input.taskId === null &&
+        hasOptions &&
+        presentation?.taskId != null
+      ) {
         const options = shownQuestionOptions.get(presentation.taskId) ?? new Set<string>();
         for (const option of presentation.options ?? []) options.add(option);
         shownQuestionOptions.set(presentation.taskId, options);
       }
-      if (hasOptions && open !== false && presentation?.taskId != null) {
+      if (
+        taskQuestion === undefined &&
+        hasOptions &&
+        open !== false &&
+        presentation?.taskId != null
+      ) {
         tasksWithOpenQuestion.add(presentation.taskId);
       }
       if (hasOptions || tone === "question")
@@ -561,7 +640,14 @@ export function buildGoatBotTimeline(input: {
         options: open === false ? NO_OPTIONS : (presentation?.options ?? NO_OPTIONS),
         ...(hasOptions ? { choices: presentation?.options ?? NO_OPTIONS } : {}),
         // Only a server that names the question also routes an answer sent to its task.
-        ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
+        // A task's own question names itself, so a pick answers it even before its card
+        // arrives; the server refuses one for a question that has closed.
+        ...((open === true || (taskQuestion !== undefined && open === null)) && presentation?.taskId
+          ? { answerTaskId: presentation.taskId }
+          : {}),
+        ...(open !== false && presentation?.taskId && taskQuestion !== undefined
+          ? { answerQuestionId: taskQuestion }
+          : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
       });
       // The conversation is now about what this reply answered; a later reply about it needs no quote.
@@ -608,12 +694,15 @@ export function buildGoatBotTimeline(input: {
           (input.taskId === null &&
             entry.taskId !== undefined &&
             (questionState(entry.taskId)?.askInChat === true ||
-              tasksWithOpenQuestion.has(entry.taskId)))) &&
+              tasksWithOpenQuestion.has(entry.taskId) ||
+              (references && entry.questionId !== undefined)))) &&
         !committedRequestKeys.has(entry.clientKey) &&
         (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
     )
     .map((entry) => {
       sentTasks.set(`pending:${entry.clientKey}`, entry.taskId ?? null);
+      if (referencesFor(entry.taskId) && entry.questionId !== undefined)
+        referenceSends.add(`pending:${entry.clientKey}`);
       return {
         kind: "user",
         id: `pending:${entry.clientKey}`,
@@ -639,6 +728,16 @@ export function buildGoatBotTimeline(input: {
     });
 
   const ordered = [...committed, ...pending];
+  const orderedIndex = new Map(ordered.map((row, index) => [row.id, index]));
+  // Each task question's first own send still on its way (queued or sending), found once.
+  const sendingByQuestion = new Map<string, number>();
+  for (const entry of input.pendingInputs) {
+    if (entry.questionId === undefined) continue;
+    if (entry.state !== "queued" && entry.state !== "sending") continue;
+    const at = orderedIndex.get("pending:" + entry.clientKey);
+    if (at !== undefined && !sendingByQuestion.has(entry.questionId))
+      sendingByQuestion.set(entry.questionId, at);
+  }
   // Choices answer the question they came with. The task's card says when that question closed,
   // and it stays open until then; without a card, anything the user sent since answers it. A send
   // that failed answers nothing. A later question of the same conversation takes the replies after
@@ -652,14 +751,29 @@ export function buildGoatBotTimeline(input: {
   for (let index = ordered.length - 1; index >= 0; index--) {
     const row = ordered[index]!;
     if (row.kind === "user") {
-      if (row.delivery.state === "failed") continue;
+      if (row.delivery.state === "failed" || referenceSends.has(row.id)) continue;
       nearestSend = index;
       nearestSendByTask.set(sentTasks.get(row.id), index);
       continue;
     }
     if (row.kind !== "bot" || !askedQuestions.has(row.id)) continue;
     const taskId = askedQuestions.get(row.id) ?? null;
-    if (openOnCard.has(row.id)) {
+    const taskQuestion = taskQuestions.get(row.id);
+    if (taskQuestion !== undefined) {
+      const decidedAt = answerRowByQuestion.get(taskQuestion);
+      const decided = decidedAt === undefined ? undefined : ordered[decidedAt];
+      // Until the record names the answer, the person's own send to it still on its way.
+      const sendingRow = sendingByQuestion.get(taskQuestion);
+      const answer =
+        decided?.kind === "user"
+          ? decided
+          : sendingRow !== undefined && ordered[sendingRow]?.kind === "user"
+            ? ordered[sendingRow]
+            : undefined;
+      const result = foldTaskQuestionAnswer(row, answer?.kind === "user" ? answer : undefined);
+      ordered[index] = result.row;
+      if (result.folded !== undefined) folded.add(result.folded);
+    } else if (openOnCard.has(row.id)) {
       // The task's card still lists the question while a pick is on its way or not yet recorded:
       // the person's next message to its task, one of its choices, is that pick until a newer card
       // shows the task saw it and kept the question open.

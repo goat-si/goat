@@ -6,6 +6,7 @@ import {
   secretSettingsFields,
   type ServerSettings,
   UsageLimitSourceConfig,
+  TextGeneratorConfig,
 } from "@goat/contracts";
 import { acpRegistryClient } from "@goat/provider-acp-registry/client";
 import { cursorClient } from "@goat/provider-cursor/client";
@@ -32,6 +33,7 @@ const providerSecretFields = new Map([
   ),
 ]);
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
+const textGeneratorSecretFields = secretSettingsFields(TextGeneratorConfig);
 const easDeviceHostSecretFields = secretSettingsFields(EasDeviceHostConfig);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
@@ -155,6 +157,19 @@ export function mapSettingsSecrets(
       ) as EasDeviceHostConfig,
   );
 
+  const textGenerators = Object.fromEntries(
+    Object.entries(settings.textGenerators).map(([id, generator]) => [
+      id,
+      mapFields(
+        generator,
+        textGeneratorSecretFields,
+        (field, serverHost) =>
+          `text-generator-${encode(id)}-${encode(field)}` +
+          (serverHost === null ? "" : `-${encode(serverHost)}`),
+      ),
+    ]),
+  ) as ServerSettings["textGenerators"];
+
   // GOAT: the launch watch completion webhook, and each named target, sign their posts with these.
   const completionWebhook = {
     ...mapFields(settings.completionWebhook, ["secret"], () => "completion-webhook-secret"),
@@ -194,6 +209,7 @@ export function mapSettingsSecrets(
     providerInstances,
     sourceControlHosts,
     usageLimitSources,
+    textGenerators,
     completionWebhook,
     easDeviceHosts,
   };

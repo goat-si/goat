@@ -17,6 +17,10 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   readonly message: string;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;
+  /** A placement answer's classification (placement_not_started, placement_full, ...). */
+  readonly remoteClassification?: string | undefined;
+  /** The idle thread a not-started placement left on the remote. */
+  readonly remoteThreadId?: string | undefined;
 }> {}
 
 /**
@@ -24,6 +28,9 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
  * memory ceiling (an older GOAT). Callers that must not run without the grant fail on it.
  */
 export const MEMORY_CEILING_UNSUPPORTED = "memory_ceiling_unsupported";
+
+/** remoteClassification when the launching session does not declare placement; nothing was sent. */
+export const PLACEMENT_UNSUPPORTED = "placement_unsupported";
 
 export const memoryRefusal = (message: string) =>
   new SshRemoteDispatchError({

@@ -1147,7 +1147,7 @@ describe("AcpRegistrySupport", () => {
       });
       const inspection = yield* resolver.inspect(settings());
 
-      expect(inspection).toMatchObject({ status: "ready", agentId: agent.id });
+      expect(inspection).toMatchObject({ status: "unprepared", agentId: agent.id });
       expect(requests).toBe(0);
     }).pipe(
       Effect.scoped,
@@ -1185,7 +1185,7 @@ describe("AcpRegistrySupport", () => {
       const resolved = yield* resolver.resolve(settings(), "/workspace", providerEnvironment);
 
       expect(hostInspection).toMatchObject({ status: "missing_runner", runner: "npm" });
-      expect(instanceInspection).toMatchObject({ status: "ready", distribution: "npx" });
+      expect(instanceInspection).toMatchObject({ status: "unprepared", distribution: "npx" });
       expect(resolved.spawn).toMatchObject({
         command: toolchain.executablePath,
         env: { PATH: expect.stringMatching(new RegExp(`^${toolchain.globalBin}:`, "u")) },
