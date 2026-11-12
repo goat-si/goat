@@ -253,10 +253,12 @@ this Worker can read the row there, and those queries are billed as Durable Obje
 object, across deploys and rollbacks.
 
 Taking a node off the list, or unsetting the secret, stops counting new traffic for it; rows already written stay. To
-remove one, take the node off the list first (a secret change deploys a new version, so a Room still holding the old
-totals in memory cannot write them back), then run `DROP TABLE traffic` in Data Studio for that node's object. Data
-Studio needs Editor access to the Worker and records every query in the account's audit log. There is no other way to
-remove a row.
+remove one, take the node off the list first. A secret change deploys a new version, and an active Room can keep running
+the previous version for up to 5 minutes (Cloudflare's default deferral); a Room on the new version checks the list
+before every write and drops the counts of a node no longer listed. So wait at least 5 minutes, run
+`DROP TABLE traffic` in Data Studio for that node's object, and check a few minutes later that it stayed gone (drop it
+again if not). Data Studio needs Editor access to the Worker and records every query in the account's audit log. There
+is no other way to remove a row.
 
 The Room writes the row at most once a minute; Cloudflare may run the alarm that writes it up to a minute late during
 maintenance or failover, so the row can trail by about two minutes. Bytes not written yet ride on the node's uplink

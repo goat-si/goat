@@ -59,8 +59,11 @@ interface ClientState extends SocketState {
   upEnd: number;
   /** This session's unacked DATA on the uplink; may overcount, never undercounts. */
   upUnacked: number;
-  /** Set when the node is listed: payload bytes relayed toward the node and from it, and how much of them the totals hold. */
-  track?: true;
+  /**
+   * The node id, when it was listed at admission: payload bytes relayed toward the node and from
+   * it, and how much of them the totals hold. The list is checked again before anything is written.
+   */
+  track?: string;
   toNode?: number;
   fromNode?: number;
   countedTo?: number;
@@ -120,6 +123,8 @@ export class Room extends DurableObject<Env> {
   private readonly totals: TotalsStore;
   /** Counts not written yet while no authenticated uplink carries them (lost if the Room is evicted). */
   private unsaved: Counts = NO_COUNTS;
+  /** The node id unsaved belongs to, kept with it in memory. */
+  private unsavedNode: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -177,7 +182,7 @@ export class Room extends DurableObject<Env> {
       upEnd: 0,
       upUnacked: 0,
       ...(tracksTraffic(this.env, nodeId)
-        ? { track: true, toNode: 0, fromNode: 0, countedTo: 0, countedFrom: 0 }
+        ? { track: nodeId, toNode: 0, fromNode: 0, countedTo: 0, countedFrom: 0 }
         : {}),
     };
     save(server, state);
@@ -373,7 +378,7 @@ export class Room extends DurableObject<Env> {
       return this.endSession(ws, state, CloseCode.Timeout);
     }
     ws.send(payload);
-    const fresh = state.track === true && payload.length > 0 && !this.uncounted(state);
+    const fresh = state.track !== undefined && payload.length > 0 && !this.uncounted(state);
     state.sent += payload.length;
     if (state.track) state.fromNode = (state.fromNode ?? 0) + payload.length;
     save(ws, state);
@@ -399,7 +404,7 @@ export class Room extends DurableObject<Env> {
     save(up, upState);
     state.upEnd = upState.sent;
     state.upUnacked = mine;
-    const fresh = state.track === true && payload.length > 0 && !this.uncounted(state);
+    const fresh = state.track !== undefined && payload.length > 0 && !this.uncounted(state);
     if (state.track) state.toNode = (state.toNode ?? 0) + payload.length;
     save(ws, state);
     if (fresh) this.armTotals();
@@ -425,6 +430,7 @@ export class Room extends DurableObject<Env> {
 
   private dropUplink(ws: WebSocket, state: UplinkState, code: number): void {
     const wasCurrent = state.authed;
+    if (!isEmpty(state.carry ?? NO_COUNTS)) this.unsavedNode = state.nodeId;
     this.unsaved = addCounts(this.unsaved, state.carry ?? NO_COUNTS);
     state.carry = NO_COUNTS;
     closeSocket(ws, state, code);
@@ -455,6 +461,8 @@ export class Room extends DurableObject<Env> {
     const bytes = takeUncounted(state);
     closeSocket(ws, state, code);
     if (!ending || !state.track) return;
+    if (!tracksTraffic(this.env, state.track)) return this.discardTotals();
+    this.unsavedNode = state.track;
     const answered = state.pending ? 0 : 1;
     this.keepTotals(
       addCounts(this.unwritten(), { ...bytes, sessions: answered, unanswered: 1 - answered }),
@@ -494,6 +502,7 @@ export class Room extends DurableObject<Env> {
   /** On an alarm: once the minute has passed, writes what open sessions relayed and what is carried. */
   private writeTotalsIfDue(now: number): void {
     if (!this.hasUnwritten() || now < this.nextWrite()) return;
+    if (!this.stillListed()) return this.discardTotals();
     let pending = this.unwritten();
     for (const [ws, state] of this.clients()) {
       pending = addCounts(pending, takeUncounted(state));
@@ -502,9 +511,39 @@ export class Room extends DurableObject<Env> {
     this.keepTotals(pending, now);
   }
 
+  /**
+   * Whether this Room's node is still in the list this version runs with. Counts can outlive a
+   * list change (in socket attachments, or on an object still running its previous version), so
+   * every write checks again.
+   */
+  private stillListed(): boolean {
+    const node =
+      this.uplink()?.[1].nodeId ??
+      this.clients().find(([, s]) => s.track)?.[1].track ??
+      this.unsavedNode;
+    return node !== undefined && tracksTraffic(this.env, node);
+  }
+
+  /** Drops every count not written yet, and stops counting open sessions: the node is no longer listed. */
+  private discardTotals(): void {
+    this.unsaved = NO_COUNTS;
+    const uplink = this.uplink();
+    if (uplink && !isEmpty(uplink[1].carry ?? NO_COUNTS)) {
+      uplink[1].carry = NO_COUNTS;
+      save(uplink[0], uplink[1]);
+    }
+    for (const [ws, state] of this.clients()) {
+      if (state.track === undefined) continue;
+      delete state.track;
+      state.countedTo = state.toNode ?? 0;
+      state.countedFrom = state.fromNode ?? 0;
+      save(ws, state);
+    }
+  }
+
   private hasUnwritten(): boolean {
     if (!isEmpty(this.unsaved) || !isEmpty(this.uplink()?.[1].carry ?? NO_COUNTS)) return true;
-    return this.clients().some(([, state]) => this.uncounted(state));
+    return this.clients().some(([, state]) => state.track !== undefined && this.uncounted(state));
   }
 
   private uncounted(state: ClientState): boolean {
