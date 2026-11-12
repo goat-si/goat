@@ -32,11 +32,15 @@ const EDITABLE: ReadonlySet<string> = new Set([
 const NAME_LIMIT = 100;
 const SCAN_LIMIT = 50;
 
-// Playwright's key: role, a JSON or /…/ name, then its attributes. No attribute holds "/" or "]",
-// so a name can't end inside the run, and a key holding ": " is always single-quoted.
-const KEY = String.raw`[a-z]+(?: (?:"(?:[^"\\]|\\.)*"|\/.*?\/))?(?: \[[^\]\/]*\])*`;
-const LINE = new RegExp(String.raw`^(\s*)- (?:'((?:[^']|'')*)'|(${KEY}))(?:(:)(?: (.*))?)?$`);
-const KEY_PARTS = /^([a-z]+)(?: ("(?:[^"\\]|\\.)*"|\/.*?\/))?((?: \[[^\]\/]*\])*)$/;
+// Playwright's key: role, a JSON name or a raw one that starts and ends with "/", then attributes.
+// No attribute holds "/" or "]" and a key holding ": " is single-quoted, so a longer /…/ name's
+// closing "/" can't pass for an attribute or value: trying a lone "/" first is exact.
+const NAME = String.raw`"(?:[^"\\]|\\.)*"|\/|\/.*?\/`;
+const ATTRIBUTES = String.raw`(?: \[[^\]\/]*\])*`;
+const LINE = new RegExp(
+  String.raw`^(\s*)- (?:'((?:[^']|'')*)'|([a-z]+(?: (?:${NAME}))?${ATTRIBUTES}))(?:(:)(?: (.*))?)?$`,
+);
+const KEY_PARTS = new RegExp(`^([a-z]+)(?: (${NAME}))?(${ATTRIBUTES})$`);
 const BOX = /^box=(-?\d+),(-?\d+),(\d+),(\d+)$/;
 // Playwright prefixes a frame's refs with f<n>; their boxes are measured from the frame's corner.
 const FRAME_REF = /(?:^|-)f\d+e\d+$/;
@@ -84,8 +88,8 @@ const entryOf = (line: string) => {
 type Entry = NonNullable<ReturnType<typeof entryOf>>;
 
 /**
- * A nameless element is named by the text under it, as agent-browser names it. An action target
- * under it, such as a field, keeps its own text and value.
+ * A nameless element is named by its own text under it. An element there with a ref keeps its
+ * text to itself: the tree shows an editable region as a plain generic, so its words are input.
  */
 const descendantText = (lines: ReadonlyArray<string>, index: number, depth: number) => {
   const parts: string[] = [];
@@ -96,8 +100,9 @@ const descendantText = (lines: ReadonlyArray<string>, index: number, depth: numb
     if (indent <= depth) break;
     if (indent > skipped) continue;
     const entry = entryOf(line);
-    skipped = entry?.target ? indent : Infinity;
-    const text = entry?.target ? undefined : (entry?.name ?? entry?.value);
+    const owned = entry !== undefined && (entry.target || entry.ref !== undefined);
+    skipped = owned ? indent : Infinity;
+    const text = owned ? undefined : (entry?.name ?? entry?.value);
     if (text) parts.push(text);
     if (parts.join(" ").length >= NAME_LIMIT) break;
   }

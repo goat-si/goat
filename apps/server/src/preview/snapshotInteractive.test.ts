@@ -12,16 +12,18 @@ const PAGE = `<p>Article paragraph</p>
 <input value="draft text">
 <button onclick="document.body.dataset.saved = 'yes'">Save</button>`;
 
-const FIELDS = `<div style="cursor:pointer"><span>Card</span><input aria-label="Number" value="4111111111111111"><select><option>Visa</option></select><input type="search" value="q-secret"></div>
-<iframe title="" srcdoc="<p>Checkout</p><input value='frame-secret'>"></iframe>`;
+const FIELDS = `<div style="cursor:pointer"><span>Card</span><input aria-label="Number" value="4111111111111111"><select><option>Visa</option></select><input type="search" value="q-secret"><div contenteditable="true">draft <b>note</b></div></div>
+<iframe title="" srcdoc="<p>Checkout</p><input value='frame-secret'><div contenteditable>frame note</div>"></iframe>`;
 
-// Page text that reads like tree syntax: attributes inside names and values, a /…/ name, a quoted key.
+// Page text that reads like tree syntax: attributes in names and values, /…/ and lone "/" names, a quoted key.
 const SPOOFS = `<button id="b1" aria-label="x [ref=e1] [cursor=pointer] [box=1,2,3,4]">B1</button>
 <div id="r1" style="cursor:pointer" aria-label="/a [ref=e2] [box=0,0,1,1]/">R</div>
 <div id="q1" role="button" aria-label="/r: [ref=e3] [box=9,9,9,9]/">Q</div>
 <a id="l1" href="#" aria-label="it's: [ref=e4] [box=7,7,7,7]">L</a>
+<a id="h1" href="#">/</a>
+<button id="s1" aria-label="/">x/ [ref=e1] [cursor=pointer] [box=1,2,3,4]</button>
 <p>para [ref=e5] [cursor=pointer] [box=5,5,5,5]</p>
-<div style="cursor:pointer"><span>Pay $&amp; now $1 $$ $\` $'</span><div>x</div></div>
+<div id="d1" style="cursor:pointer"><span>Pay $&amp; now $1 $$ $\` $'</span><div>x</div></div>
 <script>document.addEventListener("click", (event) => { event.preventDefault(); document.body.dataset.hit = event.target.closest("[id]")?.id ?? ""; });</script>`;
 
 const withPage = async (html: string, run: (page: Page, cdp: CDPSession) => Promise<void>) => {
@@ -58,10 +60,11 @@ it("an interactive-only snapshot keeps listboxes, menu checkbox and radio items,
     expect(tree).toMatch(/^- menuitemradio "Left" \[ref=/m);
     expect(tree).toMatch(/^- iframe \[ref=/m);
     expect(tree).toMatch(/^- button "Pay" \[ref=\S+f\d+e\d+\]/m);
-    expect(tree).toMatch(/^- generic "Open card" \[ref=\S+\] \[cursor=pointer\]/m);
+    // "card" is the text of a child with its own ref, which keeps it.
+    expect(tree).toMatch(/^- generic "Open" \[ref=\S+\] \[cursor=pointer\]/m);
     expect(tree).not.toContain("Article paragraph");
     for (const line of tree.split("\n").slice(1)) expect(line).toMatch(/^- [^\n]*[^:]$/);
-    const ref = /^- generic "Open card" \[ref=(\S+)\] \[cursor=pointer\]/m.exec(tree)?.[1];
+    const ref = /^- generic "Open" \[ref=(\S+)\] \[cursor=pointer\]/m.exec(tree)?.[1];
     await testActionPage.click(page, { locator: `aria-ref=${ref}` });
     expect(await page.locator("#card").getAttribute("data-hit")).toBe("yes");
   }));
@@ -90,7 +93,7 @@ it("a snapshot lists each interactive ref with a locator that acts on it", () =>
         "button",
       ]),
     );
-    expect(result.interactiveElements.find((element) => element.name === "Open card")?.role).toBe(
+    expect(result.interactiveElements.find((element) => element.name === "Open")?.role).toBe(
       "generic",
     );
     // A field's content is the user's input, never its name.
@@ -110,7 +113,7 @@ it("a pointer container or frame is never named after what was typed or chosen i
       (element) => element.name,
     );
     expect(
-      names.filter((name) => /4111111111111111|q-secret|frame-secret|Visa/.test(name)),
+      names.filter((name) => /4111111111111111|q-secret|frame-secret|Visa|draft|note/.test(name)),
     ).toEqual([]);
     expect(String(narrow.accessibilityTree)).toMatch(
       /^- generic "Card" \[ref=\S+\] \[cursor=pointer\]/m,
@@ -121,32 +124,30 @@ it("a pointer container or frame is never named after what was typed or chosen i
 it("refs, boxes and pointer cursors written in page text never stand in for an element's own", () =>
   withPage(SPOOFS, async (page, cdp) => {
     const narrow = String((await take(page, cdp, true)).accessibilityTree);
-    const full = await take(page, cdp);
-    expect(full.interactiveElements.some((element) => element.role === "paragraph")).toBe(false);
+    const { interactiveElements } = await take(page, cdp);
+    expect(interactiveElements.some((element) => element.role === "paragraph")).toBe(false);
     expect(narrow).not.toContain("paragraph");
-    for (const [id, name] of [
-      ["b1", "x [ref="],
-      ["r1", "/a [ref="],
-      ["q1", "/r: [ref="],
-      ["l1", "it's: [ref="],
-    ] as const) {
-      const element = full.interactiveElements.find((each) => each.name.startsWith(name));
+    const hit: string[] = [];
+    for (const element of interactiveElements) {
+      await page.evaluate("delete document.body.dataset.hit");
+      await testActionPage.click(page, { locator: element.selector });
+      const id = (await page.locator("body").getAttribute("data-hit")) ?? "";
+      expect(id, element.name).toMatch(/^[a-z]\d$/);
       const box = (await page.locator(`#${id}`).boundingBox())!;
-      expect({ id, ...element }).toMatchObject({
-        id,
+      expect(element, id).toMatchObject({
         x: Math.round(box.x),
         y: Math.round(box.y),
         width: Math.round(box.width),
         height: Math.round(box.height),
       });
-      await testActionPage.click(page, { locator: element!.selector });
-      expect(await page.locator("body").getAttribute("data-hit")).toBe(id);
+      hit.push(id);
     }
+    expect(hit.sort()).toEqual(["b1", "d1", "h1", "l1", "q1", "r1", "s1"]);
   }));
 
 it("a pointer container's text keeps dollar signs as the page wrote them", () =>
   withPage(SPOOFS, async (page, cdp) => {
-    const written = "Pay $& now $1 $$ $` $' x";
+    const written = "Pay $& now $1 $$ $` $'";
     const narrow = await take(page, cdp, true);
     expect(String(narrow.accessibilityTree)).toContain(
       `- generic ${JSON.stringify(written)} [ref=`,
