@@ -24,6 +24,10 @@ export interface GoatBotReplySplit {
 const parser = unified().use(remarkParse).use(remarkGfm).freeze();
 
 const MAX_CACHED_REPLIES = 64;
+// A loaded bot chat draws at most 500 rows (the bounded thread snapshot), so this keeps every
+// reply one chat draws. A split holds the reply's own text in parts, so the cache costs about the
+// size of the replies it holds; past this a chat with older history paged in reparses, as before.
+const MAX_DRAWN_REPLIES = 500;
 
 // Every render of a chat splits each reply it draws; a reply whose text did not change keeps its
 // split. The cache holds at least the replies one chat draws, or drawing it would evict them all.
@@ -42,7 +46,7 @@ export function goatBotReplySplit(text: string, drawn = 0): GoatBotReplySplit {
   }
   const split = splitAtTables(text);
   splits.set(text, split);
-  const limit = Math.max(MAX_CACHED_REPLIES, drawn);
+  const limit = Math.max(MAX_CACHED_REPLIES, Math.min(drawn, MAX_DRAWN_REPLIES));
   for (const oldest of splits.keys()) {
     if (splits.size <= limit) break;
     splits.delete(oldest);

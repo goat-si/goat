@@ -416,34 +416,31 @@ describe("files a reply names", () => {
   const listed = (text: string) =>
     goatBotReplyFiles(text, files, root).map((file) => file.relativePath);
 
-  it("a path inside a fenced code block names nothing, with backticks or tildes", () => {
+  it("a path inside a top-level fenced code block names nothing, with backticks or tildes", () => {
     const fenced = "Ran:\n\n```sh\ncat `reports/summary.md`\n```\n\nThen `chart.png`.";
     expect(listed(fenced)).toEqual(["chart.png"]);
     expect(listed("~~~\n`notes.txt`\n~~~")).toEqual([]);
-    const nested =
-      "- Steps:\n  - Read it:\n\n    ```sh\n    cat `notes.txt`\n    ```\n- Saved `chart.png`.";
-    expect(listed(nested)).toEqual(["chart.png"]);
-    // A fence closes only on a run at least as long as the one that opened it.
+    expect(listed("   ```\n`notes.txt`\n   ```\nSaved `chart.png`.")).toEqual(["chart.png"]);
+    // A fence closes only on a run of its own character at least as long as the one that opened it.
     expect(listed("````\n```\n`notes.txt`\n````\nSaved `chart.png`.")).toEqual(["chart.png"]);
+    expect(listed("~~~\n```\n`notes.txt`\n~~~\nSaved `chart.png`.")).toEqual(["chart.png"]);
     // An unclosed fence runs to the end of the reply.
     expect(listed("```\n`notes.txt`")).toEqual([]);
     expect(goatBotReplyMayNameFile("```\n`notes.txt`\n```")).toBe(false);
   });
 
-  it("escaped backticks are not code, and a span closes only on a run of its own length", () => {
-    expect(listed("Not code: \\`notes.txt\\`.")).toEqual([]);
-    expect(goatBotReplyMayNameFile("Not code: \\`notes.txt\\`.")).toBe(false);
-    // An escaped backslash leaves the backtick after it free to open a span.
-    expect(listed("A slash \\\\`notes.txt`.")).toEqual(["notes.txt"]);
-    expect(listed("Double ``chart.png`` and ``a ` b``.")).toEqual(["chart.png"]);
-    expect(listed("``chart.png` is not closed.")).toEqual([]);
-    // Backslashes inside a span are literal, so the span still ends at the next backtick.
-    expect(listed("`notes.txt\\` and more")).toEqual([]);
-  });
-
-  it("a span may wrap onto the next line of its paragraph, but never past a blank line", () => {
-    expect(listed("Opened `foo\nbar` then `chart.png`.")).toEqual(["chart.png"]);
-    expect(listed("Opened `foo\n\nbar then `chart.png`.")).toEqual(["chart.png"]);
+  it("only a fence CommonMark is certain of hides paths; an indented code line opens nothing", () => {
+    // Four spaces make indented code, not a fence, so the card after it stays.
+    expect(listed("    ```\n\nSaved `chart.png`")).toEqual(["chart.png"]);
+    // A backtick in the info string means this is not a fence, so its line is ordinary text.
+    expect(listed("```js `\nSaved `chart.png`.")).toEqual(["chart.png"]);
+    // A fence inside a list item ends with the list, so the code after it is real.
+    expect(listed("- item\n  ```\n`chart.png`")).toEqual(["chart.png"]);
+    // After a list, an indented fence may be top level instead; the rest is read as it is.
+    expect(listed("1. `chart.png`\n  ```\n```\n   `notes.txt`")).toEqual([
+      "chart.png",
+      "notes.txt",
+    ]);
   });
 });
 

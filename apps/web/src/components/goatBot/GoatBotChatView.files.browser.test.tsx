@@ -10,6 +10,8 @@ import { render } from "../../../test/render";
 import "~/index.css";
 
 const state = vi.hoisted(() => ({ narrow: false, matched: 0 }));
+// The Library listing query, an object as the real atoms are.
+const artifactsQuery = vi.hoisted(() => ({ query: "artifacts" }));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -70,7 +72,7 @@ vi.mock("~/state/channels", async (original) => {
     channelEnvironment: {
       ...real.channelEnvironment,
       listBotNotes: () => "notes",
-      listBotArtifacts: () => "artifacts",
+      listBotArtifacts: () => artifactsQuery,
     },
   };
 });
@@ -84,10 +86,13 @@ const report = {
   size: 20,
   modifiedAt: "2026-11-07T10:00:00.000Z",
 };
+// The listing as settled once; the reply files' reread reads its identity.
+const settledListing = { _tag: "Success", waiting: false };
 vi.mock("~/state/query", async (original) => ({
   ...(await original<typeof import("~/state/query")>()),
+  useEnvironmentQuerySelector: () => settledListing,
   useEnvironmentQuery: (atom: unknown) => ({
-    data: atom === "artifacts" ? { artifacts: [report], truncated: false } : { tasks: [] },
+    data: atom === artifactsQuery ? { artifacts: [report], truncated: false } : { tasks: [] },
     failure: null,
     error: null,
     isPending: false,

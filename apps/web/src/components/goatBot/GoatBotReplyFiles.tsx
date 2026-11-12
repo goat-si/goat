@@ -12,7 +12,7 @@ import { createContext, memo, use, useEffect, useEffectEvent, useState } from "r
 import { FileIcon, FileTextIcon, ImageIcon } from "~/components/solar";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
-import { useEnvironmentQuery } from "~/state/query";
+import { useEnvironmentQuery, useEnvironmentQuerySelector } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import ChatMarkdown from "../ChatMarkdown";
@@ -32,8 +32,20 @@ type Preview =
   | { readonly kind: "image"; readonly url: string }
   | null;
 
-// The listing read each listing was last read again after, so replies that saw one read share one.
-const rereadAfter = new WeakMap<object, number>();
+/**
+ * Rereads of one Library listing, shared by every reply that reads it: one read in flight; a reply
+ * that needs a read while one runs owes one follow-up when it settles; a failure clears what is
+ * owed, so a later reply tries again. Replies that ask in the same tick share one read.
+ */
+interface ListingRereads {
+  running: boolean;
+  owed: boolean;
+  scheduled: boolean;
+  /** The answer the running read started from; any other settled answer means it settled. */
+  startedFrom: unknown;
+}
+const rereads = new WeakMap<object, ListingRereads>();
+const sameResult = <Result,>(result: Result) => result;
 
 /** Cards under a bot reply for each Library file it names, so the person can open it. */
 export const GoatBotReplyFiles = memo(function GoatBotReplyFiles({
@@ -50,18 +62,50 @@ export const GoatBotReplyFiles = memo(function GoatBotReplyFiles({
   const wanted = environmentId !== null && supported && goatBotReplyMayNameFile(text);
   const query = wanted ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null;
   const listing = useEnvironmentQuery(query);
-  // A listing read before this reply arrived may predate the file it names; a listing first
-  // read for this reply needs no second read.
-  const [readBefore] = useState(() => (listing.data === null ? null : listing.dataUpdatedAt));
-  const readAgain = useEffectEvent((readAt: number) => {
-    if (query === null || rereadAfter.get(query) === readAt) return;
-    rereadAfter.set(query, readAt);
+  const result = useEnvironmentQuerySelector(query, sameResult);
+  const settled = result.waiting || result._tag === "Initial" ? null : result;
+  const start = (state: ListingRereads, from: unknown) => {
+    state.running = true;
+    state.owed = false;
+    state.startedFrom = from;
     listing.refresh();
+  };
+  // A listing already read once may predate the file this reply names; a first read still out
+  // covers it.
+  const ask = useEffectEvent((listingQuery: object) => {
+    if (result._tag === "Initial") return;
+    const state = rereads.get(listingQuery) ?? {
+      running: false,
+      owed: false,
+      scheduled: false,
+      startedFrom: null,
+    };
+    rereads.set(listingQuery, state);
+    if (state.running) state.owed = true;
+    if (state.running || state.scheduled) return;
+    state.scheduled = true;
+    const from = result;
+    queueMicrotask(() => {
+      state.scheduled = false;
+      if (state.running) state.owed = true;
+      else start(state, from);
+    });
   });
-  // oxlint-disable-next-line goat/react-effect-budget -- The Library lives on the server and nothing tells this client a file was saved; read it again once for a reply that arrives later.
+  const settle = useEffectEvent((listingQuery: object, answer: typeof result) => {
+    const state = rereads.get(listingQuery);
+    if (state === undefined || !state.running || answer === state.startedFrom) return;
+    state.running = false;
+    if (answer._tag === "Failure") state.owed = false;
+    else if (state.owed) start(state, answer);
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- The Library lives on the server and nothing tells this client a file was saved; a reply that comes to name one asks for a reread when it first wants the listing.
   useEffect(() => {
-    if (readBefore !== null) readAgain(readBefore);
-  }, [readBefore]);
+    if (query !== null) ask(query);
+  }, [query]);
+  // oxlint-disable-next-line goat/react-effect-budget -- A reread settles on the server's time; then the follow-up a reply owed, if any, starts.
+  useEffect(() => {
+    if (query !== null && settled !== null) settle(query, settled);
+  }, [query, settled]);
   const data = wanted ? (listing.data ?? null) : null;
   const named = data === null ? [] : goatBotReplyFiles(text, data.artifacts, data.root);
   if (files === null || named.length === 0) return null;

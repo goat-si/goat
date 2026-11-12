@@ -17,6 +17,10 @@ const server = vi.hoisted(() => ({
   files: new Map<string, { readonly mimeType: string; readonly text: string }>(),
   // The listing's artifacts folder; undefined is an older server that does not send it.
   root: undefined as string | undefined,
+  /** While set, a listing read waits for it; it still lists the files saved when it started. */
+  gate: null as Promise<void> | null,
+  /** The next listing read fails. */
+  failNext: false,
 }));
 const SUMMARY = { mimeType: "text/markdown", text: "# Weekly summary\nThree merged." };
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -53,11 +57,18 @@ vi.mock("~/state/channels", async (original) => {
   const methods = contracts.CHANNEL_GATEWAY_WS_METHODS;
   const client = {
     [methods.listBotArtifacts]: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         server.listed += 1;
+        const saved = [...server.files.keys()];
+        const root = server.root;
+        const fail = server.failNext;
+        server.failNext = false;
+        const gate = server.gate;
+        if (gate !== null) yield* Effect.promise(() => gate);
+        if (fail) return yield* Effect.die(new Error("The listing read failed."));
         return {
-          ...(server.root === undefined ? {} : { root: server.root }),
-          artifacts: [...server.files.keys()].map((relativePath) => ({
+          ...(root === undefined ? {} : { root }),
+          artifacts: saved.map((relativePath) => ({
             relativePath,
             size: 30,
             modifiedAt: "2026-11-07T10:00:00.000Z",
@@ -183,6 +194,8 @@ function setup(
   server.reads = [];
   server.files = new Map(files);
   server.root = root;
+  server.gate = null;
+  server.failNext = false;
   const registry = AtomRegistry.make({ scheduleTask });
   return {
     wrap: (ui: ReactNode) => (
@@ -277,6 +290,67 @@ it("a reply naming a file saved after the listing was read still gets its card, 
   );
   await expect.element(screen.getByRole("button", { name: "Open plan.md" })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Open notes.md" })).toBeVisible();
+  expect(server.listed).toBe(2);
+});
+
+const libraryView = (test: ReturnType<typeof setup>) => (rows: ReadonlyArray<GoatBotRow>) =>
+  test.wrap(
+    <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+      <GoatBotTimeline rows={rows} onRetry={() => {}} />
+    </GoatBotOpenFileContext>,
+  );
+
+it("a reply arriving while a reread is out gets one follow-up read when it settles", async () => {
+  using test = setup();
+  const view = libraryView(test);
+  const first = reply("first", "Saved `reports/summary.md`.");
+  await using screen = await render(view([first]), { router: false }); // No links here.
+  await expect.element(screen.getByRole("button", { name: "Open summary.md" })).toBeVisible();
+  let release = () => {};
+  server.gate = new Promise<void>((resolve) => (release = resolve));
+  server.files.set("reports/plan.md", { mimeType: "text/markdown", text: "# Plan" });
+  const plan = reply("plan", "Then I saved `reports/plan.md`.");
+  await screen.rerender(view([first, plan]));
+  await vi.waitFor(() => expect(server.listed).toBe(2));
+  // Saved after the reread started, so only a follow-up read can list it.
+  server.files.set("reports/notes.md", { mimeType: "text/markdown", text: "# Notes" });
+  await screen.rerender(view([first, plan, reply("notes", "And `reports/notes.md`.")]));
+  server.gate = null;
+  release();
+  await expect.element(screen.getByRole("button", { name: "Open plan.md" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Open notes.md" })).toBeVisible();
+  expect(server.listed).toBe(3);
+});
+
+it("after a reread fails, a later reply naming a file reads the listing again", async () => {
+  using test = setup();
+  const view = libraryView(test);
+  const first = reply("first", "Saved `reports/summary.md`.");
+  await using screen = await render(view([first]), { router: false }); // No links here.
+  await expect.element(screen.getByRole("button", { name: "Open summary.md" })).toBeVisible();
+  server.files.set("reports/plan.md", { mimeType: "text/markdown", text: "# Plan" });
+  server.failNext = true;
+  const failed = reply("failed", "Then I saved `reports/plan.md`.");
+  await screen.rerender(view([first, failed]));
+  await vi.waitFor(() => expect(server.listed).toBe(2));
+  await screen.rerender(view([first, failed, reply("again", "It is `reports/plan.md`.")]));
+  await vi.waitFor(() =>
+    expect(screen.getByRole("button", { name: "Open plan.md" }).elements()).toHaveLength(2),
+  );
+  expect(server.listed).toBe(3);
+});
+
+it("a reply whose text comes to name a file after it was drawn reads the listing again", async () => {
+  using test = setup();
+  const view = libraryView(test);
+  const first = reply("first", "Saved `reports/summary.md`.");
+  await using screen = await render(view([first, reply("later", "Working on it.")]), {
+    router: false, // No links here.
+  });
+  await expect.element(screen.getByRole("button", { name: "Open summary.md" })).toBeVisible();
+  server.files.set("reports/plan.md", { mimeType: "text/markdown", text: "# Plan" });
+  await screen.rerender(view([first, reply("later", "Saved `reports/plan.md`.")]));
+  await expect.element(screen.getByRole("button", { name: "Open plan.md" })).toBeVisible();
   expect(server.listed).toBe(2);
 });
 
