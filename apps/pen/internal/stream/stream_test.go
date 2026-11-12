@@ -179,6 +179,47 @@ func TestALinkCutAfterThePeersFinWasWrittenOutIsDelivered(t *testing.T) {
 	}
 }
 
+// creditHeld holds the first CREDIT this side sends until release is closed, after its writes to w returned.
+type creditHeld struct {
+	relay.Conn
+	held    chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *creditHeld) Send(p []byte) error {
+	if len(p) > 0 && p[0] == stream.TypeCredit {
+		c.once.Do(func() { close(c.held) })
+		<-c.release
+	}
+	return c.Conn.Send(p)
+}
+
+func TestALinkCutAfterThePeersFinIsDeliveredWhileTheWriterIsStillCreditingWhatItWrote(t *testing.T) {
+	a, b := relay.Pipe()
+	link := &creditHeld{Conn: b, held: make(chan struct{}), release: make(chan struct{})}
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	var got bytes.Buffer
+	errc := make(chan error, 1)
+	go func() { errc <- stream.Splice(context.Background(), link, pr, &got, nil) }()
+	reply := make([]byte, stream.CreditEvery)
+	rand.Read(reply)
+	a.Send(append([]byte{stream.TypeData}, reply[:stream.MaxData]...))
+	a.Send(append([]byte{stream.TypeData}, reply[stream.MaxData:]...))
+	<-link.held // every byte reached w; the writer is sending its CREDIT
+	a.Send([]byte{stream.TypeFin})
+	a.Close(4404)
+	err := <-errc
+	close(link.release)
+	if relay.CodeOf(err) != 4404 || !stream.Delivered(err) {
+		t.Fatalf("got %v, delivered %v; want 4404 and delivered, the peer's whole stream was written", err, stream.Delivered(err))
+	}
+	if !bytes.Equal(got.Bytes(), reply) {
+		t.Fatalf("wrote %d bytes, want the %d the peer sent", got.Len(), len(reply))
+	}
+}
+
 func TestALinkCutAfterThePeersFinButBeforeItsDataWasWrittenOutIsNotDelivered(t *testing.T) {
 	a, b := relay.Pipe()
 	pr, pw := io.Pipe()
