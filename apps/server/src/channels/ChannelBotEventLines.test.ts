@@ -1,12 +1,24 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, ChannelGatewayError, CommandId } from "@goat/contracts";
+import {
+  BotId,
+  ChannelGatewayError,
+  CommandId,
+  ProjectId,
+  ScheduledTaskId,
+  type ScheduledTaskListResult,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { scheduledTaskFixture } from "../scheduledTasks/ScheduledTaskFixture.testkit.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import { watchRoutines } from "./ChannelBotRoutineEvents.ts";
 import {
   botMessages,
   botThreadId,
@@ -49,6 +61,42 @@ describe("GOAT Bot event lines", () => {
         [["Routine Standup paused", { kind: "goat_bot_event", subject }]],
       );
     }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a routine titled over 200 characters still leaves its line, with a chip", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const events = yield* ChannelBotEvents.ChannelBotEvents;
+      const feed = yield* Queue.unbounded<ScheduledTaskListResult>();
+      const emitted = yield* Queue.unbounded<ChannelBotEvents.BotEvent>();
+      yield* watchRoutines({
+        subscribe: () => Stream.fromQueue(feed),
+        botForThread: () => Effect.succeed({ ownerId: owner.ownerId, botId: main }),
+        emit: (event) => events.emit(event).pipe(Effect.andThen(Queue.offer(emitted, event))),
+      }).pipe(Effect.forkScoped);
+      const routine = scheduledTaskFixture(ProjectId.make("project"), {
+        id: ScheduledTaskId.make("long"),
+        title: "Look over every open pull request ".repeat(8).trim(),
+        threadId: botThreadId,
+        goatBotRoutine: true,
+      });
+      yield* Queue.offer(feed, { tasks: [] });
+      yield* Queue.offer(feed, { tasks: [routine] });
+      yield* Queue.take(emitted);
+      // A refused write is retried with backoff, so let the clock run past every try.
+      const flushed = yield* events.flush.pipe(Effect.forkChild);
+      yield* TestClock.adjust("1 minute");
+      yield* Fiber.join(flushed);
+      const lines = (yield* botMessages).turnItems.flatMap((item) =>
+        item.type === "notification" && item.source.kind === "goat_bot_event" ? [item] : [],
+      );
+      assert.strictEqual(lines.length, 1);
+      const source = lines[0]?.source;
+      const name = source?.kind === "goat_bot_event" ? (source.subject?.name ?? "") : "";
+      assert.isTrue(name.endsWith("…"));
+      assert.strictEqual(lines[0]?.summary, "Routine " + name + " set up");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
   it.effect("records a bot event line once per record key, without a run", () => {
