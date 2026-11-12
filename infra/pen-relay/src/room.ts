@@ -318,6 +318,9 @@ export class Room extends DurableObject<Env> {
       state.authed = true;
       state.deadline = 0;
       state.challenge = "";
+      // Counts a replaced or lost uplink carried move to this one, which survives hibernation.
+      state.carry = addCounts(state.carry ?? NO_COUNTS, this.unsaved);
+      this.unsaved = NO_COUNTS;
       save(ws, state);
     });
   }
@@ -370,9 +373,11 @@ export class Room extends DurableObject<Env> {
       return this.endSession(ws, state, CloseCode.Timeout);
     }
     ws.send(payload);
+    const fresh = !this.uncounted(state);
     state.sent += payload.length;
     state.fromNode = (state.fromNode ?? 0) + payload.length;
     save(ws, state);
+    if (fresh) this.armTotals();
   }
 
   private onClientData([ws, state]: Entry<ClientState>, payload: Uint8Array): void {
@@ -394,8 +399,10 @@ export class Room extends DurableObject<Env> {
     save(up, upState);
     state.upEnd = upState.sent;
     state.upUnacked = mine;
+    const fresh = !this.uncounted(state);
     state.toNode = (state.toNode ?? 0) + payload.length;
     save(ws, state);
+    if (fresh) this.armTotals();
   }
 
   /** OPEN and CLOSE may use RELAY_HEADROOM past the window; an uplink that leaves even that unacked is dropped. */
@@ -486,7 +493,7 @@ export class Room extends DurableObject<Env> {
 
   /** On an alarm: once the minute has passed, writes what open sessions relayed and what is carried. */
   private writeTotalsIfDue(now: number): void {
-    if (now < this.nextWrite() || !this.hasUnwritten()) return;
+    if (!this.hasUnwritten() || now < this.nextWrite()) return;
     let pending = this.unwritten();
     for (const [ws, state] of this.clients()) {
       pending = addCounts(pending, takeUncounted(state));
@@ -497,11 +504,19 @@ export class Room extends DurableObject<Env> {
 
   private hasUnwritten(): boolean {
     if (!isEmpty(this.unsaved) || !isEmpty(this.uplink()?.[1].carry ?? NO_COUNTS)) return true;
-    return this.clients().some(
-      ([, state]) =>
-        (state.toNode ?? 0) !== (state.countedTo ?? 0) ||
-        (state.fromNode ?? 0) !== (state.countedFrom ?? 0),
+    return this.clients().some(([, state]) => this.uncounted(state));
+  }
+
+  private uncounted(state: ClientState): boolean {
+    return (
+      (state.toNode ?? 0) !== (state.countedTo ?? 0) ||
+      (state.fromNode ?? 0) !== (state.countedFrom ?? 0)
     );
+  }
+
+  /** An open session has bytes the totals lack: wake when the next write is allowed. */
+  private armTotals(): void {
+    this.ctx.waitUntil(this.armAlarm(this.nextWrite()));
   }
 
   private nextWrite(): number {

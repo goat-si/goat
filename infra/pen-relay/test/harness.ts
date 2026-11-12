@@ -122,14 +122,8 @@ export interface TotalsRow {
 /** Every Room's traffic row, read from the SQLite files wrangler keeps under persist. */
 export function readTotals(persist: string): Array<TotalsRow> {
   const rows: Array<TotalsRow> = [];
-  const files = NodeFS.readdirSync(persist, { recursive: true, encoding: "utf8" });
-  for (const file of files.filter((name) => name.endsWith(".sqlite"))) {
-    const db = new NodeSqlite.DatabaseSync(NodePath.join(persist, file), { readOnly: true });
+  for (const db of trafficDatabases(persist)) {
     try {
-      const table = db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'traffic'")
-        .get();
-      if (table === undefined) continue;
       for (const row of db.prepare("SELECT * FROM traffic").all()) {
         rows.push({
           to_node: Number(row.to_node),
@@ -145,6 +139,27 @@ export function readTotals(persist: string): Array<TotalsRow> {
     }
   }
   return rows;
+}
+
+/** How many Rooms hold a traffic table. */
+export function trafficTables(persist: string): number {
+  const dbs = trafficDatabases(persist);
+  for (const db of dbs) db.close();
+  return dbs.length;
+}
+
+function trafficDatabases(persist: string): Array<NodeSqlite.DatabaseSync> {
+  const files = NodeFS.readdirSync(persist, { recursive: true, encoding: "utf8" });
+  return files.flatMap((file) => {
+    if (!file.endsWith(".sqlite")) return [];
+    const db = new NodeSqlite.DatabaseSync(NodePath.join(persist, file), { readOnly: true });
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'traffic'")
+      .get();
+    if (table !== undefined) return [db];
+    db.close();
+    return [];
+  });
 }
 
 /** Values arrive in order; `ready` resolves when one is waiting without taking it. */

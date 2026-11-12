@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
-import { FrameType } from "@goat/pen-protocol/wire";
+import { CloseCode, FrameType } from "@goat/pen-protocol/wire";
 import {
   client,
   type FakeNode,
@@ -12,6 +12,7 @@ import {
   readTotals,
   type Relay,
   startRelay,
+  trafficTables,
   type TotalsRow,
 } from "./harness.ts";
 
@@ -77,6 +78,27 @@ describe("Room traffic totals (written at every session end)", () => {
     expect(readTotals(relay.persist)).toMatchObject([
       { to_node: 6030, from_node: 3030, sessions: 31, unanswered: 31 },
     ]);
+  });
+});
+
+describe("Room traffic totals (uplinks that never authenticate)", () => {
+  let relay: Relay;
+  beforeAll(async () => {
+    relay = await startRelay({ AUTH_TIMEOUT_MS: "300", TOTALS_EVERY_MS: "0" });
+  });
+  afterAll(async () => {
+    await relay?.stop();
+  });
+
+  it("leave no traffic table in any Room", async () => {
+    for (let i = 0; i < 3; i++) {
+      const silent = await fakeNode(relay.url, randomSeed(), { silent: true });
+      expect(await silent.closed).toBe(CloseCode.AuthFailed);
+      // The Room handles this client after the alarm that closed the uplink, and its close waits
+      // for that alarm's storage writes.
+      expect(await client(relay.url, silent.nodeId).closed).toBe(CloseCode.Offline);
+    }
+    expect(trafficTables(relay.persist)).toBe(0);
   });
 });
 

@@ -57,17 +57,22 @@ export function flushTotals(
   return NO_COUNTS;
 }
 
-/** One row in the Room's SQLite database, readable in the dashboard's Data Studio. */
+/**
+ * One row in the Room's SQLite database, readable in the dashboard's Data Studio. Only a write
+ * creates the table: a Room that never carried a session keeps nothing.
+ */
 export function sqlTotalsStore(sql: SqlStorage): TotalsStore {
   let cached: Totals | null | undefined;
-  const table = () =>
-    sql.exec(
-      "CREATE TABLE IF NOT EXISTS traffic (id INTEGER PRIMARY KEY CHECK (id = 1), to_node INTEGER NOT NULL, from_node INTEGER NOT NULL, sessions INTEGER NOT NULL, unanswered INTEGER NOT NULL, since INTEGER NOT NULL, at INTEGER NOT NULL)",
-    );
   return {
     read() {
       if (cached !== undefined) return cached;
-      table();
+      const exists = sql
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'traffic'")
+        .toArray();
+      if (exists.length === 0) {
+        cached = null;
+        return cached;
+      }
       const row = sql
         .exec<{
           to_node: number;
@@ -91,7 +96,9 @@ export function sqlTotalsStore(sql: SqlStorage): TotalsStore {
       return cached;
     },
     write(totals) {
-      table();
+      sql.exec(
+        "CREATE TABLE IF NOT EXISTS traffic (id INTEGER PRIMARY KEY CHECK (id = 1), to_node INTEGER NOT NULL, from_node INTEGER NOT NULL, sessions INTEGER NOT NULL, unanswered INTEGER NOT NULL, since INTEGER NOT NULL, at INTEGER NOT NULL)",
+      );
       sql.exec(
         "INSERT INTO traffic (id, to_node, from_node, sessions, unanswered, since, at) VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET to_node = excluded.to_node, from_node = excluded.from_node, sessions = excluded.sessions, unanswered = excluded.unanswered, since = excluded.since, at = excluded.at",
         totals.toNode,
