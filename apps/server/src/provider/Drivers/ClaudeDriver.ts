@@ -244,14 +244,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
             : Duration.zero,
       },
     );
-    // Built per lookup: the key holds PATH, which this instance's environment can still be given.
-    const resolveCapabilities = makeClaudeCapabilitiesCacheKey(
+    const capabilitiesCacheKey = yield* makeClaudeCapabilitiesCacheKey(
       effectiveConfig,
       stateDir,
       processEnv,
-    ).pipe(
-      Effect.provideService(Path.Path, path),
-      Effect.flatMap((key) => Cache.get(capabilitiesProbeCache, key)),
+    );
+    const resolveCapabilities = Cache.get(capabilitiesProbeCache, capabilitiesCacheKey).pipe(
       Effect.map((result) => result.capabilities),
     );
 

@@ -1,8 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeTls from "node:tls";
 import type { DesktopShellEnvironmentSnapshot } from "@goat/contracts";
-import { SHELL_DISCOVERY_PENDING_ENV } from "@goat/shared/cliPath";
-import { syncHostEnvironmentFollowers } from "@goat/shared/hostEnvironmentFollowers";
+import { loginShellPathUnread } from "@goat/shared/cliPath";
 import { applyShellEnvironment } from "@goat/shared/shell";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -41,10 +40,8 @@ export function makeApplyDesktopShellEnvironmentSnapshot(
         return false;
       });
     }
-    const before = {
-      PATH: environment.PATH,
-      [SHELL_DISCOVERY_PENDING_ENV]: environment[SHELL_DISCOVERY_PENDING_ENV],
-    };
+    const pathBefore = environment.PATH;
+    const unreadBefore = loginShellPathUnread(environment);
     applyShellEnvironment(environment, message.environment, platform);
     if (message.environment.NODE_EXTRA_CA_CERTS !== undefined) {
       yield* Effect.gen(function* () {
@@ -92,15 +89,11 @@ export function makeApplyDesktopShellEnvironmentSnapshot(
       );
     }
     if (message.discovered) delete environment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
-    // Only macOS and Linux read a login shell. Windows keeps its existing behavior.
+    // Windows keeps its existing behavior: statuses follow the periodic health check there.
     if (
-      (platform === "darwin" || platform === "linux") &&
-      (environment.PATH !== before.PATH ||
-        environment[SHELL_DISCOVERY_PENDING_ENV] !== before[SHELL_DISCOVERY_PENDING_ENV])
-    ) {
-      // Provider instances hold copies made before this snapshot; they must see it before the refresh.
-      syncHostEnvironmentFollowers(before, environment);
+      platform !== "win32" &&
+      (environment.PATH !== pathBefore || loginShellPathUnread(environment) !== unreadBefore)
+    )
       yield* onPathChanged;
-    }
   });
 }

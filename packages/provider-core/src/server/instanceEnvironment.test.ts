@@ -1,12 +1,8 @@
-// @effect-diagnostics nodeBuiltinImport:off -- util.inspect shows whether the copy is a plain object.
-import * as NodeUtil from "node:util";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { syncHostEnvironmentFollowers } from "@goat/shared/hostEnvironmentFollowers";
 
 import { mergeProviderInstanceEnvironment } from "./instanceEnvironment.ts";
 
@@ -73,42 +69,6 @@ describe("mergeProviderInstanceEnvironment", () => {
         ANTHROPIC_API_KEY: "",
         PATH: "/bin",
       });
-    }),
-  );
-
-  it.effect("an instance copy takes the host's new PATH on a sync, and stays a plain copy", () =>
-    Effect.gen(function* () {
-      const host: NodeJS.ProcessEnv = {
-        PATH: "/usr/bin",
-        OTHER: "old",
-        GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
-      };
-      const environment = yield* mergeProviderInstanceEnvironment(
-        [{ name: "CUSTOM_VALUE", value: "own", sensitive: false }],
-        host,
-      );
-      const ownPath = yield* mergeProviderInstanceEnvironment(
-        [{ name: "PATH", value: "/instance/bin", sensitive: false }],
-        host,
-      );
-      const before = {
-        PATH: host.PATH,
-        GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: host.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING,
-      };
-      host.PATH = "/home/ada/.local/bin:/usr/bin";
-      host.OTHER = "new";
-      delete host.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
-      syncHostEnvironmentFollowers(before, host);
-
-      expect(environment).toEqual({
-        PATH: "/home/ada/.local/bin:/usr/bin",
-        OTHER: "old",
-        CUSTOM_VALUE: "own",
-      });
-      expect(ownPath).toEqual({ PATH: "/instance/bin", OTHER: "old" });
-      expect(Object.getPrototypeOf(environment)).toBe(Object.prototype);
-      expect(NodeUtil.inspect(environment)).toContain("CUSTOM_VALUE: 'own'");
-      expect(structuredClone(environment)).toEqual(environment);
     }),
   );
 });

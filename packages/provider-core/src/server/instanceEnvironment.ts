@@ -1,5 +1,4 @@
 import type { ProviderInstanceEnvironment } from "@goat/contracts";
-import { followHostEnvironment } from "@goat/shared/hostEnvironmentFollowers";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
@@ -21,5 +20,5 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
         ? expandHomePath(variable.value, home)
         : variable.value;
   }
-  return followHostEnvironment(next, baseEnv);
+  return next;
 });

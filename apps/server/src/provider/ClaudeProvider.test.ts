@@ -74,7 +74,7 @@ it.effect("says the login shell PATH is unread when claude is missing during dis
     assert.equal(unread.installed, false);
     assert.include(
       unread.message ?? "",
-      notFound + " GOAT has not been able to read the PATH from your login shell",
+      notFound + " GOAT looked for it without the PATH from your login shell",
     );
     const windows = yield* check({ GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" }, "win32");
     assert.equal(windows.message, notFound);

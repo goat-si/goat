@@ -211,10 +211,6 @@
       "types": "./src/cliPath.ts",
       "import": "./src/cliPath.ts"
     },
-    "./hostEnvironmentFollowers": {
-      "types": "./src/hostEnvironmentFollowers.ts",
-      "import": "./src/hostEnvironmentFollowers.ts"
-    },
     "./semver": {
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"

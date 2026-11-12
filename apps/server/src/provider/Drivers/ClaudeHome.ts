@@ -6,7 +6,6 @@ import * as Schema from "effect/Schema";
 
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
-import { followHostEnvironment } from "@goat/shared/hostEnvironmentFollowers";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 import { readClaudeSettingsEnv } from "./ClaudeSkills.ts";
@@ -39,12 +38,11 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   const homePath = config.homePath.trim();
   if (homePath.length === 0) return resolvedBaseEnv;
   const resolvedHomePath = yield* resolveClaudeHomePath(config);
-  const claudeEnvironment = {
+  return {
     ...resolvedBaseEnv,
     // Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep login access.
     CLAUDE_CONFIG_DIR: resolvedHomePath,
   };
-  return followHostEnvironment(claudeEnvironment, resolvedBaseEnv);
 });
 
 // A Claude Code session that launched GOAT exports these. A claude spawned with them acts as part of
@@ -84,10 +82,9 @@ export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnviro
   const environment = yield* mergeProviderInstanceEnvironment(instanceEnvironment, baseEnvironment);
   const settingsEntrypoint = (yield* readClaudeSettingsEnv(config, undefined, environment))
     .CLAUDE_CODE_ENTRYPOINT;
-  const merged = settingsEntrypoint
+  return settingsEntrypoint
     ? { ...environment, CLAUDE_CODE_ENTRYPOINT: settingsEntrypoint }
     : environment;
-  return followHostEnvironment(merged, hostEnvironment);
 });
 
 /** managed-mcp.json excludes other MCP config and forbids --strict-mcp-config; omit the flag when present. */
@@ -120,9 +117,7 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
     environment?: NodeJS.ProcessEnv,
   ): Effect.fn.Return<string, never, Path.Path> {
     const resolvedHomePath = yield* resolveClaudeHomePath(config, environment);
-    // PATH decides which `claude` a bare name runs; a different one must not reuse this probe.
-    const path = environment?.PATH ? `\0${environment.PATH}` : "";
-    return `${config.binaryPath}\0${resolvedHomePath}\0${cwd ?? ""}${path}`;
+    return `${config.binaryPath}\0${resolvedHomePath}\0${cwd ?? ""}`;
   },
 );
 

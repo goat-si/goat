@@ -320,7 +320,9 @@ after your `PATH`, in the folders the usual installers use: `~/.local/bin`,
 CLI, set its **Binary path** in provider settings, especially when using a version manager.
 The desktop app reads `PATH` from your login shell. When that shell is slow to start,
 GOAT tries again over the next few minutes, and a missing provider's status says
-that the shell has not answered yet.
+that GOAT looked without your shell's `PATH`. If a provider still reads as not
+found after your shell has answered, restart GOAT: Claude, and any provider instance
+with its own environment variables, keep the `PATH` they started with.
 Cursor's executable is `cursor-agent`, although its login command is
 `agent login`. Codex connected through ChatGPT and Antigravity can use their
 managed runtimes without a `PATH` entry.

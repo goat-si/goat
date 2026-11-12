@@ -11,7 +11,6 @@ import {
 } from "@muse-code/sdk";
 import type { RuntimeMode } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { followHostEnvironment } from "@goat/shared/hostEnvironmentFollowers";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
 
@@ -56,7 +55,7 @@ export interface MuseSdkHostOptions {
 export function makeMuseEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const museEnvironment = {
+  return {
     ...Object.fromEntries(
       Object.keys(environment)
         .filter((key) => key.toUpperCase() !== "META_API_KEY")
@@ -64,7 +63,6 @@ export function makeMuseEnvironment(
     ),
     MUSE_NO_AUTO_UPDATE: "1",
   };
-  return followHostEnvironment(museEnvironment, environment);
 }
 
 export function museVerbatimPath(path: string): string {

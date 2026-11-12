@@ -2,7 +2,6 @@ import * as NodeOS from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { syncHostEnvironmentFollowers } from "@goat/shared/hostEnvironmentFollowers";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -100,53 +99,5 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
             .CLAUDE_CODE_ENTRYPOINT,
         ).toBe("custom");
       }),
-  );
-
-  it.effect(
-    "the environment Claude is started with takes the host's new PATH and nothing else",
-    () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const homePath = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-home-" });
-        const host: NodeJS.ProcessEnv = {
-          PATH: "/usr/bin",
-          CLAUDECODE: "1",
-          ELECTRON_RUN_AS_NODE: "1",
-          OTHER: "old",
-          GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
-        };
-        const merged = yield* mergeClaudeProcessEnvironment({ homePath }, undefined, host);
-        const started = yield* makeClaudeEnvironment({ homePath }, merged);
-        const before = {
-          PATH: host.PATH,
-          GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: host.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING,
-        };
-        host.PATH = "/home/ada/.local/bin:/usr/bin";
-        host.OTHER = "new";
-        delete host.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
-        syncHostEnvironmentFollowers(before, host);
-
-        // The launching session's variables stay deleted, and other host changes are not copied.
-        const followed = {
-          PATH: "/home/ada/.local/bin:/usr/bin",
-          OTHER: "old",
-          CLAUDE_CODE_ENTRYPOINT: "t3-code",
-        };
-        expect(merged).toEqual(followed);
-        expect(started).toEqual({
-          ...followed,
-          CLAUDE_CONFIG_DIR: yield* resolveClaudeHomePath({ homePath }),
-        });
-        expect(Object.getPrototypeOf(started)).toBe(Object.prototype);
-      }),
-  );
-
-  it.effect("the capabilities cache key changes when PATH does", () =>
-    Effect.gen(function* () {
-      const config = { binaryPath: "claude", homePath: "/claude-home" };
-      const key = (PATH: string) => makeClaudeCapabilitiesCacheKey(config, "/repo", { PATH });
-      expect(yield* key("/usr/bin")).toBe(yield* key("/usr/bin"));
-      expect(yield* key("/usr/bin")).not.toBe(yield* key("/home/ada/.local/bin:/usr/bin"));
-    }),
   );
 });

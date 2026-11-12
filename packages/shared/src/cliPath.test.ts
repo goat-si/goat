@@ -76,7 +76,7 @@ describe("login shell PATH note", () => {
     expect(withLoginShellPathNote(message, { env: {}, platform: "darwin" })).toBe(message);
     for (const platform of ["darwin", "linux"] as const) {
       const noted = withLoginShellPathNote(message, { env: pending, platform });
-      expect(noted.startsWith(message + " GOAT has not been able to read the PATH")).toBe(true);
+      expect(noted.startsWith(message + " GOAT looked for it without the PATH")).toBe(true);
       expect(noted).toContain("Binary path");
     }
     // Windows desktop sets the same variable, but has no login shell to wait for.
