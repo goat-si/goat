@@ -92,7 +92,7 @@ export const approvalTitle = (task: ChannelTask) => clip(task.title, MAX_TITLE_C
  * The two buttons on an approval card, Deny first so a quick first pick never approves. A Slack
  * button or a GOAT app choice sends one of these labels; typed, they are the only approval reply.
  */
-export const approvalChoiceLabels = (code: string): readonly [string, string] => [
+const approvalChoiceLabels = (code: string): readonly [string, string] => [
   "Deny " + code,
   "Approve " + code,
 ];

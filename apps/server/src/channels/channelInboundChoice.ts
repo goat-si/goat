@@ -2,11 +2,7 @@ import type { ChannelInboundMessage, ChannelConversationId, ChannelTask } from "
 import * as Effect from "effect/Effect";
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import {
-  approvalChoiceLabels,
-  openApprovalCards,
-  parseApprovalReply,
-} from "./channelApprovalCards.ts";
+import { openApprovalCards, parseApprovalReply } from "./channelApprovalCards.ts";
 import { pendingApprovals } from "./channelApprovalReplies.ts";
 import { nativeQuestionChoice, type NativeQuestionChoice } from "./channelNativeQuestionCards.ts";
 import {
@@ -116,9 +112,9 @@ export const makeInboundChoices = (
 
   /**
    * A choice pressed in a task's own view of the GOAT app, for a question nobody runs to forward
-   * it to (no worker): it answers that task's one matching question. An approval button or a
-   * native-question option matches first, including while the task is still running. Who may
-   * answer is checked where the answer is recorded.
+   * it to (no worker): it answers that task's one matching question. An approve or deny, typed or
+   * pressed, or a native-question option matches first, including while the task is still
+   * running. Who may answer is checked where the answer is recorded.
    */
   const taskViewChoice = Effect.fn("channel.taskViewChoice")(function* (
     stored: ChannelLedger.ChannelStoredInput,
@@ -134,13 +130,9 @@ export const makeInboundChoices = (
     )
       return undefined;
     const trimmed = message.text.trim();
-    for (const card of openApprovalCards([target.task])) {
-      const found = yield* ledger.approvalCodeForRequest(card.approval.requestId);
-      if (found === undefined) continue;
-      const labels = approvalChoiceLabels(found.code);
-      if (labels[0] === trimmed || labels[1] === trimmed) {
-        return { type: "approval-label" as const, text: trimmed };
-      }
+    // Forwarded, an approval reply would reach an agent that can't answer it.
+    if (openApprovalCards([target.task]).length > 0 && parseApprovalReply(trimmed) !== undefined) {
+      return { type: "approval-label" as const, text: trimmed };
     }
     const hasNativeQuestion = (target.task.observed?.needsYou ?? []).some(
       (need) => need.question !== undefined && need.question.host === undefined,

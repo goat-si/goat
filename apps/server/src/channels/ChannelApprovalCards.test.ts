@@ -133,6 +133,39 @@ describe("GOAT Bot approval cards", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("an approval reply typed in a running task's view is decided, never forwarded", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: clean the build cache", "v1"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      const request = approval("rm");
+      harness.world.runtimeRequests.set(task.worker!.threadId, [request]);
+      harness.world.approvalPrompts.set(request.id, "rm -rf build/");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const inView = (text: string, key: string) => ({
+        ...goatInput(text, key),
+        taskId: task.taskId,
+      });
+
+      yield* gateway.ingest(inView("approve", "v2"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness).length, 0);
+      assert.include((yield* assistantTexts).at(-1) ?? "", CHANNEL_COPY.approvalNeedsCode);
+
+      yield* gateway.ingest(inView("approve a1", "v3"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness)[0]?.requestId, request.id);
+      assert.strictEqual(responses(harness)[0]?.decision, "accept");
+      assert.isFalse(harness.world.sends.some((send) => /approve/i.test(send.text)));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("denies a subagent's approval in its own thread", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
