@@ -237,6 +237,16 @@ describe("Linux readiness grants (#1392)", () => {
     const mixed = await readinessOf({ 30: await unregistered(), 31: NOT_SECURE });
     expect(mixed.tree).toBe("ready");
   });
+
+  it("names a missing gdbus instead of blaming at-spi2-core (#2247)", async () => {
+    const readiness = await readinessOf({
+      42: { known: false, secure: false, windows: 0, gdbusMissing: true },
+    });
+    expect(readiness.tree).toBe("unavailable");
+    expect(readiness.reasons.join(" ")).toMatch(/gdbus/);
+    expect(readiness.reasons.join(" ")).toMatch(/libglib2\.0-bin/);
+    expect(readiness.reasons.join(" ")).not.toMatch(/at-spi2-core/);
+  });
 });
 
 describe("Linux computer use helper conformance", () => {

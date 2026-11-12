@@ -1,6 +1,6 @@
 import { RegistryContext, scheduleTask } from "@effect/atom-react";
 import type { EnvironmentRegistry } from "@goat/client-runtime/connection";
-import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import { botFileReads, type GoatBotRow } from "@goat/client-runtime/goatBot";
 import { EnvironmentId } from "@goat/contracts";
 import { AtomRegistry } from "effect/reactivity";
 import type { ReactNode } from "react";
@@ -21,6 +21,12 @@ const server = vi.hoisted(() => ({
   gate: null as Promise<void> | null,
   /** The next listing read fails. */
   failNext: false,
+  /** While set, a file read waits for it. */
+  readGate: null as Promise<void> | null,
+  /** Called as each file read reaches the server, before it waits. */
+  onRead: (() => {}) as () => void,
+  /** Paths whose reads answer busy. */
+  busy: new Set<string>(),
 }));
 const SUMMARY = { mimeType: "text/markdown", text: "# Weekly summary\nThree merged." };
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -77,8 +83,13 @@ vi.mock("~/state/channels", async (original) => {
         };
       }),
     [methods.readBotArtifact]: (input: { readonly relativePath: string }) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         server.reads.push(input.relativePath);
+        server.onRead();
+        const gate = server.readGate;
+        if (gate !== null) yield* Effect.promise(() => gate);
+        if (server.busy.has(input.relativePath))
+          return { status: "busy" as const, relativePath: input.relativePath };
         const file = server.files.get(input.relativePath);
         if (file === undefined) return { status: "changed" as const };
         const bytes = new TextEncoder().encode(file.text);
@@ -196,6 +207,11 @@ function setup(
   server.root = root;
   server.gate = null;
   server.failNext = false;
+  server.readGate = null;
+  server.onRead = () => {};
+  server.busy = new Set();
+  // The read queue is one module instance; a read a test left waiting must not hold the next.
+  botFileReads.clear();
   const registry = AtomRegistry.make({ scheduleTask });
   return {
     wrap: (ui: ReactNode) => (
@@ -398,7 +414,64 @@ it("an older server's listing keeps cards for relative names, extensionless too,
   );
   await expect.element(screen.getByRole("button", { name: "Open README" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Open summary.md" }).elements()).toHaveLength(0);
-  expect(server.reads).toEqual(["README"]);
+  // README has no preview to draw, so its card reads nothing.
+  expect(server.reads).toEqual([]);
+});
+
+it("six cards under one reply all show previews; the oldest waiting card is not dropped while the first read is out", async () => {
+  const notes = ["a", "b", "c", "d", "e", "f"];
+  using test = setup(
+    notes.map((note) => [
+      `notes/${note}.md`,
+      { mimeType: "text/markdown", text: `# Note ${note.toUpperCase()}` },
+    ]),
+  );
+  let release = () => {};
+  server.readGate = new Promise<void>((resolve) => (release = resolve));
+  const firstRead = new Promise<void>((resolve) => (server.onRead = resolve));
+  await using screen = await render(
+    test.wrap(
+      <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+        <GoatBotTimeline
+          rows={[
+            reply("saved", `Saved ${notes.map((note) => `\`notes/${note}.md\``).join(", ")}.`),
+          ]}
+          onRetry={() => {}}
+        />
+      </GoatBotOpenFileContext>,
+    ),
+    { router: false }, // This reply has no links.
+  );
+  // Every card asks for its preview in the commit that mounts them all, so once one read is out,
+  // the other five are waiting behind it.
+  await firstRead;
+  server.readGate = null;
+  release();
+  for (const note of notes)
+    await expect.element(screen.getByText(`Note ${note.toUpperCase()}`)).toBeInTheDocument();
+  expect(server.reads).toHaveLength(6);
+});
+
+it("a preview answered busy shows Preview unavailable and the card still opens", async () => {
+  using test = setup();
+  server.busy = new Set(["reports/summary.md"]);
+  const open = vi.fn();
+  await using screen = await render(
+    test.wrap(
+      <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open }}>
+        <GoatBotTimeline
+          rows={[reply("saved", "Saved `reports/summary.md`.")]}
+          onRetry={() => {}}
+        />
+      </GoatBotOpenFileContext>,
+    ),
+    { router: false }, // This reply has no links.
+  );
+  await expect.element(screen.getByText("Preview unavailable")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Open summary.md" }));
+  expect(open).toHaveBeenCalledWith(
+    expect.objectContaining({ relativePath: "reports/summary.md" }),
+  );
 });
 
 const remote = "https://tracker.example.com";
@@ -486,4 +559,33 @@ it("an SVG preview is drawn as an image, so its scripts and external references 
   expect(card.querySelector("[inert] svg, script")).toBeNull();
   expect(document.title).toBe(title);
   expect(fetchedFrom(card)).toEqual({ elements: [], requests: [] });
+});
+it("a zip, a pdf and a code file get cards that read nothing, the code file named as text, while a text file still previews", async () => {
+  using test = setup([
+    ["q3.zip", { mimeType: "application/zip", text: "PK" }],
+    ["deck.pdf", { mimeType: "application/pdf", text: "%PDF" }],
+    ["deploy.yaml", { mimeType: "text/yaml", text: "replicas: 2" }],
+    ["notes.txt", { mimeType: "text/plain", text: "Remember the release notes" }],
+  ]);
+  await using screen = await render(
+    test.wrap(
+      <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+        <GoatBotTimeline
+          rows={[reply("files", "Saved `q3.zip`, `deck.pdf`, `deploy.yaml` and `notes.txt`.")]}
+          onRetry={() => {}}
+        />
+      </GoatBotOpenFileContext>,
+    ),
+    { router: false }, // These replies have no links.
+  );
+  await expect.element(screen.getByText("Remember the release notes")).toBeInTheDocument();
+  expect(server.reads).toEqual(["notes.txt"]);
+  const kindOf = (name: string) =>
+    screen
+      .getByRole("button", { name: `Open ${name}` })
+      .element()
+      .textContent?.slice(name.length);
+  expect(kindOf("deploy.yaml")).toBe("Text");
+  expect(kindOf("q3.zip")).toBe("File");
+  expect(kindOf("deck.pdf")).toBe("File");
 });

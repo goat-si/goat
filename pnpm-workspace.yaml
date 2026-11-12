@@ -263,8 +263,9 @@ overrides:
   react-native-gesture-handler: 3.3.0
   react-native-reanimated: 4.7.1
   react-native-keyboard-controller: 1.22.8
-  react-native-pdf-jsi: 5.0.0
+  react-native-pdf-jsi: 6.1.0
   react-native-webview: 14.0.1
+  react-native-svg: 15.16.0
   "@expo/ui": 58.0.20
   "@expo/fingerprint": 0.21.5
   app-builder-lib: 26.16.1
@@ -400,9 +401,10 @@ patchedDependencies:
   # inside one otherwise hold its removal for a later mount, after its stack has moved on.
   react-native-reanimated@4.7.1: patches/react-native-reanimated@4.7.1.patch
   react-native-keyboard-controller@1.22.8: patches/react-native-keyboard-controller@1.22.8.patch
-  react-native-pdf-jsi@5.0.0: patches/react-native-pdf-jsi@5.0.0.patch
   # Android: a nested WebView hands a vertical drag to its scrolling parent at the page's edge.
+  react-native-pdf-jsi@6.1.0: patches/react-native-pdf-jsi@6.1.0.patch
   react-native-webview@14.0.1: patches/react-native-webview@14.0.1.patch
+  react-native-svg@15.16.0: patches/react-native-svg@15.16.0.patch
   "@expo/ui@58.0.20": patches/@expo__ui@58.0.20.patch
   # iOS: native modules register permission requesters from several threads during reloads.
   # Android: a Compose host that requests layout in a mount (a new screen's app bar) is laid out

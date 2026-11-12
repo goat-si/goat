@@ -4,6 +4,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 
 import { readLocalApi } from "~/localApi";
 
+import { holdNavigation } from "~/lib/navigationHolds";
 import { useMarkGoatBotRead } from "./useGoatBotWaitingCount";
 
 type GoatBotReadMenuAction = "mark-read";
@@ -14,9 +15,14 @@ const isMenuKey = (event: KeyboardEvent) =>
 /**
  * Right-click (or Shift+F10 / the menu key) on a GOAT Bot entry: "Mark all as read" clears its
  * waiting badge for every client. Disabled with nothing unread; absent on servers that cannot
- * count read tasks, so the platform menu stays.
+ * count read tasks, so the platform menu stays. In the roster, an open menu holds back the chat a
+ * New bot create would open.
  */
-export function useGoatBotReadMenu(count: number | undefined, botName = "GOAT Bot") {
+export function useGoatBotReadMenu(
+  count: number | undefined,
+  botName = "GOAT Bot",
+  { holdsNewBotOpen = false }: { readonly holdsNewBotOpen?: boolean } = {},
+) {
   const markRead = useMarkGoatBotRead(botName);
   const unread = count !== undefined && count > 0;
   const open = useRef(false);
@@ -27,7 +33,11 @@ export function useGoatBotReadMenu(count: number | undefined, botName = "GOAT Bo
       { id: "mark-read", label: "Mark all as read", disabled: !unread },
     ];
     open.current = true;
-    const action = await api.contextMenu.show(items, position).catch(() => null);
+    const release = holdsNewBotOpen ? holdNavigation() : null;
+    const action = await api.contextMenu
+      .show(items, position)
+      .catch(() => null)
+      .finally(() => release?.());
     open.current = false;
     if (action === "mark-read") await markRead();
   };

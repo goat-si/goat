@@ -1,8 +1,7 @@
+import type { NewBotOperation } from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
 import { useEffect } from "react";
 import { AccessibilityInfo, Platform, Pressable, Text, View } from "react-native";
-
-import type { NewBotOperation } from "./mobileNewBots";
 
 /**
  * The roster's lines for New bot: Creating… until the server answers, the reason with Retry and

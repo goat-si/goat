@@ -100,6 +100,7 @@ export async function readLinuxReadiness(
         }
         if (facts.tree !== "ready") {
           const focus = await deps.secureFocus(window.pid);
+          if (focus.gdbusMissing) facts.gdbusMissing = true;
           // An app the registry does not list shows AT-SPI nothing, like an app with no windows.
           const found = !focus.known
             ? focus.unregistered

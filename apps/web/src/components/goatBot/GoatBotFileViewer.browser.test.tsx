@@ -1,3 +1,4 @@
+import { botFileReads } from "@goat/client-runtime/goatBot";
 import { EnvironmentId, type ChannelReadBotArtifactInput } from "@goat/contracts";
 import * as Base64 from "effect/encoding/Base64";
 import { expect, it, vi } from "vite-plus/test";
@@ -22,6 +23,8 @@ const fileFor = (relativePath: string) => ({
 });
 
 function setup() {
+  // The read queue is one module instance; a read a test left waiting must not hold the next.
+  botFileReads.clear();
   state.gate = null;
   state.answered = 0;
   const encode = (text: string) => new TextEncoder().encode(text);
@@ -125,7 +128,7 @@ it("says why a file did not open and tries again", async () => {
     <GoatBotFileViewer environmentId={environmentId} file={missing} onClose={() => {}} />,
   );
   await expect
-    .element(screen.getByText("Another file is still opening. Try again in a moment."))
+    .element(screen.getByText("gone.txt is taking too long to open. Try again in a moment."))
     .toBeVisible();
   state.files.set("gone.txt", { mimeType: "text/plain", bytes: new TextEncoder().encode("Back") });
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));

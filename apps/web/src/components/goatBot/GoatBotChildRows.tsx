@@ -14,6 +14,7 @@ import { ThreadStatusLabel } from "../ThreadStatusIndicators";
 import { Button } from "../ui/button";
 import { EllipsisIcon } from "../solar";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { holdNavigation } from "~/lib/navigationHolds";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 export function GoatBotChildRows({
@@ -47,6 +48,7 @@ export function GoatBotChildRows({
   ) {
     const api = readLocalApi();
     if (!api || !canUpdate) return;
+    const release = holdNavigation();
     const action = await api.contextMenu
       .show(
         [
@@ -56,7 +58,8 @@ export function GoatBotChildRows({
         ],
         position,
       )
-      .catch(() => null);
+      .catch(() => null)
+      .finally(release);
     const input: ChannelUpdateTaskViewInput =
       action === "pin"
         ? { taskId: row.task.taskId, pinned: row.view.pinnedAt === null }

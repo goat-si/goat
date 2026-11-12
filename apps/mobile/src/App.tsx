@@ -3,8 +3,9 @@ import { installComposerAttachmentUploads } from "./state/composer-attachment-up
 import { installPermissionUpdateNotice } from "./features/connection/permissionUpdateNotice";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
+import { requireNativeModule } from "expo";
 import { useEffect } from "react";
-import { StatusBar } from "react-native";
+import { Platform, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -148,6 +149,14 @@ export default function App() {
 function AppContent() {
   const { themeAppearance } = useAppearancePreferences();
   const navigationTheme = useMobileNavigationTheme();
+
+  // oxlint-disable-next-line goat/react-effect-budget -- synchronize the Android navigation bar with the app theme
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    void requireNativeModule<{ setNavigationBarStyle(light: boolean): Promise<void> }>(
+      "GoatNativeControls",
+    ).setNavigationBarStyle(themeAppearance === "light");
+  }, [themeAppearance]);
 
   return (
     <>

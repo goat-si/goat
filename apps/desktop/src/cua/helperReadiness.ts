@@ -14,6 +14,10 @@ type Blocker = Readiness["blockers"][number];
  */
 export interface HelperReadinessState {
   readonly grants: Readiness["grants"];
+  /** Whether macOS has answered about the grants at all; until it has, unknown is not off. */
+  readonly answered: boolean;
+  /** Why the last read of the grants got no answer, until a read answers. */
+  readonly unread?: string;
   readonly running: boolean;
   /**
    * A readiness check got past the helper's identity and read through it. The helper stays
@@ -45,6 +49,7 @@ export const helperSignals = (
 
 export const initialHelperReadiness: HelperReadinessState = {
   grants: { accessibility: "unknown", screenCapture: "unknown" },
+  answered: false,
   running: false,
   confirmed: false,
   capture: "pending",
@@ -90,10 +95,11 @@ export const withGrants = (
   const changed =
     grants.accessibility !== state.grants.accessibility ||
     grants.screenCapture !== state.grants.screenCapture;
-  const { desktop: _previous, ...rest } = changed ? withoutProof(state) : state;
+  const { desktop: _previous, unread: _unread, ...rest } = changed ? withoutProof(state) : state;
   return {
     ...rest,
     grants,
+    answered: true,
     ...(answer.detail === undefined
       ? {}
       : {
@@ -104,6 +110,15 @@ export const withGrants = (
         }),
   };
 };
+
+/**
+ * A read of the grants that got no answer. macOS said nothing, so the grants stay as they were
+ * last read, and what was proven under them needs proving again.
+ */
+export const withUnreadGrants = (
+  state: HelperReadinessState,
+  detail: string,
+): HelperReadinessState => ({ ...withoutProof(state), unread: detail });
 
 export const withRunning = (state: HelperReadinessState, running: boolean) =>
   state.running === running ? state : { ...state, running };
@@ -136,10 +151,13 @@ export const toReadiness = (
   principal: string,
   platform: NodeJS.Platform = "darwin",
 ): Readiness => {
-  const off = [
-    ...(state.grants.accessibility === "granted" ? [] : ["Accessibility"]),
-    ...(state.grants.screenCapture === "granted" ? [] : ["Screen Recording"]),
-  ];
+  // Before macOS has answered once, a grant is unread, which no surface may show as off.
+  const off = state.answered
+    ? [
+        ...(state.grants.accessibility === "granted" ? [] : ["Accessibility"]),
+        ...(state.grants.screenCapture === "granted" ? [] : ["Screen Recording"]),
+      ]
+    : [];
   const unproven = state.capture === "pending" && state.details.length === 0;
   // A grant macOS reports on proves nothing by itself (AXIsProcessTrusted stays true for a switch
   // macOS no longer honors, trycua/cua#3170); a tree read that fails under it is the tell.
@@ -172,6 +190,7 @@ export const toReadiness = (
     input: usable ? "background" : "unavailable",
     blockers,
     reasons: [
+      ...(state.unread === undefined ? [] : [state.unread]),
       // The helper's own refusal names the real cause; the grant pair it zeroed would mislead.
       ...(state.desktop !== undefined
         ? [state.desktop.detail]

@@ -1,11 +1,13 @@
-import type {
-  ComputerUseReadiness,
-  CuaHostStatus,
-  CuaVerificationStepId,
-  DesktopBridge,
-  DesktopCuaGrants,
-  DesktopCuaVerification,
-  HostComputerUse,
+import {
+  CUA_UNANSWERED_AFTER,
+  type ComputerUseReadiness,
+  type CuaGrantReadFailure,
+  type CuaHostStatus,
+  type CuaVerificationStepId,
+  type DesktopBridge,
+  type DesktopCuaGrants,
+  type DesktopCuaVerification,
+  type HostComputerUse,
 } from "@goat/contracts";
 
 export type CuaPermission = "accessibility" | "screen-recording";
@@ -29,6 +31,68 @@ export function readCuaGrants(
 
 /** The grants of an app that can hold them; an unusable helper has none to show. */
 export type CuaGrantHolder = Exclude<DesktopCuaGrants, { principal: "unusable" }>;
+
+/** A grant read that got no answer: why, when the desktop said, and the line setup shows. */
+export interface CuaUnanswered {
+  readonly reason: CuaGrantReadFailure | null;
+  readonly message: string;
+}
+
+export const CUA_READ_FAILED = "GOAT could not check the permissions on this Mac.";
+
+export interface CuaGrantReads {
+  /** The last answer: the grants, or a helper that cannot be used at all. */
+  readonly grants: DesktopCuaGrants | null;
+  /** One failed read, retried without changing what setup shows. */
+  readonly error: string | null;
+  /** Reads stopped being answered; setup shows this in place of the grants. */
+  readonly unanswered: CuaUnanswered | null;
+  readonly failures: number;
+}
+
+export const CUA_GRANT_READS_INITIAL: CuaGrantReads = {
+  grants: null,
+  error: null,
+  unanswered: null,
+  failures: 0,
+};
+
+/** Why a read got no answer, or null when the app said its grants or that it cannot be used. */
+const unansweredRead = (read: DesktopCuaGrants | null): CuaUnanswered | null =>
+  read === null
+    ? { reason: null, message: CUA_READ_FAILED }
+    : read.principal === "unusable" && read.unanswered !== undefined
+      ? { reason: read.unanswered, message: read.message }
+      : null;
+
+/** Whether the app said anything at all. null is a read the desktop could not make. */
+export const cuaReadAnswered = (read: DesktopCuaGrants | null) => unansweredRead(read) === null;
+
+/** A helper that cannot be used or that refused GOAT stays that way: only a person asks again. */
+export const cuaReadIsFinal = (read: DesktopCuaGrants | null) =>
+  read?.principal === "unusable" &&
+  (read.unanswered === undefined || read.unanswered === "refused");
+
+/**
+ * Setup's grant state after one more read. asked: a person asked for this read, so a failure
+ * shows at once, as a refusal does. Any answer starts the count again.
+ */
+export function cuaGrantReadsAfter(
+  state: CuaGrantReads,
+  read: DesktopCuaGrants | null,
+  asked: boolean,
+): CuaGrantReads {
+  const unanswered = unansweredRead(read);
+  if (unanswered === null) return { grants: read, error: null, unanswered: null, failures: 0 };
+  const failures = state.failures + 1;
+  return asked || unanswered.reason === "refused" || failures >= CUA_UNANSWERED_AFTER
+    ? { ...state, error: null, unanswered, failures }
+    : {
+        ...state,
+        error: "Could not check permissions. We'll try again automatically.",
+        failures,
+      };
+}
 
 export const cuaGranted = (grants: CuaGrantHolder, permission: CuaPermission) =>
   permission === "accessibility" ? grants.accessibility : grants.screenRecording;
@@ -76,23 +140,24 @@ export function cuaGrantSteps(
 }
 
 /**
- * Remedies for the ways a grant goes missing: an older copy's entry left on, the wrong app
- * switched on, no entry at all, and a rebuilt app. macOS lists each copy as its own row under
- * the same name, so a switch that reads on can belong to a copy that is gone (#1333).
- * GOAT shows the reset command and never runs it.
+ * Remedies for a grant that stays off. macOS lists each copy as its own row under one name, and
+ * GOAT and GOAT Nightly ship helpers with that name and different bundle ids (ADR-0023), so no
+ * tip may say which row is the wrong one or tell the person to remove them all. GOAT shows the
+ * reset command and never runs it.
  */
 export function cuaGrantTroubleshooting(grants: CuaGrantHolder): readonly string[] {
   const name = grants.name;
+  const helper = grants.principal === "helper";
   return [
-    `${name} is already on in the list but setup still waits: that row belongs to an older copy, and macOS can show several rows with the same name. In both Accessibility and Screen & System Audio Recording, select every ${name} row and remove it with the − button, then drag ${name} in again and turn it on.`,
-    ...(grants.principal === "helper"
+    `${name} is already on in the list but setup still waits: macOS lists each copy as its own row under the same name, so the row that is on may be for another copy.${helper ? ` GOAT and GOAT Nightly each list their own ${name}, and only the one for the app you are using counts.` : ""}`,
+    ...(helper
       ? [
           `Only the switch for ${name} counts. Turning on GOAT, Terminal, or another app does not let agents use this Mac.`,
         ]
       : []),
-    `If ${name} is not in the list, drag it in from the panel next to System Settings, or show it in Finder and drag it from there.`,
-    `After an update or a new development build, macOS can treat ${name} as a new app and list it twice. Remove the old rows from both lists and allow it again.`,
-    `To clear every entry for it, run these in Terminal, then allow it again: tccutil reset Accessibility ${grants.bundleId} and tccutil reset ScreenCapture ${grants.bundleId}`,
+    `If you cannot tell which row is for this copy, or ${name} is not in the list, drag it in from the panel next to System Settings, or show it in Finder and drag it from there, then turn it on.`,
+    `After an update or a new development build, macOS can treat ${name} as a new app and list it twice. You can remove a row with the − button, but removing the row of ${helper ? "the other GOAT app" : "another copy"} takes away that app's permission until it is allowed again.`,
+    `To clear only the entries of the copy GOAT is checking, run these in Terminal, then allow it again: tccutil reset Accessibility ${grants.bundleId} and tccutil reset ScreenCapture ${grants.bundleId}`,
   ];
 }
 

@@ -105,6 +105,9 @@ export function useBotRoster() {
     bots,
     botsLoaded: profiles.isSuccess,
     botsPending: profiles.isPending,
+    /** Why the last list read failed; `bots` keeps the read before it. */
+    botsError: profiles.error,
+    retryBots: profiles.refresh,
     roster: botRoster({ supportsProfiles: capabilities?.goatBotProfiles === true, bots }),
     groups: botRosterGroups(bots ?? []),
     rows: threads.rows,

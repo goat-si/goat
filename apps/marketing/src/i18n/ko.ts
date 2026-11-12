@@ -22,6 +22,9 @@ export const ko: Messages = {
     downloadTitle: "GOAT 다운로드",
     downloadDescription:
       "macOS, Windows, Linux용 GOAT 데스크톱 앱을 내려받거나 goat 명령과 서버 전용 머신을 설치하세요.",
+    mobileTitle: "휴대폰용 GOAT 베타 참여하기",
+    mobileDescription:
+      "iPhone, iPad, Android에 GOAT 베타 앱을 설치하고 휴대폰에서 내 컴퓨터의 코딩 에이전트를 조종하세요.",
     legalTitle: "법적 고지",
     legalDescription:
       "GOAT Connect 초대제 베타의 개인정보처리방침, 약관, 보안 신고와 웹사이트·제품 사용 데이터 처리를 안내해요.",
@@ -220,15 +223,60 @@ export const ko: Messages = {
     ],
     mobileTitle: "휴대폰과 태블릿",
     mobileBody:
-      "iPhone, iPad, Android용 GOAT 앱은 개발 중이고 아직 App Store와 Google Play에 없어요. iPhone과 iPad 빌드는 지금은 초대 전용인 TestFlight로 받거나 소스에서 직접 빌드할 수 있어요. 그전까지는 휴대폰 브라우저를 환경과 페어링해서 쓰세요.",
+      "iPhone, iPad, Android용 GOAT 앱은 베타이고 아직 App Store와 Google Play에 없어요. 누구나 베타에 참여할 수 있어요. iPhone과 iPad는 TestFlight로, Android는 Firebase App Distribution으로 받아요. 휴대폰 브라우저를 환경과 페어링해서 쓸 수도 있어요.",
     mobileWarning:
       "스토어에 있는 T3 Code 앱은 GOAT가 포크한 원래 프로젝트의 앱이에요. GOAT가 아니고 GOAT 서버에 연결할 수 없어요.",
+    mobileBeta: "베타 앱 받기",
     mobileGuide: "모바일 앱 가이드",
     mobileGuideHref: guide("install", "mobile-app"),
     allBuilds: "모든 빌드와 체크섬",
     nightlyBuilds: "Nightly 빌드",
     installGuide: "설치 가이드",
     installGuideHref: guide("install"),
+  },
+  mobile: {
+    title: "휴대폰에서 쓰는 GOAT",
+    lede: "GOAT 앱은 베타예요. 휴대폰에 설치하고 컴퓨터의 GOAT와 연결하면 어디서든 에이전트를 지켜보고 조종할 수 있어요.",
+    ios: {
+      name: "iPhone과 iPad",
+      cta: "TestFlight 베타 참여",
+      helper: "TestFlight 받기",
+      steps: [
+        {
+          title: "TestFlight 설치",
+          body: "App Store에서 무료로 받는 Apple의 베타 테스트 앱이에요.",
+        },
+        {
+          title: "iPhone에서 초대 열기",
+          body: "iPhone이나 iPad에서 TestFlight 베타 참여를 누르고, TestFlight에서 수락과 설치를 누르세요.",
+        },
+        { title: "GOAT 열기", body: "새 베타 빌드가 나오면 TestFlight가 업데이트해 줘요." },
+      ],
+      note: "iOS 18 이상이 필요해요.",
+    },
+    android: {
+      name: "Android",
+      cta: "Android 베타 참여",
+      steps: [
+        {
+          title: "휴대폰에서 초대 열기",
+          body: "Android 베타 참여를 누르고 이메일을 입력하세요. Firebase App Distribution이 초대 메일을 보내요.",
+        },
+        {
+          title: "수락하고 내려받기",
+          body: "초대 메일을 열고 Google로 로그인한 뒤 가장 새 GOAT 빌드의 다운로드를 누르세요.",
+        },
+        {
+          title: "GOAT 설치",
+          body: "Android가 물으면 브라우저의 앱 설치를 허용하세요. 새 빌드도 같은 곳에 올라와요.",
+        },
+      ],
+      note: "Android 7.0 이상이 필요해요. 베타 빌드는 GOAT가 서명하고 Google Play 밖에서 설치돼요.",
+    },
+    pairTitle: "컴퓨터와 연결하기",
+    pairBody:
+      "앱은 다른 머신에서 돌아가는 GOAT를 조종해요. 데스크톱 앱에서 설정 → Connections를 열고 Show phone QR을 누른 뒤, 앱에서 Scan QR code를 눌러 찍으세요. 휴대폰과 컴퓨터는 Tailscale이나 같은 네트워크로 서로 닿아야 해요.",
+    pairGuide: "휴대폰 페어링 가이드",
   },
   legal: {
     title: "법적 고지",

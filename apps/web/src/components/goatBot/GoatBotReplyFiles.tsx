@@ -1,11 +1,14 @@
 import {
+  botArtifactCardReadsFirstChunk,
   botArtifactName,
   botArtifactPreview,
   botArtifactPreviewSlot,
   botArtifactViewKind,
+  botFileReads,
   goatBotReplyFiles,
   goatBotReplyMayNameFile,
 } from "@goat/client-runtime/goatBot";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { ChannelBotArtifact, EnvironmentId } from "@goat/contracts";
 import { createContext, memo, use, useEffect, useEffectEvent, useState } from "react";
 
@@ -16,7 +19,6 @@ import { useEnvironmentQuery, useEnvironmentQuerySelector } from "~/state/query"
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import ChatMarkdown from "../ChatMarkdown";
-import { queuePreviewRead } from "./goatBotFileReads";
 import { GOAT_BOT_PREVIEW_REMARK_PLUGINS } from "./goatBotPreviewMarkdown";
 
 /** The bot's server and how to open one of its Library files; null outside a bot chat. */
@@ -30,7 +32,11 @@ const KIND_LABEL = { markdown: "Document", text: "Text", image: "Image", downloa
 type Preview =
   | { readonly kind: "markdown" | "text"; readonly text: string }
   | { readonly kind: "image"; readonly url: string }
+  /** The read failed, was skipped, or gave nothing to show; the card still opens. */
+  | { readonly kind: "unavailable" }
   | null;
+
+const UNAVAILABLE: Preview = { kind: "unavailable" };
 
 /**
  * Rereads of one Library listing, shared by every reply that reads it: one read in flight; a reply
@@ -134,35 +140,43 @@ function GoatBotFileCard({
 }) {
   const name = botArtifactName(file.relativePath);
   const kind = botArtifactViewKind("", file.relativePath, file.size);
+  // A card with no preview to draw is named from the file's name and reads nothing.
+  const readsFirstChunk = botArtifactCardReadsFirstChunk(file.relativePath, file.size);
   const read = useAtomCommand(channelEnvironment.readBotArtifact, { reportFailure: false });
   const [preview, setPreview] = useState<Preview>(null);
   const readFirstChunk = useEffectEvent(() =>
-    queuePreviewRead(environmentId, () =>
-      read({ environmentId, input: { relativePath: file.relativePath } }),
+    botFileReads.preview(
+      environmentId,
+      async (input) => {
+        const answer = await read({ environmentId, input });
+        if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
+        return answer.value;
+      },
+      file.relativePath,
     ),
   );
   // oxlint-disable-next-line goat/react-effect-budget -- The first chunk arrives after render; a card that goes leaves the queue and lets its image URL go.
   useEffect(() => {
+    if (!readsFirstChunk) return;
     let cancelled = false;
     let url: string | null = null;
     const pending = readFirstChunk();
-    void pending.result.then((answer) => {
-      if (cancelled || answer === null || answer._tag !== "Success") return;
-      const next = botArtifactPreview(answer.value);
-      if (next?.kind === "image") {
+    void pending.result.then((outcome) => {
+      if (cancelled || outcome.status === "cancelled") return;
+      const next = outcome.status === "ready" ? botArtifactPreview(outcome.answer) : null;
+      if (next === null) setPreview(UNAVAILABLE);
+      else if (next.kind === "image") {
         url = URL.createObjectURL(new Blob([next.bytes], { type: next.mimeType }));
         setPreview({ kind: "image", url });
-        return;
-      }
-      setPreview(next);
+      } else setPreview(next);
     });
     return () => {
       cancelled = true;
       pending.cancel();
       if (url !== null) URL.revokeObjectURL(url);
     };
-  }, []);
-  const shown = preview?.kind ?? kind;
+  }, [readsFirstChunk]);
+  const shown = preview === null || preview.kind === "unavailable" ? kind : preview.kind;
   const slot = botArtifactPreviewSlot(file.relativePath, file.size);
   const Icon = shown === "image" ? ImageIcon : shown === "download" ? FileIcon : FileTextIcon;
   return (
@@ -177,11 +191,15 @@ function GoatBotFileCard({
             slot === "image" ? "h-56 bg-muted/40" : "h-40",
             preview !== null &&
               preview.kind !== "image" &&
+              preview.kind !== "unavailable" &&
               "px-4 pt-3 text-xs [mask-image:linear-gradient(to_bottom,black_55%,transparent)]",
+            preview?.kind === "unavailable" && "px-4 pt-3",
           )}
         >
           {preview?.kind === "image" ? (
             <img src={preview.url} alt="" className="size-full object-cover" />
+          ) : preview?.kind === "unavailable" ? (
+            <span className="text-xs text-muted-foreground">Preview unavailable</span>
           ) : preview?.kind === "markdown" ? (
             <ChatMarkdown
               text={preview.text}

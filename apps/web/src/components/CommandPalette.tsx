@@ -101,6 +101,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { notesRpc } from "../rpc/notes/atoms";
 import { notesPaletteItems } from "../notes/notesPaletteItems";
 import { goatBotPaletteItems, useGoatBotPaletteBots } from "./goatBot/goatBotPaletteItems";
+import { useGoatBotPaletteNewBot } from "./goatBot/goatBotPaletteNewBot";
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -541,6 +542,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canCreateNote = useAtomValue(notesRpc.write.permissionAtom(primaryEnvironmentId));
   const goatBots = useGoatBotPaletteBots();
+  const goatBotNewBot = useGoatBotPaletteNewBot();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1686,7 +1688,7 @@ function OpenCommandPaletteDialog(props: {
   });
 
   const goatBotItems = goatBotPaletteItems(goatBots, navigate);
-  actionItems.push(...goatBotItems.actions);
+  actionItems.push(...goatBotItems.actions, ...goatBotNewBot);
 
   actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 

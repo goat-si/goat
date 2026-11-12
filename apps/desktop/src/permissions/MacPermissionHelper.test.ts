@@ -154,3 +154,77 @@ it("offers the helper app, under its own name, as the file dragged into System S
   Electron.ipcMain.emit(MAC_PERMISSION_HELPER_CHANNEL, sender, "finder");
   expect(mocks.showItemInFolder).toHaveBeenCalledWith(helperApp);
 });
+
+const helperTarget = {
+  bundlePath: "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app",
+  name: "GOAT Computer Use",
+};
+
+it("says the helper is not answering after two failed reads in a row, once, and waits again when it answers", async () => {
+  let read = async (): Promise<boolean> => false;
+  await helper.show(
+    "accessibility",
+    "/bundle/mac-permission-preload.cjs",
+    null,
+    iconPaths,
+    () => read(),
+    helperTarget,
+  );
+  read = () => Promise.reject(new Error("no_hello"));
+  await vi.advanceTimersByTimeAsync(1_500);
+  // One read can fail while an update swaps the helper; the panel keeps waiting.
+  expect(mocks.send).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(mocks.send).toHaveBeenCalledWith(MAC_PERMISSION_HELPER_CHANNEL, "unanswered");
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+
+  read = async () => false;
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(mocks.send).toHaveBeenLastCalledWith(MAC_PERMISSION_HELPER_CHANNEL, "waiting");
+  expect(mocks.send).toHaveBeenCalledTimes(2);
+  expect(windows[0]!.destroyed).toBe(false);
+  // The page carries both lines; the preload swaps them, since the page runs no script.
+  const page = decodeURIComponent(String(mocks.loadURL.mock.calls[0]?.[0]));
+  expect(page).toContain("GOAT Computer Use is not answering. See GOAT for why.");
+  // The line is a polite live region, so a screen reader hears it change.
+  expect(page).toMatch(/<header id="status" role="status"/u);
+});
+
+it("still opens the panel when the opening read fails, and counts it as the first failed read", async () => {
+  await helper.show(
+    "accessibility",
+    "/bundle/mac-permission-preload.cjs",
+    null,
+    iconPaths,
+    () => Promise.reject(new Error("helper_exited")),
+    helperTarget,
+  );
+  expect(windows).toHaveLength(1);
+  expect(mocks.send).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(mocks.send).toHaveBeenCalledWith(MAC_PERMISSION_HELPER_CHANNEL, "unanswered");
+});
+
+it("tells the panel the helper is not answering once its page has loaded, when the reads failed while it loaded", async () => {
+  const loaded = Promise.withResolvers<void>();
+  mocks.loadURL.mockReturnValue(loaded.promise);
+  const shown = helper.show(
+    "accessibility",
+    "/bundle/mac-permission-preload.cjs",
+    null,
+    iconPaths,
+    () => Promise.reject(new Error("no_hello")),
+    helperTarget,
+  );
+  // The opening read and the first poll both fail before the page can hear about it.
+  await vi.advanceTimersByTimeAsync(0);
+  expect(windows).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(mocks.send).not.toHaveBeenCalled();
+
+  loaded.resolve();
+  await shown;
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect(mocks.send).toHaveBeenCalledWith(MAC_PERMISSION_HELPER_CHANNEL, "unanswered");
+});

@@ -2,6 +2,7 @@
 export const INDEXED_PATHS: ReadonlyArray<string> = [
   "/",
   "/download/",
+  "/mobile/",
   "/legal/",
   "/privacy-policy/",
   "/terms-of-service/",

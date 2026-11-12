@@ -15,6 +15,13 @@ type Snapshot struct {
 	Self    string           `json:"self"`
 	Members []SnapshotMember `json:"members"`
 	Revoked []NameRef        `json:"revoked"`
+	Relays  []SnapshotRelay  `json:"relays"`
+}
+
+// SnapshotRelay is a configured relay and its uplink's state: connecting, up or replaced.
+type SnapshotRelay struct {
+	URL    string `json:"url"`
+	Uplink string `json:"uplink"`
 }
 
 // SnapshotMember is a member in a snapshot; User and HostKeys are always present.
@@ -34,7 +41,8 @@ const maxSnapWatchers = 8
 // snapshotLineLocked renders the current snapshot; d.mu is held.
 func (d *Daemon) snapshotLineLocked() []byte {
 	v := d.lastView
-	s := Snapshot{T: "snapshot", Gen: d.snapGen, Mesh: v.MeshID, Self: d.nodeID, Members: []SnapshotMember{}, Revoked: refs(v.SortedRevoked())}
+	s := Snapshot{T: "snapshot", Gen: d.snapGen, Mesh: v.MeshID, Self: d.nodeID, Members: []SnapshotMember{}, Revoked: refs(v.SortedRevoked()),
+		Relays: append([]SnapshotRelay{}, d.snapRelays...)}
 	for _, m := range v.SortedMembers() {
 		s.Members = append(s.Members, SnapshotMember{
 			NodeID: m.NodeID, SignPub: m.SignPub, NoisePub: m.NoisePub, Name: m.Name, User: m.User,

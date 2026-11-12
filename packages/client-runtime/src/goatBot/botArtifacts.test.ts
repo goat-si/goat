@@ -23,6 +23,7 @@ import {
   botArtifactPreview,
   botArtifactPreviewSlot,
   botArtifactViewKind,
+  botArtifactCardReadsFirstChunk,
   goatBotArtifactDays,
   goatBotReplyFiles,
   goatBotReplyMayNameFile,
@@ -199,7 +200,7 @@ describe("Library copy", () => {
       botArtifactOpenMessage("big.zip", { status: "too_large", size: 1, maxBytes: 1 }, "Goaty"),
     ).toBe("big.zip is larger than 20 MB, so Goaty can't send it here.");
     expect(botArtifactOpenMessage("a.txt", { status: "busy" })).toBe(
-      "Another file is still opening. Try again in a moment.",
+      "a.txt is taking too long to open. Try again in a moment.",
     );
     expect(botArtifactOpenMessage("a.txt", { status: "changed" })).toBe(
       "a.txt changed while it was opening. Try again.",
@@ -485,5 +486,36 @@ describe("botArtifactPreviewSlot", () => {
     expect(botArtifactPreviewSlot("chart.PNG", 1000)).toBe("image");
     expect(botArtifactPreviewSlot("huge.png", 5 * 1024 * 1024)).toBeNull();
     expect(botArtifactPreviewSlot("deck.pdf", 10)).toBeNull();
+  });
+});
+describe("a file card's first-chunk read", () => {
+  it("is asked only for a card with a preview to draw: never for a zip, a pdf, a code file or an image past one chunk", () => {
+    expect(botArtifactCardReadsFirstChunk("q3.zip", 10)).toBe(false);
+    expect(botArtifactCardReadsFirstChunk("deck.pdf", 10)).toBe(false);
+    expect(botArtifactCardReadsFirstChunk("deploy.yaml", 10)).toBe(false);
+    expect(botArtifactCardReadsFirstChunk("README", 10)).toBe(false);
+    expect(botArtifactCardReadsFirstChunk("big.png", 600 * 1024)).toBe(false);
+    expect(botArtifactCardReadsFirstChunk("chart.png", 10)).toBe(true);
+    expect(botArtifactCardReadsFirstChunk("notes.md", 10)).toBe(true);
+    expect(botArtifactCardReadsFirstChunk("notes.txt", 10)).toBe(true);
+  });
+
+  it("names text and code files as text from their name, and every previewable kind keeps the label its read gives", () => {
+    for (const path of ["deploy.yaml", "src/main.ts", "tool.py", "index.html", "config.toml"])
+      expect(botArtifactViewKind("", path)).toBe("text");
+    // Named alone, a previewable file already has the label its own type gives once read.
+    for (const [path, mimeType] of [
+      ["notes.md", "text/markdown"],
+      ["notes.txt", "text/plain"],
+      ["data.json", "application/json"],
+      ["counts.csv", "text/csv"],
+      ["run.log", "text/plain"],
+    ] as const)
+      expect(botArtifactViewKind("", path)).toBe(botArtifactViewKind(mimeType, path));
+    expect(botArtifactViewKind("", "q3.zip")).toBe("download");
+    expect(botArtifactViewKind("", "deck.pdf")).toBe("download");
+    expect(botArtifactViewKind("", "huge.ts", 2 * 1024 * 1024)).toBe("download");
+    // A file's own type still decides once it is read: a .ts video stays a download.
+    expect(botArtifactViewKind("video/mp2t", "clip.ts")).toBe("download");
   });
 });

@@ -122,6 +122,35 @@ describe("DesktopCuaDriver readiness after a passing check", () => {
   );
 
   it.effect.each(["darwin", "win32"] as const)(
+    "reads a helper that exited on its own as not running before its cleanup ends on %s (#1305)",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform,
+            helper: { granted: true },
+            tools: helperFixtureTools(platform),
+            hold: "helperStop",
+          });
+          // A failed assertion still lets the held cleanup finish before the fixture closes.
+          yield* Effect.addFinalizer(() => test.release);
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const crash = yield* test.nextAgentCrash;
+          yield* crash;
+          // The crashed helper's cleanup has begun and is held, as a slow retire would.
+          yield* test.helperStopping;
+          const during = test.readiness.at(-1)?.readiness;
+          assert.equal(during?.helper, "unauthenticated");
+          assert.equal(during?.input, "unavailable");
+          yield* test.release;
+          assert.equal((yield* test.next).status, "unavailable");
+        }),
+      ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
     "keeps a crash's lost proof when the host is detached right after it on %s",
     (platform) =>
       Effect.scoped(

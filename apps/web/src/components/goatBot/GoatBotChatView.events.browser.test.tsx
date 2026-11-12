@@ -173,6 +173,21 @@ it("on a narrow screen a routine chip opens the sheet on Home with that routine 
   expect(document.activeElement?.textContent).toMatch(/^Check in/);
 });
 
+it("on a narrow screen a routine list that arrives after the sheet opened still lands on the routine", async () => {
+  setup(null);
+  state.narrow = true;
+  await using screen = await render(view([line("Check in")]));
+  await userEvent.click(screen.getByRole("button", { name: "Open routine Check in" }));
+  await expect
+    .element(page.getByRole("tab", { name: "Home" }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect.element(page.getByRole("dialog")).not.toHaveAttribute("data-starting-style");
+  setup({ tasks: [routine("r1", "Check in")] });
+  state.narrow = true;
+  await screen.rerender(view([line("Check in")]));
+  await expect.element(page.getByRole("link", { name: /^Check in/ })).toHaveFocus();
+});
+
 it("a routine list that arrives after the person moved on leaves their focus where it is", async () => {
   setup(null);
   await using screen = await render(view([line("Check in")]));

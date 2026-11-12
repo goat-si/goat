@@ -1,10 +1,11 @@
 /** One MCP transport, with an isolated legacy proxy and reservation generation per control. */
 // @effect-diagnostics preferSchemaOverJson:off -- MCP envelopes retain the client's opaque fields.
-import type {
-  ComputerUseControlEnd,
-  ComputerUseLeaseThreadUpdate,
-  ComputerUseLeaseUpdate,
-  ComputerUsePrimitiveRequest,
+import {
+  ComputerUseDriverEndReason,
+  type ComputerUseControlEnd,
+  type ComputerUseLeaseThreadUpdate,
+  type ComputerUseLeaseUpdate,
+  type ComputerUsePrimitiveRequest,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -85,7 +86,9 @@ const replySafety = Schema.decodeUnknownOption(
     }),
   ),
 );
-type ControlStop = ComputerUseControlEnd | "lost" | "transport_lost";
+type ControlStop = ComputerUseControlEnd | ComputerUseDriverEndReason | "lost" | "transport_lost";
+
+const isDriverEnd = Schema.is(ComputerUseDriverEndReason);
 
 interface Context {
   readonly controlId: string;
@@ -193,7 +196,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         ? transport === "reconnecting"
           ? RECONNECTING
           : WAITING
-        : terminal !== undefined || personStopped || reason === "transport_lost"
+        : terminal !== undefined ||
+            personStopped ||
+            reason === "transport_lost" ||
+            isDriverEnd(reason)
           ? LEASE_END_MESSAGES[reason]
           : reason === "disabled"
             ? "Computer use is turned off in settings. Re-enable it, then start a new turn or approval."
@@ -314,7 +320,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     waiting = reason;
     for (const [key, owner] of clientRequests)
       if (owner.context === context) clientRequests.delete(key);
-    if (reason !== "lost" && reason !== "transport_lost")
+    if (reason !== "lost" && reason !== "transport_lost" && !isDriverEnd(reason))
       return receive(context, { state: "ended", reason });
     receive(context, undefined);
     // No server end will close this control's input; a successor for the same id waits on it.
@@ -423,6 +429,15 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           }
           return options.onControlDriverCutoff?.(context.controlId, driver) ?? Effect.void;
         },
+        // The server keeps the control for the thread's next turn; a driver that only stopped or
+        // restarted starts again with the server's next update for it.
+        onDriverEnded: (reason) =>
+          Effect.sync(() => {
+            // A server end that landed first decides, and its id stays seen.
+            if (context.ended !== undefined) return;
+            if (reason === "helper_restarted") seen.delete(context.controlId);
+            stop(context, reason);
+          }),
         output: (line, reply) => output(context, line, reply),
         leaseUpdates: Stream.never,
         onLeaseUpdateReceiver: (take) => {

@@ -24,6 +24,7 @@ import {
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
@@ -35,6 +36,16 @@ export interface GoatBotComposerHandle {
   focus(): void;
   /** The message field, for focus that must land after something else closes. */
   field(): HTMLTextAreaElement | null;
+}
+
+// Outside the component: React Compiler cannot lower try/finally without catch.
+async function settleAfter<T>(work: Promise<T>, settle: (outcome: T | null) => void) {
+  let outcome: T | null = null;
+  try {
+    outcome = await work;
+  } finally {
+    settle(outcome);
+  }
 }
 
 /**
@@ -71,6 +82,8 @@ export function GoatBotComposer({
 }) {
   const [text, setText] = useState(initialText);
   const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
+  // Files handed to the box and still being prepared (an image is compressed first).
+  const [staging, setStaging] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef(attachments);
   const lifetime = useRef<AbortController | null>(null);
@@ -95,7 +108,10 @@ export function GoatBotComposer({
     };
   }, [draftRef]);
   const trimmed = text.trim();
-  const canSubmit = !disabled && (trimmed.length > 0 || attachments.length > 0);
+  const drafted = trimmed.length > 0 || attachments.length > 0;
+  const canSubmit = !disabled && drafted;
+  // Leaving the chat would drop any of these, focused or not.
+  const holdsNavigation = drafted || staging > 0 || replyTo !== null;
   const submit = () => {
     if (!canSubmit) return;
     if (onSend(trimmed, attachments) === false) return;
@@ -108,20 +124,26 @@ export function GoatBotComposer({
     if (attachmentSupport === null || files.length === 0) return false;
     const signal = lifetime.current?.signal;
     if (!signal) return false;
-    const { staged, error } = await stageGoatBotFiles(files, {
-      existingCount: draftRef.current.length,
-      support: attachmentSupport,
-      botName,
-    });
-    if (signal.aborted) {
-      releaseUnownedGoatBotAttachments(staged);
-      return false;
-    }
-    if (staged.length > 0) {
-      retainGoatBotAttachments(staged);
-      setAttachments((current) => [...current, ...staged]);
-    }
-    if (error !== null) toastManager.add({ type: "error", title: error });
+    setStaging((count) => count + 1);
+    await settleAfter(
+      stageGoatBotFiles(files, {
+        existingCount: draftRef.current.length,
+        support: attachmentSupport,
+        botName,
+      }),
+      (outcome) => {
+        if (outcome !== null && signal.aborted) releaseUnownedGoatBotAttachments(outcome.staged);
+        else if (outcome !== null) {
+          if (outcome.staged.length > 0) {
+            retainGoatBotAttachments(outcome.staged);
+            setAttachments((current) => [...current, ...outcome.staged]);
+          }
+          if (outcome.error !== null) toastManager.add({ type: "error", title: outcome.error });
+        }
+        // Set in the same block as the attachment, so no commit lacks both the hold and the file.
+        setStaging((count) => count - 1);
+      },
+    );
     return false;
   };
   useImperativeHandle(ref, () => ({
@@ -167,6 +189,7 @@ export function GoatBotComposer({
 
   return (
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
+      {holdsNavigation ? <HoldsNavigation /> : null}
       <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
         {replyTo !== null ? (
           <div className="mx-2 mt-1 flex min-w-0 items-center gap-1 rounded-md border border-border ps-2 text-xs text-muted-foreground">
@@ -239,7 +262,7 @@ export function GoatBotComposer({
             data-accent={canSubmit ? "true" : "false"}
             className={cn(
               "goat-bot-send flex size-7 shrink-0 items-center justify-center rounded-full",
-              trimmed.length === 0 && attachments.length === 0 && "invisible",
+              !drafted && "invisible",
             )}
           >
             <ArrowUpIcon className="size-4" />

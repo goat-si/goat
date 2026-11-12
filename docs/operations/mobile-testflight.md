@@ -1,4 +1,10 @@
-# Mobile TestFlight builds
+# Mobile beta builds
+
+Testers join from [trygoat.ai/mobile](https://trygoat.ai/mobile/): iPhone and iPad through TestFlight,
+Android through Firebase App Distribution. Both invite links are public and live in
+[`links.ts`](../../apps/marketing/src/lib/links.ts).
+
+## iOS: TestFlight
 
 GOAT's iOS app is archived and uploaded from a Mac with Xcode, signed by the GOAT Apple Developer
 team (`U9ATA49N28`). [`scripts/mobile-testflight.ts`](../../scripts/mobile-testflight.ts) runs the
@@ -10,7 +16,7 @@ whole path; the bundle ids and names come from
 | production | GOAT         | `si.goat.mobile`         |
 | preview    | GOAT Preview | `si.goat.mobile.preview` |
 
-## Once per Mac and per app
+### Once per Mac and per app
 
 1. Sign in to Xcode with an Apple account in the team: **Xcode > Settings > Accounts > + > Apple
    Account**. The script checks that the team shows up there. Instead of an account you can use an
@@ -32,7 +38,7 @@ whole path; the bundle ids and names come from
 Automatic signing creates the Apple Distribution certificate and the App Store profiles for the app,
 the widget (`.widgets`), the share extension (`.sharing`) and their app group on the first archive.
 
-## Each build
+### Each build
 
 From the repository root:
 
@@ -50,6 +56,44 @@ The script refuses an archive whose app or extensions carry another bundle id or
 After the upload, App Store Connect processes the build for a few minutes. Members of the team see it
 in the TestFlight app once it is added to an internal testing group (**TestFlight > Internal Testing**);
 internal testing needs no Beta App Review.
+
+## Android: Firebase App Distribution
+
+Android beta builds go to Firebase App Distribution in the Firebase project `goat-mobile-6c1ed`
+(owned by jun@lidgeai.com, free Spark plan), Android app `si.goat.mobile`, tester group
+`beta-testers`. Google Play testing waits on a Play developer account
+([#3057](https://github.com/goat-si/goat/issues/3057)).
+
+Every build must be signed with the same GOAT beta key, or testers have to uninstall before they can
+update. The keystore is `~/Library/Application Support/goat-mobile-android/goat-beta.keystore` on
+Jun's home Mac (macbookpro-2), alias `goat-beta`; its password is the Keychain item
+`goat-android-beta-keystore`. Keep a backup of both outside the repository.
+
+### Once per Mac
+
+Install JDK 17 and the Android command-line tools (`brew install openjdk@17` and
+`brew install --cask android-commandlinetools`), then accept the SDK licenses with
+`sdkmanager --sdk_root=$HOME/Library/Android/sdk --licenses`. Gradle downloads the platform, build
+tools and NDK it needs on the first build.
+
+### Each build
+
+From `apps/mobile`, with `JAVA_HOME=/opt/homebrew/opt/openjdk@17` and
+`ANDROID_HOME=$HOME/Library/Android/sdk`:
+
+```bash
+export APP_VARIANT=production GOAT_MOBILE_VERSION=3.0.0 GOAT_MOBILE_BUILD_NUMBER=$(( $(date +%s) / 60 ))
+EXPO_NO_GIT_STATUS=1 npx expo prebuild --clean --platform android --no-install
+(cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64)
+apksigner sign --ks "$HOME/Library/Application Support/goat-mobile-android/goat-beta.keystore" \
+  --ks-key-alias goat-beta --ks-pass "pass:$(security find-generic-password -s goat-android-beta-keystore -w)" \
+  --out goat-beta.apk android/app/build/outputs/apk/release/app-release.apk
+```
+
+`GOAT_MOBILE_BUILD_NUMBER` becomes the Android `versionCode`, which must grow with each build.
+`apksigner` is in `$ANDROID_HOME/build-tools/<version>/`. Upload `goat-beta.apk` in the Firebase
+console under **App Distribution → Releases**, add the **Beta testers** group and a short release
+note, and distribute. Testers get an email and see the build in the invite link's tester page.
 
 ## Services left off
 
