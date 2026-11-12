@@ -24,7 +24,7 @@ import {
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
-import { HoldsNewBotOpen } from "./newBotOpenHolds";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
@@ -170,7 +170,7 @@ export function GoatBotComposer({
   return (
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
       {/* Leaving the chat would drop the draft, focused or not. */}
-      {drafted ? <HoldsNewBotOpen /> : null}
+      {drafted ? <HoldsNavigation /> : null}
       <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
         {replyTo !== null ? (
           <div className="mx-2 mt-1 flex min-w-0 items-center gap-1 rounded-md border border-border ps-2 text-xs text-muted-foreground">

@@ -4,7 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 import { render } from "../../../test/render";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
-import { newBotOpenBlocked } from "./newBotOpenHolds";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 const question: Extract<GoatBotRow, { kind: "bot" }> = {
   kind: "bot",
@@ -47,10 +47,10 @@ it("an answer being typed holds back a New bot open until it is sent", async () 
   );
   const field = screen.getByRole("textbox", { name: "Something else" });
   await userEvent.type(field, "Both");
-  expect(newBotOpenBlocked()).toBe(true);
+  expect(navigationBlocked()).toBe(true);
   await userEvent.type(field, "{Enter}");
   await expect.element(field).toHaveValue("");
-  expect(newBotOpenBlocked()).toBe(false);
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("keeps only the picked row once the question is answered", async () => {

@@ -2,7 +2,7 @@ import { goatBotChoiceLetter, type GoatBotRow } from "@goat/client-runtime/goatB
 import { type ReactNode, useId, useState } from "react";
 
 import { cn } from "~/lib/utils";
-import { HoldsNewBotOpen } from "./newBotOpenHolds";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 type QuestionRow = Extract<GoatBotRow, { kind: "bot" }>;
 
@@ -32,7 +32,7 @@ export function GoatBotQuestionCard({
       <div className={cn("goat-bot-prose min-w-0", !open && "text-muted-foreground")}>{body}</div>
       {open ? (
         <div role="group" aria-label="Choices" className="-mx-1.5 flex flex-col">
-          {other.trim() === "" ? null : <HoldsNewBotOpen />}
+          {other.trim() === "" ? null : <HoldsNavigation />}
           {row.options.map((option, index) => (
             <button
               key={option}

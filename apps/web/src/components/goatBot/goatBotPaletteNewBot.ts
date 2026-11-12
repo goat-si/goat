@@ -16,7 +16,7 @@ import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "../CommandPalett
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { openNewBotChat } from "./goatBotNewBotOpen";
 import { useGoatBotPaletteNewBotSource } from "./goatBotPaletteItems";
-import { newBotOpenBlocked } from "./newBotOpenHolds";
+import { navigationBlocked } from "~/lib/navigationHolds";
 import { readGoatBotEnvironmentId } from "./readGoatBotEnvironmentId";
 import { useNewBotSlot } from "./useNewBotSlot";
 
@@ -81,7 +81,7 @@ function startPaletteNewBot(
   // included, is open. Otherwise no roster may be showing the new bot, so a toast says it is ready.
   const open = (bot: BotProfile, sentTo: EnvironmentId) => {
     const stillHere = readGoatBotEnvironmentId() === sentTo && router.state.location.href === ranAt;
-    if (stillHere && !newBotOpenBlocked()) openNewBotChat(router, bot);
+    if (stillHere && !navigationBlocked()) openNewBotChat(router, bot);
     else toastManager.add(stackedThreadToast({ type: "success", title: `${bot.name} is ready` }));
   };
   settleListedNewBots(environmentId, new Set(listed.map((bot) => bot.botId)));

@@ -14,7 +14,7 @@ import { ThreadStatusLabel } from "../ThreadStatusIndicators";
 import { Button } from "../ui/button";
 import { EllipsisIcon } from "../solar";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-import { holdNewBotOpen } from "./newBotOpenHolds";
+import { holdNavigation } from "~/lib/navigationHolds";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 export function GoatBotChildRows({
@@ -48,7 +48,7 @@ export function GoatBotChildRows({
   ) {
     const api = readLocalApi();
     if (!api || !canUpdate) return;
-    const release = holdNewBotOpen();
+    const release = holdNavigation();
     const action = await api.contextMenu
       .show(
         [

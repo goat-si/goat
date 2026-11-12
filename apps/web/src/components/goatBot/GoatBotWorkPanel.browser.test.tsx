@@ -80,7 +80,7 @@ vi.mock("~/state/channels", () => ({
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
-import { newBotOpenBlocked } from "./newBotOpenHolds";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
   mocks.canEdit = false;
@@ -236,13 +236,13 @@ it("a task peek holds back a New bot open until Back, since it has no URL of its
       peekRows={() => []}
     />,
   );
-  expect(newBotOpenBlocked()).toBe(false);
+  expect(navigationBlocked()).toBe(false);
   await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
   const back = screen.getByRole("button", { name: /Back to Home from Stop the port 3774 server/ });
   await expect.element(back).toBeVisible();
-  expect(newBotOpenBlocked()).toBe(true);
+  expect(navigationBlocked()).toBe(true);
   await userEvent.click(back);
-  expect(newBotOpenBlocked()).toBe(false);
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("steps back from a peek to its row with Escape", async () => {

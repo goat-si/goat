@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
-import { newBotOpenBlocked } from "../components/goatBot/newBotOpenHolds";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn<(target: unknown, handlers: PreviewStreamEvents) => unknown>(),
@@ -167,11 +167,11 @@ describe("ServerBrowserSurface page prompts", () => {
     await using _screen = screen;
     const handlers = mocks.createClient.mock.calls.at(-1)![1];
     const dialog = { type: "prompt", message: "Your name?", defaultValue: "" };
-    expect(newBotOpenBlocked()).toBe(false);
+    expect(navigationBlocked()).toBe(false);
     await act(() =>
       handlers.onControl?.({ canOperate: true, controller: "you", generation: 2, dialog }),
     );
-    expect(newBotOpenBlocked()).toBe(true);
+    expect(navigationBlocked()).toBe(true);
     await act(() =>
       handlers.onControl?.({
         canOperate: true,
@@ -180,11 +180,11 @@ describe("ServerBrowserSurface page prompts", () => {
         dialog,
       }),
     );
-    expect(newBotOpenBlocked()).toBe(false);
+    expect(navigationBlocked()).toBe(false);
     await act(() =>
       handlers.onControl?.({ canOperate: true, controller: "you", generation: 4, dialog: null }),
     );
-    expect(newBotOpenBlocked()).toBe(false);
+    expect(navigationBlocked()).toBe(false);
     await act(() =>
       handlers.onFileChooser?.({
         multiple: false,
@@ -193,9 +193,9 @@ describe("ServerBrowserSurface page prompts", () => {
         credentials: false,
       }),
     );
-    expect(newBotOpenBlocked()).toBe(true);
+    expect(navigationBlocked()).toBe(true);
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(newBotOpenBlocked()).toBe(false);
+    expect(navigationBlocked()).toBe(false);
   });
 });
 

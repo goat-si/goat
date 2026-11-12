@@ -23,7 +23,7 @@ import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
-import { HoldsNewBotOpen } from "./newBotOpenHolds";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
 export function GoatBotMemory({
@@ -226,7 +226,7 @@ function NoteRow({
         </div>
       ) : (
         <div className="space-y-2">
-          <HoldsNewBotOpen />
+          <HoldsNavigation />
           <Textarea
             size="sm"
             aria-label="New wording"

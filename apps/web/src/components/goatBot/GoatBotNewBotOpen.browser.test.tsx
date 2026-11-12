@@ -136,7 +136,7 @@ import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
 import { useGoatBotPaletteNewBot } from "./goatBotPaletteNewBot";
 import { GoatBotSidebarTabs } from "./GoatBotSidebarTabs";
-import { newBotOpenBlocked, resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
+import { navigationBlocked, resetNavigationHoldsForTests } from "~/lib/navigationHolds";
 
 /** A create answer the test releases when it chooses. */
 function deferred<T>() {
@@ -234,7 +234,7 @@ function Roster({ overlay = null }: { readonly overlay?: Overlay }) {
 function setup() {
   forgetNewBotEnvironment(EnvironmentId.make("env-1"));
   forgetNewBotEnvironment(EnvironmentId.make("env-2"));
-  resetNewBotOpenHoldsForTests();
+  resetNavigationHoldsForTests();
   resetNameRowFocusForTests();
   roster.set({ environmentId: "env-1", bots: [ada] });
   const answer = deferred<unknown>();
@@ -370,7 +370,7 @@ it.each([
     await expect.element(screen.getByRole("link", { name: "New bot", exact: true })).toBeVisible();
     // Closing the file ends the hold: a later create opens its chat again.
     await userEvent.click(screen.getByRole("button", { name: "Close notes.md" }));
-    expect(newBotOpenBlocked()).toBe(false);
+    expect(navigationBlocked()).toBe(false);
   },
 );
 

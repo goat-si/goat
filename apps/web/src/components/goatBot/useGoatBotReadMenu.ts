@@ -4,7 +4,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 
 import { readLocalApi } from "~/localApi";
 
-import { holdNewBotOpen } from "./newBotOpenHolds";
+import { holdNavigation } from "~/lib/navigationHolds";
 import { useMarkGoatBotRead } from "./useGoatBotWaitingCount";
 
 type GoatBotReadMenuAction = "mark-read";
@@ -33,7 +33,7 @@ export function useGoatBotReadMenu(
       { id: "mark-read", label: "Mark all as read", disabled: !unread },
     ];
     open.current = true;
-    const release = holdsNewBotOpen ? holdNewBotOpen() : null;
+    const release = holdsNewBotOpen ? holdNavigation() : null;
     const action = await api.contextMenu
       .show(items, position)
       .catch(() => null)

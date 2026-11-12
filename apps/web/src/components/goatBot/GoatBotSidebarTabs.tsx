@@ -30,7 +30,7 @@ import { GoatBotChildRows } from "./GoatBotChildRows";
 import { GoatBotMemberRoster } from "./GoatBotMemberRows";
 import { GoatBotNewBotStatus } from "./GoatBotNewBotStatus";
 import { openNewBotChat } from "./goatBotNewBotOpen";
-import { newBotOpenBlocked } from "./newBotOpenHolds";
+import { navigationBlocked } from "~/lib/navigationHolds";
 import { useBotRoster } from "./useBotRoster";
 import { useGoatBotHome } from "./useGoatBotHome";
 import { useGoatBotEnabled } from "./useGoatBotSession";
@@ -158,7 +158,7 @@ function NewBotButton({
     return (bot, sentTo) => {
       const now = mount.current;
       if (!now.mounted || !now.visible || now.environmentId !== sentTo) return;
-      if (router.state.location.href !== clickedAt || newBotOpenBlocked()) return;
+      if (router.state.location.href !== clickedAt || navigationBlocked()) return;
       setOpenMobile(false);
       openNewBotChat(router, bot);
     };

@@ -11,7 +11,7 @@ import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { ToastProvider } from "../ui/toast";
 import { disposeGoatBotEnvironment } from "./goatBotEnvironmentLifecycle";
 import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
-import { HoldsNewBotOpen, resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
+import { HoldsNavigation, resetNavigationHoldsForTests } from "~/lib/navigationHolds";
 
 const decode = Schema.decodeSync(BotProfile);
 const profile = (botId: string, role: "main" | "member", name: string) =>
@@ -59,7 +59,7 @@ const made = profile("made", "member", "New bot 2");
 
 function setup() {
   forgetNewBotEnvironment(environmentId);
-  resetNewBotOpenHoldsForTests();
+  resetNavigationHoldsForTests();
   resetNameRowFocusForTests();
   state.listed = [profile("main", "main", "Goaty"), profile("first", "member", "New bot")];
   // The first create waits for `answer`, any later one for `later`.
@@ -83,7 +83,7 @@ function App({
     <ToastProvider>
       <CommandPalette>{null}</CommandPalette>
       {/* Like a bot chat's message box with an unsent draft. */}
-      {held ? <HoldsNewBotOpen /> : null}
+      {held ? <HoldsNavigation /> : null}
       {/* Like the pull request checkout dialog: unrelated to bots, with a field being edited. */}
       <Dialog open={dialog}>
         <DialogPopup>

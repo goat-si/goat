@@ -28,7 +28,7 @@ import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { useGoatBotMember } from "./goatBotMemberContext";
 import { webBotNameRowDismissals } from "./goatBotNameRowDismissed";
 import { takeNameRowFocus } from "./goatBotNewBotOpen";
-import { HoldsNewBotOpen } from "./newBotOpenHolds";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 const NO_PERMISSION = Atom.make(false);
 const NAME_MAX = 64;
@@ -132,7 +132,7 @@ function NameForm({
       className="mx-auto grid w-full max-w-3xl gap-1 px-4 pb-2"
       onSubmit={(event) => void save(event)}
     >
-      {name === member.name ? null : <HoldsNewBotOpen />}
+      {name === member.name ? null : <HoldsNavigation />}
       <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
         Name this bot
       </label>

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { HoldsNewBotOpen } from "~/components/goatBot/newBotOpenHolds";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 /** A question the page asks, over the page. While the person answers it, New bot stays put. */
 export function BrowserPagePrompt(props: {
@@ -15,7 +15,7 @@ export function BrowserPagePrompt(props: {
       role="dialog"
       aria-label={props.label}
     >
-      {props.answering ? <HoldsNewBotOpen /> : null}
+      {props.answering ? <HoldsNavigation /> : null}
       {props.children}
     </div>
   );

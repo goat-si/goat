@@ -32,7 +32,7 @@ import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from ".
 import { GoatBotSessionAvatar } from "./GoatBotAvatar";
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
-import { HoldsNewBotOpen } from "./newBotOpenHolds";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 
@@ -233,7 +233,7 @@ function GoatBotMemberRow({
             <EllipsisIcon />
           </MenuTrigger>
           <MenuPopup align="end">
-            <HoldsNewBotOpen />
+            <HoldsNavigation />
             <MenuItem disabled={!canEdit} onClick={() => onEdit(bot)}>
               Edit
             </MenuItem>
@@ -283,7 +283,7 @@ export function GoatBotMainMenu({
           <EllipsisIcon />
         </MenuTrigger>
         <MenuPopup align="end">
-          <HoldsNewBotOpen />
+          <HoldsNavigation />
           <MenuItem onClick={() => setEditing(true)}>Edit</MenuItem>
         </MenuPopup>
       </Menu>

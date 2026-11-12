@@ -44,7 +44,7 @@ vi.mock("~/state/query", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotMemory } from "./GoatBotMemory";
-import { newBotOpenBlocked } from "./newBotOpenHolds";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 const environmentId = EnvironmentId.make("env");
 const decodeProfile = Schema.decodeSync(BotProfile);
@@ -150,12 +150,12 @@ it("new wording being written holds back a New bot open until it is cancelled", 
   await using screen = await render(
     <GoatBotMemory environmentId={environmentId} onDraft={() => {}} />,
   );
-  expect(newBotOpenBlocked()).toBe(false);
+  expect(navigationBlocked()).toBe(false);
   await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).first());
   await expect.element(screen.getByRole("textbox", { name: "New wording" })).toBeVisible();
-  expect(newBotOpenBlocked()).toBe(true);
+  expect(navigationBlocked()).toBe(true);
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(newBotOpenBlocked()).toBe(false);
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("notes reading alike but for spacing are held back, since a request names a note by its words", async () => {
