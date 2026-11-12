@@ -160,7 +160,7 @@ const editable = Effect.fn("channelProgressMessages.editable")(function* (
  * The one message a task's later progress edits: the request's reply when that request made only
  * this task, or else the task's first interim message the person heard.
  */
-export const progressTarget = Effect.fn("channelProgressMessages.target")(function* (
+const progressTarget = Effect.fn("channelProgressMessages.target")(function* (
   sql: SqlClient.SqlClient,
   taskId: string,
 ) {

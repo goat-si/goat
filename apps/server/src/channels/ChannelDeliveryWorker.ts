@@ -86,7 +86,7 @@ export const deliveryOutcomeFor = (
  * What to record for an edit or removal of a sent message. A 429 waits out Retry-After like a post;
  * any other failure ends that message's progress and is never retried.
  */
-export const progressOutcomeFor = (
+const progressOutcomeFor = (
   result: ChannelProgressResult,
   attempts: number,
   now: DateTime.Utc,

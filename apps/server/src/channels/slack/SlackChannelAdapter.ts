@@ -246,9 +246,7 @@ export function slackDeliveryError(failure: SlackSdkFailure): ChannelGatewayErro
  * How an edit or removal went. Any Slack refusal, including missing_scope and invalid_auth,
  * only ends that message's progress; it never says anything about the connection.
  */
-export function slackProgressResult(
-  failure: SlackSdkFailure,
-): ChannelTransport.ChannelProgressResult {
+function slackProgressResult(failure: SlackSdkFailure): ChannelTransport.ChannelProgressResult {
   switch (failure.category) {
     case "rate_limited":
       return {

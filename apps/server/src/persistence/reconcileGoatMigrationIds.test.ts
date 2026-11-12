@@ -18,8 +18,8 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 // added CodexUsageNativeTurnIndex, RepairClientSettlementTimestamps and WebhookDedupe, at 68
 // before the one that added ShellStopRequestIndex, and at 69 before the one that added
 // ThreadMessageSearch.
-const manifestIds = new Set(migrationEntries.map(([id]) => id));
-const manifestIdOf = new Map(migrationEntries.map(([id, name]) => [name, id]));
+const manifestIds = new Set<number>(migrationEntries.map(([id]) => id));
+const manifestIdOf = new Map<string, number>(migrationEntries.map(([id, name]) => [name, id]));
 /** Ids the manifest leaves free below a migration, such as one an unmerged change holds. */
 const freeIdsBelow = (name: string | undefined) => {
   let free = 0;
