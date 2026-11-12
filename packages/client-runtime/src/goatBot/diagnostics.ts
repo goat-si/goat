@@ -16,7 +16,7 @@ import type { GoatBotFaceTaskItem } from "./face.ts";
 import type { GoatBotHomeResolution } from "./home.ts";
 import { deriveGoatBotModelSettings } from "./model.ts";
 
-/** listBotThreads returns at most this many tasks, open and recently finished together. */
+/** An older server's listBotThreads returns at most this many tasks, open and finished together. */
 const BOT_THREADS_PAGE = 100;
 const SLACK_DELIVERY_ERROR_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -100,6 +100,11 @@ export interface GoatBotDiagnosticsInput {
   readonly canChangeModel: boolean;
   /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
   readonly rows: ReadonlyArray<BotThreadRow> | null | "failed" | "unavailable";
+  /**
+   * From a paged read: whether running work went past its page. Absent from older servers, whose
+   * one page mixes open and finished tasks, so a full page is only a lower bound.
+   */
+  readonly openWorkTruncated?: boolean | undefined;
   /** The bot's own turns asking the person something; the task list leaves turns out. */
   readonly turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>;
   /** "unavailable" when the home cannot report Slack, which hides the line. */
@@ -125,7 +130,7 @@ export function diagnoseGoatBot(input: GoatBotDiagnosticsInput): GoatBotDiagnost
   const lines = [
     homeLine(input),
     modelLine(input, homeId),
-    workLine(input.rows, input.turnsWaiting),
+    workLine(input.rows, input.turnsWaiting, input.openWorkTruncated),
     input.member ? null : slackLine(input, homeId),
   ].filter((line) => line !== null);
   const has = (tone: GoatBotDiagnosticTone) => lines.some((line) => line.tone === tone);
@@ -269,6 +274,7 @@ export function goatBotWaitingInChatText(botName: string): string {
 function workLine(
   rows: GoatBotDiagnosticsInput["rows"],
   turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>,
+  openWorkTruncated: boolean | undefined,
 ): GoatBotDiagnosticLine | null {
   const outside = Array.isArray(rows) ? goatBotTurnsOutsideList(turnsWaiting, rows) : turnsWaiting;
   let approvals = 0;
@@ -308,7 +314,7 @@ function workLine(
     waitingPhrase(approvals, waiting.length + turnAnswers),
   ].filter((part) => part !== null);
   // A full page can leave older open tasks out, so the counts are only a lower bound.
-  const full = tasks.length >= BOT_THREADS_PAGE;
+  const full = openWorkTruncated ?? tasks.length >= BOT_THREADS_PAGE;
   if (parts.length === 0)
     return full
       ? {

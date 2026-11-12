@@ -51,6 +51,7 @@ export function GoatBotStatusCard({
   environmentId: callerEnvironmentId,
   member,
   rows,
+  openWorkTruncated,
   turnsWaiting,
   onShowChat,
   className,
@@ -60,6 +61,7 @@ export function GoatBotStatusCard({
   readonly environmentId: EnvironmentId | null;
   readonly member: BotProfile | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
+  readonly openWorkTruncated?: boolean | undefined;
   readonly turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>;
   /** Called when a link leads back to the chat, so a sheet over it can close. */
   readonly onShowChat?: (() => void) | undefined;
@@ -129,6 +131,7 @@ export function GoatBotStatusCard({
           }),
     canChangeModel,
     rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
+    openWorkTruncated,
     turnsWaiting: homeId === null || homeId === callerEnvironmentId ? turnsWaiting : [],
     slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,

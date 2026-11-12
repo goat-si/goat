@@ -24,6 +24,7 @@ export function GoatBotStatusSettings() {
         member={null}
         botName={groups.main?.name ?? "GOAT Bot"}
         turnsWaiting={threads.turnsWaiting}
+        openWorkTruncated={threads.openWorkTruncated}
         rows={
           !listsTasks
             ? "unavailable"

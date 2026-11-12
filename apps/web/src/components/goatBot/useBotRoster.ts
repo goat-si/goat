@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { botRoster, botRosterGroups, goatBotTurnsWaiting } from "@goat/client-runtime/goatBot";
+import {
+  botRoster,
+  botRosterGroups,
+  botThreadsInput,
+  goatBotTurnsWaiting,
+} from "@goat/client-runtime/goatBot";
 import type { BotId, BotRemoteWork, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadVisibleTurnItems } from "~/state/entities";
@@ -31,7 +36,7 @@ export function useBotThreads(
     supported
       ? channelEnvironment.listBotThreads({
           environmentId,
-          input: bot === null ? {} : { botId: bot.botId },
+          input: botThreadsInput(capabilities, bot?.botId),
         })
       : null,
   );
@@ -63,6 +68,8 @@ export function useBotThreads(
     rows: threads.data?.rows ?? [],
     /** Threads the bot launched on other machines; none from servers before this list. */
     remoteWork: threads.data?.remoteWork ?? NO_REMOTE_WORK,
+    /** From a paged server: whether running work went past the first page. */
+    openWorkTruncated: threads.data?.page?.activeTruncated,
     supported,
     loaded: threads.isSuccess,
     failed: threads.error !== null,

@@ -116,10 +116,8 @@ export function GoatBotWorkPanel({
   const member = useGoatBotMember();
   const botName = useGoatBotName();
   const avatar = useGoatBotAvatar();
-  const { rows, remoteWork, supported, loaded, failed, turnsWaiting, refresh } = useBotThreads(
-    environmentId,
-    memberThreadsKey(member),
-  );
+  const { rows, remoteWork, supported, loaded, failed, turnsWaiting, refresh, openWorkTruncated } =
+    useBotThreads(environmentId, memberThreadsKey(member));
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -246,6 +244,7 @@ export function GoatBotWorkPanel({
               environmentId={environmentId}
               member={member}
               rows={!supported ? "unavailable" : failed ? "failed" : loaded ? rows : null}
+              openWorkTruncated={openWorkTruncated}
               turnsWaiting={turnsWaiting}
               onShowChat={onShowChat}
               quietWhenReady

@@ -1,5 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { retryRefusalText } from "@goat/client-runtime/goatBot";
+import { botThreadsInput, retryRefusalText } from "@goat/client-runtime/goatBot";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -9,6 +9,7 @@ import { useContext, useState } from "react";
 
 import { randomUUID } from "~/lib/utils";
 import { channelEnvironment } from "~/state/channels";
+import { useEnvironment } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { useGoatBotMember } from "./goatBotMemberContext";
@@ -33,6 +34,7 @@ export function GoatBotTaskRetry({
   const canRetry = useAtomValue(channelEnvironment.retryTask.permissionAtom(environmentId));
   const registry = useContext(RegistryContext);
   const member = useGoatBotMember();
+  const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities;
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   if (!canRetry) return null;
@@ -40,7 +42,7 @@ export function GoatBotTaskRetry({
     registry.refresh(
       channelEnvironment.listBotThreads({
         environmentId,
-        input: member === null ? {} : { botId: member.botId },
+        input: botThreadsInput(capabilities, member?.botId),
       }),
     );
   const run = async () => {
