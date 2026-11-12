@@ -30,6 +30,9 @@ export const latestDeliveredChoices = (
     .toSorted((left, right) => left.at.localeCompare(right.at))
     .at(-1);
 
+/** A reply that is only digits, "0" and "2." included. */
+export const isNumericReply = (text: string): boolean => /^\d+\.?$/.test(text.trim());
+
 /** "2" and "2." are choice numbers. Anything else is a normal message. */
 export const parseNumberedReply = (text: string): number | undefined => {
   const match = /^(\d+)\.?$/.exec(text.trim());

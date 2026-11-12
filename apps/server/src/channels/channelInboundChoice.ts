@@ -11,6 +11,7 @@ import { pendingApprovals } from "./channelApprovalReplies.ts";
 import { nativeQuestionChoice, type NativeQuestionChoice } from "./channelNativeQuestionCards.ts";
 import {
   choiceAt,
+  isNumericReply,
   latestDeliveredChoices,
   parseNumberedReply,
   singleQuestionChoice,
@@ -30,7 +31,7 @@ export const makeInboundChoices = (
   const numberedChoice = Effect.fn("channel.numberedChoice")(function* (
     conversationId: ChannelConversationId,
     tasks: ReadonlyArray<ChannelTask>,
-    number: number,
+    number: number | undefined,
   ) {
     const needing = yield* ledger.listConversationNeedsYou(conversationId);
     const listed = openApprovalCards(needing);
@@ -56,7 +57,8 @@ export const makeInboundChoices = (
         ),
     );
     const choices = latestDeliveredChoices(questions);
-    const label = choices === undefined ? undefined : choiceAt(choices, number);
+    const label =
+      choices === undefined || number === undefined ? undefined : choiceAt(choices, number);
     return choices === undefined || label === undefined
       ? undefined
       : {
@@ -81,12 +83,10 @@ export const makeInboundChoices = (
     tasks: ReadonlyArray<ChannelTask>,
   ) {
     if (message.intent !== "message" || message.kind === "mcp") return undefined;
-    if (message.kind === "slack" || message.kind === "imessage") {
+    if ((message.kind === "slack" || message.kind === "imessage") && isNumericReply(message.text)) {
       const number = parseNumberedReply(message.text);
-      if (number !== undefined) {
-        const picked = yield* numberedChoice(conversationId, tasks, number);
-        if (picked !== undefined) return picked;
-      }
+      const picked = yield* numberedChoice(conversationId, tasks, number);
+      if (picked !== undefined) return picked;
     }
     if (parseApprovalReply(message.text) !== undefined) return undefined;
     // The tasks already read for this pass. A label is not worth a second scan of older work;

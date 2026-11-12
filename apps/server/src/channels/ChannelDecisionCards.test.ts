@@ -173,9 +173,11 @@ describe("decision cards", () => {
       assert.deepStrictEqual(card?.message.options, ["Deny A1", "Approve A1"]);
 
       yield* gateway.ingest(slackInput("9", "Ev9"), slackContext);
+      yield* gateway.ingest(slackInput("0", "Ev0"), slackContext);
       yield* runtime.drain;
       assert.strictEqual(responses(harness).length, 0);
       assert.notInclude(seen, "9");
+      assert.notInclude(seen, "0");
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -344,6 +346,33 @@ describe("decision cards", () => {
       yield* runtime.drain;
       assert.deepStrictEqual(responses(harness), []);
       assert.notInclude(sent.at(-1)?.text ?? "", "Approved.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("offers no words for a request whose details can't be read now", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const sent = yield* imessageChat();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
+      yield* runtime.drain;
+      const worker = (yield* onlyTask).worker!.threadId;
+      const request = approval("ship");
+      harness.world.runtimeRequests.set(worker, [request]);
+      harness.world.approvalPrompts.set(request.id, "make release");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+
+      // The thread can't be read now, so the repeat cannot say what the request is.
+      harness.world.recordFailures.add(worker);
+      yield* gateway.ingest(imessageInput("approve", "row-2"), imessageContext);
+      yield* runtime.drain;
+      assert.deepStrictEqual(responses(harness), []);
+      const asked = sent.at(-1)?.text ?? "";
+      assert.include(asked, "A1: ship the build: " + CHANNEL_COPY.approvalDetailUnreadable);
+      assert.notInclude(asked, "Approve A1");
     }).pipe(Effect.provide(harness.layer));
   });
 

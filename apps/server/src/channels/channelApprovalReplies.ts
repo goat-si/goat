@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { approvalCard, type OpenApprovalCard } from "./channelApprovalCards.ts";
+import { CHANNEL_COPY } from "./channelCopy.ts";
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { approvalRequestDetail } from "./channelNativeQuestionCards.ts";
 
@@ -43,7 +44,10 @@ export const pendingApprovals = Effect.fn("channel.pendingApprovals")(function* 
   return open;
 });
 
-/** Each open request as its card said it, headed by its code, with that card's two words. */
+/**
+ * Each open request as its card said it, headed by its code, with that card's two words. A
+ * request whose details can't be read now (a failed read, another machine's) gets no words.
+ */
 export const askForApprovalCode = Effect.fn("channel.askForApprovalCode")(function* (input: {
   readonly ledger: ChannelLedger.ChannelLedger["Service"];
   readonly threads: ThreadManagement.ThreadManagementService["Service"];
@@ -60,6 +64,10 @@ export const askForApprovalCode = Effect.fn("channel.askForApprovalCode")(functi
         requestId: card.approval.requestId,
         now,
       });
+      if (detail.kind === undefined && detail.prompt === undefined) {
+        const unreadable = card.task.title + ": " + CHANNEL_COPY.approvalDetailUnreadable;
+        return { text: code + ": " + unreadable, options: [] };
+      }
       const words = approvalCard({
         card,
         code,
@@ -75,7 +83,7 @@ export const askForApprovalCode = Effect.fn("channel.askForApprovalCode")(functi
     text:
       input.lead +
       listed.map((entry) => "\n\n" + entry.text).join("") +
-      (more > 0 ? "\n\n" + more + " more waiting." : ""),
+      (more > 0 ? "\n\n" + more + CHANNEL_COPY.approvalsMoreWaiting : ""),
     options: listed.flatMap((entry) => entry.options),
     task: undefined,
     byWord: true as const,
