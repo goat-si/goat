@@ -459,6 +459,23 @@ func (d *Daemon) controlWatch(ctx context.Context, c net.Conn) {
 		return
 	}
 	gone := clientGone(c)
+	// A leave queues the view revoking this node and then stops the daemon, which also ends ctx:
+	// on either, pass on what is queued before ending.
+	drain := func() {
+		for {
+			select {
+			case line, ok := <-ch:
+				if !ok {
+					return
+				}
+				if _, err := c.Write(line); err != nil {
+					return
+				}
+			default:
+				return
+			}
+		}
+	}
 	for {
 		select {
 		case line, ok := <-ch:
@@ -471,22 +488,11 @@ func (d *Daemon) controlWatch(ctx context.Context, c net.Conn) {
 		case <-gone:
 			return
 		case <-ctx.Done():
+			drain()
 			return
 		case <-d.stopCh:
-			// A leave queues the view revoking this node and then stops the daemon: pass on what is queued.
-			for {
-				select {
-				case line, ok := <-ch:
-					if !ok {
-						return
-					}
-					if _, err := c.Write(line); err != nil {
-						return
-					}
-				default:
-					return
-				}
-			}
+			drain()
+			return
 		}
 	}
 }
@@ -533,13 +539,18 @@ func (cl *Client) Close() error { return cl.c.Close() }
 // SetDeadline bounds the requests and replies still to come on this connection.
 func (cl *Client) SetDeadline(t time.Time) error { return cl.c.SetDeadline(t) }
 
+// ErrWatchDropped is a daemon that took a watch but hung up before its first line, as it does when
+// it stops (at the end of a leave, for one).
+var ErrWatchDropped = errors.New("the pen daemon hung up before it could watch for revocations (it may be stopping or leaving the mesh); run this again once pen ls answers")
+
 // WatchRevoked follows the daemon's view and sends the first of nodeIDs to be revoked. It returns
 // once the daemon holds the watch (its first line came), so no later revoke is missed. Without a
-// running daemon it returns a nil channel (which never fires); stop ends the watch.
-func WatchRevoked(st *state.Store, nodeIDs ...string) (revoked <-chan string, stop func()) {
+// running daemon it returns a nil channel (which never fires) and no error; a daemon that does not
+// send its first line is ErrWatchDropped. stop ends the watch.
+func WatchRevoked(st *state.Store, nodeIDs ...string) (revoked <-chan string, stop func(), err error) {
 	cl, err := Dial(st)
 	if err != nil {
-		return nil, func() {}
+		return nil, func() {}, nil
 	}
 	revokedIn := func(w WatchLine) (string, bool) {
 		for _, r := range w.Revoked {
@@ -553,13 +564,13 @@ func WatchRevoked(st *state.Store, nodeIDs ...string) (revoked <-chan string, st
 	if cl.SetDeadline(time.Now().Add(dialTimeout)) != nil || cl.Send(Request{Op: "watch"}) != nil ||
 		cl.Next(&first) != nil || cl.SetDeadline(time.Time{}) != nil {
 		cl.Close()
-		return nil, func() {}
+		return nil, func() {}, ErrWatchDropped
 	}
 	ch := make(chan string, 1)
 	if id, ok := revokedIn(first); ok {
 		cl.Close()
 		ch <- id
-		return ch, func() {}
+		return ch, func() {}, nil
 	}
 	go func() {
 		for {
@@ -573,7 +584,7 @@ func WatchRevoked(st *state.Store, nodeIDs ...string) (revoked <-chan string, st
 			}
 		}
 	}()
-	return ch, func() { cl.Close() }
+	return ch, func() { cl.Close() }, nil
 }
 
 // Call sends one request and decodes one reply.

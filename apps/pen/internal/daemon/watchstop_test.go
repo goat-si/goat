@@ -12,18 +12,20 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
 )
 
-// A leave queues the view that revokes this node, replies, and stops the daemon at once. A watch
-// still passes that view on before it ends, or a pen forward never learns that its own node left.
+// A leave queues the view that revokes this node, replies, and stops the daemon at once, which also
+// ends the daemon's context. A watch still passes that view on before it ends, or a pen forward
+// never learns that its own node left.
 func TestAWatchDeliversTheViewQueuedBeforeTheDaemonStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
 	a := founder(t, ctx, rs, "a", nil)
+	watchCtx, endWatchCtx := context.WithCancel(ctx)
 	srv, cli := net.Pipe()
 	defer cli.Close()
 	go func() {
-		a.d.controlWatch(ctx, srv)
+		a.d.controlWatch(watchCtx, srv)
 		srv.Close()
 	}()
 	// net.Pipe does not buffer: one byte read means the watch is registered and still writing its
@@ -36,6 +38,7 @@ func TestAWatchDeliversTheViewQueuedBeforeTheDaemonStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.d.Stop()
+	endWatchCtx()
 	lines := bufio.NewScanner(io.MultiReader(bytes.NewReader(head), cli))
 	for lines.Scan() {
 		var w WatchLine

@@ -201,3 +201,52 @@ func TestForwardStopsWhenThisNodeLeavesTheMesh(t *testing.T) {
 		t.Fatal("the forward still listens after this node left")
 	}
 }
+
+// A daemon that takes the watch but hangs up before its first line (it is stopping, perhaps for a
+// leave) leaves the forward unable to learn of a revocation, so the forward does not start.
+func TestForwardDoesNotStartWhenTheDaemonDropsItsWatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := meshOfTwo(t, ctx, rs)
+	p, err := loadPeer(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Resolve(p.view.SortedMembers(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropping := tmpStore(t)
+	ctl, err := net.Listen("unix", daemon.SocketPath(dropping))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	go func() {
+		c, err := ctl.Accept()
+		if err != nil {
+			return
+		}
+		bufio.NewReader(c).ReadString('\n')
+		c.Close()
+	}()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	out, outW := io.Pipe()
+	go func() {
+		code <- runForward(ctx, ln, dropping, p, m, 9, outW, &errOut, nil)
+		outW.Close()
+	}()
+	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "" {
+		t.Fatalf("the forward started without its watch: %q", line)
+	}
+	if got := <-code; got == 0 || !strings.Contains(errOut.String(), "daemon") {
+		t.Fatalf("forward exit %d, stderr %q; want a failure naming the daemon", got, errOut.String())
+	}
+}

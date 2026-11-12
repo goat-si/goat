@@ -158,7 +158,10 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	self := p.id.NodeID()
-	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID, self)
+	revoked, stopWatch, err := daemon.WatchRevoked(st, m.NodeID, self)
+	if err != nil {
+		return die(err)
+	}
 	defer stopWatch()
 	// The exact form writes nothing to stderr before its ready line, so it never traces.
 	var tr *openTrace
