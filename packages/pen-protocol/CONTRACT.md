@@ -315,12 +315,14 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   an id from an earlier counter (a restart, or a room that emptied) cannot reach a session of the new one. The counter
   does not read the clock. (The Worker keeps its counter in that node id's Durable Object, one stored integer per node
   id that ever had a client reach its authenticated uplink, with no cleanup.)
-- Relay traffic (operators only, nothing on the wire): both relays count each admitted session's payload bytes toward
-  the node and from it. `pen relay serve` writes one stderr line per session the node answered (the node id's first 8
-  characters, the bytes, duration, which side ended it, the close code and the time) and every 10 minutes per-node
-  totals kept in memory for at most 256 node ids; session lines are rate limited, totals are not. The Worker logs
-  nothing and keeps one `traffic` row in each node id's Durable Object, written at most once a minute. Neither keeps
-  an address, a header or anything from a session.
+- Relay traffic (operators only, nothing on the wire): both relays count the payload bytes they deliver for each
+  admitted session, toward the node and toward its client. Per-node numbers are kept only for node ids the operator
+  lists, since anyone can mint one. `pen relay serve` (`--traffic-nodes`) writes one stderr line per session a listed
+  node answered (the node id's first 8 characters, the bytes, duration, which side ended it, the close code and the
+  time) and every 10 minutes the listed nodes' totals and relay-wide totals; lines pass a bounded queue and a rate
+  limit, totals are exact. The Worker logs nothing and keeps one `traffic` row in the Durable Object of each node id
+  in its `TRAFFIC_NODES` secret, written at most once a minute. Neither keeps an address, a header or anything from a
+  session.
 
 ## Accounts (v1.1)
 
@@ -906,5 +908,6 @@ v1.2 member-only reader refuses both valid new forms.
   applies that view; list drops and registration ends close 4401 unless the session is already closing, with every
   local connection closed before the answer; `pen service register` prints the answers to forwarded ops before it
   exits at the end of stdin; two v1.2 sentences point to the v1.3 exceptions.
-- v1.3 (2026-11-12): relays count each session's payload bytes for operators ("Relay traffic" under "Several
-  relays"): the Go relay logs answered sessions and per-node totals, the Worker keeps one row per node id. No wire change.
+- v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
+  "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
+  on the Go relay and one row per node id on the Worker. No wire change.

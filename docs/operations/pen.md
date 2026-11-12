@@ -20,8 +20,8 @@ uplinks and exchanges 64 KiB each way with a client through the relay, with timi
 when `--timeout` (30 s) runs out, including a certificate that expires within 14 days (`--min-cert-days`), so it
 works as a cron or monitor probe. The check node's keys live in `relay-check/` under the state directory
 (`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id. The Go relay
-keeps only that node id's traffic totals in memory once the check's sockets close; the Worker keeps one Durable Object
-holding that node id's next session id and its traffic row (see "Relay traffic").
+keeps nothing for it once the check's sockets close; the Worker keeps one Durable Object holding that node id's next
+session id.
 That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
 sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
 while one runs waits for it, within its own `--timeout`. Run the same build of `pen` as the relay (see
@@ -72,9 +72,8 @@ offers no compression, moves 1 MiB each way between a fresh node and a client, a
 served build with `curl -fsS .../dl/<version>/SHA256SUMS` against the local file.
 
 Rollback: `pnpm exec wrangler deployments list`, then `pnpm exec wrangler rollback <version-id>`. Static assets roll
-back with the version. Each node id's Durable Object keeps only its next session id and its traffic row beyond its
-sockets, so a rollback loses only open sockets, which reconnect; an older version ignores the row and a later one
-adds to it.
+back with the version. Each node id's Durable Object keeps only its next session id beyond its sockets (and a listed node's traffic row), so a
+rollback loses only open sockets, which reconnect; an older version ignores the row and a later one adds to it.
 
 ## pen-login Worker
 
@@ -216,23 +215,27 @@ fails until issuance succeeds. A failed first issuance does the same and the pro
 
 ## Relay traffic
 
-Both relays count, for each node, the payload bytes they pass toward it (`toNode`) and from it (`fromNode`). They
-record nothing else: no address, no headers, nothing from a session. The Go relay names a node by the first 8
-characters of its id, as `pen ls` shows it; the Worker keeps each node's numbers in that node's own Durable Object.
+Both relays count the payload bytes they deliver for each session: toward the node (`toNode`) and toward its client
+(`fromNode`). A byte counts once the relay's write of it to the other end succeeded. They record nothing else: no
+address, no headers, nothing from a session. Anyone can mint a node id, so per-node numbers are kept only for the node
+ids the operator lists; the Go relay names them by their first 8 characters, as `pen ls` shows them.
 
-**Go relay.** `pen relay serve` writes JSON lines to stderr, so on the Seoul VM they are in the journal:
+**Go relay.** `pen relay serve` writes JSON lines to stderr, so on the Seoul VM they are in the journal. List your nodes
+in `/etc/pen-relay.env` as `PEN_RELAY_TRAFFIC_NODES=<id>,<id>` (full ids from `pen ls --json`, at most 256; the unit
+passes them as `--traffic-nodes`) and restart the service. With no list the relay writes only its `relay` lines.
 
-- `session`, once per session the node answered, when it ends: `node`, `toNode`, `fromNode`, `ms`, `end` (`client`, `node`,
-  `relay` or `uplink`: which side ended it), the close `code` and `at`. Sessions the node never answered get no line.
-  Lines are limited to a burst of 120, then one a second; `linesDropped` counts the rest, and the totals still hold
-  their bytes.
-- Every 10 minutes when something changed, a `node` line per node that changed (totals since `since`) and one `relay`
-  line (all nodes since the process started, plus `unanswered`, `linesDropped`, `nodes` and `evicted`). Open sessions are
-  counted as they go, so a tunnel open for days shows every 10 minutes. A clean stop writes these lines once more.
+- `session`, once per session a listed node answered, when it ends: `node`, `toNode`, `fromNode`, `ms`, `end`
+  (`client`, `node`, `relay` or `uplink`: which side ended it), the close `code` and `at`. Lines are limited to a burst
+  of 120, then one a second.
+- Every 10 minutes when something changed, a `node` line per listed node that changed (totals since `since`) and one
+  `relay` line: every session's bytes since the process started, plus `unanswered`, `linesDropped` and `nodes` (how many
+  listed nodes have numbers). Open sessions are counted as they go, so a tunnel open for days shows every 10 minutes.
+  On a clean stop the relay ends open sessions (`relay`, code 1001) and writes these lines once more.
 
-Totals live in memory and start from zero when the process restarts. At most 256 nodes are tracked; past that the least
-recently active one is dropped (`evicted`) and starts from zero if it returns, while the `relay` line keeps every byte.
-The journal keeps the lines until its size cap (`journalctl --disk-usage`; `SystemMaxUse` in `journald.conf`).
+Lines wait in a queue of 1024 for the journal; a line that does not fit, or that the session line limit holds back, is
+dropped and counted in `linesDropped`, and the totals still hold its bytes. Totals live in memory and start from zero
+when the process restarts. The journal keeps the lines until its size cap (`journalctl --disk-usage`; `SystemMaxUse`
+in `journald.conf`).
 
 ```sh
 journalctl -u pen-relay -o cat | grep '^{"event":"relay"' | tail -1
@@ -240,21 +243,25 @@ journalctl -u pen-relay -o cat --since today | grep '^{"event":"session"' |
   jq -s 'group_by(.node) | map({node: .[0].node, toNode: (map(.toNode) | add), fromNode: (map(.fromNode) | add), sessions: length})'
 ```
 
-**Worker.** It logs nothing: Workers Logs would keep request URLs, which hold the full node id. Each node's Durable
-Object keeps one row in a `traffic` table (`to_node`, `from_node`, `sessions`, `unanswered`, and `since` and `at` in ms
-since the epoch), written at most once a minute. Read it in the dashboard under Workers & Pages, Durable Objects, the
-`Room` namespace of `pen-relay`, Data Studio: enter the full node id (`pen ls --json`) and run
-`SELECT * FROM traffic`. Data Studio needs Editor access, and its queries are billed as Durable Object use. The row
-stays as long as the object, across deploys and rollbacks. It lags by at most a minute: bytes not written yet ride on the
-node's uplink socket and survive hibernation, but sessions that ended while the node had no uplink are lost if the
-object is evicted before the next write. It costs one table page (4 KiB) per node id that ever had a session, and at
-most one row write a minute while the node has traffic.
+**Worker.** It logs nothing: Workers Logs would keep request URLs, which hold the full node id. List your nodes with
+`pnpm exec wrangler secret put TRAFFIC_NODES` in `infra/pen-relay` (full ids, comma-separated); a secret keeps the ids
+out of the repository and survives deploys. With no list no Room keeps a row. Each listed node's Durable Object keeps
+one row in a `traffic` table (`to_node`, `from_node`, `sessions`, `unanswered`, and `since` and `at` in ms since the
+epoch). Read it in the dashboard under Workers & Pages, Durable Objects, the `Room` namespace of `pen-relay`, Data
+Studio: enter the full node id and run `SELECT * FROM traffic`. Anyone on the Cloudflare account whose role can edit
+this Worker can read the row there, and those queries are billed as Durable Object use. The row stays as long as the
+object, across deploys and rollbacks.
 
-**After a deploy.** Run `pen relay check` against each relay. On the VM, `journalctl -u pen-relay -o cat -n 20` shows a
-`session` line for the check, and no line holds an address. For the Worker, the check node's row is not easy to find;
-read your own node's row in Data Studio after it carried a session.
+The Room writes the row at most once a minute; Cloudflare may run the alarm that writes it up to a minute late during
+maintenance or failover, so the row can trail by about two minutes. Bytes not written yet ride on the node's uplink
+socket and survive hibernation; sessions that ended while the node had no uplink are lost if the object is evicted
+before the next write. A row costs one table page (4 KiB) per listed node.
 
-**Check the numbers against the VM.** Relayed bytes are received once and sent once, so a day's growth of the
+**After a deploy.** Run `pen relay check` against each relay. On the VM, the next `relay` line (within 10 minutes,
+`journalctl -u pen-relay -o cat -n 20`) counts the check's sessions, a listed node's sessions get `session` lines, and no
+line holds an address. For the Worker, read a listed node's row in Data Studio after it carried a session.
+
+**Check the numbers against the VM.** Each delivered byte was received once and sent once, so a day's growth of the
 `relay` line's `toNode` plus `fromNode` tracks the interface's `tx_bytes` growth over the same day; TCP, TLS and
 WebSocket overhead and the VM's own traffic make up the rest. On a relay carrying bulk sessions (model traffic, file
 copies) the gap is expected within about 10%; on a quiet relay, small messages, keepalives and the VM's other traffic
