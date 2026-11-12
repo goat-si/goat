@@ -18,7 +18,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
@@ -37,6 +36,7 @@ import {
   makeIsManagedWorktreePath,
   managedWorktreesDirectories,
 } from "../worktreesDirectory.ts";
+import { makeSweepRounds, type SweepRound, takeRemovingTurn } from "./WorktreeSweepRounds.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 type LocalInput<A> = Omit<A, "host">;
@@ -223,23 +223,7 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   let checkSequence = 0;
-  // Per repo scope: when each worktree's check last started (least recent goes first), and the
-  // worktrees decided since remaining last reached 0 (a repeat skips counting them, so it ends).
-  const scopes = new Map<
-    string,
-    { lastStart: Map<string, number>; decided: Set<string>; sweeping: Semaphore.Semaphore }
-  >();
-  const scopeOf = (key: string) => {
-    const existing = scopes.get(key);
-    if (existing !== undefined) return existing;
-    const created = {
-      lastStart: new Map<string, number>(),
-      decided: new Set<string>(),
-      sweeping: Semaphore.makeUnsafe(1),
-    };
-    scopes.set(key, created);
-    return created;
-  };
+  const scopeOf = makeSweepRounds();
 
   const real = (target: string) =>
     fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
@@ -844,17 +828,19 @@ const make = Effect.gen(function* () {
   const sweep = Effect.fnUntraced(function* (
     input: Parameters<WorktreeInventoryService["Service"]["cleanup"]>[0],
     deadline: number,
-    scope: ReturnType<typeof scopeOf>,
+    scope: SweepRound,
     waited: boolean,
   ) {
     const dryRun = input.dryRun !== false;
     const facts = yield* scan(input.repo);
-    if (!dryRun)
+    if (!dryRun) {
+      scope.listed = facts.filter((fact) => !fact.entry.main).map((fact) => fact.entry.path);
       facts.sort((a, b) => {
         const order =
           (scope.lastStart.get(a.entry.path) ?? 0) - (scope.lastStart.get(b.entry.path) ?? 0);
         return order || a.entry.path.localeCompare(b.entry.path);
       });
+    }
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
     let remaining = 0;
@@ -915,15 +901,14 @@ const make = Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
     const scope = scopeOf(input.repo ?? "");
     if (dryRun) return yield* sweep(input, deadline, scope, false);
-    // Removing sweeps of a scope share its round, so they take turns; the wait counts against the budget.
-    const now = yield* Semaphore.withPermitsIfAvailable(
-      scope.sweeping,
-      1,
-      sweep(input, deadline, scope, false),
+    const result = yield* takeRemovingTurn(scope, deadline, (waited) =>
+      sweep(input, deadline, scope, waited),
     );
-    return Option.isSome(now)
-      ? now.value
-      : yield* scope.sweeping.withPermits(1)(sweep(input, deadline, scope, true));
+    if (Option.isSome(result)) return result.value;
+    return yield* failure(
+      "orchestration_error",
+      "Other removing sweeps of these worktrees are running or waiting. Call again when one returns.",
+    );
   });
 
   const facts: WorktreeInventoryService["Service"]["facts"] = scan(undefined).pipe(

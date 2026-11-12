@@ -483,6 +483,58 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("a removing sweep that waited past its budget answers without scanning again", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup, setDuringScan } =
+        yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+      let scans = 0;
+      setDuringScan(Effect.sync(() => void scans++));
+
+      // The first holds the scope for 80 s; the second gets its turn 20 s past its own budget.
+      const sweeps = yield* Effect.all(
+        [service.cleanup({ dryRun: false }), service.cleanup({ dryRun: false })],
+        { concurrency: "unbounded" },
+      );
+      expect(scans).toBe(1);
+      expect(
+        sweeps.map((sweep) => [sweep.removed.length, sweep.kept.length, sweep.remaining]),
+      ).toEqual([
+        [0, 2, 0],
+        [0, 0, 2],
+      ]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("removing sweeps of one scope past the waiting limit are refused at once", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const path = yield* addWorktree("a");
+      yield* run(path, ["commit", "--allow-empty", "-m", "work on a"]);
+      setThreads([{ id: "t0", worktreePath: path }]);
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const sweeps = yield* Effect.all(
+        Array.from({ length: 5 }, () => Effect.result(service.cleanup({ dryRun: false }))),
+        { concurrency: "unbounded" },
+      );
+      expect(sweeps.map((sweep) => sweep._tag)).toEqual([
+        "Success",
+        "Success",
+        "Success",
+        "Success",
+        "Failure",
+      ]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("sweeps of a repo and of all repos keep separate rounds", () =>
     Effect.gen(function* () {
       const { service, repo, run, addWorktree, setThreads, setDuringPullRequestLookup } =
