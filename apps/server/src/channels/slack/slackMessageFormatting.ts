@@ -180,19 +180,20 @@ const slackChoiceBlocks = (
 
 /**
  * The posts one outbound message becomes: its text parts, the last carrying the choice buttons.
- * With buttons every part fits one section, split before escaping, so none is cut or broken.
+ * With buttons every part fits one section, split before escaping, so none is cut or broken; a
+ * message too long for Slack keeps its text and loses the buttons, which would sit beside a cut.
  */
 export function slackOutboundPosts(input: {
   readonly text: string;
   readonly mentionUserId?: string | undefined;
   readonly options?: ReadonlyArray<string> | undefined;
 }): Array<{ readonly text: string; readonly blocks?: ReadonlyArray<SlackChoiceBlock> }> {
-  const options = input.options ?? [];
   const parts = formatSlackOutboundMessages({
     text: input.text,
     mentionUserId: input.mentionUserId,
-    limit: options.length > 0 ? SLACK_SECTION_TEXT_LIMIT : SLACK_TEXT_LIMIT,
+    limit: (input.options ?? []).length > 0 ? SLACK_SECTION_TEXT_LIMIT : SLACK_TEXT_LIMIT,
   });
+  const options = parts.at(-1) === SLACK_TRUNCATED_NOTE ? [] : (input.options ?? []);
   return parts.map((text, index) => {
     const blocks =
       index === parts.length - 1 && options.length > 0

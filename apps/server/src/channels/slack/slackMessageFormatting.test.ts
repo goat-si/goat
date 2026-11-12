@@ -164,4 +164,12 @@ describe("slackOutboundPosts", () => {
     expect(shown.replaceAll(/&(amp|lt|gt);/g, "")).not.toContain("&");
     expect(shown.replaceAll(/\s/g, "")).toBe("x".repeat(2999) + "&amp;" + "y".repeat(400));
   });
+  it("drops the buttons when the text runs out of room, so none sits beside a cut card", () => {
+    const posts = slackOutboundPosts({
+      text: "x".repeat(30001),
+      options: ["Deny A1", "Approve A1"],
+    });
+    expect(posts.at(-1)?.text).toBe(SLACK_TRUNCATED_NOTE);
+    expect(posts.filter((post) => post.blocks !== undefined)).toHaveLength(0);
+  });
 });
