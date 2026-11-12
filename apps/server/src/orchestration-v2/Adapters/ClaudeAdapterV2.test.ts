@@ -4202,6 +4202,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           options: [
             { decision: "cancel", label: "Cancel" },
             { decision: "decline", label: "Decline" },
+            { decision: "acceptForSession", label: "Always allow this session" },
             { decision: "accept", label: "Approve" },
           ],
         });
@@ -4231,16 +4232,67 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
     );
 
-    it.effect.each(["acceptForSession", "acceptAlways"] as const)(
-      "declines an unsupported %s decision",
-      (decision) =>
-        Effect.gen(function* () {
-          const { harness, elicit, awaitCard } = yield* startElicitationTurn();
-          const answer = yield* elicit(approvalOnly);
-          const request = yield* awaitCard(1);
-          yield* harness.runtime.respondToRuntimeRequest({ requestId: request.id, decision });
-          assert.deepEqual(yield* Fiber.join(answer), { action: "decline" });
-        }).pipe(Effect.scoped, Effect.provide(testLayer)),
+    it.effect("reuses identical session approvals but prompts for a changed schema", () =>
+      Effect.gen(function* () {
+        const { harness, elicit, awaitCard, runtimeRequests } = yield* startElicitationTurn();
+        const first = yield* elicit(approvalOnly);
+        const card = yield* awaitCard(1);
+        yield* harness.runtime.respondToRuntimeRequest({
+          requestId: card.id,
+          decision: "acceptForSession",
+        });
+        assert.deepEqual(yield* Fiber.join(first), { action: "accept", content: {} });
+        assert.deepEqual(yield* Fiber.join(yield* elicit(approvalOnly)), {
+          action: "accept",
+          content: {},
+        });
+        assert.equal(runtimeRequests().length, 1);
+        const changed = yield* elicit({
+          ...approvalOnly,
+          requestedSchema: { type: "object", properties: { count: { type: "number" } } },
+        });
+        yield* awaitCard(2);
+        assert.isUndefined(changed.pollUnsafe());
+        let cardCount = 2;
+        for (const other of [
+          { ...approvalOnly, displayName: "Other app" },
+          { ...approvalOnly, title: "Other title" },
+          { ...approvalOnly, message: "Other message" },
+          { ...approvalOnly, serverName: "other" },
+        ]) {
+          const answer = yield* elicit(other);
+          yield* awaitCard(++cardCount);
+          assert.isUndefined(answer.pollUnsafe());
+        }
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
+    );
+
+    it.effect("does not cache the 65th distinct session approval", () =>
+      Effect.gen(function* () {
+        const { harness, elicit, awaitCard } = yield* startElicitationTurn();
+        for (let i = 0; i < 65; i++) {
+          const answer = yield* elicit({ ...approvalOnly, message: `request ${i}` });
+          const card = yield* awaitCard(i + 1);
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: card.id,
+            decision: "acceptForSession",
+          });
+          assert.deepEqual(yield* Fiber.join(answer), { action: "accept", content: {} });
+        }
+        const repeated = yield* elicit({ ...approvalOnly, message: "request 64" });
+        yield* awaitCard(66);
+        assert.isUndefined(repeated.pollUnsafe());
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
+    );
+
+    it.effect.each(["acceptAlways"] as const)("declines an unsupported %s decision", (decision) =>
+      Effect.gen(function* () {
+        const { harness, elicit, awaitCard } = yield* startElicitationTurn();
+        const answer = yield* elicit(approvalOnly);
+        const request = yield* awaitCard(1);
+        yield* harness.runtime.respondToRuntimeRequest({ requestId: request.id, decision });
+        assert.deepEqual(yield* Fiber.join(answer), { action: "decline" });
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
     );
 
     it.effect("declines URL and value forms without a card", () =>

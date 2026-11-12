@@ -48,7 +48,6 @@ import {
   IDLE_COMPACTING_LABELS,
   resolveUserMessagePresentation,
 } from "@goat/client-runtime/user-message";
-import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import type { WorkflowOpening } from "@goat/client-runtime/state/subagentRuntime";
@@ -62,7 +61,6 @@ import {
   type ChatImageAttachment,
   type EnvironmentId,
   type MessageId,
-  type OrchestrationV2ProjectedTurnItem,
   type RunId,
   type ScheduledTaskId,
   type ScopedThreadRef,
@@ -187,7 +185,6 @@ import {
   type LayoutVariant,
   THREAD_WORK_ROW_MIN_HEIGHT,
 } from "../../lib/layout";
-import { uuidv4 } from "../../lib/uuid";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
@@ -255,14 +252,13 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useV2ItemSupport } from "../../state/v2-item-support";
 import {
   fileRoutePathSegments,
   resolveFileLinkPath,
   resolveWorkspaceFilePath,
   resolveWorkspaceRelativeFilePath,
 } from "../files/filePath";
-import { waitForThreadShellReady } from "./threadForkNavigation";
+import { AssistantForkButton } from "./AssistantForkButton";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
 import { useFileChipShare } from "./useFileChipShare";
@@ -279,25 +275,13 @@ import {
   ThreadMarkdownDirectImage,
 } from "./ThreadMarkdownImage";
 import { openSettings } from "../settings/settings-navigation";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { formatMessageTimestamp } from "./messageTimestamp";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   // iOS blockquotes and selectable text measure separately; definite bubble width matches UIKit's drawing width.
   includeBlockquotes: Platform.OS === "ios",
   includeOrderedLists: Platform.OS === "android",
 } as const;
-
-const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-});
-function formatMessageTime(input: string): string {
-  const timestamp = Date.parse(input);
-  if (Number.isNaN(timestamp)) {
-    return "";
-  }
-  return MESSAGE_TIME_FORMATTER.format(timestamp);
-}
 
 const TURN_FOLD_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT + 3.5;
 const FEED_PADDING_TOP = 12;
@@ -339,6 +323,8 @@ export interface ThreadFeedProps {
   readonly dispatchingMessageId: MessageId | null;
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
   readonly environmentId: EnvironmentId;
+  /** The environment is not connected, so its handoff cards cannot be answered yet. */
+  readonly offline?: boolean;
   readonly threadId: ThreadId;
   /** Null while the thread's creation is queued: reading detail then caches a not-found as deleted. */
   readonly detailRef: ScopedThreadRef | null;
@@ -375,16 +361,6 @@ export interface ThreadFeedProps {
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
 }
 
-async function waitForThreadShell(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-): Promise<boolean> {
-  const atom = environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, threadId));
-  return waitForThreadShellReady({
-    read: () => appAtomRegistry.get(atom) !== null,
-  });
-}
-
 const USER_MESSAGE_COPY_MENU_ACTIONS = [
   { id: "copy-prompt-link", title: "Copy prompt link", image: "link" },
 ];
@@ -416,88 +392,6 @@ function UserMessageCopyButton(props: {
     >
       {button}
     </Menu>
-  );
-}
-
-function AssistantForkButton(props: {
-  readonly environmentId: EnvironmentId;
-  readonly iconColor: ColorValue;
-  readonly buttonSize: number;
-  readonly iconSize: number;
-  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
-  readonly sourceTitle: string;
-}) {
-  const support = useV2ItemSupport({
-    environmentId: props.environmentId,
-    sourceThreadId: props.projectedItem.sourceThreadId,
-    sourceItemId: props.projectedItem.sourceItemId,
-  });
-  const forkFromRun = useAtomCommand(threadEnvironment.forkFromRun, "fork from response");
-  const selectDetail = useSelectWorkspaceDetail();
-  const [busy, setBusy] = useState(false);
-  const canFork = canForkProjectedAssistantItem({
-    projectedItem: props.projectedItem,
-    capabilities: support.providerSession?.capabilities,
-  });
-  const runId = props.projectedItem.item.runId;
-
-  if (!canFork || runId === null) return null;
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Fork from this response"
-      disabled={busy}
-      onPress={() => {
-        const targetThreadId = ThreadId.make(uuidv4());
-        setBusy(true);
-        void Haptics.selectionAsync();
-        void forkFromRun({
-          environmentId: props.environmentId,
-          input: {
-            sourceThreadId: props.projectedItem.sourceThreadId,
-            targetThreadId,
-            runId,
-            title: `${props.sourceTitle} fork`,
-            creationSource: "mobile",
-          },
-        })
-          .then(async (result) => {
-            if (result._tag !== "Success") return;
-            const targetThreadReady = await waitForThreadShell(props.environmentId, targetThreadId);
-            if (!targetThreadReady) {
-              Dialog.alert(
-                "Fork created",
-                "Its thread data did not reach this client. Reconnect and try opening it from the thread list.",
-              );
-              return;
-            }
-            selectDetail({
-              name: "Thread",
-              params: { environmentId: props.environmentId, threadId: targetThreadId },
-            });
-          })
-          .finally(() => setBusy(false));
-      }}
-      hitSlop={8}
-      className="h-7 w-7 items-center justify-center disabled:opacity-40"
-      style={
-        Platform.OS === "android"
-          ? { width: props.buttonSize, height: props.buttonSize }
-          : undefined
-      }
-    >
-      {busy ? (
-        <AppActivityIndicator size="small" />
-      ) : (
-        <SymbolView
-          name="arrow.triangle.branch"
-          size={props.iconSize}
-          tintColor={props.iconColor}
-          type="monochrome"
-        />
-      )}
-    </Pressable>
   );
 }
 
@@ -1184,6 +1078,7 @@ function renderFeedEntry(
   props: Pick<
     ThreadFeedProps,
     | "environmentId"
+    | "offline"
     | "onUseArtifactTemplate"
     | "skills"
     | "dispatchingMessageId"
@@ -1351,6 +1246,7 @@ function renderFeedEntry(
           environmentId={props.environmentId}
           handoff={projected.item.handoff}
           inherited={projected.visibility !== "local"}
+          offline={props.offline}
         />
       );
     return (
@@ -1397,7 +1293,7 @@ function renderFeedEntry(
     const presentation = resolveUserMessagePresentation(message);
     const renderedText = renderAssistantCitationsAsText(presentation.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
-    const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
+    const timestampLabel = formatMessageTimestamp(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
     const hasReviewCommentContext = presentation.text.includes("<review_comment");
     // Android does not reposition children after maxWidth clamps bubbles; definite width prevents wide-block overlap.
@@ -2639,6 +2535,8 @@ export const ThreadFeed = memo(function ThreadFeed({
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = {
     disclosureLayout,
+    // Handoff cards read it through renderItem; a visible card must follow a reconnect.
+    offline: props.offline,
     reduceMotion,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,
@@ -3190,6 +3088,7 @@ export const ThreadFeed = memo(function ThreadFeed({
           <FeedEntryShimmerContext value={info.index}>
             {renderFeedEntry(info, {
               environmentId: props.environmentId,
+              offline: props.offline,
               dispatchingMessageId: props.dispatchingMessageId,
               onEditPendingMessage: props.onEditPendingMessage,
               onUseArtifactTemplate: props.onUseArtifactTemplate,

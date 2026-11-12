@@ -1,14 +1,14 @@
 name: goat-ci
 
-# goat fork CI; every upstream workflow is disabled. The short hosted matrix tasks run on
-# GitHub-hosted ubuntu-24.04, and test-windows on windows-2025 (#1385). On a manual run or a
-# same-repository pull request, the heavy linux tasks and the gate jobs (goat-scope,
-# goat-screenshot-gate, goat-ci-result) go to the lidge pool: ephemeral runners that a scaler
-# creates on one self-hosted Ryzen 9950X3D box for trusted runs only, so a starved hosted queue
-# cannot hold back a run's start or verdict. The gate jobs need only Node and git. The repository
-# variable LIDGE_RUNNERS=on enables it; off or unset sends those jobs to ubuntu-24.04. goat-ci skips
-# fork pull requests for now. The pre-push guard pins the runs-on values. A step that needs sudo
-# relies on the hosted VM being discarded after the job.
+# goat fork CI; every upstream workflow is disabled. The short hosted matrix tasks and test-relay,
+# whose tests need Docker, run on GitHub-hosted ubuntu-24.04, and test-windows on windows-2025
+# (#1385). On a manual run or a same-repository pull request, the heavy linux tasks and the gate
+# jobs (goat-scope, goat-screenshot-gate, goat-ci-result) go to the lidge pool: ephemeral runners
+# that a scaler creates on one self-hosted Ryzen 9950X3D box for trusted runs only, so a starved
+# hosted queue cannot hold back a run's start or verdict. The gate jobs need only Node and git. The
+# repository variable LIDGE_RUNNERS=on enables it; off or unset sends those jobs to ubuntu-24.04.
+# goat-ci skips fork pull requests for now. The pre-push guard pins the runs-on values. A step that
+# needs sudo relies on the hosted VM being discarded after the job.
 #
 # A pull request, draft or ready, gets a quick run: the goat-scope job reads the diff
 # (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
@@ -113,12 +113,12 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
     needs: scope
     runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || matrix.task == 'test-windows' && 30 || 60 }}
+    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || (matrix.task == 'test-windows' || matrix.task == 'test-pen-windows') && 30 || 60 }}
     strategy:
       fail-fast: false
       # Tasks: check, typecheck, test, test-packages, test-ssh, test-desktop, test-contracts, test-client-runtime,
       # test-mobile, test-shared, test-ingest, test-memory-growth, test-windows,
-      # smoke-linux-computer-use, test-pen, build, and test-server in
+      # smoke-linux-computer-use, test-pen, test-pen-windows, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
       # one to four for the related files goat-scope picked. A quick run has check, typecheck,
       # test-changed, and related server shards when its server tests outgrow one job. Each entry
@@ -409,12 +409,49 @@ jobs:
         if: matrix.task == 'test-pen'
         run: apps/pen/scripts/loginnode.sh
 
+      # Pen on hosted Windows: the Go suite (no -race, which needs cgo there) and the PowerShell
+      # install check, the twin of installcheck.sh. The image's go switches to apps/pen/go.mod's toolchain.
+      - name: Pen Go vet and tests on Windows
+        if: matrix.task == 'test-pen-windows'
+        shell: bash
+        run: |
+          go -C apps/pen version
+          go -C apps/pen vet ./...
+          go -C apps/pen test -count=1 ./...
+
+      - name: Pen install check on Windows
+        if: matrix.task == 'test-pen-windows'
+        shell: pwsh
+        run: apps/pen/scripts/installcheck.ps1
+
       - name: Pen protocol, relay and login Workers
         if: matrix.task == 'test-pen'
         run: |
           vp run --filter @goat/pen-protocol test
           vp run --filter @goat/pen-relay test
           vp run --filter @goat/pen-login test
+
+      # The Pen TypeScript client's WebSocket against the Autobahn fuzzingserver (client mode). test-pen
+      # runs on a hosted image (goat-ci-scope.cjs HOSTED_TASKS), which has Docker; the image is pinned by
+      # digest. The script prints the report summary and fails on any failing, missing or unexpected case.
+      - name: Pen client WebSocket conformance (Autobahn)
+        if: matrix.task == 'test-pen'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Autobahn on commit $(git rev-parse HEAD); pull request head: ${PR_HEAD_SHA:-none}"
+          reports="$RUNNER_TEMP/autobahn-reports"
+          mkdir -p "$reports"
+          docker run -d --name autobahn --network host \
+            -v "$PWD/packages/pen-protocol/scripts/autobahn:/config:ro" -v "$reports:/reports" \
+            crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074 \
+            wstest -m fuzzingserver -s /config/fuzzingserver.json
+          for _ in $(seq 1 60); do (exec 3<>/dev/tcp/127.0.0.1/9001) 2>/dev/null && break; sleep 1; done
+          status=0
+          node packages/pen-protocol/scripts/autobahn.ts ws://127.0.0.1:9001 "$reports" || status=$?
+          if [ "$status" -ne 0 ]; then docker logs autobahn | tail -50; fi
+          docker rm -f autobahn >/dev/null
+          exit "$status"
 
       - name: Test server
         if: matrix.task == 'test-server' && !matrix.related

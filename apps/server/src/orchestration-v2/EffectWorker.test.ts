@@ -127,6 +127,7 @@ function layerExecutorFor(input: {
         release: () => record("release"),
         detach: () => record("detach"),
         otherWorkingThreads: () => Effect.succeed([]),
+        settleTurnStart: () => Effect.void,
         releaseUnlessBusy: () => Effect.succeed(true),
       }),
     ),

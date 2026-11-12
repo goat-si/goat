@@ -61,13 +61,6 @@ import {
   McpAppUpdateModelContextInput,
 } from "./mcpApps.ts";
 import {
-  ChatGptReconnectProfileInput,
-  ChatGptReconnectProfile,
-  ChatGptImportProfileInput,
-  ChatGptHandoffInput,
-  ChatGptHandoffState,
-} from "./providerSetup.ts";
-import {
   ProviderHostMatrixInput,
   ProviderHostMatrixResult,
   ProviderHostSyncError,
@@ -83,6 +76,11 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  ChatGptReconnectProfileInput,
+  ChatGptReconnectProfile,
+  ChatGptImportProfileInput,
+  ChatGptHandoffInput,
+  ChatGptHandoffState,
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
   ProviderAuthCancelInput,
@@ -96,6 +94,7 @@ import {
   ProviderSetupError,
   ProviderSetupInput,
 } from "./providerSetup.ts";
+import { WsOrchestrationV2ForkThreadRpc } from "./threadFork.ts";
 
 import {
   AcpRegistryAcceptUrlAuthInput,
@@ -891,7 +890,6 @@ const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   success: ServerConfig,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
 });
-
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({
     instanceId: Schema.optional(ProviderInstanceId),
@@ -899,6 +897,7 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     fresh: Schema.optional(Schema.Boolean),
     /** Bypass model caches; explicit rediscovery may open sessions, background refreshes must not. */
     refreshModels: Schema.optional(Schema.Boolean),
+    modelCatalogOnly: Schema.optional(Schema.Boolean),
     reloadSecrets: Schema.optional(Schema.Boolean),
     /**
      * Reply without snapshots, or with only the requested instance's cwd snapshot. Snapshots then
@@ -2751,6 +2750,7 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetOlderSettledThreadsRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
+  WsOrchestrationV2ForkThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,

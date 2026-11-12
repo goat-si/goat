@@ -27,9 +27,15 @@ export const replyDelivery = (input: {
   /** Links the message to an input without making this the input's own reply row. */
   readonly replyTo?: ChannelInputId | undefined;
   readonly task?: ChannelTask | undefined;
+  /** The attempt the message speaks for when it is not the task's current one. */
+  readonly taskGeneration?: number | undefined;
   readonly mentionActorId?: string | undefined;
   readonly options?: ReadonlyArray<string> | undefined;
   readonly questionId?: ChannelQuestionId | undefined;
+  /** Progress before the answer; see ChannelOutboundMessage.interim. */
+  readonly interim?: boolean | undefined;
+  /** Only the task's own question narration passes it; see ChannelMessageMeta.questionKind. */
+  readonly questionKind?: "task" | undefined;
 }): ChannelLedger.ChannelOutboxInsert => {
   const deliveryId = deliveryIdFor(input.causeKey);
   const options = input.options === undefined || input.options.length === 0 ? [] : input.options;
@@ -55,10 +61,16 @@ export const replyDelivery = (input: {
         : { inReplyToInputId: input.inputId ?? input.replyTo }),
       ...(input.task === undefined
         ? {}
-        : { taskId: input.task.taskId, taskVersion: input.task.version }),
+        : {
+            taskId: input.task.taskId,
+            taskVersion: input.task.version,
+            taskGeneration: input.taskGeneration ?? input.task.generation,
+          }),
       ...(input.mentionActorId === undefined ? {} : { mentionActorId: input.mentionActorId }),
       ...(keepOptions ? { options } : {}),
       ...(input.questionId === undefined ? {} : { questionId: input.questionId }),
+      ...(input.interim === true ? { interim: true as const } : {}),
+      ...(input.questionKind === undefined ? {} : { questionKind: input.questionKind }),
     },
   };
 };

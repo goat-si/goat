@@ -28,7 +28,9 @@ import {
 } from "@goat/contracts/agentSurface/resolve";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { listedDescription } from "@goat/contracts/agentSurface/signature";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
@@ -51,7 +53,6 @@ import {
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import {
   type Outcome,
@@ -62,6 +63,7 @@ import {
   routeOutcome,
 } from "./agentSurfaceOutcome.testkit.ts";
 import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
@@ -73,8 +75,8 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list and the session notes change.
-  expect(entries).toHaveLength(298);
+  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list, the session notes change, handoff withdraw and hub device move.
+  expect(entries).toHaveLength(300);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -617,7 +619,7 @@ describe("agent surface access", () => {
         }
       }
       expect(mismatches).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(registered, NodeHttpServer.layerTest))),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(registered, layerTestLoopback))),
   );
 
   it("documents every access exception", () => {
@@ -722,7 +724,15 @@ it.effect("lists canonical names and keeps legacy names callable, unlisted and d
     expect(byLegacy._meta?.[DEPRECATED_META_KEY]).toBe("goat_provider_list");
     expect(byListed._meta?.[DEPRECATED_META_KEY]).toBeUndefined();
     expect(byLegacy.content).toEqual(byListed.content);
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
+);
+
+it.effect("a tools/list that returns an RPC error fails with that error", () =>
+  Effect.gen(function* () {
+    const http = yield* serveCatalogOverHttp(callers, "full");
+    const listed = yield* Effect.exit(http.listTools("thread", () => "{"));
+    expect(Exit.isFailure(listed) && Cause.pretty(listed.cause)).toMatch(/tools\/list failed: /);
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("goat_call names the replacement for a deprecated name or path", () =>

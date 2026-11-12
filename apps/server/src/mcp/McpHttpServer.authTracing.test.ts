@@ -1,4 +1,3 @@
-import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -17,6 +16,7 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const recordSpans = () => {
   const spans: Array<Tracer.NativeSpan> = [];
@@ -184,5 +184,5 @@ it.effect("admits provider and OAuth client credentials and points only clients 
       ).toEqual([]);
       expect(deadProvider.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
     }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  ).pipe(Effect.provide(layerTestLoopback)),
 );

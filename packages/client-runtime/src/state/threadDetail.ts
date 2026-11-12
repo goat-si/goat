@@ -1,4 +1,6 @@
 import {
+  type Handoff,
+  isHandoffPending,
   OrchestrationV2AppThread,
   OrchestrationV2TurnItem,
   type OrchestrationV2ThreadProjection,
@@ -559,6 +561,22 @@ export function createEnvironmentThreadDetailAtoms<E>(
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-pending-requests:${key}`));
   });
+  /** Open approval handoffs among the loaded items; a bounded snapshot can miss older ones. */
+  const pendingHandoffsAtomFamily = Atom.family((key: string) => {
+    let value: ReadonlyArray<Handoff> = [];
+    return Atom.make((get) => {
+      const projection = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
+      const next = (projection?.turnItems ?? []).flatMap((item) =>
+        item.type === "human_handoff" &&
+        item.handoff.kind === "approval" &&
+        isHandoffPending(item.handoff.state)
+          ? [item.handoff]
+          : [],
+      );
+      if (!arrayElementsEqual(value, next)) value = next;
+      return value;
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-pending-handoffs:${key}`));
+  });
 
   const statusAtomFamily = Atom.family((key: string) =>
     Atom.make((get) => get(threadStateValueAtomFamily(key)).status).pipe(
@@ -601,6 +619,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     updatedAtAtom: (ref: ScopedThreadRef) => updatedAtAtomFamily(threadKey(ref)),
     lastVisitedAtAtom: (ref: ScopedThreadRef) => lastVisitedAtAtomFamily(threadKey(ref)),
     pendingRequestsAtom: (ref: ScopedThreadRef) => pendingRequestsAtomFamily(threadKey(ref)),
+    pendingHandoffsAtom: (ref: ScopedThreadRef) => pendingHandoffsAtomFamily(threadKey(ref)),
     queueWorkflowAtom: (ref: ScopedThreadRef) => queueWorkflowAtomFamily(threadKey(ref)),
     queuedCountAtom: (ref: ScopedThreadRef) => queuedCountAtomFamily(threadKey(ref)),
     runStopAtom: (ref: ScopedThreadRef) => runStopAtomFamily(threadKey(ref)),

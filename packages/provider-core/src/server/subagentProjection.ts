@@ -22,7 +22,7 @@ import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import { isOrchestrationV2WorkActive } from "@goat/contracts";
+import { isOrchestrationV2WorkActive, latestProviderTurnForAttempt } from "@goat/contracts";
 
 function trimmed(value: string | null | undefined): string | undefined {
   const result = value?.trim();
@@ -179,7 +179,8 @@ export function makeSubagentConversationArtifacts(input: {
 }
 
 export function subagentResultForRun(
-  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems">,
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems"> &
+    Partial<Pick<OrchestrationV2ThreadProjection, "providerTurns">>,
   run: OrchestrationV2Run,
 ): {
   readonly text: string;
@@ -225,8 +226,15 @@ export function subagentResultForRun(
     (run.status === "completed"
       ? "Child task completed without an assistant result."
       : `Child task ended with status ${run.status}.`);
+  const executed = latestProviderTurnForAttempt(
+    projection.providerTurns ?? [],
+    run.activeAttemptId,
+  )?.model;
   return {
-    text,
+    text:
+      executed === undefined || executed === run.modelSelection.model
+        ? text
+        : `Requested model ${run.modelSelection.model}; the provider reported running ${executed}.\n\n${text}`,
     messageId: failure === undefined ? (message?.id ?? turnItem?.messageId ?? null) : null,
     turnItemId: failure?.id ?? turnItem?.id ?? null,
   };

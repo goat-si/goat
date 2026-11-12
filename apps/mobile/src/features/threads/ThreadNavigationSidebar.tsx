@@ -12,7 +12,7 @@ import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-ru
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
-import type { MenuAction } from "@react-native-menu/menu";
+import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LayoutChangeEvent, TextInputInstance } from "react-native";
@@ -308,6 +308,7 @@ function ThreadNavigationSidebarPane(
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
+    forkWorkspaceEnvironmentIds,
   } = listEnvironments;
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder();
@@ -412,11 +413,7 @@ function ThreadNavigationSidebarPane(
           },
         ] satisfies MenuAction[])),
   ] satisfies MenuAction[];
-  const handleListMenuAction = ({
-    nativeEvent,
-  }: {
-    readonly nativeEvent: { readonly event: string };
-  }) => {
+  const handleListMenuAction = ({ nativeEvent }: NativeActionEvent) => {
     const event = nativeEvent.event;
     if (event === "environment:all") {
       setSelectedEnvironmentId(null);
@@ -631,6 +628,7 @@ function ThreadNavigationSidebarPane(
               onRegenerateThreadTitle={regenerateThreadTitle}
               onMarkThreadUnread={markThreadUnread}
               titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
+              forkWorkspaceSupported={forkWorkspaceEnvironmentIds.has(thread.environmentId)}
               settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
               onSettleThread={settleThread}
               snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}

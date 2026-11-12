@@ -1,7 +1,13 @@
-import { ChannelReceptionResult, type ChannelTask, type ChannelTaskEvent } from "@goat/contracts";
+import {
+  type ChannelInputId,
+  ChannelReceptionResult,
+  type ChannelTask,
+  type ChannelTaskEvent,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
+import type { ChannelTaskChanges } from "./channelTaskChanges.ts";
 import type { SqlError } from "effect/sql/SqlError";
 import type {
   ChannelLedger,
@@ -10,6 +16,7 @@ import type {
   ChannelOutboxInsert,
 } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { answerDecisionDelivery } from "./channelPersonMessage.ts";
 
 const encodeDecision = Schema.encodeSync(Schema.fromJsonString(ChannelReceptionResult));
 const encodeReply = (reply: { text: string }) => JSON.stringify(reply);
@@ -38,6 +45,7 @@ export const receptionLedger = (
       rows: ReadonlyArray<ChannelOutboxInsert>,
       now: string,
     ) => Effect.Effect<void, SqlError | ChannelLedgerError>;
+    changes: ChannelTaskChanges;
   },
 ): Pick<
   ChannelLedger["Service"],
@@ -48,7 +56,18 @@ export const receptionLedger = (
   | "commitSessionReceipt"
   | "takeSessionAcknowledgment"
 > => {
-  const { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries } = deps;
+  const { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes } = deps;
+  // Every settling pass commits its answer decision itself, so no caller can leave it out.
+  const withAnswerDecision = (
+    inputId: ChannelInputId,
+    deliveries: ReadonlyArray<ChannelOutboxInsert>,
+    taskEvents?: ReadonlyArray<ChannelTaskEventWrite>,
+  ) =>
+    Effect.map(readInbox(inputId), (stored) =>
+      stored === undefined
+        ? deliveries
+        : [...deliveries, ...answerDecisionDelivery(stored, taskEvents)],
+    );
   const operations: ReturnType<typeof receptionLedger> = {
     beginReception: (input) =>
       sql
@@ -69,18 +88,20 @@ export const receptionLedger = (
         )
         .pipe(Effect.mapError(toLedgerError("beginReception"))),
 
-    completeReception: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            const created =
-              input.createdTasks ?? (input.createdTask === undefined ? [] : [input.createdTask]);
-            const taskIds = [
-              ...created.map(({ task }) => task.taskId),
-              ...(input.taskEvents ?? []).map((write) => write.next.taskId),
-            ];
-            const rows = yield* sql<{ readonly owner_id: string }>`
+    completeReception: (input) => {
+      const touched: Array<string> = [];
+      return changes
+        .afterCommit(
+          sql.withTransaction(
+            Effect.gen(function* () {
+              yield* fence(input.owner);
+              const created =
+                input.createdTasks ?? (input.createdTask === undefined ? [] : [input.createdTask]);
+              const taskIds = [
+                ...created.map(({ task }) => task.taskId),
+                ...(input.taskEvents ?? []).map((write) => write.next.taskId),
+              ];
+              const rows = yield* sql<{ readonly owner_id: string }>`
               UPDATE channel_inbox SET
                 state = 'replied',
                 decision_json = ${encodeDecision(input.decision)},
@@ -90,15 +111,22 @@ export const receptionLedger = (
                 AND reception_id = ${input.receptionId}
               RETURNING owner_id
             `;
-            const row = rows[0];
-            if (row === undefined) return false;
-            for (const item of created) yield* insertTask(item.task, row.owner_id, item.event);
-            for (const write of input.taskEvents ?? []) yield* writeTaskEvent(write);
-            yield* insertDeliveries(input.deliveries, input.now);
-            return true;
-          }),
+              const row = rows[0];
+              if (row === undefined) return false;
+              for (const item of created) yield* insertTask(item.task, row.owner_id, item.event);
+              for (const write of input.taskEvents ?? []) yield* writeTaskEvent(write);
+              if (taskIds.length > 0) touched.push(row.owner_id);
+              yield* insertDeliveries(
+                yield* withAnswerDecision(input.inputId, input.deliveries, input.taskEvents),
+                input.now,
+              );
+              return true;
+            }),
+          ),
+          () => touched,
         )
-        .pipe(Effect.mapError(toLedgerError("completeReception"))),
+        .pipe(Effect.mapError(toLedgerError("completeReception")));
+    },
 
     failReception: (input) =>
       sql
@@ -113,28 +141,34 @@ export const receptionLedger = (
               RETURNING input_id
             `;
             if (rows.length === 0) return false;
-            yield* insertDeliveries(input.deliveries, input.now);
+            yield* insertDeliveries(
+              yield* withAnswerDecision(input.inputId, input.deliveries),
+              input.now,
+            );
             return true;
           }),
         )
         .pipe(Effect.mapError(toLedgerError("failReception"))),
 
     claimForSession: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            const rows = yield* sql<{
-              owner_id: string;
-            }>`UPDATE channel_inbox SET state = 'processing',
+      changes
+        .afterCommit(
+          sql.withTransaction(
+            Effect.gen(function* () {
+              yield* fence(input.owner);
+              const rows = yield* sql<{
+                owner_id: string;
+              }>`UPDATE channel_inbox SET state = 'processing',
       reception_id = ${input.receptionId}, read_at = COALESCE(read_at, ${input.now}),
       task_ids_json = ${encodeStrings([input.createdTask.task.taskId])}
       WHERE input_id = ${input.inputId} AND state = 'accepted'
       RETURNING owner_id`;
-            if (rows[0] === undefined) return false;
-            yield* insertTask(input.createdTask.task, rows[0].owner_id, input.createdTask.event);
-            return true;
-          }),
+              if (rows[0] === undefined) return false;
+              yield* insertTask(input.createdTask.task, rows[0].owner_id, input.createdTask.event);
+              return true;
+            }),
+          ),
+          (claimed) => (claimed ? [input.createdTask.task.requester.ownerId] : []),
         )
         .pipe(Effect.mapError(toLedgerError("claimForSession"))),
     takeSessionAcknowledgment: (input) =>
@@ -163,7 +197,10 @@ export const receptionLedger = (
       (input_id, task_id, source, run_id, turn_item_id, text, committed_at)
       VALUES (${input.inputId}, ${input.taskId}, ${input.source}, ${input.runId ?? null},
         ${input.turnItemId ?? null}, ${input.text}, ${input.now})`;
-            yield* insertDeliveries(input.deliveries, input.now);
+            yield* insertDeliveries(
+              yield* withAnswerDecision(input.inputId, input.deliveries),
+              input.now,
+            );
             return true;
           }),
         )

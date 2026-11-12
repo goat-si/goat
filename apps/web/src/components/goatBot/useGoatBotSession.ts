@@ -18,10 +18,12 @@ import {
   type GoatBotSendQueue,
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import type {
   BotProfile,
   ChannelBotRef,
   ChannelGatewayError,
+  ChannelQuestionId,
   ChannelTaskId,
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
@@ -131,25 +133,23 @@ function newQueue(environmentId: EnvironmentId) {
         (session.machine.ensure.bot.threadId === bot.threadId || session.members.has(bot.threadId))
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId, questionId }) => {
       const port = useSessions.getState().sessions.get(environmentId)?.port;
       if (!port) throw new Error("GOAT Bot isn't available");
       const files = await uploadGoatBotAttachments(bot.environmentId, attachments);
       if (disposed) throw new Error("GOAT Bot environment was removed");
-      const result = await port.ingest(bot.environmentId, {
-        kind: "goat",
-        connectionId: "goat",
-        conversationKey: bot.threadId,
-        externalMessageId: clientKey,
-        idempotencyKey: clientKey,
-        actor: {},
-        replyAddress: { kind: "goat", environmentId: bot.environmentId, threadId: bot.threadId },
-        text,
-        attachments: files,
-        receivedAt,
-        intent: "message",
-        ...(taskId === undefined ? {} : { taskId }),
-      });
+      const result = await port.ingest(
+        bot.environmentId,
+        goatBotIngestInput({
+          bot,
+          text,
+          attachments: files,
+          clientMessageId: clientKey,
+          receivedAt,
+          ...(taskId === undefined ? {} : { taskId }),
+          ...(questionId === undefined ? {} : { questionId }),
+        }),
+      );
       // The server keeps its own copy of each file once it has the message, and a rejected
       // message is never sent again.
       forget(clientKey);
@@ -546,6 +546,8 @@ export function useGoatBotSession(
       ...(selectedTask === undefined ? {} : { taskId: selectedTask }),
       // Work cards leave the chat only where the bot's work list can open every task.
       conversationOnly: capabilities?.goatBotTaskThreads === true,
+      // This client's question card sends answers with their question.
+      answerReferences: true,
     });
   const rows = rowsForTask(taskId);
   const sendable =
@@ -561,6 +563,7 @@ export function useGoatBotSession(
     confirmedBot: availability.kind === "ready" ? availability.bot : null,
     availability,
     canOperate,
+    visibleTurnItems,
     rows,
     replyingSince: goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     activity,
@@ -572,10 +575,11 @@ export function useGoatBotSession(
       selectedTask: ChannelTaskId,
       text: string,
       attachments: ReadonlyArray<GoatBotDraftAttachment> = [],
+      questionId?: ChannelQuestionId,
     ) => {
       if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments, selectedTask);
+      queue.submit(text, availability.bot, attachments, selectedTask, questionId);
       return true;
     },
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {

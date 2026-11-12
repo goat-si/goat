@@ -88,16 +88,6 @@ const markReplaced = (lines: ReadonlyArray<ChannelBotNoteLine>) => {
   });
 };
 
-/** A note line without the replaces marker the parser counts, or the line itself when it has none. */
-export const withoutReplacesMarker = (raw: string) => {
-  if (!raw.endsWith(")")) return raw;
-  for (let at = raw.indexOf(MARKER); at !== -1; at = raw.indexOf(MARKER, at + 1)) {
-    const replaces = jsonString(raw.slice(at + MARKER.length, -1));
-    if (replaces !== undefined && SOURCED.test(raw.slice(0, at))) return raw.slice(0, at);
-  }
-  return raw;
-};
-
 /** Every line of a notes file, oldest first, without the header, blank lines or headings. */
 export const parseChannelBotNoteLines = (text: string): ReadonlyArray<ChannelBotNoteLine> => {
   const normal = text.replaceAll("\r\n", "\n");
@@ -111,25 +101,47 @@ export const parseChannelBotNoteLines = (text: string): ReadonlyArray<ChannelBot
   return markReplaced(lines);
 };
 
-/** The newest `chars` of a text, starting at a whole line. */
-export const notesTail = (text: string, chars: number) => {
-  if (text.length <= chars) return text;
-  const part = text.slice(-chars - 1);
-  return part.slice(part.indexOf("\n") + 1);
+/** The one note words name, or how many notes they could mean when that is not exactly one. */
+export type NamedNote =
+  | { readonly line: ChannelBotNoteLine; readonly alike?: undefined }
+  | { readonly line?: undefined; readonly alike: number };
+
+// Words name a note only when exactly one candidate reads them, so nothing acts on a guess.
+const onlyOne = (candidates: ReadonlyArray<ChannelBotNoteLine>): NamedNote => {
+  const [line, ...others] = candidates;
+  return line !== undefined && others.length === 0 ? { line } : { alike: candidates.length };
+};
+
+/** The current note whose text is `words`, spacing collapsed. Every change or forget starts here. */
+export const currentNoteNamedBy = (lines: ReadonlyArray<ChannelBotNoteLine>, words: string) => {
+  const wanted = collapseNoteText(words);
+  return onlyOne(
+    lines.filter((line) => line.replacedBy === undefined && collapseNoteText(line.text) === wanted),
+  );
 };
 
 /**
- * The note a correction names: a whole dated line counts by its text. The newest note in force
- * with that text wins; a note already replaced leads to the note that replaced it, so corrections
- * saved one after another each replace the latest.
+ * The note a correction names: a whole dated line counts by its text. Words no current note reads
+ * but a replaced one does lead to the note that replaced it, so corrections saved one after another
+ * each replace the latest; there too they name a note only when they lead to exactly one.
  */
-export const noteNamedBy = (lines: ReadonlyArray<ChannelBotNoteLine>, named: string) => {
+export const noteNamedBy = (lines: ReadonlyArray<ChannelBotNoteLine>, named: string): NamedNote => {
   const parsed = parseLine(collapseNoteText(named), 0);
-  const wanted = collapseNoteText(parsed.date === null ? named : parsed.text);
-  const matches = (line: ChannelBotNoteLine) => collapseNoteText(line.text) === wanted;
-  let found =
-    lines.findLast((line) => line.replacedBy === undefined && matches(line)) ??
-    lines.findLast(matches);
-  while (found?.replacedBy !== undefined) found = lines[found.replacedBy];
-  return found;
+  const words = parsed.date === null ? named : parsed.text;
+  const current = currentNoteNamedBy(lines, words);
+  if (current.line !== undefined || current.alike > 1) return current;
+  const wanted = collapseNoteText(words);
+  // Where each line's corrections end, filled newest first since a correction always comes later.
+  const latest: Array<ChannelBotNoteLine> = [];
+  for (let at = lines.length - 1; at >= 0; at--) {
+    const line = lines[at];
+    if (line === undefined) continue;
+    latest[at] = (line.replacedBy === undefined ? undefined : latest[line.replacedBy]) ?? line;
+  }
+  const ends = new Set<ChannelBotNoteLine>();
+  for (const line of lines) {
+    const end = latest[line.index];
+    if (end !== undefined && collapseNoteText(line.text) === wanted) ends.add(end);
+  }
+  return onlyOne([...ends]);
 };

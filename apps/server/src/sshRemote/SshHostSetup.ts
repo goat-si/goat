@@ -32,6 +32,13 @@ import {
   type SshHostSetupProgress,
 } from "@goat/contracts";
 import { discoverSshHosts } from "@goat/ssh/config";
+import {
+  type Challenge,
+  type Continuation,
+  approvedProcessGone,
+  decodeContinuation,
+  runtimeUpdateApproval,
+} from "./sshHostContinuation.ts";
 import { resolveSshCommand } from "@goat/ssh/command";
 import { parseSshDestination } from "@goat/shared/sshDestination";
 import { runSshPreflight } from "@goat/ssh/preflight";
@@ -160,37 +167,6 @@ const aliasFor = (input: SshHostAddInput) =>
     .update(JSON.stringify([input.address, input.user, input.port ?? 22]))
     .digest("hex")
     .slice(0, 8)}`;
-const Endpoint = Schema.Struct({
-  host: Schema.String,
-  port: Schema.Number,
-  user: Schema.String,
-  hostKey: Schema.String,
-  proxyJump: Schema.optionalKey(Schema.String),
-  proxyCommand: Schema.optionalKey(Schema.String),
-});
-const Challenge = Schema.Struct({
-  input: SshHostAddInput,
-  host: SshHostAlias,
-  endpoint: Endpoint,
-  fingerprint: Schema.String,
-  algorithm: Schema.optionalKey(Schema.String),
-  identityFile: Schema.optionalKey(Schema.String),
-  expiresAt: Schema.Number,
-  aliasGeneration: Schema.Int,
-  includeRequired: Schema.Boolean,
-});
-type Challenge = typeof Challenge.Type;
-const Continuation = Schema.Struct({
-  version: Schema.Literal(1),
-  step: Schema.Literals(["runtime_update", "host_trust", "key_auth"]),
-  host: SshHostAlias,
-  operationId: Schema.String,
-  aliasGeneration: Schema.Int,
-  requestedVersion: Schema.optionalKey(Schema.String),
-  aliasRevision: Schema.optionalKey(Schema.String),
-  challenge: Schema.optional(Challenge),
-});
-const decodeContinuation = Schema.decodeUnknownEffect(Continuation);
 const isProbeError = Schema.is(SshHostProbeError);
 const isHandoffError = Schema.is(HandoffError);
 const isAuthorizationError = Schema.is(EnvironmentAuthorizationError);
@@ -753,6 +729,7 @@ export const make = (
         const revision = yield* aliasRevision(host).pipe(
           Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })),
         );
+        const replace = step === "runtime_update" ? snapshot.status?.replaceTarget : undefined;
         const args: typeof Continuation.Type = {
           version: 1,
           step,
@@ -763,6 +740,7 @@ export const make = (
           ...(step === "runtime_update"
             ? { requestedVersion: snapshot.status?.requestedVersion ?? "" }
             : {}),
+          ...(replace === undefined ? {} : { replace }),
           ...(challenge ? { challenge } : {}),
         };
         const now = yield* DateTime.now;
@@ -770,13 +748,13 @@ export const make = (
           kind: step === "key_auth" ? "terminal" : "approval",
           title:
             step === "runtime_update"
-              ? `Update runtime on ${host}?`
+              ? runtimeUpdateApproval(host, replace).title
               : step === "host_trust"
                 ? `Trust ${host}?`
                 : `Set up key authentication on ${host}`,
           reason:
             step === "runtime_update"
-              ? "Running agent work gets up to a minute to finish, then continues on the new version."
+              ? runtimeUpdateApproval(host, replace).reason
               : step === "host_trust"
                 ? `Check that ${host} is the server you meant before GOAT connects to it.`
                 : `${host} needs your public key before GOAT can sign in.`,
@@ -879,6 +857,7 @@ export const make = (
       requestGeneration = aliasGenerations.get(host) ?? 0,
       beforeRun?: Effect.Effect<void, HandoffError>,
       authorizeCaller: ReturnType<typeof authorize> = authorize(caller, "environment:maintain"),
+      forceReplace?: (typeof Continuation.Type)["replace"],
     ) =>
       Effect.gen(function* () {
         yield* authorizeCaller;
@@ -935,25 +914,32 @@ export const make = (
               .append({ ...auditEntry, outcome: "requested" })
               .pipe(Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })));
           let result = yield* auditEntry !== undefined
-            ? dispatch.runtimeUpdate(host, { confirmReplacement, onPhase, ...operation }).pipe(
-                // An idle update can return while it still waits; only the target version is done.
-                Effect.tap((updated) =>
-                  audit
-                    .append({
-                      ...auditEntry,
-                      outcome:
-                        updated.status?.runtimeVersion === auditEntry.targetVersion
-                          ? "completed"
-                          : "accepted",
-                    })
-                    .pipe(Effect.ignore({ log: true })),
-                ),
-                Effect.tapError(() =>
-                  audit
-                    .append({ ...auditEntry, outcome: "failed" })
-                    .pipe(Effect.ignore({ log: true })),
-                ),
-              )
+            ? dispatch
+                .runtimeUpdate(host, {
+                  confirmReplacement,
+                  onPhase,
+                  ...operation,
+                  ...(forceReplace === undefined ? {} : { forceReplace }),
+                })
+                .pipe(
+                  // An idle update can return while it still waits; only the target version is done.
+                  Effect.tap((updated) =>
+                    audit
+                      .append({
+                        ...auditEntry,
+                        outcome:
+                          updated.status?.runtimeVersion === auditEntry.targetVersion
+                            ? "completed"
+                            : "accepted",
+                      })
+                      .pipe(Effect.ignore({ log: true })),
+                  ),
+                  Effect.tapError(() =>
+                    audit
+                      .append({ ...auditEntry, outcome: "failed" })
+                      .pipe(Effect.ignore({ log: true })),
+                  ),
+                )
             : dispatch.prepareRuntime(host, { ...operation, onPhase });
           if (
             update ||
@@ -1369,6 +1355,13 @@ export const make = (
               current.status?.requestedVersion !== args.requestedVersion
             )
               return yield* discard;
+            const gone = approvedProcessGone(
+              args.host,
+              args.replace,
+              current.status?.replaceTarget,
+            );
+            if (args.step === "runtime_update" && gone)
+              return yield* reject("approval_expired", gone);
           }
           const latest = yield* status({ host: args.host });
           if (
@@ -1421,6 +1414,8 @@ export const make = (
                 )
                   return yield* new HandoffError({ reason: "expired" });
               }),
+              undefined,
+              args.step === "runtime_update" ? args.replace : undefined,
             ),
           );
         }).pipe(

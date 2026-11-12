@@ -28,6 +28,10 @@ import { warmBundledDevPlugin } from "./vite/warmBundledDev";
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
+// patches/playwright-core@1.60.0.patch: raise Playwright's Request and Route limits in this Vitest process only (a global, so no child inherits it).
+if (process.env.VITEST)
+  Reflect.set(globalThis, Symbol.for("goat.test.playwrightRequestBuckets"), true);
+
 // Signal single-origin dev explicitly; loadRepoEnv can restore deleted URL keys from .env.
 const isSingleOriginDev = process.env.GOAT_SINGLE_ORIGIN_DEV === "1";
 
@@ -184,8 +188,9 @@ const browserTestProject = {
   },
 } satisfies TestProjectInlineConfiguration;
 
-// Render scenarios count React commits; they run only through scripts/render-metrics.ts,
-// which reads the per-scenario reports this command writes.
+// Render scenarios count React commits; scripts/render-metrics.ts runs them and reads the
+// per-scenario reports this command writes.
+let directRenderReportDir: Promise<string> | undefined;
 const renderScenariosProject = {
   ...browserTestProject,
   test: {
@@ -203,8 +208,12 @@ const renderScenariosProject = {
       commands: {
         ...browserTestProject.test.browser.commands,
         writeRenderReport: async (_context, scenario: string, json: string) => {
-          const directory = process.env.GOAT_RENDER_REPORT_DIR;
-          if (!directory) throw new Error("GOAT_RENDER_REPORT_DIR is not set");
+          // scripts/render-metrics.ts sets the directory; a direct run writes to a temp one.
+          const directory =
+            process.env.GOAT_RENDER_REPORT_DIR ||
+            (await (directRenderReportDir ??= NodeFSP.mkdtemp(
+              `${NodeOS.tmpdir()}/goat-render-report-`,
+            )));
           await NodeFSP.writeFile(`${directory}/${scenario}.json`, json);
         },
       },

@@ -18,6 +18,9 @@ var serviceUnit string
 //go:embed install/si.goat.pen.plist
 var launchdPlist string
 
+//go:embed install/pen-task.xml
+var taskXML string
+
 const usage = `usage: pen <command> [flags]
 
   up [--relay URL]... [--name N] [--foreground] [--no-service]   start this node (founds a mesh the first time)
@@ -34,6 +37,8 @@ const usage = `usage: pen <command> [flags]
   revoke <member> [--compromised]         remove a member
   leave                                   remove this node and delete its keys
   pipe <node> <port>                      connect stdin/stdout to a member's local port
+  pipe --node <id> --noise <key> (<port>|@<service>)   the same on exactly that node, or to its registered service
+  service register <name> --port <port>   hold a local service registration (key on stdin) while stdin is open
   forward <localPort> <node>:<port>       forward a local port to a member's port
   ssh-config [--write|--install|--uninstall]   ssh_config for pen-<name> hosts (--install puts it first in ~/.ssh/config)
   dashboard [--no-open] [--stop]          open this node's local management page, or close it
@@ -47,13 +52,13 @@ const usage = `usage: pen <command> [flags]
 type verb func(args []string, stdout, stderr io.Writer) int
 
 func main() {
-	cli.Version, cli.ServiceUnit, cli.LaunchdPlist = version, serviceUnit, launchdPlist
+	cli.Version, cli.ServiceUnit, cli.LaunchdPlist, cli.TaskXML = version, serviceUnit, launchdPlist, taskXML
 	verbs := map[string]verb{
 		"up": cli.RunUp, "down": cli.RunDown, "invite": cli.RunInvite, "join": cli.RunJoin, "ls": cli.RunLs,
 		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,
 		"ssh-config": cli.RunSSHConfig, "relay": cli.RunRelay,
 		"login": cli.RunLogin, "logout": cli.RunLogout, "lock": cli.RunLock, "approve": cli.RunApprove,
-		"deny": cli.RunDeny, "account": cli.RunAccount, "dashboard": cli.RunDashboard,
+		"deny": cli.RunDeny, "account": cli.RunAccount, "dashboard": cli.RunDashboard, "service": cli.RunService,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

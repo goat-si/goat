@@ -1,5 +1,4 @@
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -26,6 +25,7 @@ import * as SessionLifetime from "../auth/SessionSocketLifetime.testkit.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { routeLayer } from "./ServerBrowserStream.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const platformLayer = NodeHttpPlatform.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -44,6 +44,7 @@ const makeAuth = (
             subject: "stream-test",
             method: "bearer-access-token",
             scopes,
+            principalKind: "person",
           });
     },
   });
@@ -113,7 +114,7 @@ it.effect.each([
           Layer.provide(platformLayer),
         ),
         { disableListenLog: true },
-      ).pipe(Layer.provideMerge(NodeHttpServer.layerTest), Layer.provide(auth.layer)),
+      ).pipe(Layer.provideMerge(layerTestLoopback), Layer.provide(auth.layer)),
     );
     const server = Context.get(services, HttpServer.HttpServer);
     const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
@@ -186,7 +187,7 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
         ),
         { disableListenLog: true },
       ).pipe(
-        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provideMerge(layerTestLoopback),
         Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
       ),
     );
@@ -431,7 +432,7 @@ it.effect.each([
         ),
         { disableListenLog: true },
       ).pipe(
-        Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provideMerge(layerTestLoopback),
         Layer.provide(makeAuth([AuthOrchestrationReadScope]).layer),
       ),
     );

@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as Config from "../config.ts";
 import * as Runtime from "./ConnectHubRuntime.testkit.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 
 it.effect.each([
   { phase: "mint", first: "issuance" },
@@ -77,6 +78,7 @@ it.effect.each([
     const exchange = (credential: string) =>
       runtime.auth.exchangeBootstrapCredentialForAccessToken(
         credential,
+        MAIN_LISTENER,
         undefined,
         { deviceType: "mobile" },
         { proofKeyThumbprint: "key" },
@@ -148,15 +150,18 @@ it.effect.each([
     if (first === "withdrawal" && minted) {
       expect(minted.scopes).not.toContain("hub:proxy");
       expect(
-        (yield* runtime.sessions.verify((yield* exchange(minted.credential)).access_token)).scopes,
+        (yield* runtime.sessions.verify(
+          (yield* exchange(minted.credential)).access_token,
+          MAIN_LISTENER,
+        )).scopes,
       ).not.toContain("hub:proxy");
     }
     armed = false;
     const after = yield* mint;
     expect(after.scopes).not.toContain("hub:proxy");
     const standard = yield* exchange(after.credential);
-    expect((yield* runtime.sessions.verify(standard.access_token)).scopes).not.toContain(
-      "hub:proxy",
-    );
+    expect(
+      (yield* runtime.sessions.verify(standard.access_token, MAIN_LISTENER)).scopes,
+    ).not.toContain("hub:proxy");
   }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),
 );

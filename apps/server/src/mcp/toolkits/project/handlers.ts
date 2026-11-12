@@ -13,6 +13,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { admitLaunch, withPressure } from "../../pressureAdmission.ts";
 import { newCommandId, readCaller, unavailable } from "../../threadAccess.ts";
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
+import { launchPlaced } from "../../../fleet/admission/PlacementLaunch.ts";
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import { ProjectToolkit } from "./tools.ts";
 
@@ -76,6 +77,15 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           const scope = yield* McpInvocationContext.McpInvocationContext;
           const launches = yield* ThreadLaunchMcpService.ThreadLaunchMcpService;
           const pressure = yield* admitLaunch(null);
+          if (input.placement !== undefined) {
+            const { placement: _placement, ...unplaced } = input;
+            return withPressure(
+              yield* launchPlaced(scope, input, (commandId) =>
+                launches.launch(scope, unplaced, modes, { commandId }),
+              ),
+              pressure,
+            );
+          }
           if (input.references === undefined || input.references.length === 0)
             return withPressure(yield* launches.launch(scope, input, modes), pressure);
           const references = yield* RepositoryReferenceMcpService.RepositoryReferenceMcpService;

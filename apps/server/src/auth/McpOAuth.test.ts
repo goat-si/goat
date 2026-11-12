@@ -40,6 +40,8 @@ import * as McpOAuthHttp from "./mcpOAuthHttp.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as Sessions from "./SessionStore.ts";
 import * as AuthHttp from "./http.ts";
+import { registerSourceForTest } from "./connectionContext.ts";
+import { MAIN_LISTENER, onMainListener } from "./connectionContext.testkit.ts";
 
 class AuthTestApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.auth)
@@ -107,7 +109,12 @@ const withRoutes = <A, E>(
       Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
       (web) =>
         Effect.gen(function* () {
-          const handler: Handler = (request) => Effect.promise(() => web.handler(request, context));
+          // The web handler stands in for the main listener; each request arrives on it.
+          const handler: Handler = (request) =>
+            Effect.promise(() => {
+              registerSourceForTest(request, MAIN_LISTENER);
+              return web.handler(request, context);
+            });
           yield* handler(at("/.well-known/oauth-authorization-server"));
           return yield* use(handler, routerAuth!);
         }),
@@ -145,7 +152,9 @@ const withAuthenticatedMemoryTools = (
   Effect.gen(function* () {
     const authenticator = yield* McpHttpServer.McpClientAuthenticator;
     const invocation = yield* authenticator.authenticate(
-      HttpServerRequest.fromWeb(at("/mcp", { headers: { authorization: `Bearer ${token}` } })),
+      onMainListener(
+        HttpServerRequest.fromWeb(at("/mcp", { headers: { authorization: `Bearer ${token}` } })),
+      ),
     );
     expect(invocation).toBeDefined();
     const list = yield* MemoryToolkitFixture.call(
@@ -340,8 +349,12 @@ it.live("signs in with a pairing code and issues a token only /mcp accepts", () 
 
       for (const scheme of ["Bearer", "bearer", "bEaReR"]) {
         const client = yield* auth.authenticateMcpClient(
-          HttpServerRequest.fromWeb(
-            at("/mcp", { headers: { authorization: `${scheme} ${token.access_token}` } }),
+          onMainListener(
+            onMainListener(
+              HttpServerRequest.fromWeb(
+                at("/mcp", { headers: { authorization: `${scheme} ${token.access_token}` } }),
+              ),
+            ),
           ),
         );
         expect(client).toMatchObject({ label: "Claude Code", access: "auto" });
@@ -415,8 +428,12 @@ it.live("signs in a hosted agent with an https callback that asked for a client 
       expect(tokenResponse.status).toBe(200);
       const token = (yield* json<unknown>(tokenResponse)) as { access_token: string };
       const signedIn = yield* auth.authenticateMcpClient(
-        HttpServerRequest.fromWeb(
-          at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
+        onMainListener(
+          onMainListener(
+            HttpServerRequest.fromWeb(
+              at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
+            ),
+          ),
         ),
       );
       expect(signedIn).toMatchObject({ label: "Hosted bot", access: "approval-required" });
@@ -480,6 +497,7 @@ it.live(
         const stillValid = yield* auth
           .exchangeBootstrapCredentialForAccessToken(
             bound.credential,
+            MAIN_LISTENER,
             undefined,
             { deviceType: "mobile" },
             { proofKeyThumbprint: "device-key-thumbprint" },
@@ -525,8 +543,12 @@ it.live(
         ).pipe(Effect.flatMap(json<{ access_token: string; scope: string }>));
         expect(readOnlyToken.scope).toBe("orchestration:read");
         const readOnlyClient = yield* auth.authenticateMcpClient(
-          HttpServerRequest.fromWeb(
-            at("/mcp", { headers: { authorization: `Bearer ${readOnlyToken.access_token}` } }),
+          onMainListener(
+            onMainListener(
+              HttpServerRequest.fromWeb(
+                at("/mcp", { headers: { authorization: `Bearer ${readOnlyToken.access_token}` } }),
+              ),
+            ),
           ),
         );
         expect(readOnlyClient.access).toBe("read-only");
@@ -657,7 +679,13 @@ it.effect("grants approvals only to issued clients with operate and approve, and
       });
     const authenticate = (token: string) =>
       auth.authenticateMcpClient(
-        HttpServerRequest.fromWeb(at("/mcp", { headers: { authorization: `Bearer ${token}` } })),
+        onMainListener(
+          onMainListener(
+            HttpServerRequest.fromWeb(
+              at("/mcp", { headers: { authorization: `Bearer ${token}` } }),
+            ),
+          ),
+        ),
       );
 
     const approver = yield* issue([
@@ -727,8 +755,12 @@ it.live.each([
           ...memoryScopes,
         ]);
         const client = yield* auth.authenticateMcpClient(
-          HttpServerRequest.fromWeb(
-            at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
+          onMainListener(
+            onMainListener(
+              HttpServerRequest.fromWeb(
+                at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
+              ),
+            ),
           ),
         );
         expect(client.grantedScopes?.filter((scope) => scope.startsWith("memory:"))).toEqual([
@@ -805,8 +837,10 @@ const setupBearer = Effect.gen(function* () {
     Effect.gen(function* () {
       const authenticator = yield* McpHttpServer.McpClientAuthenticator;
       const invocation = yield* authenticator.authenticate(
-        HttpServerRequest.fromWeb(
-          at("/mcp", { headers: { authorization: `Bearer ${issued.token}` } }),
+        onMainListener(
+          HttpServerRequest.fromWeb(
+            at("/mcp", { headers: { authorization: `Bearer ${issued.token}` } }),
+          ),
         ),
       );
       if (invocation === undefined) return yield* Effect.fail("unauthenticated" as const);

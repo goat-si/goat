@@ -533,6 +533,8 @@ export function filterCommandPaletteGroups(input: {
     readonly nestedItems: ReadonlyArray<CommandPaletteActionItem>;
   };
   projectSearchItems: ReadonlyArray<CommandPaletteActionItem>;
+  /** GOAT Bot's added bots: found by a search, never listed for an empty one. */
+  botSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
   settingsSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** Threads whose messages match, best first; threads already listed are skipped. */
@@ -593,6 +595,9 @@ export function filterCommandPaletteGroups(input: {
         label: "Projects",
         items: input.projectSearchItems,
       });
+    }
+    if (input.botSearchItems && input.botSearchItems.length > 0) {
+      searchableGroups.push({ value: "bots-search", label: "Bots", items: input.botSearchItems });
     }
     if (input.settingsSearchItems && input.settingsSearchItems.length > 0) {
       searchableGroups.push({

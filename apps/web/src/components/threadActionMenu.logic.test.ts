@@ -110,4 +110,72 @@ describe("buildThreadActionMenuItems", () => {
     expect(items.find((item) => item.id === "archive")?.disabled).toBe(true);
     expect(items.find((item) => item.id === "turn-into-project")?.disabled).toBe(true);
   });
+
+  describe("fork entry", () => {
+    const fork = {
+      canFork: true,
+      canForkIntoWorktree: true,
+      inWorktree: false,
+      needsServerUpdate: false,
+    } as const;
+    const forkItem = (state: Partial<ThreadActionMenuState>) =>
+      buildThreadActionMenuItems({ ...baseState, branch: "main", ...state }).find((item) =>
+        item.id.startsWith("fork"),
+      );
+
+    it("offers both workspaces in a submenu after New thread on the branch", () => {
+      const ids = buildThreadActionMenuItems({ ...baseState, branch: "main", fork }).map(
+        (item) => item.id,
+      );
+      expect(ids.indexOf("fork")).toBe(ids.indexOf("new-thread-on-branch") + 1);
+      expect(forkItem({ fork })).toMatchObject({
+        id: "fork",
+        label: "Fork thread",
+        disabled: false,
+        children: [
+          { id: "fork:current", label: "Fork thread" },
+          { id: "fork:worktree", label: "Fork thread in new worktree" },
+        ],
+      });
+    });
+
+    it("names the same worktree when the thread already lives in one", () => {
+      expect(forkItem({ fork: { ...fork, inWorktree: true } })?.children?.[0]?.label).toBe(
+        "Fork thread in same worktree",
+      );
+      expect(
+        forkItem({ fork: { ...fork, inWorktree: true, canForkIntoWorktree: false } })?.label,
+      ).toBe("Fork thread in same worktree");
+    });
+
+    it("is a single item when a new worktree is not possible, and disabled without a turn", () => {
+      expect(forkItem({ fork: { ...fork, canForkIntoWorktree: false } })).toMatchObject({
+        id: "fork:current",
+        label: "Fork thread",
+        disabled: false,
+      });
+      expect(
+        forkItem({ fork: { ...fork, canFork: false, canForkIntoWorktree: false } }),
+      ).toMatchObject({ id: "fork:current", disabled: true });
+    });
+
+    it("asks for a server update on a hub-proxied server that cannot fork", () => {
+      expect(
+        forkItem({
+          fork: {
+            canFork: false,
+            canForkIntoWorktree: false,
+            inWorktree: false,
+            needsServerUpdate: true,
+          },
+        }),
+      ).toMatchObject({ label: "Fork thread (update this server)", disabled: true });
+    });
+
+    it("is absent without fork state and for the global agent", () => {
+      expect(forkItem({ fork: null })).toBeUndefined();
+      expect(forkItem({})).toBeUndefined();
+      expect(forkItem({ fork, globalAgent: true })).toBeUndefined();
+    });
+  });
 });

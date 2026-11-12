@@ -39,4 +39,23 @@ describe("thread row menu", () => {
     expect(leaves(nested).toSorted()).toEqual(leaves(actions).toSorted());
     expect(layoutThreadRowMenu(actions, false)).toEqual(actions);
   });
+  it("keeps Fork thread at the top level on iOS", () => {
+    const actions: MenuAction[] = [
+      "new-thread-on-branch",
+      "fork",
+      "copy-thread",
+      "copy-thread-id",
+      "settle",
+      "rename",
+      "archive",
+      "delete",
+    ].map((id) => ({ id, title: id }));
+    const single = actions.map((action) =>
+      action.id === "fork" ? { ...action, id: "fork:current" } : action,
+    );
+    for (const menu of [actions, single]) {
+      const top = layoutThreadRowMenu(menu, true).map((action) => action.id);
+      expect(top.slice(0, 2)).toEqual(["new-thread-on-branch", menu[1]?.id]);
+    }
+  });
 });

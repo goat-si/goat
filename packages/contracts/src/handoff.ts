@@ -106,6 +106,7 @@ export const HUB_DEVICE_HANDOFF_PATHS = {
   join: "hub.device_join",
   leave: "hub.device_leave",
   repair: "hub.device_repair",
+  move: "hub.device_move",
 } as const;
 const HUB_PATHS: ReadonlySet<string> = new Set(Object.values(HUB_DEVICE_HANDOFF_PATHS));
 export const isHubDeviceHandoffPath = (path: string) => HUB_PATHS.has(path);
@@ -189,6 +190,11 @@ export const HandoffOpenResult = Schema.Struct({
   handoff: Handoff,
   human: Schema.NullOr(HandoffHuman),
 });
+/** An agent withdrawing an approval its own thread asked for and a person has not answered. */
+export const HandoffWithdrawInput = Schema.Struct({ handoffId: TurnItemId });
+export type HandoffWithdrawInput = typeof HandoffWithdrawInput.Type;
+export const HandoffWithdrawResult = Schema.Struct({ handoff: HandoffSummary });
+export type HandoffWithdrawResult = typeof HandoffWithdrawResult.Type;
 
 export const HandoffErrorReason = Schema.Literals([
   "not_found",
@@ -218,7 +224,11 @@ export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffErr
         : `GOAT could not apply this change: ${this.detail}`;
     if (this.outcome === "apply_unknown")
       return `This change may have been applied${this.detail === undefined ? "" : ` (${this.detail})`}. Check the provider with Diagnose before you approve it again.`;
-    if (this.reason === "conflict" && this.detail !== undefined) return this.detail;
+    if (
+      (this.reason === "conflict" || this.reason === "limit_reached") &&
+      this.detail !== undefined
+    )
+      return this.detail;
     return {
       not_found: "This handoff no longer exists.",
       expired: "This handoff expired. Ask for a new one.",

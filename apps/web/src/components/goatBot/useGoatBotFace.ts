@@ -9,15 +9,19 @@ import {
   goatBotFaceTasks,
   goatBotItemReaders,
   goatBotReplyingSince,
+  goatBotRowFaceSignals,
+  goatBotRowReadingUntil,
   type FaceMotion,
   type GoatBotFaceInput,
   type GoatBotFaceState,
+  type GoatBotRowStatus,
 } from "@goat/client-runtime/goatBot";
 import type { ScopedThreadRef } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { useNowAfter } from "~/hooks/useDeadline";
 import {
   resolveThreadDetailRef,
   useThreadShell,
@@ -45,16 +49,16 @@ function useGoatBotFaceState(input: GoatBotFaceInput): GoatBotFaceState {
 }
 
 /**
- * A bot's face from its conversation: the shell every client streams and, when the caller says a
- * view already holds the conversation (the bot-mode sidebar row, the open chat), its task chips.
- * Reading the same detail atom adds no load there. The bot's own reply turns carry no chip, so
- * reading comes from the unanswered message in those items.
+ * A bot's face from its conversation shell plus, where a view already holds the conversation, its
+ * task chips and unanswered message (no added load). A roster row that does not hold it passes its
+ * bot status instead.
  */
 export function useGoatBotSessionFace(
   threadRef: ScopedThreadRef | null,
   waitingCount: number,
   activity: GoatBotFaceInput["activity"],
   held: boolean,
+  row?: GoatBotRowStatus,
 ): { readonly state: GoatBotFaceState; readonly since: number | null } {
   const shell = useThreadShell(threadRef);
   const detailRef = held
@@ -67,18 +71,24 @@ export function useGoatBotSessionFace(
       ? null
       : goatBotReplyingSince({ visibleTurnItems: items, readers: goatBotItemReaders });
   const reading = useGoatBotReading(replyingSince);
-  const tasks = items === null ? null : goatBotFaceTasks(items);
+  const rowStatus = items === null ? row : undefined;
+  // One timer: the clock is read again when the row's reading window closes.
+  const now = useNowAfter(rowStatus === undefined ? null : goatBotRowReadingUntil(rowStatus));
+  const rowSignals = rowStatus === undefined ? null : goatBotRowFaceSignals(rowStatus, now);
+  const rowReading = rowSignals?.activity !== null && rowSignals?.activity !== undefined;
+  const tasks = items === null ? (rowSignals?.tasks ?? null) : goatBotFaceTasks(items);
   const state = useGoatBotFaceState({
-    activity: activity ?? (reading ? READING : null),
+    activity: activity ?? (reading ? READING : (rowSignals?.activity ?? null)),
     waitingCount,
     shell: shell?.source ?? null,
     tasks,
   });
   const runStartedAt = (shell?.source ?? null)?.activityRunStartedAt;
+  const readingSince = replyingSince ?? (rowReading ? (row?.latest?.at ?? null) : null);
   // Which work started last decides which of several working faces moves.
   const since =
-    state === "reading" && replyingSince !== null
-      ? Date.parse(replyingSince)
+    state === "reading" && readingSince !== null
+      ? Date.parse(readingSince)
       : (tasks?.activeSince ??
         (runStartedAt === null || runStartedAt === undefined
           ? null

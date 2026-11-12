@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -18,8 +18,11 @@ import { threadEnvironment } from "~/state/threads";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
 import { toastManager } from "../ui/toast";
+import { useUiStateStore } from "~/uiStateStore";
+import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ThreadVisitWatermark } from "../chat/ThreadVisitWatermark";
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotStepsProvider } from "./GoatBotStepsProvider";
 import { GoatBotActivityContext } from "./GoatBotTimeline";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
@@ -86,6 +89,17 @@ function GoatBotThreadSession({
   });
   const threadRef = scopeThreadRef(environmentId, threadId);
   const shell = useThreadShell(threadRef);
+  const localLastVisitedAt = useUiStateStore(
+    (state) => state.threadLastVisitedAtById[scopedThreadKey(threadRef)],
+  );
+  const [unreadSince, setUnreadSince] = useState(() =>
+    shell === null
+      ? undefined
+      : (resolveThreadLastVisitedAt(shell.lastVisitedAt, localLastVisitedAt) ?? null),
+  );
+  if (unreadSince === undefined && shell !== null) {
+    setUnreadSince(resolveThreadLastVisitedAt(shell.lastVisitedAt, localLastVisitedAt) ?? null);
+  }
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
@@ -143,6 +157,7 @@ function GoatBotThreadSession({
     retryAvailability();
   }, [confirmedHere, removal, retryAvailability, threadId]);
   const unarchive = useOrchestrationCommand(threadEnvironment.unarchive, { reportFailure: false });
+  const rows = removal === null ? session.rows : NO_PENDING;
   return (
     <GoatBotActivityContext value={removal === null ? session.activity : null}>
       {shell !== null ? <ThreadVisitWatermark threadRef={threadRef} /> : null}
@@ -154,47 +169,53 @@ function GoatBotThreadSession({
           onResolve={resolveRemoval}
         />
       ) : null}
-      <GoatBotChatView
-        {...session}
-        environmentId={environmentId}
-        homeMove={
-          moveTarget
-            ? {
-                label: moveTarget.label,
-                busy: homeSettings.busy,
-                onMove: () => homeSettings.changeHome(moveTarget.environmentId),
-              }
-            : undefined
-        }
-        homeMoveError={homeSettings.error}
-        rows={removal === null ? session.rows : NO_PENDING}
-        removal={removal}
-        canOpenCurrentBot={canOpenCurrentBot}
-        onRestore={
-          member !== null && manage.canManage ? () => void manage.restore(member) : undefined
-        }
-        onUnarchive={
-          member === null && removal === "archived" && session.canOperate
-            ? () =>
-                void unarchive({ environmentId, input: { threadId } }).then((result) => {
-                  if (result._tag === "Failure") {
-                    toastManager.add({
-                      type: "error",
-                      title: `Couldn't unarchive ${botName}`,
-                      description: "It may have been deleted. Check again in a moment.",
-                    });
-                  }
-                  refreshArchivedThreadsForEnvironment(environmentId);
-                })
-            : undefined
-        }
-        onCheckAgain={
-          removal === "unchecked"
-            ? () => refreshArchivedThreadsForEnvironment(environmentId)
-            : undefined
-        }
-        legacyAgentRoute={legacyAgentRoute}
-      />
+      <GoatBotStepsProvider
+        visibleTurnItems={visibleTurnItems}
+        environmentId={removal === null ? environmentId : null}
+      >
+        <GoatBotChatView
+          {...session}
+          environmentId={environmentId}
+          unreadSince={unreadSince}
+          homeMove={
+            moveTarget
+              ? {
+                  label: moveTarget.label,
+                  busy: homeSettings.busy,
+                  onMove: () => homeSettings.changeHome(moveTarget.environmentId),
+                }
+              : undefined
+          }
+          homeMoveError={homeSettings.error}
+          rows={rows}
+          removal={removal}
+          canOpenCurrentBot={canOpenCurrentBot}
+          onRestore={
+            member !== null && manage.canManage ? () => void manage.restore(member) : undefined
+          }
+          onUnarchive={
+            member === null && removal === "archived" && session.canOperate
+              ? () =>
+                  void unarchive({ environmentId, input: { threadId } }).then((result) => {
+                    if (result._tag === "Failure") {
+                      toastManager.add({
+                        type: "error",
+                        title: `Couldn't unarchive ${botName}`,
+                        description: "It may have been deleted. Check again in a moment.",
+                      });
+                    }
+                    refreshArchivedThreadsForEnvironment(environmentId);
+                  })
+              : undefined
+          }
+          onCheckAgain={
+            removal === "unchecked"
+              ? () => refreshArchivedThreadsForEnvironment(environmentId)
+              : undefined
+          }
+          legacyAgentRoute={legacyAgentRoute}
+        />
+      </GoatBotStepsProvider>
     </GoatBotActivityContext>
   );
 }

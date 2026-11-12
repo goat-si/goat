@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { onMainListenerWeb } from "./connectionContext.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   AuthAccessTokenType,
@@ -75,7 +76,7 @@ const makeRoutes = (input: { readonly hubEnabled: boolean; readonly devToken?: b
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const toHandler = (input: { readonly hubEnabled: boolean; readonly devToken?: boolean }) =>
-  HttpRouter.toWebHandler(makeRoutes(input), { disableLogger: true });
+  onMainListenerWeb(HttpRouter.toWebHandler(makeRoutes(input), { disableLogger: true }));
 type Handler = ReturnType<typeof toHandler>;
 
 const client = (

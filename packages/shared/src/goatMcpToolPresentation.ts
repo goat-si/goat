@@ -61,6 +61,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "schedule-delete",
   ),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
+  goat_handoff_withdraw: tool(
+    ["Withdraw", "Withdrawing", "Withdrew", "an approval request"],
+    "environment-update",
+  ),
   create_threads: tool(["Create", "Creating", "Created", "GOAT threads"], "thread-create"),
   t3_thread_start: tool(["Start", "Starting", "Started", "a GOAT thread"], "thread-create"),
   goat_thread_list: tool(["List", "Listing", "Listed", "GOAT threads"], "thread-list"),
@@ -435,6 +439,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_hub_device_repair: tool(
     ["Repair", "Repairing", "Repaired", "a hub device"],
+    "environment-update",
+  ),
+  goat_hub_device_move: tool(
+    ["Move", "Moving", "Moved", "a hub device to another alias"],
     "environment-update",
   ),
   goat_hub_opencodex_sync: tool(

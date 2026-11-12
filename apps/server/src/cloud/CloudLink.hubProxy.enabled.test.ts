@@ -22,6 +22,7 @@ import * as Cli from "./CliTokenManager.ts";
 import * as CloudLink from "./CloudLink.ts";
 import * as Reachability from "./ConnectReachability.ts";
 import * as Endpoint from "./ManagedEndpointRuntime.ts";
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 
 vi.mock("@goat/shared/goatConnect", async (original) => ({
   ...(await original<typeof import("@goat/shared/goatConnect")>()),
@@ -125,11 +126,12 @@ it.effect(
         const minted = yield* cloud.mintCredential({ proof: signed });
         const exchanged = yield* auth.exchangeBootstrapCredentialForAccessToken(
           minted.credential,
+          MAIN_LISTENER,
           undefined,
           { deviceType: "mobile" },
           { proofKeyThumbprint: "device-key" },
         );
-        expect((yield* sessions.verify(exchanged.access_token)).scopes).toEqual(
+        expect((yield* sessions.verify(exchanged.access_token, MAIN_LISTENER)).scopes).toEqual(
           allowed ? [...AuthStandardClientScopes, AuthHubProxyScope] : AuthStandardClientScopes,
         );
         expect(yield* cloud.mintCredential({ proof: signed }).pipe(Effect.result)).toMatchObject({

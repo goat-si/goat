@@ -624,6 +624,8 @@ export type ProviderAdapterV2SubagentOutcome = {
   readonly result: OrchestrationV2Subagent["result"];
 };
 
+export type ProviderModelStatus = "ready" | "predated" | "missing" | "unconfirmed";
+
 export interface ProviderAdapterV2SessionRuntime {
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
@@ -638,6 +640,21 @@ export interface ProviderAdapterV2SessionRuntime {
    * Past the ceiling the runtime confirms cached state with the provider first.
    */
   readonly holdsLiveWork?: (input: { readonly pastPinCeiling: boolean }) => Effect.Effect<boolean>;
+  /**
+   * Whether this process can run a model GOAT offers from the provider's catalog: `predated` when it
+   * started before the model was added, so a new process would know it; `missing` when it does not
+   * list a model GOAT already offered when it started; `unconfirmed` when GOAT cannot tell, and
+   * the turn runs as it would without the check.
+   */
+  readonly modelStatus?: (
+    model: string,
+    /**
+     * `cachedOnly` answers from what the runtime already knows, never asking the process. `since`
+     * is when the turn's open began (Clock milliseconds); an answer the process gave after it is
+     * as recent as the open, so it is reused.
+     */
+    options?: { readonly cachedOnly?: boolean; readonly since?: number | undefined },
+  ) => Effect.Effect<ProviderModelStatus>;
   /** Set when a reopen of this session must wait until its scope has closed, process included. */
   readonly reopenAfterClose?: true;
   /** Root-subscription probe; replacement checks opt in to subagents owned by the live process. */

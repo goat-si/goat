@@ -15,6 +15,7 @@ import {
   type ChannelMessageKind,
   type ChannelMessageMeta,
   type ChannelOutboundMessage,
+  type ChannelQuestionId,
   type ChannelTimelineRecord,
   type ThreadId,
 } from "@goat/contracts";
@@ -27,6 +28,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import { timelineIdsFor } from "./channelIds.ts";
+import { personMessageEntry } from "./channelPersonMessage.ts";
 
 export class ChannelBotTimeline extends Context.Service<
   ChannelBotTimeline,
@@ -84,6 +86,39 @@ export const layerGoatTransport = Layer.effectDiscard(
     const registry = yield* ChannelTransport.ChannelTransportRegistry;
     const timeline = yield* ChannelBotTimeline;
     const ledger = yield* ChannelLedger.ChannelLedger;
+    const persistenceFailed = () => new ChannelGatewayError({ reason: "persistence_failed" });
+
+    /**
+     * Reception's decision about an answer goes onto the person's own message, in the thread it
+     * was sent to. A bot gone, or moved to another thread since, gets nothing: that thread is
+     * no longer shown, and the new one never had the message.
+     */
+    const recordAnswerDecision = (
+      message: ChannelOutboundMessage,
+      answersQuestionId: ChannelQuestionId | null,
+    ) =>
+      Effect.gen(function* () {
+        if (message.inReplyToInputId === undefined) {
+          return yield* new ChannelGatewayError({ reason: "invalid_input" });
+        }
+        const stored = yield* ledger
+          .getInput(message.inReplyToInputId)
+          .pipe(Effect.mapError(persistenceFailed));
+        const origin = stored?.message.replyAddress;
+        if (stored === undefined || origin?.kind !== "goat") return;
+        const bot = yield* ledger
+          .getBotById(stored.ownerId, stored.botId)
+          .pipe(Effect.mapError(persistenceFailed));
+        if (bot?.bot.threadId !== origin.threadId) return;
+        yield* timeline.record({
+          threadId: origin.threadId,
+          record: {
+            recordKey: "input:" + stored.snapshot.inputId,
+            entry: { ...personMessageEntry(stored, { answersQuestionId }), answerDecided: true },
+          },
+          revision: "decided",
+        });
+      });
 
     /** The conversation, owner and bot a delivery belongs to, from the task or input it answers. */
     const sourceOf = (message: ChannelOutboundMessage) =>
@@ -111,6 +146,11 @@ export const layerGoatTransport = Layer.effectDiscard(
         const destination = message.destination;
         if (destination.kind !== "goat") {
           return yield* new ChannelGatewayError({ reason: "invalid_input" });
+        }
+        if (message.personAnswer !== undefined) {
+          yield* recordAnswerDecision(message, message.personAnswer.answersQuestionId);
+          const acceptedAt = DateTime.formatIso(yield* DateTime.now);
+          return { deliveryId: message.deliveryId, acceptedAt };
         }
         const source = yield* sourceOf(message);
         // A delivery goes to the current thread of the bot its input or task belongs to, so work
@@ -148,8 +188,12 @@ export const layerGoatTransport = Layer.effectDiscard(
               ? {}
               : { inReplyToInputId: message.inReplyToInputId }),
             ...(message.taskId === undefined ? {} : { taskId: message.taskId }),
+            ...(message.taskGeneration === undefined
+              ? {}
+              : { taskGeneration: message.taskGeneration }),
             ...(message.options === undefined ? {} : { options: message.options }),
             ...(message.questionId === undefined ? {} : { questionId: message.questionId }),
+            ...(message.questionKind === undefined ? {} : { questionKind: message.questionKind }),
           };
           yield* timeline.record({
             threadId,

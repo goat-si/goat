@@ -34,6 +34,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import { connectionOf } from "./connectionContext.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { hubProxyDelegationRefusal } from "./hubProxyDelegation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -313,6 +314,7 @@ export const layer = HttpApiBuilder.group(
             );
             const result = yield* serverAuth.createBrowserSession(
               args.payload.credential,
+              connectionOf(request),
               deriveAuthClientMetadata({ request }),
               previousCredential &&
                 EnvironmentAuth.isBrowserCookieCredential(previousCredential.source)
@@ -398,6 +400,7 @@ export const layer = HttpApiBuilder.group(
             yield* appendCredentialResponseHeaders;
             return yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
               args.payload.subject_token,
+              connectionOf(request),
               requestedScopes,
               deriveAuthClientMetadata({
                 request,

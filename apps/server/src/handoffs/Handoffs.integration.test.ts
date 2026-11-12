@@ -232,6 +232,7 @@ it.effect(
           {
             sessionId,
             subject: "test",
+            principalKind: "person",
             method: "browser-session-cookie",
             scopes: ["orchestration:operate"],
             permissions: ["orchestration:operate", "providers:manage"],
@@ -486,6 +487,7 @@ it.effect.each([
                 {
                   sessionId,
                   subject: "test",
+                  principalKind: "person",
                   method: "browser-session-cookie",
                   scopes: permissions,
                   permissions,
@@ -661,6 +663,7 @@ it.effect(
                 {
                   sessionId: reviewer,
                   subject: "test",
+                  principalKind: "person",
                   method: "browser-session-cookie",
                   scopes: ["orchestration:operate", "providers:manage"],
                   client: { label: "Human reviewer", deviceType: "unknown" },
@@ -753,6 +756,7 @@ it.effect(
                 {
                   sessionId: reviewer,
                   subject: "test",
+                  principalKind: "person",
                   method: "browser-session-cookie",
                   scopes: ["orchestration:operate", "providers:manage"],
                   client: { label: "Human reviewer", deviceType: "unknown" },

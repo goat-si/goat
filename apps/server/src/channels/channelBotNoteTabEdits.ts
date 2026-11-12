@@ -21,9 +21,9 @@ import type * as ChannelLedger from "./ChannelLedger.ts";
 import { isUnlinkedPrincipal } from "./ChannelGateway.ts";
 import {
   collapseNoteText,
+  currentNoteNamedBy,
   NOTES_HEADER,
   parseChannelBotNoteLines,
-  withoutReplacesMarker,
   type ChannelBotNoteLine,
 } from "./channelBotNoteLines.ts";
 import {
@@ -34,8 +34,8 @@ import {
   noteSource,
   type ChannelBotFiles,
 } from "./channelBotNotes.ts";
-import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { readChannelBotNotesTail, type NotesTail } from "./channelBotNotesTail.ts";
+import { CHANNEL_COPY, notesAlikeAnswer, notesAlikeNotSaved } from "./channelCopy.ts";
 
 /** The largest notes file a Memory tab edit reads and rewrites. */
 const NOTES_EDIT_MAX_BYTES = 1024 * 1024;
@@ -97,6 +97,23 @@ const tabRequest = (text: string): TabRequest | undefined => {
 export const isMemoryTabEdit = (message: { readonly intent: string; readonly text?: string }) =>
   message.intent === "message" && tabRequest(message.text ?? "") !== undefined;
 
+/** The one current note a request's words name; words several current notes read name none. */
+const addressedNote = (
+  lines: ReadonlyArray<ChannelBotNoteLine>,
+  note: string,
+):
+  | { readonly line: ChannelBotNoteLine }
+  | { readonly line?: undefined; readonly answer: string } => {
+  const named = currentNoteNamedBy(lines, note);
+  if (named.line !== undefined) return { line: named.line };
+  return {
+    answer:
+      named.alike === 0
+        ? CHANNEL_COPY.noteNotFound
+        : notesAlikeAnswer(collapseNoteText(note), named.alike),
+  };
+};
+
 /** What a tab edit answers; shaped like an approval answer so reception completes it the same way. */
 interface TabEditAnswer {
   readonly text: string;
@@ -105,7 +122,7 @@ interface TabEditAnswer {
 }
 
 export interface NoteWriterHooks {
-  /** Runs after the rewritten notes are staged, before memory.md is compared and replaced. */
+  /** Runs after an edit is prepared (a forget's file staged), before memory.md is compared. */
   readonly beforeCompare?: Effect.Effect<void>;
   /** Runs right after the rename, before the file is read again to check it. */
   readonly afterRename?: Effect.Effect<void>;
@@ -126,6 +143,12 @@ interface RefusedForget {
   readonly holders: ReadonlySet<string>;
 }
 
+/** What a save adds to the reply; `held` when nothing was saved and the reply is only `notice`. */
+export interface NoteSaveAnswer {
+  readonly notice: string | undefined;
+  readonly held?: true;
+}
+
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 // A forget rewrites the file, so it keeps a byte order mark and refuses bytes that are not UTF-8.
 const strictDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -134,35 +157,46 @@ const BOM = "\uFEFF";
 const sameBytes = (left: Uint8Array, right: Uint8Array) =>
   left.length === right.length && left.every((byte, index) => byte === right[index]);
 
+const sameRead = (left: NotesTail | null, right: NotesTail | null) =>
+  left === null || right === null ? left === right : sameBytes(left.bytes, right.bytes);
+
 /**
- * The file without the note `text`: its lines, every earlier line they replaced, every other line
- * with a removed text, and replaces markers that quote a removed text. Every other byte is kept.
+ * Whether `after` holds exactly the lines kept, byte for byte, each replacing the same kept line as
+ * before. Removing a note with the notes it replaced keeps every other binding, but it can change
+ * how other lines parse: a note above the header, once removed, makes the header start the file again.
  */
-const withoutNote = (fileText: string, lines: ReadonlyArray<ChannelBotNoteLine>, text: string) => {
-  // Indexed both ways, so a long correction chain is walked once instead of once per link.
-  const byText = new Map<string, Array<number>>();
-  const replacedLines = new Map<number, Array<number>>();
-  const add = <K>(map: Map<K, Array<number>>, key: K, index: number) => {
-    const list = map.get(key);
-    if (list === undefined) map.set(key, [index]);
-    else list.push(index);
-  };
-  for (const line of lines) {
-    add(byText, collapseNoteText(line.text), line.index);
-    if (line.replacedBy !== undefined) add(replacedLines, line.replacedBy, line.index);
-  }
-  const removedTexts = new Set<string>();
+const sameBindings = (
+  kept: ReadonlyArray<ChannelBotNoteLine>,
+  after: ReadonlyArray<ChannelBotNoteLine>,
+) => {
+  const position = new Map(kept.map((line, at) => [line.index, at]));
+  return (
+    after.length === kept.length &&
+    kept.every((line, at) => {
+      const now = after[at];
+      const by = line.replacedBy === undefined ? undefined : position.get(line.replacedBy);
+      return now !== undefined && now.raw === line.raw && now.replacedBy === by;
+    })
+  );
+};
+
+/**
+ * The file without `selected` and the notes it replaced, followed through the parser's bindings.
+ * Every other line is kept byte for byte; a replaces marker binds only an earlier line, so one left
+ * behind can never bind a later note.
+ */
+const withoutNote = (
+  fileText: string,
+  lines: ReadonlyArray<ChannelBotNoteLine>,
+  selected: ChannelBotNoteLine,
+) => {
+  // Each correction replaces at most one earlier line, so a note's replaced notes form one chain.
+  const replacedOf = new Map<number, number>();
+  for (const line of lines)
+    if (line.replacedBy !== undefined) replacedOf.set(line.replacedBy, line.index);
   const removed = new Set<number>();
-  const queue = [...(byText.get(collapseNoteText(text)) ?? [])];
-  for (let index = queue.pop(); index !== undefined; index = queue.pop()) {
-    if (removed.has(index)) continue;
-    removed.add(index);
-    for (const earlier of replacedLines.get(index) ?? []) queue.push(earlier);
-    const key = collapseNoteText(lines[index]?.text ?? "");
-    if (removedTexts.has(key)) continue;
-    removedTexts.add(key);
-    for (const same of byText.get(key) ?? []) queue.push(same);
-  }
+  for (let at: number | undefined = selected.index; at !== undefined; at = replacedOf.get(at))
+    removed.add(at);
   // Physical lines keep their own endings; parsed notes map onto them with the parser's skips.
   const physical = fileText.split(/(?<=\n)/u);
   const headerLines = fileText.replaceAll("\r\n", "\n").startsWith(NOTES_HEADER)
@@ -173,20 +207,19 @@ const withoutNote = (fileText: string, lines: ReadonlyArray<ChannelBotNoteLine>,
     const content = (physical[at] ?? "").replace(/\r?\n$/u, "").trim();
     if (content === "" || content.startsWith("#")) continue;
     const line = lines[index++];
-    if (line === undefined || line.raw !== content) return undefined;
+    if (line === undefined || line.raw !== content) return "unmapped" as const;
     if (removed.has(line.index)) physical[at] = "";
-    else if (line.replaces !== undefined && removedTexts.has(collapseNoteText(line.replaces)))
-      physical[at] = (physical[at] ?? "").replace(line.raw, withoutReplacesMarker(line.raw));
   }
-  return index === lines.length ? { text: physical.join(""), removedTexts } : undefined;
+  if (index !== lines.length) return "unmapped" as const;
+  const text = physical.join("");
+  const kept = lines.filter((line) => !removed.has(line.index));
+  if (!sameBindings(kept, parseChannelBotNoteLines(text))) return "rebinds" as const;
+  return { text, removedRaws: new Set([...removed].map((index) => lines[index]?.raw ?? "")) };
 };
 
-const stillThere = (fileText: string, removedTexts: ReadonlySet<string>) =>
-  parseChannelBotNoteLines(fileText).some(
-    (line) =>
-      removedTexts.has(collapseNoteText(line.text)) ||
-      (line.replaces !== undefined && removedTexts.has(collapseNoteText(line.replaces))),
-  );
+// Counted, since a kept line may read exactly like a removed one.
+const linesAmong = (fileText: string, raws: ReadonlySet<string>) =>
+  parseChannelBotNoteLines(fileText).filter((line) => raws.has(line.raw)).length;
 
 export const makeChannelBotNoteWriter = (
   fs: FileSystem.FileSystem,
@@ -206,7 +239,7 @@ export const makeChannelBotNoteWriter = (
      */
     const savedBefore = (inputId: string, replaces: string | undefined) =>
       readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES).pipe(
-        Effect.map((read) => {
+        Effect.map((read): NoteSaveAnswer | undefined => {
           const source = noteSource(inputId);
           if (read === null) return undefined;
           const text = decode(read.bytes);
@@ -219,15 +252,25 @@ export const makeChannelBotNoteWriter = (
       );
     const append = (note: string, readAt: string, inputId: string, replaces?: string) =>
       appendChannelBotNote(fs, files, note, readAt, inputId, replaces).pipe(
-        Effect.map(({ correction, wrote }) => ({
-          notice: correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
-          wrote,
-        })),
-        Effect.catch((cause) =>
-          Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
-            Effect.as({ notice: CHANNEL_COPY.noteNotSaved, wrote: false }),
-          ),
-        ),
+        Effect.map(({ correction, alike, wrote }) => {
+          const answer: NoteSaveAnswer =
+            correction === "alike"
+              ? {
+                  notice: notesAlikeNotSaved(collapseNoteText(replaces ?? ""), alike ?? 0),
+                  held: true,
+                }
+              : {
+                  notice:
+                    correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
+                };
+          return { answer, wrote };
+        }),
+        Effect.catch((cause) => {
+          const answer: NoteSaveAnswer = { notice: CHANNEL_COPY.noteNotSaved };
+          return Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
+            Effect.as({ answer, wrote: false }),
+          );
+        }),
       );
     const reportWrote = (inputId: string) => {
       const report = hooks.onWrote;
@@ -242,7 +285,8 @@ export const makeChannelBotNoteWriter = (
     /**
      * Saves notes one at a time, so a correction sees the note the one before it saved. Each save
      * answers what the reply must add: a correction that matched nothing, a failed save, or that a
-     * task holding a notes grant may be editing the file by hand, so nothing was saved.
+     * task holding a notes grant may be editing the file by hand or that the correction's words
+     * name several notes, so nothing was saved.
      */
     const save = (note: string, readAt: string, inputId: string, replaces?: string) =>
       gate.withPermits(1)(
@@ -250,11 +294,12 @@ export const makeChannelBotNoteWriter = (
           const busy = yield* grantOpen.pipe(Effect.orElseSucceed(() => true));
           if (busy) {
             const prior = yield* savedBefore(inputId, replaces);
-            return prior === undefined ? CHANNEL_COPY.noteEditBusy : prior.notice;
+            const held: NoteSaveAnswer = { notice: CHANNEL_COPY.noteEditBusy, held: true };
+            return prior ?? held;
           }
           const saved = yield* append(note, readAt, inputId, replaces);
           if (saved.wrote) yield* reportWrote(inputId);
-          return saved.notice;
+          return saved.answer;
         }),
       );
 
@@ -276,7 +321,7 @@ export const makeChannelBotNoteWriter = (
           if (refused !== undefined) return (yield* savedBefore(inputId, replaces)) ?? { refused };
           const saved = yield* append(note, readAt, inputId, replaces);
           if (saved.wrote) yield* reportWrote(inputId);
-          return { notice: saved.notice };
+          return saved.answer;
         }),
       );
 
@@ -298,9 +343,8 @@ export const makeChannelBotNoteWriter = (
         .map((stored) => stored.task.taskId as string);
       const read = yield* readNotes;
       if (holders.length === 0 || read === null || read.truncated) return;
-      const line = parseChannelBotNoteLines(decode(read.bytes)).findLast(
-        (candidate) => candidate.replacedBy === undefined && candidate.text === note,
-      );
+      // A forget the words could not have carried out is not one to put back later.
+      const { line } = addressedNote(parseChannelBotNoteLines(decode(read.bytes)), note);
       if (line === undefined) return;
       const key = collapseNoteText(line.text);
       const prior = refused.get(key);
@@ -379,21 +423,21 @@ export const makeChannelBotNoteWriter = (
     const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
       note: string,
       next: string,
-      text: string,
-      exists: boolean,
+      read: NotesTail | null,
       inputId: string,
       readAt: string,
     ) {
+      const text = read === null ? "" : decode(read.bytes);
       // A pass re-run after a restart finds its own line and answers as the first pass did.
       if (text.includes(noteSource(inputId))) return CHANNEL_COPY.noteChanged;
-      const inForce = parseChannelBotNoteLines(text).some(
-        (line) => line.replacedBy === undefined && line.text === note,
-      );
-      const line = inForce
-        ? channelBotNoteLine(next, yield* noteDay(readAt), inputId, note)
-        : undefined;
+      const addressed = addressedNote(parseChannelBotNoteLines(text), note);
+      if (addressed.line === undefined) return addressed.answer;
+      const line = channelBotNoteLine(next, yield* noteDay(readAt), inputId, addressed.line.text);
       if (line === undefined) return CHANNEL_COPY.noteNotFound;
-      yield* fs.writeFileString(files.notes, appendPrefix(exists, text) + line + "\n", {
+      // A line written since the read could take the correction's binding; start over instead.
+      yield* hooks.beforeCompare ?? Effect.void;
+      if (!sameRead(yield* readNotes, read)) return undefined;
+      yield* fs.writeFileString(files.notes, appendPrefix(read !== null, text) + line + "\n", {
         flag: "a",
       });
       yield* reportWrote(inputId);
@@ -415,10 +459,11 @@ export const makeChannelBotNoteWriter = (
       const bom = decoded.value.startsWith(BOM) ? BOM : "";
       const text = decoded.value.slice(bom.length);
       const lines = parseChannelBotNoteLines(text);
-      const target = lines.find((line) => line.replacedBy === undefined && line.text === note);
-      if (target === undefined) return CHANNEL_COPY.noteNotFound;
-      const next = withoutNote(text, lines, target.text);
-      if (next === undefined) return CHANNEL_COPY.noteEditFailed;
+      const addressed = addressedNote(lines, note);
+      if (addressed.line === undefined) return addressed.answer;
+      const next = withoutNote(text, lines, addressed.line);
+      if (next === "unmapped") return CHANNEL_COPY.noteEditFailed;
+      if (next === "rebinds") return CHANNEL_COPY.noteForgetWouldRebind;
       const mode = (yield* fs.stat(files.notes)).mode;
       // Created exclusively under a fresh name, so no existing file or link is ever written.
       const staged = files.notes + ".edit-" + NodeCrypto.randomUUID();
@@ -440,9 +485,10 @@ export const makeChannelBotNoteWriter = (
         yield* reportWrote(inputId);
         return CHANNEL_COPY.noteUnverified;
       }
-      const answer = stillThere(decode(check.value.bytes), next.removedTexts)
-        ? CHANNEL_COPY.noteCameBack
-        : CHANNEL_COPY.noteForgotten;
+      const cameBack =
+        linesAmong(decode(check.value.bytes), next.removedRaws) >
+        linesAmong(next.text, next.removedRaws);
+      const answer = cameBack ? CHANNEL_COPY.noteCameBack : CHANNEL_COPY.noteForgotten;
       if (!sameBytes(check.value.bytes, original)) yield* reportWrote(inputId);
       return answer;
     });
@@ -462,17 +508,10 @@ export const makeChannelBotNoteWriter = (
       for (let attempt = 0; attempt < EDIT_ATTEMPTS; attempt++) {
         const read = yield* readNotes;
         if (read?.truncated === true) return CHANNEL_COPY.noteFileTooLarge;
-        const original = read?.bytes ?? new Uint8Array();
-        if (request.kind === "change")
-          return yield* change(
-            request.note,
-            request.next,
-            decode(original),
-            read !== null,
-            inputId,
-            readAt,
-          );
-        const answer = yield* forget(request.note, original, inputId);
+        const answer =
+          request.kind === "change"
+            ? yield* change(request.note, request.next, read, inputId, readAt)
+            : yield* forget(request.note, read?.bytes ?? new Uint8Array(), inputId);
         if (answer !== undefined) return answer;
       }
       return CHANNEL_COPY.noteEditFailed;

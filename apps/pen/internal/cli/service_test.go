@@ -36,7 +36,7 @@ func TestServiceFindsTheUserManagerWithoutXDGRuntimeDir(t *testing.T) {
 	if mode := serviceMode(false, nil); mode != "systemd" {
 		t.Fatalf("service mode %q, want systemd", mode)
 	}
-	if err := removeService("systemd"); err != nil {
+	if err := removeService("systemd", nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(*calls) == 0 || len(seen) != len(*calls) {

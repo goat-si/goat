@@ -10,7 +10,7 @@ import (
 	"maps"
 	"os"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -52,9 +52,9 @@ type Options struct {
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time
-	// Since is the monotonic time elapsed since a Now reading (time.Since); a wall clock that ran
-	// ahead of it means the machine slept (wake.go).
-	Since func(time.Time) time.Duration
+	// Awake reads a clock that stops while the machine sleeps; a wall clock that ran ahead of it
+	// means the machine slept (wake.go). Tests drive it.
+	Awake func() time.Duration
 	// WakeTicks paces the sleep check (every 5 s when nil); tests drive it.
 	WakeTicks <-chan time.Time
 	// PresenceEvery spaces the presence syncs a polled dashboard starts (30 s).
@@ -64,6 +64,8 @@ type Options struct {
 	PresenceTimeout time.Duration
 	// PresenceDone, when set, is told each finished presence sync (tests).
 	PresenceDone func()
+	// ServiceEnded, when set, is told the id of each service registration once it has ended (tests).
+	ServiceEnded func(id string)
 }
 
 // Daemon is one running node.
@@ -72,6 +74,9 @@ type Daemon struct {
 	st     *state.Store
 	id     *ident.Identity
 	nodeID string
+
+	// leaving is set while a leave runs: a second one is refused instead of running beside it.
+	leaving atomic.Bool
 
 	cfgMu sync.Mutex
 	// cfgSave and versionsSave hold one save of config.json or versions.json from snapshot to file.
@@ -95,7 +100,10 @@ type Daemon struct {
 	sessions map[uint64]*live
 	nextLive uint64
 	watchers map[chan []byte]struct{}
-	seen     map[string]seenInfo
+	// snapWatchers follow watch.snapshot; snapGen is the generation of the last published snapshot.
+	snapWatchers map[chan []byte]struct{}
+	snapGen      uint64
+	seen         map[string]seenInfo
 	// versions is what each peer (by Noise key) announced in its last sync hello, kept in
 	// versions.json so an offline member's last announcement still counts.
 	versions map[string]string
@@ -105,6 +113,11 @@ type Daemon struct {
 	lastView   *mesh.View
 	// saveErr is the last mesh save's error (nil once a save succeeds), shown by pen ls.
 	saveErr error
+	// hostKeysErr names the sshd key files the last host key check could not read, shown by pen ls.
+	hostKeysErr string
+
+	// svc holds the registered local services (services.go).
+	svc serviceBook
 
 	khMu sync.Mutex
 	// sshUser is published in this node's hostkeys records.
@@ -165,7 +178,7 @@ func New(opt Options) (*Daemon, error) {
 		opt.Logf = log.Printf
 	}
 	if opt.HostKeyGlob == "" {
-		opt.HostKeyGlob = "/etc/ssh/ssh_host_*_key.pub"
+		opt.HostKeyGlob = defaultHostKeyGlob()
 	}
 	if opt.SyncEvery == 0 {
 		opt.SyncEvery = 10 * time.Minute
@@ -182,8 +195,8 @@ func New(opt Options) (*Daemon, error) {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	if opt.Since == nil {
-		opt.Since = time.Since
+	if opt.Awake == nil {
+		opt.Awake = awakeClock()
 	}
 	if opt.KnownHosts == "" {
 		p, err := DefaultKnownHosts()
@@ -230,7 +243,8 @@ func New(opt Options) (*Daemon, error) {
 	}
 	d := &Daemon{
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending, forgets: forgets,
-		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
+		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, snapWatchers: map[chan []byte]struct{}{}, snapGen: 1,
+		seen:     map[string]seenInfo{},
 		versions: versions, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
 	switch opt.SSHUser {
@@ -342,15 +356,11 @@ func (d *Daemon) Stop() { d.stopOnce.Do(func() { close(d.stopCh) }) }
 
 // lockDaemon holds daemon.lock for the daemon's lifetime so only one runs per state directory.
 func (d *Daemon) lockDaemon() (func(), error) {
-	f, err := os.OpenFile(d.st.Path("daemon.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+	release, err := state.TryLock(d.st.Path("daemon.lock"))
+	if errors.Is(err, state.ErrLocked) {
 		return nil, errors.New("a pen daemon is already running for this state directory")
 	}
-	return func() { f.Close() }, nil
+	return release, err
 }
 
 type daemonJSON struct {
@@ -522,6 +532,9 @@ func (d *Daemon) markSeen(noisePub []byte, online bool, via string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s := d.seen[m.SignPub]
+	if s.Online != online {
+		defer d.publishSnapshotLocked()
+	}
 	s.Online = online
 	if online {
 		s.At = d.now()
@@ -596,6 +609,7 @@ func (d *Daemon) viewChanged() {
 			delete(d.watchers, ch)
 		}
 	}
+	d.publishSnapshotLocked()
 	d.mu.Unlock()
 	for _, l := range doomed {
 		l.sec.Close(4401)

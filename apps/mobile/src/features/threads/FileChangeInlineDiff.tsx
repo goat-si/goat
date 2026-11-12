@@ -43,7 +43,7 @@ function InlineDiffNote(props: { readonly children: string }) {
 
 function patchFiles(patch: string, scope: string): ReadonlyArray<FileDiffMetadata> {
   try {
-    return parsePatchFiles(patch, scope).flatMap((parsed) => parsed.files);
+    return parsePatchFiles(patch, { cacheKeyPrefix: scope }).flatMap((parsed) => parsed.files);
   } catch {
     return [];
   }

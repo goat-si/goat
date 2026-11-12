@@ -145,7 +145,8 @@ describe("selectTasks", () => {
           task !== "test-ingest" &&
           task !== "test-windows" &&
           task !== "smoke-linux-computer-use" &&
-          task !== "test-pen",
+          task !== "test-pen" &&
+          task !== "test-pen-windows",
       ),
     );
   });
@@ -439,8 +440,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists twenty-one jobs for a full run including package suites, relay, Windows, the Linux smoke, Pen and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 21);
+  it("lists twenty-two jobs for a full run including package suites, relay, Windows, the Linux smoke, Pen on Linux and Windows and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 22);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
@@ -451,7 +452,7 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("marks the browser, native, ssh, relay and server work linux and sends the rest to hosted runners", () => {
+  it("marks the browser, native, ssh and server work linux and sends the rest, relay's Docker tests included, to hosted runners", () => {
     const pools = Object.fromEntries(matrixFor(TASKS).include.map((e) => [e.task, e.runner]));
     assert.deepEqual(
       Object.keys(pools).filter((task) => pools[task] === "linux"),
@@ -460,15 +461,15 @@ describe("matrixFor", () => {
         "test-packages",
         "test-ssh",
         "test-desktop",
-        "test-relay",
         "test-memory-growth",
         "build",
         "test-server",
       ],
     );
+    assert.equal(pools["test-relay"], "hosted");
     assert.deepEqual(
       Object.keys(pools).filter((task) => pools[task] === "windows"),
-      ["test-windows"],
+      ["test-windows", "test-pen-windows"],
     );
   });
 });
@@ -479,7 +480,7 @@ describe("laneRun", () => {
     assert.equal(laneRun("server").server.mode, "full");
     assert.deepEqual(laneRun("memory-growth").tasks, ["test-memory-growth"]);
     assert.deepEqual(laneRun("quick").tasks, ["check", "typecheck"]);
-    assert.deepEqual(laneRun("windows").tasks, ["test-windows"]);
+    assert.deepEqual(laneRun("windows").tasks, ["test-windows", "test-pen-windows"]);
     assert.deepEqual(laneRun("all").tasks, TASKS);
     assert.equal(laneRun("all").full, true);
   });
@@ -554,6 +555,17 @@ describe("planRun", () => {
     assert.ok(titles.includes("test-server related 1/" + result.server.shards));
   });
 
+  it("runs a quick run's changed tests on a hosted runner when they include relay tests, which need Docker (#2893)", async () => {
+    const runnerFor = async (file) => {
+      const result = await plan(pr(), labels([]), [file]);
+      return matrixFor(result.tasks, result.server, result.changedTests).include.find(
+        (entry) => entry.task === "test-changed",
+      )?.runner;
+    };
+    assert.equal(await runnerFor("infra/relay/src/clientConfig.test.ts"), "hosted");
+    assert.equal(await runnerFor("apps/server/src/channels/ChannelDispatcher.ts"), "linux");
+  });
+
   it("quick PR includes cross-package importing tests (#1705)", async () => {
     const result = await plan(pr(), labels([]), [
       "packages/provider-opencode/src/server/v2/textGeneration.ts",
@@ -579,12 +591,18 @@ describe("planRun", () => {
       vitest: [],
       node: [".github/scripts/goat-ci-scope.test.cjs"],
     });
-    // goat-ci-scope.cjs and goat-ci.yml also define test-pen, so they run it.
-    assert.deepEqual(scripts.tasks, ["check", "typecheck", "test-changed", "test-pen"]);
+    // goat-ci-scope.cjs and goat-ci.yml also define test-pen and test-pen-windows, so they run them.
+    assert.deepEqual(scripts.tasks, [
+      "check",
+      "typecheck",
+      "test-changed",
+      "test-pen",
+      "test-pen-windows",
+    ]);
     const docs = await plan(pr(), labels([]), ["docs/user/memory.md"]);
     assert.deepEqual(docs.tasks, ["check"]);
     const workflow = await plan(pr(), labels([]), [".github/workflows/goat-ci.yml"]);
-    assert.deepEqual(workflow.tasks, ["check", "typecheck", "test-pen"]);
+    assert.deepEqual(workflow.tasks, ["check", "typecheck", "test-pen", "test-pen-windows"]);
   });
 
   it("runs an app's React Compiler coverage suite for its source changes, deletions included (#1579)", async () => {
@@ -663,6 +681,12 @@ describe("planRun", () => {
         await plan(pr(), labels([]), ["apps/server/src/memory/imports/MemoryImportReader.ts"])
       ).tasks.includes("test-windows"),
     );
+    for (const patch of [
+      "patches/node-pty@1.2.0-beta.15.patch",
+      "patches/node-pty@1.2.0-beta.18.patch",
+    ]) {
+      assert.ok((await plan(pr(), labels([]), [patch])).tasks.includes("test-windows"), patch);
+    }
     assert.ok(!(await plan(pr(), labels([]))).tasks.includes("test-windows"));
     const labelled = await plan(pr(), labels([WINDOWS_LABEL]));
     assert.equal(labelled.reasons.get("test-windows"), WINDOWS_LABEL + " label");
@@ -838,9 +862,31 @@ describe("pen suites", () => {
       assert.ok(!suites.includes(name), name);
   });
 
+  it("selects test-pen-windows on the Windows runner for Pen's Go node and vectors only", async () => {
+    for (const file of [
+      "apps/pen/internal/state/state.go",
+      "apps/pen/install/install.ps1",
+      "packages/pen-protocol/vectors/mesh.json",
+    ]) {
+      const result = await quick([file]);
+      assert.equal(result.reasons.get("test-pen-windows"), file, file);
+      assert.deepEqual(
+        matrixFor(result.tasks, result.server).include.find((e) => e.task === "test-pen-windows"),
+        { task: "test-pen-windows", title: "test-pen-windows", runner: "windows" },
+      );
+      assert.ok(select(file).tasks.includes("test-pen-windows"), file);
+    }
+    for (const file of ["infra/pen-relay/src/room.ts", "infra/pen-login/src/api.ts"]) {
+      assert.ok(!(await quick([file])).tasks.includes("test-pen-windows"), file);
+      assert.ok(!select(file).tasks.includes("test-pen-windows"), file);
+    }
+    assert.ok(laneRun("all").tasks.includes("test-pen-windows"));
+  });
+
   it("runs when the CI files that define test-pen change", async () => {
     for (const file of [".github/workflows/goat-ci.yml", ".github/scripts/goat-ci-scope.cjs"]) {
       assert.equal((await quick([file])).reasons.get("test-pen"), file, file);
+      assert.equal((await quick([file])).reasons.get("test-pen-windows"), file, file);
     }
   });
 

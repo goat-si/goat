@@ -87,6 +87,22 @@ describe("GOAT Bot event lines", () => {
       summary: "Resumed after a restart",
     }) satisfies OrchestrationV2TurnItem;
 
+  it("keeps the routine or task an event line names", () => {
+    const subject = { kind: "routine", id: "r1", name: "Standup" };
+    const line = { ...event("e1", "2026-10-12T12:00:01Z", "Routine Standup paused") } as {
+      source: unknown;
+    };
+    line.source = { kind: "goat_bot_event", subject };
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([line as unknown as OrchestrationV2TurnItem]),
+        pendingInputs: [],
+        readers: readers(),
+      }),
+    );
+    expect(rows).toMatchObject([{ kind: "event", text: "Routine Standup paused", subject }]);
+  });
+
   it("shows a bot event as its own line between messages and ignores other system notices", () => {
     const rows = content(
       buildGoatBotTimeline({

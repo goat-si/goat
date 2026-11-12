@@ -59,6 +59,7 @@ const setup = (
     const session: AuthClientSession = {
       sessionId: AuthSessionId.make("session:test"),
       subject: "desktop-bootstrap",
+      principalKind: "person",
       method: "browser-session-cookie",
       scopes: ["orchestration:operate", "settings:write"],
       client: { label: "Person", deviceType: "unknown" },
@@ -195,7 +196,7 @@ it.effect.each(["answer", "stop", "stop_all", "blocked", "restart"] as const)(
         if (ending === "answer") {
           const handlers = makeBrowserClaimsRpcHandlers(
             Option.some({ ...f.grants, setDriverCapability: () => Effect.void }),
-            { subject: "desktop-bootstrap" },
+            { principalKind: "person" },
           );
           yield* handlers[WS_METHODS.browserClaimsAnswer]({
             claimId: request.claimId,

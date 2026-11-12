@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { AuthProvidersManageScope, type EnvironmentId } from "@goat/contracts";
+import { AuthProvidersManageScope, type BotProfile, type EnvironmentId } from "@goat/contracts";
+import { FACE_MOTION_RANK, goatBotFaceSpoken } from "@goat/client-runtime/goatBot";
 import type { FleetMachineSummary } from "@goat/client-runtime/state/fleet";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
@@ -55,9 +56,14 @@ import { useFleetSummary } from "../../state/fleet";
 import { providerReadyAtom } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
 import { resolveThreadRouteTarget } from "../../threadRoutes";
-import { GoatBotMainAvatar, GoatBotMemberAvatar } from "../goatBot/GoatBotAvatar";
+import {
+  GoatBotAvatar,
+  GoatBotMemberAvatar,
+  useGoatBotMainFace,
+  useGoatBotMemberFace,
+  type GoatBotShownFace,
+} from "../goatBot/GoatBotAvatar";
 import { useBotRoster } from "../goatBot/useBotRoster";
-import { useGoatBotWaitingCount } from "../goatBot/useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "../goatBot/useGoatBotReadMenu";
 import {
   isMemoryEnvironmentAvailable,
@@ -230,54 +236,73 @@ const FleetRailItem = memo(function FleetRailItem({ active }: { active: boolean 
   );
 });
 
-const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
-  const botWaiting = useGoatBotWaitingCount();
+/** A bot's rail link names its state first, saying waiting once with the count; idle says nothing. */
+function botRailLabel(face: GoatBotShownFace, name: string) {
+  const spoken = goatBotFaceSpoken(face.state, face.waitingCount);
+  return spoken === null ? name : `${spoken}, ${name}`;
+}
+
+export const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
+  // The rail's one read of the main face: its avatar and its link's label both show it.
+  const face = useGoatBotMainFace(null, false);
+  const botWaiting = face.waitingCount;
   const { roster } = useBotRoster();
   const mainName = roster[0]?.profile?.name ?? "GOAT Bot";
   const setMode = useGlobalAgentStore((state) => state.setMode);
   const botReadMenu = useGoatBotReadMenu(botWaiting, mainName);
   return (
     <>
-      <RailTooltip label={roster[0]?.profile?.name ?? "GOAT Bot"}>
+      <RailTooltip label={mainName}>
         <Link
           to="/bot"
-          aria-label={
-            botWaiting
-              ? `${roster[0]?.profile?.name ?? "GOAT Bot"}, ${botWaiting} waiting for you`
-              : (roster[0]?.profile?.name ?? "GOAT Bot")
-          }
+          aria-label={botRailLabel(face, mainName)}
           activeOptions={EXACT_MATCH}
           aria-current={active ? "page" : undefined}
           className={railItemClassName(active)}
           {...botReadMenu}
           onClick={() => setMode("bot")}
         >
-          <GoatBotMainAvatar size="sm" emoji={roster[0]?.profile?.avatar} />
+          <GoatBotAvatar
+            size="sm"
+            state={face.state}
+            emoji={roster[0]?.profile?.avatar}
+            motion={{ rank: FACE_MOTION_RANK.rail, since: face.since }}
+          />
           <RailCount count={botWaiting} />
         </Link>
       </RailTooltip>
-      {roster.slice(1).map(
-        (entry) =>
-          entry.profile && (
-            <RailTooltip key={entry.profile.botId} label={entry.profile.name}>
-              <Link
-                to="/$environmentId/$threadId"
-                params={{
-                  environmentId: entry.profile.environmentId,
-                  threadId: entry.profile.sessionThreadId,
-                }}
-                aria-label={entry.profile.name}
-                className={railItemClassName(false)}
-                onClick={() => setMode("bot")}
-              >
-                <GoatBotMemberAvatar size="sm" bot={entry.profile} />
-              </Link>
-            </RailTooltip>
-          ),
-      )}
+      {roster
+        .slice(1)
+        .map(
+          (entry) =>
+            entry.profile && (
+              <MemberRailItem
+                key={entry.profile.botId}
+                bot={entry.profile}
+                onOpen={() => setMode("bot")}
+              />
+            ),
+        )}
     </>
   );
 });
+
+function MemberRailItem({ bot, onOpen }: { bot: BotProfile; onOpen: () => void }) {
+  const face = useGoatBotMemberFace(bot);
+  return (
+    <RailTooltip label={bot.name}>
+      <Link
+        to="/$environmentId/$threadId"
+        params={{ environmentId: bot.environmentId, threadId: bot.sessionThreadId }}
+        aria-label={botRailLabel(face, bot.name)}
+        className={railItemClassName(false)}
+        onClick={onOpen}
+      >
+        <GoatBotMemberAvatar size="sm" bot={bot} face={face} />
+      </Link>
+    </RailTooltip>
+  );
+}
 
 const DecisionsRailItem = memo(function DecisionsRailItem({ active }: { active: boolean }) {
   const { count } = useAtomValue(decisionInbox.summaryAtom);

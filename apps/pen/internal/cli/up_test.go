@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -61,12 +60,33 @@ func TestNoServiceDaemonIsNotAChildOfTheCommandThatStartedIt(t *testing.T) {
 	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
 		t.Fatal(err)
 	}
-	ppid, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(s.PID)).Output()
+	if got := parentPID(s.PID); got == strconv.Itoa(os.Getpid()) {
+		t.Fatalf("daemon %d is still a child of the pen up that started it (ppid %s)", s.PID, got)
+	}
+}
+
+// #2864: the first pen up founds a mesh of the shared epoch (ADR-0026), whose record space is shared out
+// by admission lineage.
+func TestTheFirstPenUpFoundsAMeshOfTheSharedEpoch(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st := tmpStore(t)
+	t.Setenv("PEN_TEST_MAIN", "1")
+	t.Setenv("PEN_HOME", st.Dir)
+	t.Setenv("PEN_SERVICE", "none")
+	t.Setenv("PEN_HOSTKEYS", "none")
+	t.Setenv("PEN_SSH_DIR", filepath.Join(st.Dir, "ssh"))
+	var out, errOut bytes.Buffer
+	if code := RunUp([]string{"--no-service", "--relay", rs.URL, "--name", "t"}, &out, &errOut); code != 0 {
+		t.Fatalf("pen up exit %d: %s", code, errOut.String())
+	}
+	t.Cleanup(func() { RunDown(nil, io.Discard, io.Discard) })
+	s, err := mesh.Load(st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(ppid)); got == strconv.Itoa(os.Getpid()) {
-		t.Fatalf("daemon %d is still a child of the pen up that started it (ppid %s)", s.PID, got)
+	if !s.Shared() {
+		t.Fatal("pen up founded a version 1 mesh")
 	}
 }
 
@@ -92,9 +112,8 @@ func TestDownReturnsOnlyOnceTheDaemonHasExited(t *testing.T) {
 		t.Fatalf("pen down exit %d: %s", code, errOut.String())
 	}
 	// Scripts remove or replace the state directory and the binary right after pen down.
-	stat, _ := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(s.PID)).Output()
-	if st := strings.TrimSpace(string(stat)); st != "" && !strings.HasPrefix(st, "Z") {
-		t.Fatalf("pen down returned while daemon %d was still running (state %q)", s.PID, st)
+	if running(s.PID) {
+		t.Fatalf("pen down returned while daemon %d was still running", s.PID)
 	}
 }
 
@@ -141,6 +160,30 @@ func TestUpAsTheServiceWithARefusedRelayListExitsZeroWithTheReason(t *testing.T)
 	var out, errOut bytes.Buffer
 	if code := RunUp([]string{"--foreground", "--service"}, &out, &errOut); code != 0 || !strings.Contains(errOut.String(), "cannot be used") {
 		t.Fatalf("exit %d: %q; want 0 and the refusal", code, errOut.String())
+	}
+}
+
+// A person's pen up ends a pen down even when Pen then runs without the service, so a later sign-in
+// starts the task again.
+func TestUpClearsTheDownRecordAlsoWithoutTheService(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st := tmpStore(t)
+	t.Setenv("PEN_TEST_MAIN", "1")
+	t.Setenv("PEN_HOME", st.Dir)
+	t.Setenv("PEN_HOSTKEYS", "none")
+	t.Setenv("PEN_SSH_DIR", filepath.Join(st.Dir, "ssh"))
+	if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := RunUp([]string{"--no-service", "--relay", rs.URL, "--name", "t"}, &out, &errOut)
+	t.Cleanup(func() { RunDown(nil, io.Discard, io.Discard) })
+	if code != 0 {
+		t.Fatalf("pen up exit %d: %s", code, errOut.String())
+	}
+	if _, err := os.Stat(st.Path(downMarker)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the down record survived pen up: %v", err)
 	}
 }
 

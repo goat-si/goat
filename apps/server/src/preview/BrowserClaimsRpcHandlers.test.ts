@@ -15,13 +15,15 @@ import * as BrowserRpc from "./BrowserClaimsRpcHandlers.ts";
 
 it.effect("browser window listing is person-only and unavailable without the driver", () =>
   Effect.gen(function* () {
-    for (const subject of ["mcp-client", "paired-person"]) {
-      const handlers = BrowserRpc.makeBrowserClaimsRpcHandlers(Option.none(), { subject });
+    for (const principalKind of ["outside_client", "person"] as const) {
+      const handlers = BrowserRpc.makeBrowserClaimsRpcHandlers(Option.none(), { principalKind });
       const result = yield* handlers[WS_METHODS.browserClaimsWindows]().pipe(Effect.result);
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure")
         expect(result.failure._tag).toBe(
-          subject === "mcp-client" ? "EnvironmentAuthorizationError" : "BrowserClaimsRpcError",
+          principalKind === "outside_client"
+            ? "EnvironmentAuthorizationError"
+            : "BrowserClaimsRpcError",
         );
     }
   }),
@@ -30,7 +32,7 @@ it.effect("browser window listing is person-only and unavailable without the dri
 it.effect("refuses browser claim subscriptions from non-person sessions", () =>
   Effect.gen(function* () {
     const handlers = BrowserRpc.makeBrowserClaimsRpcHandlers(Option.none(), {
-      subject: "mcp-client",
+      principalKind: "outside_client",
     });
     const result = yield* handlers[WS_METHODS.browserClaimsSubscribe]().pipe(
       Stream.runCollect,
@@ -44,8 +46,8 @@ it.effect("refuses browser claim subscriptions from non-person sessions", () =>
 
 it.effect("allows only person sessions and requires settings to widen browser access", () =>
   Effect.gen(function* () {
-    const person = sessionResolver({ subject: "paired-person" });
-    const mcp = sessionResolver({ subject: "mcp-client" });
+    const person = sessionResolver({ principalKind: "person" });
+    const mcp = sessionResolver({ principalKind: "outside_client" });
     yield* BrowserRpc.requirePerson(person);
     expect((yield* BrowserRpc.requirePerson(mcp).pipe(Effect.result))._tag).toBe("Failure");
     expect((yield* BrowserRpc.requirePerson({ kind: "thread" }).pipe(Effect.result))._tag).toBe(

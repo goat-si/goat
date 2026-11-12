@@ -107,8 +107,10 @@ const heldThread = (name: string) =>
     });
     const bindings = yield* Ref.make<ReadonlyArray<CodexSurvivors.CodexSurvivorBinding>>([]);
     const stopFenced = yield* Ref.make<ReadonlyArray<string>>([]);
+    const fenceChanged = yield* Ref.make<Option.Option<Effect.Effect<void>>>(Option.none());
     const survivors = Layer.mock(CodexSurvivors.CodexSurvivors)({
       list: Ref.get(bindings),
+      onFenceChange: (effect) => Ref.set(fenceChanged, Option.some(effect)),
       startBlockedThreads: Effect.all([Ref.get(bindings), Ref.get(stopFenced)]).pipe(
         Effect.map(([held, fenced]) => [
           ...held.map((binding) => binding.threadId),
@@ -155,7 +157,16 @@ const heldThread = (name: string) =>
       Effect.tap((reactor) => reactor.start),
       Effect.provide(Layer.merge(survivors, NodeServices.layer)),
     );
-    return { orchestrator, threadId, bindings, stopFenced, send, runReaches, startReactor };
+    return {
+      orchestrator,
+      threadId,
+      bindings,
+      stopFenced,
+      fenceChanged,
+      send,
+      runReaches,
+      startReactor,
+    };
   });
 
 it.layer(layerTest)("RunStartHoldReactor", (it) => {
@@ -233,5 +244,56 @@ it.layer(layerTest)("RunStartHoldReactor", (it) => {
         assert.strictEqual(next.id, first.id);
       }),
     ),
+  );
+
+  it.effect("shell reports a start hold and clears it when the fence disappears", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const held = yield* heldThread("shell");
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        yield* Ref.set(held.stopFenced, ["goal-turn"]);
+        const reactor = yield* held.startReactor;
+        yield* held.send("waiting");
+        yield* held.runReaches((run) => run.startHold !== undefined);
+        assert.strictEqual(
+          (yield* projections.getThreadShell(held.threadId))?.latestRunStartHeld,
+          true,
+        );
+        const projection = yield* projections.getThreadProjection(held.threadId);
+        assert.strictEqual(
+          ProjectionStore.threadShellFromProjection(projection!).latestRunStartHeld,
+          true,
+        );
+        yield* Ref.set(held.stopFenced, []);
+        yield* reactor.reconcileThread(held.threadId);
+        assert.isNotTrue((yield* projections.getThreadShell(held.threadId))?.latestRunStartHeld);
+        const released = yield* projections.getThreadProjection(held.threadId);
+        assert.isNotTrue(ProjectionStore.threadShellFromProjection(released!).latestRunStartHeld);
+      }),
+    ),
+  );
+
+  it.effect(
+    "a fence that clears on its own re-points the hold to the turn still holding the run",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const held = yield* heldThread("natural-clear");
+          yield* Ref.set(held.stopFenced, ["first-turn", "second-turn"]);
+          yield* held.startReactor;
+          yield* held.send("waits-for-two");
+          const first = yield* held.runReaches((run) => run.startHold !== undefined);
+          assert.strictEqual(first.startHold?.nativeTurnId, "first-turn");
+          // The first turn ends by itself: its fence clears with no run event and no person's stop.
+          yield* Ref.set(held.stopFenced, ["second-turn"]);
+          const changed = yield* Ref.get(held.fenceChanged);
+          assert.isTrue(Option.isSome(changed), "the reactor must follow fence changes");
+          yield* Option.getOrThrow(changed);
+          const next = yield* held.runReaches(
+            (run) => run.startHold?.nativeTurnId === "second-turn",
+          );
+          assert.strictEqual(next.id, first.id);
+        }),
+      ),
   );
 });

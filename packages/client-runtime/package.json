@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./composer-model-mentions": {
+      "types": "./src/composerModelMentions.ts",
+      "default": "./src/composerModelMentions.ts"
+    },
     "./blocked-browser-hosts": {
       "types": "./src/blockedBrowserHosts.ts",
       "default": "./src/blockedBrowserHosts.ts"
@@ -603,6 +607,10 @@
       "types": "./src/work-log/toolPresentation.ts",
       "default": "./src/work-log/toolPresentation.ts"
     },
+    "./work-log/turn-item-entry": {
+      "types": "./src/work-log/turnItemEntry.ts",
+      "default": "./src/work-log/turnItemEntry.ts"
+    },
     "./work-log/command-label": {
       "types": "./src/work-log/commandLabel.ts",
       "default": "./src/work-log/commandLabel.ts"
@@ -772,6 +780,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@goat/pen-protocol": "workspace:*",
     "@types/three": "0.180.0",
     "vite-plus": "catalog:"
   }

@@ -10,6 +10,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 
 const layerServerConfig = (
   overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken">>,
@@ -74,7 +75,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth administrative operations", (it) =
       const issued = yield* environmentAuth.issueSession({
         label: "deploy-bot",
       });
-      const verified = yield* sessionCredentials.verify(issued.token);
+      const verified = yield* sessionCredentials.verify(issued.token, MAIN_LISTENER);
       const listedBeforeRevoke = yield* environmentAuth.listSessions();
       const revoked = yield* environmentAuth.revokeSession(issued.sessionId);
       const listedAfterRevoke = yield* environmentAuth.listSessions();

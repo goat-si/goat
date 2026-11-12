@@ -20,6 +20,11 @@ export const ChannelListBotArtifactsInput = Schema.Struct({});
 export type ChannelListBotArtifactsInput = typeof ChannelListBotArtifactsInput.Type;
 
 export const ChannelListBotArtifactsResult = Schema.Struct({
+  /**
+   * The server's artifacts folder as an absolute path, as the worker brief names it. Older
+   * servers leave it out; clients then give full paths no card.
+   */
+  root: Schema.optionalKey(Schema.String),
   /** The newest files among those the walk visited, newest first. */
   artifacts: Schema.Array(ChannelBotArtifact),
   /** A bound on files, entries visited or depth stopped the walk. */

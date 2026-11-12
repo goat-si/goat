@@ -319,6 +319,10 @@ export const AuthClientMetadata = Schema.Struct({
 });
 export type AuthClientMetadata = typeof AuthClientMetadata.Type;
 
+/** Who a stored session speaks for; only "person" may resolve a step that needs a person. */
+export const SessionPrincipalKind = Schema.Literals(["person", "outside_client", "proxied_person"]);
+export type SessionPrincipalKind = typeof SessionPrincipalKind.Type;
+
 export const AuthClientSession = Schema.Struct({
   sessionId: AuthSessionId,
   subject: TrimmedNonEmptyString,
@@ -330,6 +334,8 @@ export const AuthClientSession = Schema.Struct({
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtc),
   connected: Schema.Boolean,
   current: Schema.Boolean,
+  /** Absent from servers that predate principal kinds. */
+  principalKind: Schema.optionalKey(SessionPrincipalKind),
 });
 export type AuthClientSession = typeof AuthClientSession.Type;
 
@@ -651,6 +657,7 @@ export function requiredScopesForServerSettingsPatch(
       key === "providers" ||
       key === "providerInstances" ||
       key === "usageLimitSources" ||
+      key === "textGenerators" ||
       key === "secretProviders"
     ) {
       changesProviders = true;

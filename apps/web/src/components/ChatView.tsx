@@ -22,7 +22,7 @@ import {
   reconcileOptimisticUserMessages,
 } from "./chat/optimisticUserMessages";
 import { useTimelineRewind } from "./chat/useTimelineRewind";
-import { useThreadLifecycle } from "./chat/useThreadLifecycle";
+import { useAwaitingApprovalId, useThreadLifecycle } from "./chat/useThreadLifecycle";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
 import { useComposerSend } from "./chat/useComposerSend";
@@ -230,7 +230,7 @@ import { type TerminalContextDraft } from "../lib/terminalContext";
 import { collectInlineContextIds } from "../lib/composerContextReferences";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
-import { useEnvironmentQuery } from "../state/query";
+import { useEnvironmentQueryRefresh } from "../state/query";
 import { useEnvironmentScope } from "~/state/session";
 import {
   primaryServerAvailableEditorsAtom,
@@ -239,7 +239,7 @@ import {
 } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useOfferedSkills } from "./chat/providerSkillsWithBuiltIns";
-import { vcsEnvironment } from "../state/vcs";
+import { chatGitStatusAtom, NO_CHAT_GIT_STATUS_ATOM, vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
   useEnvironmentProviders,
@@ -1725,19 +1725,22 @@ export default function ChatView(props: ChatViewProps) {
     serverConfig?.environment.capabilities.worktreeRestore === true,
     `${activeLatestRun?.runId ?? ""}:${activeLatestRun?.status ?? ""}`,
   );
-  const gitStatusQuery = useEnvironmentQuery(
+  const gitStatusAtom =
     gitStatusCwd === null ||
-      workspaceUnavailable(
-        workspaceStatus.data?.state,
-        activeThread?.worktreePath ?? null,
-        gitStatusCwd,
-      )
+    workspaceUnavailable(
+      workspaceStatus.data?.state,
+      activeThread?.worktreePath ?? null,
+      gitStatusCwd,
+    )
       ? null
       : vcsEnvironment.status({
           environmentId,
           input: { cwd: gitStatusCwd },
-        }),
-  );
+        });
+  const gitStatusQuery = {
+    data: useAtomValue(gitStatusAtom ? chatGitStatusAtom(gitStatusAtom) : NO_CHAT_GIT_STATUS_ATOM),
+    refresh: useEnvironmentQueryRefresh(gitStatusAtom).refresh,
+  };
   useWorkspaceMutationRefresh({
     enabled: gitStatusCwd !== null,
     mutationId: workspaceMutationId,
@@ -1812,21 +1815,21 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const approvalId = useAwaitingApprovalId(routeThreadDetailRef, activePendingApproval?.requestId);
   const timelineActivity = {
     isWorking,
     runlessWorkActive: runlessWorkStartedAt !== null,
     activeTurnInProgress: isWorking || !latestRunSettled,
     isCompacting,
     awaitingUser:
-      activePendingApproval !== null
+      approvalId !== null
         ? ("approval" as const)
         : activePendingUserInput !== null ||
             // A secret request has no runtime request; the shell carries it.
             activeThreadShell?.hasPendingUserInput === true
           ? ("input" as const)
           : null,
-    awaitingRequestId:
-      activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? null,
+    awaitingRequestId: approvalId ?? activePendingUserInput?.requestId ?? null,
     activeTurnStartedAt: activeWorkStartedAt,
     latestRun: activeActivityRun,
     runningRunId: activeRuntime?.activeRunId ?? null,
@@ -2590,6 +2593,7 @@ export default function ChatView(props: ChatViewProps) {
     acknowledgeActiveThreadWoke,
     activeBranchMismatchKey,
     activityBanners,
+    approvalBanners,
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,
@@ -2755,6 +2759,7 @@ export default function ChatView(props: ChatViewProps) {
         })
       : null;
   const composerBannerItems = (() => {
+    const leadItems = [...approvalBanners, ...feedbackBannerItems];
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const backgroundWorkItems = withPiExtensionStatus(activityBanners, serverProjection);
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
@@ -2779,7 +2784,7 @@ export default function ChatView(props: ChatViewProps) {
         : [];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
-        ...feedbackBannerItems,
+        ...leadItems,
         ...limitRecoveryItems,
         ...usageLimitsItems,
         ...projectCloneItems,
@@ -2789,7 +2794,7 @@ export default function ChatView(props: ChatViewProps) {
       ];
     }
     return [
-      ...feedbackBannerItems,
+      ...leadItems,
       ...limitRecoveryItems,
       ...usageLimitsItems,
       ...projectCloneItems,
@@ -2926,6 +2931,7 @@ export default function ChatView(props: ChatViewProps) {
     onTimelineRollbackCheckpointStable,
   } = useTimelineRewind({
     isCloudThread,
+    isGitRepo,
     environmentId,
     routeThreadRef,
     routeThreadKey,
@@ -3066,7 +3072,7 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentUnavailable,
     defaultRuntimeMode,
   });
-  const { onSend, continueThreadOnSsh } = useComposerSend({
+  const { onSend, continueThreadOnSsh, forkCommand } = useComposerSend({
     environmentId,
     routeThreadRef,
     primaryEnvironmentId,
@@ -3244,8 +3250,7 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     if (sendEnvMode !== "local") {
-      // The draft is back; switch it to the project checkout and let the next
-      // render resend.
+      // The draft is back; switch it to the project checkout and let the next render resend.
       setDraftThreadContext(composerDraftTarget, {
         envMode: "local",
         startFromOrigin: false,
@@ -3839,6 +3844,7 @@ export default function ChatView(props: ChatViewProps) {
                                 isRevertingCheckpoint={isRevertingCheckpoint}
                                 sshWorktreeSelected={sshDestination !== null}
                                 sideChatAvailable={sideChatAvailable}
+                                forkCommand={forkCommand}
                                 sendDisabledReason={
                                   cloudState.composerBlockReason ??
                                   sshSendBlockReason ??

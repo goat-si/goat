@@ -191,6 +191,29 @@ function Host({ initial }: { readonly initial: string }) {
   );
 }
 
+it("sends a model mention to the native editor as a chip with its exact source", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const text = "Ask model:codex/gpt-5.5 now";
+  native.value = "";
+  native.selection = { start: 0, end: 0 };
+  native.eventCount = 0;
+  native.tokensJson = "[]";
+  draft.text = text;
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(<Host initial={text} />));
+    expect(JSON.parse(native.tokensJson)).toContainEqual(
+      expect.objectContaining({
+        type: "model",
+        source: "model:codex/gpt-5.5",
+        label: "codex/gpt-5.5",
+      }),
+    );
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
 async function typeKorean(
   prefix: string,
   suffix: string,

@@ -1,8 +1,10 @@
 import type { GoatBotActivity, GoatBotAttachmentLabel } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
+import { useState } from "react";
 
 import { useAssetUrlState } from "~/assets/assetUrls";
 import { BellIcon, PaperclipIcon } from "~/components/solar";
+import { cn } from "~/lib/utils";
 
 import { GoatBotFace } from "./GoatBotFace";
 
@@ -94,10 +96,18 @@ function GoatBotSentFile({ name }: { readonly name: string }) {
 
 /**
  * One line for what GOAT Bot is doing: its still face and the step it is on, then the work it
- * follows. Nothing here moves; a new step replaces the text.
+ * follows. Nothing here moves; a new step replaces the text. The line opens to its full text;
+ * `onToggle` applies the change itself, so the conversation can keep its place around it.
  */
-export function GoatBotActivityLine({ activity }: { readonly activity: GoatBotTimelineActivity }) {
-  const waiting = activity.state === "working" && activity.text.startsWith("Waiting");
+export function GoatBotActivityLine({
+  activity,
+  onToggle,
+}: {
+  readonly activity: GoatBotTimelineActivity;
+  readonly onToggle?: (toggle: () => void) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const waiting = activity.attention !== undefined;
   const title =
     activity.state === "working" && activity.title !== activity.text ? activity.title : undefined;
   return (
@@ -106,12 +116,22 @@ export function GoatBotActivityLine({ activity }: { readonly activity: GoatBotTi
         state={activity.state === "reading" ? "reading" : waiting ? "waiting" : "working"}
         className="size-5 shrink-0 text-foreground"
       />
-      <p className="min-w-0 truncate">
-        <span role="status" aria-live="polite" aria-atomic="true">
-          {activity.text}
-        </span>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          const toggle = () => setOpen((value) => !value);
+          if (onToggle === undefined) toggle();
+          else onToggle(toggle);
+        }}
+        className={cn(
+          "min-w-0 rounded-sm text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          open ? "break-words" : "truncate",
+        )}
+      >
+        {open ? (activity.fullText ?? activity.text) : activity.text}
         {title === undefined ? null : <span className="opacity-70">{" · " + title}</span>}
-      </p>
+      </button>
     </div>
   );
 }

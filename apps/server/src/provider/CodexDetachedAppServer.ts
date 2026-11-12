@@ -13,6 +13,8 @@ import * as Scope from "effect/Scope";
 import type { CodexAppServerMessageChannel } from "effect-codex-app-server/client";
 import { blocksSession, recordKey, servesSession } from "./CodexRecordSessions.ts";
 import { goalKey, sameGoal, sameStop, stopKey } from "./CodexFenceKeys.ts";
+import { CodexDetachedAppServerError } from "./CodexDetachedAppServerError.ts";
+import * as KeptRecord from "./CodexKeptRecord.ts";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
@@ -93,14 +95,8 @@ export type DetachedClassification =
 
 export type DetachedOutcome = "cleaned" | "tombstoned" | "blocked" | "signalled" | "retained";
 
-export class CodexDetachedAppServerError extends Schema.TaggedError<CodexDetachedAppServerError>()(
-  "CodexDetachedAppServerError",
-  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
-) {
-  override get message(): string {
-    return this.detail;
-  }
-}
+export { CodexDetachedAppServerError };
+export { privateSocketDirectory } from "./CodexDetachedLaunch.ts";
 
 const RECORD_DIRECTORY = "codex-app-servers";
 const TERM_GRACE = "5 seconds";
@@ -109,30 +105,6 @@ const READINESS = Schedule.spaced("50 millis");
 const READINESS_LIMIT = "30 seconds";
 const MAX_SOCKET_PATH_BYTES = 103;
 const ABANDONED = "abandoned";
-
-/** Runs as the detached group leader: publishes its pid with link(2), then execs Codex in place. */
-export const PID_HANDSHAKE_SCRIPT =
-  'printf %s "$$" > "$1.$$" && ln "$1.$$" "$1" || { rm -f "$1.$$"; exit 75; }; rm -f "$1.$$"; shift; exec "$@"';
-
-/** Creates root/codex with mode 0700 and refuses a directory another user could write to. */
-export const privateSocketDirectory = (root: string, uid: number) =>
-  Effect.tryPromise({
-    try: async () => {
-      const directory = NodePath.join(root, "codex");
-      await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
-      for (const path of [root, directory]) {
-        const stat = await NodeFSP.lstat(path);
-        if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o077) !== 0)
-          throw new Error(path + " must be a private directory owned by this user.");
-      }
-      return directory;
-    },
-    catch: (cause) =>
-      new CodexDetachedAppServerError({
-        detail: "The Codex socket directory is not private.",
-        cause,
-      }),
-  });
 
 export const classifyDetachedAppServer = Effect.fn("CodexDetachedAppServers.classify")(function* (
   record: DetachedAppServerRecord,
@@ -249,6 +221,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const launching = new Set<string>();
   const retained = new Set<string>();
   const recoveryRetained = new Set<string>();
+  /** Kept records settleKept released; their fences still refuse the threads they name. */
+  const released = new Set<string>();
   const adoptedClosed = new Set<string>();
   // One gate keeps infrequent record writes and cross-instance fence checks atomic.
   const recordGate = yield* Semaphore.make(1);
@@ -311,6 +285,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         await NodeFSP.rm(files.stderr, { force: true });
         fences.delete(record.name);
         recoveryRetained.delete(record.name);
+        released.delete(record.name);
       }),
     );
 
@@ -885,6 +860,33 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   );
 
   /**
+   * A kept record whose group exited stops being offered for recovery, so the session starts
+   * afresh. Its file stays for fence writes and startup cleanup settles it, as it does any gone record.
+   */
+  const settleKept = (input: KeptRecord.KeptRecordOpen) =>
+    KeptRecord.settleKeptRecord({
+      ...input,
+      record: fences.get(input.name),
+      busy: owned.has(input.name) || launching.has(input.name) || stopping.has(input.name),
+      globallyBlocked: Ref.get(globallyBlocked),
+      classify: (record) => classify(record),
+      warn,
+      // Under the gate: a fence for this thread written or in flight meanwhile still refuses.
+      release: (threadId) =>
+        recordGate.withPermit(Effect.sync(() => releases.release(input.name, threadId))),
+    });
+  const releases = KeptRecord.makeReleases({ fences, failedFences, recoveryRetained, released });
+  /** Before a spawn: a released record of this session still refuses a thread it fences. */
+  const ensureReleasedClear = (
+    instanceId: string,
+    session: ProviderSessionId,
+    threadId: ThreadId,
+  ) =>
+    recordGate.withPermit(
+      Effect.suspend(() => releases.ensureClear(instanceId, session, threadId)),
+    );
+
+  /**
    * Without a session this is a status probe, whose close never touches the process. A session
    * adopts it: closing outside shutdown stops it like an owned one, unless a goal still runs there.
    */
@@ -965,6 +967,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     connectExisting,
     preserveForRecovery,
     listPreservedForSession,
+    settleKept,
+    ensureReleasedClear,
     retainOnClose,
     recordStopObligation,
     clearStopObligation,

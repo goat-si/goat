@@ -25,3 +25,22 @@ export const MARK_UNREAD_MENU_ACTION: MenuAction = {
   title: "Mark unread",
   image: "envelope.badge",
 };
+
+export function buildAutoSettleMenuActions(
+  supported: boolean,
+  autoSettleDisabledAt: string | null | undefined,
+): MenuAction[] {
+  if (!supported) return [];
+  const enabled = autoSettleDisabledAt == null;
+  return [
+    {
+      id: "auto-settle",
+      title: "Auto-settle behavior",
+      image: "timer",
+      subactions: [
+        { id: "auto-settle:enabled", title: "Follow settings", state: enabled ? "on" : "off" },
+        { id: "auto-settle:disabled", title: "Never", state: enabled ? "off" : "on" },
+      ],
+    },
+  ];
+}

@@ -39,9 +39,10 @@ import { WorkspaceTabsProvider, useWorkspaceTabs } from "../workspace/WorkspaceT
 import { WorkspaceNativeTabs } from "../workspace/WorkspaceNativeTabs.ios";
 import { workspaceUsesColumns } from "../workspace/workspace-tabs-state";
 import { isSettingsRoute, settingsOpenIn } from "../settings/settings-navigation";
-import { workspaceRoutesOf } from "./workspace-overlay-routes";
+import { isNewTaskRoute, workspaceRoutesOf } from "./workspace-overlay-routes";
 import { setNativelyPoppingWorkspaceRoute } from "../workspace/workspace-detail-selection";
 import { useDeviceType, useNativeLayoutMetrics } from "../../native/native-layout-metrics";
+import { nativeInspectorColumnWidth } from "../../lib/layout";
 
 import { useAdaptiveWorkspaceLayout } from "./AdaptiveWorkspaceLayout";
 import { WorkspacePaneDivider } from "./workspace-pane-divider";
@@ -150,13 +151,7 @@ function ColumnScreen(props: {
             options={options}
             canGoBack={!props.primary}
             column={props.primary ? "primary" : "detail"}
-            onCompose={
-              descriptor.route.params &&
-              "draft" in descriptor.route.params &&
-              descriptor.route.params.draft
-                ? undefined
-                : props.onCompose
-            }
+            onCompose={isNewTaskRoute(descriptor.route) ? undefined : props.onCompose}
           />
           <ColumnContent
             primary={props.primary}
@@ -196,11 +191,14 @@ function WorkspaceColumns(
   const windowDimensions = useWindowDimensions();
   const nativeMetrics = useNativeLayoutMetrics();
   const viewportWidth = nativeMetrics?.width ?? windowDimensions.width;
-  const [inspectorWidthFraction, setInspectorWidthFraction] = useState(0.4);
-  const inspectorWidth = Math.max(
-    260,
-    Math.min(viewportWidth * 0.6, viewportWidth * inspectorWidthFraction),
-  );
+  const inspector = use(NativeWorkspaceInspectorContext);
+  const horizontalSafeArea =
+    (nativeMetrics?.safeArea.left ?? 0) + (nativeMetrics?.safeArea.right ?? 0);
+  const inspectorWidth = nativeInspectorColumnWidth({
+    viewportWidth,
+    horizontalSafeArea,
+    fraction: inspector.widthFraction,
+  });
   const resizeStartWidth = useRef(inspectorWidth);
   const settingsDetailIn = (detail: readonly Route[]) =>
     layout.usesSplitView && detail[0] && isSettingsRoute(detail[0].name) ? detail[0] : undefined;
@@ -246,7 +244,6 @@ function WorkspaceColumns(
     deviceType === "duo-unfolded" && selectedTab !== "pullRequests" && !settingsOpen
       ? openNewTask
       : undefined;
-  const inspector = use(NativeWorkspaceInspectorContext);
   const hostRef = useRef<SplitHostCommands>(null);
   const activeDetailKey = props.detail.at(-1)?.key;
   const compactColumn = activeDetailKey ? "secondary" : "primary";
@@ -477,11 +474,12 @@ function WorkspaceColumns(
                           resizeStartWidth.current = inspectorWidth;
                         }}
                         onResizeBy={(delta) => {
-                          const width = Math.max(
-                            260,
-                            Math.min(viewportWidth * 0.6, resizeStartWidth.current + delta),
-                          );
-                          setInspectorWidthFraction(width / viewportWidth);
+                          const width = nativeInspectorColumnWidth({
+                            viewportWidth,
+                            horizontalSafeArea,
+                            fraction: (resizeStartWidth.current + delta) / viewportWidth,
+                          });
+                          inspector.setWidthFraction(width / viewportWidth);
                         }}
                       />
                     </View>

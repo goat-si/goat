@@ -434,6 +434,71 @@ describe("goatBotActivity", () => {
     expect(text).toHaveLength(120);
     expect(text.endsWith("…")).toBe(true);
   });
+
+  it("keeps the whole of a long step for the opened line", () => {
+    const long = `Line one\n\n  line two ${"x".repeat(200)} the end`;
+    const activity = working(acknowledged(chip("task-1", { summary: long })));
+    expect(activity?.fullText).toBe(`Line one line two ${"x".repeat(200)} the end`);
+    expect(working(acknowledged(chip("task-1", { summary: "Short step" })))?.fullText).toBe(
+      undefined,
+    );
+  });
+
+  it("marks a step as waiting on the person only from what the work asks of them", () => {
+    const shell = (pending: "command" | null) => ({
+      shell: {
+        activityRunStatus: "waiting" as const,
+        pendingRuntimeRequest:
+          pending === null
+            ? null
+            : {
+                id: RuntimeRequestId.make("request-1"),
+                kind: pending,
+                createdAt: DateTime.makeUnsafe(at(4)),
+              },
+      },
+      projection: null,
+    });
+    const task = chip("task-1");
+    // "Waiting on other work" is the run waiting on something else; nothing asks the person.
+    const other = working(acknowledged(task), shell(null));
+    expect([other?.text, other?.attention]).toEqual(["Waiting on other work", undefined]);
+    expect(working(acknowledged(task), shell("command"))?.attention).toBe("waiting");
+    const limited = chip("task-1", {
+      observed: { pullRequests: [], needsYou: [{ kind: "usage_limit", since: at(5) }] },
+    });
+    expect(working(acknowledged(limited))?.attention).toBe("paused");
+  });
+
+  it("names what a wait is on, so a reworded wait on the person stays one wait", () => {
+    const waitOf = (overrides: Partial<ChannelTaskChip>, worker: GoatBotWorkerObservation | null) =>
+      working(acknowledged(chip("task-1", overrides)), worker);
+    const generic = waitOf({ status: "waiting_input" }, null);
+    const answer = waitOf({ status: "waiting_input", openQuestionCount: 1 }, null);
+    expect([generic?.text, generic?.wait]).toEqual(["Waiting for you", "you"]);
+    expect([answer?.text, answer?.wait]).toEqual(["Waiting for your answer", "you"]);
+    const limited = waitOf(
+      { observed: { pullRequests: [], needsYou: [{ kind: "usage_limit", since: at(5) }] } },
+      null,
+    );
+    expect(limited?.wait).toBe("usage_limit");
+    const runWaiting: GoatBotWorkerObservation = {
+      shell: { activityRunStatus: "waiting", pendingRuntimeRequest: null },
+      projection: null,
+    };
+    const other = waitOf({}, runWaiting);
+    expect([other?.text, other?.wait]).toEqual(["Waiting on other work", "other_work"]);
+    // A task's own update that reads like a wait is a working step.
+    const update: Entry = {
+      kind: "bot",
+      text: "Waiting on other work",
+      taskId: "task-1",
+      channelKind: "status",
+      second: 3,
+    };
+    expect(working(acknowledged(chip("task-1"), update))?.wait).toBeUndefined();
+    expect(waitOf({ status: "running" }, null)?.wait).toBeUndefined();
+  });
 });
 
 describe("resident atoms", () => {

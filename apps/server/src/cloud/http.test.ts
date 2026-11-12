@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { onMainListenerWeb } from "../auth/connectionContext.testkit.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
@@ -122,9 +123,11 @@ const withLinkProofClient = async (
     exchange: (credential: string, scope?: string) => Promise<string>;
   }) => Promise<void>,
 ) => {
-  const { handler, dispose } = HttpRouter.toWebHandler(layerLinkProofRoutes, {
-    disableLogger: true,
-  });
+  const { handler, dispose } = onMainListenerWeb(
+    HttpRouter.toWebHandler(layerLinkProofRoutes, {
+      disableLogger: true,
+    }),
+  );
   const post = (
     path: string,
     payload: unknown,
@@ -301,7 +304,9 @@ it("refuses cloud health requests while GOAT Connect is disabled", async () => {
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(Etag.layerWeak))),
     Layer.provideMerge(NodeServices.layer),
   );
-  const { handler, dispose } = HttpRouter.toWebHandler(layerRoutes, { disableLogger: true });
+  const { handler, dispose } = onMainListenerWeb(
+    HttpRouter.toWebHandler(layerRoutes, { disableLogger: true }),
+  );
   try {
     const response = await handler(
       new Request("http://127.0.0.1/api/goat-connect/health", {

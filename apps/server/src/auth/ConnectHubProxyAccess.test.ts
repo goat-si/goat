@@ -30,6 +30,7 @@ import * as Grants from "./PairingGrantStore.ts";
 import * as Secrets from "./ServerSecretStore.ts";
 import * as Sessions from "./SessionStore.ts";
 import * as Lifetime from "./SessionSocketLifetime.ts";
+import { MAIN_LISTENER, onMainListener } from "./connectionContext.testkit.ts";
 
 const services = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
   Layer.provide(Secrets.layer),
@@ -90,12 +91,13 @@ it.effect("adds hub access only to new Connect grants under effective standing c
       const grant = yield* auth.createCloudConnectPairingLink({ proofKeyThumbprint: "device-key" });
       const exchanged = yield* auth.exchangeBootstrapCredentialForAccessToken(
         grant.credential,
+        MAIN_LISTENER,
         undefined,
         metadata,
         { proofKeyThumbprint: "device-key" },
       );
       const sessions = yield* Sessions.SessionStore;
-      const verified = yield* sessions.verify(exchanged.access_token);
+      const verified = yield* sessions.verify(exchanged.access_token, MAIN_LISTENER);
       expect(verified.scopes).toEqual(
         allowed ? [...AuthStandardClientScopes, AuthHubProxyScope] : AuthStandardClientScopes,
       );
@@ -120,11 +122,13 @@ it.effect(
       });
       const standard = yield* auth.issueSession({ subject: "cloud-connect" });
       const paired = yield* auth.issueSession({ subject: "paired", scopes: [AuthHubProxyScope] });
-      yield* auth.authenticateHttpRequest(request(session.token));
+      yield* auth.authenticateHttpRequest(onMainListener(request(session.token)));
       yield* settings.updateSettings({ hub: { connectDevicesHubProxy: false } });
       yield* settings.updateSettings({ hub: { connectDevicesHubProxy: true } });
       expect(
-        yield* auth.authenticateHttpRequest(request(session.token)).pipe(Effect.result),
+        yield* auth
+          .authenticateHttpRequest(onMainListener(request(session.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       const upgrade = HttpServerRequest.fromWeb(
         new Request(
@@ -132,23 +136,28 @@ it.effect(
         ),
       );
       expect(
-        yield* auth.authenticateWebSocketUpgrade(upgrade, "rpc").pipe(Effect.result),
+        yield* auth
+          .authenticateWebSocketUpgrade(onMainListener(upgrade), "rpc")
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       expect(
         yield* auth
           .exchangeBootstrapCredentialForAccessToken(
             grant.credential,
+            MAIN_LISTENER,
             ["orchestration:read"],
             metadata,
           )
           .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
-      expect((yield* auth.authenticateHttpRequest(request(standard.token))).subject).toBe(
-        "cloud-connect",
-      );
-      expect((yield* auth.authenticateHttpRequest(request(paired.token))).subject).toBe("paired");
+      expect(
+        (yield* auth.authenticateHttpRequest(onMainListener(request(standard.token)))).subject,
+      ).toBe("cloud-connect");
+      expect(
+        (yield* auth.authenticateHttpRequest(onMainListener(request(paired.token)))).subject,
+      ).toBe("paired");
       const fresh = yield* issuePrivileged;
-      yield* auth.authenticateHttpRequest(request(fresh.token));
+      yield* auth.authenticateHttpRequest(onMainListener(request(fresh.token)));
     }).pipe(Effect.provide(layer)),
 );
 
@@ -169,7 +178,7 @@ it.effect("Connect unlink and relink revoke issued hub privileges while consent 
       scopes: [...AuthStandardClientScopes, AuthHubProxyScope],
       connectAccessGeneration: stamp,
     };
-    yield* auth.authenticateHttpRequest(request(session.token));
+    yield* auth.authenticateHttpRequest(onMainListener(request(session.token)));
     yield* auth.setCloudLinkTrust(null);
     yield* auth.setCloudLinkTrust("test-account");
     const current = yield* access.current;
@@ -177,7 +186,9 @@ it.effect("Connect unlink and relink revoke issued hub privileges while consent 
     expect(Access.admits(credential, current)).toBe(false);
     yield* access.awaitDenial(credential);
     expect(
-      yield* auth.authenticateHttpRequest(request(session.token)).pipe(Effect.result),
+      yield* auth
+        .authenticateHttpRequest(onMainListener(request(session.token)))
+        .pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure" });
     const upgrade = HttpServerRequest.fromWeb(
       new Request(
@@ -185,22 +196,30 @@ it.effect("Connect unlink and relink revoke issued hub privileges while consent 
       ),
     );
     expect(
-      yield* auth.authenticateWebSocketUpgrade(upgrade, "rpc").pipe(Effect.result),
+      yield* auth.authenticateWebSocketUpgrade(onMainListener(upgrade), "rpc").pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure" });
     expect(
       yield* auth
-        .exchangeBootstrapCredentialForAccessToken(grant.credential, undefined, metadata)
+        .exchangeBootstrapCredentialForAccessToken(
+          grant.credential,
+          MAIN_LISTENER,
+          undefined,
+          metadata,
+        )
         .pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure" });
     const fresh = yield* auth.createCloudConnectPairingLink({ proofKeyThumbprint: "device-key" });
     const exchanged = yield* auth.exchangeBootstrapCredentialForAccessToken(
       fresh.credential,
+      MAIN_LISTENER,
       undefined,
       metadata,
       { proofKeyThumbprint: "device-key" },
     );
     const sessions = yield* Sessions.SessionStore;
-    expect((yield* sessions.verify(exchanged.access_token)).scopes).toContain(AuthHubProxyScope);
+    expect((yield* sessions.verify(exchanged.access_token, MAIN_LISTENER)).scopes).toContain(
+      AuthHubProxyScope,
+    );
   }).pipe(Effect.provide(layer)),
 );
 
@@ -254,7 +273,9 @@ it.effect("a guarded media socket ends when Connect hub consent is withdrawn", (
     const { settings, auth } = yield* setup;
     yield* settings.updateSettings({ hub: { enabled: true, connectDevicesHubProxy: true } });
     const session = yield* issuePrivileged;
-    const authenticated = yield* auth.authenticateHttpRequest(request(session.token));
+    const authenticated = yield* auth.authenticateHttpRequest(
+      onMainListener(request(session.token)),
+    );
     const socket = yield* Lifetime.guard(authenticated, Effect.never).pipe(Effect.forkChild);
     yield* settings.updateSettings({ hub: { connectDevicesHubProxy: false } });
     expect((yield* Fiber.join(socket)).status).toBe(204);
@@ -304,14 +325,18 @@ it.effect("hub disable preserves consent and invalidates unstamped legacy privil
     yield* settings.updateSettings({ hub: { enabled: true, connectDevicesHubProxy: true } });
     const legacy = yield* sessions.issue({ subject: "cloud-connect", scopes: [AuthHubProxyScope] });
     expect(
-      yield* auth.authenticateHttpRequest(request(legacy.token)).pipe(Effect.result),
+      yield* auth
+        .authenticateHttpRequest(onMainListener(request(legacy.token)))
+        .pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure" });
     const privileged = yield* issuePrivileged;
     yield* settings.updateSettings({ hub: { enabled: false } });
     expect((yield* settings.getSettings).hub.connectDevicesHubProxy).toBe(true);
     yield* settings.updateSettings({ hub: { enabled: true } });
     expect(
-      yield* auth.authenticateHttpRequest(request(privileged.token)).pipe(Effect.result),
+      yield* auth
+        .authenticateHttpRequest(onMainListener(request(privileged.token)))
+        .pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure" });
   }).pipe(Effect.provide(layer)),
 );
@@ -326,7 +351,7 @@ it.effect(
       const config = yield* Config.ServerConfig;
       yield* settings.updateSettings({ hub: { enabled: true, connectDevicesHubProxy: true } });
       const session = yield* issuePrivileged;
-      const verified = yield* (yield* Sessions.SessionStore).verify(session.token);
+      const verified = yield* (yield* Sessions.SessionStore).verify(session.token, MAIN_LISTENER);
       const stopped = yield* Deferred.make<void>();
       yield* access
         .awaitDenial(verified)
@@ -344,7 +369,9 @@ it.effect(
       expect(yield* access.current).toMatchObject({ allowed: false, fenced: true });
       expect(yield* fs.exists(`${config.stateDir}/connect-hub-access.fence`)).toBe(true);
       expect(
-        yield* auth.authenticateHttpRequest(request(session.token)).pipe(Effect.result),
+        yield* auth
+          .authenticateHttpRequest(onMainListener(request(session.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       expect(
         yield* settings
@@ -361,7 +388,9 @@ it.effect(
       expect(yield* fs.exists(`${config.stateDir}/connect-hub-access.fence`)).toBe(false);
       yield* settings.updateSettings({ hub: { connectDevicesHubProxy: true } });
       expect(
-        yield* auth.authenticateHttpRequest(request(session.token)).pipe(Effect.result),
+        yield* auth
+          .authenticateHttpRequest(onMainListener(request(session.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
     }).pipe(Effect.scoped, Effect.provide(layer)),
 );
@@ -386,6 +415,7 @@ it.effect("mint after an in-flight enable receives the newly committed scope", (
     const grant = yield* Fiber.join(mint);
     const token = yield* auth.exchangeBootstrapCredentialForAccessToken(
       grant.credential,
+      MAIN_LISTENER,
       undefined,
       metadata,
       { proofKeyThumbprint: "device-key" },
@@ -460,6 +490,7 @@ it.effect.each([
         kind: "exchange" as const,
         token: yield* auth.exchangeBootstrapCredentialForAccessToken(
           bootstrap.credential,
+          MAIN_LISTENER,
           undefined,
           metadata,
         ),
@@ -502,6 +533,7 @@ it.effect.each([
           yield* auth
             .exchangeBootstrapCredentialForAccessToken(
               result.grant.credential,
+              MAIN_LISTENER,
               undefined,
               metadata,
               { proofKeyThumbprint: "device-key" },
@@ -512,7 +544,7 @@ it.effect.each([
         expect(result.token.scope.split(" ")).toContain(AuthHubProxyScope);
         expect(
           yield* auth
-            .authenticateHttpRequest(request(result.token.access_token))
+            .authenticateHttpRequest(onMainListener(request(result.token.access_token)))
             .pipe(Effect.result),
         ).toMatchObject({ _tag: "Failure" });
       }
@@ -545,11 +577,12 @@ it.effect.each([
         expect(result.success.grant.scopes).toEqual(AuthStandardClientScopes);
         const token = yield* auth.exchangeBootstrapCredentialForAccessToken(
           result.success.grant.credential,
+          MAIN_LISTENER,
           undefined,
           metadata,
           { proofKeyThumbprint: "device-key" },
         );
-        expect((yield* sessions.verify(token.access_token)).scopes).toEqual(
+        expect((yield* sessions.verify(token.access_token, MAIN_LISTENER)).scopes).toEqual(
           AuthStandardClientScopes,
         );
       }
@@ -598,7 +631,7 @@ it.effect(
       expect((yield* settings.getSettings).hub.connectDevicesHubProxy).toBe(true);
       expect((yield* access.current).allowed).toBe(true);
       expect(
-        yield* auth.authenticateHttpRequest(request(old.token)).pipe(Effect.result),
+        yield* auth.authenticateHttpRequest(onMainListener(request(old.token))).pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       expect(
         (yield* auth.createCloudConnectPairingLink({ proofKeyThumbprint: "device-key" })).scopes,
@@ -694,7 +727,9 @@ it.effect(
       const second = yield* openServer(controlled);
       expect(yield* second.access.current).toMatchObject({ allowed: false, fenced: true });
       expect(
-        yield* second.auth.authenticateHttpRequest(request(old.token)).pipe(Effect.result),
+        yield* second.auth
+          .authenticateHttpRequest(onMainListener(request(old.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       const waiting = yield* Deferred.make<void>();
       const ready = yield* Deferred.make<void>();
@@ -725,7 +760,9 @@ it.effect(
       expect(yield* second.access.current).toMatchObject({ allowed: true, fenced: false });
       expect((yield* second.settings.getSettings).enableProviderUpdateChecks).toBe(false);
       expect(
-        yield* second.auth.authenticateHttpRequest(request(old.token)).pipe(Effect.result),
+        yield* second.auth
+          .authenticateHttpRequest(onMainListener(request(old.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       yield* Deferred.await(watching);
       const changes = yield* second.settings.subscribeChanges;
@@ -820,7 +857,7 @@ it.effect("marker removal failure and double write failure keep live denial unti
         scopes: ["hub:proxy"],
         connectAccessGeneration: (yield* server.access.current).generation,
       });
-      const credential = yield* server.sessions.verify(token.token);
+      const credential = yield* server.sessions.verify(token.token, MAIN_LISTENER);
       const stopped = yield* Deferred.make<void>();
       yield* server.access
         .awaitDenial(credential)
@@ -840,7 +877,9 @@ it.effect("marker removal failure and double write failure keep live denial unti
       yield* Deferred.await(stopped);
       expect(yield* server.access.current).toMatchObject({ allowed: false, fenced: true });
       expect(
-        yield* server.auth.authenticateHttpRequest(request(token.token)).pipe(Effect.result),
+        yield* server.auth
+          .authenticateHttpRequest(onMainListener(request(token.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       markerFails = false;
       removalFails = false;
@@ -852,7 +891,9 @@ it.effect("marker removal failure and double write failure keep live denial unti
       );
       yield* server.settings.updateSettings({ hub: { connectDevicesHubProxy: true } });
       expect(
-        yield* server.auth.authenticateHttpRequest(request(token.token)).pipe(Effect.result),
+        yield* server.auth
+          .authenticateHttpRequest(onMainListener(request(token.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
     }
     yield* Scope.close(server.scope, Exit.void);
@@ -871,13 +912,17 @@ it.effect(
         scopes: ["hub:proxy"],
         connectAccessGeneration: generation,
       });
-      const browser = yield* auth.createBrowserSession(grant.credential, { deviceType: "mobile" });
-      expect((yield* sessions.verify(browser.sessionToken)).connectAccessGeneration).toBe(
-        generation,
-      );
+      const browser = yield* auth.createBrowserSession(grant.credential, MAIN_LISTENER, {
+        deviceType: "mobile",
+      });
+      expect(
+        (yield* sessions.verify(browser.sessionToken, MAIN_LISTENER)).connectAccessGeneration,
+      ).toBe(generation);
       yield* settings.updateSettings({ hub: { connectDevicesHubProxy: false } });
       expect(
-        yield* auth.authenticateHttpRequest(request(browser.sessionToken)).pipe(Effect.result),
+        yield* auth
+          .authenticateHttpRequest(onMainListener(request(browser.sessionToken)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
     }).pipe(Effect.provide(layer)),
 );
@@ -889,11 +934,12 @@ it.effect("Connect hub media tickets remain bearer capabilities but cannot open 
     const grant = yield* auth.createCloudConnectPairingLink({ proofKeyThumbprint: "device-key" });
     const token = yield* auth.exchangeBootstrapCredentialForAccessToken(
       grant.credential,
+      MAIN_LISTENER,
       undefined,
       { deviceType: "mobile" },
       { proofKeyThumbprint: "device-key" },
     );
-    const verified = yield* sessions.verify(token.access_token);
+    const verified = yield* sessions.verify(token.access_token, MAIN_LISTENER);
     const ticket = yield* auth.issueWebSocketTicket(verified);
     const request = HttpServerRequest.fromWeb(
       new Request(
@@ -901,10 +947,10 @@ it.effect("Connect hub media tickets remain bearer capabilities but cannot open 
       ),
     );
     expect(
-      yield* auth.authenticateWebSocketUpgrade(request, "rpc").pipe(Effect.result),
+      yield* auth.authenticateWebSocketUpgrade(onMainListener(request), "rpc").pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure", failure: { _tag: "ServerAuthInvalidCredentialError" } });
-    expect((yield* auth.authenticateWebSocketUpgrade(request, "media")).sessionId).toBe(
-      verified.sessionId,
-    );
+    expect(
+      (yield* auth.authenticateWebSocketUpgrade(onMainListener(request), "media")).sessionId,
+    ).toBe(verified.sessionId);
   }).pipe(Effect.provide(layer)),
 );

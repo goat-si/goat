@@ -23,6 +23,7 @@ it.effect(
             {
               sessionId: reviewer,
               subject: "test",
+              principalKind: "person",
               method: "browser-session-cookie",
               scopes: ["orchestration:operate", "providers:manage"],
               client: { label: "Human reviewer", deviceType: "unknown" },

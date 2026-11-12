@@ -34,7 +34,8 @@ import {
   safeProcessCwd,
   spawnFailureMessage,
   DEFAULT_TIMEOUT_MS,
-  parseGenericCliVersion,
+  parseCliVersionResult,
+  providerProbeEnvironment,
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
@@ -43,10 +44,8 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "@goat/provider-core/server/maintenanceResolver";
-import {
-  EMPTY_PI_MODEL_CAPABILITIES,
-  thinkingCapabilitiesForPiModel,
-} from "./thinkingCapabilities.ts";
+import { EMPTY_PI_MODEL_CAPABILITIES } from "./thinkingCapabilities.ts";
+import { piModelCapabilities } from "./serviceTierCapabilities.ts";
 import {
   parsePiDiscoveredCommands,
   withPiBuiltinSlashCommands,
@@ -132,7 +131,7 @@ function parseDiscoveredModels(
       name: recordString(model, "name") ?? slug,
       subProvider: provider,
       isCustom: false,
-      capabilities: thinkingCapabilitiesForPiModel(
+      capabilities: piModelCapabilities(
         model,
         provider === activeProvider && id === activeModelId
           ? recordString(state, "thinkingLevel")
@@ -226,7 +225,7 @@ export const discoverPiCommandsForCwd = Effect.fn("discoverPiCommandsForCwd")(
     }
     const connection = yield* makePiDiscoveryConnection(
       piSettings,
-      environment,
+      providerProbeEnvironment(environment),
       launchArgs.args,
       cwd,
       profile,
@@ -381,10 +380,13 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   }
 
   const spawnCwd = safeProcessCwd();
-  const versionResult = yield* runPiVersionCommand(piSettings, environment, spawnCwd, profile).pipe(
-    Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
-    Effect.result,
-  );
+  const probeEnvironment = providerProbeEnvironment(environment);
+  const versionResult = yield* runPiVersionCommand(
+    piSettings,
+    probeEnvironment,
+    spawnCwd,
+    profile,
+  ).pipe(Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
@@ -432,7 +434,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   }
 
   const versionOutput = versionResult.success.value;
-  const version = parseGenericCliVersion(`${versionOutput.stdout}\n${versionOutput.stderr}`);
+  const version = parseCliVersionResult(versionOutput);
   if (versionOutput.code !== 0) {
     return buildServerProvider({
       presentation: { ...PI_PRESENTATION, displayName: profile.displayName },
@@ -502,7 +504,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
 
   const discoveryExit = yield* discoverPiViaRpc(
     piSettings,
-    environment,
+    probeEnvironment,
     resolvedLaunchArgs.args,
     cwd,
     profile,
@@ -549,7 +551,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       ? undefined
       : yield* describeUnavailablePiModel(
           piSettings,
-          environment,
+          probeEnvironment,
           version,
           resolvedLaunchArgs.args,
           discovery.unavailableActiveModel,

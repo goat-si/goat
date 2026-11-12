@@ -140,6 +140,14 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
   incoming: OrchestrationV2Command,
   channelOwner?: ChannelConnectionOwner,
 ) {
+  if (incoming.type === "thread.fork" && incoming.workspace !== undefined) {
+    // Only ThreadForkWorkspaceService, which creates the checkout, may bind a fork to one.
+    return yield* new Orchestrator.OrchestratorDispatchError({
+      commandId: incoming.commandId,
+      commandType: incoming.type,
+      cause: "A fork's workspace is chosen through orchestration.forkThread.",
+    });
+  }
   const command =
     incoming.type === "message.dispatch" ? yield* withGuestAttachments(incoming) : incoming;
   const threads = yield* ThreadManagement.ThreadManagementService;

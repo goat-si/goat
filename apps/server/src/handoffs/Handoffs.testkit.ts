@@ -154,6 +154,7 @@ export const computerUseGrantClients = (orchestrator: Orchestrator.OrchestratorV
       ({
         sessionId: AuthSessionId.make(id),
         subject: "test",
+        principalKind: "person",
         method: "browser-session-cookie",
         scopes: ["orchestration:operate"],
         permissions,

@@ -1,4 +1,5 @@
 import type { OrchestrationV2ThreadLauncher, OrchestrationV2ThreadShell } from "@goat/contracts";
+import { isPendingApprovalRequest, isPendingUserInputRequest } from "@goat/contracts";
 
 import { backgroundWorkHoldsCompletion } from "./orchestrationV2PendingBackgroundWork.ts";
 
@@ -129,9 +130,9 @@ export function launchLiftInputOfShell(
   const working =
     runtimeStatus === "preparing" || runtimeStatus === "starting" || runtimeStatus === "running";
   return {
-    hasPendingApprovals:
-      request !== null && request.kind !== "user_input" && request.kind !== "auth_refresh",
-    hasPendingUserInput: request?.kind === "user_input" && (request.blocking !== false || !working),
+    hasPendingApprovals: isPendingApprovalRequest(request),
+    hasPendingUserInput:
+      isPendingUserInputRequest(request) && (request?.blocking !== false || !working),
     runtimeStatus,
     pendingBackgroundTaskCount: tasks.length,
   };

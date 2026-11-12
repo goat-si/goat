@@ -1,12 +1,12 @@
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
-import { deliveryLedger } from "./channelDeliveryLedger.ts";
-import { copyUndeliveredReplies, type UndeliveredSourceRow } from "./channelUndeliveredReplies.ts";
+import { type ChannelDeliveryLedgerOps, deliveryLedger } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
 import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
+import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
 /**
  * ChannelLedger - durable state for channel input, tasks, and deliveries.
  *
@@ -58,6 +58,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import {
+  botActiveTasksStatement,
+  newestAskAt,
+  waitingTaskCondition,
+} from "./channelWaitingTasks.ts";
 export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
@@ -135,9 +140,11 @@ export interface ChannelTailEntry {
 }
 export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
 
+type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
+
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
-  ChannelBotLedgerOps & {
+  ChannelLedgerOps & {
     /** Stores an input, or returns the stored one for the same idempotency key. */
     readonly acceptInput: (input: {
       readonly ownerId: string;
@@ -302,6 +309,11 @@ export class ChannelLedger extends Context.Service<
       readThrough?: string,
       botId?: BotId,
     ) => Effect.Effect<number, ChannelLedgerError>;
+    /** Whether one of the bot's tasks is going and waits on no one (botActiveTasksStatement). */
+    readonly botHasActiveTasks: (
+      ownerId: string,
+      botId: BotId,
+    ) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly findTaskByWorkerThread: (
       threadId: ThreadId,
     ) => Effect.Effect<ChannelStoredTask | undefined, ChannelLedgerError>;
@@ -455,32 +467,6 @@ export class ChannelLedger extends Context.Service<
       deliveries: ReadonlyArray<ChannelOutboxInsert>,
       now: string,
     ) => Effect.Effect<void, ChannelLedgerError>;
-    /**
-     * Marks the oldest due rows as delivering. A row waits while an earlier row for the same task
-     * and destination kind is still pending or in flight, so a receipt goes out before its result.
-     */
-    readonly claimDueDeliveries: (input: {
-      readonly owner: string;
-      readonly now: string;
-      readonly limit: number;
-      readonly receiptsOnly?: boolean | undefined;
-    }) => Effect.Effect<ReadonlyArray<ChannelStoredDelivery>, ChannelLedgerError>;
-    readonly recordDelivery: (input: {
-      readonly owner: string;
-      readonly deliveryId: ChannelDeliveryId;
-      readonly outcome: ChannelDeliveryOutcome;
-      readonly now: string;
-      readonly attempt?: number | undefined;
-    }) => Effect.Effect<void, ChannelLedgerError>;
-    readonly expireReceipts: (input: {
-      readonly owner: string;
-      readonly now: string;
-    }) => Effect.Effect<void, ChannelLedgerError>;
-    /** After a restart: GOAT bot and MCP deliveries retry, external ones in flight become ambiguous. */
-    readonly settleInterruptedDeliveries: (input: {
-      readonly owner: string;
-      readonly now: string;
-    }) => Effect.Effect<void, ChannelLedgerError>;
     readonly getDeliveryState: (
       deliveryId: ChannelDeliveryId,
     ) => Effect.Effect<string | undefined, ChannelLedgerError>;
@@ -821,7 +807,7 @@ const make = Effect.gen(function* () {
           version = ${next.version},
           generation = ${next.generation},
           worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = ${encodeTask(next)},
+          task_json = ${encodeTask(next)}, newest_ask_at = ${newestAskAt(next)},
           updated_at = ${next.updatedAt},
           pending_answer_message_id = ${pendingAnswer},
           completion_hold = ${hold}
@@ -855,10 +841,11 @@ const make = Effect.gen(function* () {
       const inserted = yield* sql<{ readonly task_id: string }>`
         INSERT INTO channel_tasks (
           task_id, owner_id, conversation_id, status, version, generation, task_json,
-          created_at, updated_at, bot_id
+          created_at, updated_at, bot_id, newest_ask_at
         ) SELECT
           ${task.taskId}, ${ownerId}, ${task.conversationId}, ${task.status}, ${task.version},
-          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}, bot_id
+          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}, bot_id,
+          ${newestAskAt(task)}
         FROM channel_inbox WHERE input_id = ${task.originInputId} AND owner_id = ${ownerId}
         RETURNING task_id
       `;
@@ -982,7 +969,9 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(toLedgerError("acceptInput")));
 
-  const bots = botLedger(sql);
+  const changes = yield* makeChannelTaskChanges(sql);
+  const bots = botLedger(sql, changes);
+  const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
     acceptInput,
 
@@ -1021,7 +1010,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listReceivableInputs")),
       ),
 
-    ...receptionLedger(sql, { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries }),
+    ...receptionLedger(sql, reception),
     ...bots,
 
     readConversationTail: (conversationId, limit) =>
@@ -1287,12 +1276,7 @@ const make = Effect.gen(function* () {
         sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
         FROM channel_tasks
-        WHERE owner_id = ${ownerId} AND bot_id = ${botId}
-          AND (status = 'waiting_input'
-            OR (status = 'running' AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0)
-            OR (status IN ('completed', 'failed') AND EXISTS (
-              SELECT 1 FROM json_each(task_json, '$.observed.needsYou')
-              WHERE json_extract(value, '$.kind') = 'approval')))
+        WHERE owner_id = ${ownerId} AND bot_id = ${botId} AND ${waitingTaskCondition(sql)}
       `,
       ).pipe(
         Effect.map((rows) => {
@@ -1303,6 +1287,15 @@ const make = Effect.gen(function* () {
           ).length;
         }),
         Effect.mapError(toLedgerError("countWaitingTasks")),
+      ),
+
+    botHasActiveTasks: (ownerId, botId) =>
+      Effect.andThen(
+        bots.ensureTaskBotsRepaired(),
+        botActiveTasksStatement(sql, { ownerId, botId }),
+      ).pipe(
+        Effect.map((rows) => rows[0]?.active === 1),
+        Effect.mapError(toLedgerError("botHasActiveTasks")),
       ),
 
     findTaskByWorkerThread: (threadId) =>
@@ -1316,34 +1309,40 @@ const make = Effect.gen(function* () {
       ),
 
     applyTaskEvent: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            if (input.completeForwardSequence !== undefined) {
-              const pending = yield* sql<{ readonly sequence: number }>`
+      changes
+        .afterCommit(
+          sql.withTransaction(
+            Effect.gen(function* () {
+              yield* fence(input.owner);
+              if (input.completeForwardSequence !== undefined) {
+                const pending = yield* sql<{ readonly sequence: number }>`
                 UPDATE channel_task_events SET forward_state = 'done'
                 WHERE sequence = ${input.completeForwardSequence} AND task_id = ${input.write.next.taskId}
                   AND forward_state = 'pending' RETURNING sequence
               `;
-              if (pending.length === 0) return 0;
-            }
-            const sequence = yield* writeTaskEvent(input.write);
-            for (const created of input.createdTasks ?? []) {
-              const existing = yield* sql<{ readonly task_id: string }>`
+                if (pending.length === 0) return 0;
+              }
+              const sequence = yield* writeTaskEvent(input.write);
+              for (const created of input.createdTasks ?? []) {
+                const existing = yield* sql<{ readonly task_id: string }>`
                 SELECT task_id FROM channel_tasks WHERE task_id = ${created.task.taskId}`;
-              if (existing.length === 0)
-                yield* insertTask(created.task, created.ownerId, created.event);
-            }
-            yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
-            if (input.cursor !== undefined) {
-              yield* upsertCursor(input.cursor, input.write.event.occurredAt);
-            }
-            if (input.remoteWorker !== undefined) {
-              yield* patchRemoteWorker(input.remoteWorker, input.write.event.occurredAt);
-            }
-            return sequence;
-          }),
+                if (existing.length === 0)
+                  yield* insertTask(created.task, created.ownerId, created.event);
+              }
+              yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
+              if (input.cursor !== undefined) {
+                yield* upsertCursor(input.cursor, input.write.event.occurredAt);
+              }
+              if (input.remoteWorker !== undefined) {
+                yield* patchRemoteWorker(input.remoteWorker, input.write.event.occurredAt);
+              }
+              return sequence;
+            }),
+          ),
+          () => [
+            input.write.next.requester.ownerId,
+            ...(input.createdTasks ?? []).map((created) => created.ownerId),
+          ],
         )
         .pipe(Effect.mapError(toLedgerError("applyTaskEvent"))),
 
@@ -1655,31 +1654,6 @@ const make = Effect.gen(function* () {
         onSome: (channel) => channel.wake,
       }),
     ),
-
-    settleInterruptedDeliveries: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            // Local destinations record idempotently, so an interrupted one is simply sent again.
-            yield* sql`
-              UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind IN ('goat', 'mcp')
-            `;
-            const interrupted = yield* sql<UndeliveredSourceRow>`
-              UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
-                updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
-              RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
-                last_error_code
-            `;
-            yield* copyUndeliveredReplies(sql, interrupted, "ambiguous", input.now);
-          }),
-        )
-        .pipe(
-          Effect.tap(() => receiptGate.changed),
-          Effect.mapError(toLedgerError("settleInterruptedDeliveries")),
-        ),
 
     getDeliveryState: (deliveryId) =>
       sql<{ readonly state: string }>`

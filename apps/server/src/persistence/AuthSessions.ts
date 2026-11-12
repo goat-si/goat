@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import type * as DateTime from "effect/DateTime";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,6 +14,7 @@ import {
   AuthSessionId,
   ClientSurface,
   ServerAuthSessionMethod,
+  SessionPrincipalKind,
 } from "@goat/contracts";
 
 import {
@@ -32,6 +34,15 @@ export const AuthSessionClientMetadataRecord = Schema.Struct({
 });
 export type AuthSessionClientMetadataRecord = typeof AuthSessionClientMetadataRecord.Type;
 
+/** The Pen member a session was issued to; immutable after issue (mesh link design §6). */
+export const AuthSessionPenBinding = Schema.Struct({
+  meshId: Schema.String,
+  nodeId: Schema.String,
+  signPub: Schema.String,
+  noisePub: Schema.String,
+});
+export type AuthSessionPenBinding = typeof AuthSessionPenBinding.Type;
+
 export const AuthSessionRecord = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
@@ -43,6 +54,8 @@ export const AuthSessionRecord = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  principalKind: SessionPrincipalKind,
+  penBinding: Schema.NullOr(AuthSessionPenBinding),
 });
 export type AuthSessionRecord = typeof AuthSessionRecord.Type;
 
@@ -55,6 +68,8 @@ export const CreateAuthSessionInput = Schema.Struct({
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
+  principalKind: SessionPrincipalKind,
+  penBinding: Schema.optionalKey(Schema.NullOr(AuthSessionPenBinding)),
 });
 export type CreateAuthSessionInput = typeof CreateAuthSessionInput.Type;
 
@@ -102,6 +117,20 @@ export const SetAuthSessionClientConnectionInput = Schema.Struct({
 });
 export type SetAuthSessionClientConnectionInput = typeof SetAuthSessionClientConnectionInput.Type;
 
+export const PenBoundSessionsInput = Schema.Struct({
+  now: Schema.DateTimeUtcFromString,
+  nodeId: Schema.optionalKey(Schema.String),
+});
+export type PenBoundSessionsInput = typeof PenBoundSessionsInput.Type;
+
+export const PenBoundSession = Schema.Struct({
+  sessionId: AuthSessionId,
+  nodeId: Schema.String,
+  signPub: Schema.String,
+  noisePub: Schema.String,
+});
+export type PenBoundSession = typeof PenBoundSession.Type;
+
 export class AuthSessionRepository extends Context.Service<
   AuthSessionRepository,
   {
@@ -132,6 +161,22 @@ export class AuthSessionRepository extends Context.Service<
     readonly setClientConnection: (
       input: SetAuthSessionClientConnectionInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
+    /** Unrevoked Pen-bound sessions with their member, of one member when nodeId is set. */
+    readonly listPenBound: (
+      input: PenBoundSessionsInput,
+    ) => Effect.Effect<ReadonlyArray<PenBoundSession>, AuthSessionRepositoryError>;
+    /** Active (unrevoked, unexpired) Pen-bound sessions: of nodeId and in total. */
+    readonly countActivePenBound: (input: {
+      readonly now: DateTime.Utc;
+      readonly nodeId: string;
+    }) => Effect.Effect<
+      { readonly member: number; readonly total: number },
+      AuthSessionRepositoryError
+    >;
+    /** Deletes Pen-bound rows that are revoked or expired; never touches any other row. */
+    readonly deleteInactivePenBound: (
+      input: PenBoundSessionsInput,
+    ) => Effect.Effect<number, AuthSessionRepositoryError>;
   }
 >()("goat/persistence/AuthSessions/AuthSessionRepository") {}
 
@@ -151,6 +196,11 @@ const AuthSessionDbRow = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  principalKind: SessionPrincipalKind,
+  penMeshId: Schema.NullOr(Schema.String),
+  penNodeId: Schema.NullOr(Schema.String),
+  penSignPub: Schema.NullOr(Schema.String),
+  penNoisePub: Schema.NullOr(Schema.String),
 });
 
 const AuthSessionRawDbRow = Schema.Struct({
@@ -169,6 +219,11 @@ const AuthSessionRawDbRow = Schema.Struct({
   expiresAt: Schema.Unknown,
   lastConnectedAt: Schema.Unknown,
   revokedAt: Schema.Unknown,
+  principalKind: Schema.Unknown,
+  penMeshId: Schema.Unknown,
+  penNodeId: Schema.Unknown,
+  penSignPub: Schema.Unknown,
+  penNoisePub: Schema.Unknown,
 });
 
 const decodeAuthSessionDbRow = Schema.decodeUnknownEffect(AuthSessionDbRow);
@@ -192,6 +247,19 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
     expiresAt: row.expiresAt,
     lastConnectedAt: row.lastConnectedAt,
     revokedAt: row.revokedAt,
+    principalKind: row.principalKind,
+    penBinding:
+      row.penMeshId !== null &&
+      row.penNodeId !== null &&
+      row.penSignPub !== null &&
+      row.penNoisePub !== null
+        ? {
+            meshId: row.penMeshId,
+            nodeId: row.penNodeId,
+            signPub: row.penSignPub,
+            noisePub: row.penNoisePub,
+          }
+        : null,
   };
 }
 
@@ -233,7 +301,12 @@ export const make = Effect.gen(function* () {
           client_browser,
           issued_at,
           expires_at,
-          revoked_at
+          revoked_at,
+          principal_kind,
+          pen_mesh_id,
+          pen_node_id,
+          pen_sign_pub,
+          pen_noise_pub
         )
         VALUES (
           ${input.sessionId},
@@ -249,7 +322,12 @@ export const make = Effect.gen(function* () {
           ${input.client.browser},
           ${input.issuedAt},
           ${input.expiresAt},
-          NULL
+          NULL,
+          ${input.principalKind},
+          ${input.penBinding?.meshId ?? null},
+          ${input.penBinding?.nodeId ?? null},
+          ${input.penBinding?.signPub ?? null},
+          ${input.penBinding?.noisePub ?? null}
         )
         ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
       `,
@@ -277,7 +355,12 @@ export const make = Effect.gen(function* () {
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          principal_kind AS "principalKind",
+          pen_mesh_id AS "penMeshId",
+          pen_node_id AS "penNodeId",
+          pen_sign_pub AS "penSignPub",
+          pen_noise_pub AS "penNoisePub"
         FROM auth_sessions
         WHERE session_id = ${sessionId}
       `,
@@ -322,7 +405,12 @@ export const make = Effect.gen(function* () {
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          principal_kind AS "principalKind",
+          pen_mesh_id AS "penMeshId",
+          pen_node_id AS "penNodeId",
+          pen_sign_pub AS "penSignPub",
+          pen_noise_pub AS "penNoisePub"
         FROM auth_sessions
         WHERE revoked_at IS NULL
           AND (expires_at > ${now} OR ${sql.in("session_id", connectedSessionIds)})
@@ -378,6 +466,70 @@ export const make = Effect.gen(function* () {
         RETURNING session_id AS "sessionId"
       `,
   });
+
+  const penBoundRows = SqlSchema.findAll({
+    Request: PenBoundSessionsInput,
+    Result: PenBoundSession,
+    execute: ({ nodeId }) =>
+      sql`
+        SELECT
+          session_id AS "sessionId",
+          pen_node_id AS "nodeId",
+          pen_sign_pub AS "signPub",
+          pen_noise_pub AS "noisePub"
+        FROM auth_sessions
+        WHERE pen_node_id IS NOT NULL
+          AND revoked_at IS NULL
+          ${nodeId === undefined ? sql`` : sql`AND pen_node_id = ${nodeId}`}
+      `,
+  });
+
+  const penBoundCountRows = SqlSchema.findAll({
+    Request: Schema.Struct({ now: Schema.DateTimeUtcFromString, nodeId: Schema.String }),
+    Result: Schema.Struct({ member: Schema.Number, total: Schema.Number }),
+    execute: ({ now, nodeId }) =>
+      sql`
+        SELECT
+          COALESCE(SUM(CASE WHEN pen_node_id = ${nodeId} THEN 1 ELSE 0 END), 0) AS "member",
+          COUNT(*) AS "total"
+        FROM auth_sessions
+        WHERE pen_node_id IS NOT NULL
+          AND revoked_at IS NULL
+          AND expires_at > ${now}
+      `,
+  });
+
+  const deletePenBoundRows = SqlSchema.findAll({
+    Request: PenBoundSessionsInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ now }) =>
+      sql`
+        DELETE FROM auth_sessions
+        WHERE pen_node_id IS NOT NULL
+          AND (revoked_at IS NOT NULL OR expires_at <= ${now})
+        RETURNING session_id AS "sessionId"
+      `,
+  });
+
+  const penError = (operation: string) =>
+    toPersistenceSqlOrDecodeError(
+      `AuthSessionRepository.${operation}:query`,
+      `AuthSessionRepository.${operation}:decodeRows`,
+    );
+  const listPenBound: AuthSessionRepository["Service"]["listPenBound"] = (input) =>
+    penBoundRows(input).pipe(Effect.mapError(penError("listPenBound")));
+  const countActivePenBound: AuthSessionRepository["Service"]["countActivePenBound"] = (input) =>
+    penBoundCountRows(input).pipe(
+      Effect.mapError(penError("countActivePenBound")),
+      Effect.map((rows) => rows[0] ?? { member: 0, total: 0 }),
+    );
+  const deleteInactivePenBound: AuthSessionRepository["Service"]["deleteInactivePenBound"] = (
+    input,
+  ) =>
+    deletePenBoundRows(input).pipe(
+      Effect.mapError(penError("deleteInactivePenBound")),
+      Effect.map((rows) => rows.length),
+    );
 
   const create: AuthSessionRepository["Service"]["create"] = (input) =>
     createSessionRow(input).pipe(
@@ -524,6 +676,9 @@ export const make = Effect.gen(function* () {
     );
 
   return {
+    listPenBound,
+    countActivePenBound,
+    deleteInactivePenBound,
     create,
     createReplacingActive,
     createIfAbsent,

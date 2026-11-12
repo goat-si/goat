@@ -76,7 +76,6 @@ const fixture = vi.hoisted<{
   back: () => {},
   canGoBack: true,
 }));
-
 vi.mock("../../state/threads", async () => {
   const { Atom } = await import("effect/reactivity");
   fixture.raw = Atom.make<Snapshot>({
@@ -207,6 +206,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("../../components/ui/AppText", () => ({ AppText: TextHost, AppTextInput: InputHost }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../threads/HumanHandoffCard", () => ({ HumanHandoffCard: () => null }));
 vi.mock("../../components/ui/AppBar", () => ({
   AppBar: (props: { title: string; onBack: () => void }) => (
     <header>

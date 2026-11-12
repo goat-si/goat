@@ -388,6 +388,11 @@ export function resolveAppModelSelectionState(
     instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
     model: DEFAULT_TEXT_GENERATION_MODEL,
   };
+  if (
+    Object.hasOwn(settings.textGenerators, selection.instanceId) &&
+    settings.textGenerators[selection.instanceId]?.enabled === true
+  )
+    return selection;
   const supportedProviders = providers.filter(
     (provider) => provider.supportsTextGeneration !== false,
   );

@@ -8,6 +8,7 @@ import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type {
   BotRemoteWork,
   BotThreadRow,
+  ChannelBotArtifact,
   ChannelTaskId,
   EnvironmentId,
   ThreadId,
@@ -18,6 +19,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotAvatar } from "./GoatBotAvatar";
+import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
 import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotLibrary } from "./GoatBotLibrary";
@@ -47,6 +49,8 @@ export function GoatBotWorkPanel({
   onShowChat,
   peekRows,
   onRetryInput,
+  openFile = null,
+  onOpenFile,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
@@ -58,14 +62,29 @@ export function GoatBotWorkPanel({
   /** A task's conversation, for reading it here without leaving the bot's chat. */
   peekRows?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
   onRetryInput?: ((clientKey: string) => void) | undefined;
+  /** The Library file open in the chat, if any. */
+  openFile?: string | null | undefined;
+  /** Opens a Library file in place of the conversation. */
+  onOpenFile: (file: ChannelBotArtifact) => void;
 }) {
   const [tab, setTab] = useState<Tab>("Home");
   const [peek, setPeek] = useState<{
     readonly taskId: ChannelTaskId;
     readonly title: string;
   } | null>(null);
-  // Back returns focus to the row the peek opened from.
-  const [returnTo, setReturnTo] = useState<ChannelTaskId | null>(null);
+  // Where focus lands once Home shows again: the row Back returns to, or the Home tab when the
+  // peek held focus and closed because its task left the list. It applies once, so later tab
+  // switches keep focus.
+  const [focusTarget, setFocusTarget] = useState<ChannelTaskId | "home" | null>(null);
+  // A peek removed while focused fires no blur, so this still says it held focus as it closes.
+  const [peekHasFocus, setPeekHasFocus] = useState(false);
+  const focusOnce = (element: HTMLElement | null) => {
+    if (element === null) return;
+    // Only focus that the closed peek dropped moves; someone typing elsewhere keeps theirs.
+    const active = document.activeElement;
+    if (active === null || active === document.body) element.focus();
+    setFocusTarget(null);
+  };
   // Back also returns Home to where it was scrolled.
   const homeScroll = useRef(0);
   const restoreHome = (element: HTMLElement | null) => {
@@ -92,25 +111,38 @@ export function GoatBotWorkPanel({
         );
   // A task the list no longer has, once it has loaded, closes its peek.
   const peekGone = peek !== null && loaded && !failed && peeked === undefined;
-  if (peekGone) setPeek(null);
+  if (peekGone) {
+    setPeek(null);
+    setPeekHasFocus(false);
+    if (peekHasFocus) setFocusTarget("home");
+  }
   if (peek !== null && peekRows !== undefined && !peekGone) {
     return (
-      <GoatBotWorkPeek
-        taskId={peek.taskId}
-        title={peeked?.task.title ?? peek.title}
-        statusLabel={
-          peeked === undefined
-            ? ""
-            : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
-        }
-        rows={peekRows(peek.taskId)}
-        environmentId={environmentId}
-        onRetry={onRetryInput}
-        onBack={() => {
-          setReturnTo(peek.taskId);
-          setPeek(null);
+      <div
+        className="contents"
+        onFocus={() => setPeekHasFocus(true)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setPeekHasFocus(false);
         }}
-      />
+      >
+        <GoatBotWorkPeek
+          taskId={peek.taskId}
+          title={peeked?.task.title ?? peek.title}
+          statusLabel={
+            peeked === undefined
+              ? ""
+              : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
+          }
+          rows={peekRows(peek.taskId)}
+          environmentId={environmentId}
+          onRetry={onRetryInput}
+          onBack={() => {
+            setFocusTarget(peeked === undefined ? "home" : peek.taskId);
+            setPeekHasFocus(false);
+            setPeek(null);
+          }}
+        />
+      </div>
     );
   }
   return (
@@ -118,11 +150,17 @@ export function GoatBotWorkPanel({
       <header className="flex flex-col items-center gap-2 pt-16 pb-4 text-center">
         <GoatBotAvatar size="lg" emoji={avatar} />
         <h2 className="max-w-full truncate text-base font-semibold">{botName}</h2>
+        <GoatBotEditBotButton />
       </header>
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <TabsList aria-label={`${botName} work`} variant="plain" className="justify-center">
           {tabs.map((name) => (
-            <TabsTab key={name} value={name} variant="plain">
+            <TabsTab
+              key={name}
+              value={name}
+              variant="plain"
+              ref={name === "Home" && focusTarget === "home" ? focusOnce : undefined}
+            >
               {name}
             </TabsTab>
           ))}
@@ -185,7 +223,7 @@ export function GoatBotWorkPanel({
                             rows={rows}
                             remoteWork={remoteWork}
                             environmentId={environmentId}
-                            focusOnMount={row.task.taskId === returnTo}
+                            focusRef={row.task.taskId === focusTarget ? focusOnce : undefined}
                             onPeek={
                               peekRows === undefined
                                 ? undefined
@@ -217,13 +255,14 @@ export function GoatBotWorkPanel({
                 tasks={routines.data?.tasks ?? null}
                 error={routines.error}
                 onRetry={routines.refresh}
+                onDraft={onDraft}
               />
             </HomeSection>
           </div>
         </TabsPanel>
         <TabsPanel value="Library" className="mt-5 min-h-0 overflow-y-auto">
           <div className="space-y-6">
-            <GoatBotLibrary environmentId={environmentId} />
+            <GoatBotLibrary environmentId={environmentId} openPath={openFile} onOpen={onOpenFile} />
             <HomeSection title="Memory">
               <GoatBotMemory
                 environmentId={environmentId}
@@ -237,9 +276,6 @@ export function GoatBotWorkPanel({
     </div>
   );
 }
-
-/** A stable ref callback, so focus moves once when the element mounts. */
-const focusElement = (element: HTMLElement | null) => element?.focus();
 
 function HomeSection({
   title,
@@ -262,7 +298,7 @@ function TaskWorkRow({
   remoteWork,
   environmentId,
   onPeek,
-  focusOnMount = false,
+  focusRef,
 }: {
   row: Extract<BotThreadRow, { kind: "task" }>;
   rows: readonly BotThreadRow[];
@@ -270,7 +306,8 @@ function TaskWorkRow({
   environmentId: EnvironmentId;
   /** Opens the task's conversation in this panel; absent where it can only open in full. */
   onPeek?: (() => void) | undefined;
-  focusOnMount?: boolean;
+  /** Takes focus when Back returns to this row. */
+  focusRef?: ((element: HTMLElement | null) => void) | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const member = useGoatBotMember();
@@ -290,7 +327,7 @@ function TaskWorkRow({
       ) : (
         <button
           type="button"
-          ref={focusOnMount ? focusElement : undefined}
+          ref={focusRef}
           onClick={onPeek}
           className="block w-full rounded-md p-2 text-start hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >

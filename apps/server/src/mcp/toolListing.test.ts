@@ -7,7 +7,6 @@ import {
 } from "@goat/contracts/agentSurface/listing";
 import { canonicalToolName, listedToolName } from "@goat/contracts/agentSurface/resolve";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -20,6 +19,7 @@ import { advertisesMemoryTools } from "../sshRemote/remoteToolNames.ts";
 import { type ListedTool, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { filterToolsListBody, listingChanges } from "./toolListing.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const entries = Object.values(agentSurfaceRegistry);
 const base = {
@@ -101,7 +101,7 @@ it.effect(
       );
       // A client that keeps the full listing still learns which listing agents get.
       expect((yield* http.listResultMeta("client"))?.[AGENT_TOOL_LISTING_META_KEY]).toBe("core");
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect.each(["core", "full"] as const)(
@@ -145,7 +145,7 @@ it.effect.each(["core", "full"] as const)(
           ? ["goat_call", "goat_describe"]
           : listed((entry) => entry.requires !== "client" && entry.resource !== "device"),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect.each(["core", "full"] as const)(
@@ -159,7 +159,7 @@ it.effect.each(["core", "full"] as const)(
       const http = yield* serveCatalogOverHttp({ screen, thread: callers.thread }, setting);
       expect(names(yield* http.listTools("screen"))).toContain("goat_screen_run");
       expect(names(yield* http.listTools("thread"))).not.toContain("goat_screen_run");
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("lists a client by the header of each tools/list, within one session", () =>
@@ -172,7 +172,7 @@ it.effect("lists a client by the header of each tools/list, within one session",
     expect(names(yield* http.listTools("client"))).toEqual(["goat_call", "goat_describe"]);
     sent["x-goat-tool-listing"] = "";
     expect(names(yield* http.listTools("client"))).toEqual(full);
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect(
@@ -206,7 +206,7 @@ it.effect(
             `${asking} ${name}`,
           ).toBe(textOf(yield* http.callTool(plain, name, { goat_probe: 1 })));
         }
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect(
@@ -232,7 +232,7 @@ it.effect(
           expect(textOf(called), name).toContain(refusal);
         }
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect(
@@ -254,7 +254,7 @@ it.effect(
         expect(yield* refused("goat_provider_list", args), JSON.stringify(args)).not.toContain(
           "goat_call",
         );
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("lists every tool a caller can use in the full listing and hides the rest", () =>
@@ -278,7 +278,7 @@ it.effect("lists every tool a caller can use in the full listing and hides the r
           entry.requires !== "thread" && (entry.effect === "read" || entry.resource === "surface"),
       ),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("marks core tools to load up front in both listings, and no other tool", () =>
@@ -293,7 +293,7 @@ it.effect("marks core tools to load up front in both listings, and no other tool
         listed((entry) => "listing" in entry && entry.listing === "core"),
       );
     }
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("keeps the core listing a thread's model sees within its byte budget", () =>
@@ -305,7 +305,7 @@ it.effect("keeps the core listing a thread's model sees within its byte budget",
       inputSchema,
     }));
     expect(Buffer.byteLength(JSON.stringify(seen))).toBeLessThanOrEqual(CORE_LISTING_BUDGET_BYTES);
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("filters a tools/list whose method JSON spells with an escaped slash", () =>
@@ -317,7 +317,7 @@ it.effect("filters a tools/list whose method JSON spells with an escaped slash",
     expect(names(escaped)).toEqual(
       listed((entry) => "listing" in entry && entry.listing === "core"),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect("filters a tools/list answer sent as SSE, buffered or streamed", () =>
@@ -349,7 +349,7 @@ it.effect("filters a tools/list whose method JSON spells with unicode escapes", 
     expect(names(escaped)).toEqual(
       listed((entry) => "listing" in entry && entry.listing === "core"),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
 it.effect(

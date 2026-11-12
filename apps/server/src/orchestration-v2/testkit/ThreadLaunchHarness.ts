@@ -84,6 +84,8 @@ export const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  /** The database every layer shares; an in-memory one unless given. */
+  readonly databaseLayer?: typeof SqlitePersistence.layerMemory;
   readonly adapter?: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly prepared?: Deferred.Deferred<void>;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
@@ -112,7 +114,7 @@ interface HarnessOptions {
 }
 
 export function makeHarness(options: HarnessOptions = {}) {
-  const layerDatabase = SqlitePersistence.layerMemory;
+  const layerDatabase = options.databaseLayer ?? SqlitePersistence.layerMemory;
   const layerRegistry = ProviderAdapterRegistry.layerFromAdapters(
     options.adapters ?? [options.adapter ?? adapter],
   );

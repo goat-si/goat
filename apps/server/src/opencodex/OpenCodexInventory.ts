@@ -8,6 +8,7 @@ import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -199,7 +200,7 @@ const make = Effect.gen(function* () {
       const output = yield* runner.run({
         command: binary,
         args,
-        env: environment,
+        env: providerProbeEnvironment(environment),
         cwd,
         timeout: COMMAND_TIMEOUT,
         maxOutputBytes: MAX_BYTES,

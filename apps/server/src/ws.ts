@@ -10,14 +10,7 @@ import * as SettingsSessionPermit from "./auth/settingsSessionPermit.ts";
 import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
-import {
-  CHANNEL_GATEWAY_WS_METHODS,
-  ChannelGatewayError,
-  HubProxyRpcError,
-  MemoryRpcError,
-  OrchestrationDispatchCommandError,
-  SLACK_CHANNEL_WS_METHODS,
-} from "@goat/contracts";
+import { threadForkRpcHandlers } from "./orchestration-v2/goat/ThreadForkRpc.ts";
 import * as Crypto from "effect/Crypto";
 import * as Clock from "effect/Clock";
 import { installRelayClient } from "./cloud/installRelayClient.ts";
@@ -121,6 +114,12 @@ import {
   type PullRequestRef,
   type ScheduledTaskListResult,
   AutomationResumeError,
+  CHANNEL_GATEWAY_WS_METHODS,
+  ChannelGatewayError,
+  HubProxyRpcError,
+  MemoryRpcError,
+  OrchestrationDispatchCommandError,
+  SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1902,7 +1901,6 @@ export const layerWsRpc = (
         threadManagement,
         latestSequence: applicationEvents.latestApplicationSequence,
       });
-
       const subscribeOrchestrationV2ArchivedShell = Effect.fn(
         "ws.orchestrationV2.subscribeArchivedShell",
       )(function* () {
@@ -1938,7 +1936,6 @@ export const layerWsRpc = (
           );
         return Stream.concat(rpcInitialItems([{ kind: "snapshot" as const, snapshot }]), live);
       });
-
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
@@ -2178,6 +2175,7 @@ export const layerWsRpc = (
                 ),
             ),
           ),
+        ...(yield* threadForkRpcHandlers(startup)),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": input.commandId,
@@ -2496,6 +2494,8 @@ export const layerWsRpc = (
         [WS_METHODS.serverRefreshProviders]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {
+            if (input.modelCatalogOnly === true)
+              return yield* providerRegistry.refreshModelCatalog.pipe(Effect.as({ providers: [] }));
             if (input.refreshModels) {
               yield* providerRegistry.invalidateModelCaches({
                 instanceId: input.instanceId,
@@ -3634,7 +3634,7 @@ export const layer = Layer.unwrap(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
             Effect.provide(
               Layer.merge(
-                RpcAuthorization.layer(session.scopes, (method, payload) => {
+                HubRpcSocket.rpcAuthorization(session, sessions, (method, payload) => {
                   // Anonymous feature and variant signal for the connecting surface.
                   const usage = featureUsage(method, payload);
                   return usage === undefined

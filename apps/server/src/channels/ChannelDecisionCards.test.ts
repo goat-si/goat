@@ -165,9 +165,9 @@ describe("decision cards", () => {
       const card = resultsTo(harness.slackSent, "question")[0];
       assert.strictEqual(
         card?.message.text,
-        "deploy staging: the agent wants to run a command.\n1. Deny A1\n2. Approve A1",
+        "deploy staging: the agent wants to run a command.\n1. Approve A1\n2. Deny A1",
       );
-      assert.deepStrictEqual(card?.message.options, ["Deny A1", "Approve A1"]);
+      assert.deepStrictEqual(card?.message.options, ["Approve A1", "Deny A1"]);
 
       // Out of range is an ordinary message. The approval stays unanswered.
       yield* gateway.ingest(slackInput("9", "Ev9"), slackContext);
@@ -206,12 +206,11 @@ describe("decision cards", () => {
       const card = imessageSent.find((message) => message.kind === "question");
       assert.strictEqual(
         card?.text,
-        "ship the build: the agent wants to run a command.\n1. Deny A1\n2. Approve A1",
+        "ship the build: the agent wants to run a command.\n1. Approve A1\n2. Deny A1",
       );
       assert.isUndefined(card?.options);
 
-      // Deny is listed first, so "1" declines.
-      yield* gateway.ingest(imessageInput("1", "row-2"), imessageContext);
+      yield* gateway.ingest(imessageInput("2", "row-2"), imessageContext);
       yield* runtime.drain;
       const [answered] = responses(harness);
       assert.strictEqual(answered?.decision, "decline");

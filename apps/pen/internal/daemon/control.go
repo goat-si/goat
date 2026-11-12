@@ -31,6 +31,9 @@ type Request struct {
 	On      bool          `json:"on,omitempty"`
 	// Relays is the new relay list of op "relays".
 	Relays []string `json:"relays,omitempty"`
+	// Port and Key are a service.register's loopback port and base64url key.
+	Port int    `json:"port,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
 
 // LsMember is a member as ls reports it.
@@ -65,6 +68,8 @@ type LsReply struct {
 	// mesh's records, against the caps.
 	SaveError string `json:"saveError,omitempty"`
 	Records   int    `json:"records"`
+	// HostKeysError names sshd public key files that exist but could not be read, and the fix.
+	HostKeysError string `json:"hostKeysError,omitempty"`
 	// StateDir is this machine's state folder, filled in by the command line for its advice.
 	StateDir string `json:"-"`
 }
@@ -113,28 +118,60 @@ func (d *Daemon) listenControl() (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("control socket: %w", err)
 	}
-	if err := os.Chmod(p, 0o600); err != nil {
+	if err := state.RestrictFile(p); err != nil {
 		ln.Close()
 		return nil, err
 	}
 	return ln, nil
 }
 
+// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations)
+// included; controlRequestTimeout bounds the wait for a connection's request line, and controlWriteTimeout
+// each write to a client, so one that stops reading frees its slot (variables for tests).
+var (
+	controlConnCap        = 512
+	controlRequestTimeout = 10 * time.Second
+	controlWriteTimeout   = 5 * time.Second
+)
+
+// boundedConn gives every write its own deadline.
+type boundedConn struct{ net.Conn }
+
+func (b boundedConn) Write(p []byte) (int, error) {
+	if err := b.Conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout)); err != nil {
+		return 0, err
+	}
+	return b.Conn.Write(p)
+}
+
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
+	slots := make(chan struct{}, controlConnCap)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		d.spawn(func() { d.handleControl(ctx, c) })
+		select {
+		case slots <- struct{}{}:
+		default:
+			c.Close()
+			continue
+		}
+		d.spawn(func() {
+			defer func() { <-slots }()
+			d.handleControl(ctx, boundedConn{c})
+		})
 	}
 }
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	defer c.Close()
 	r := bufio.NewReader(io.LimitReader(c, 64<<10))
+	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
+		return
+	}
 	line, err := r.ReadBytes('\n')
-	if err != nil {
+	if err != nil || c.SetReadDeadline(time.Time{}) != nil {
 		return
 	}
 	var req Request
@@ -148,6 +185,13 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	switch req.Op {
 	case "watch":
 		d.controlWatch(ctx, c)
+		return
+	// These two run on the control socket only: the dashboard reaches do, never handleControl.
+	case "service.register":
+		d.controlRegister(ctx, c, req, reply, fail)
+		return
+	case "watch.snapshot":
+		d.controlSnapshot(ctx, c, fail)
 		return
 	case "invite":
 		if req.Wait {
@@ -185,8 +229,14 @@ func (d *Daemon) do(ctx context.Context, req Request) (any, error) {
 		}
 		return map[string]any{"results": res}, nil
 	case "leave":
+		// A leave runs to its end even when its client stops waiting (pen leave says it is still in
+		// progress, and a later pen leave finishes the cleanup), so a second one only says so.
+		if !d.leaving.CompareAndSwap(false, true) {
+			return nil, errors.New("this node is already leaving its mesh; run pen leave again once that has finished")
+		}
 		res, err := d.leave(ctx)
 		if err != nil {
+			d.leaving.Store(false)
 			return nil, err
 		}
 		return map[string]any{"results": res}, nil
@@ -289,6 +339,7 @@ func (d *Daemon) ls() LsReply {
 	if d.saveErr != nil {
 		out.SaveError = d.saveErr.Error()
 	}
+	out.HostKeysError = d.hostKeysErr
 	d.mu.Unlock()
 	for _, f := range d.forgets.refusedList() {
 		u := Unforgotten{NodeID: f.NodeID, LoginURL: f.LoginURL}
@@ -328,6 +379,8 @@ type InviteReply struct {
 	ExpiresAt int64  `json:"expiresAt"`
 	// Command installs pen on the new machine and joins (from the download relay).
 	Command string `json:"command"`
+	// WindowsCommand does the same from PowerShell on Windows.
+	WindowsCommand string `json:"windowsCommand"`
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
@@ -341,7 +394,8 @@ func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
 	}
 	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
 	s := tok.String()
-	return InviteReply{Token: s, Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt, Command: InstallCommand(d.downloadRelay(), s)}, inv.ID, nil
+	return InviteReply{Token: s, Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt, Command: InstallCommand(d.downloadRelay(), s),
+		WindowsCommand: InstallCommandWindows(d.downloadRelay(), s)}, inv.ID, nil
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
@@ -463,6 +517,9 @@ func (cl *Client) Next(v any) error {
 // Close hangs up.
 func (cl *Client) Close() error { return cl.c.Close() }
 
+// SetDeadline bounds the requests and replies still to come on this connection.
+func (cl *Client) SetDeadline(t time.Time) error { return cl.c.SetDeadline(t) }
+
 // WatchRevoked follows the daemon's view and sends the first of nodeIDs to be revoked.
 // Without a running daemon it returns a nil channel (which never fires); stop ends the watch.
 func WatchRevoked(st *state.Store, nodeIDs ...string) (revoked <-chan string, stop func()) {
@@ -504,3 +561,43 @@ func Call(st *state.Store, req Request, v any) error {
 	}
 	return cl.Next(v)
 }
+
+// CallWithin is Call that waits at most d for the answer once the request is sent (and dialTimeout
+// to connect): a daemon that takes the connection but never answers cannot hold the caller. The
+// request itself always goes out, so the daemon may still act on it after the caller gave up.
+func CallWithin(st *state.Store, req Request, v any, d time.Duration) error {
+	c, err := (&net.Dialer{Timeout: dialTimeout}).Dial("unix", SocketPath(st))
+	if err != nil {
+		return ErrNotRunning
+	}
+	cl := &Client{c: c, dec: json.NewDecoder(c)}
+	defer cl.Close()
+	if err := c.SetWriteDeadline(time.Now().Add(sendTimeout)); err != nil {
+		return err
+	}
+	// The daemon acts only on a whole request line, ending in its newline. A write that failed before
+	// the last byte left it no such line (ErrNotSent: nothing changed); one that failed after it may
+	// have delivered the line, so it counts as sent and the answer is awaited as usual.
+	line, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	if n, err := c.Write(line); err != nil && n < len(line) {
+		return fmt.Errorf("%w: %w", ErrNotSent, err)
+	}
+	if err := c.SetDeadline(time.Now().Add(d)); err != nil {
+		return err
+	}
+	return cl.Next(v)
+}
+
+// dialTimeout bounds connecting to the control socket and writing a request to it.
+const dialTimeout = 2 * time.Second
+
+// sendTimeout bounds writing a request (a variable for tests).
+var sendTimeout = dialTimeout
+
+// ErrNotSent wraps a CallWithin failure that came before the request was fully written: the daemon
+// did not get it.
+var ErrNotSent = errors.New("the request did not reach the daemon")

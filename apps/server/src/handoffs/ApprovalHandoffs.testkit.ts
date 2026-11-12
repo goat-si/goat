@@ -97,6 +97,7 @@ export const withApprovals = <A, E, R>(
       const session: AuthClientSession = {
         sessionId: person,
         subject: "browser",
+        principalKind: "person",
         method: "browser-session-cookie",
         scopes: ["orchestration:operate", "settings:write", "environment:maintain"],
         client: { label: "Laptop", deviceType: "unknown" },

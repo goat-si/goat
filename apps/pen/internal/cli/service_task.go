@@ -1,0 +1,466 @@
+package cli
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"os/user"
+	"runtime/debug"
+	"strings"
+	"time"
+	"unicode/utf16"
+	"unicode/utf8"
+
+	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/state"
+)
+
+// On Windows the service is a Task Scheduler task that starts "pen up --supervise" at the user's logon,
+// with the user's interactive token: registering one needs no admin rights, and it runs only while the
+// user is signed in. The task's restart-on-failure covers launch failures only, not a non-zero exit, so
+// the supervisor restarts a daemon that crashed.
+
+// currentAccount is the signed-in account, MACHINE\name or DOMAIN\name (a seam for tests).
+var currentAccount = func() (string, error) {
+	u, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	return u.Username, nil
+}
+
+// taskName is "pen-<short name>-<hash>": task names are machine-wide, and the hash of the full account
+// keeps two accounts with the same short name apart.
+func taskName(account string) string {
+	var b strings.Builder
+	dash := false
+	for _, c := range strings.ToLower(account[strings.LastIndex(account, `\`)+1:]) {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-' {
+			b.WriteRune(c)
+			dash = false
+		} else if !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(account)))
+	return "pen-" + b.String() + "-" + hex.EncodeToString(sum[:4])
+}
+
+func accountTaskName() (string, error) {
+	account, err := currentAccount()
+	if err != nil {
+		return "", err
+	}
+	return taskName(account), nil
+}
+
+// renderTask fills the task definition. Task Scheduler expands %VAR% in the action's path with no
+// escape, so a path with % (or control characters, or bytes that are not UTF-8) is refused, as the
+// systemd unit refuses $.
+func renderTask(exe, account string) (string, error) {
+	if !utf8.ValidString(exe) || strings.ContainsFunc(exe, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '%' }) {
+		return "", fmt.Errorf("cannot write a task that starts %q exactly (%%, control characters or bytes that are not UTF-8); install pen under a path without them", exe)
+	}
+	esc := func(s string) string {
+		var b bytes.Buffer
+		xml.EscapeText(&b, []byte(s))
+		return b.String()
+	}
+	return strings.NewReplacer("__PEN__", esc(exe), "__USER__", esc(account)).Replace(TaskXML), nil
+}
+
+// utf16File is s as UTF-16LE with a byte order mark: schtasks /XML refuses UTF-8 ("cannot switch encoding").
+func utf16File(s string) []byte {
+	u := utf16.Encode([]rune(s))
+	b := make([]byte, 2+2*len(u))
+	b[0], b[1] = 0xff, 0xfe
+	for i, v := range u {
+		binary.LittleEndian.PutUint16(b[2+2*i:], v)
+	}
+	return b
+}
+
+// startTask registers (or replaces) the logon task and starts it now.
+func startTask(st *state.Store) error {
+	release, err := taskTurn(st, "pen up", io.Discard)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return startTaskInTurn(st)
+}
+
+// startTaskInTurn is startTask for a caller that holds the task turn (pen up).
+func startTaskInTurn(st *state.Store) error {
+	account, err := currentAccount()
+	if err != nil {
+		return err
+	}
+	exe, err := exePath()
+	if err != nil {
+		return err
+	}
+	name := taskName(account)
+	path := st.Path(".pen-task.xml")
+	def, err := renderTask(exe, account)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, utf16File(def), 0o600); err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	if err := run("schtasks", "/Create", "/TN", name, "/XML", path, "/F"); err != nil {
+		return err
+	}
+	if err := os.Remove(st.Path(downMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(st.Path(refusedRecord)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// The supervisor this start runs reads the request id before it checks the configuration, and a
+	// refusal counts only with this id: one from an earlier start, written late, is not this start's.
+	var id [8]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return err
+	}
+	req := hex.EncodeToString(id[:])
+	if err := st.WriteAtomic(startRequest, []byte(req), 0o600); err != nil {
+		return err
+	}
+	// A supervisor that pen down just ended can still count as running for Task Scheduler, which then
+	// drops this /Run (IgnoreNew); another /Run is harmless, since a second supervisor would find the
+	// lock held and exit, so repeat it until the daemon answers. A start the supervisor or its daemon
+	// refused ends the wait with the reason.
+	deadline := taskNow().Add(readyTimeout)
+	for {
+		if err := run("schtasks", "/Run", "/TN", name); err != nil {
+			return err
+		}
+		up, refusal := started(st, runRetry, req)
+		if up {
+			return nil
+		}
+		if refusal != "" {
+			return fmt.Errorf("the pen task %s refused to start: %s", name, strings.TrimPrefix(refusal, "pen: "))
+		}
+		if taskNow().After(deadline) {
+			return fmt.Errorf("the pen task %s did not start the daemon within %v", name, readyTimeout)
+		}
+	}
+}
+
+// runRetry is how long pen up waits for the daemon before it repeats schtasks /Run (a seam for tests).
+var runRetry = 2 * time.Second
+
+// taskNow and taskSleep are pen up's clock while it waits for the task (seams for tests).
+var taskNow, taskSleep = time.Now, time.Sleep
+
+// startRequest holds the id of the latest start pen up asked the task for.
+const startRequest = "start-request"
+
+// startLockWaits is called when pen up, pen down or pen leave waits for another one's task turn (a
+// seam for tests).
+var startLockWaits func()
+
+// startLock is the task turn (taskTurn).
+const startLock = "start.lock"
+
+// Only the default state folder can install a service.
+func taskTurnApplies() bool {
+	return os.Getenv("PEN_HOME") == "" && (serviceOS == "windows" || serviceOS == "linux" || serviceOS == "darwin")
+}
+
+// taskTurn takes start.lock: pen up holds it until the service start is decided, and pen down and pen
+// leave from before they look for a service or daemon until stopping or removing it. Whichever runs
+// last decides whether Pen runs, and none reports a
+// state another undoes: a supervisor reads one start request, and a stop cannot slip between a start's
+// registration and its removal of the down record. It is its own lock: the state lock must stay free
+// for the daemon being started.
+//
+// Every step taken while holding it is bounded (probeTimeout, commandTimeout, readyTimeout, downWait,
+// opTimeout), so a start holds it at most about 1 min, a pen down 1.5 min and a pen leave 3 min. A
+// command that waits longer than turnWait for it fails and names the holder.
+func taskTurn(st *state.Store, who string, w io.Writer) (func(), error) {
+	path := st.Path(startLock)
+	release, err := state.TryLock(path)
+	if errors.Is(err, state.ErrLocked) {
+		fmt.Fprintf(w, "pen: waiting for %s, which holds %s\n", turnHolderName(st), path)
+		if startLockWaits != nil {
+			startLockWaits()
+		}
+		deadline := taskNow().Add(turnWait)
+		for errors.Is(err, state.ErrLocked) && taskNow().Before(deadline) {
+			taskSleep(100 * time.Millisecond)
+			release, err = state.TryLock(path)
+		}
+		if errors.Is(err, state.ErrLocked) {
+			return nil, fmt.Errorf("%s waited %v for %s, which holds %s; try again once it has finished", who, turnWait, turnHolderName(st), path)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Only names the holder in the message above; removed at release, so a failed write names nobody.
+	st.WriteAtomic(turnHolder, []byte(fmt.Sprintf("%s (pid %d)\n", who, os.Getpid())), 0o600)
+	return func() {
+		os.Remove(st.Path(turnHolder))
+		release()
+	}, nil
+}
+
+// turnWait bounds the wait for the task turn: longer than any holder keeps it.
+var turnWait = 3*time.Minute + 10*time.Second
+
+// turnHolder names the command holding the task turn.
+const turnHolder = "start.holder"
+
+// turnHolderName is the command holding the task turn, as start.holder names it.
+func turnHolderName(st *state.Store) string {
+	b, _ := os.ReadFile(st.Path(turnHolder))
+	if h := strings.TrimSpace(string(b)); h != "" {
+		return h
+	}
+	return "another pen command"
+}
+
+// startRequestOf is the start the supervisor was run for: the id pen up wrote last ("" for none).
+func startRequestOf(st *state.Store) string {
+	b, _ := os.ReadFile(st.Path(startRequest))
+	return strings.TrimSpace(string(b))
+}
+
+// started waits up to d for the daemon to answer on the control socket (up) or for the task to record
+// that it refused start req (the reason).
+func started(st *state.Store, d time.Duration, req string) (up bool, refusal string) {
+	deadline := taskNow().Add(d)
+	for {
+		var s daemon.Status
+		if daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout) == nil {
+			return true, ""
+		}
+		if b, err := os.ReadFile(st.Path(refusedRecord)); err == nil {
+			if id, reason, ok := strings.Cut(string(b), "\n"); ok && id == req && reason != "" {
+				return false, strings.TrimSpace(reason)
+			}
+		}
+		if !taskNow().Before(deadline) {
+			return false, ""
+		}
+		taskSleep(100 * time.Millisecond)
+	}
+}
+
+// downMarker records pen down: a supervisor checks it before each start of the daemon and ends instead,
+// so nothing starts Pen again, at a sign-in either, until pen up removes it.
+const downMarker = "down"
+
+// supervisorLock is held by the running supervisor; pen down waits for it to come free.
+const supervisorLock = "supervisor.lock"
+
+// supervisorWait bounds how long pen down waits for the supervisor to end (a seam for tests).
+var supervisorWait = downWait
+
+// stopTask records pen down, stops the daemon through its control socket and waits until the
+// supervisor has ended; schtasks /End is the fallback for one that does not. A daemon a supervisor
+// started just before it saw the record is stopped last. The task stays registered.
+func stopTask(st *state.Store) error {
+	release, err := taskTurn(st, "pen down", io.Discard)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return stopTaskInTurn(st)
+}
+
+// stopTaskInTurn is stopTask for a caller that holds the task turn.
+func stopTaskInTurn(st *state.Store) error {
+	if err := st.WriteAtomic(downMarker, nil, 0o600); err != nil {
+		return err
+	}
+	stopDaemon(st)
+	if !supervisorGone(st, supervisorWait) {
+		name, err := accountTaskName()
+		if err != nil {
+			return err
+		}
+		endErr := run("schtasks", "/End", "/TN", name)
+		if !supervisorGone(st, 0) {
+			if endErr != nil {
+				return fmt.Errorf("the pen task %s did not stop: %w", name, endErr)
+			}
+			return fmt.Errorf("the pen task %s did not stop", name)
+		}
+	}
+	if !stopDaemon(st) {
+		return errors.New("the pen daemon did not stop")
+	}
+	return nil
+}
+
+// stopDaemon asks a running daemon to stop and reports whether none runs afterwards: daemon.lock, which a
+// daemon holds while it runs, must come free.
+func stopDaemon(st *state.Store) bool {
+	var s daemon.Status
+	if daemon.CallWithin(st, daemon.Request{Op: "status"}, &s, probeTimeout) == nil {
+		// A daemon that is already shutting down (pen leave) may close the socket before it answers.
+		daemon.CallWithin(st, daemon.Request{Op: "stop"}, &map[string]bool{}, probeTimeout)
+		waitExit(s.PID, downWait)
+	}
+	return lockFree(st.Path("daemon.lock"), downWait)
+}
+
+// supervisorGone reports whether no supervisor holds its lock, waiting up to d for it to end.
+func supervisorGone(st *state.Store, d time.Duration) bool {
+	return lockFree(st.Path(supervisorLock), d)
+}
+
+// lockFree reports whether nobody holds the lock at path, waiting up to d for it to come free.
+func lockFree(path string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		release, err := state.TryLock(path)
+		if err == nil {
+			release()
+			return true
+		}
+		if !errors.Is(err, state.ErrLocked) || !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func removeTask(st *state.Store) error {
+	release, err := taskTurn(st, "pen leave", io.Discard)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return removeTaskInTurn(st)
+}
+
+// removeTaskInTurn is removeTask for a caller that holds the task turn.
+func removeTaskInTurn(st *state.Store) error {
+	if err := stopTaskInTurn(st); err != nil {
+		return err
+	}
+	name, err := accountTaskName()
+	if err != nil {
+		return err
+	}
+	return run("schtasks", "/Delete", "/TN", name, "/F")
+}
+
+// runSupervised is "pen up --supervise", the task's action: it drops the console window the task gave
+// it, runs the daemon as a windowless child that logs to daemon.log, and starts it again after a crash.
+func runSupervised(st *state.Store, stderr io.Writer, req string) int {
+	logf, err := os.OpenFile(st.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	defer logf.Close()
+	detachConsole()
+	debug.SetCrashOutput(logf, debug.CrashOptions{})
+	logger := log.New(logf, "", log.LstdFlags)
+	release, err := state.TryLock(st.Path(supervisorLock))
+	if errors.Is(err, state.ErrLocked) {
+		logger.Print("pen supervisor: another one is running")
+		return 0
+	}
+	if err != nil {
+		logger.Printf("pen supervisor: %v", err)
+		return 1
+	}
+	defer release()
+	if err := killChildrenWithMe(); err != nil {
+		logger.Printf("pen supervisor: %v", err)
+		return 1
+	}
+	stopRequested := func() bool {
+		_, err := os.Stat(st.Path(downMarker))
+		return err == nil
+	}
+	exe, err := exePath()
+	if err != nil {
+		logger.Print(err)
+		return 1
+	}
+	return superviseLoop(func() int {
+		// --service: a daemon that refuses its start exits 0 and ends this loop instead of restarting.
+		cmd := exec.Command(exe, "up", "--foreground", "--service")
+		cmd.Env = append(os.Environ(), "PEN_START_REQUEST="+req)
+		cmd.Stdout, cmd.Stderr = logf, logf
+		hideWindow(cmd)
+		err := cmd.Run()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return exit.ExitCode()
+		}
+		if err != nil {
+			logger.Printf("pen supervisor: %v", err)
+			return -1
+		}
+		return 0
+	}, stopRequested, superviseWait, time.Now, logger.Printf)
+}
+
+const restartFirst, restartMax = 2 * time.Second, time.Minute
+
+// superviseWait is the supervisor's wait before a restart (a seam for tests).
+var superviseWait = time.Sleep
+
+// refusedRecord holds the start request id and, on the next line, the reason the Windows task refused
+// to start Pen, for pen up to report.
+const refusedRecord = "start-refused"
+
+// noteRefused leaves the reason for a refused service start where it can be read: on stderr (daemon.log
+// for the daemon the supervisor runs), in daemon.log for the supervisor itself, whose console nobody
+// sees, and for the Windows task in refusedRecord, which pen up reports.
+func noteRefused(st *state.Store, req string, supervise bool, err error, stderr io.Writer) {
+	msg := "pen: " + err.Error() + "\n"
+	io.WriteString(stderr, msg)
+	if supervise {
+		if logf, err := os.OpenFile(st.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			log.New(logf, "", log.LstdFlags).Print("pen supervisor: " + msg)
+			logf.Close()
+		}
+	}
+	if supervise || serviceOS == "windows" {
+		st.WriteAtomic(refusedRecord, []byte(req+"\n"+msg), 0o600) // best effort: the reason is in daemon.log too
+	}
+}
+
+// superviseLoop runs the daemon until it exits 0 (pen down, pen leave, the left marker) or pen down is
+// recorded (stopRequested, checked before every start). After any other exit it waits 2 s, doubling up
+// to 1 min while the daemon keeps failing fast, as systemd's Restart=on-failure and launchd's KeepAlive do.
+func superviseLoop(run func() int, stopRequested func() bool, wait func(time.Duration), now func() time.Time, logf func(string, ...any)) int {
+	backoff := restartFirst
+	for {
+		if stopRequested() {
+			return 0
+		}
+		began := now()
+		code := run()
+		if code == 0 {
+			return 0
+		}
+		if now().Sub(began) >= restartMax {
+			backoff = restartFirst
+		}
+		logf("pen daemon exited with status %d; starting it again in %v", code, backoff)
+		wait(backoff)
+		backoff = min(2*backoff, restartMax)
+	}
+}

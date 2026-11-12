@@ -332,6 +332,9 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	// inviter that is no longer a member keeps the invite unused.
 	errBurn := errors.New("burn")
 	admit, err := a.Store.AppendAsMember(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card}, func(*View) error {
+		if a.Store.burnGate != nil {
+			a.Store.burnGate()
+		}
 		if err := a.Invites.Burn(a.InviteID, now); err != nil {
 			return errBurn
 		}

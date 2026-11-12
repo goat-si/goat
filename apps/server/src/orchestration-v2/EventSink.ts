@@ -32,6 +32,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as EventSinkBatch from "./EventSinkBatch.ts";
 import { stampComputerUseStop } from "./goat/StampComputerUseStop.ts";
+import type { CommitGuardRefused } from "./goat/CommitGuard.ts";
 import { replayAndBufferProjectedLiveEvents } from "./LiveStreamBudget.ts";
 import type { UnsequencedProjectEvent } from "../persistence/OrchestrationEventStore.ts";
 import { projectStoredEventForWire } from "./WireProjection.ts";
@@ -176,6 +177,10 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     >;
     /** Like writeWithEffects' updateDelegatedCompletionOnly, for this run's run.updated only. */
     readonly updateDelegatedCompletionOnlyRunId?: RunId;
+    /** Runs in the commit's transaction after projections apply; never on a receipt replay. */
+    readonly guard?: (
+      storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>,
+    ) => Effect.Effect<void, CommitGuardRefused>;
   }) => Effect.Effect<
     {
       readonly receipt: CommandReceiptStore.CommandReceiptV2;
@@ -781,6 +786,7 @@ const layerBase: Layer.Layer<
             );
           }
           const outcomes = yield* applyStoredEvents(storedEvents);
+          if (input.guard !== undefined) yield* input.guard(storedEvents);
           yield* effectOutbox.enqueue(yield* stampComputerUseStop(input.effects, eventStore));
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,
