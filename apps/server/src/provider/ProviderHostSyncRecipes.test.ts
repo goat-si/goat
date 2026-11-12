@@ -6,6 +6,7 @@ import {
   installMethod,
   parseDeviceLogin,
   relayableBrowserUrl,
+  trustedLogin,
   versionCore,
 } from "./ProviderHostSyncRecipes.ts";
 
@@ -165,10 +166,30 @@ describe("pinned prerelease versions", () => {
     expect(versionCore("version 1.2.3.")).toBe("1.2.3");
     // An identifier longer than a pin can name is no version GOAT can match.
     expect(versionCore("1.2.3-" + "a".repeat(25))).toBeNull();
+    expect(versionCore("pi 1.2.3-beta-")).toBe("1.2.3-beta-");
+    // A version starts where a token starts, never inside a longer one.
+    expect(versionCore("1234567.2.3")).toBeNull();
+    expect(versionCore("1.2.3-beta.1.2.3.4.5")).toBeNull();
     expect(installCommand("opencode", "linux", "1.2.3-beta-2")?.args).toEqual([
       "install",
       "-g",
       "opencode-ai@1.2.3-beta-2",
     ]);
+  });
+});
+
+describe("trustedLogin", () => {
+  it("regression F8-2: relays a remote device login as the vendor page alone", () => {
+    expect(
+      trustedLogin("codex", "box", {
+        type: "device_code",
+        url: "https://auth.openai.com/device?token=example-secret#do-this",
+        userCode: "ABCD-12345",
+      }),
+    ).toEqual({
+      type: "device_code",
+      url: "https://auth.openai.com/device",
+      userCode: "ABCD-12345",
+    });
   });
 });

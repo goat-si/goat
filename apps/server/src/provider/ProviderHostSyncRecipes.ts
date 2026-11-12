@@ -138,7 +138,7 @@ export function describeInstallFailure(exitCode: number | null, output: string):
 export function versionCore(version: string): string | null {
   return (
     // A whole version or none: an identifier that runs on past a pin's bounds is not cut short.
-    /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?(?![0-9A-Za-z-]|\.[0-9A-Za-z])/u.exec(
+    /(?<![0-9A-Za-z.-])\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?(?![0-9A-Za-z-]|\.[0-9A-Za-z])/u.exec(
       version,
     )?.[0] ?? null
   );
@@ -301,7 +301,10 @@ export function trustedLogin(
   if (login.type === "device_code") {
     const url = safeUrl(login.url);
     const vendor = url !== null && (recipe.deviceLogin?.hosts ?? []).includes(url.hostname);
-    return vendor && /^[A-Z0-9]{4,5}-[A-Z0-9]{4,6}$/u.test(login.userCode) ? login : terminal;
+    // The page alone: a remote's query or fragment never rides along.
+    return url !== null && vendor && /^[A-Z0-9]{4,5}-[A-Z0-9]{4,6}$/u.test(login.userCode)
+      ? { type: "device_code", url: url.origin + url.pathname, userCode: login.userCode }
+      : terminal;
   }
   if (login.type === "browser")
     return relayableBrowserUrl(driver, login.url, false) === null ? terminal : login;

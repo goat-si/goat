@@ -1566,6 +1566,9 @@ const make = Effect.gen(function* () {
           error instanceof SshRemoteDispatchError &&
           forwardLaunchedBy &&
           (error.reason === "remote_refused" || error.reason === "ssh_failed") &&
+          // An older remote answers in plain text; a structured refusal is its own answer.
+          error.remoteCode === undefined &&
+          error.remoteClassification === undefined &&
           error.message.includes("goat_thread_launch does not take launchedBy, so nothing ran")
             ? Effect.gen(function* () {
                 const retryAdmission = yield* launchAdmission();

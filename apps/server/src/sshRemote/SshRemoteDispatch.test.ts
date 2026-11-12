@@ -1934,6 +1934,29 @@ it.effect(
         }),
     ),
 );
+it.effect(
+  "regression F8-1: a structured refusal quoting the old-remote phrase launches only once",
+  () =>
+    Effect.gen(function* () {
+      let lists = 0;
+      const result = yield* launchAgainst({
+        declaresLaunchedBy: true,
+        launchRefusal: {
+          _tag: "OrchestratorMcpFailure",
+          code: "provider_unavailable",
+          classification: "provider_cli_missing",
+          mayHaveStarted: true,
+          message: "goat_thread_launch does not take launchedBy, so nothing ran",
+        },
+        onList: () => {
+          lists += 1;
+        },
+      }).pipe(Effect.result);
+      // A retry lists the remote's tools again before its second launch.
+      expect(lists).toBe(1);
+      expect(result._tag).toBe("Failure");
+    }),
+);
 it.effect("regression F2R-1: a missing-CLI refusal that may have started stays unknown", () =>
   withLaunchRemote(
     {

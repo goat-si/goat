@@ -315,6 +315,8 @@ describe("parseGenericCliVersion", () => {
     expect(parseGenericCliVersion("opencode v2.0.3-rc.2 (linux)")).toBe("2.0.3-rc.2");
     // SemVer prerelease identifiers may contain hyphens.
     expect(parseGenericCliVersion("opencode 1.2.3-beta-test.1")).toBe("1.2.3-beta-test.1");
+    expect(parseGenericCliVersion("pi 1.2.3-beta-")).toBe("1.2.3-beta-");
+    expect(parseGenericCliVersion("version 1.2.3.")).toBe("1.2.3");
   });
 
   it("parses a version embedded in other output", () => {
