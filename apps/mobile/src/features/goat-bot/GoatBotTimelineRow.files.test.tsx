@@ -635,7 +635,8 @@ it("names the file's kind to a screen reader", async () => {
   expect(labels).toEqual([
     "Open report.md, Markdown file",
     "Open chart.png, Image",
-    "Open data.csv, File",
+    // Named from the file's name before its preview is read, as its read would name it.
+    "Open data.csv, Text file",
   ]);
 });
 
@@ -833,4 +834,16 @@ it("remembers a preview with nothing to show for the file's version, and asks ag
   await view.rerender(chat(rows));
   await settle();
   expect(asked("broken.png")).toHaveLength(2);
+});
+it("a zip, a pdf and a code file get cards that read nothing, the code file named as text, while a text file still previews", async () => {
+  setup();
+  files.listing = listed("q3.zip", "deck.pdf", "deploy.yaml", "notes.txt");
+  await show([bot("b1", "`q3.zip`, `deck.pdf`, `deploy.yaml` and `notes.txt`")]);
+  await answerNext("notes.txt", chunk("notes.txt", "text/plain", "Remember the release notes"));
+  expect(card("notes.txt")?.textContent).toContain("Remember the release notes");
+  expect(card("deploy.yaml")?.textContent).toContain("Text");
+  expect(card("deploy.yaml")?.getAttribute("aria-label")).toBe("Open deploy.yaml, Text file");
+  expect(card("q3.zip")?.textContent).toContain("File");
+  expect(card("deck.pdf")?.textContent).toContain("File");
+  expect(files.previews.map((entry) => entry.relativePath)).toEqual(["notes.txt"]);
 });

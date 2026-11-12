@@ -1,4 +1,5 @@
 import {
+  botArtifactCardReadsFirstChunk,
   botArtifactName,
   botArtifactPreviewSlot,
   botArtifactViewKind,
@@ -263,13 +264,15 @@ function GoatBotFileCard(props: {
   const label = useScaledTextRole("label");
   const key = JSON.stringify([chatKey, path, generation]);
   const cached = cachedGoatBotFilePreview(chatKey, path, generation);
+  // A card with no preview to draw is named from the file's name and reads nothing.
+  const readsFirstChunk = botArtifactCardReadsFirstChunk(path, file.size);
   const [read, setRead] = useState<{
     readonly key: string;
     readonly preview: GoatBotFilePreview | null;
   } | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- The first chunk arrives after render; a card that goes, or changes chat or listing, leaves the queue and drops a late answer.
   useEffect(() => {
-    if (cached !== undefined) return;
+    if (cached !== undefined || !readsFirstChunk) return;
     let stale = false;
     const readChunk = async (input: ChannelReadBotArtifactInput) => {
       const answer = await runAtomCommand(
@@ -297,7 +300,7 @@ function GoatBotFileCard(props: {
       stale = true;
       pending.cancel();
     };
-  }, [cached, environmentId, chatKey, path, generation, key]);
+  }, [cached, readsFirstChunk, environmentId, chatKey, path, generation, key]);
   const preview = cached ?? (read?.key === key ? read.preview : null);
   const unavailable =
     cached === null || (cached === undefined && read?.key === key && read.preview === null);

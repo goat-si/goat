@@ -210,6 +210,9 @@ export function goatBotReplyMayNameFile(text: string): boolean {
 }
 
 const TEXT_TYPES = new Set(["application/json", "text/csv"]);
+/** Text and code files by name, for a card that names a file's kind before or without reading it. */
+const TEXT_NAMES =
+  /\.(txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|xml|html?|css|scss|less|js|jsx|mjs|cjs|ts|tsx|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|php|sh|bash|zsh|sql|graphql|vue|svelte|lua|diff|patch)$/i;
 /** Larger text stays a download: decoding and rendering it would stall the chat. */
 export const BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES = 1024 * 1024;
 
@@ -224,6 +227,8 @@ export function botArtifactViewKind(
   if (size > BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES) return "download";
   if (type === "text/markdown" || /\.(md|markdown)$/i.test(relativePath)) return "markdown";
   if (type.startsWith("text/") || TEXT_TYPES.has(type)) return "text";
+  // Named alone: the file's own type decides once it is read.
+  if (type === "" && TEXT_NAMES.test(relativePath)) return "text";
   return "download";
 }
 
@@ -356,6 +361,14 @@ export function botArtifactPreviewSlot(
     return size <= CHANNEL_BOT_ARTIFACT_CHUNK_BYTES ? "image" : null;
   if (/\.(md|markdown|txt|csv|json|log)$/i.test(relativePath)) return "text";
   return null;
+}
+
+/**
+ * Whether a reply's file card reads the file's first chunk: only to draw the preview it has room
+ * for. Any other card is named from the file's name and costs no read.
+ */
+export function botArtifactCardReadsFirstChunk(relativePath: string, size: number): boolean {
+  return botArtifactPreviewSlot(relativePath, size) !== null;
 }
 
 /**
