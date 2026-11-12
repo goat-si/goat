@@ -1446,6 +1446,8 @@ function parseClaudeInteger(text: string): number {
   return Number.parseInt(value, 10);
 }
 
+const CLAUDE_CODE_MODEL_ALIASES = new Set(["opus", "sonnet", "haiku", "fable"]);
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly modelCatalog?: ClaudeModelCatalog;
@@ -1522,6 +1524,12 @@ export function makeClaudeQueryOptions(input: {
         } as ClaudeSdkSettings);
   const flagEnvironment = {
     ...input.flagEnvironment,
+    ...(CLAUDE_CODE_MODEL_ALIASES.has(compiledSelection.apiModelId)
+      ? {
+          [`ANTHROPIC_DEFAULT_${compiledSelection.apiModelId.toUpperCase()}_MODEL`]:
+            compiledSelection.apiModelId,
+        }
+      : {}),
     ...(input.toolSearchOverride === undefined
       ? {}
       : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
