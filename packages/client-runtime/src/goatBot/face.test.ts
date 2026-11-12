@@ -358,15 +358,31 @@ describe("goatBotRowFaceSignals", () => {
     expect(goatBotRowFaceSignals(answered, T0 + 3_000).readingUntil).toBeNull();
   });
 
-  it("leaves the tasks unknown when the status has no working flag, as today's servers send", () => {
+  it("leaves the tasks unknown when the status has no tasks, as older servers send", () => {
     expect(goatBotRowFaceSignals({ waitingCount: 0 }, T0).tasks).toBeNull();
-    expect(rowFace({ waitingCount: 0, working: true }, T0)).toBe("working");
-    expect(rowFace({ waitingCount: 0, working: false }, T0)).toBe("idle");
+    expect(rowFace({ waitingCount: 0 }, T0)).toBe("idle");
+  });
+
+  it("works while the status says a task is going, and is idle once none is", () => {
+    expect(goatBotRowFaceSignals({ waitingCount: 0, tasks: { active: true } }, T0).tasks).toEqual({
+      waiting: 0,
+      active: 1,
+      ended: null,
+      activeSince: null,
+    });
+    expect(rowFace({ waitingCount: 0, tasks: { active: true } }, T0)).toBe("working");
+    expect(rowFace({ waitingCount: 0, tasks: { active: false } }, T0)).toBe("idle");
   });
 
   it("shows waiting over working and over reading", () => {
-    expect(rowFace({ waitingCount: 1, working: true }, T0)).toBe("waiting");
+    expect(rowFace({ waitingCount: 1, tasks: { active: true } }, T0)).toBe("waiting");
     expect(rowFace({ waitingCount: 1, latest: latest("person", T0) }, T0 + 1_000)).toBe("waiting");
+  });
+
+  it("reads a person's unanswered message over a going task", () => {
+    const status = { waitingCount: 0, latest: latest("person", T0), tasks: { active: true } };
+    expect(rowFace(status, T0 + 1_000)).toBe("reading");
+    expect(rowFace(status, T0 + GOAT_BOT_READING_LIMIT_MS)).toBe("working");
   });
 });
 

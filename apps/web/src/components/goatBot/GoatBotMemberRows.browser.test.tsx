@@ -20,6 +20,7 @@ const server = vi.hoisted(() => ({
   toasts: [] as Array<{ title: string; description?: string }>,
   latest: {} as Record<string, { text: string; at: string; author: "bot" | "person" }>,
   waiting: {} as Record<string, number>,
+  tasks: {} as Record<string, { active: boolean }>,
 }));
 const publish = () => {
   for (const listener of server.listeners) listener();
@@ -90,6 +91,7 @@ vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberStatus: (bot: BotProfile) => ({
     waitingCount: server.waiting[bot.botId] ?? 0,
     latest: server.latest[bot.botId],
+    tasks: server.tasks[bot.botId],
   }),
   useGoatBotMemberWaitingCount: (bot: BotProfile) => server.waiting[bot.botId] ?? 0,
 }));
@@ -145,6 +147,7 @@ function setup() {
   server.toasts = [];
   server.latest = {};
   server.waiting = {};
+  server.tasks = {};
 }
 
 it("hides a member under Hidden bots and shows it again", async () => {
@@ -225,6 +228,16 @@ it("a member whose person message is unanswered reads Reading first", async () =
   };
   await using screen = await render(<Roster />, { router: false });
   await expect.element(screen.getByRole("link", { name: /^Reading\s*Research/ })).toBeVisible();
+});
+
+it("a working member's row is named Working first", async () => {
+  setup();
+  server.latest = {
+    research: { text: "On it.", at: "2026-11-07T01:00:00.000Z", author: "bot" },
+  };
+  server.tasks = { research: { active: true } };
+  await using screen = await render(<Roster />, { router: false });
+  await expect.element(screen.getByRole("link", { name: /^Working\s*Research/ })).toBeVisible();
 });
 
 it("says waiting once, with the count, on a member whose tasks wait for the person", async () => {

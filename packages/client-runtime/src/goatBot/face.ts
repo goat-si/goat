@@ -83,8 +83,8 @@ export function goatBotFaceSpoken(state: GoatBotFaceState, waitingCount: number)
 export interface GoatBotRowStatus {
   readonly waitingCount: number;
   readonly latest?: { readonly at: string; readonly author: "bot" | "person" } | undefined;
-  /** Whether one of the bot's tasks is going; absent where the server does not say. */
-  readonly working?: boolean | undefined;
+  /** Whether one of the bot's tasks is going; absent from servers that do not say. */
+  readonly tasks?: { readonly active: boolean } | undefined;
 }
 
 export interface GoatBotRowFaceSignals extends Omit<GoatBotFaceInput, "shell"> {
@@ -104,7 +104,7 @@ export function goatBotRowReadingUntil(status: GoatBotRowStatus): number | null 
 /**
  * A roster row's face inputs from its bot status alone, with no conversation loaded. The bot is
  * reading while the person's message is the newest one, until the reading limit; without the
- * status's working flag its tasks are unknown, as the conversation shell alone shows them.
+ * status's tasks they are unknown, as the conversation shell alone shows them.
  */
 export function goatBotRowFaceSignals(
   status: GoatBotRowStatus,
@@ -115,9 +115,9 @@ export function goatBotRowFaceSignals(
     activity: readingUntil !== null && now < readingUntil ? READING : null,
     waitingCount: status.waitingCount,
     tasks:
-      status.working === undefined
+      status.tasks === undefined
         ? null
-        : { waiting: 0, active: status.working ? 1 : 0, ended: null, activeSince: null },
+        : { waiting: 0, active: status.tasks.active ? 1 : 0, ended: null, activeSince: null },
     readingUntil,
   };
 }

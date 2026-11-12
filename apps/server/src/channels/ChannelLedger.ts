@@ -58,7 +58,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
-import { newestAskAt, waitingTaskCondition } from "./channelWaitingTasks.ts";
+import {
+  botActiveTasksStatement,
+  newestAskAt,
+  waitingTaskCondition,
+} from "./channelWaitingTasks.ts";
 export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
@@ -305,6 +309,11 @@ export class ChannelLedger extends Context.Service<
       readThrough?: string,
       botId?: BotId,
     ) => Effect.Effect<number, ChannelLedgerError>;
+    /** Whether one of the bot's tasks is going and waits on no one (botActiveTasksStatement). */
+    readonly botHasActiveTasks: (
+      ownerId: string,
+      botId: BotId,
+    ) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly findTaskByWorkerThread: (
       threadId: ThreadId,
     ) => Effect.Effect<ChannelStoredTask | undefined, ChannelLedgerError>;
@@ -1278,6 +1287,15 @@ const make = Effect.gen(function* () {
           ).length;
         }),
         Effect.mapError(toLedgerError("countWaitingTasks")),
+      ),
+
+    botHasActiveTasks: (ownerId, botId) =>
+      Effect.andThen(
+        bots.ensureTaskBotsRepaired(),
+        botActiveTasksStatement(sql, { ownerId, botId }),
+      ).pipe(
+        Effect.map((rows) => rows[0]?.active === 1),
+        Effect.mapError(toLedgerError("botHasActiveTasks")),
       ),
 
     findTaskByWorkerThread: (threadId) =>
