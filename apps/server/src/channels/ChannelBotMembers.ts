@@ -32,6 +32,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -128,6 +129,7 @@ const make = Effect.gen(function* () {
   const serial = <A, E, R>(effect: Effect.Effect<A, E, R>) => permit.withPermits(1)(effect);
   const events = yield* ChannelBotEvents.ChannelBotEvents;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
+  const eventSink = yield* EventSink.EventSinkV2;
   // Edits queue their lines in commit order, so two quick renames read in the order they landed.
   const profileEdits = yield* Semaphore.make(1);
   const now = Effect.map(DateTime.now, DateTime.formatIso);
@@ -171,15 +173,25 @@ const make = Effect.gen(function* () {
       },
       now: yield* now,
     });
-    // The timeline takes records only once the thread is the bot's. A greeting that fails, or a
-    // creation interrupted just before it, leaves the bot without one; creating still succeeds.
-    yield* recordMemberGreeting(timeline.record, {
-      ownerId,
-      threadId: ids.threadId,
-      bot: record,
-    }).pipe(
-      Effect.catchCause((cause) => Effect.logWarning("member greeting not recorded", { cause })),
-    );
+    // The timeline takes records only once the thread is the bot's; the profile lock and a fresh
+    // read greet with a rename that landed since. A greeting that fails, or a creation interrupted
+    // just before it, leaves the bot without one; creating still succeeds.
+    yield* profileEdits
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* readMember(ownerId, record.botId);
+          if (current === undefined) return;
+          yield* recordMemberGreeting(timeline.record, {
+            ownerId,
+            threadId: ids.threadId,
+            bot: current,
+            revision: () => "v1",
+          });
+        }),
+      )
+      .pipe(
+        Effect.catchCause((cause) => Effect.logWarning("member greeting not recorded", { cause })),
+      );
   });
 
   /**
@@ -441,21 +453,55 @@ const make = Effect.gen(function* () {
     });
   }, Effect.mapError(failed));
 
-  /** A rename or a new purpose leaves a line in that bot's conversation once it is saved. */
+  /**
+   * Writes a member's greeting again for its new name or purpose; runs under the profile lock.
+   * Says whether it wrote, or "launching" before the member has a thread: launch then greets
+   * from the stored profile.
+   */
+  const regreet = Effect.fn("ChannelBotMembers.regreet")(
+    function* (ownerId: string, bot: BotProfile) {
+      const found = yield* ledger.getBotById(ownerId, bot.botId);
+      if (found === undefined) return "launching" as const;
+      // A line still queued would land after the new greeting and contradict it.
+      if (yield* events.pending(ownerId, bot.botId)) return false;
+      const threadId = found.bot.threadId;
+      const sequence = yield* eventSink.latestSequence({ threadId });
+      return yield* recordMemberGreeting(timeline.recordChanged, {
+        ownerId,
+        threadId,
+        bot,
+        revision: (text) => "profile:" + sequence + ":" + text,
+      });
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("member greeting not re-recorded", { cause }).pipe(Effect.as(false)),
+    ),
+  );
+
+  /**
+   * A rename or a new purpose re-records a member's greeting while nothing follows it; otherwise,
+   * and always for the main bot, it leaves a line in that bot's conversation once it is saved.
+   */
   const update: ChannelBotMembers["Service"]["update"] = (input, owner) =>
     profileEdits.withPermits(1)(
-      Effect.gen(function* () {
-        const { bot, changed } = yield* profiles.updateWithChanges(input, owner);
-        for (const field of changed)
-          yield* events.emit({
-            ownerId: owner.ownerId,
-            botId: bot.botId,
-            kind: "profile-" + field,
-            id: bot.botId,
-            text: field === "name" ? "Renamed to " + bot.name : "Purpose updated",
-          });
-        return bot;
-      }),
+      // Waiting for the lock stays interruptible; once saved, the greeting or lines always follow.
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const { bot, changed } = yield* profiles.updateWithChanges(input, owner);
+          if (changed.length === 0) return bot;
+          const greeted = bot.botId === MAIN_BOT_ID ? false : yield* regreet(owner.ownerId, bot);
+          if (greeted !== false) return bot;
+          for (const field of changed)
+            yield* events.emit({
+              ownerId: owner.ownerId,
+              botId: bot.botId,
+              kind: "profile-" + field,
+              id: bot.botId,
+              text: field === "name" ? "Renamed to " + bot.name : "Purpose updated",
+            });
+          return bot;
+        }),
+      ),
     );
 
   return ChannelBotMembers.of({

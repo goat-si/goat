@@ -60,6 +60,8 @@ export class ChannelBotEvents extends Context.Service<
     readonly emit: (event: BotEvent) => Effect.Effect<void>;
     /** Resolves once every queued line has been recorded or given up on. */
     readonly flush: Effect.Effect<void>;
+    /** Whether this bot has a line queued or being recorded, which may still land later. */
+    readonly pending: (ownerId: string, botId: BotId) => Effect.Effect<boolean>;
   }
 >()("goat/channels/ChannelBotEvents") {}
 
@@ -74,6 +76,7 @@ export interface BotEventsDeps {
 
 const recordKeyFor = (event: QueuedEvent) =>
   "event:" + event.kind + ":" + event.id + ":" + event.changeId;
+const queueKeyFor = (ownerId: string, botId: BotId) => ownerId + "\u0000" + botId;
 
 export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotEventsDeps) {
   const scope: Scope.Scope = yield* Effect.scope;
@@ -143,7 +146,7 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
   });
 
   const emit = Effect.fn("ChannelBotEvents.emit")(function* (event: BotEvent) {
-    const key = event.ownerId + "\u0000" + event.botId;
+    const key = queueKeyFor(event.ownerId, event.botId);
     // Unique per change across restarts (time, then a counter and a random part), stable on retry.
     const changeId = [yield* Clock.currentTimeMillis, (emitted += 1), yield* Random.nextInt]
       .map((part) => part.toString(36))
@@ -199,7 +202,11 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
     if (!ready) yield* Deferred.await(waiter);
   });
 
-  return ChannelBotEvents.of({ emit, flush });
+  // A bot's queue lives until its worker finds it empty, so a line being recorded counts.
+  const pending = (ownerId: string, botId: BotId) =>
+    Effect.sync(() => queues.has(queueKeyFor(ownerId, botId)));
+
+  return ChannelBotEvents.of({ emit, flush, pending });
 });
 
 export const layer = Layer.effect(

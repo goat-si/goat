@@ -30,37 +30,42 @@ import * as ChannelTransport from "./ChannelTransport.ts";
 import { timelineIdsFor } from "./channelIds.ts";
 import { personMessageEntry } from "./channelPersonMessage.ts";
 
+export interface TimelineRecordInput {
+  readonly threadId: ThreadId;
+  readonly record: ChannelTimelineRecord;
+  readonly revision: string;
+}
+
 export class ChannelBotTimeline extends Context.Service<
   ChannelBotTimeline,
   {
     /** Records one entry and returns the orchestration sequence that committed it. */
-    readonly record: (input: {
-      readonly threadId: ThreadId;
-      readonly record: ChannelTimelineRecord;
-      readonly revision: string;
-    }) => Effect.Effect<number, ChannelGatewayError>;
+    readonly record: (input: TimelineRecordInput) => Effect.Effect<number, ChannelGatewayError>;
+    /** Records one entry and reports whether it committed anything; a declined record does not. */
+    readonly recordChanged: (
+      input: TimelineRecordInput,
+    ) => Effect.Effect<boolean, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotTimeline") {}
 
 const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const dispatch = (input: TimelineRecordInput) =>
+    threads
+      .dispatch({
+        type: "channel.timeline.record",
+        commandId: timelineIdsFor(input.threadId, input.record.recordKey, input.revision).commandId,
+        threadId: input.threadId,
+        record: input.record,
+      })
+      .pipe(
+        Effect.tapError((cause) => Effect.logWarning("channel.timeline.record failed", { cause })),
+        Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+      );
   return ChannelBotTimeline.of({
-    record: (input) =>
-      threads
-        .dispatch({
-          type: "channel.timeline.record",
-          commandId: timelineIdsFor(input.threadId, input.record.recordKey, input.revision)
-            .commandId,
-          threadId: input.threadId,
-          record: input.record,
-        })
-        .pipe(
-          Effect.map((result) => result.sequence),
-          Effect.tapError((cause) =>
-            Effect.logWarning("channel.timeline.record failed", { cause }),
-          ),
-          Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
-        ),
+    record: (input) => dispatch(input).pipe(Effect.map((result) => result.sequence)),
+    recordChanged: (input) =>
+      dispatch(input).pipe(Effect.map((result) => result.storedEvents.length > 0)),
   });
 });
 

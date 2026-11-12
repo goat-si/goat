@@ -46,6 +46,8 @@ describe("session receipt recovery", () => {
               Effect.provideService(ChannelBotTimeline.ChannelBotTimeline, {
                 record: () =>
                   Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" })),
+                recordChanged: () =>
+                  Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" })),
               }),
             );
             assert.isTrue(yield* beforeCrash.offer(input.inputId, runtime.ownerToken));
