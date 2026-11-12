@@ -1,8 +1,9 @@
 # GOAT Mobile
 
 > [!WARNING]
-> GOAT Mobile is in development. Team members install it through TestFlight; see
-> [Mobile TestFlight builds](../../docs/operations/mobile-testflight.md). You can also build it from source.
+> GOAT Mobile is in beta. Testers install it from [trygoat.ai/mobile](https://trygoat.ai/mobile/)
+> (TestFlight on iOS, Firebase App Distribution on Android); see
+> [Mobile beta builds](../../docs/operations/mobile-testflight.md). You can also build it from source.
 
 ## Quickstart
 

@@ -225,8 +225,9 @@ there before refreshing to find newer versions. The same setting controls whethe
 GOAT downloads model catalog updates, so with it off new models may not appear
 until you enable it and refresh provider status.
 
-GOAT's mobile app has no App Store or Google Play release yet; TestFlight
-installs new TestFlight builds. The mobile app can also download updates in the
+GOAT's mobile app has no App Store or Google Play release yet. On iPhone and iPad,
+TestFlight installs new beta builds; on Android, download each new build from the
+Firebase App Distribution invitation. The mobile app can also download updates in the
 background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
 for a long time, it may ask to install immediately; choosing **Later** leaves the

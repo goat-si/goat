@@ -1,0 +1,66 @@
+---
+import { messages, type Locale } from "../i18n";
+import Base from "../layouts/Base.astro";
+import { guide, LINKS } from "../lib/links";
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = messages(locale);
+const m = t.mobile;
+const platforms = [
+  { id: "ios", ...m.ios, href: LINKS.iosBeta, helper: { label: m.ios.helper, href: LINKS.testFlightApp } },
+  { id: "android", ...m.android, href: LINKS.androidBeta, helper: null },
+];
+---
+
+<Base locale={locale} path="/mobile/" title={t.meta.mobileTitle} description={t.meta.mobileDescription}>
+  <section class="page-head container" aria-labelledby="mobile-title">
+    <h1 id="mobile-title">{m.title}</h1>
+    <p class="lede">{m.lede}</p>
+
+    <div class="platforms">
+      {
+        platforms.map((platform) => (
+          <section class="platform" aria-labelledby={`beta-${platform.id}`}>
+            <h2 id={`beta-${platform.id}`}>{platform.name}</h2>
+            <div>
+              <div class="actions">
+                <a class="button button-primary" href={platform.href}>
+                  {platform.cta}
+                </a>
+                {platform.helper && (
+                  <a class="button button-quiet" href={platform.helper.href}>
+                    {platform.helper.label}
+                  </a>
+                )}
+              </div>
+              <ol class="steps">
+                {platform.steps.map((step) => (
+                  <li>
+                    <h3>{step.title}</h3>
+                    <p>{step.body}</p>
+                  </li>
+                ))}
+              </ol>
+              <p class="fine-print">{platform.note}</p>
+            </div>
+          </section>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="section container split" aria-labelledby="pair-title">
+    <div class="split-lead">
+      <h2 id="pair-title">{m.pairTitle}</h2>
+    </div>
+    <div>
+      <p>{m.pairBody}</p>
+      <p class="callout">{t.download.mobileWarning}</p>
+      <a class="text-link" href={guide("remote-access", "connect-your-phone-to-a-hub")}>{m.pairGuide}</a>
+    </div>
+  </section>
+</Base>
