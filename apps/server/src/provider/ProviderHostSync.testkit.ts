@@ -27,6 +27,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
 import * as Diagnosis from "./ProviderDiagnosisService.ts";
+import type * as ProviderCliGate from "./ProviderCliGate.ts";
 import * as HostSync from "./ProviderHostSync.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -105,6 +106,8 @@ export const harness = (options: {
       { readonly ready: boolean; readonly reason?: ProviderDiagnosisReason }
     >
   >;
+  /** The provider CLI gate a local install asks; none unless given. */
+  readonly cliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
 }) => {
   const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
   const spawner = Layer.succeed(
@@ -220,6 +223,7 @@ export const harness = (options: {
         Layer.mock(Environment.ServerEnvironmentIdentity)({
           getEnvironmentId: Effect.succeed(environmentId),
         }),
+        options.cliGate ?? Layer.empty,
         spawner,
       ),
     ),

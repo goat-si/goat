@@ -34,6 +34,10 @@ const CLI_DRIVERS: ReadonlySet<string> = new Set([
 /** Twice the default background provider check, so a launch normally probes nothing. */
 const PRESENT_FRESH_MS = 10 * 60_000;
 
+/** Whether this driver's probe runs an instance's CLI from PATH, so its answer says installed. */
+export const checksCli = (driver: string, cli: ServerProvider["cli"]) =>
+  CLI_DRIVERS.has(driver) && cli !== "none";
+
 /**
  * The chosen instance's CLI was not found on this machine by a probe that just ran. created says
  * whether a thread already exists: before creation nothing ran; after, that thread can be retried.

@@ -193,6 +193,16 @@ export function installCommand(
   };
 }
 
+/** What a person reads as the command a host ran: the vendor's own line, with its version. */
+export function describeInstall(command: InstallCommand): string {
+  if (command.method === "npm") return ["npm", ...command.args].join(" ");
+  if (command.command === "bash") {
+    const [, script = "", , version] = command.args;
+    return version === undefined ? script : script.replace('"$1"', version);
+  }
+  return command.args.at(-1) ?? command.command;
+}
+
 export function installMethod(
   driver: ProviderHostSyncDriver,
   platform: HostPlatform,

@@ -191,6 +191,8 @@ export const ProviderSyncHostState = Schema.Struct({
   version: Schema.NullOr(Version),
   message: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(1_024))),
   login: Schema.optionalKey(ProviderSyncLogin),
+  /** The installer command line this host ran, from GOAT's fixed recipe. */
+  ran: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
 });
 export type ProviderSyncHostState = typeof ProviderSyncHostState.Type;
 

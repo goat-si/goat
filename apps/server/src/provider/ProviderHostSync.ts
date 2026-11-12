@@ -74,7 +74,10 @@ import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import { checksCli, ProviderCliGate } from "./ProviderCliGate.ts";
+import { runInstaller, withProbedCli } from "./ProviderHostSyncInstall.ts";
 import {
+  describeInstall,
   describeInstallFailure,
   hostPlatform,
   installCommand,
@@ -106,7 +109,6 @@ const MATRIX_DEADLINE_MS = 20_000;
 /** Holder diagnosis probes three CLIs, so only a cloud matrix row waits this long. */
 const CLOUD_MATRIX_DEADLINE_MS = 120_000;
 const CALL_DEADLINE_MS = 60_000;
-const INSTALL_DEADLINE = Duration.minutes(10);
 const LOGIN_DEADLINE = Duration.minutes(15);
 const REMOTE_POLL = Duration.seconds(3);
 const REMOTE_DEADLINE_MS = 30 * 60_000;
@@ -172,6 +174,7 @@ const make = Effect.gen(function* () {
   const platform = hostPlatform(runtimePlatform);
   const operations = new Map<string, SyncOperation>();
   const installers = yield* Semaphore.make(MAX_CONCURRENT_INSTALLERS);
+  const cliGate = yield* Effect.serviceOption(ProviderCliGate);
 
   const readCeiling = (caller: SshHostCaller) =>
     authorizeSshHost(sessions, caller, "orchestration:read").pipe(
@@ -186,6 +189,8 @@ const make = Effect.gen(function* () {
    * pass: they get an approval handoff instead.
    */
   const writeCeiling = (caller: SshHostCaller): Effect.Effect<RuntimeMode, Failure> => {
+    if (caller.kind === "mcp" && caller.directInstall !== undefined)
+      return caller.directInstall.pipe(Effect.as("full-access" as RuntimeMode));
     if (caller.kind === "mcp" && (caller.scope.thread !== undefined || !caller.scope.client))
       return Effect.fail(
         new EnvironmentAuthorizationError({
@@ -529,47 +534,21 @@ const make = Effect.gen(function* () {
       operation.fibers.push(fiber);
     });
 
-  /** Runs a fixed installer argv. Output is kept only to classify a failure. */
-  const runInstaller = (command: string, args: ReadonlyArray<string>) =>
-    Effect.gen(function* () {
-      const resolved = yield* resolveSpawnCommand(command, args);
-      const child = yield* spawner.spawn(
-        ChildProcess.make(resolved.command, resolved.args, {
-          shell: resolved.shell,
-          env: { CI: "1", npm_config_yes: "true" },
-          extendEnv: true,
-          stdin: "ignore",
-        }),
-      );
-      yield* Effect.addFinalizer(() => Effect.ignore(child.kill({ forceKillAfter: "1 second" })));
-      let tail = "";
-      const decoder = new TextDecoder();
-      const keep = (chunk: Uint8Array) =>
-        Effect.sync(() => {
-          tail = (tail + decoder.decode(chunk, { stream: true })).slice(-OUTPUT_LIMIT);
-        });
-      const [, , exitCode] = yield* Effect.all(
-        [
-          Stream.runForEach(child.stdout, keep),
-          Stream.runForEach(child.stderr, keep),
-          child.exitCode,
-        ],
-        { concurrency: "unbounded" },
-      );
-      return { exitCode: Number(exitCode), output: tail };
-    }).pipe(
-      Effect.scoped,
-      Effect.timeoutOption(INSTALL_DEADLINE),
-      Effect.map((result) =>
-        Option.getOrElse(result, () => ({ exitCode: null as number | null, output: "" })),
-      ),
-    );
-
   const instanceFor = (driver: ProviderHostSyncDriver) =>
     Effect.gen(function* () {
       const all = yield* instances.listInstances;
       const own = all.filter((instance) => instance.driverKind === driver);
       return own.find((instance) => instance.instanceId === driver) ?? own[0];
+    });
+
+  /** The sync's instance as its own probe sees it, when that probe runs a CLI from PATH. */
+  const cliProbe = (driver: ProviderHostSyncDriver) =>
+    Effect.gen(function* () {
+      const instance = yield* instanceFor(driver);
+      const cached = snapshotFor(yield* providers.getProviders, driver);
+      if (Option.isNone(cliGate) || instance === undefined || !checksCli(driver, cached?.cli))
+        return undefined;
+      return (fresh: boolean) => cliGate.value.probe(instance.instanceId, { fresh });
     });
 
   const refreshDriver = (driver: ProviderHostSyncDriver) =>
@@ -701,7 +680,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const driver = operation.driver;
       const recipe = recipeFor(driver);
-      const before = (yield* localProviders).find((provider) => provider.driver === driver);
+      const probe = yield* cliProbe(driver);
+      const row = localProviders.pipe(Effect.map((all) => all.find((p) => p.driver === driver)));
+      const before = withProbedCli(yield* row, probe && (yield* probe(false)));
       const sameVersion =
         before?.installed === true &&
         (operation.version === null || before.version === null
@@ -735,12 +716,13 @@ const make = Effect.gen(function* () {
           );
         yield* update(task, {
           phase: "installing",
+          ran: describeInstall(command),
           ...(command.latestOnly && operation.version !== null
             ? { message: `${recipe.displayName}'s installer always installs the latest release.` }
             : {}),
         });
         const result = yield* installers.withPermits(1)(
-          runInstaller(command.command, command.args),
+          runInstaller(spawner, command.command, command.args),
         );
         if (result.exitCode !== 0)
           return yield* update(
@@ -750,13 +732,17 @@ const make = Effect.gen(function* () {
           );
       }
       const snapshot = yield* refreshDriver(driver);
-      const after = (yield* localProviders).find((provider) => provider.driver === driver);
+      const answer = probe && (yield* probe(true));
+      const after = withProbedCli(yield* row, answer);
       if (after?.installed !== true)
         return yield* update(
           task,
           {
             phase: "failed",
-            message: `The installer finished, but GOAT cannot find ${recipe.binary} on its PATH here. Add the install folder to PATH and restart GOAT.`,
+            message:
+              answer?.kind === "unknown"
+                ? `Installed, but GOAT could not confirm ${recipe.binary} runs here.`
+                : `The installer finished, but GOAT cannot find ${recipe.binary} on its PATH here. Add the install folder to PATH and restart GOAT.`,
           },
           true,
         );
@@ -765,14 +751,16 @@ const make = Effect.gen(function* () {
         version: after.version,
         ...(sameVersion ? { message: "Already installed." } : {}),
       });
-      if (!operation.login || after.auth === "signed_in")
-        return yield* update(task, after.auth === "signed_in" ? { phase: "signed_in" } : {}, true);
+      if (after.auth === "signed_in") return yield* update(task, { phase: "signed_in" }, true);
+      // Installed only: say what a person runs there before its first thread.
+      const terminal = { login: { type: "terminal", command: recipe.terminalLogin } } as const;
+      if (!operation.login) return yield* update(task, terminal, true);
       const instance = yield* instanceFor(driver);
       if (snapshot?.setup?.canAuthenticate === true && instance !== undefined)
         return yield* goatLogin(task, driver, instance.instanceId, owner);
       if (recipe.deviceLogin !== undefined)
         return yield* deviceLogin(task, driver, instance?.instanceId);
-      yield* update(task, { login: { type: "terminal", command: recipe.terminalLogin } }, true);
+      yield* update(task, terminal, true);
     }).pipe(
       Effect.catchCause(() =>
         task.finished
@@ -996,7 +984,7 @@ const make = Effect.gen(function* () {
     input: ProviderSyncInput,
     caller: SshHostCaller,
   ) {
-    if (caller.kind === "mcp" && caller.scope.thread !== undefined)
+    if (caller.kind === "mcp" && caller.scope.thread !== undefined && !caller.directInstall)
       return yield* requestApproval(input, caller);
     yield* writeCeiling(caller);
     return yield* start(input, caller);
