@@ -533,29 +533,43 @@ func (cl *Client) Close() error { return cl.c.Close() }
 // SetDeadline bounds the requests and replies still to come on this connection.
 func (cl *Client) SetDeadline(t time.Time) error { return cl.c.SetDeadline(t) }
 
-// WatchRevoked follows the daemon's view and sends the first of nodeIDs to be revoked.
-// Without a running daemon it returns a nil channel (which never fires); stop ends the watch.
+// WatchRevoked follows the daemon's view and sends the first of nodeIDs to be revoked. It returns
+// once the daemon holds the watch (its first line came), so no later revoke is missed. Without a
+// running daemon it returns a nil channel (which never fires); stop ends the watch.
 func WatchRevoked(st *state.Store, nodeIDs ...string) (revoked <-chan string, stop func()) {
 	cl, err := Dial(st)
 	if err != nil {
 		return nil, func() {}
 	}
-	if err := cl.Send(Request{Op: "watch"}); err != nil {
+	revokedIn := func(w WatchLine) (string, bool) {
+		for _, r := range w.Revoked {
+			if slices.Contains(nodeIDs, r.NodeID) {
+				return r.NodeID, true
+			}
+		}
+		return "", false
+	}
+	var first WatchLine
+	if cl.SetDeadline(time.Now().Add(dialTimeout)) != nil || cl.Send(Request{Op: "watch"}) != nil ||
+		cl.Next(&first) != nil || cl.SetDeadline(time.Time{}) != nil {
 		cl.Close()
 		return nil, func() {}
 	}
 	ch := make(chan string, 1)
+	if id, ok := revokedIn(first); ok {
+		cl.Close()
+		ch <- id
+		return ch, func() {}
+	}
 	go func() {
 		for {
 			var w WatchLine
 			if cl.Next(&w) != nil {
 				return
 			}
-			for _, r := range w.Revoked {
-				if slices.Contains(nodeIDs, r.NodeID) {
-					ch <- r.NodeID
-					return
-				}
+			if id, ok := revokedIn(w); ok {
+				ch <- id
+				return
 			}
 		}
 	}()

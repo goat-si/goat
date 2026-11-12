@@ -81,7 +81,7 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 		select {
 		case who := <-revoked:
 			mu.Lock()
-			revokedErr = revokedNodeErr(m, who == self && who != m.NodeID)
+			revokedErr = revokedNodeErr(m, who == self)
 			wasRevoked.Store(true)
 			for sec := range open {
 				sec.Close(wire.CodeNotAdmitted)

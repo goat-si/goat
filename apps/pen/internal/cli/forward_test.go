@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"io"
@@ -181,7 +182,12 @@ func TestForwardStopsWhenThisNodeLeavesTheMesh(t *testing.T) {
 	}
 	var errOut bytes.Buffer
 	code := make(chan int, 1)
-	go func() { code <- runForward(ctx, ln, b, p, m, 9, io.Discard, &errOut, nil) }()
+	out, outW := io.Pipe()
+	go func() { code <- runForward(ctx, ln, b, p, m, 9, outW, &errOut, nil) }()
+	// The forward says it is forwarding only once the daemon holds its watch, so the leave comes after.
+	if _, err := bufio.NewReader(out).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
 	var res struct{ Results []daemon.PushResult }
 	if err := daemon.Call(b, daemon.Request{Op: "leave"}, &res); err != nil {
 		t.Fatal(err)

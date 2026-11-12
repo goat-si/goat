@@ -188,7 +188,7 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	go func() {
 		select {
 		case who := <-revoked:
-			selfRevoked = who == self && who != m.NodeID
+			selfRevoked = who == self
 			wasRevoked.Store(true)
 			sec.Close(wire.CodeNotAdmitted)
 		case <-spliced:

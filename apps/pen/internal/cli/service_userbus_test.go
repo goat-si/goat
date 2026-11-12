@@ -50,9 +50,12 @@ func TestServiceFindsTheUserManagerWithoutXDGRuntimeDir(t *testing.T) {
 	if mode := serviceMode(false, nil); mode != "systemd" {
 		t.Errorf("pen up chose service mode %q, want systemd", mode)
 	}
+	// pen down and pen leave are separate processes, each without XDG_RUNTIME_DIR again.
+	os.Unsetenv("XDG_RUNTIME_DIR")
 	if err := stopService("systemd", nil); err != nil {
 		t.Errorf("pen down: %v", err)
 	}
+	os.Unsetenv("XDG_RUNTIME_DIR")
 	if err := removeService("systemd", nil); err != nil {
 		t.Errorf("pen leave: %v", err)
 	}
