@@ -59,4 +59,3 @@ func BenchmarkWindowAddParallel(b *testing.B) {
 		}
 	})
 }
-
