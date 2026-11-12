@@ -9,9 +9,11 @@ import { CHANNEL_GATEWAY_WS_METHODS, ChannelGatewayError, EnvironmentId } from "
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotArtifacts from "./ChannelBotArtifacts.ts";
@@ -77,6 +79,41 @@ const read = (relativePath: string, offset?: number, version?: string) =>
 const list = Effect.flatMap(service, (artifacts) => artifacts.list);
 const reason = <A, R>(effect: Effect.Effect<A, ChannelGatewayError, R>) =>
   Effect.map(Effect.flip(effect), (error) => error.reason);
+
+/**
+ * Holds the first `count` reads where the OS would answer. `started` settles once all of them
+ * are held; `wentOn` counts those that ran past the hold instead of being abandoned.
+ */
+const holdFirst = (count: number, abandonable = false) => {
+  const started = Deferred.makeUnsafe<void>();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  let wentOn = 0;
+  const wait = Effect.promise(() => gate).pipe(Effect.andThen(Effect.sync(() => wentOn++)));
+  const hold = Effect.suspend(() => {
+    calls += 1;
+    if (calls > count) return Effect.void;
+    const signal = calls === count ? Deferred.succeed(started, undefined) : Effect.void;
+    // An OS read cannot end early; a path lookup's promise can be abandoned.
+    return Effect.andThen(signal, abandonable ? wait : Effect.uninterruptible(wait));
+  });
+  return {
+    hold,
+    started: Deferred.await(started),
+    release: Effect.sync(() => release()),
+    wentOn: () => wentOn,
+  };
+};
+
+/** A request's answer if it has one, without waiting for it. */
+const statusOf = (fiber: Fiber.Fiber<{ readonly status: string }, unknown>) => {
+  const exit = fiber.pollUnsafe();
+  if (exit === undefined) return "no answer";
+  return Exit.isSuccess(exit) ? exit.value.status : "failed";
+};
 
 describe("ChannelBotArtifacts list", () => {
   // Windows refuses colons and trailing spaces in names and needs elevated rights for symlinks.
@@ -453,4 +490,114 @@ describe("ChannelBotArtifacts over a connection's handlers", () => {
       assert.strictEqual((yield* Fiber.join(first)).status, "chunk");
     }).pipe(Effect.provide(handlersLayer({ afterRead: hold })));
   });
+
+  /** A new connection's read method. */
+  const connection = Effect.map(
+    channelBotWorkRpcHandlers(owner),
+    (handlers) => (relativePath: string) =>
+      handlers[CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]({ relativePath }),
+  );
+
+  it.effect(
+    "a read its client interrupted frees the connection at once; the next read there gets a chunk",
+    () => {
+      const disk = holdFirst(1);
+      return Effect.gen(function* () {
+        const { at } = yield* folders;
+        write(at("a.txt"), "hi", 1_700_000_000);
+        const readHere = yield* connection;
+        const first = yield* Effect.forkChild(readHere("a.txt"));
+        yield* disk.started;
+        // RpcServer ends a request this way on a client Interrupt or a closed socket.
+        first.interruptUnsafe();
+        assert.strictEqual((yield* readHere("a.txt")).status, "chunk");
+      }).pipe(
+        Effect.ensuring(disk.release),
+        Effect.provide(handlersLayer({ afterRead: disk.hold })),
+      );
+    },
+  );
+
+  it.effect(
+    "a read with no answer within 20 seconds answers busy, and the connection reads again",
+    () => {
+      const disk = holdFirst(1);
+      return Effect.gen(function* () {
+        const { at } = yield* folders;
+        write(at("a.txt"), "hi", 1_700_000_000);
+        const readHere = yield* connection;
+        const first = yield* Effect.forkChild(readHere("a.txt"));
+        yield* disk.started;
+        yield* TestClock.adjust("19999 millis");
+        assert.strictEqual(statusOf(first), "no answer");
+        yield* TestClock.adjust("1 millis");
+        assert.strictEqual(statusOf(first), "busy");
+        assert.strictEqual((yield* readHere("a.txt")).status, "chunk");
+      }).pipe(
+        Effect.ensuring(disk.release),
+        Effect.provide(handlersLayer({ afterRead: disk.hold })),
+      );
+    },
+  );
+
+  it.effect(
+    "two stuck reads hold both server slots; a third answers busy at the bound, and reads go on once the disk answers",
+    () => {
+      const disk = holdFirst(2);
+      return Effect.gen(function* () {
+        const { at } = yield* folders;
+        write(at("a.txt"), "hi", 1_700_000_000);
+        const stuck = [
+          yield* Effect.forkChild((yield* connection)("a.txt")),
+          yield* Effect.forkChild((yield* connection)("a.txt")),
+        ];
+        yield* disk.started;
+        const third = yield* Effect.forkChild((yield* connection)("a.txt"));
+        yield* TestClock.adjust("20 seconds");
+        assert.deepStrictEqual([...stuck, third].map(statusOf), ["busy", "busy", "busy"]);
+        yield* disk.release;
+        assert.strictEqual((yield* (yield* connection)("a.txt")).status, "chunk");
+      }).pipe(
+        Effect.ensuring(disk.release),
+        Effect.provide(handlersLayer({ afterRead: disk.hold })),
+      );
+    },
+  );
+
+  it.effect(
+    "a read whose path lookup is stuck keeps its server slot past the bound until the lookup ends",
+    () => {
+      const lookup = holdFirst(2, true);
+      return Effect.gen(function* () {
+        const { at } = yield* folders;
+        write(at("a.txt"), "hi", 1_700_000_000);
+        const stuck = [
+          yield* Effect.forkChild((yield* connection)("a.txt")),
+          yield* Effect.forkChild((yield* connection)("a.txt")),
+        ];
+        yield* lookup.started;
+        yield* TestClock.adjust("20 seconds");
+        assert.deepStrictEqual(stuck.map(statusOf), ["busy", "busy"]);
+        const third = yield* Effect.forkChild((yield* connection)("a.txt"));
+        yield* TestClock.adjust("20 seconds");
+        assert.strictEqual(statusOf(third), "busy");
+        yield* lookup.release;
+        // Two later reads both get a slot only once both held lookups ran to their end.
+        const later = yield* Effect.all(
+          [(yield* connection)("a.txt"), (yield* connection)("a.txt")],
+          {
+            concurrency: 2,
+          },
+        );
+        assert.deepStrictEqual(
+          later.map((result) => result.status),
+          ["chunk", "chunk"],
+        );
+        assert.strictEqual(lookup.wentOn(), 2);
+      }).pipe(
+        Effect.ensuring(lookup.release),
+        Effect.provide(handlersLayer({ beforeOpen: lookup.hold })),
+      );
+    },
+  );
 });
