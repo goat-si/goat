@@ -224,18 +224,16 @@ const make = Effect.gen(function* () {
   const load = (id: string) =>
     rows(sql`SELECT * FROM remote_dispatches
     WHERE correlation_id = ${id}`).pipe(Effect.map((values) => values[0] ?? null));
-  const deleteIntentHeld = (id: string) =>
-    gate(locks, id, 1).withPermits(1)(
-      Effect.gen(function* () {
-        const noted = yield* db(
-          sql<{ readonly correlation_id: string }>`UPDATE remote_dispatches
-            SET last_error = ${DELETE_DRAIN_NOTE}, updated_at = ${yield* now}
-            WHERE correlation_id = ${id} AND delete_requested_at IS NOT NULL AND state = 'running'
-            RETURNING correlation_id`,
-        );
-        return noted.length > 0;
-      }),
+  const noteDeleteIntent = Effect.fnUntraced(function* (id: string) {
+    const noted = yield* db(
+      sql<{ readonly correlation_id: string }>`UPDATE remote_dispatches
+        SET last_error = ${DELETE_DRAIN_NOTE}, updated_at = ${yield* now}
+        WHERE correlation_id = ${id} AND delete_requested_at IS NOT NULL AND state = 'running'
+        RETURNING correlation_id`,
     );
+    return noted.length > 0;
+  });
+  const deleteIntentHeld = (id: string) => gate(locks, id, 1).withPermits(1)(noteDeleteIntent(id));
   const call = (r: Row, tool: string, args: Readonly<Record<string, unknown>>) =>
     gate(hosts, r.host, 8).withPermits(1)(
       ssh.callHostTool(
@@ -283,6 +281,12 @@ const make = Effect.gen(function* () {
     if (record.task === null) throw new Error("Decoded task row has no task association");
     return { ...record, task: record.task };
   };
+  const recordBindingLost = (r: Row) =>
+    recordRemoteTaskResult({
+      ...taskRecord(r),
+      status: "failed",
+      summary: "The remote task's thread or report binding is unavailable.",
+    });
   const importTaskBatch = Effect.fn("RemoteDispatchCoordinator.importTaskBatch")(function* (
     id: string,
     owner: number,
@@ -754,20 +758,16 @@ const make = Effect.gen(function* () {
           .getThreadShell(r.origin_thread_id)
           .pipe(Effect.mapError((cause) => new RemoteDispatchError({ stage: "storage", cause })));
         if (shell === null || shell.archivedAt !== null || shell.deletedAt !== null) {
-          if (r.kind === "task")
-            yield* taskEffect(
-              recordRemoteTaskResult({
-                ...taskRecord(r),
-                status: "failed",
-                summary: "The remote task's thread or report binding is unavailable.",
-              }),
-            );
-          const at = yield* now;
           yield* owned(
             id,
             owner,
-            db(sql`UPDATE remote_dispatches SET state = ${r.kind === "task" ? "lost" : "settled"}, last_error = ${r.kind === "task" ? "Origin thread is unavailable." : null}, updated_at = ${at}
-          WHERE correlation_id = ${id} AND state = 'running'`),
+            Effect.gen(function* () {
+              const current = yield* load(id);
+              if (current?.state !== "running") return;
+              if (current.kind === "task") yield* taskEffect(recordBindingLost(current));
+              yield* db(sql`UPDATE remote_dispatches SET state = ${r.kind === "task" ? "lost" : "settled"}, last_error = ${r.kind === "task" ? "Origin thread is unavailable." : null}, updated_at = ${yield* now}
+          WHERE correlation_id = ${id} AND state = 'running'`);
+            }),
           );
           return false;
         }
@@ -820,21 +820,19 @@ const make = Effect.gen(function* () {
               error.reason === "remote_refused" &&
               (error.remoteCode === "capability_denied" || error.remoteCode === "thread_not_found");
             if (gone) {
-              if (yield* deleteIntentHeld(id)) return false;
-              yield* taskEffect(
-                recordRemoteTaskResult({
-                  ...taskRecord(r),
-                  status: "failed",
-                  summary: "The remote task's thread or report binding is unavailable.",
-                }),
-              );
-              const at = yield* now;
+              // The result and the row change together under the lock, by the drain that owns it.
               yield* owned(
                 id,
                 owner,
-                db(
-                  sql`UPDATE remote_dispatches SET state = 'lost', last_error = 'Remote task binding or thread is unavailable.', updated_at = ${at} WHERE correlation_id = ${id} AND state = 'running'`,
-                ),
+                Effect.gen(function* () {
+                  if (yield* noteDeleteIntent(id)) return;
+                  const current = yield* load(id);
+                  if (current?.state !== "running") return;
+                  yield* taskEffect(recordBindingLost(current));
+                  yield* db(
+                    sql`UPDATE remote_dispatches SET state = 'lost', last_error = 'Remote task binding or thread is unavailable.', updated_at = ${yield* now} WHERE correlation_id = ${id} AND state = 'running'`,
+                  );
+                }),
               );
               return false;
             }
