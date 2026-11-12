@@ -560,6 +560,33 @@ describe("ChannelBotThreads paged read", () => {
     ),
   );
 
+  it.effect(
+    "keeps a task that crosses the three-day cutoff between page requests listed once",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          for (const [id, hoursAgo] of [
+            ["near", 70],
+            ["edge", 71],
+            ["old", 80],
+          ] as const)
+            yield* insertTask(id, { status: "completed", updatedAt: at(hoursAgo) });
+          const first = yield* list({ kind: "first" });
+          assert.deepStrictEqual(taskIds([first]), ["near", "edge"]);
+          // Three hours later both recent tasks are past the cutoff, which each request computes anew.
+          yield* TestClock.adjust("3 hours");
+          const cursor = first.page?.earlierCursor ?? "";
+          const continued = yield* list({ kind: "earlier", cursor });
+          assert.deepStrictEqual(taskIds([continued]), ["old"], "the old cursor repeats nothing");
+          // A client that reads the first page again starts its earlier pages over from its cursor.
+          const restarted = yield* walk;
+          assert.deepStrictEqual(taskIds(restarted.slice(0, 1)), []);
+          assertEachOnce(taskIds(restarted), ["near", "edge", "old"]);
+        }),
+      ),
+  );
+
   it.effect("answers a malformed cursor as invalid input", () =>
     provide(
       Effect.gen(function* () {
