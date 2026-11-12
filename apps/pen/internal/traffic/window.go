@@ -33,7 +33,8 @@ type entry [Buckets]bucket
 
 // Window keeps, per member and relay, the bytes in and out of the last 24 hours in fixed buckets.
 type Window struct {
-	now func() time.Time
+	now  func() time.Time
+	made time.Time
 
 	mu      sync.Mutex
 	entries map[key]*entry
@@ -44,12 +45,21 @@ type Window struct {
 
 // NewWindow reads the wall clock through now.
 func NewWindow(now func() time.Time) *Window {
-	return &Window{now: now, entries: map[key]*entry{}, pruned: math.MinInt64}
+	return &Window{now: now, made: now(), entries: map[key]*entry{}, pruned: math.MinInt64}
+}
+
+// Since is where the totals start: when the window was made, or 24 hours ago if that is later.
+func (w *Window) Since() time.Time {
+	if s := w.now().Add(-24 * time.Hour); s.After(w.made) {
+		return s
+	}
+	return w.made
 }
 
 func bucketOf(t time.Time) int64 { return t.UnixNano() / int64(Span) }
 
-func addSat(a, b uint64) uint64 {
+// AddSat adds without wrapping: a sum past MaxUint64 stays MaxUint64.
+func AddSat(a, b uint64) uint64 {
 	if s := a + b; s >= a {
 		return s
 	}
@@ -60,7 +70,7 @@ func addSat(a, b uint64) uint64 {
 func (e *entry) sum(now int64) (in, out uint64) {
 	for i := range e {
 		if b := &e[i]; b.idx > now-Buckets && b.idx <= now {
-			in, out = addSat(in, b.in), addSat(out, b.out)
+			in, out = AddSat(in, b.in), AddSat(out, b.out)
 		}
 	}
 	return in, out
@@ -87,7 +97,7 @@ func (w *Window) Add(member, relay string, in, out uint64) error {
 	if b.idx != now {
 		*b = bucket{idx: now}
 	}
-	b.in, b.out = addSat(b.in, in), addSat(b.out, out)
+	b.in, b.out = AddSat(b.in, in), AddSat(b.out, out)
 	return nil
 }
 
