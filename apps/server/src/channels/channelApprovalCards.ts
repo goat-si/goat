@@ -79,6 +79,14 @@ const actionPhrase = (kind: OrchestrationV2RuntimeRequest["kind"] | undefined): 
 };
 
 const MAX_PROMPT_CHARS = 400;
+/** Bounds a card so three in one Slack section (3,000 characters) keep every prompt visible. */
+const MAX_TITLE_CHARS = 120;
+
+const clip = (text: string, max: number) =>
+  text.length > max ? text.slice(0, max - 1) + "…" : text;
+
+/** The work's title as an approval card shows it. */
+export const approvalTitle = (task: ChannelTask) => clip(task.title, MAX_TITLE_CHARS);
 
 /**
  * The two buttons on an approval card, Deny first so a quick first pick never approves. A Slack
@@ -116,14 +124,10 @@ export const approvalCard = (input: {
   readonly prompt: string | undefined;
 }): { readonly text: string; readonly options: ReadonlyArray<string> } => {
   const prompt = input.prompt?.trim();
-  const detail =
-    prompt === undefined || prompt === ""
-      ? ""
-      : "\n" +
-        (prompt.length > MAX_PROMPT_CHARS ? prompt.slice(0, MAX_PROMPT_CHARS - 1) + "…" : prompt);
+  const detail = prompt === undefined || prompt === "" ? "" : "\n" + clip(prompt, MAX_PROMPT_CHARS);
   return {
     text:
-      input.card.task.title +
+      approvalTitle(input.card.task) +
       ": " +
       (input.bySubagent ? "a subagent" : "the agent") +
       " wants to " +

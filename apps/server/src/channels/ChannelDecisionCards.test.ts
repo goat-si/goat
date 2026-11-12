@@ -20,6 +20,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { handleSlackEnvelope } from "./slack/SlackChannelAdapter.ts";
+import { slackChoiceBlocks } from "./slack/slackMessageFormatting.ts";
 import {
   defaultScript,
   linkSlackUser,
@@ -379,6 +380,36 @@ describe("decision cards", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  // Slack cuts a section at 3,000 characters but keeps every button, so the words for a request
+  // must never outlast the text that says what it is.
+  it.effect("keeps every repeated request's prompt inside Slack's section text", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(slackInput("do: deploy " + "x".repeat(3000), "Ev1"), slackContext);
+      yield* runtime.drain;
+      const worker = (yield* onlyTask).worker!.threadId;
+      const requests = ["one", "two", "three"].map(approval);
+      harness.world.runtimeRequests.set(worker, requests);
+      for (const [index, request] of requests.entries()) {
+        harness.world.approvalPrompts.set(request.id, String(index).repeat(399) + "!");
+      }
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+
+      yield* gateway.ingest(slackInput("approve", "Ev2"), slackContext);
+      yield* runtime.drain;
+      const asked = resultsTo(harness.slackSent, "question").at(-1)?.message;
+      assert.include(asked?.text ?? "", CHANNEL_COPY.approvalNeedsCode);
+      const [section] = slackChoiceBlocks(asked?.text ?? "", asked?.options ?? []) ?? [];
+      const shown = section?.type === "section" ? section.text.text : "";
+      for (const index of [0, 1, 2]) assert.include(shown, String(index).repeat(399) + "!");
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   // A card sent before this change listed "1. Approve A1 / 2. Deny A1"; a number typed for it
   // must not land on a question asked since.

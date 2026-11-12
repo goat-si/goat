@@ -8,7 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import { approvalCard, type OpenApprovalCard } from "./channelApprovalCards.ts";
+import { approvalCard, approvalTitle, type OpenApprovalCard } from "./channelApprovalCards.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { approvalRequestDetail } from "./channelNativeQuestionCards.ts";
@@ -65,7 +65,7 @@ export const askForApprovalCode = Effect.fn("channel.askForApprovalCode")(functi
         now,
       });
       if (detail.prompt === undefined || detail.prompt.trim() === "") {
-        const unreadable = card.task.title + ": " + CHANNEL_COPY.approvalDetailUnreadable;
+        const unreadable = approvalTitle(card.task) + ": " + CHANNEL_COPY.approvalDetailUnreadable;
         return { text: code + ": " + unreadable, options: [] };
       }
       const words = approvalCard({
