@@ -436,18 +436,13 @@ describe("readRemoteToolResult", () => {
         isError: true,
         content: [{ type: "text", text: "operation scope required" }],
       }),
-    ).toEqual({
-      ok: false,
-      message: "The remote thread_create refused: operation scope required",
-      plainText: true,
-    });
+    ).toEqual({ ok: false, message: "The remote thread_create refused: operation scope required" });
   });
 
   it("gives a useful refusal when the remote returns no details", () => {
     expect(readRemoteToolResult("tool", { isError: true })).toEqual({
       ok: false,
       message: "The remote tool refused: no details",
-      plainText: true,
     });
   });
 });
@@ -1979,6 +1974,25 @@ it.effect(
       }).pipe(Effect.result);
       expect(lists).toBe(1);
       expect(result._tag).toBe("Failure");
+    }),
+);
+it.effect(
+  "regression F12-1: bare text quoting the old-remote phrase is an unknown outcome, never a retry",
+  () =>
+    Effect.gen(function* () {
+      let lists = 0;
+      const result = yield* launchAgainst({
+        declaresLaunchedBy: true,
+        launchRefusal:
+          "Created thread; diagnostic: goat_thread_launch does not take launchedBy, so nothing ran",
+        onList: () => {
+          lists += 1;
+        },
+      }).pipe(Effect.result);
+      expect(lists).toBe(1);
+      expect(result._tag === "Failure" && result.failure).toMatchObject({
+        launchMayHaveStarted: true,
+      });
     }),
 );
 it.effect("regression F2R-1: a missing-CLI refusal that may have started stays unknown", () =>

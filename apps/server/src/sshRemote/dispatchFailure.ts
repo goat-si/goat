@@ -44,21 +44,26 @@ export const memoryRefusal = (message: string) =>
   });
 
 /**
- * An older remote's answer that goat_thread_launch takes no launchedBy, so nothing ran: its
- * schema refuses invalid params before the handler, or it says so in bare text. A structured
- * refusal or any other RPC or transport failure may follow a create, so none of those count.
+ * A remote's answer that goat_thread_launch takes no launchedBy, so nothing ran: GOAT's admission
+ * refusal of an undeclared argument (invalid_request), or an older schema's invalid params, each
+ * before the handler and starting with that sentence. Bare text, another code or error, or the
+ * phrase anywhere else may follow a create, so none of those count.
  */
 export const isLaunchedByRefusal = (
   tool: string,
   said: {
-    readonly message: string | undefined;
+    readonly message?: string | undefined;
     readonly rpcCode?: number | undefined;
-    readonly plainText?: true | undefined;
+    readonly code?: string | undefined;
+    readonly mayHaveStarted?: boolean | undefined;
   },
 ) =>
   tool === "goat_thread_launch" &&
-  (said.rpcCode === -32602 || said.plainText === true) &&
-  said.message?.includes("goat_thread_launch does not take launchedBy, so nothing ran") === true;
+  said.mayHaveStarted !== true &&
+  (said.rpcCode === -32602 || said.code === "invalid_request") &&
+  said.message
+    ?.replace(/^The remote goat_thread_launch refused: /u, "")
+    .startsWith("goat_thread_launch does not take launchedBy, so nothing ran") === true;
 
 export const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
   new SshRemoteDispatchError({ reason, message, ...facts });

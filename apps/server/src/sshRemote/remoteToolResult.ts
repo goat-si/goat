@@ -18,8 +18,6 @@ export function readRemoteToolResult(
       readonly mayHaveStarted?: boolean;
       readonly threadId?: string;
       readonly driver?: string;
-      /** The refusal was bare text, as an older GOAT answered, with no structured payload. */
-      readonly plainText?: true;
     } {
   const result = (typeof raw === "object" && raw !== null ? raw : {}) as CallToolResult;
   const text = result.content?.find((item) => item.type === "text")?.text;
@@ -56,7 +54,6 @@ export function readRemoteToolResult(
         : {}),
       ...(typeof fields.threadId === "string" ? { threadId: fields.threadId } : {}),
       ...(typeof fields.driver === "string" ? { driver: fields.driver } : {}),
-      ...(typeof payload === "object" && payload !== null ? {} : { plainText: true as const }),
     };
   }
   return { ok: true, value: payload };

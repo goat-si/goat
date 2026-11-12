@@ -60,7 +60,6 @@ export const toolRefusal = (
     readonly threadId?: string | undefined;
     readonly driver?: string | undefined;
     readonly message?: string | undefined;
-    readonly plainText?: true | undefined;
   },
 ) => {
   // The destination refused before creating anything because the provider's CLI is missing there.
@@ -80,8 +79,7 @@ export const toolRefusal = (
       ...(result.threadId === undefined ? {} : { remoteThreadId: result.threadId }),
       launchMayHaveStarted: result.mayHaveStarted !== false,
     };
-  if (isLaunchedByRefusal(tool, { message: result.message ?? "", plainText: result.plainText }))
-    return { launchedByRefused: true as const };
+  if (isLaunchedByRefusal(tool, result)) return { launchedByRefused: true as const };
   return {
     ...(result.code === undefined ? {} : { remoteCode: result.code }),
     ...(tool === "goat_thread_launch" &&
