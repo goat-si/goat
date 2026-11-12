@@ -1459,8 +1459,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --sidebar-row-active: var(--accent);
     --sidebar-row-selected: var(--muted);
     --chrome-divider: var(--sidebar-border);
-    /* Code and diffs sit in a well below the canvas: the pierre-dark syntax
-       theme's punctuation and comments need the darker ground to stay legible. */
+    /* Code and diffs sit in a well below the canvas. goat-dark's syntax colors
+       (lib/readableSyntaxTheme.ts) are tuned for code surfaces this dark. */
     --code-background: color-mix(in srgb, var(--background) 65%, var(--color-black));
     --terminal-cursor: rgb(180 203 255);
     --terminal-selection-background: rgb(180 203 255 / 25%);

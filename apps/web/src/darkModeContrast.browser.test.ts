@@ -3,6 +3,8 @@ import indexCss from "~/index.css?raw";
 import { GOAT_DARK_THEME_COLORS, type ThemeColorRole } from "@goat/shared/themePalettes";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { readableDarkSyntaxColor } from "~/lib/readableSyntaxTheme";
+
 // Contrast is measured on the pixels the browser paints: each token resolves
 // through the real stylesheet, translucent layers composite in order on a
 // canvas, and WCAG 2.2 relative luminance is computed from the result.
@@ -249,21 +251,20 @@ const DARK_PAIRS: ReadonlyArray<Pair> = [
     background: ["var(--background)", "var(--code-background)"],
     minimum: 4.5,
   },
-  // The dimmest pierre-dark syntax colors (punctuation, comments) are fixed by
-  // that theme, so the code ground is what keeps them readable.
+  // goat-dark's dimmest syntax colors (punctuation, comments), on the code ground they were tuned for.
   {
     label: "syntax punctuation / code block",
     scope: "root",
-    foreground: "#636363",
+    foreground: readableDarkSyntaxColor("#636363"),
     background: ["var(--background)", "var(--code-background)"],
-    minimum: 3,
+    minimum: 4.5,
   },
   {
     label: "syntax comment / code block",
     scope: "root",
-    foreground: "#737373",
+    foreground: readableDarkSyntaxColor("#737373"),
     background: ["var(--background)", "var(--code-background)"],
-    minimum: 4,
+    minimum: 4.5,
   },
   {
     label: "link (info) / canvas",
