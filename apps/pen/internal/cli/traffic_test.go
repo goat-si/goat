@@ -569,7 +569,7 @@ func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		reports = append(reports, r)
-		if len(reports) <= 2 {
+		if len(reports) == 1 {
 			return `{"error":"unknown op \"traffic.report\""}`
 		}
 		return `{"t":"counted"}`
@@ -598,16 +598,14 @@ func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
 	out.wait(100)
 	now.Store(start.Add(2 * time.Minute).UnixNano())
 	ticks <- time.Now()
-	<-reported // refused: kept
-	now.Store(start.Add(traffic.Span + time.Minute).UnixNano())
-	ticks <- time.Now()
-	<-reported // refused again, a bucket after those bytes: dropped
+	<-reported // refused: those 100 bytes wait
 	inW.Write(make([]byte, 50))
 	out.wait(150)
-	now.Store(start.Add(traffic.Span + 2*time.Minute).UnixNano())
+	// The daemon answers again only a bucket after the refused bytes began: they are dropped, not counted now.
+	now.Store(start.Add(traffic.Span + time.Minute).UnixNano())
 	ticks <- time.Now()
 	if err := <-reported; err != nil {
-		t.Fatalf("third report: %v", err)
+		t.Fatalf("second report: %v", err)
 	}
 	inW.Close()
 	if c := <-code; c != 0 {
@@ -615,8 +613,8 @@ func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(reports) != 3 || reports[2].In != 50 || reports[2].Out != 50 {
-		t.Fatalf("reports %+v; want the counted third report to carry only the 50 new bytes each way", reports)
+	if len(reports) != 2 || reports[1].In != 50 || reports[1].Out != 50 {
+		t.Fatalf("reports %+v; want the counted second report to carry only the 50 new bytes each way", reports)
 	}
 }
 

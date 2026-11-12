@@ -54,15 +54,16 @@ type sessionTraffic struct {
 	// ctx ends a periodic report still in flight when the session's shutdown deadline passes.
 	ctx    context.Context
 	cancel context.CancelFunc
-	// sentIn, sentOut and since (when the bytes not yet settled began) are touched by report and finish only, one at
-	// a time.
-	sentIn, sentOut uint64
-	since           time.Time
-	stop, done      chan struct{}
+	// Touched by report only, one call at a time: sentIn and sentOut are settled (counted, possibly counted, or
+	// dropped); heldIn and heldOut are what a refused or unsent report carried, from heldSince on; lastTry is when
+	// the last report was due, where bytes not yet in a report begin.
+	sentIn, sentOut, heldIn, heldOut uint64
+	heldSince, lastTry               time.Time
+	stop, done                       chan struct{}
 }
 
 func startTraffic(st *state.Store, node, relay string) *sessionTraffic {
-	s := &sessionTraffic{st: st, node: node, relay: relay, since: trafficNow(), stop: make(chan struct{}), done: make(chan struct{})}
+	s := &sessionTraffic{st: st, node: node, relay: relay, lastTry: trafficNow(), stop: make(chan struct{}), done: make(chan struct{})}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	ticks, stopTicks := trafficTicks()
 	go func() {
@@ -110,20 +111,25 @@ func (s *sessionTraffic) finish() {
 }
 
 func (s *sessionTraffic) report(ctx context.Context) {
-	in, out := min(s.in.Load()-s.sentIn, daemon.MaxTrafficCount), min(s.out.Load()-s.sentOut, daemon.MaxTrafficCount)
 	now := trafficNow()
+	if (s.heldIn != 0 || s.heldOut != 0) && now.Sub(s.heldSince) >= traffic.Span {
+		// Dropped: counted now, they would land in a later bucket than the one they crossed the relay in.
+		s.sentIn, s.sentOut, s.heldIn, s.heldOut = s.sentIn+s.heldIn, s.sentOut+s.heldOut, 0, 0
+	}
+	in, out := min(s.in.Load()-s.sentIn, daemon.MaxTrafficCount), min(s.out.Load()-s.sentOut, daemon.MaxTrafficCount)
+	since := s.lastTry
+	s.lastTry = now
 	if in == 0 && out == 0 {
-		s.since = now
 		return
 	}
 	kept, err := sendReport(ctx, s.st, daemon.TrafficReport{Op: "traffic.report", Node: s.node, Relay: s.relay, In: in, Out: out})
-	if kept && now.Sub(s.since) >= traffic.Span {
-		kept = false // dropped: older bytes would land in a later bucket than the one they crossed the relay in
-	}
-	if !kept {
-		s.sentIn += in
-		s.sentOut += out
-		s.since = now
+	if kept {
+		if s.heldIn == 0 && s.heldOut == 0 {
+			s.heldSince = since
+		}
+		s.heldIn, s.heldOut = in, out
+	} else {
+		s.sentIn, s.sentOut, s.heldIn, s.heldOut = s.sentIn+in, s.sentOut+out, 0, 0
 	}
 	if trafficReported != nil {
 		trafficReported(err)
