@@ -150,8 +150,8 @@ export function GoatBotTimeline({
     ? goatBotActivity({ reading: true, task: null, worker: null })
     : working;
   const activityText = activity?.text ?? null;
-  // The transcript's height right after the activity line opened or closed in place; the one
-  // resize that reaches it is that toggle's own and does not follow the newest message.
+  // The transcript's height right after a line opened or closed in place and resized the list;
+  // the one resize that reaches it is that toggle's own and does not follow the newest message.
   const toggledHeight = useRef<number | null>(null);
   const updateEdges = useStableCallback(() => {
     const scroll = scrollRef.current;
@@ -258,11 +258,14 @@ export function GoatBotTimeline({
   const keepPlace = (toggle: () => void) => {
     const scroll = scrollRef.current;
     const top = scroll?.scrollTop;
+    const listHeight = listRef.current?.getBoundingClientRect().height;
     flushSync(toggle);
     if (scroll === null || top === undefined) return;
     scroll.scrollTop = top;
     lastScrollTopRef.current = scroll.scrollTop;
-    toggledHeight.current = scroll.scrollHeight;
+    // A toggle that left the list's height alone gets no resize to absorb.
+    toggledHeight.current =
+      listRef.current?.getBoundingClientRect().height === listHeight ? null : scroll.scrollHeight;
   };
   const trailingMark = steps?.trailing ?? null;
   const renderRow = (row: GoatBotRow | UnreadDivider, index: number) => {

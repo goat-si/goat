@@ -461,3 +461,16 @@ it("still follows a reply after a short line toggles for a reader at the bottom"
   await reply();
   expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBeLessThan(2);
 });
+
+it("still follows the newest message when the chat gets shorter after a short line toggled", async () => {
+  await using screen = await render(shortLineChat(30), { router: false });
+  const { scroller } = await toggleShortLine(screen);
+  using sizes = resizes(scroller);
+  await sizes.next();
+  // The window gets shorter or a keyboard opens: the content keeps its height, the view shrinks.
+  const frame = scroller.closest<HTMLElement>(".goat-timeline")?.parentElement;
+  if (!frame) throw new Error("missing chat frame");
+  frame.style.height = "200px";
+  await sizes.next();
+  expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBeLessThan(2);
+});
