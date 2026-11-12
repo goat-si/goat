@@ -437,7 +437,7 @@ func TestSSHConfigWritesAnExactNodeIDBlockPerMemberWithoutConnectionReuse(t *tes
 	if !strings.Contains(blk, " pipe ") || !strings.Contains(blk, " --node "+am.NodeID+" --noise "+am.NoisePub+" 22\n") || strings.Contains(blk, "%n") {
 		t.Fatalf("pen-<nodeId> block is not the exact form:\n%s", blk)
 	}
-	if i := strings.Index(cfg, "Host pen-"+am.NodeID+"\n"); i < strings.Index(cfg, "Host pen-a\n") || i > strings.Index(cfg, "Host pen-*\n") {
+	if i := strings.Index(cfg, "Host pen-"+am.NodeID+"\n"); i < strings.Index(cfg, "Host pen-a\n") || i > strings.Index(cfg, "Host "+fallbackHost+"\n") {
 		t.Fatal("the pen-<nodeId> blocks must come after the name blocks and before pen-*")
 	}
 	if connectionReuse && (!strings.Contains(blk, "ControlMaster no\n") || !strings.Contains(blk, "ControlPath none\n")) {
@@ -465,7 +465,7 @@ func TestSSHConfigKeepsEveryNameBlockAsItWasEvenANameThatEqualsANodeID(t *testin
 		named = append(named, sshHost{Name: h.Name, User: h.User})
 	}
 	old := sshConfigText(cmd, "/k/known_hosts", "/k", named)
-	fallback := old[strings.Index(old, "Host pen-*\n"):]
+	fallback := old[strings.Index(old, "Host "+fallbackHost+"\n"):]
 	if !strings.HasPrefix(got, strings.TrimSuffix(old, fallback)) || !strings.HasSuffix(got, fallback) {
 		t.Fatalf("name blocks changed:\n%s\nwant the name blocks of:\n%s", got, old)
 	}
