@@ -318,8 +318,9 @@ command. The command does nothing while display 99 is running; if another
 program holds that number, use another number in all three places.</p>
 </li>
 </ul>
-<p>App controls need AT-SPI (the <code>at-spi2-core</code> package) and one D-Bus session
-bus that GOAT and the apps share; without them agents can still take
+<p>App controls need AT-SPI (the <code>at-spi2-core</code> package), the <code>gdbus</code> command
+(<code>libglib2.0-bin</code> on Debian and Ubuntu), and one D-Bus session bus that GOAT
+and the apps share; without them agents can still take
 screenshots and use the mouse and keyboard. GOAT turns accessibility on when
 computer use starts, but Chrome and Electron apps such as VS Code read that
 setting only when they open, so quit and reopen apps that were already open.
