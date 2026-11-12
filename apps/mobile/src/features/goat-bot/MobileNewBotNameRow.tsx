@@ -1,3 +1,4 @@
+import { isGeneratedBotName } from "@goat/client-runtime/goatBot";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { useState, type ReactNode } from "react";
 import { AccessibilityInfo, Platform, Pressable, Text, TextInput, View } from "react-native";
@@ -5,7 +6,6 @@ import { AccessibilityInfo, Platform, Pressable, Text, TextInput, View } from "r
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { dismissBotNameRow, useBotNameRowDismissed } from "./mobileBotNameRowDismissed";
-import { isGeneratedBotName } from "./mobileNewBotNames";
 import { useMobileBotManage } from "./useMobileBotManage";
 
 /**

@@ -6,24 +6,26 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId } from "@goat/contracts";
-import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
-import { Alert, type AlertButton, AppState, Pressable, Text, View } from "react-native";
-import { MobileBotEditSheet } from "./MobileBotEditSheet";
-import { MobileBotRosterView } from "./MobileBotRosterView";
 import {
   dismissCreatedBot,
   dismissNewBot,
   forgetNewBotIntentsOf,
+  goatBotName,
   newBotSlot,
   retryNewBot,
   settleListedNewBots,
   startNewBot,
   subscribeNewBots,
+  type BotRosterEntry,
   type CreateNewBot,
   type OpenIfStillHere,
-} from "./mobileNewBots";
+} from "@goat/client-runtime/goatBot";
+import type { BotProfile, ChannelTaskId } from "@goat/contracts";
+import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
+import { Alert, type AlertButton, AppState, Pressable, Text, View } from "react-native";
+import { uuidv4 } from "../../lib/uuid";
+import { MobileBotEditSheet } from "./MobileBotEditSheet";
+import { MobileBotRosterView } from "./MobileBotRosterView";
 import { MobileNewBotStatus } from "./MobileNewBotStatus";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
@@ -181,7 +183,7 @@ export function MobileBotRoster(props: {
                 canCreate: manage.canCreate && listed !== null && operation === null,
                 onNewBot: () => {
                   if (environmentId !== null && listed !== null)
-                    startNewBot(environmentId, listed, create, openIfStillHere(), mount);
+                    startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);
                 },
                 onLongPressBot: askAbout,
                 canRestore: manage.canManage,
