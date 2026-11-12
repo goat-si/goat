@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ChannelChildWork from "./ChannelChildWork.ts";
+import { launchesStatement } from "./channelBotThreadHistory.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { childWorkCorrelationIdFor, taskEventIdFor } from "./channelIds.ts";
@@ -303,6 +304,98 @@ describe("ChannelChildWork reconcile", () => {
   );
 
   it.effect(
+    "keeps a remote launch's acknowledged thread when reconcile binds it before the launch does",
+    () =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const sql = yield* SqlClient.SqlClient;
+        const admission = yield* admit("remote thread", { surface: "ssh_thread_launch" });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* Effect.scoped(
+          childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+        );
+        // The coordinator stores the acknowledgement before the launch call returns to bind it.
+        yield* sql`INSERT INTO remote_dispatches
+          (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
+          VALUES (${correlationId}, 'thread', ${admission.record.callerThreadId}, 'box', 'remote-thread', 'read-key', 'wake', 'running', ${NOW}, ${NOW})`;
+        assert.strictEqual(yield* childWork.reconcile, 1);
+        yield* childWork.markBound(admission.record, {
+          correlationId,
+          host: "box",
+          threadId: ThreadId.make("remote-thread"),
+          environmentId: EnvironmentId.make("box-env"),
+        });
+        const record = yield* store.get(taskId, admission.record.childWorkId);
+        assert.strictEqual(record?.state, "bound");
+        assert.deepStrictEqual(record?.destination, {
+          correlationId,
+          host: "box",
+          threadId: ThreadId.make("remote-thread"),
+        });
+        const listed = yield* launchesStatement(sql, {
+          ownerId: admission.record.ownerId,
+          taskId,
+          limit: 21,
+        });
+        assert.deepStrictEqual(
+          listed.map((row) => row.key),
+          ["child-work:" + taskId + ":" + admission.record.childWorkId],
+        );
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect(
+    "fills a missing remote thread from its dispatch when the launch never binds, and never replaces one",
+    () =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const sql = yield* SqlClient.SqlClient;
+        const claim = (key: string) =>
+          Effect.gen(function* () {
+            const admission = yield* admit(key, { surface: "ssh_thread_launch" });
+            if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+            const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+            yield* Effect.scoped(
+              childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+            );
+            return { record: admission.record, correlationId };
+          });
+        const dispatch = (correlationId: string, state: string, remoteThreadId: string | null) =>
+          sql`INSERT INTO remote_dispatches
+            (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
+            VALUES (${correlationId}, 'thread', 'caller', 'box', ${remoteThreadId}, 'read-key', 'wake', ${state}, ${NOW}, ${NOW})`;
+        const crashed = yield* claim("bound before its thread was stored");
+        const settled = yield* claim("settled before it bound");
+        const own = yield* claim("bound with its own thread");
+        yield* dispatch(crashed.correlationId, "running", null);
+        yield* dispatch(settled.correlationId, "settled", "settled-thread");
+        yield* dispatch(own.correlationId, "running", "another-thread");
+        yield* childWork.markBound(own.record, {
+          correlationId: own.correlationId,
+          host: "box",
+          threadId: ThreadId.make("own-thread"),
+        });
+        // A pass that ran before the coordinator stored the thread bound the record without it.
+        assert.strictEqual(yield* childWork.reconcile, 2);
+        yield* sql`UPDATE remote_dispatches SET remote_thread_id = 'crashed-thread'
+          WHERE correlation_id = ${crashed.correlationId}`;
+        assert.strictEqual(yield* childWork.reconcile, 1);
+        const threadOf = (record: typeof own.record) =>
+          store
+            .get(taskId, record.childWorkId)
+            .pipe(Effect.map((stored) => `${stored?.state} ${stored?.destination?.threadId}`));
+        assert.strictEqual(yield* threadOf(crashed.record), "bound crashed-thread");
+        assert.strictEqual(yield* threadOf(settled.record), "completed settled-thread");
+        assert.strictEqual(yield* threadOf(own.record), "bound own-thread");
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect(
     "keeps a launched remote record without a dispatch row while its launch is in flight, even once the task settles",
     () =>
       Effect.gen(function* () {
@@ -362,6 +455,81 @@ describe("ChannelChildWork reconcile", () => {
         assert.strictEqual((yield* store.get(taskId, sent.record.childWorkId))?.state, "launched");
         const next = yield* admit("after release", { surface: "delegate_remote" });
         assert.strictEqual(next._tag, "admitted");
+      }).pipe(Effect.provide(makeLayer())),
+  );
+});
+
+describe("ChannelChildWork reconcile after a host outage or a dismissal", () => {
+  it.effect.each([
+    ["its host was unreachable for a day", "lost", "host_unreachable", "failed"],
+    ["a person dismissed it", "cancelled", "dismissed", "cancelled"],
+  ] as const)(
+    "settles a remote thread launch whose %s by that outcome and keeps its acknowledged thread",
+    ([, state, endReason, expected]) =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const sql = yield* SqlClient.SqlClient;
+        const admission = yield* admit("remote thread", { surface: "ssh_thread_launch" });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* Effect.scoped(
+          childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+        );
+        yield* sql`INSERT INTO remote_dispatches
+          (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state,
+            end_reason, ended_at, created_at, updated_at)
+          VALUES (${correlationId}, 'thread', ${admission.record.callerThreadId}, 'box', 'remote-thread',
+            'read-key', 'wake', ${state}, ${endReason}, ${NOW}, ${NOW}, ${NOW})`;
+        assert.strictEqual(yield* childWork.reconcile, 1);
+        const record = yield* store.get(taskId, admission.record.childWorkId);
+        assert.strictEqual(record?.state, expected);
+        assert.strictEqual(record?.destination?.threadId, "remote-thread");
+        const listed = yield* launchesStatement(sql, {
+          ownerId: admission.record.ownerId,
+          taskId,
+          limit: 21,
+        });
+        assert.lengthOf(listed, 1);
+      }).pipe(Effect.provide(makeLayer())),
+  );
+});
+
+describe("ChannelChildWorkStore transition", () => {
+  it.effect(
+    "refuses a destination together with threadIdIfMissing and keeps the recorded thread",
+    () =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const admission = yield* admit("remote thread", { surface: "ssh_thread_launch" });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+        yield* Effect.scoped(
+          childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+        );
+        yield* childWork.markBound(admission.record, {
+          correlationId,
+          host: "box",
+          threadId: ThreadId.make("own-thread"),
+        });
+        const refused = yield* Effect.result(
+          store.transition({
+            taskId,
+            childWorkId: admission.record.childWorkId,
+            from: ["bound"],
+            to: "completed",
+            destination: { correlationId, host: "box" },
+            threadIdIfMissing: ThreadId.make("other-thread"),
+            now: NOW,
+          }),
+        );
+        assert.strictEqual(refused._tag, "Failure");
+        const record = yield* store.get(taskId, admission.record.childWorkId);
+        assert.strictEqual(record?.state, "bound");
+        assert.strictEqual(record?.destination?.threadId, "own-thread");
       }).pipe(Effect.provide(makeLayer())),
   );
 });

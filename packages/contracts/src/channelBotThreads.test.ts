@@ -1,7 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 import { ChannelChildWork } from "./channelChildWork.ts";
-import { ChannelListBotThreadsResult, ChannelUpdateTaskViewInput } from "./channelGateway.ts";
+import {
+  ChannelListBotThreadsInput,
+  ChannelListBotThreadsResult,
+  ChannelUpdateTaskViewInput,
+} from "./channelGateway.ts";
+import { BotId } from "./botProfile.ts";
 
 const decodeRows = Schema.decodeUnknownSync(ChannelListBotThreadsResult);
 const decodeUpdate = Schema.decodeUnknownSync(ChannelUpdateTaskViewInput);
@@ -17,6 +22,21 @@ const decodeRowsBefore = Schema.decodeUnknownSync(
 const at = "2026-11-04T10:00:00.000Z";
 
 describe("bot thread contracts", () => {
+  it("bounds a history cursor, and an older server's input drops the history key", () => {
+    const decodeInput = Schema.decodeUnknownSync(ChannelListBotThreadsInput);
+    expect(
+      decodeInput({ history: { cursor: "v1." + "a".repeat(509) } }).history?.cursor,
+    ).toHaveLength(512);
+    expect(() => decodeInput({ history: { cursor: "v1." + "a".repeat(510) } })).toThrow();
+    // RpcServer decodes payloads with the default onExcessProperty, "ignore".
+    const decodeOlder = Schema.decodeUnknownSync(
+      Schema.Struct({ botId: Schema.optionalKey(BotId) }),
+    );
+    expect(decodeOlder({ botId: "helper", history: { cursor: "v1.x" } })).toEqual({
+      botId: "helper",
+    });
+  });
+
   it("decodes task views and coding destinations without the full ledger record", () => {
     const result = decodeRows({
       mainMessageCount: 10,

@@ -28,7 +28,7 @@ import {
   isGoatBotSessionThreadId,
   localChildThreadId,
   type RunId,
-  type ThreadId,
+  ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -64,6 +64,8 @@ const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =
   surface === "delegate_local" || surface === "delegate_remote"
     ? CHANNEL_CHILD_WORK_MAX_ACTIVE
     : CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS;
+
+const isThreadId = Schema.is(ThreadId);
 
 export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkError>()(
   "ChannelChildWorkError",
@@ -407,6 +409,7 @@ const make = Effect.gen(function* () {
     from: ReadonlyArray<ChannelChildWorkState>,
     to: ChannelChildWorkState,
     destination?: ChannelChildWorkDestination,
+    threadIdIfMissing?: ThreadId,
   ): Effect.Effect<boolean> =>
     nowIso.pipe(
       Effect.flatMap((now) =>
@@ -416,6 +419,7 @@ const make = Effect.gen(function* () {
           from,
           to,
           ...(destination === undefined ? {} : { destination }),
+          ...(threadIdIfMissing === undefined ? {} : { threadIdIfMissing }),
           now,
         }),
       ),
@@ -657,8 +661,9 @@ const make = Effect.gen(function* () {
       readonly kind: string;
       readonly known_run_status: string | null;
       readonly end_reason: string | null;
+      readonly remote_thread_id: string | null;
     }>`
-      SELECT state, kind, known_run_status, end_reason FROM remote_dispatches
+      SELECT state, kind, known_run_status, end_reason, remote_thread_id FROM remote_dispatches
       WHERE correlation_id = ${correlationId}
     `.pipe(Effect.mapError(() => undefined));
     if (rows === undefined) return false;
@@ -669,28 +674,36 @@ const make = Effect.gen(function* () {
       return yield* transition(record, ["launched"], "released");
     }
     const { state, kind, known_run_status: runStatus, end_reason: endReason } = rows[0];
+    // The coordinator stores a remote thread launch's acknowledged thread before the launch binds
+    // it, so a pass that gets here first, or after a crash, fills it in; a set one is kept.
+    const remoteThreadId = rows[0].remote_thread_id;
+    const acknowledged =
+      record.surface === "ssh_thread_launch" &&
+      record.destination?.threadId === undefined &&
+      isThreadId(remoteThreadId)
+        ? remoteThreadId
+        : undefined;
+    const move = (from: ReadonlyArray<ChannelChildWorkState>, to: ChannelChildWorkState) =>
+      transition(record, from, to, undefined, acknowledged);
     if (state === "running" || state === "idle") {
-      if (record.state !== "bound")
-        return yield* transition(record, ["launched", "unknown"], "bound");
-      return false;
+      if (record.state !== "bound") return yield* move(["launched", "unknown"], "bound");
+      return acknowledged === undefined ? false : yield* move(["bound"], "bound");
     }
     // A task's row settles for every result; the run status it keeps says which.
     if (state === "settled")
-      return yield* transition(
-        record,
+      return yield* move(
         ["launched", "bound", "unknown"],
         kind === "task" && FAILED_RUNS.has(runStatus ?? "") ? "failed" : "completed",
       );
-    if (state === "cancelled")
-      return yield* transition(record, ["launched", "bound", "unknown"], "cancelled");
+    if (state === "cancelled") return yield* move(["launched", "bound", "unknown"], "cancelled");
     // GOAT stopped tracking it after a day without contact; whatever ran there is not this slot's.
     if (state === "lost" && endReason === "host_unreachable")
-      return yield* transition(record, ["launched", "bound", "unknown"], "failed");
+      return yield* move(["launched", "bound", "unknown"], "failed");
     if (state === "lost") {
       // The outcome is uncertain until the coordinator's resolve pass settles the row with the
       // destination: rebound (running) or fenced (cancelled).
-      if (record.state !== "unknown")
-        return yield* transition(record, ["launched", "bound"], "unknown");
+      if (record.state !== "unknown") return yield* move(["launched", "bound"], "unknown");
+      return acknowledged === undefined ? false : yield* move(["unknown"], "unknown");
     }
     return false;
   });

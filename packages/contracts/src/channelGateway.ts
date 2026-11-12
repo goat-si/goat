@@ -502,13 +502,56 @@ export const BotRemoteWork = Schema.Struct({
   workKind: Schema.optional(GoatBotWorkKind),
 });
 export type BotRemoteWork = typeof BotRemoteWork.Type;
-export const ChannelListBotThreadsInput = Schema.Struct({ botId: Schema.optionalKey(BotId) });
+/** A history page's tasks, and the launched threads it lists per task, newest first. */
+export const CHANNEL_BOT_THREADS_HISTORY_LIMIT = 50;
+export const CHANNEL_BOT_THREADS_HISTORY_LAUNCHES = 20;
+export const CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH = 512;
+/** Opaque and bound to one owner and bot; a server refuses one that is not its own. */
+export const ChannelBotThreadsCursor = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH),
+);
+export const ChannelListBotThreadsInput = Schema.Struct({
+  botId: Schema.optionalKey(BotId),
+  /**
+   * Read by servers with `goatBotTaskThreadsPaged`: instead of the current list, one page of
+   * every task of the bot by creation, newest first, from the cursor the previous page returned.
+   * Older servers drop the key and answer the current list.
+   */
+  history: Schema.optionalKey(
+    Schema.Struct({ cursor: Schema.optionalKey(ChannelBotThreadsCursor) }),
+  ),
+});
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
+  /** History pages carry 0: the bot's count belongs to the current list. */
   mainMessageCount: NonNegativeInt,
   /** Absent from servers before it; clients read that as none. */
   remoteWork: Schema.optional(Schema.Array(BotRemoteWork)),
+  /**
+   * Present when the input asked for history; an answer without it came from a server that does
+   * not walk history. A history row's mainMessagesSinceQuiet is the exact count capped at 10, the
+   * only value clients compare it with, so a ">= 10" decision matches the current list's.
+   */
+  history: Schema.optionalKey(
+    Schema.Struct({
+      /**
+       * The next page's start; absent once the walk reached the bot's oldest task. One request
+       * examines at most 500 tasks plus one lookahead, so a page can be short or empty and still
+       * carry it: keep reading until it is absent.
+       */
+      nextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
+      /** Tasks that launched more threads than this page lists; the rest stay in Threads. */
+      launchesTruncated: Schema.optionalKey(Schema.Array(ChannelTaskId)),
+      /** The walk cannot go on: the next task's stored id cannot be named in a cursor. */
+      endedEarly: Schema.optionalKey(Schema.Boolean),
+      /**
+       * This page left out stored tasks, launches or task views it could not read; a row whose
+       * view was unreadable shows the empty view. The walk is not a complete account of the bot.
+       */
+      partial: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
 });
 export type ChannelListBotThreadsResult = typeof ChannelListBotThreadsResult.Type;
 
