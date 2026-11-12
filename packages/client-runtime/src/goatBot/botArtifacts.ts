@@ -94,7 +94,75 @@ export async function readWholeBotArtifact(
 export const botArtifactName = (relativePath: string) =>
   relativePath.split("/").at(-1) ?? relativePath;
 
-const INLINE_CODE = /`([^`\n]+)`/g;
+// Any indent: a fence nested in a list item sits deeper than three spaces, and a deeper line
+// that is not one is an indented code block, which holds no inline code either.
+const FENCE_OPEN = /^[ \t]*(`{3,}(?=[^`]*$)|~{3,})/;
+const ASCII_PUNCTUATION = /[!-/:-@[-`{-~]/;
+
+/**
+ * The inline code spans of a markdown reply, as CommonMark reads them: none inside fenced code
+ * blocks, none opened by an escaped backtick, each closed by a backtick run of its own length,
+ * and none across a blank line. A span that wraps a line is left out, since no path holds one.
+ */
+function inlineCode(text: string): Array<string> {
+  const spans: Array<string> = [];
+  let paragraph: Array<string> = [];
+  let fence: { readonly char: string; readonly length: number } | null = null;
+  const flush = () => {
+    spansOf(paragraph.join("\n"), spans);
+    paragraph = [];
+  };
+  for (const line of text.split("\n")) {
+    if (fence !== null) {
+      const close = /^[ \t]*(`+|~+)\s*$/.exec(line)?.[1];
+      if (close?.[0] === fence.char && close.length >= fence.length) fence = null;
+      continue;
+    }
+    const open = FENCE_OPEN.exec(line)?.[1];
+    if (open !== undefined) {
+      flush();
+      fence = { char: open[0] ?? "`", length: open.length };
+    } else if (line.trim() === "") flush();
+    else paragraph.push(line);
+  }
+  flush();
+  return spans;
+}
+
+function spansOf(paragraph: string, into: Array<string>): void {
+  let index = 0;
+  while (index < paragraph.length) {
+    const char = paragraph[index];
+    if (char === "\\" && ASCII_PUNCTUATION.test(paragraph[index + 1] ?? "")) {
+      index += 2;
+      continue;
+    }
+    if (char !== "`") {
+      index += 1;
+      continue;
+    }
+    let run = 1;
+    while (paragraph[index + run] === "`") run += 1;
+    const start = index + run;
+    let close = -1;
+    for (let at = paragraph.indexOf("`", start); at !== -1;) {
+      let length = 1;
+      while (paragraph[at + length] === "`") length += 1;
+      if (length === run) {
+        close = at;
+        break;
+      }
+      at = paragraph.indexOf("`", at + length);
+    }
+    if (close === -1) {
+      index = start;
+      continue;
+    }
+    const code = paragraph.slice(start, close);
+    if (!code.includes("\n")) into.push(code);
+    index = close + run;
+  }
+}
 
 const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/;
 // The names the server lists (plainName in ChannelBotArtifacts): no leading dot, colon, backslash or edge spaces.
@@ -139,8 +207,8 @@ export function goatBotReplyFiles<File extends { readonly relativePath: string }
   const windows = root !== undefined && (root.includes("\\") || /^[A-Za-z]:/.test(root));
   const folder = root === undefined ? null : normalizedAbsolute(root, windows);
   const named: Array<File> = [];
-  for (const match of text.matchAll(INLINE_CODE)) {
-    const code = (match[1] ?? "").trim();
+  for (const span of inlineCode(text)) {
+    const code = span.trim();
     const absolute = folder === null ? null : normalizedAbsolute(code, windows);
     const file = files.find((candidate) =>
       absolute === null
@@ -160,8 +228,8 @@ export function goatBotReplyFiles<File extends { readonly relativePath: string }
  * reading: a relative path of listable names, or an absolute path ending in one.
  */
 export function goatBotReplyMayNameFile(text: string): boolean {
-  for (const match of text.matchAll(INLINE_CODE)) {
-    const code = (match[1] ?? "").trim();
+  for (const span of inlineCode(text)) {
+    const code = span.trim();
     if (code.startsWith("/") || WINDOWS_ABSOLUTE.test(code)) {
       if (listableName(code.split(/[\\/]/).at(-1) ?? "")) return true;
     } else if (code.length <= 512 && code.split("/").every(listableName)) return true;
