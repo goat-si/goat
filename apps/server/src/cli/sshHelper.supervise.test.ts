@@ -506,6 +506,10 @@ it("rolls back to a previous version whose protocol does not overlap this build"
     { mode: 0o700 },
   );
   let restoredPid = 0;
+  // A link planted at the record's temporary name must be replaced, never written through.
+  const outside = NodePath.join(baseDir, "outside");
+  NodeFS.writeFileSync(outside, "keep\n");
+  NodeFS.symlinkSync(outside, NodePath.join(stateDir, `started.next.${process.pid}`));
   try {
     const result = await superviseSshRuntimeReplacement({
       oldPid: deadPid(),
@@ -540,6 +544,8 @@ it("rolls back to a previous version whose protocol does not overlap this build"
     });
     assert.equal(record(stateDir, "started").trim(), lstart.trim().replace(/\s+/gu, " "));
     assert.isTrue(NodeFS.existsSync(NodePath.join(stateDir, "started.ticks")));
+    assert.equal(NodeFS.readFileSync(outside, "utf8"), "keep\n");
+    assert.isFalse(NodeFS.lstatSync(NodePath.join(stateDir, "started")).isSymbolicLink());
     const compat = await readSshRuntimeCompatibility(port);
     assert.equal(compat.verdict, "update-required");
     assert.equal(compat.serverVersion, previousVersion);

@@ -70,7 +70,9 @@ const copyDatabase = (fromDir: string, toDir: string) => {
 
 const writeAtomically = (file: string, contents: string, mode = 0o600) => {
   const next = `${file}.next.${process.pid}`;
-  NodeFS.writeFileSync(next, contents, { mode });
+  // Removing first and creating exclusively means a link planted at this name is never followed.
+  NodeFS.rmSync(next, { force: true });
+  NodeFS.writeFileSync(next, contents, { mode, flag: "wx" });
   NodeFS.renameSync(next, file);
 };
 

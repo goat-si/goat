@@ -179,6 +179,8 @@ GOAT_FORCED_RECORDS
       forced_restore_runner
       printf 'GOAT PID %s on the remote host did not exit after SIGKILL; the update stopped. See %s.\\n' "$FORCE_PID" "$LOG_FILE" >&2; exit 1
     fi
+    # Still running but no longer identifiable, as after a failed read: nothing more is started.
+    if server_alive "$FORCE_PID"; then forced_refused "it was still running after SIGKILL and could not be identified"; fi
   fi
   # A shell cannot signal a child by anything firmer than its PID, which it may have given up by
   # then, so children are never signalled. A recorded child still running is named for a person.
