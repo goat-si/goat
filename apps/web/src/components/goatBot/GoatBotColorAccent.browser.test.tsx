@@ -73,6 +73,7 @@ vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
+import { forgetRenamedBots } from "./goatBotRenamedBots";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
 const member = (color: string | undefined) =>
@@ -94,6 +95,7 @@ const member = (color: string | undefined) =>
 function setup(colorCapability: boolean) {
   state.colorCapability = colorCapability;
   state.updates.length = 0;
+  forgetRenamedBots(EnvironmentId.make("env-1"));
 }
 
 it("hides the swatches on a server that cannot store a color, and sends none", async () => {

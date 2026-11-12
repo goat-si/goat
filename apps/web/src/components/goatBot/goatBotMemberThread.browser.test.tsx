@@ -81,6 +81,16 @@ const connected = (goatBotMembers: boolean | undefined) => ({
   serverConfig: { environment: { capabilities: { goatBotMembers } } },
 });
 
+/** No bot created or renamed by an earlier test, and a server that has not answered yet. */
+function setup() {
+  forgetNewBotEnvironment(environmentId);
+  forgetRenamedBots(environmentId);
+  server.presentation = null;
+  server.query = { data: null, error: null, isPending: false };
+  server.listed = [];
+  server.update = () => Promise.resolve({});
+}
+
 function Lookup({ threadId }: { threadId: ThreadId }) {
   const result = useGoatBotMemberAt({ environmentId, threadId });
   return (
@@ -97,6 +107,7 @@ async function look(threadId: ThreadId = memberThread) {
 }
 
 it("decides when a thread may be a member's: wait, retry, the member, or an ordinary thread", async () => {
+  setup();
   server.presentation = { connection: { phase: "connecting" } };
   expect(await look()).toBe("pending");
   server.presentation = { connection: { phase: "offline" } };
@@ -121,7 +132,7 @@ it("decides when a thread may be a member's: wait, retry, the member, or an ordi
 });
 
 it("finds a member this client just created when the list read after the create failed", async () => {
-  forgetNewBotEnvironment(environmentId);
+  setup();
   startNewBot(
     environmentId,
     [],
@@ -134,14 +145,11 @@ it("finds a member this client just created when the list read after the create 
   server.presentation = connected(true);
   // The last good list, from before the create; the read after it failed.
   server.query = { data: { bots: [] }, error: "Request failed", isPending: false };
-  try {
-    expect(await look()).toBe("Research");
-  } finally {
-    forgetNewBotEnvironment(environmentId);
-  }
+  expect(await look()).toBe("Research");
 });
 
 it("names the main chat from a server that keeps profiles but not members", async () => {
+  setup();
   const main = decodeProfile({
     botId: "main",
     role: "main",
@@ -160,7 +168,6 @@ it("names the main chat from a server that keeps profiles but not members", asyn
     serverConfig: { environment: { capabilities: { goatBotProfiles: true } } },
   };
   server.query = { data: { bots: [main] }, error: null, isPending: false };
-  server.listed = [];
   function MainName(props: { readonly threadId: string; readonly main: boolean }) {
     const lookup = useGoatBotMemberAt(
       { environmentId, threadId: ThreadId.make(props.threadId) },
@@ -238,8 +245,7 @@ const at = (minute: number) => `2026-11-07T00:0${minute}:00.000Z`;
 
 /** A member chat at New bot 2 whose name row renames it; the rename's own list read starts as it answers. */
 async function renameInChat(renamed: BotProfile) {
-  forgetNewBotEnvironment(environmentId);
-  forgetRenamedBots(environmentId);
+  setup();
   const registry = AtomRegistry.make();
   server.presentation = {
     connection: { phase: "connected" },
