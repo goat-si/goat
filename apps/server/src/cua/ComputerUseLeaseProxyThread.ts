@@ -433,6 +433,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         // restarted starts again with the server's next update for it.
         onDriverEnded: (reason) =>
           Effect.sync(() => {
+            // A server end that landed first decides, and its id stays seen.
+            if (context.ended !== undefined) return;
             if (reason === "helper_restarted") seen.delete(context.controlId);
             stop(context, reason);
           }),
