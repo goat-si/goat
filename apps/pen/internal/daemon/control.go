@@ -166,7 +166,8 @@ func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	defer c.Close()
-	r := bufio.NewReader(io.LimitReader(c, 64<<10))
+	lr := &io.LimitedReader{R: c, N: 64 << 10}
+	r := bufio.NewReader(lr)
 	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
 		return
 	}
@@ -188,7 +189,7 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 		return
 	// These two run on the control socket only: the dashboard reaches do, never handleControl.
 	case "service.register":
-		d.controlRegister(ctx, c, req, reply, fail)
+		d.controlRegister(ctx, c, r, lr, req, reply, fail)
 		return
 	case "watch.snapshot":
 		d.controlSnapshot(ctx, c, fail)
@@ -535,6 +536,20 @@ func (cl *Client) Next(v any) error {
 
 // Close hangs up.
 func (cl *Client) Close() error { return cl.c.Close() }
+
+// Write sends raw bytes after the request (the ops of a service registration).
+func (cl *Client) Write(p []byte) (int, error) { return cl.c.Write(p) }
+
+// Rest reads what the node sends after the replies Next decoded, including bytes Next already buffered.
+func (cl *Client) Rest() io.Reader { return io.MultiReader(cl.dec.Buffered(), cl.c) }
+
+// CloseWrite tells the node this side sends nothing more; the node still answers what it was sent.
+func (cl *Client) CloseWrite() error {
+	if u, ok := cl.c.(interface{ CloseWrite() error }); ok {
+		return u.CloseWrite()
+	}
+	return cl.c.Close()
+}
 
 // SetDeadline bounds the requests and replies still to come on this connection.
 func (cl *Client) SetDeadline(t time.Time) error { return cl.c.SetDeadline(t) }

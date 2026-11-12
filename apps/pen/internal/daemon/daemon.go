@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 // Options configure a daemon. Zero values pick the production defaults.
@@ -66,6 +69,40 @@ type Options struct {
 	PresenceDone func()
 	// ServiceEnded, when set, is told the id of each service registration once it has ended (tests).
 	ServiceEnded func(id string)
+	// ClientClosing, when set, runs when the owner of a client session's close starts closing it, before it takes
+	// the session's gate (tests).
+	ClientClosing func()
+	// ClientClosed, when set, runs when that owner has closed the session and its local connection, before it signals
+	// the session closed (tests).
+	ClientClosed func()
+	// RegistrationEnding, when set, runs as a registration's single teardown starts (tests).
+	RegistrationEnding func()
+	// RegistrationJoining, when set, is told the id when a caller finds a registration's teardown already running,
+	// just before it waits for it (tests).
+	RegistrationJoining func(id string)
+	// Registering, when set, runs after a registration became current and before its holder is answered (tests).
+	Registering func()
+	// HandshakeContext, when set, derives each incoming handshake's context; a test ends it to drive the handshake
+	// deadline's path without waiting 10 s (tests).
+	HandshakeContext func(context.Context) context.Context
+	// HolderWriting, when set, runs as a holder queue's writer holds write ownership, before it writes (tests).
+	HolderWriting func()
+	// HolderFilling, when set, runs as a holder line becomes ready to write, on the goroutine that made it ready, before
+	// the writer can reach it (tests).
+	HolderFilling func()
+	// ClientEnded, when set, runs when the goroutine that accepted a confirmed client or pairing session is done with
+	// it, after everything that goroutine releases (tests).
+	ClientEnded func()
+	// ClientRegistering, when set, runs as a confirmed client or pairing session's check takes d.mu (tests).
+	ClientRegistering func()
+	// ClientConfirmed, when set, runs after a client or pairing handshake confirmed, before its session is
+	// registered (tests).
+	ClientConfirmed func()
+	// ClientsWaiting, when set, is told how many handshakes of dropped keys an applied list waits for, before it
+	// waits (tests).
+	ClientsWaiting func(handshakes int)
+	// PhoneSlots, when set, is told the node-wide count of held phone slots after every change, in order (tests).
+	PhoneSlots func(total int)
 }
 
 // Daemon is one running node.
@@ -100,9 +137,12 @@ type Daemon struct {
 	sessions map[uint64]*live
 	nextLive uint64
 	watchers map[chan []byte]struct{}
-	// snapWatchers follow watch.snapshot; snapGen is the generation of the last published snapshot.
+	// snapWatchers follow watch.snapshot; snapGen is the generation of the last published snapshot; snapRelays are
+	// the relays it carries (guarded by d.mu, written under relaysMu).
 	snapWatchers map[chan []byte]struct{}
 	snapGen      uint64
+	snapRelays   []SnapshotRelay
+	relaysMu     sync.Mutex
 	seen         map[string]seenInfo
 	// versions is what each peer (by Noise key) announced in its last sync hello, kept in
 	// versions.json so an offline member's last announcement still counts.
@@ -154,6 +194,21 @@ type live struct {
 	// deferred is set on the mesh session that carried its own peer's revoke; it closes itself
 	// after its done.
 	deferred bool
+	// client marks a session from a key that is not a member, admitted under reg (contract "Service clients"); k is
+	// its key in d.sessions.
+	client bool
+	reg    *serviceReg
+	k      uint64
+	// inv is the burned invite of a pairing session (nil for a listed client); slot is its phone slot, returned by
+	// the close owner.
+	inv  *serviceInvite
+	slot *phoneSlot
+	// gate orders a client delivery's commit and identity line before its close; closing, closed and conn are
+	// guarded by d.mu (clients.go).
+	gate    sync.Mutex
+	closing bool
+	closed  chan struct{}
+	conn    net.Conn
 }
 
 type seenInfo struct {
@@ -247,6 +302,7 @@ func New(opt Options) (*Daemon, error) {
 		seen:     map[string]seenInfo{},
 		versions: versions, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
+	d.svc.onPhones = opt.PhoneSlots
 	switch opt.SSHUser {
 	case "":
 		d.sshUser = LoginUser()
@@ -320,8 +376,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	os.Remove(d.st.Path(DashboardFile))
 	d.capLog()
 	d.pruneInvites()
-	d.spawn(func() { d.serveControl(ctx, ln) })
+	// Uplinks first: startUplinks publishes the relay list before any control request, so no snapshot lacks it.
 	d.startUplinks()
+	d.spawn(func() { d.serveControl(ctx, ln) })
 	d.spawn(func() { d.acceptLoop(ctx) })
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
 	d.spawn(func() {
@@ -406,8 +463,9 @@ func (sl *uplinkSlot) setRTT(rtt time.Duration, at time.Time) {
 
 // startUplinks (re)connects one uplink per relay.
 func (d *Daemon) startUplinks() {
+	d.relaysMu.Lock()
+	defer d.relaysMu.Unlock()
 	d.upMu.Lock()
-	defer d.upMu.Unlock()
 	for _, sl := range d.slots {
 		sl.cancel()
 	}
@@ -424,10 +482,41 @@ func (d *Daemon) startUplinks() {
 			err := sl.up.Run(ctx)
 			if errors.Is(err, relay.ErrReplaced) {
 				d.opt.Logf("%s: uplink replaced by another pen for this node (4409); not reconnecting until pen up", url)
-				sl.set("replaced")
+				d.setUplinkState(sl, "replaced")
 				d.writeDaemonJSON(d.now())
 			}
 		})
+	}
+	d.upMu.Unlock()
+	d.publishRelaysLocked()
+}
+
+// setUplinkState sets one uplink's state and publishes the relays, in one step (contract "Snapshot watch").
+func (d *Daemon) setUplinkState(sl *uplinkSlot, state string) {
+	d.relaysMu.Lock()
+	defer d.relaysMu.Unlock()
+	sl.set(state)
+	d.publishRelaysLocked()
+}
+
+// publishRelaysLocked publishes a snapshot when the configured relays or their uplink states differ from the last
+// published ones. A slot that is no longer configured is not read, so its late callbacks never show. relaysMu is held;
+// it orders every relay change with its publication (relaysMu, then upMu and uplinkSlot.mu, then d.mu).
+func (d *Daemon) publishRelaysLocked() {
+	d.upMu.Lock()
+	states := make([]SnapshotRelay, 0, len(d.slots))
+	for _, sl := range d.slots {
+		states = append(states, SnapshotRelay{URL: sl.url, Uplink: sl.get()})
+	}
+	d.upMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if slices.Equal(states, d.snapRelays) {
+		return
+	}
+	d.snapRelays = states
+	if d.lastView != nil {
+		d.publishSnapshotLocked()
 	}
 }
 
@@ -443,10 +532,10 @@ func (d *Daemon) stopUplinks(why string) {
 
 func (d *Daemon) onUplink(sl *uplinkSlot, up bool) {
 	if up {
-		sl.set("up")
+		d.setUplinkState(sl, "up")
 		d.spawn(func() { d.pushAll(d.runCtx) })
 	} else if sl.get() == "up" {
-		sl.set("connecting")
+		d.setUplinkState(sl, "connecting")
 	}
 	d.writeDaemonJSON(d.now())
 }
@@ -581,8 +670,9 @@ func (d *Daemon) retrySave() {
 
 // viewChanged closes sessions of keys that are no longer members, tells watchers, rewrites known_hosts.
 func (d *Daemon) viewChanged() {
-	v := d.view()
 	d.mu.Lock()
+	// Read under d.mu, so a sweep always applies the newest view and a stale callback never sweeps an older one.
+	v := d.view()
 	if v == d.lastView {
 		d.mu.Unlock()
 		return
@@ -590,8 +680,10 @@ func (d *Daemon) viewChanged() {
 	old := d.lastView
 	d.lastView = v
 	var doomed []*live
+	// A client session closes only when the view makes its key a member or a revoked member.
+	clients, _ := d.selectLocked(func(l *live) bool { return l.inv == nil && memberOrRevoked(v, l.remote) })
 	for k, l := range d.sessions {
-		if l.deferred {
+		if l.deferred || l.client {
 			continue
 		}
 		pub, _ := ident.DecodeKey(l.remote)
@@ -613,6 +705,9 @@ func (d *Daemon) viewChanged() {
 	d.mu.Unlock()
 	for _, l := range doomed {
 		l.sec.Close(4401)
+	}
+	for _, l := range clients {
+		d.closeOwned(l, wire.CodeNotAdmitted)
 	}
 	d.forgetRevoked(old, v)
 	d.writeKnownHosts()

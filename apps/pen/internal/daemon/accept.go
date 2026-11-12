@@ -71,7 +71,25 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 
 func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 	var slot *acctSlot
+	var client *clientAdmission
 	admit := func(kind byte, remote []byte, p session.Payload) ([]byte, error) {
+		if kind == session.KindJoin && p.Stream == "service-pair" {
+			a, psk, err := d.admitPairing(remote, p, c)
+			if err == nil {
+				client = &a
+			}
+			return psk, err
+		}
+		if _, member := d.view().MemberByNoise(remote); kind == session.KindSession && !member {
+			a, err := d.admitClient(remote, p, c)
+			if err == nil {
+				client = &a
+			}
+			return nil, err
+		}
+		if kind == session.KindAccount && d.svc.listedAnywhere(ident.B64.EncodeToString(remote)) {
+			return nil, errNotAdmitted
+		}
 		psk, err := d.admit(kind, remote, p)
 		if err != nil || kind != session.KindAccount {
 			return psk, err
@@ -79,11 +97,38 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		slot, err = d.reserveAccount(c)
 		return nil, err
 	}
-	sec, err := session.Respond(ctx, c, d.id, d.nodeID, admit)
+	hctx := ctx
+	if d.opt.HandshakeContext != nil {
+		hctx = d.opt.HandshakeContext(ctx)
+	}
+	sec, err := session.Respond(hctx, c, d.id, d.nodeID, admit)
+	if client != nil {
+		// Tracked on its registration until serveClient registers or refuses its session, or, for a handshake that
+		// fails, until this goroutine is done with it (deferred first, so it runs last).
+		defer d.svc.leaveHandshake(client.reg, client.hs)
+		if err == nil {
+			d.svc.confirmHandshake(client.hs)
+			if d.opt.ClientConfirmed != nil {
+				d.opt.ClientConfirmed()
+			}
+		}
+	}
+	if err != nil && client != nil && client.slot != nil {
+		// Taken before message 2; a handshake that did not confirm returns it here. A confirmed session's slot is
+		// returned by serveClient or by the owner of its close.
+		d.svc.releasePhone(client.slot)
+	}
 	if slot != nil {
 		defer d.releaseAccount(slot)
 	}
 	if err != nil {
+		return
+	}
+	if client != nil {
+		if d.opt.ClientEnded != nil {
+			defer d.opt.ClientEnded()
+		}
+		d.serveClient(ctx, sec, *client)
 		return
 	}
 	switch sec.Payload.Stream {

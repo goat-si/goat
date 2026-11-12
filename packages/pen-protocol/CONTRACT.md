@@ -110,7 +110,9 @@ unanswered. Kind 0x02 (Doriterm's typed code) is not used.
 - Handshake payloads are one JSON line (UTF-8 object + LF, at most 256 bytes, `"v":1`). Message 1: `{"v":1,"stream":S,…}`.
   Message 2: always `{"v":1}`. A responder that refuses after message 1 closes without answering; one that refuses
   after confirmation (port refused, invite lost a race) sends CLOSE with the code. Nothing a replayed message 1 can
-  trigger depends on the stream's target.
+  trigger depends on the stream's target, except that a `service-pair` message 1 spends one answer of its invite's
+  budget and takes a phone slot until the session ends ("Service invites"), and a listed client's kind 0x01 message 1
+  for its service takes a phone slot until the session ends ("Phone slots").
 - Admission: kind 0x01 admits only an initiator static key that is a current member's noisePub in the responder's
   mesh view (4401 otherwise), and from v1.3 a listed client key for one service stream ("Service clients"). Kind 0x03
   is valid only with `stream:"join"` and an `"invite"` member, or from v1.3 with `stream:"service-pair"` ("Service
@@ -403,7 +405,8 @@ in sync `hello` as `"pen":"1.1"` and refuses otherwise); v1.0 nodes reject those
 ### Account join
 
 Kind 0x04, `account`: `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `pen/1` || nodeId || 0x04, valid only with
-`{"v":1,"stream":"account","name"}`. The responder accepts any initiator key on this kind; at most 4 such sessions run at
+`{"v":1,"stream":"account","name"}`. The responder accepts any initiator key on this kind except, from v1.3, a key that
+a service registration lists ("Admission of client keys"); at most 4 such sessions run at
 once, a fifth evicts the oldest one that has not sent its assertion (4429), and a session that sends no assertion within
 10 s after key confirmation, or no card within 10 s after the offer, closes 4408. The slot is taken at message 1, before
 key confirmation, so an initiator that never confirms holds it for up to the 10 s handshake timeout and can evict another
@@ -475,14 +478,16 @@ mesh is unbound, or bound to an older login key, offers to bind it again (same q
 
 A node can hand a member's session to a local program that registered a name with it, and tell that program, with
 proof, which member is calling. GOAT is the first such program (name `goat`). Nothing here changes `tcp`, `mesh`,
-`join` or `account`: v1.2 adds no record type and no sync message, and nodes keep announcing `"pen":"1.1"`. Until
+`join` or `account`: v1.2 adds no record type and no sync message, and leaves the version nodes announce in the sync
+hello as it was (`"pen":"1.1"`, or `"2.0"` in a mesh of the shared epoch). Until
 a program registers, a node refuses every service stream.
 
 ### The service stream
 
 - Kind 0x01, message 1 `{"v":1,"stream":"service","name":N}`. A service name is 1 to 32 characters of `a-z 0-9 -`,
   starting with a letter; `pen` is reserved. Admission is that of `tcp`: only a current member's key, otherwise 4401
-  unanswered, and a malformed name is refused the same way.
+  unanswered, and a malformed name is refused the same way (v1.3 also admits listed client keys; see "Service
+  clients").
 - After key confirmation the responder counts the session as a live session of that member, exactly as it counts a
   `tcp` session: a revoke closes it 4401, before and after delivery. It then delivers the session to the program
   that holds N ("Local delivery"). If no program holds N it sends CLOSE 4404; if 32 deliveries are already in
@@ -525,7 +530,9 @@ other failure, before or at registration, exits 2 with the reason on stderr. Fro
 further stdin line to the node unchanged and prints every line the node sends after `registered`, except
 `replaced`, on stdout unchanged ("Ops on the registration"). A stdin line longer than 4096 bytes with its LF is not
 forwarded: the child exits 2. Bytes after the last LF when stdin ends are dropped. A v1.2 child forwards nothing, so a
-program that sends ops through it gets no answer.
+program that sends ops through it gets no answer. When stdin ends, a v1.3 child half-closes the connection, prints
+the node's answers to the ops it forwarded, and exits 0, or 1 when the node closed the connection before answering
+every op it forwarded (a v1.2 node does).
 
 ### Local delivery
 
@@ -557,10 +564,17 @@ for N. A delivery that cannot commit fails. A committed delivery belongs to its 
 registration ends.
 
 If any step fails (the dial, a deadline, the cap, a malformed line, a wrong A, or a delivery that cannot commit),
-the node closes the socket and sends CLOSE 4404 to the caller. From v1.3, a client or pairing session that a list
-change or the end of its registration closes gets 4401 instead. The node sends that CLOSE before it answers the list
-or finishes ending the registration, and it sends at most one CLOSE per session, so a delivery that then fails adds
-no second code. Close codes are unauthenticated and never tell a caller whether the program read its bytes. It logs each failure under one of a fixed set of
+the node closes the socket and sends CLOSE 4404 to the caller. From v1.3, a list that drops a client's key closes
+that key's client sessions 4401, and the end of a registration closes its client and pairing sessions 4401, unless
+the session is already closing: a session whose
+delivery failed keeps 4404, and one the transport closed (4400 decryption failure, 4408 queue overflow) or the peer
+closed keeps that close. The node sends at most one CLOSE per session. Before the list answer, and before the
+registration's end completes, every such session is closed and every connection delivered for it to the program is
+closed by the node; the node writes no identity line for it after that. A client or pairing session's connection to
+the program ends with a FIN only once the caller's stream reached it whole (its FIN and every byte before it); every
+other close of that connection, a list drop, a registration end or a relay cut included, is a TCP reset, so the
+program never reads a cut stream as a complete one. Close codes are unauthenticated and never tell
+a caller whether the program read its bytes. It logs each failure under one of a fixed set of
 causes (dial, deadline, malformed, proof, replaced), at most once a minute per cause. A
 refused delivery passes no caller byte to the program, but the caller still classifies its own data by what it
 wrote (above). At most 32 deliveries are in progress at once, from key confirmation to the end of step 3.
@@ -610,7 +624,8 @@ Control op `watch.snapshot` (control socket only) answers one line now and one o
 member's online state, and from v1.3 of the relay list or a relay's uplink state:
 `{"t":"snapshot","gen":G,"mesh":M,"self":S,"members":[{"nodeId","signPub","noisePub","name","user","hostKeys","online"}],"revoked":[{"nodeId","name"}],"relays":[{"url","uplink"}]}`.
 `relays` (v1.3) is the node's configured relay list in its configured order, always present, with each relay's
-uplink state: `connecting`, `up` (authenticated now) or `replaced` (another node process took the uplink, 4409; no
+uplink state: `connecting`, `up` (the node sent its answer to the relay's challenge on an open uplink; the relay
+acknowledges nothing, so `up` proves neither that the relay accepted it nor that callers can reach the node) or `replaced` (another node process took the uplink, 4409; no
 reconnect until `pen up`). Each line states the relays as of its G; an uplink state from a relay that has left the
 list never appears. A conforming reader ignores object members it does not know (GOAT's does), so it keeps working
 when `relays` appears; a v1.2 node's lines have no `relays`.
@@ -639,8 +654,9 @@ effective route before using it refuses it.
 
 A program that registered a name can let keys that are not members reach it: GOAT uses this for phones it paired.
 A listed client key reaches only the service stream of the name whose registration lists it, and a service invite
-admits pairing handshakes for one pairing. Nothing here changes members, records, sync, `tcp`, `mesh`, `join` or
-`account`, and nodes keep announcing `"pen":"1.1"`. In v1.3 only a registration of the name `goat` may hold a client
+admits pairing handshakes for one pairing. Nothing here changes members, records, sync, `tcp`, `mesh` or `join`;
+`account` changes only in that kind 0x04 refuses a key any registration lists ("Admission of client keys"); and the version nodes announce in the sync hello is unchanged (`"pen":"1.1"`, or `"2.0"` in a mesh of the shared
+epoch). In v1.3 only a registration of the name `goat` may hold a client
 list or an invite. Until its holder sends a list no client key is admitted, and until it sends an invite no
 `service-pair` handshake is.
 
@@ -652,11 +668,11 @@ line ends the registration (the node closes the connection). Members are exact: 
 case-variant member, a value of the wrong type, or trailing data refuses the op. An integer is a JSON number with no
 fraction, exponent or sign. Times are compared with the node's wall clock.
 
-| Op                                                                   | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Answer                                                                                                                                                                                                                  |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{"op":"service.clients","gen":G,"clients":[{"id":D,"noisePub":X}]}` | Replaces the whole list. G is an integer from 1 to 2^53−1, greater than the last G this registration applied; a new registration has applied none, so its first list may carry any G. 0 to 8 entries. D is 26 characters of lowercase base32, unique in the list. X is a canonical Noise key (43 base64url characters that decode to 32 bytes and encode back to the same text), unique in the list, and neither this node's key nor the noisePub of a current or revoked member of the node's view | `{"t":"clients","gen":G}`, written only after the sessions and deliveries of every key the list dropped are closed ("Admission of client keys")                                                                         |
-| `{"op":"service.invite","id":I,"psk":P,"expiresAt":T}`               | I is 16 base64url characters that decode to 12 bytes and encode back to the same text, and differs from the I of the invite the registration holds now. P is a canonical 32-byte value, as X above. T is an integer of milliseconds since the Unix epoch, later than the node's clock and at most 10 minutes past it. A registration holds at most one invite; a new one replaces it, and the replaced invite can no longer be used or burned                                                       | `{"t":"invite","id":I}`                                                                                                                                                                                                 |
-| `{"op":"service.invite.cancel","id":I}`                              | I as above. The node forgets the invite if it holds I                                                                                                                                                                                                                                                                                                                                                                                                                                               | `{"t":"invite-cancelled","id":I,"was":W}`: W is `live` when the registration held I unburned and unexpired, `burned` when it held I burned, and `absent` otherwise (never held, replaced, expired or already cancelled) |
+| Op                                                                   | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Answer                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `{"op":"service.clients","gen":G,"clients":[{"id":D,"noisePub":X}]}` | Replaces the whole list. G is an integer from 1 to 2^53−1, greater than the last G this registration applied; a new registration has applied none, so its first list may carry any G. 0 to 8 entries. D is 26 characters of lowercase base32, unique in the list. X is a canonical Noise key (43 base64url characters that decode to 32 bytes and encode back to the same text), unique in the list, and neither this node's key nor the noisePub of a current or revoked member of the node's view | `{"t":"clients","gen":G}`, written only after the sessions and deliveries of every key the list dropped are closed ("Admission of client keys")                                                                                                        |
+| `{"op":"service.invite","id":I,"psk":P,"expiresAt":T}`               | I is 16 base64url characters that decode to 12 bytes and encode back to the same text, and differs from the I of the invite the registration holds now. P is a canonical 32-byte value, as X above. T is an integer of milliseconds since the Unix epoch, later than the node's clock and at most 10 minutes past it. A registration holds at most one invite; a new one replaces it, and the replaced invite can no longer be used or burned                                                       | `{"t":"invite","id":I}`                                                                                                                                                                                                                                |
+| `{"op":"service.invite.cancel","id":I}`                              | I as above. The node forgets the invite if it holds I                                                                                                                                                                                                                                                                                                                                                                                                                                               | `{"t":"invite-cancelled","id":I,"was":W}`: W is `live` when the registration held I unburned and unexpired, `burned` when it held I burned (expired or not), and `absent` otherwise (never held, replaced, unburned and expired, or already cancelled) |
 
 A refusal is `{"t":"refused","op":O,"reason":R}` and changes nothing: the previous list and invite stay. O is the
 line's top-level `op` when it is one of the three op names, otherwise `""` (a line that is not a JSON object, has a
@@ -675,17 +691,21 @@ node close the connection, which ends the registration.
 **Lifetime.** The list, the invite and the last applied G live only in memory. They start empty with each
 registration and end with it: when its connection closes, when the node stops, or when a newer registration of the
 name replaces it. When a registration ends, the node closes every client and pairing session admitted under it with
-4401, along with the connections it delivered to the program ("Registration").
+4401 (unless it is already closing, "Local delivery"), handshakes it answered that are not sessions yet included,
+along with the connections it delivered to the program ("Registration"), and returns their phone slots before the end
+completes.
 
 ### Admission of client keys
 
 - Kind 0x01 from a key that is not a member is admitted only with `{"v":1,"stream":"service","name":N}`, only if the
   registration currently holding N lists the key, and only if a phone slot is free ("Phone slots"). Anything else
   closes 4401 unanswered: `tcp`, `mesh`, another name, a key on no list, a full slot.
-- Membership is checked first: a key that is a member is admitted as a member, whatever a list says. If a later view
-  makes a listed key a member (the mesh admitted it, which only a member can do), the node closes that key's client
-  sessions 4401 at that view change and refuses every later list that names it, so a key never holds a client
-  session beside member rights.
+- Membership is checked first: a key that is a member, or a revoked member, of the node's current view is never a
+  client. Admission, the check after confirmation and the commit refuse it as a client (4401); a current member is
+  admitted on the member path instead. Lists naming it are refused.
+  When the node applies a view change that makes a listed key a member or a revoked member, it closes that key's
+  client sessions 4401, as it closes a revoked member's sessions; until that change is applied the key may already be
+  admitted as a member, which is the mesh's grant (only a member can admit a key).
 - Kind 0x04 from a key that any registration lists closes 4401 unanswered. Kind 0x03 treats a listed key like any
   other: it needs a live invite of the stream it names.
 - A session is bound to the registration whose list admitted it at message 1. After key confirmation the node checks
@@ -695,11 +715,12 @@ name replaces it. When a registration ends, the node closes every client and pai
   a client session of that registration and delivers it as in "Local delivery", with that section's cap (4429) and
   failure code (4404). A client delivery commits only if, at the commit, the registration is still current and still
   lists the key. The identity line is written after the commit, in its client form ("Identity line forms").
-- When a list drops a key, the node closes that key's client sessions 4401, and the connections it delivered for
-  them, before it answers the list. From that answer on, no session of that key reaches the program unless a later
+- When a list drops a key, the node closes that key's client sessions 4401 (handshakes it answered that are not
+  sessions yet included, confirmed or not), and the connections it delivered for them, and returns their phone slots,
+  before it answers the list. From that answer on, no session of that key reaches the program unless a later
   list names it again.
-- A client session is not a member session. A change of the mesh view closes it only when that change makes its key
-  a member (above); no other view change does. It never marks a member
+- A client session is not a member session. A change of the mesh view closes it only as the bullet above says; no
+  other view change does. It never marks a member
   online, never counts as a member, never announces a version, and never appears in `ls`, `watch`, `watch.snapshot`,
   known_hosts or the dashboard. Every reconnect is admitted afresh.
 
@@ -720,6 +741,10 @@ it ends (closed after delivery, unconfirmed at its 10 s deadline, closed 1000 as
 refused after confirmation, ended with its registration), and is then returned. With at most 32 active sessions per
 relay ("Relay"), phones and pairings use at most 8 of them, and the other 24 stay for members, account sessions and
 joins.
+The node's own bound of 64 sessions per uplink (v1.3, node side) refuses an OPEN before its message 1, so a refused
+OPEN takes no phone slot and every phone slot belongs to a session that bound counts. With a relay that keeps its caps
+the bound is never reached and the phone caps bind first; with one that does not, phones still hold at most 8 of
+the 64.
 
 ### Service invites
 
@@ -871,3 +896,7 @@ v1.2 member-only reader refuses both valid new forms.
   code change, and `tcp`, `mesh`, `join` and `account` are unchanged except that kind 0x04 refuses a listed key. Only
   `goat` may hold a list or an invite. `service-pair` uses the handshake race; joins and account sessions keep the
   ping race. Vectors: servicepair.json, stream.json, new lines in service.json.
+- v1.3 (2026-11-13): a key that is or was a member is never a client, and the node closes its client sessions when it
+  applies that view; list drops and registration ends close 4401 unless the session is already closing, with every
+  local connection closed before the answer; `pen service register` prints the answers to forwarded ops before it
+  exits at the end of stdin; two v1.2 sentences point to the v1.3 exceptions.

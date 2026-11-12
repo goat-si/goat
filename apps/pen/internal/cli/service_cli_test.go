@@ -485,3 +485,87 @@ func TestSSHConfigKeepsEveryNameBlockAsItWasEvenANameThatEqualsANodeID(t *testin
 		t.Fatalf("pen-dup changed:\n%s", g)
 	}
 }
+
+func TestServiceRegisterForwardsOpsAndPrintsEachAnswerBeforeItExitsAtTheEndOfStdin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a, _ := meshOfTwo(t, ctx, rs)
+	key := make([]byte, 32)
+	rand.Read(key)
+	port := echoProgram(t, "goat", key)
+	t.Setenv("PEN_HOME", a.Dir)
+	ops := `{"op":"service.clients","gen":1,"clients":[]}` + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n"
+	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + ops + `{"op":"partial"`)
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if rc := RunService([]string{"register", "goat", "--port", strconv.Itoa(port)}, &out, &errOut); rc != 0 {
+		t.Fatalf("exit %d, stderr %q", rc, errOut.String())
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], "pen-service v1 registered goat ") ||
+		lines[1] != `{"gen":1,"t":"clients"}` || !strings.Contains(lines[2], `"t":"refused"`) {
+		t.Fatalf("stdout %q: want the registered line, then one answer per forwarded op and nothing for the partial line", out.String())
+	}
+}
+
+func TestServiceRegisterRefusesToForwardAnOpLineOver4096Bytes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a, _ := meshOfTwo(t, ctx, rs)
+	key := make([]byte, 32)
+	rand.Read(key)
+	port := echoProgram(t, "goat", key)
+	t.Setenv("PEN_HOME", a.Dir)
+	long := `{"op":"service.clients","gen":1,"clients":[]` + strings.Repeat(" ", 4096) + "}\n"
+	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + long)
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if rc := RunService([]string{"register", "goat", "--port", strconv.Itoa(port)}, &out, &errOut); rc != 2 {
+		t.Fatalf("exit %d, stdout %q, stderr %q; want 2", rc, out.String(), errOut.String())
+	}
+	if strings.Count(out.String(), "\n") != 1 {
+		t.Fatalf("stdout %q: the long line was forwarded", out.String())
+	}
+}
+
+func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t *testing.T) {
+	dir, err := os.MkdirTemp(tmpRoot(), "pen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	st, err := state.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A node that registers and then, like a v1.2 node, ignores the ops and ends the registration at the half-close.
+	ln, err := net.Listen("unix", daemon.SocketPath(st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		r.ReadBytes('\n')
+		c.Write([]byte(`{"t":"registered","id":"r","name":"goat","port":1}` + "\n"))
+		io.Copy(io.Discard, r)
+	}()
+	t.Setenv("PEN_HOME", dir)
+	key := make([]byte, 32)
+	rand.Read(key)
+	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n")
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), "before answering 1") {
+		t.Fatalf("exit %d, stderr %q; want 1 and the unanswered op named", rc, errOut.String())
+	}
+}
