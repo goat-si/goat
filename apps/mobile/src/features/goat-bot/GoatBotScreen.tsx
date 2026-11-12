@@ -3,6 +3,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotAccent,
+  goatBotEventSubjectSpan,
   goatBotName,
   goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
@@ -155,9 +156,10 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   }
   if (row.kind === "event") {
     const subject = row.subject;
-    const at = subject === undefined ? -1 : row.text.indexOf(subject.name);
-    const open = subject === undefined || at < 0 ? undefined : props.onOpenEvent?.(subject);
-    if (subject === undefined || open === undefined) {
+    const span = goatBotEventSubjectSpan(row);
+    const open =
+      subject === undefined || span === undefined ? undefined : props.onOpenEvent?.(subject);
+    if (subject === undefined || span === undefined || open === undefined) {
       return (
         <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
           {row.text}
@@ -173,9 +175,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         className="min-h-[44px] justify-center"
       >
         <Text className="text-center text-xs text-foreground-muted">
-          {row.text.slice(0, at)}
-          <Text className="text-foreground underline">{subject.name}</Text>
-          {row.text.slice(at + subject.name.length)}
+          {span.before}
+          <Text className="text-foreground underline">{span.name}</Text>
+          {span.after}
         </Text>
       </Pressable>
     );
