@@ -53,13 +53,18 @@ func (m *meter) Recv(ctx context.Context) ([]byte, error) {
 	return p, err
 }
 
-// gated blocks its first Write until open is closed.
+// gated blocks its first Write until open is closed; started, when set, is closed as that Write begins.
 type gated struct {
-	open <-chan struct{}
-	buf  bytes.Buffer
+	open    <-chan struct{}
+	started chan struct{}
+	once    sync.Once
+	buf     bytes.Buffer
 }
 
 func (g *gated) Write(p []byte) (int, error) {
+	if g.started != nil {
+		g.once.Do(func() { close(g.started) })
+	}
 	<-g.open
 	return g.buf.Write(p)
 }
@@ -226,9 +231,11 @@ func TestALinkCutAfterThePeersFinButBeforeItsDataWasWrittenOutIsNotDelivered(t *
 	defer pw.Close()
 	open := make(chan struct{})
 	defer close(open) // releases the writer still holding the peer's DATA
+	w := &gated{open: open, started: make(chan struct{})}
 	errc := make(chan error, 1)
-	go func() { errc <- stream.Splice(context.Background(), b, pr, &gated{open: open}, nil) }()
+	go func() { errc <- stream.Splice(context.Background(), b, pr, w, nil) }()
 	a.Send(append([]byte{stream.TypeData}, "reply"...))
+	<-w.started // the writer took the DATA off its queue and is inside Write
 	a.Send([]byte{stream.TypeFin})
 	a.Close(4404)
 	err := <-errc
