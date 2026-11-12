@@ -1,0 +1,192 @@
+import { BotProfile } from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
+import { useImperativeHandle, useRef, type Ref } from "react";
+import { expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
+
+import { act, render } from "../../../test/render";
+import "~/index.css";
+
+const state = vi.hoisted(() => ({
+  canEdit: true,
+  update: (_input: unknown): Promise<unknown> => Promise.resolve({ _tag: "Success", value: {} }),
+}));
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: { updateBot: { permissionAtom: () => null } },
+}));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: () => (input: unknown) => state.update(input),
+}));
+vi.mock("@effect/atom-react", async (original) => ({
+  ...(await original<typeof import("@effect/atom-react")>()),
+  useAtomValue: () => state.canEdit,
+}));
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
+  useEnvironment: () => ({
+    connection: { phase: "connected" },
+    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+  }),
+}));
+
+import type { GoatBotComposerHandle } from "./GoatBotComposer";
+import { GoatBotMemberContext } from "./goatBotMemberContext";
+import { GoatBotNameRow } from "./GoatBotNameRow";
+import { openNewBotChat } from "./goatBotNewBotOpen";
+
+const decodeProfile = Schema.decodeSync(BotProfile);
+let nextBot = 0;
+/** A fresh bot each time, so this browser's dismissals and focus marks never carry over. */
+function member(name: string, overrides: { readonly state?: "deleted" } = {}) {
+  nextBot += 1;
+  return decodeProfile({
+    botId: `bot-${nextBot}`,
+    role: "member",
+    name,
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env-name-row",
+    sessionThreadId: `thread-${nextBot}`,
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+    ...overrides,
+  });
+}
+
+function setup() {
+  state.canEdit = true;
+  const update = vi.fn(async (_input: unknown): Promise<unknown> => ({
+    _tag: "Success",
+    value: {},
+  }));
+  state.update = update;
+  return { update };
+}
+
+function FakeComposer({ ref }: { readonly ref: Ref<GoatBotComposerHandle> }) {
+  const field = useRef<HTMLTextAreaElement>(null);
+  useImperativeHandle(ref, () => ({
+    addFiles: () => {},
+    offerDraft: () => true,
+    focus: () => field.current?.focus(),
+    field: () => field.current,
+  }));
+  return <textarea aria-label="Message" ref={field} />;
+}
+
+function Chat({ bot }: { readonly bot: BotProfile | null }) {
+  const composer = useRef<GoatBotComposerHandle>(null);
+  return (
+    <GoatBotMemberContext value={bot}>
+      <GoatBotNameRow composer={composer} />
+      <FakeComposer ref={composer} />
+    </GoatBotMemberContext>
+  );
+}
+
+const nameField = () => page.getByRole("textbox", { name: "Name this bot" });
+
+it("New bot 2 shows Name this bot; Ada, the main bot, a deleted member and a read-only viewer do not", async () => {
+  setup();
+  {
+    await using _screen = await render(<Chat bot={member("New bot 2")} />);
+    await expect.element(nameField()).toHaveValue("New bot 2");
+  }
+  for (const bot of [member("Ada"), null, member("New bot", { state: "deleted" })]) {
+    await using screen = await render(<Chat bot={bot} />);
+    await expect.element(screen.getByRole("textbox", { name: "Message" })).toBeVisible();
+    expect(nameField().query()).toBeNull();
+  }
+  state.canEdit = false;
+  await using screen = await render(<Chat bot={member("New bot 3")} />);
+  await expect.element(screen.getByRole("textbox", { name: "Message" })).toBeVisible();
+  expect(nameField().query()).toBeNull();
+});
+
+it("Enter saves the typed name, says why a save failed, and moves focus to the message box once named", async () => {
+  const { update } = setup();
+  const bot = member("New bot");
+  await using screen = await render(<Chat bot={bot} />);
+  await userEvent.click(nameField());
+  // An unchanged name sends nothing.
+  await userEvent.keyboard("{Enter}");
+  expect(update).not.toHaveBeenCalled();
+  update.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Not allowed.")) });
+  await userEvent.fill(nameField(), "Ada");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(page.getByRole("alert")).toHaveTextContent("Not allowed.");
+  await expect.element(nameField()).toHaveValue("Ada");
+  await userEvent.click(nameField());
+  await userEvent.keyboard("{Enter}");
+  expect(update).toHaveBeenLastCalledWith({
+    environmentId: "env-name-row",
+    input: { botId: bot.botId, name: "Ada" },
+  });
+  await expect.element(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+});
+
+it("More opens Edit bot with the typed name, saves that name alone, and returns focus to the message box", async () => {
+  const { update } = setup();
+  const bot = member("New bot");
+  await using screen = await render(<Chat bot={bot} />);
+  await userEvent.fill(nameField(), "Scout");
+  await userEvent.click(page.getByRole("button", { name: "More settings for New bot" }));
+  const dialog = page.getByRole("dialog", { name: "Edit bot" });
+  await expect.element(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("Scout");
+  await userEvent.click(dialog.getByRole("button", { name: "Save" }));
+  await expect.element(dialog).not.toBeInTheDocument();
+  expect(update).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "env-name-row",
+    input: { botId: bot.botId, name: "Scout" },
+  });
+  await expect.element(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+});
+
+it("Dismiss hides the row in this browser and moves focus to the message box", async () => {
+  setup();
+  const bot = member("New bot");
+  {
+    await using screen = await render(<Chat bot={bot} />);
+    await userEvent.click(page.getByRole("button", { name: "Dismiss naming New bot" }));
+    await expect.element(nameField()).not.toBeInTheDocument();
+    await expect.element(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+  }
+  await using screen = await render(<Chat bot={bot} />);
+  await expect.element(screen.getByRole("textbox", { name: "Message" })).toBeVisible();
+  expect(nameField().query()).toBeNull();
+});
+
+it("the name field takes focus only when New bot opened the chat, and only once", async () => {
+  setup();
+  const opened = member("New bot");
+  await using screen = await render(<Chat bot={null} />, { router: "/" });
+  const router = screen.router;
+  if (!router) throw new Error("the chat renders under a router");
+  // Opened any other way: focus stays where it was.
+  await screen.rerender(<Chat bot={member("New bot 2")} />);
+  await expect.element(nameField()).not.toHaveFocus();
+  await screen.rerender(<Chat bot={null} />);
+  await act(() => openNewBotChat(router, opened));
+  await screen.rerender(<Chat bot={opened} />);
+  await expect.element(nameField()).toHaveFocus();
+  // Coming back to the same chat later does not take focus again.
+  await screen.rerender(<Chat bot={null} />);
+  await screen.rerender(<Chat bot={opened} />);
+  await expect.element(nameField()).not.toHaveFocus();
+});
+
+it("the focus mark ends when the person goes elsewhere before the chat shows its row", async () => {
+  setup();
+  const opened = member("New bot");
+  await using screen = await render(<Chat bot={null} />, { router: "/" });
+  const router = screen.router;
+  if (!router) throw new Error("the chat renders under a router");
+  await act(() => openNewBotChat(router, opened));
+  await act(() => router.navigate({ to: "/fleet" }));
+  await screen.rerender(<Chat bot={opened} />);
+  await expect.element(nameField()).toBeVisible();
+  await expect.element(nameField()).not.toHaveFocus();
+});
