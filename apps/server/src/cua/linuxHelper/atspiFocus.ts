@@ -37,7 +37,7 @@ export interface SecureFocus {
 }
 
 /** gdbus could not be run because it is not installed; GLib ships it (libglib2.0-bin on Debian). */
-export class GdbusMissing extends Error {}
+class GdbusMissing extends Error {}
 
 /** Runs gdbus with these arguments and returns its stdout, or throws. */
 export type GdbusRunner = (args: ReadonlyArray<string>) => Promise<string>;
