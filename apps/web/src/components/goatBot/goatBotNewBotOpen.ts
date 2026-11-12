@@ -1,9 +1,10 @@
 import type { BotProfile } from "@goat/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 
-// The chat New bot opened focuses its name row once. The mark ends when the row takes it or the
-// person goes anywhere but that chat. The chat opens at the bot's own thread, as its roster row
-// does: through /bot it would mount twice, and the second mount would lose the focus.
+// The chat New bot opened focuses its name row once, if the row shows when the chat first does.
+// The mark ends with that first showing, row or not, or when the person goes anywhere but that
+// chat. The chat opens at the bot's own thread, as its roster row does: through /bot it would
+// mount twice, and the second mount would lose the focus.
 let focusMark: {
   readonly botId: string;
   readonly onChat: () => boolean;

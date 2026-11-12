@@ -3,7 +3,15 @@ import { botManageFailure, isGeneratedBotName } from "@goat/client-runtime/goatB
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
-import { useId, useState, useSyncExternalStore, type FormEvent, type RefObject } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+  type RefObject,
+} from "react";
 
 import { XIcon } from "~/components/solar";
 import { channelEnvironment } from "~/state/channels";
@@ -45,6 +53,14 @@ export function GoatBotNameRow({
   const [more, setMore] = useState<{ readonly botId: string; readonly draftName: string } | null>(
     null,
   );
+  const nameInput = useRef<HTMLInputElement>(null);
+  const botId = member?.botId ?? null;
+  // oxlint-disable-next-line goat/react-effect-budget -- The chat's first showing takes New bot's focus mark, row or not, so a row that appears later never steals focus.
+  useLayoutEffect(() => {
+    if (botId === null || !takeNameRowFocus(botId)) return;
+    nameInput.current?.focus();
+    nameInput.current?.select();
+  }, [botId]);
   // The row goes away once the bot has a real name or is dismissed; the message box is next.
   const toComposer = () => composer.current?.focus();
   return (
@@ -53,6 +69,7 @@ export function GoatBotNameRow({
         <NameForm
           key={member.botId}
           member={member}
+          inputRef={nameInput}
           onMore={(draftName) => setMore({ botId: member.botId, draftName })}
           onGone={toComposer}
         />
@@ -72,10 +89,12 @@ export function GoatBotNameRow({
 
 function NameForm({
   member,
+  inputRef,
   onMore,
   onGone,
 }: {
   readonly member: BotProfile;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly onMore: (draftName: string) => void;
   readonly onGone: () => void;
 }) {
@@ -110,13 +129,7 @@ function NameForm({
       <div className="flex items-center gap-1">
         <Input
           id={inputId}
-          // A chat that New bot just opened starts here, once.
-          ref={(input) => {
-            if (input !== null && takeNameRowFocus(member.botId)) {
-              input.focus();
-              input.select();
-            }
-          }}
+          ref={inputRef}
           value={draft}
           maxLength={NAME_MAX}
           disabled={saving}

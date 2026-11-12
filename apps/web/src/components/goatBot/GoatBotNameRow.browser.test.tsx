@@ -9,19 +9,39 @@ import { act, render } from "../../../test/render";
 import "~/index.css";
 
 const state = vi.hoisted(() => ({
-  canEdit: true,
   update: (_input: unknown): Promise<unknown> => Promise.resolve({ _tag: "Success", value: {} }),
 }));
+// The edit permission as a store, so a grant arriving later re-renders the row as the atom does.
+const permission = vi.hoisted(() => {
+  let canEdit = true;
+  const listeners = new Set<() => void>();
+  return {
+    read: () => canEdit,
+    set: (next: boolean) => {
+      canEdit = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+});
 vi.mock("~/state/channels", () => ({
   channelEnvironment: { updateBot: { permissionAtom: () => null } },
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => (input: unknown) => state.update(input),
 }));
-vi.mock("@effect/atom-react", async (original) => ({
-  ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => state.canEdit,
-}));
+vi.mock("@effect/atom-react", async (original) => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    ...(await original<typeof import("@effect/atom-react")>()),
+    useAtomValue: () => useSyncExternalStore(permission.subscribe, permission.read),
+  };
+});
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
   useEnvironment: () => ({
@@ -57,7 +77,7 @@ function member(name: string, overrides: { readonly state?: "deleted" } = {}) {
 }
 
 function setup() {
-  state.canEdit = true;
+  permission.set(true);
   const update = vi.fn(async (_input: unknown): Promise<unknown> => ({
     _tag: "Success",
     value: {},
@@ -100,7 +120,7 @@ it("New bot 2 shows Name this bot; Ada, the main bot, a deleted member and a rea
     await expect.element(screen.getByRole("textbox", { name: "Message" })).toBeVisible();
     expect(nameField().query()).toBeNull();
   }
-  state.canEdit = false;
+  permission.set(false);
   await using screen = await render(<Chat bot={member("New bot 3")} />);
   await expect.element(screen.getByRole("textbox", { name: "Message" })).toBeVisible();
   expect(nameField().query()).toBeNull();
@@ -190,4 +210,23 @@ it("the focus mark ends when the person goes elsewhere before the chat shows its
   await screen.rerender(<Chat bot={opened} />);
   await expect.element(nameField()).toBeVisible();
   await expect.element(nameField()).not.toHaveFocus();
+});
+
+it("a chat New bot opened without its name row never gives the row focus when it appears later", async () => {
+  setup();
+  // No edit permission yet: the chat opens without the row.
+  permission.set(false);
+  const opened = member("New bot");
+  await using screen = await render(<Chat bot={null} />, { router: "/" });
+  const router = screen.router;
+  if (!router) throw new Error("the chat renders under a router");
+  await act(() => openNewBotChat(router, opened));
+  await screen.rerender(<Chat bot={opened} />);
+  const message = screen.getByRole("textbox", { name: "Message" });
+  await expect.element(message).toBeVisible();
+  expect(nameField().query()).toBeNull();
+  await userEvent.click(message);
+  await act(() => permission.set(true));
+  await expect.element(nameField()).toBeVisible();
+  await expect.element(message).toHaveFocus();
 });
