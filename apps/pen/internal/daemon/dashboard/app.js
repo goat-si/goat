@@ -139,6 +139,13 @@
   const groups = (fp) => fp.split(" ");
   const shortFP = (fp) => groups(fp).slice(0, 2).join(" ");
   const hostOf = (u) => u.replace(/^[a-z]+:\/\//, "");
+  // bytes writes n in SI units with three significant digits, as pen ls does.
+  function bytes(n) {
+    let i = 0;
+    for (; n >= 999.5 && i < 5; i++) n /= 1000;
+    return i ? n.toFixed(n < 9.995 ? 2 : n < 99.95 ? 1 : 0) + " " + "kMGTP"[i - 1] + "B" : n + " B";
+  }
+  const inOut = (t) => bytes(t.in) + " / " + bytes(t.out);
   const hexOf = (s) => s.replace(/\s+/g, "").toUpperCase();
 
   function flash(btn, ko, en) {
@@ -491,6 +498,7 @@
       h("td", null, via),
       h("td", null, joined),
       h("td", null, relay),
+      h("td", null, m.traffic24h ? mono(inOut(m.traffic24h)) : muted("—")),
       h("td", { class: "actions" }, action),
     );
   }
@@ -621,13 +629,20 @@
         },
         "제거 · Remove",
       );
+      const t = s.relays24h.find((x) => x.url === r.url);
+      const traffic = t ? h("div", { class: "sub muted" }, "24h " + inOut(t)) : "";
       return h(
         "li",
         { class: "row stack" },
-        h("div", { class: "row-main" }, mono({ class: "url", title: r.url }, r.url), note),
+        h("div", { class: "row-main" }, mono({ class: "url", title: r.url }, r.url), note, traffic),
         h("div", { class: "row-side" }, uplinkBadge(r.uplink), " ", rtt, " ", rm),
       );
     });
+    const other = s.relays24h.find((x) => x.url === "");
+    if (other)
+      rows.push(
+        h("li", { class: "row" }, muted(bi("다른 릴레이", "Other relays"), " 24h " + inOut(other))),
+      );
     $("relays").replaceChildren(...rows);
   }
   async function setRelays(list) {
