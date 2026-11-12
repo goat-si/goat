@@ -66,7 +66,6 @@ function GoatBotProfileSection() {
       />
       {editing && main !== undefined ? (
         <GoatBotProfileDialog
-          mode="edit"
           initial={main}
           canSubmit={canEdit}
           onClose={() => setEditing(false)}

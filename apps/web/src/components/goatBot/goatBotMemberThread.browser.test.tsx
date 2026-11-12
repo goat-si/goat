@@ -1,3 +1,4 @@
+import { forgetNewBotEnvironment, newBotSlot, startNewBot } from "@goat/client-runtime/goatBot";
 import { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
@@ -88,6 +89,27 @@ it("decides when a thread may be a member's: wait, retry, the member, or an ordi
   expect(await look()).toBe("ordinary");
   server.presentation = connected(undefined);
   expect(await look()).toBe("ordinary");
+});
+
+it("finds a member this client just created when the list read after the create failed", async () => {
+  forgetNewBotEnvironment(environmentId);
+  startNewBot(
+    environmentId,
+    [],
+    async () => research,
+    () => {},
+    {},
+    () => "request-1",
+  );
+  await vi.waitFor(() => expect(newBotSlot(environmentId).created).toHaveLength(1));
+  server.presentation = connected(true);
+  // The last good list, from before the create; the read after it failed.
+  server.query = { data: { bots: [] }, error: "Request failed", isPending: false };
+  try {
+    expect(await look()).toBe("Research");
+  } finally {
+    forgetNewBotEnvironment(environmentId);
+  }
 });
 
 it("names the main chat from a server that keeps profiles but not members", async () => {

@@ -2,7 +2,7 @@ import { botManageFailure } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
@@ -16,11 +16,13 @@ export function GoatBotEditBotDialog({
   bot,
   canSubmit,
   onClose,
+  draftName,
+  finalFocus,
 }: {
   readonly bot: BotProfile;
   readonly canSubmit: boolean;
   readonly onClose: () => void;
-}) {
+} & Pick<ComponentProps<typeof GoatBotProfileDialog>, "draftName" | "finalFocus">) {
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
   const mainName = useGoatBotMainName();
   const modelEditable = useGoatBotMemberModelEditable(bot);
@@ -29,8 +31,9 @@ export function GoatBotEditBotDialog({
   const modelChanged = modelEditable && !sameModel(model, bot.defaultModelSelection);
   return (
     <GoatBotProfileDialog
-      mode="edit"
       initial={bot}
+      draftName={draftName}
+      finalFocus={finalFocus}
       canSubmit={canSubmit}
       extraChanged={modelChanged}
       colorEditable={colorEditable}

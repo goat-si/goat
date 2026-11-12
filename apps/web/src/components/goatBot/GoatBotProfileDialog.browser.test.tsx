@@ -11,13 +11,7 @@ it("refuses to save a blank name and sends only what the person changed", async 
   const onSubmit = vi.fn(async (_changes: GoatBotProfileChanges) => null);
   const onClose = vi.fn();
   await using _screen = await render(
-    <GoatBotProfileDialog
-      mode="edit"
-      initial={initial}
-      canSubmit
-      onSubmit={onSubmit}
-      onClose={onClose}
-    />,
+    <GoatBotProfileDialog initial={initial} canSubmit onSubmit={onSubmit} onClose={onClose} />,
     { router: false }, // The dialog uses no links or navigation.
   );
   const name = page.getByRole("textbox", { name: "Name" });
@@ -40,11 +34,10 @@ it("refuses to save a blank name and sends only what the person changed", async 
   });
 });
 
-it("says a new bot needs a name only once the person leaves the field or saves", async () => {
+it("says a blank name is missing only once the person leaves the field or saves", async () => {
   const onSubmit = vi.fn(async (_changes: GoatBotProfileChanges) => null);
   await using _screen = await render(
     <GoatBotProfileDialog
-      mode="create"
       initial={{ name: "", avatar: null, purpose: "" }}
       canSubmit
       onSubmit={onSubmit}
@@ -57,7 +50,7 @@ it("says a new bot needs a name only once the person leaves the field or saves",
   await expect.element(name).toBeVisible();
   await expect.element(missing).not.toBeInTheDocument();
   await expect.element(name).not.toHaveAttribute("aria-invalid", "true");
-  await userEvent.click(page.getByRole("button", { name: "Create" }));
+  await userEvent.click(page.getByRole("button", { name: "Save" }));
   await expect.element(missing).toBeVisible();
   await expect.element(name).toHaveAttribute("aria-invalid", "true");
   await expect.element(name).toHaveFocus();
@@ -69,7 +62,6 @@ it("says a new bot needs a name only once the person leaves the field or saves",
 it("checks a cleared name when the person leaves the field", async () => {
   await using _screen = await render(
     <GoatBotProfileDialog
-      mode="edit"
       initial={initial}
       canSubmit
       onSubmit={vi.fn(async () => null)}
@@ -88,7 +80,6 @@ it("checks a cleared name when the person leaves the field", async () => {
 it("checks a name typed then cleared when the person leaves the field", async () => {
   await using _screen = await render(
     <GoatBotProfileDialog
-      mode="create"
       initial={{ name: "", avatar: null, purpose: "" }}
       canSubmit
       onSubmit={vi.fn(async () => null)}
@@ -109,13 +100,7 @@ it("shows a refused save in the dialog and keeps the person's text", async () =>
   const onSubmit = vi.fn(async (_changes: GoatBotProfileChanges) => "This request is not allowed.");
   const onClose = vi.fn();
   await using _screen = await render(
-    <GoatBotProfileDialog
-      mode="edit"
-      initial={initial}
-      canSubmit
-      onSubmit={onSubmit}
-      onClose={onClose}
-    />,
+    <GoatBotProfileDialog initial={initial} canSubmit onSubmit={onSubmit} onClose={onClose} />,
     { router: false }, // The dialog uses no links or navigation.
   );
   const name = page.getByRole("textbox", { name: "Name" });
@@ -130,7 +115,6 @@ it("shows a refused save in the dialog and keeps the person's text", async () =>
 it("cannot save without permission to edit the bot", async () => {
   await using _screen = await render(
     <GoatBotProfileDialog
-      mode="edit"
       initial={initial}
       canSubmit={false}
       onSubmit={vi.fn(async () => null)}
@@ -139,21 +123,4 @@ it("cannot save without permission to edit the bot", async () => {
     { router: false }, // The dialog uses no links or navigation.
   );
   await expect.element(page.getByRole("button", { name: "Save" })).toBeDisabled();
-});
-
-it("opening More on a new bot does not flag the name the person has not typed yet", async () => {
-  await using _screen = await render(
-    <GoatBotProfileDialog
-      mode="create"
-      initial={{ name: "", avatar: null, purpose: "" }}
-      canSubmit
-      onSubmit={vi.fn(async () => null)}
-      onClose={vi.fn()}
-    />,
-    { router: false }, // The dialog uses no links or navigation.
-  );
-  await expect.element(page.getByRole("textbox", { name: "Name" })).toHaveFocus();
-  await userEvent.click(page.getByRole("button", { name: "More" }));
-  await expect.element(page.getByRole("textbox", { name: "Purpose" })).toBeVisible();
-  await expect.element(page.getByText("The bot needs a name.")).not.toBeInTheDocument();
 });

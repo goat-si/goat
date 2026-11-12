@@ -32,6 +32,7 @@ import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from ".
 import { GoatBotSessionAvatar } from "./GoatBotAvatar";
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
+import { HoldsNewBotOpen } from "./newBotOpenHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 
@@ -121,6 +122,7 @@ export function GoatBotMemberRoster({
       ) : null}
       <AlertDialog open={deleting !== null} onOpenChange={(open) => open || setDeleting(null)}>
         <AlertDialogPopup>
+          <HoldsNewBotOpen />
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -232,6 +234,7 @@ function GoatBotMemberRow({
             <EllipsisIcon />
           </MenuTrigger>
           <MenuPopup align="end">
+            <HoldsNewBotOpen />
             <MenuItem disabled={!canEdit} onClick={() => onEdit(bot)}>
               Edit
             </MenuItem>
@@ -281,12 +284,12 @@ export function GoatBotMainMenu({
           <EllipsisIcon />
         </MenuTrigger>
         <MenuPopup align="end">
+          <HoldsNewBotOpen />
           <MenuItem onClick={() => setEditing(true)}>Edit</MenuItem>
         </MenuPopup>
       </Menu>
       {editing ? (
         <GoatBotProfileDialog
-          mode="edit"
           initial={main}
           canSubmit={canEdit}
           onClose={() => setEditing(false)}

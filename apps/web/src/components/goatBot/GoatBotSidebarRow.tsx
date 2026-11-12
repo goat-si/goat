@@ -69,7 +69,7 @@ function GoatBotSidebarObserver({
   main: BotProfile | null;
 }) {
   const count = useGoatBotWaitingCount();
-  const readMenu = useGoatBotReadMenu(count, name);
+  const readMenu = useGoatBotReadMenu(count, name, { holdsNewBotOpen: true });
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const pathname = useLocation({ select: (location) => location.pathname });
   const task = useLocation({
