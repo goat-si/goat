@@ -87,6 +87,8 @@ export const claimDueStatement = (
     readonly now: string;
     readonly limit: number;
     readonly receiptsOnly?: boolean | undefined;
+    /** Takes no edit or end row, while the worker already runs as many as it allows. */
+    readonly postsOnly?: boolean | undefined;
   },
 ) => sql<ClaimRow>`UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
   send_started_at = NULL, updated_at = ${input.now}
@@ -109,6 +111,7 @@ export const claimDueStatement = (
           WHERE earlier.task_id = due.task_id AND earlier.destination_kind = due.destination_kind
             AND earlier.state IN ('pending', 'delivering') AND earlier.rowid < due.rowid
             AND earlier.operation = 'post')))
+      AND (${input.postsOnly === true ? 1 : 0} = 0 OR due.operation = 'post')
       AND (due.operation = 'post' OR NOT EXISTS (SELECT 1 FROM channel_outbox busy
         WHERE busy.target_delivery_id = due.target_delivery_id AND busy.state = 'delivering'))
       -- The unary plus keeps this off the pending-narration index, so it searches by task.
@@ -147,6 +150,7 @@ export interface ChannelDeliveryLedgerOps extends UnsentDeliveryRelease {
     readonly now: string;
     readonly limit: number;
     readonly receiptsOnly?: boolean | undefined;
+    readonly postsOnly?: boolean | undefined;
   }) => Effect.Effect<
     { readonly deliveries: ReadonlyArray<ChannelStoredDelivery>; readonly setAside: number },
     ChannelLedgerError
@@ -251,6 +255,7 @@ export const deliveryLedger = (
                   now: input.now,
                   limit,
                   receiptsOnly: input.receiptsOnly,
+                  postsOnly: input.postsOnly,
                 });
                 const claimed = yield* Effect.forEach(
                   rows.toSorted((a, b) => {

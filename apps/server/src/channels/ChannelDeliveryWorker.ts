@@ -35,6 +35,8 @@ const MAX_ATTEMPTS = 10;
  */
 export const ANSWER_DECISION_ATTEMPTS = MAX_ATTEMPTS + 6;
 const ANSWER_DECISION_MAX_WAIT_SECONDS = 600;
+/** Edits and deletions of sent messages running at once; at the cap, claims take posts only. */
+export const PROGRESS_WRITES_IN_FLIGHT = 8;
 /** Rows one pass may send before it yields to the rest of the loop. */
 const MAX_PER_PASS = 50;
 /** A failed hand-over's release is retried this often, at most this many times, in batches. */
@@ -143,6 +145,8 @@ const make = Effect.gen(function* () {
   // Rows this worker claimed and has not settled; reconciliation never takes them back. Each one is
   // a send this worker is running, so it is as bounded as those are.
   const inFlight = new Set<ChannelLedger.ChannelStoredDelivery["deliveryId"]>();
+  // Progress writes running now; never more than PROGRESS_WRITES_IN_FLIGHT.
+  let progressWrites = 0;
   // One slot: a request made during a run asks for one more run after it.
   const reconcileRequests = yield* Queue.sliding<string>(1);
 
@@ -356,8 +360,6 @@ const make = Effect.gen(function* () {
       now: DateTime.formatIso(now),
       outcome: progressOutcomeFor(result, delivery.attempts, now),
     });
-    // The message's next write waited on this one.
-    yield* wake.wake;
   });
 
   /** Runs a write on its own fiber, which settleReceipts and so drain wait for. */
@@ -443,6 +445,7 @@ const make = Effect.gen(function* () {
         now: DateTime.formatIso(yield* DateTime.now),
         limit: 1,
         receiptsOnly: false,
+        postsOnly: progressWrites >= PROGRESS_WRITES_IN_FLIGHT,
       });
       const [delivery] = claimed.deliveries;
       // Interim messages set aside count as work done, so a long backlog is worked off in batches.
@@ -455,9 +458,17 @@ const make = Effect.gen(function* () {
       handled += 1;
       // A write to a sent message may take Slack's full timeout; it never stalls this loop.
       if (delivery.progress !== undefined) {
+        progressWrites += 1;
         yield* forkTracked(
           delivery.deliveryId,
-          sendProgress(delivery, delivery.progress, owner),
+          sendProgress(delivery, delivery.progress, owner).pipe(
+            // A freed slot, and the message's next write, wait on this one.
+            Effect.ensuring(
+              Effect.sync(() => {
+                progressWrites -= 1;
+              }).pipe(Effect.andThen(wake.wake)),
+            ),
+          ),
           "channel progress write failed",
         );
         continue;
