@@ -48,6 +48,8 @@ export const CHANNEL_COPY = {
   approvalNeedsCode: "Which approval? Reply with its code, so I answer the one you mean.",
   approvalDetailUnreadable:
     "I can't show what it asks here, so open its thread in GOAT to answer it.",
+  approvalDetailNotShown:
+    "I can't show what this asks here. Check its thread in GOAT before answering.",
   approvalsMoreWaiting: " more waiting. They show here once these are answered, or open GOAT.",
   approvalFailed:
     "I couldn't pass that approval on. Open the work's thread in GOAT to answer it there.",

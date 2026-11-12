@@ -16,6 +16,8 @@ import type {
   ProviderApprovalDecision,
 } from "@goat/contracts";
 
+import { CHANNEL_COPY } from "./channelCopy.ts";
+
 export interface OpenApprovalCard {
   readonly task: ChannelTask;
   readonly approval: ChannelTaskApprovalRef;
@@ -115,7 +117,10 @@ export const approvalSent = (decision: ApprovalReply["decision"], title: string)
     ? "Approved. " + title + " continues."
     : "Denied. I told the agent on " + title + " not to.";
 
-/** The card's words and buttons; the buttons carry the card's code. */
+/**
+ * The card's words and buttons; the buttons carry the card's code. A request it can't show (no
+ * prompt, or held on another machine) keeps its buttons and says to check the thread first.
+ */
 export const approvalCard = (input: {
   readonly card: OpenApprovalCard;
   readonly code: string;
@@ -124,7 +129,10 @@ export const approvalCard = (input: {
   readonly prompt: string | undefined;
 }): { readonly text: string; readonly options: ReadonlyArray<string> } => {
   const prompt = input.prompt?.trim();
-  const detail = prompt === undefined || prompt === "" ? "" : "\n" + clip(prompt, MAX_PROMPT_CHARS);
+  const detail =
+    prompt === undefined || prompt === ""
+      ? "\n" + CHANNEL_COPY.approvalDetailNotShown
+      : "\n" + clip(prompt, MAX_PROMPT_CHARS);
   return {
     text:
       approvalTitle(input.card.task) +

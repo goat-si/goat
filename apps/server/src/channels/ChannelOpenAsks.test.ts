@@ -9,6 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -145,7 +146,10 @@ describe("open asks across bots", () => {
           ["approval", "approval:deploy"],
         ],
       );
-      assert.strictEqual(asks[1]?.text, "deploy staging: the agent wants to run a command.");
+      assert.strictEqual(
+        asks[1]?.text,
+        "deploy staging: the agent wants to run a command.\n" + CHANNEL_COPY.approvalDetailNotShown,
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 

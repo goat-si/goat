@@ -169,7 +169,9 @@ describe("decision cards", () => {
       const card = resultsTo(harness.slackSent, "question")[0];
       assert.strictEqual(
         card?.message.text,
-        'deploy staging: the agent wants to run a command.\nReply "Deny A1" or "Approve A1".',
+        "deploy staging: the agent wants to run a command.\n" +
+          CHANNEL_COPY.approvalDetailNotShown +
+          '\nReply "Deny A1" or "Approve A1".',
       );
       assert.deepStrictEqual(card?.message.options, ["Deny A1", "Approve A1"]);
 

@@ -113,7 +113,9 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
   has no buttons, takes the same words. A number or a bare "approve" answers
   no approval: the bot repeats what is waiting with each code, so a reply
   can't land on a request you hadn't seen yet. While an approval is waiting,
-  answer a question with its choice's words instead of its number. Only
+  answer a question with its choice's words instead of its number. A card
+  that can't show what the request asks says so; check its thread in GOAT
+  before answering. Only
   people with the same access as whoever asked for the work can answer. An
   approval on another GOAT machine is sent there; if that machine can't take
   it, answer it in that thread.

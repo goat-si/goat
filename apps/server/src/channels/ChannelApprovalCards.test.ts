@@ -166,6 +166,36 @@ describe("GOAT Bot approval cards", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  // A card's buttons answer that one request, so they stay; when the card can't show what the
+  // request asks, it says so and points at the thread.
+  it.effect.each([
+    { why: "with its prompt", prompt: "rm -rf build/" },
+    { why: "without a prompt", prompt: undefined },
+  ])("a first card $why says whether it can show the request", ({ prompt }) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: clean the build cache", "n1"), rpcContext);
+      yield* runtime.drain;
+      const request = approval("rm");
+      harness.world.runtimeRequests.set((yield* onlyTask).worker!.threadId, [request]);
+      if (prompt !== undefined) harness.world.approvalPrompts.set(request.id, prompt);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const [card] = (yield* botMessages).messages.filter(
+        (message) => message.channel?.kind === "question",
+      );
+      assert.strictEqual(
+        card?.text.includes(CHANNEL_COPY.approvalDetailNotShown),
+        prompt === undefined,
+      );
+      assert.deepStrictEqual(card?.channel?.options, ["Deny A1", "Approve A1"]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("denies a subagent's approval in its own thread", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -184,7 +214,8 @@ describe("GOAT Bot approval cards", () => {
       yield* runtime.drain;
       assert.include(
         yield* assistantTexts,
-        "research the options: a subagent wants to change files.",
+        "research the options: a subagent wants to change files.\n" +
+          CHANNEL_COPY.approvalDetailNotShown,
       );
       yield* gateway.ingest(goatInput("거절 A1", "s2"), rpcContext);
       yield* runtime.drain;
@@ -296,7 +327,9 @@ describe("GOAT Bot approval cards", () => {
       const card = resultsTo(harness.slackSent, "question")[0];
       assert.strictEqual(
         card?.message.text,
-        'deploy staging: the agent wants to run a command.\nReply "Deny A1" or "Approve A1".',
+        "deploy staging: the agent wants to run a command.\n" +
+          CHANNEL_COPY.approvalDetailNotShown +
+          '\nReply "Deny A1" or "Approve A1".',
       );
 
       yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U1" });
