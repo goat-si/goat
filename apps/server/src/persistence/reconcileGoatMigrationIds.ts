@@ -70,6 +70,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "PlacementAdmission",
   "AuthSessionPenBinding",
   "ChannelOutboxOperations",
+  "ChannelBotFinishedWork",
 ]);
 
 type MigrationEntry<E> = readonly [

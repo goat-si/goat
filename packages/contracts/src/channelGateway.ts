@@ -502,13 +502,44 @@ export const BotRemoteWork = Schema.Struct({
   workKind: Schema.optional(GoatBotWorkKind),
 });
 export type BotRemoteWork = typeof BotRemoteWork.Type;
-export const ChannelListBotThreadsInput = Schema.Struct({ botId: Schema.optionalKey(BotId) });
+/** The paged read's limits; pinned tasks do not count toward the first page's. */
+export const CHANNEL_BOT_THREADS_PINNED_LIMIT = 100;
+export const CHANNEL_BOT_THREADS_FIRST_PAGE_LIMIT = 100;
+export const CHANNEL_BOT_THREADS_EARLIER_PAGE_LIMIT = 50;
+/** Launched threads listed per task in a paged read, newest first, as `listChildWork` shows. */
+export const CHANNEL_BOT_THREADS_LAUNCHES_PER_TASK = 20;
+/**
+ * Read by servers with `goatBotTaskThreadsPaged`. "earlier" continues the finished work after
+ * the cursor the previous page returned. Older servers drop the key and answer today's list.
+ */
+export const ChannelBotThreadsPage = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("first") }),
+  Schema.Struct({ kind: Schema.Literal("earlier"), cursor: TrimmedNonEmptyString }),
+]);
+export type ChannelBotThreadsPage = typeof ChannelBotThreadsPage.Type;
+export const ChannelListBotThreadsInput = Schema.Struct({
+  botId: Schema.optionalKey(BotId),
+  page: Schema.optionalKey(ChannelBotThreadsPage),
+});
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
   mainMessageCount: NonNegativeInt,
   /** Absent from servers before it; clients read that as none. */
   remoteWork: Schema.optional(Schema.Array(BotRemoteWork)),
+  /** Present when the input asked for a page. */
+  page: Schema.optionalKey(
+    Schema.Struct({
+      /** Finished work after this page's; absent when there is none. */
+      earlierCursor: Schema.optionalKey(TrimmedNonEmptyString),
+      /** First page only: more pinned tasks than CHANNEL_BOT_THREADS_PINNED_LIMIT. */
+      pinnedTruncated: Schema.optionalKey(Schema.Boolean),
+      /** First page only: more running work than CHANNEL_BOT_THREADS_FIRST_PAGE_LIMIT. */
+      activeTruncated: Schema.optionalKey(Schema.Boolean),
+      /** First page only: the bot's unread task rows across every page. */
+      unreadCount: Schema.optionalKey(NonNegativeInt),
+    }),
+  ),
 });
 export type ChannelListBotThreadsResult = typeof ChannelListBotThreadsResult.Type;
 
