@@ -12,6 +12,7 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -28,6 +29,7 @@ import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
 import { watchRoutines } from "./ChannelBotRoutineEvents.ts";
+import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import {
   botMessages,
@@ -72,11 +74,11 @@ const ensureThread = (threadId: ThreadId) =>
     });
   });
 
-const newMember = (purpose = "Checks builds.") =>
+const newMember = (purpose = "Checks builds.", clientRequestId = "new") =>
   Effect.gen(function* () {
     const bot = yield* (yield* ChannelBotMembers.ChannelBotMembers).create(
       {
-        clientRequestId: "new",
+        clientRequestId,
         name: "New bot 2",
         avatar: null,
         purpose,
@@ -118,10 +120,118 @@ const memberChat = (threadId: ThreadId) =>
       lines: records.turnItems.flatMap((item) =>
         item.type === "notification" && item.source.kind === "goat_bot_event" ? [item.summary] : [],
       ),
+      /** The chat in order: "greeting <name>", event lines, and the person's messages. */
+      items: records.turnItems
+        .toSorted((a, b) => a.ordinal - b.ordinal)
+        .flatMap((item) =>
+          item.type === "assistant_message"
+            ? ["greeting " + (/^Hi, I'm (.+?)\./.exec(item.text)?.[1] ?? item.text)]
+            : item.type === "notification" && item.source.kind === "goat_bot_event"
+              ? [item.summary]
+              : item.type === "user_message"
+                ? [item.text]
+                : [],
+        ),
       greeting,
       greetingMessage: records.messages.find((message) => message.id === greeting?.messageId),
     };
   });
+
+/** Runs before a timeline record; `changed` marks a greeting re-record from a rename. */
+type Hold = (
+  input: ChannelBotTimeline.TimelineRecordInput,
+  changed: boolean,
+) => Effect.Effect<void, ChannelGatewayError>;
+
+/**
+ * Fresh members and event lines over the real timeline, with `gates.hold` before each record.
+ * The body sees these instead of the harness's own.
+ */
+const withHeld = (gates: { hold: Hold }, harness: ReturnType<typeof makeHarness>) =>
+  Layer.fresh(
+    ChannelBotMembers.layer.pipe(
+      Layer.provideMerge(ChannelBotEvents.layer),
+      Layer.provide(
+        Layer.effect(
+          ChannelBotTimeline.ChannelBotTimeline,
+          Effect.gen(function* () {
+            const real = yield* ChannelBotTimeline.ChannelBotTimeline;
+            return ChannelBotTimeline.ChannelBotTimeline.of({
+              record: (input) => gates.hold(input, false).pipe(Effect.andThen(real.record(input))),
+              recordChanged: (input) =>
+                gates.hold(input, true).pipe(Effect.andThen(real.recordChanged(input))),
+            });
+          }),
+        ),
+      ),
+    ),
+  ).pipe(Layer.provideMerge(harness.layer));
+
+/** A gate: `hold` waits until `release`; `entered` resolves when the first record reaches it. */
+const makeGate = Effect.gen(function* () {
+  const entered = yield* Deferred.make<void>();
+  const opened = yield* Deferred.make<void>();
+  return {
+    entered: Deferred.await(entered),
+    release: Deferred.succeed(opened, undefined),
+    hold: Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(opened))),
+  };
+});
+
+const isLine = (input: ChannelBotTimeline.TimelineRecordInput, kind: string) =>
+  input.record.recordKey.startsWith("event:" + kind);
+
+/**
+ * Holds creation between the member's thread ref and its first greeting, the gap in which the
+ * member is already renamable and its lines already land. Resolves `entered` with its bot id.
+ */
+const holdLaunch = (harness: ReturnType<typeof makeHarness>) =>
+  Effect.gen(function* () {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const sql = yield* SqlClient.SqlClient;
+    const entered = yield* Deferred.make<BotId>();
+    const release = yield* Deferred.make<void>();
+    harness.launch.afterAccepted = (launch) =>
+      Effect.gen(function* () {
+        const threadId = launch.threadId!;
+        // Read straight from the profile row, so nothing reconciles or launches again.
+        const [row] = yield* sql<{ readonly bot_id: string }>`
+          SELECT json_extract(value_json, '$.botId') AS bot_id FROM channel_runtime_state
+          WHERE json_extract(value_json, '$.sessionThreadId') = ${threadId}`;
+        const botId = BotId.make(row!.bot_id);
+        yield* ledger.setMemberBotIfAbsent({
+          ownerId: owner.ownerId,
+          botId,
+          bot: { environmentId, projectId: launch.projectId, threadId },
+          now: "2026-10-12T00:00:00.000Z",
+        });
+        yield* Deferred.succeed(entered, botId);
+        yield* Deferred.await(release);
+      }).pipe(Effect.orDie);
+    return { entered: Deferred.await(entered), release: Deferred.succeed(release, undefined) };
+  });
+
+const createMember = Effect.gen(function* () {
+  return yield* (yield* ChannelBotMembers.ChannelBotMembers).create(
+    {
+      clientRequestId: "new",
+      name: "New bot 2",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    },
+    owner,
+  );
+});
+
+const routineLine = (botId: BotId) => ({
+  ownerId: owner.ownerId,
+  botId,
+  kind: "routine-paused",
+  id: "routine-1",
+  text: "Routine Standup paused",
+  subject: { kind: "routine" as const, id: "routine-1", name: "Standup" },
+});
 
 describe("GOAT Bot event lines", () => {
   it.effect("keeps the routine a line is about, so the line can open it", () => {
@@ -381,45 +491,12 @@ describe("a new member's greeting after an early rename or purpose change", () =
       return Effect.gen(function* () {
         yield* setupBot;
         const members = yield* ChannelBotMembers.ChannelBotMembers;
-        const ledger = yield* ChannelLedger.ChannelLedger;
-        const sql = yield* SqlClient.SqlClient;
-        const entered = yield* Deferred.make<BotId>();
-        const release = yield* Deferred.make<void>();
-        // A member is renamable once its ref exists (ChannelBotProfiles lists it then), and its
-        // greeting comes after: hold creation in that gap, with the ref written as launch does.
-        harness.launch.afterAccepted = (launch) =>
-          Effect.gen(function* () {
-            const threadId = launch.threadId!;
-            // Read straight from the profile row, so nothing reconciles or launches again.
-            const [row] = yield* sql<{ readonly bot_id: string }>`
-              SELECT json_extract(value_json, '$.botId') AS bot_id FROM channel_runtime_state
-              WHERE json_extract(value_json, '$.sessionThreadId') = ${threadId}`;
-            const botId = BotId.make(row!.bot_id);
-            yield* ledger.setMemberBotIfAbsent({
-              ownerId: owner.ownerId,
-              botId,
-              bot: { environmentId, projectId: launch.projectId, threadId },
-              now: "2026-10-12T00:00:00.000Z",
-            });
-            yield* Deferred.succeed(entered, botId);
-            yield* Deferred.await(release);
-          }).pipe(Effect.orDie);
-        const creating = yield* members
-          .create(
-            {
-              clientRequestId: "new",
-              name: "New bot 2",
-              avatar: null,
-              purpose: "",
-              defaultModelSelection: null,
-            },
-            owner,
-          )
-          .pipe(Effect.forkChild);
-        const botId = yield* Deferred.await(entered);
+        const launch = yield* holdLaunch(harness);
+        const creating = yield* createMember.pipe(Effect.forkChild);
+        const botId = yield* launch.entered;
         yield* members.update({ botId, name: "Bea" }, owner);
         yield* (yield* ChannelBotEvents.ChannelBotEvents).flush;
-        yield* Deferred.succeed(release, undefined);
+        yield* launch.release;
         const bot = yield* Fiber.join(creating);
         yield* ensureThread(bot.sessionThreadId);
         const chat = yield* memberChat(bot.sessionThreadId);
@@ -430,35 +507,37 @@ describe("a new member's greeting after an early rename or purpose change", () =
     },
   );
 
-  // Passes on dev by design; fails if the rename re-records while a line is still queued.
+  // Passes on dev by design; fails if the rename re-records while a profile line is still queued.
   it.effect(
-    "a rename while an earlier line still waits keeps the greeting and writes its line",
+    "a rename while an earlier profile line still waits keeps the greeting and writes its line",
     () => {
       const harness = makeHarness();
+      const gates: { hold: Hold } = { hold: () => Effect.void };
       return Effect.gen(function* () {
         yield* setupBot;
         const members = yield* ChannelBotMembers.ChannelBotMembers;
         const events = yield* ChannelBotEvents.ChannelBotEvents;
         const bot = yield* newMember();
-        // GoatBotEventSubject caps a name at 200 characters, so the timeline refuses this line on
-        // every try and it waits in the bot's queue, as a line in retry does.
+        const lines = yield* makeGate;
+        gates.hold = (input) => (isLine(input, "profile-") ? lines.hold : Effect.void);
+        // An earlier purpose change whose line is still being recorded.
         yield* events.emit({
           ownerId: owner.ownerId,
           botId: bot.botId,
-          kind: "routine-paused",
-          id: "routine-1",
-          text: "Routine paused",
-          subject: { kind: "routine", id: "routine-1", name: "x".repeat(201) },
+          kind: "profile-purpose",
+          id: bot.botId,
+          text: "Purpose updated",
         });
+        yield* lines.entered;
         yield* members.update({ botId: bot.botId, name: "Ada" }, owner);
-        const flushed = yield* events.flush.pipe(Effect.forkChild);
-        yield* TestClock.adjust("1 minute");
-        yield* Fiber.join(flushed);
+        yield* lines.release;
         const chat = yield* memberChat(bot.sessionThreadId);
-        assert.lengthOf(chat.texts, 1);
-        assert.isTrue(chat.texts[0]?.startsWith("Hi, I'm New bot 2."));
-        assert.deepStrictEqual(chat.lines, ["Renamed to Ada"]);
-      }).pipe(Effect.provide(harness.layer));
+        assert.deepStrictEqual(chat.items, [
+          "greeting New bot 2",
+          "Purpose updated",
+          "Renamed to Ada",
+        ]);
+      }).pipe(Effect.provide(withHeld(gates, harness)));
     },
   );
 
@@ -570,4 +649,214 @@ describe("a new member's greeting after an early rename or purpose change", () =
       assert.deepStrictEqual(chat.lines, renamed ? [] : ["Renamed to Ada"]);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  // Passes on dev by design: the send lands between the rename's reads and its record.
+  it.effect(
+    "a send that lands while a rename waits to record keeps the greeting and writes the line",
+    () => {
+      const harness = makeHarness();
+      const gates: { hold: Hold } = { hold: () => Effect.void };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const bot = yield* newMember();
+        const greeting = yield* makeGate;
+        gates.hold = (_input, changed) => (changed ? greeting.hold : Effect.void);
+        const renaming = yield* members
+          .update({ botId: bot.botId, name: "Ada" }, owner)
+          .pipe(Effect.forkChild);
+        yield* greeting.entered;
+        yield* send(bot.sessionThreadId, "hello", "send-first");
+        yield* greeting.release;
+        yield* Fiber.join(renaming);
+        const chat = yield* memberChat(bot.sessionThreadId);
+        assert.deepStrictEqual(chat.items, ["greeting New bot 2", "hello", "Renamed to Ada"]);
+      }).pipe(Effect.provide(withHeld(gates, harness)));
+    },
+  );
+});
+
+describe("a new member's greeting around lines, other bots and a stuck record", () => {
+  it.effect(
+    "a line that lands before a member's first greeting leaves the greeting after it",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const events = yield* ChannelBotEvents.ChannelBotEvents;
+        const launch = yield* holdLaunch(harness);
+        const creating = yield* createMember.pipe(Effect.forkChild);
+        const botId = yield* launch.entered;
+        yield* events.emit(routineLine(botId));
+        yield* events.flush;
+        yield* launch.release;
+        const bot = yield* Fiber.join(creating);
+        yield* ensureThread(bot.sessionThreadId);
+        const chat = yield* memberChat(bot.sessionThreadId);
+        assert.deepStrictEqual(chat.items, ["Routine Standup paused", "greeting New bot 2"]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "a rename before the first greeting that writes its line leaves a greeting on the new name after it",
+    () => {
+      const harness = makeHarness();
+      const gates: { hold: Hold } = { hold: () => Effect.void };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const events = yield* ChannelBotEvents.ChannelBotEvents;
+        const lines = yield* makeGate;
+        gates.hold = (input) => (isLine(input, "profile-") ? lines.hold : Effect.void);
+        const launch = yield* holdLaunch(harness);
+        const creating = yield* createMember.pipe(Effect.forkChild);
+        const botId = yield* launch.entered;
+        // An earlier rename's line is still being recorded, so this rename writes its own line.
+        yield* events.emit({
+          ownerId: owner.ownerId,
+          botId,
+          kind: "profile-name",
+          id: botId,
+          text: "Renamed to Ada",
+        });
+        yield* lines.entered;
+        yield* members.update({ botId, name: "Bea" }, owner);
+        yield* lines.release;
+        yield* events.flush;
+        yield* launch.release;
+        const bot = yield* Fiber.join(creating);
+        yield* ensureThread(bot.sessionThreadId);
+        const chat = yield* memberChat(bot.sessionThreadId);
+        assert.deepStrictEqual(chat.items, ["Renamed to Ada", "Renamed to Bea", "greeting Bea"]);
+      }).pipe(Effect.provide(withHeld(gates, harness)));
+    },
+  );
+
+  it.effect("a routine line still waiting does not hold back the re-recorded greeting", () => {
+    const harness = makeHarness();
+    const gates: { hold: Hold } = { hold: () => Effect.void };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const events = yield* ChannelBotEvents.ChannelBotEvents;
+      const bot = yield* newMember();
+      const routine = yield* makeGate;
+      gates.hold = (input) => (isLine(input, "routine-") ? routine.hold : Effect.void);
+      yield* events.emit(routineLine(bot.botId));
+      yield* routine.entered;
+      yield* members.update({ botId: bot.botId, name: "Ada" }, owner);
+      yield* routine.release;
+      const chat = yield* memberChat(bot.sessionThreadId);
+      assert.deepStrictEqual(chat.items, ["greeting Ada", "Routine Standup paused"]);
+    }).pipe(Effect.provide(withHeld(gates, harness)));
+  });
+
+  // Passes on dev by design: a routine line queued after the rename's check lands below it.
+  it.effect(
+    "a routine line queued while the greeting is re-recorded lands after the new greeting",
+    () => {
+      const harness = makeHarness();
+      const gates: { hold: Hold } = { hold: () => Effect.void };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const events = yield* ChannelBotEvents.ChannelBotEvents;
+        const bot = yield* newMember();
+        const greeting = yield* makeGate;
+        const routine = yield* makeGate;
+        gates.hold = (input, changed) =>
+          changed ? greeting.hold : isLine(input, "routine-") ? routine.hold : Effect.void;
+        const renaming = yield* members
+          .update({ botId: bot.botId, name: "Ada" }, owner)
+          .pipe(Effect.forkChild);
+        yield* greeting.entered;
+        yield* events.emit(routineLine(bot.botId));
+        yield* routine.entered;
+        yield* greeting.release;
+        yield* Fiber.join(renaming);
+        yield* routine.release;
+        const chat = yield* memberChat(bot.sessionThreadId);
+        assert.deepStrictEqual(chat.items, ["greeting Ada", "Routine Standup paused"]);
+      }).pipe(Effect.provide(withHeld(gates, harness)));
+    },
+  );
+
+  it.effect(
+    "a greeting record that never answers gives up at the bound: the rename writes its line and other bots' edits go on",
+    () => {
+      const harness = makeHarness();
+      const gates: { hold: Hold } = { hold: () => Effect.void };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const stuck = yield* newMember("Checks builds.", "stuck");
+        const other = yield* newMember("Checks builds.", "other");
+        const entered = yield* Deferred.make<void>();
+        const never = yield* Deferred.make<void>();
+        gates.hold = (input, changed) =>
+          changed && input.threadId === stuck.sessionThreadId
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.uninterruptible(Deferred.await(never))),
+              )
+            : Effect.void;
+        const renaming = yield* members
+          .update({ botId: stuck.botId, name: "Ada" }, owner)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const others = yield* Effect.all(
+          [
+            members.update({ botId: other.botId, name: "Bea" }, owner),
+            members.update({ botId: main, name: "Max" }, owner),
+          ],
+          { concurrency: 2 },
+        ).pipe(Effect.forkChild);
+        yield* TestClock.adjust(ChannelBotMembers.GREETING_RERECORD_BOUND_MS - 1);
+        assert.isUndefined(renaming.pollUnsafe());
+        assert.isUndefined(others.pollUnsafe());
+        yield* TestClock.adjust(1);
+        yield* Fiber.join(renaming);
+        yield* Fiber.join(others);
+        assert.deepStrictEqual((yield* memberChat(stuck.sessionThreadId)).items, [
+          "greeting New bot 2",
+          "Renamed to Ada",
+        ]);
+        assert.deepStrictEqual((yield* memberChat(other.sessionThreadId)).items, ["greeting Bea"]);
+        assert.deepStrictEqual(yield* eventLines, ["Renamed to Max"]);
+      }).pipe(Effect.provide(withHeld(gates, harness)));
+    },
+  );
+
+  it.effect(
+    "interrupting a rename whose greeting record never answers ends it, and its line is still written",
+    () => {
+      const harness = makeHarness();
+      const gates: { hold: Hold } = { hold: () => Effect.void };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const bot = yield* newMember();
+        const entered = yield* Deferred.make<void>();
+        const never = yield* Deferred.make<void>();
+        gates.hold = (_input, changed) =>
+          changed
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.uninterruptible(Deferred.await(never))),
+              )
+            : Effect.void;
+        const renaming = yield* members
+          .update({ botId: bot.botId, name: "Ada" }, owner)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(renaming);
+        assert.deepStrictEqual((yield* memberChat(bot.sessionThreadId)).items, [
+          "greeting New bot 2",
+          "Renamed to Ada",
+        ]);
+        // The lock is free again for the next edit.
+        yield* members.update({ botId: main, name: "Max" }, owner);
+        assert.deepStrictEqual(yield* eventLines, ["Renamed to Max"]);
+      }).pipe(Effect.provide(withHeld(gates, harness)));
+    },
+  );
 });

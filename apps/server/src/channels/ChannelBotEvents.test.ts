@@ -184,25 +184,32 @@ describe("ChannelBotEvents", () => {
     }),
   );
 
-  it.effect("a bot's lines are pending from queueing until the last one is recorded", () =>
+  it.effect("only a bot's profile lines count as pending, queued or being recorded", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
-      const inFlight = yield* Deferred.make<void>();
+      const bothInFlight = yield* Deferred.make<void>();
       const timeline = fakeTimeline({
         gate,
-        onAttempt: () => Deferred.succeed(inFlight, undefined).pipe(Effect.asVoid),
+        onAttempt: (attempts) =>
+          attempts.length === 2
+            ? Deferred.succeed(bothInFlight, undefined).pipe(Effect.asVoid)
+            : Effect.void,
       });
       const events = yield* makeWith(timeline.deps);
       const ada = BotId.make("ada");
-      assert.isFalse(yield* events.pending("owner", ada));
+      const bob = BotId.make("bob");
+      yield* events.emit({ ...line("ada", "Routine Standup paused"), kind: "routine-paused" });
+      yield* events.emit(line("bob", "Renamed to Bob"));
+      yield* Deferred.await(bothInFlight);
+      // A routine line never contradicts a greeting; a profile line being recorded may.
+      assert.isFalse(yield* events.profileLinePending("owner", ada));
+      assert.isTrue(yield* events.profileLinePending("owner", bob));
       yield* events.emit(line("ada", "Renamed to Ada"));
-      yield* Deferred.await(inFlight);
-      // The line is being recorded, so it may still land after anything written now.
-      assert.isTrue(yield* events.pending("owner", ada));
-      assert.isFalse(yield* events.pending("owner", BotId.make("bob")));
+      assert.isTrue(yield* events.profileLinePending("owner", ada));
       yield* Deferred.succeed(gate, undefined);
       yield* events.flush;
-      assert.isFalse(yield* events.pending("owner", ada));
+      assert.isFalse(yield* events.profileLinePending("owner", ada));
+      assert.isFalse(yield* events.profileLinePending("owner", bob));
     }).pipe(Effect.scoped),
   );
 });
