@@ -276,4 +276,43 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "drops an ssh approval once GOAT stops following its host, and shows it again on recovery",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(goatInput("do: write the release notes", "ssh-gone"), rpcContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        yield* admitSsh(task, "gone", "bound");
+        yield* insertThreadDispatch("gone", sshObservation);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [stampedSshApproval]);
+        const sql = yield* SqlClient.SqlClient;
+        for (const ended of [
+          sql`UPDATE remote_dispatches SET state = 'lost', end_reason = 'host_unreachable',
+          ended_at = ${since} WHERE correlation_id = ${"corr:gone"}`,
+          sql`UPDATE remote_dispatches SET state = 'cancelled', end_reason = 'dismissed',
+          ended_at = ${since} WHERE correlation_id = ${"corr:gone"}`,
+        ]) {
+          yield* ended;
+          yield* reports.reconcile(runtime.ownerToken);
+          yield* runtime.drain;
+          assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+          // The host answered again: its observation counts once more.
+          yield* sql`UPDATE remote_dispatches SET state = 'running', end_reason = NULL, ended_at = NULL
+          WHERE correlation_id = ${"corr:gone"}`;
+          yield* reports.reconcile(runtime.ownerToken);
+          yield* runtime.drain;
+          assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [stampedSshApproval]);
+        }
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
