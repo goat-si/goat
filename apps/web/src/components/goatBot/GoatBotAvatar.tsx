@@ -17,7 +17,6 @@ import { useGlobalAgentStore } from "~/globalAgentStore";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "~/state/entities";
 
-import { GoatWordmark } from "../GoatWordmark";
 import { GoatBotFace } from "./GoatBotFace";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { useGoatBotFaceMotion, useGoatBotSessionFace } from "./useGoatBotFace";
@@ -25,7 +24,8 @@ import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 
 const CIRCLE = { sm: "size-5", md: "size-7", lg: "size-12" } as const;
-const MARK = { sm: "size-3.5", md: "size-5", lg: "size-8" } as const;
+// The head nearly fills its circle so its ears and eyes still read at 20 px.
+const HEAD = { sm: "size-4.5", md: "size-6", lg: "size-10" } as const;
 const DOT = { sm: "size-1.5", md: "size-2", lg: "size-3" } as const;
 const EMOJI = { sm: "text-[0.6875rem]", md: "text-sm", lg: "text-2xl" } as const;
 const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
@@ -35,9 +35,9 @@ const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
 };
 
 /**
- * A bot on a theme-aware neutral circle: its chosen emoji, else its face, else the plain goat mark
- * when no state is given. A member's color fills the circle behind its picture. The ring and dot
- * carry the state either way.
+ * A bot on a theme-aware neutral circle: its chosen emoji, else its face, still and idle when no
+ * state is given. A member's color fills the circle behind its picture. The ring and dot carry
+ * the state either way.
  */
 export function GoatBotAvatar({
   size = "md",
@@ -98,10 +98,8 @@ export function GoatBotAvatar({
         >
           {picture}
         </span>
-      ) : state === undefined ? (
-        <GoatWordmark className={MARK[size]} />
       ) : (
-        <GoatBotFace state={state} motion={eyeMotion} className={MARK[size]} />
+        <GoatBotFace state={state ?? "idle"} motion={eyeMotion} className={HEAD[size]} />
       )}
       {signal?.waitingDot ? (
         <span className={cn("absolute top-0 right-0 rounded-full bg-warning", DOT[size])} />
