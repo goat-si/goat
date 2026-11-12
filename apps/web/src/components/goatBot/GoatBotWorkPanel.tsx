@@ -147,9 +147,15 @@ export function GoatBotWorkPanel({
   const work = groupBotWork(rows, [], environmentId);
   const tasks = [...work.inProgress, ...work.done];
   // In the top padding Home and a task view both leave; inside the panel, so a routine landing
-  // still sees the sheet's opening focus as the panel's.
+  // still sees the sheet's opening focus as the panel's. A full-width sheet docks under the
+  // titlebar's sidebar control (z-sheet < z-modal), so there it starts just past that control.
   const backToChat = onShowChat ? (
-    <Button variant="ghost" size="sm" onClick={onShowChat} className="absolute start-2 top-2">
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={onShowChat}
+      className="absolute start-2 top-2.5 max-sm:start-[calc(var(--workspace-controls-left)+2.5rem)]"
+    >
       <ArrowLeftIcon aria-hidden />
       Back to chat
     </Button>
