@@ -373,7 +373,7 @@ export class Room extends DurableObject<Env> {
       return this.endSession(ws, state, CloseCode.Timeout);
     }
     ws.send(payload);
-    const fresh = !this.uncounted(state);
+    const fresh = payload.length > 0 && !this.uncounted(state);
     state.sent += payload.length;
     state.fromNode = (state.fromNode ?? 0) + payload.length;
     save(ws, state);
@@ -399,7 +399,7 @@ export class Room extends DurableObject<Env> {
     save(up, upState);
     state.upEnd = upState.sent;
     state.upUnacked = mine;
-    const fresh = !this.uncounted(state);
+    const fresh = payload.length > 0 && !this.uncounted(state);
     state.toNode = (state.toNode ?? 0) + payload.length;
     save(ws, state);
     if (fresh) this.armTotals();

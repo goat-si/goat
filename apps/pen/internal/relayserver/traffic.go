@@ -32,8 +32,11 @@ type traffic struct {
 	rate     float64
 
 	start sync.Once
-	mu    sync.Mutex
-	timer *time.Timer
+	// summary serializes summaries from collection to output, so the last one (Close) never runs
+	// while a timer summary holds bytes it took from sessions but has not counted yet.
+	summary sync.Mutex
+	mu      sync.Mutex
+	timer   *time.Timer
 	// since is when counting began; tokens and refilled are the session line bucket.
 	since    time.Time
 	tokens   float64
@@ -278,6 +281,8 @@ func (s *Server) Summarize() {
 	if s.TrafficLog == nil {
 		return
 	}
+	s.traffic.summary.Lock()
+	defer s.traffic.summary.Unlock()
 	s.mu.Lock()
 	rooms := make([]*room, 0, len(s.rooms))
 	for _, rm := range s.rooms {
