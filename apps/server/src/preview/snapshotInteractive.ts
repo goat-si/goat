@@ -88,8 +88,8 @@ const entryOf = (line: string) => {
 type Entry = NonNullable<ReturnType<typeof entryOf>>;
 
 /**
- * A nameless element is named by its own text under it. An element there with a ref keeps its
- * text to itself: the tree shows an editable region as a plain generic, so its words are input.
+ * A nameless element is named by the text lines directly under it. Every element under it keeps
+ * its text: the tree draws an editable region like any wrapper, so its words may be input.
  */
 const descendantText = (lines: ReadonlyArray<string>, index: number, depth: number) => {
   const parts: string[] = [];
@@ -100,9 +100,8 @@ const descendantText = (lines: ReadonlyArray<string>, index: number, depth: numb
     if (indent <= depth) break;
     if (indent > skipped) continue;
     const entry = entryOf(line);
-    const owned = entry !== undefined && (entry.target || entry.ref !== undefined);
-    skipped = owned ? indent : Infinity;
-    const text = owned ? undefined : (entry?.name ?? entry?.value);
+    const text = entry?.role === "text" ? entry.value : undefined;
+    skipped = entry?.role === "text" ? Infinity : indent;
     if (text) parts.push(text);
     if (parts.join(" ").length >= NAME_LIMIT) break;
   }

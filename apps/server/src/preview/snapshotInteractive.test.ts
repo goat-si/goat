@@ -12,7 +12,8 @@ const PAGE = `<p>Article paragraph</p>
 <input value="draft text">
 <button onclick="document.body.dataset.saved = 'yes'">Save</button>`;
 
-const FIELDS = `<div style="cursor:pointer"><span>Card</span><input aria-label="Number" value="4111111111111111"><select><option>Visa</option></select><input type="search" value="q-secret"><div contenteditable="true">draft <b>note</b></div></div>
+// Editable regions show as plain generics, with a ref or, under pointer-events:none, without one.
+const FIELDS = `<div style="cursor:pointer"><span>Card</span><input aria-label="Number" value="4111111111111111"><select><option>Visa</option></select><input type="search" value="q-secret"><div contenteditable="true">draft <b>note</b></div><div contenteditable="true"><p>block draft</p><h2>block heading</h2></div><div style="pointer-events:none"><div contenteditable="true">hidden draft</div></div></div>
 <iframe title="" srcdoc="<p>Checkout</p><input value='frame-secret'><div contenteditable>frame note</div>"></iframe>`;
 
 // Page text that reads like tree syntax: attributes in names and values, /…/ and lone "/" names, a quoted key.
@@ -113,7 +114,9 @@ it("a pointer container or frame is never named after what was typed or chosen i
       (element) => element.name,
     );
     expect(
-      names.filter((name) => /4111111111111111|q-secret|frame-secret|Visa|draft|note/.test(name)),
+      names.filter((name) =>
+        /4111111111111111|q-secret|frame-secret|Visa|draft|note|block/.test(name),
+      ),
     ).toEqual([]);
     expect(String(narrow.accessibilityTree)).toMatch(
       /^- generic "Card" \[ref=\S+\] \[cursor=pointer\]/m,
