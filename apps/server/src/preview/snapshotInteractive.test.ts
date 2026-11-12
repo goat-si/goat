@@ -40,6 +40,10 @@ const BORROWED = `<button>Card <input value="4111111111111111"></button>
 <button>Card <div contenteditable="true"><p>draft note</p></div></button>
 <button>Card <div contenteditable="true"><p>draft</p><h2>note</h2></div></button>
 <button>Card <div role="textbox" contenteditable="true">draft note</div></button>
+<button>Card <div role="textbox" contenteditable="true" placeholder="hint">draft note</div></button>
+<a href="#">Card <div role="textbox" contenteditable="true" placeholder="hint">draft note</div></a>
+<div role="button" tabindex="0">Card <div role="textbox" contenteditable="true" placeholder="hint">draft note</div></div>
+<button>Card <div role="textbox" contenteditable="true">draft note<img alt="x"></div></button>
 <button>Card <select><option>Visa</option></select></button>
 <button aria-label="Pay now">Card <input value="4111111111111111"></button>
 <ul role="listbox" aria-label="Fruits"><li role="option">Apple</li></ul>`;
@@ -155,12 +159,12 @@ it("a button, link or labelled box is never named after what a field or editor u
       const names = interactiveElements
         .filter((element) => ["button", "link", "generic"].includes(element.role ?? ""))
         .map((element) => element.name);
-      expect(names).toEqual([...Array.from({ length: 11 }, () => "Card"), "Pay now"]);
+      expect(names).toEqual([...Array.from({ length: 15 }, () => "Card"), "Pay now"]);
     }
     const lines = String(narrow.accessibilityTree)
       .split("\n")
       .filter((line) => /^- (?:button|link|generic) /.test(line));
-    expect(lines).toHaveLength(12);
+    expect(lines).toHaveLength(16);
     for (const line of lines)
       expect(line).toMatch(/^- (?:button|link|generic) "(?:Card|Pay now)" \[ref=/);
   }));

@@ -113,10 +113,25 @@ const ownText = (rows: ReadonlyArray<Row>, index: number) => {
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /**
+ * Whether a field shows its content: as its value, a text line under it, or a select's options.
+ * Playwright leaves out the text inside a role=textbox editor, even when it draws a placeholder
+ * or an image there.
+ */
+const showsContent = (rows: ReadonlyArray<Row>, index: number) => {
+  const depth = rows[index]?.indent ?? 0;
+  if (rows[index]?.entry?.value !== undefined) return true;
+  for (let next = index + 1; ; next++) {
+    const row = rows[next];
+    if (row === undefined || row.indent <= depth) return false;
+    if (row.entry?.role === "text" || row.entry?.role === "option") return true;
+  }
+};
+
+/**
  * Whether a name holds text an element under it shows. Playwright folds a field's value into a
  * button's or link's name and draws an editor like any wrapper, so only text lines directly under
- * an element are its own. A field showing no content, like a role=textbox editor, may be in it too,
- * as may whatever a cut tree left out.
+ * an element are its own. A field that does not show its content may be in it too, as may whatever
+ * a cut tree left out.
  */
 const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut: boolean) => {
   const depth = rows[index]?.indent ?? 0;
@@ -132,7 +147,7 @@ const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut:
     nested = Math.min(nested, row.indent);
     // An image's name is its alt text, which the page writes.
     if (entry === undefined || entry.role === "img") continue;
-    if (EDITABLE.has(entry.role) && entry.value === undefined && !entry.children) return true;
+    if (EDITABLE.has(entry.role) && !showsContent(rows, next)) return true;
     for (const text of [entry.name, entry.value]) {
       const shown = text === undefined ? "" : squash(text);
       if (shown && own.includes(shown)) return true;
