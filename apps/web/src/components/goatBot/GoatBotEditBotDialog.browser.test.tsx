@@ -1,4 +1,4 @@
-import { BotProfile, EnvironmentId } from "@goat/contracts";
+import { BotProfile } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -10,12 +10,7 @@ const server = vi.hoisted(() => ({
   modelEdit: true,
 }));
 
-vi.mock("~/state/channels", async () => {
-  const { AsyncResult, Atom } = await import("effect/reactivity");
-  // The list read a rename starts; it never answers here.
-  const list = Atom.make(AsyncResult.initial(true));
-  return { channelEnvironment: { updateBot: {}, listBots: () => list } };
-});
+vi.mock("~/state/channels", () => ({ channelEnvironment: { updateBot: {} } }));
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
     serverConfig: { environment: { capabilities: { goatBotMemberModelEdit: server.modelEdit } } },
@@ -49,7 +44,6 @@ vi.mock("../chat/ProviderModelPicker", () => ({
 }));
 
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
-import { forgetRenamedBots } from "./goatBotRenamedBots";
 
 const member = Schema.decodeSync(BotProfile)({
   botId: "docs",
@@ -68,7 +62,6 @@ const member = Schema.decodeSync(BotProfile)({
 function setup(modelEdit: boolean) {
   server.inputs.length = 0;
   server.modelEdit = modelEdit;
-  forgetRenamedBots(EnvironmentId.make("env-1"));
 }
 
 it("sends a member's model only when the person changed it", async () => {

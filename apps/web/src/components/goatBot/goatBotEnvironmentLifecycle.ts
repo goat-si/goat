@@ -1,8 +1,6 @@
 import { forgetNewBotEnvironment } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 
-import { forgetRenamedBots } from "./goatBotRenamedBots";
-
 let disposeSession: ((environmentId: EnvironmentId) => void) | undefined;
 
 export function registerGoatBotEnvironmentDisposal(
@@ -14,6 +12,5 @@ export function registerGoatBotEnvironmentDisposal(
 export function disposeGoatBotEnvironment(environmentId: EnvironmentId) {
   // A New bot create, from the roster or the palette, ends with its environment.
   forgetNewBotEnvironment(environmentId);
-  forgetRenamedBots(environmentId);
   disposeSession?.(environmentId);
 }

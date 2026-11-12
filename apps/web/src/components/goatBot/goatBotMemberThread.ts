@@ -4,7 +4,6 @@ import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
-import { useRenamedBots } from "./goatBotRenamedBots";
 import { useNewBotSlot } from "./useNewBotSlot";
 
 // Member conversations get stable ids with this prefix (apps/server/src/channels/channelIds.ts,
@@ -12,10 +11,9 @@ import { useNewBotSlot } from "./useNewBotSlot";
 const MEMBER_THREAD_PREFIX = "channel-member-bot:";
 
 /**
- * The member bot whose thread this is, deleted ones included, from the roster's cached list. This
- * client's rename stands in until the list is read again, and its create until the list holds it.
- * A thread that may be a member's is `pending` until that list answers and `unavailable` if it
- * cannot be read.
+ * The member bot whose thread this is, deleted ones included, from the roster's cached list, or
+ * this client's create until the list holds it. A thread that may be a member's is `pending` until
+ * that list answers and `unavailable` if it cannot be read.
  */
 export function useGoatBotMemberAt(
   target: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
@@ -49,12 +47,10 @@ export function useGoatBotMemberAt(
       : null,
   );
   const created = useNewBotSlot(environmentId).created;
-  const renamed = useRenamedBots();
   const member =
     target === null
       ? null
-      : (findMemberBot(renamed, target.environmentId, target.threadId) ??
-        findMemberBot(profiles.data?.bots, target.environmentId, target.threadId) ??
+      : (findMemberBot(profiles.data?.bots, target.environmentId, target.threadId) ??
         findMemberBot(created, target.environmentId, target.threadId));
   // Before the server's capabilities arrive, a member-looking thread waits too.
   const candidate =

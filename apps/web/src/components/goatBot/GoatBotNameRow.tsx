@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { botManageFailure, isGeneratedBotName } from "@goat/client-runtime/goatBot";
+import {
+  botManageFailure,
+  isGeneratedBotName,
+  replaceCreatedBot,
+} from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
@@ -24,7 +28,6 @@ import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { useGoatBotMember } from "./goatBotMemberContext";
 import { webBotNameRowDismissals } from "./goatBotNameRowDismissed";
 import { takeNameRowFocus } from "./goatBotNewBotOpen";
-import { useRememberRenamedBot } from "./useRememberRenamedBot";
 import { HoldsNewBotOpen } from "./newBotOpenHolds";
 
 const NO_PERMISSION = Atom.make(false);
@@ -101,7 +104,6 @@ function NameForm({
   readonly onGone: () => void;
 }) {
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
-  const rememberRenamedBot = useRememberRenamedBot();
   const [draft, setDraft] = useState(member.name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +124,7 @@ function NameForm({
       setError(botManageFailure(squashAtomCommandFailure(result)));
       return;
     }
-    rememberRenamedBot(result.value.bot);
+    replaceCreatedBot(member.environmentId, result.value.bot);
     if (!isGeneratedBotName(name)) onGone();
   }
   return (

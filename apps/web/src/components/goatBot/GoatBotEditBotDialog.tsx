@@ -1,4 +1,4 @@
-import { botManageFailure } from "@goat/client-runtime/goatBot";
+import { botManageFailure, replaceCreatedBot } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
@@ -10,7 +10,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { GoatBotModelField } from "./GoatBotModelField";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { useGoatBotMainName } from "./goatBotMemberContext";
-import { useRememberRenamedBot } from "./useRememberRenamedBot";
 
 /** Edits a bot's profile, and a member's model where its server takes one. */
 export function GoatBotEditBotDialog({
@@ -25,7 +24,6 @@ export function GoatBotEditBotDialog({
   readonly onClose: () => void;
 } & Pick<ComponentProps<typeof GoatBotProfileDialog>, "draftName" | "finalFocus">) {
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
-  const rememberRenamedBot = useRememberRenamedBot();
   const mainName = useGoatBotMainName();
   const modelEditable = useGoatBotMemberModelEditable(bot);
   const colorEditable = useGoatBotMemberColorEditable(bot);
@@ -50,7 +48,7 @@ export function GoatBotEditBotDialog({
           },
         });
         if (result._tag === "Failure") return botManageFailure(squashAtomCommandFailure(result));
-        rememberRenamedBot(result.value.bot);
+        replaceCreatedBot(bot.environmentId, result.value.bot);
         return null;
       }}
     >

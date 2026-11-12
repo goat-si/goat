@@ -1,4 +1,4 @@
-import { BotProfile, EnvironmentId } from "@goat/contracts";
+import { BotProfile } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { useImperativeHandle, useRef, type Ref } from "react";
@@ -29,14 +29,9 @@ const permission = vi.hoisted(() => {
     },
   };
 });
-vi.mock("~/state/channels", async () => {
-  const { AsyncResult, Atom } = await import("effect/reactivity");
-  // The list read a rename starts; it never answers here.
-  const list = Atom.make(AsyncResult.initial(true));
-  return {
-    channelEnvironment: { updateBot: { permissionAtom: () => null }, listBots: () => list },
-  };
-});
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: { updateBot: { permissionAtom: () => null } },
+}));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => (input: unknown) => state.update(input),
 }));
@@ -60,7 +55,6 @@ import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { resetBotNameRowDismissalsForTests } from "./goatBotNameRowDismissed";
 import { openNewBotChat, resetNameRowFocusForTests } from "./goatBotNewBotOpen";
-import { forgetRenamedBots } from "./goatBotRenamedBots";
 import { newBotOpenBlocked } from "./newBotOpenHolds";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
@@ -92,7 +86,6 @@ function setup() {
   resetNameRowFocusForTests();
   resetBotNameRowDismissalsForTests();
   localStorage.removeItem("goat:bot-name-row-dismissed:v1");
-  forgetRenamedBots(EnvironmentId.make("env-name-row"));
   // The server answers with the bot as it now is.
   const update = vi.fn(async (args: unknown): Promise<unknown> => {
     const { input } = args as { readonly input: { readonly botId: string } };

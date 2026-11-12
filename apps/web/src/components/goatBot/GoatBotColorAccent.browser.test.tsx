@@ -26,12 +26,7 @@ vi.mock("~/state/environments", async (original) => ({
     },
   }),
 }));
-vi.mock("~/state/channels", async () => {
-  const { AsyncResult, Atom } = await import("effect/reactivity");
-  // The list read a rename starts; it never answers here.
-  const list = Atom.make(AsyncResult.initial(true));
-  return { channelEnvironment: { updateBot: {}, createBot: {}, listBots: () => list } };
-});
+vi.mock("~/state/channels", () => ({ channelEnvironment: { updateBot: {}, createBot: {} } }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand:
     () =>
@@ -73,7 +68,6 @@ vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
-import { forgetRenamedBots } from "./goatBotRenamedBots";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
 const member = (color: string | undefined) =>
@@ -95,7 +89,6 @@ const member = (color: string | undefined) =>
 function setup(colorCapability: boolean) {
   state.colorCapability = colorCapability;
   state.updates.length = 0;
-  forgetRenamedBots(EnvironmentId.make("env-1"));
 }
 
 it("hides the swatches on a server that cannot store a color, and sends none", async () => {

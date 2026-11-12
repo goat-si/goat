@@ -152,6 +152,16 @@ export function dismissCreatedBot(environmentId: EnvironmentId, botId: string): 
   set(environmentId, { ...slot, created: slot.created.filter((bot) => bot.botId !== botId) });
 }
 
+/** An edit answered for a created bot the list may not hold yet: its row and chat show the edit. */
+export function replaceCreatedBot(environmentId: EnvironmentId, bot: BotProfile): void {
+  const slot = slotOf(environmentId);
+  if (!slot.created.some((created) => created.botId === bot.botId)) return;
+  set(environmentId, {
+    ...slot,
+    created: slot.created.map((created) => (created.botId === bot.botId ? bot : created)),
+  });
+}
+
 /** The roster's list now holds these bots, in any group: their own rows take over. */
 export function settleListedNewBots(
   environmentId: EnvironmentId,

@@ -1,14 +1,11 @@
 import { forgetNewBotEnvironment, newBotSlot, startNewBot } from "@goat/client-runtime/goatBot";
 import { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
-import { RegistryContext } from "@effect/atom-react";
-import * as Cause from "effect/Cause";
-import * as Option from "effect/Option";
-import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import * as Schema from "effect/Schema";
-import { useRef, type ReactNode } from "react";
+import { useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
-import { act, render } from "../../../test/render";
+import { render } from "../../../test/render";
+import "~/index.css";
 
 const server = vi.hoisted(() => ({
   presentation: null as null | object,
@@ -18,28 +15,21 @@ const server = vi.hoisted(() => ({
     isPending: boolean;
   },
   listed: [] as unknown[],
-  /** The bot list as the atom registry holds it, which a rename watches for its next read. */
-  list: null as unknown,
   update: (_input: unknown): Promise<unknown> => Promise.resolve({}),
 }));
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
   useEnvironment: () => server.presentation,
 }));
-vi.mock("~/state/channels", async () => {
-  const { AsyncResult, Atom } = await import("effect/reactivity");
-  const list = Atom.make(AsyncResult.initial<{ bots: unknown[] }, unknown>());
-  server.list = list;
-  return {
-    channelEnvironment: {
-      listBots: (args: { readonly input: unknown }) => {
-        server.listed.push(args.input);
-        return list;
-      },
-      updateBot: { permissionAtom: () => null },
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: {
+    listBots: (args: { readonly input: unknown }) => {
+      server.listed.push(args.input);
+      return {};
     },
-  };
-});
+    updateBot: { permissionAtom: () => null },
+  },
+}));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => (input: unknown) => server.update(input),
 }));
@@ -58,7 +48,6 @@ import { useGoatBotMemberAt } from "./goatBotMemberThread";
 import type { GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotNameRow } from "./GoatBotNameRow";
-import { forgetRenamedBots } from "./goatBotRenamedBots";
 
 const environmentId = EnvironmentId.make("env");
 const memberThread = ThreadId.make("channel-member-bot:abc");
@@ -81,10 +70,9 @@ const connected = (goatBotMembers: boolean | undefined) => ({
   serverConfig: { environment: { capabilities: { goatBotMembers } } },
 });
 
-/** No bot created or renamed by an earlier test, and a server that has not answered yet. */
+/** No bot created by an earlier test, and a server that has not answered yet. */
 function setup() {
   forgetNewBotEnvironment(environmentId);
-  forgetRenamedBots(environmentId);
   server.presentation = null;
   server.query = { data: null, error: null, isPending: false };
   server.listed = [];
@@ -205,111 +193,52 @@ function NamedChat() {
   const composer = useRef<GoatBotComposerHandle>(null);
   return (
     <GoatBotMemberContext value={member}>
-      <h1 data-state={member?.state ?? "active"}>{member?.name ?? "No bot"}</h1>
+      <h1>{member?.name ?? "No bot"}</h1>
       <GoatBotNameRow composer={composer} />
     </GoatBotMemberContext>
   );
 }
 
-type ListAnswer =
-  | { readonly bots: ReadonlyArray<BotProfile> }
-  | { readonly reading: ReadonlyArray<BotProfile> }
-  | { readonly failed: ReadonlyArray<BotProfile> };
-
-/** The bot list's state, both as the chat's query view and in the registry a rename watches. */
-function answerList(registry: AtomRegistry.AtomRegistry, answer: ListAnswer) {
-  const list = server.list as Atom.Writable<AsyncResult.AsyncResult<{ bots: unknown[] }, unknown>>;
-  if ("bots" in answer) {
-    server.query = { data: { bots: [...answer.bots] }, error: null, isPending: false };
-    registry.set(list, AsyncResult.success({ bots: [...answer.bots] }));
-  } else if ("reading" in answer) {
-    server.query = { data: { bots: [...answer.reading] }, error: null, isPending: true };
-    registry.set(list, AsyncResult.success({ bots: [...answer.reading] }, { waiting: true }));
-  } else {
-    server.query = {
-      data: { bots: [...answer.failed] },
-      error: "Request failed",
-      isPending: false,
-    };
-    registry.set(
-      list,
-      AsyncResult.failure(Cause.fail(new Error("Request failed")), {
-        previousSuccess: Option.some(AsyncResult.success({ bots: [...answer.failed] })),
-      }),
-    );
-  }
-}
-
-const generated = { ...research, name: "New bot 2" };
-const at = (minute: number) => `2026-11-07T00:0${minute}:00.000Z`;
-
-/** A member chat at New bot 2 whose name row renames it; the rename's own list read starts as it answers. */
-async function renameInChat(renamed: BotProfile) {
-  setup();
-  const registry = AtomRegistry.make();
-  server.presentation = {
-    connection: { phase: "connected" },
-    serverConfig: {
-      environment: { capabilities: { goatBotMembers: true, goatBotProfileEdit: true } },
+it.each<[string, () => Promise<void>]>([
+  ["its name row", () => userEvent.keyboard("{Enter}")],
+  [
+    "Edit bot",
+    async () => {
+      await userEvent.click(page.getByRole("button", { name: "More settings for New bot 2" }));
+      await userEvent.click(page.getByRole("dialog").getByRole("button", { name: "Save" }));
     },
-  };
-  answerList(registry, { bots: [generated] });
-  server.update = async () => {
-    answerList(registry, { reading: [generated] });
-    return { _tag: "Success", value: { bot: renamed } };
-  };
-  const chat = (): ReactNode => (
-    <RegistryContext value={registry}>
-      <NamedChat />
-    </RegistryContext>
-  );
-  const screen = await render(chat(), { router: false }); // A hook check.
-  const nameField = page.getByRole("textbox", { name: "Name this bot" });
-  await userEvent.fill(nameField, renamed.name);
-  await userEvent.keyboard("{Enter}");
-  /** The list read answers; the chat renders again, as a settled query re-renders its readers. */
-  const listAnswers = async (answer: ListAnswer) => {
-    await act(() => answerList(registry, answer));
-    await screen.rerender(chat());
-  };
-  return { screen, nameField, listAnswers };
-}
-
-it("a rename the list has not caught up with names the chat, and its name row goes away", async () => {
-  const { screen, nameField, listAnswers } = await renameInChat({
-    ...generated,
-    name: "Scout",
-    updatedAt: at(5),
-  });
-  await using _screen = screen;
-  await expect.element(screen.getByRole("heading")).toHaveTextContent("Scout");
-  expect(nameField.query()).toBeNull();
-  // The read after the rename failed, so the last good list still says New bot 2.
-  await listAnswers({ failed: [generated] });
-  await expect.element(screen.getByRole("heading")).toHaveTextContent("Scout");
-});
-
-it("a rename answered at the list's own timestamp names the chat until the list is read again", async () => {
-  // The server's clock gave the rename the same instant the listed profile has.
-  const { screen, listAnswers } = await renameInChat({ ...generated, name: "Scout" });
-  await using _screen = screen;
-  await expect.element(screen.getByRole("heading")).toHaveTextContent("Scout");
-  // Another device renamed the bot in that same instant; the list read after the rename says so.
-  await listAnswers({ bots: [{ ...generated, name: "Atlas" }] });
-  await expect.element(screen.getByRole("heading")).toHaveTextContent("Atlas");
-});
-
-it("a deletion the list reads after the rename shows, though the deleting server's clock is behind", async () => {
-  const { screen, listAnswers } = await renameInChat({
-    ...generated,
-    name: "Scout",
-    updatedAt: at(5),
-  });
-  await using _screen = screen;
-  const heading = screen.getByRole("heading");
-  await expect.element(heading).toHaveTextContent("Scout");
-  await listAnswers({
-    bots: [{ ...generated, name: "Scout", state: "deleted", updatedAt: at(4) }],
-  });
-  await expect.element(heading).toHaveAttribute("data-state", "deleted");
-});
+  ],
+])(
+  "a bot just created that the list does not hold yet, renamed from %s while the list read fails: the chat shows the new name and no name row",
+  async (_from, save) => {
+    setup();
+    const generated = { ...research, name: "New bot 2" };
+    startNewBot(
+      environmentId,
+      [],
+      async () => generated,
+      () => {},
+      {},
+      () => "request-1",
+    );
+    await vi.waitFor(() => expect(newBotSlot(environmentId).created).toHaveLength(1));
+    server.presentation = {
+      connection: { phase: "connected" },
+      serverConfig: {
+        environment: { capabilities: { goatBotMembers: true, goatBotProfileEdit: true } },
+      },
+    };
+    // The last good list, from before the create; the reads after the create and the rename failed.
+    server.query = { data: { bots: [] }, error: "Request failed", isPending: false };
+    server.update = async (args) => {
+      const { input } = args as { readonly input: { readonly name: string } };
+      return { _tag: "Success", value: { bot: { ...generated, name: input.name } } };
+    };
+    await using screen = await render(<NamedChat />, { router: false }); // A hook check.
+    const nameField = page.getByRole("textbox", { name: "Name this bot" });
+    await userEvent.fill(nameField, "Scout");
+    await save();
+    await expect.element(screen.getByRole("heading")).toHaveTextContent("Scout");
+    expect(nameField.query()).toBeNull();
+  },
+);
