@@ -96,13 +96,14 @@ export const botArtifactName = (relativePath: string) =>
 
 const INLINE_CODE = /`([^`\n]+)`/g;
 
-// A fence CommonMark is certain of without tracking lists or quotes: three or more backticks (none
-// in the info string) or tildes, unindented, or indented at most three spaces when no list item or
-// quote came before. After one, an indented fence may close with its container or be top level,
-// so from there on the reply is read as it is, fences and all.
+// Fences CommonMark is certain of without tracking containers: 3+ backticks (none in the info
+// string) or tildes, unindented, or indented up to 3 spaces before any list item or quote. After
+// an indented fence that follows one, or a line that may open an HTML block, the rest of the reply
+// is read as it is: such a fence may close with its container, and a marker in HTML is HTML.
 const FENCE_OPEN = /^( {0,3})(`{3,}(?=[^`]*$)|~{3,})/;
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const CONTAINER_START = /^ {0,3}(?:>|[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$))/;
+const HTML_START = /^ {0,3}</;
 
 /** The reply without the lines of its top-level fenced code blocks; an unclosed one runs to the end. */
 function outsideFences(text: string): string {
@@ -110,6 +111,8 @@ function outsideFences(text: string): string {
   let fence: { readonly char: string; readonly length: number } | null = null;
   let containerSeen = false;
   const lines = text.split(/\r?\n/);
+  // The rest of the reply from `index` on, as it is; joined, never spread, so a long reply is fine.
+  const readAsIs = (index: number) => [...kept, lines.slice(index).join("\n")].join("\n");
   for (const [index, line] of lines.entries()) {
     if (fence !== null) {
       const close = FENCE_CLOSE.exec(line)?.[1];
@@ -120,10 +123,8 @@ function outsideFences(text: string): string {
     }
     const opening = FENCE_OPEN.exec(line);
     const open = opening?.[2];
-    if (open !== undefined && opening?.[1] !== "" && containerSeen) {
-      kept.push(...lines.slice(index));
-      break;
-    }
+    if (HTML_START.test(line) || (open !== undefined && opening?.[1] !== "" && containerSeen))
+      return readAsIs(index);
     if (open === undefined) {
       if (CONTAINER_START.test(line)) containerSeen = true;
       kept.push(line);

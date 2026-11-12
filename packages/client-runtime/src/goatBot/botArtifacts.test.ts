@@ -441,6 +441,16 @@ describe("files a reply names", () => {
       "chart.png",
       "notes.txt",
     ]);
+    // A fence marker inside an HTML block is HTML, so the code after the block is real.
+    expect(listed("<div>\n```\n</div>\n\nSaved `chart.png`")).toEqual(["chart.png"]);
+  });
+
+  it("a reply of hundreds of thousands of lines is read without failing", () => {
+    const long = "- item\n  ```\n" + "\n".repeat(300_000) + "Saved `chart.png`.";
+    expect(goatBotReplyMayNameFile(long)).toBe(true);
+    expect(listed(long)).toEqual(["chart.png"]);
+    const fenced = "```\n" + "`notes.txt`\n".repeat(300_000) + "```\nSaved `chart.png`.";
+    expect(listed(fenced)).toEqual(["chart.png"]);
   });
 });
 
