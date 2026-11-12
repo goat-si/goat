@@ -563,3 +563,30 @@ it.effect(
       }).pipe(Effect.provide(layer));
     }),
 );
+
+it.effect(
+  "regression S8-1: a start whose reply was lost says the install may have started there",
+  () =>
+    Effect.gen(function* () {
+      const { state, layer } = harness({ answer: () => Effect.fail(dropped) });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", hosts: ["box"], login: false },
+          direct(Effect.void),
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        const lost = yield* sync.awaitDone(started.sync.syncId);
+        expect(lost.hosts[0]?.message).toBe(
+          "box went away It may have started installing there; check goat_provider_host_matrix before trying again.",
+        );
+        // Without the remote sync id there is nothing to cancel there, so a cancel claims nothing.
+        const after = yield* sync.cancel(
+          { syncId: started.sync.syncId },
+          { kind: "client", sessionId: "person" as never },
+        );
+        expect(after.hosts).toEqual(lost.hosts);
+        expect(state.calls.map(({ call }) => call.tool)).toEqual(["goat_provider_sync"]);
+      }).pipe(Effect.provide(layer));
+    }),
+);

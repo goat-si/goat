@@ -863,7 +863,10 @@ const make = Effect.gen(function* () {
               failure.status === "update_runtime"
                 ? `Update GOAT on ${host} to sync providers there. ${failure.message}`
                 : failure.message,
-              failure.status === "update_runtime" ? "update_runtime" : "failed",
+              {
+                phase: failure.status === "update_runtime" ? "update_runtime" : "failed",
+                unsent: failure.unsent === true,
+              },
             ),
       ),
       // An interrupted start call means this process is stopping; the restart path records that.
@@ -1064,6 +1067,14 @@ const make = Effect.gen(function* () {
     return view(operation);
   });
 
+  /** A later cancel can reopen finished hosts, set in the step that reopens them: wait out each. */
+  const cancelsSettled = (operation: SyncOperation): Effect.Effect<void> =>
+    Effect.suspend(() =>
+      operation.cancelling === undefined
+        ? Effect.void
+        : Fiber.await(operation.cancelling).pipe(Effect.andThen(cancelsSettled(operation))),
+    );
+
   const respondHandoff = Effect.fn("ProviderHostSync.respondHandoff")(function* (
     input: HandoffRespondInput,
     sessionId: AuthSessionId,
@@ -1087,17 +1098,8 @@ const make = Effect.gen(function* () {
     respondHandoff: provided(respondHandoff),
     awaitDone: (syncId) =>
       find(syncId).pipe(
-        // A later cancel can reopen finished hosts; it is set in the step that reopens them.
         Effect.tap((operation) =>
-          Deferred.await(operation.allFinished).pipe(
-            Effect.andThen(
-              Effect.suspend(() =>
-                operation.cancelling === undefined
-                  ? Effect.void
-                  : Fiber.await(operation.cancelling),
-              ),
-            ),
-          ),
+          Deferred.await(operation.allFinished).pipe(Effect.andThen(cancelsSettled(operation))),
         ),
         Effect.map(view),
       ),

@@ -149,22 +149,34 @@ const afterRemoteCancel = <E>(host: string, reply: Exit.Exit<ProviderSyncState, 
 };
 
 /**
- * Ends a remote host whose sync Home can no longer follow. When that sync started, it may
- * still be running, so the host stays cancellable.
+ * Ends a remote host whose sync Home can no longer follow. A sync that started may still be
+ * running, so the host stays cancellable; a start whose reply was lost may have run, with no id
+ * to cancel, so the host says to check that machine.
  */
 export const lostTrack = (
   task: HostTask,
   message: string,
-  phase: "failed" | "update_runtime" = "failed",
+  options: { readonly phase?: "failed" | "update_runtime"; readonly unsent?: boolean } = {},
 ) =>
   Effect.suspend(() => {
-    if (task.remoteSyncId === undefined) return update(task, { phase, message }, true);
-    task.mayStillRun = true;
+    const phase = options.phase ?? "failed";
+    if (task.remoteSyncId !== undefined) {
+      task.mayStillRun = true;
+      return update(
+        task,
+        {
+          phase,
+          message: `${message} Its installer may still be running there; cancel this sync to stop it.`,
+        },
+        true,
+      );
+    }
+    if (options.unsent === true) return update(task, { phase, message }, true);
     return update(
       task,
       {
         phase,
-        message: `${message} Its installer may still be running there; cancel this sync to stop it.`,
+        message: `${message} It may have started installing there; check goat_provider_host_matrix before trying again.`,
       },
       true,
     );
