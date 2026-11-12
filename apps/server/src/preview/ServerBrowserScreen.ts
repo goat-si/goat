@@ -459,14 +459,17 @@ export const screenTree = (
   },
 ) => {
   const { generation } = input;
+  // A cut line can end inside a name, leaving page text where the line's attributes would be.
+  const whole =
+    text.length <= input.limit
+      ? text
+      : text.slice(0, Math.max(0, text.lastIndexOf("\n", input.limit)));
   return {
-    accessibilityTree: text
-      .slice(0, input.limit)
-      .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
-        const ref = `t3-${generation}-${nativeRef}`;
-        input.refs.set(ref, nativeRef);
-        return `[ref=${ref}]${input.occluded?.has(nativeRef) ? " [occluded]" : ""}`;
-      }),
+    accessibilityTree: whole.replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
+      const ref = `t3-${generation}-${nativeRef}`;
+      input.refs.set(ref, nativeRef);
+      return `[ref=${ref}]${input.occluded?.has(nativeRef) ? " [occluded]" : ""}`;
+    }),
     treeComplete: text.length <= input.limit && input.unread.length === 0,
     refGeneration: String(generation),
   };

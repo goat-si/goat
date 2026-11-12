@@ -87,19 +87,21 @@ const entryOf = (line: string) => {
 };
 type Entry = NonNullable<ReturnType<typeof entryOf>>;
 
+const rowsOf = (tree: string) =>
+  tree.split("\n").map((line) => ({ line, indent: indentOf(line), entry: entryOf(line) }));
+type Row = ReturnType<typeof rowsOf>[number];
+
 /**
- * A nameless element is named by the text lines directly under it. Every element under it keeps
- * its text: the tree draws an editable region like any wrapper, so its words may be input.
+ * The text lines directly under an element. Every element under it keeps its text: the tree draws
+ * an editable region like any wrapper, so its words may be input.
  */
-const descendantText = (lines: ReadonlyArray<string>, index: number, depth: number) => {
+const ownText = (rows: ReadonlyArray<Row>, index: number) => {
+  const depth = rows[index]?.indent ?? 0;
   const parts: string[] = [];
   let skipped = Infinity;
-  for (let next = index + 1; next < lines.length && next <= index + SCAN_LIMIT; next++) {
-    const line = lines[next] ?? "";
-    const indent = indentOf(line);
+  for (const { indent, entry } of rows.slice(index + 1, index + 1 + SCAN_LIMIT)) {
     if (indent <= depth) break;
     if (indent > skipped) continue;
-    const entry = entryOf(line);
     const text = entry?.role === "text" ? entry.value : undefined;
     skipped = entry?.role === "text" ? Infinity : indent;
     if (text) parts.push(text);
@@ -108,43 +110,91 @@ const descendantText = (lines: ReadonlyArray<string>, index: number, depth: numb
   return parts.join(" ").slice(0, NAME_LIMIT);
 };
 
-const nameOf = (lines: ReadonlyArray<string>, index: number, entry: Entry) => {
-  if (entry.name !== undefined) return entry.name;
+const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/**
+ * Whether a name holds text an element under it shows. Playwright folds a field's value into a
+ * button's or link's name and draws an editor like any wrapper, so only text lines directly under
+ * an element are its own. A field showing no content, like a role=textbox editor, may be in it too,
+ * as may whatever a cut tree left out.
+ */
+const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut: boolean) => {
+  const depth = rows[index]?.indent ?? 0;
+  const own = squash(name);
+  let nested = Infinity;
+  for (let next = index + 1; ; next++) {
+    const row = rows[next];
+    if (row === undefined) return cut;
+    if (row.indent <= depth) return false;
+    if (row.indent <= nested) nested = Infinity;
+    const { entry } = row;
+    if (nested === Infinity && entry?.role === "text") continue;
+    nested = Math.min(nested, row.indent);
+    // An image's name is its alt text, which the page writes.
+    if (entry === undefined || entry.role === "img") continue;
+    if (EDITABLE.has(entry.role) && entry.value === undefined && !entry.children) return true;
+    for (const text of [entry.name, entry.value]) {
+      const shown = text === undefined ? "" : squash(text);
+      if (shown && own.includes(shown)) return true;
+    }
+  }
+};
+
+/** The name a target is listed under: its own, or its own text lines when that name borrows. */
+const safeName = (rows: ReadonlyArray<Row>, index: number, entry: Entry, cut: boolean) =>
+  entry.name === undefined ||
+  !entry.children ||
+  EDITABLE.has(entry.role) ||
+  // A frame's content is another document, which its name can't take text from.
+  entry.role === "iframe" ||
+  !borrowsText(rows, index, entry.name, cut)
+    ? entry.name
+    : ownText(rows, index);
+
+const nameOf = (rows: ReadonlyArray<Row>, index: number, entry: Entry, cut: boolean) => {
+  const name = safeName(rows, index, entry, cut);
+  if (name !== undefined) return name;
   if (EDITABLE.has(entry.role)) return "";
-  return entry.value ?? descendantText(lines, index, entry.depth);
+  return entry.value ?? ownText(rows, index);
 };
 
 export const narrowTree = (tree: string, interactiveOnly?: boolean) => {
   if (!interactiveOnly) return tree;
-  const lines = tree.split("\n");
-  return lines
-    .flatMap((line, index) => {
-      const entry = entryOf(line);
+  const rows = rowsOf(tree);
+  return rows
+    .flatMap(({ line, entry }, index) => {
       if (!entry?.target) return [];
       // Ancestors are filtered out, so their indentation and child markers would invent nesting.
       const own = line.trimStart();
       if (!entry.children) return [own];
-      const named = INTERACTIVE_ROLES.has(entry.role) || entry.name !== undefined;
-      const text = named ? "" : descendantText(lines, index, entry.depth);
+      const name = safeName(rows, index, entry, false);
+      if (name !== undefined && name === entry.name) return [own.slice(0, -1)];
+      const text = name ?? (INTERACTIVE_ROLES.has(entry.role) ? "" : ownText(rows, index));
       // Written as the line's name, the form Playwright uses for a named element.
-      return [text ? `- ${entry.role} ${JSON.stringify(text)}${entry.run}` : own.slice(0, -1)];
+      return [
+        text
+          ? `- ${entry.role} ${JSON.stringify(text)}${entry.run}`
+          : `- ${entry.role}${entry.run}`,
+      ];
     })
     .join("\n");
 };
 
-/** One element per interactive ref line, located by the ref the tree shows. */
-export const interactiveElementsOf = (tree: string): PreviewAutomationElement[] => {
-  const lines = tree.split("\n");
-  return lines.flatMap((line, index) => {
-    const entry = entryOf(line);
-    // The tree is cut at a character limit; a line cut before its box has no usable element.
+/**
+ * One element per interactive ref line, located by the ref the tree shows. `cut` says the tree may
+ * stop inside an element's children.
+ */
+export const interactiveElementsOf = (tree: string, cut: boolean): PreviewAutomationElement[] => {
+  const rows = rowsOf(tree);
+  return rows.flatMap(({ entry }, index) => {
+    // An element is located by its own ref and box; a line without both has no usable element.
     if (!entry?.target || entry.ref === undefined || entry.box === undefined) return [];
     return [
       {
         // The tree names roles, not HTML tags.
         tag: entry.role,
         role: entry.role,
-        name: nameOf(lines, index, entry),
+        name: nameOf(rows, index, entry, cut),
         selector: "aria-ref=" + entry.ref,
         // A coordinate click reads viewport pixels, which a frame's box is not.
         ...(FRAME_REF.test(entry.ref) ? {} : entry.box),

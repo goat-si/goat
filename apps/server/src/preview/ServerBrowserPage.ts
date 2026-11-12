@@ -568,12 +568,14 @@ const capture = async (
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
+  const masked = maskTree(redacted, dotted, cookies);
+  // An interactive-only tree keeps lines from past the cut, so it is masked in full.
+  const visible = filled(masked, input.interactiveOnly ? undefined : MAX_VISIBLE_TEXT_LENGTH);
+  // The tab's mask cuts a long tree a little past the limit, maybe inside a line, and masking can
+  // leave it shorter than screenTree's cut, so its last line is dropped here.
+  const cut = !input.interactiveOnly && masked.length > MAX_VISIBLE_TEXT_LENGTH;
   const narrowed = narrowTree(
-    // An interactive-only tree keeps lines from past the cut, so it is masked in full.
-    filled(
-      maskTree(redacted, dotted, cookies),
-      input.interactiveOnly ? undefined : MAX_VISIBLE_TEXT_LENGTH,
-    ),
+    cut ? visible.slice(0, Math.max(0, visible.lastIndexOf("\n"))) : visible,
     input.interactiveOnly,
   );
   const { accessibilityTree, ...treeFields } = screenTree(`${mask(layersLine)}\n${narrowed}`, {
@@ -583,6 +585,7 @@ const capture = async (
     refs: state.refs,
     occluded: occludedRefs(paint, tree),
   });
+  const treeComplete = treeFields.treeComplete && !cut;
   return snapshotOptionsResult(
     input.page,
     {
@@ -592,8 +595,9 @@ const capture = async (
       // Mask text before truncating so a value crossing the cut cannot leak its prefix.
       visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
       accessibilityTree,
-      interactiveElements: interactiveElementsOf(accessibilityTree),
+      interactiveElements: interactiveElementsOf(accessibilityTree, !treeComplete),
       ...treeFields,
+      treeComplete,
       ...maskSnapshotRecords(mask, input),
       ...(screenshot === undefined ? {} : { screenshot }),
       ...(full === undefined ? {} : { fullScreenshot: { data: full, ...pngSize(full) } }),
