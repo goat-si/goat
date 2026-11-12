@@ -1,8 +1,7 @@
 import type { EnvironmentId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
-vi.mock("../../lib/uuid", () => ({ uuidv4: () => "request-1" }));
-import { forgetNewBotEnvironment, newBotSlot, startNewBot } from "./mobileNewBots";
+import { forgetNewBotEnvironment, newBotSlot, startNewBot } from "./newBots.ts";
 
 it("forgets a create when its environment leaves the app, so its answer opens nothing", async () => {
   const removed = "env-removed" as EnvironmentId;
@@ -11,13 +10,21 @@ it("forgets a create when its environment leaves the app, so its answer opens no
   const keptAnswer = Promise.withResolvers<object>();
   const openRemoved = vi.fn();
   const keptOpened = Promise.withResolvers<void>();
-  startNewBot(removed, [], () => removedAnswer.promise as never, openRemoved, {});
+  startNewBot(
+    removed,
+    [],
+    () => removedAnswer.promise as never,
+    openRemoved,
+    {},
+    () => "request-1",
+  );
   startNewBot(
     kept,
     [],
     () => keptAnswer.promise as never,
     () => keptOpened.resolve(),
     {},
+    () => "request-1",
   );
   forgetNewBotEnvironment(removed);
   expect(newBotSlot(removed).operation).toBeNull();
