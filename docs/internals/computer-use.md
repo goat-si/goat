@@ -560,11 +560,14 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   keyboard fallback. Each step turns to success from the helper's own readiness, checked in a
   fresh helper process because TCC answers are cached per process (#1226); when macOS needs the
   helper restarted, the step says so and offers to quit and reopen it.
-  A read the helper does not answer (it did not start, stopped, took too long or refused its
-  parent) says nothing about the grant. It reaches setup and the readiness check as that reason,
-  never as a grant that is off, and after `CUA_UNANSWERED_AFTER` such reads in a row setup shows
-  it in place of the steps. Each kind of read logs one line when what it found changes
-  (`apps/desktop/src/cua/cuaGrantReadLog.ts`).
+  A read the helper does not answer (it did not answer when started, stopped, took too long or
+  refused its parent) says nothing about the grant. It reaches setup, the readiness check and
+  the readiness report as that reason, never as a grant that is off, and after
+  `CUA_UNANSWERED_AFTER` such reads in a row setup shows it in place of the steps. Each kind of
+  read logs one line when what it found changes (`apps/desktop/src/cua/cuaGrantReadLog.ts`),
+  with error codes from an allowlist. With an OTLP logs endpoint configured the message goes to
+  that endpoint and not to `desktop.trace.ndjson`; the `desktop.cua.grantRead` span there
+  carries the same fields as attributes either way.
 - **Troubleshooting** covers entries that belong to another copy, the wrong app toggled
   (GOAT.app or Terminal instead of the helper), and development builds that need a new grant
   after each rebuild. Stable and nightly helpers share one display name and differ in bundle id

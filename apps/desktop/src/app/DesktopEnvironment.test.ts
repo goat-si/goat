@@ -116,6 +116,19 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect(
+    "serves a packaged app's renderer from inside that app, so the web calling its bridge is the same build",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* makeEnvironment({ isPackaged: true });
+        assert.equal(
+          mac.clientAssetsDir,
+          "/Applications/T3 Code.app/Contents/Resources/app.asar/apps/server/dist/client",
+        );
+        assert.isTrue(mac.clientAssetsDir.startsWith(defaultInput.resourcesPath + "/"));
+      }),
+  );
+
   it.effect("uses the packaged Windows server sidecar as the backend root", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({

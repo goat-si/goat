@@ -236,11 +236,11 @@ export function CuaUnansweredNotice({
         {unanswered.message}
       </p>
       <p className="text-xs text-muted-foreground">
-        GOAT could not read the permissions, so this does not mean one is missing. Allowing them
-        again in System Settings will not change it.
+        GOAT could not read the permissions, so it cannot tell whether one is missing. Choose Try
+        again before you allow anything again in System Settings.
         {unanswered.reason === "refused"
           ? null
-          : " GOAT keeps asking and goes on by itself once it gets an answer."}
+          : " GOAT also keeps asking and goes on by itself once it gets an answer."}
       </p>
       <Button size="xs" variant="outline" disabled={retrying} onClick={onRetry}>
         {retrying ? "Asking…" : "Try again"}

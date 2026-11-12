@@ -40,6 +40,7 @@ import {
   withGrants,
   withProof,
   withRunning,
+  withUnreadGrants,
   withoutProof,
   type HelperProof,
   type HelperReadinessState,
@@ -496,7 +497,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       // not. A read that got no answer is not macOS saying no, so the grants stay as last read.
       yield* noteHelper((state) =>
         "code" in read
-          ? withoutProof(state, read.detail)
+          ? withUnreadGrants(state, read.detail)
           : withoutProof(withGrants(state, read, false)),
       );
     }

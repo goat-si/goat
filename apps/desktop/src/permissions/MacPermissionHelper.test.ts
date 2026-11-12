@@ -203,3 +203,26 @@ it("still opens the panel when the opening read fails, and counts it as the firs
   await vi.advanceTimersByTimeAsync(1_500);
   expect(mocks.send).toHaveBeenCalledWith(MAC_PERMISSION_HELPER_CHANNEL, "unanswered");
 });
+
+it("tells the panel the helper is not answering once its page has loaded, when the reads failed while it loaded", async () => {
+  const loaded = Promise.withResolvers<void>();
+  mocks.loadURL.mockReturnValue(loaded.promise);
+  const shown = helper.show(
+    "accessibility",
+    "/bundle/mac-permission-preload.cjs",
+    null,
+    iconPaths,
+    () => Promise.reject(new Error("no_hello")),
+    helperTarget,
+  );
+  // The opening read and the first poll both fail before the page can hear about it.
+  await vi.advanceTimersByTimeAsync(0);
+  expect(windows).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(mocks.send).not.toHaveBeenCalled();
+
+  loaded.resolve();
+  await shown;
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect(mocks.send).toHaveBeenCalledWith(MAC_PERMISSION_HELPER_CHANNEL, "unanswered");
+});

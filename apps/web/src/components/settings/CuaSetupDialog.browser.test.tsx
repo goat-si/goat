@@ -232,7 +232,8 @@ it("says GOAT Computer Use did not answer after two failed reads, with Try again
   await refocus();
   await refocus();
   expect(text()).toContain(message);
-  expect(text()).toContain("this does not mean one is missing");
+  expect(text()).toContain("it cannot tell whether one is missing");
+  expect(text()).toContain("keeps asking");
   expect(text()).not.toContain("waiting for you");
   for (const label of ["Open Settings", "Open again", "Quit & reopen"])
     expect(button(label), label).toBeUndefined();
@@ -265,6 +266,46 @@ it("stops showing a grant as waiting for its switch when reads keep failing, ins
   expect(text()).not.toContain("waiting for you");
   expect(text()).not.toContain("We'll try again automatically");
   expect(button("Open again")).toBeUndefined();
+  expect(button("Try again")).toBeDefined();
+});
+
+it("a Try again while a read is still out asks again, and shows that read's answer instead of the older one's", async () => {
+  const f = fixture({ grantOnOpen: false });
+  await using _screen = await dialog(f);
+  await refocus();
+  const message = "GOAT Computer Use did not answer: it took too long.";
+  f.helper.unanswered = { principal: "unusable", message, unanswered: "tookTooLong" };
+  await refocus();
+  await refocus();
+  expect(text()).toContain(message);
+
+  const answers: Array<(grants: DesktopCuaGrants) => void> = [];
+  const held = () => new Promise<DesktopCuaGrants>((resolve) => answers.push(resolve));
+  f.onCheck.mockImplementationOnce(held);
+  f.onCheck.mockImplementationOnce(held);
+  await refocus();
+  await click("Try again");
+  expect(button("Asking…")?.disabled).toBe(true);
+  expect(answers).toHaveLength(2);
+
+  // The read that was already out answers late; the one the person asked for decides.
+  await act(() => answers[0]?.({ ...HELPER, accessibility: true, screenRecording: true }));
+  expect(text()).toContain(message);
+  expect(button("Asking…")).toBeDefined();
+  await act(() => answers[1]?.({ ...HELPER, ...f.grants }));
+  expect(text()).not.toContain(message);
+  expect(text()).toContain("Step 1 · Accessibility (to do now)");
+});
+
+it("shows a helper that refused GOAT at once, and does not promise to keep asking it", async () => {
+  const f = fixture();
+  const message = "GOAT Computer Use did not answer: it refused GOAT.";
+  f.helper.unanswered = { principal: "unusable", message, unanswered: "refused" };
+  await using _screen = await dialog(f);
+  await refocus();
+  expect(text()).toContain(message);
+  expect(text()).toContain("it cannot tell whether one is missing");
+  expect(text()).not.toContain("keeps asking");
   expect(button("Try again")).toBeDefined();
 });
 

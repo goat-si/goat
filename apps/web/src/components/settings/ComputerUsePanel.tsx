@@ -135,7 +135,7 @@ function setupLine(input: {
       error: true,
       retry: true,
       retryLabel: "Try again",
-      hint: "GOAT could not read the permissions, so this does not mean one is missing.",
+      hint: "GOAT could not read the permissions, so it cannot tell whether one is missing.",
     };
   if (localMac && setup.unusable) return { text: setup.unusable, error: true, retry: true };
   if (localMac && setup.missing)

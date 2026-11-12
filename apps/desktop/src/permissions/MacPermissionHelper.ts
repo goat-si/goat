@@ -162,9 +162,12 @@ export class MacPermissionHelper {
     };
     let checking = false;
     let unanswered = false;
+    // Nothing reaches the page before it has loaded, so its state is sent again once it has.
+    let loaded = false;
     const say = (state: "waiting" | "unanswered") => {
       unanswered = state === "unanswered";
-      if (!window.isDestroyed()) window.webContents.send(MAC_PERMISSION_HELPER_CHANNEL, state);
+      if (loaded && !window.isDestroyed())
+        window.webContents.send(MAC_PERMISSION_HELPER_CHANNEL, state);
     };
     const check = async () => {
       if (checking || window.isDestroyed()) return;
@@ -250,6 +253,8 @@ export class MacPermissionHelper {
         `data:text/html;charset=utf-8,${encodeURIComponent(helperHtml(permission, icon.toDataURL(), target?.name ?? "GOAT"))}`,
       );
       if (!window.isDestroyed()) {
+        loaded = true;
+        if (unanswered) say("unanswered");
         stopTracking = watchMacSettingsWindow(
           (current) => {
             trackingAvailable = true;

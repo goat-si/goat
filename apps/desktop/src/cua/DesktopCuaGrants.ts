@@ -34,14 +34,14 @@ export type CuaGrantTarget =
  * as another app or speaks another protocol stays that way however often it is asked.
  */
 const UNANSWERED: ReadonlyMap<string, CuaGrantReadFailure> = new Map([
-  ["no_hello", "notStarted"],
+  ["no_hello", "noHello"],
   ["helper_exited", "stopped"],
   ["timeout", "tookTooLong"],
   ["untrusted_parent", "refused"],
 ]);
 
 const UNANSWERED_WORDS: Readonly<Record<CuaGrantReadFailure, string>> = {
-  notStarted: "it did not start",
+  noHello: "it did not answer when started",
   stopped: "it stopped before it answered",
   tookTooLong: "it took too long",
   refused: "it refused GOAT",
@@ -86,7 +86,7 @@ function unreadGrantsStep(cause: unknown): {
     detail:
       unread.unanswered === undefined
         ? unread.message
-        : `${unread.message} Its permissions could not be read, so this is not a missing permission. Try again.`,
+        : `${unread.message} Its permissions could not be read, so GOAT does not know whether one is missing. Try again.`,
   };
 }
 

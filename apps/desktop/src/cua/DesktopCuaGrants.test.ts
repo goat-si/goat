@@ -1,18 +1,35 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Tracer from "effect/Tracer";
 
 import { ComputerUseHelperError } from "./ComputerUseHelper.ts";
 import { fixture, HELPER_BUNDLE, HELPER_ID } from "./DesktopCuaDriver.testkit.ts";
 
-/** The grant read lines a test's driver logged, in order. */
+/** The grant read lines a test's driver logged, in order, and the fields of the spans around them. */
 function grantReadLog() {
   const lines: unknown[] = [];
+  const spans: Tracer.Span[] = [];
   const logger = Logger.make(({ message }) => {
     const [text, line] = Array.isArray(message) ? message : [message];
     if (text === "Computer use grant read changed") lines.push(line);
   });
-  return { lines, layer: Logger.layer([logger], { mergeWithExisting: false }) };
+  const tracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
+      if (span.name === "desktop.cua.grantRead") spans.push(span);
+      return span;
+    },
+  });
+  return {
+    lines,
+    spanFields: () => spans.map((span) => Object.fromEntries(span.attributes)),
+    layer: Layer.merge(
+      Logger.layer([logger], { mergeWithExisting: false }),
+      Layer.succeed(Tracer.Tracer, tracer),
+    ),
+  };
 }
 
 describe("DesktopCuaDriver grants for setup", () => {
@@ -98,7 +115,7 @@ describe("DesktopCuaDriver grants for setup", () => {
   );
 
   it.effect.each([
-    ["no_hello", "notStarted", "it did not start"],
+    ["no_hello", "noHello", "it did not answer when started"],
     ["helper_exited", "stopped", "it stopped before it answered"],
     ["timeout", "tookTooLong", "it took too long"],
     ["untrusted_parent", "refused", "it refused GOAT"],
@@ -157,6 +174,34 @@ describe("DesktopCuaDriver grants for setup", () => {
             { read: "verification", ...asked, error: "no_hello", failedStep: "grants" },
             { read: "panel", ...asked, accessibility: true, screenRecording: true },
           ]);
+          // The span carries the same fields, so the local trace has them whatever logger runs.
+          assert.deepEqual(log.spanFields(), log.lines);
+        }),
+      ).pipe(Effect.provide(log.layer));
+    },
+  );
+
+  it.effect(
+    "logs a fixed code for a helper error it does not know, so no text the helper chose reaches the line",
+    () => {
+      const log = grantReadLog();
+      const leaked = "/Users/someone/Documents/taxes.pdf: permission denied";
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true, fails: new ComputerUseHelperError(leaked, leaked) },
+          });
+          yield* test.grants;
+          yield* test.verify;
+          const target = yield* test.grantTarget;
+          if (target.kind === "helper") yield* Effect.exit(target.read("panel"));
+          assert.deepEqual(
+            log.lines.map((line) => (line as { error?: string }).error),
+            ["unknown_helper_error", "unknown_helper_error", "unknown_helper_error"],
+          );
+          for (const fields of [...log.lines, ...log.spanFields()])
+            assert.notInclude(Object.values(fields as object).join(" "), "someone");
         }),
       ).pipe(Effect.provide(log.layer));
     },

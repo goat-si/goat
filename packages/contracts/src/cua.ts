@@ -531,10 +531,12 @@ export type DesktopCuaVerification = typeof DesktopCuaVerification.Type;
 
 /**
  * Why the app that holds the grants gave no answer when asked about them. Such a read says
- * nothing about the grants, so no surface may show it as a permission that is off.
+ * nothing about the grants, so no surface may show it as a permission that is off, or as one
+ * that is on. noHello: it was started and never greeted, which is not known to mean it did not
+ * start.
  */
 export const CuaGrantReadFailure = Schema.Literals([
-  "notStarted",
+  "noHello",
   "stopped",
   "tookTooLong",
   "refused",

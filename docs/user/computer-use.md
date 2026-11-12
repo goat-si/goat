@@ -331,10 +331,11 @@ under the permission steps: it shows the path and bundle ID of the copy GOAT is
 checking, and the Terminal commands that reset that copy only. Removing a row
 that belongs to the other app takes away that app's permission.
 
-If setup says **GOAT Computer Use did not answer**, no permission is missing:
-the helper did not start, stopped, took too long or refused GOAT, so allowing it
-again in System Settings changes nothing. Choose **Try again**. Setup also goes
-on by itself once the helper answers.
+If setup says **GOAT Computer Use did not answer**, the permissions could not be
+read: the helper did not answer when started, stopped, took too long or refused
+GOAT. GOAT then does not know whether a permission is missing, so choose **Try
+again** before allowing anything again in System Settings. Unless the helper
+refused GOAT, setup also keeps asking and goes on by itself once it answers.
 
 When you report a setup that does not finish, send the lines that contain
 `Computer use grant read changed` from `desktop.trace.ndjson` in the logs folder

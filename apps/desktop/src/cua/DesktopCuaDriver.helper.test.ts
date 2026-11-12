@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { computerUseReady } from "@goat/contracts";
+import { CUA_STALE_ACCESSIBILITY_ADVICE, computerUseReady } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { afterEach, vi } from "vite-plus/test";
 import { ComputerUseHelperError } from "./ComputerUseHelper.ts";
@@ -219,7 +219,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
             fails: new ComputerUseHelperError("timeout", "GOAT Computer Use did not answer."),
           });
           const detail =
-            "GOAT Computer Use did not answer: it took too long. Its permissions could not be read, so this is not a missing permission. Try again.";
+            "GOAT Computer Use did not answer: it took too long. Its permissions could not be read, so GOAT does not know whether one is missing. Try again.";
           assert.deepEqual((yield* test.verify).steps, [{ id: "grants", ok: false, detail }]);
           // Nothing started without an answer, and no grant macOS gave reads as taken away.
           assert.lengthOf(test.helperLaunches, 1);
@@ -228,6 +228,47 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           assert.equal(after?.capture, "pending");
           assert.include(after?.reasons ?? [], detail);
           assert.notInclude(after?.reasons.join(" ") ?? "", "not on for");
+        }),
+      ),
+  );
+
+  it.effect(
+    "a first check whose helper does not answer tells other clients the grants could not be read, not that they are off",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: {
+              granted: true,
+              fails: new ComputerUseHelperError("no_hello", "GOAT Computer Use did not answer."),
+            },
+          });
+          const result = yield* test.verify;
+          // macOS has answered nothing yet, so nothing may say a grant is off.
+          const first = test.readiness.at(-1)?.readiness;
+          assert.notInclude(first?.reasons.join(" ") ?? "", "not on for");
+          assert.notInclude(first?.reasons ?? [], CUA_STALE_ACCESSIBILITY_ADVICE);
+          assert.deepEqual(first?.grants, { accessibility: "unknown", screenCapture: "unknown" });
+          const detail =
+            "GOAT Computer Use did not answer: it did not answer when started. Its permissions could not be read, so GOAT does not know whether one is missing. Try again.";
+          assert.equal(first?.reasons[0], detail);
+          assert.deepEqual(result.steps, [{ id: "grants", ok: false, detail }]);
+
+          // A grant macOS really answered was off stays reported as off through a later silence.
+          yield* test.answerAsHelper({ granted: false });
+          yield* test.verify;
+          yield* test.answerAsHelper({
+            granted: false,
+            fails: new ComputerUseHelperError("no_hello", "GOAT Computer Use did not answer."),
+          });
+          yield* test.verify;
+          const later = test.readiness.at(-1)?.readiness.reasons ?? [];
+          assert.include(later, detail);
+          assert.include(
+            later,
+            "Accessibility and Screen Recording are not on for GOAT Computer Use.",
+          );
         }),
       ),
   );
