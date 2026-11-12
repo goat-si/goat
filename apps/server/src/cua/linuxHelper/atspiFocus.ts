@@ -32,7 +32,12 @@ export interface SecureFocus {
    * accessibility was turned on. Focus stays unknown.
    */
   readonly unregistered?: true;
+  /** gdbus, which finds the accessibility bus, is not installed. Focus stays unknown. */
+  readonly gdbusMissing?: true;
 }
+
+/** gdbus could not be run because it is not installed; GLib ships it (libglib2.0-bin on Debian). */
+class GdbusMissing extends Error {}
 
 /** Runs gdbus with these arguments and returns its stdout, or throws. */
 export type GdbusRunner = (args: ReadonlyArray<string>) => Promise<string>;
@@ -446,11 +451,13 @@ export function makeSecureFocusProbe(
     const body = probeFocus(probe, pid);
     try {
       return await untilAborted(body, controller.signal);
-    } catch {
+    } catch (error) {
       // A restarted app gets a new bus name; look it up again next time.
       busByPid.delete(pid);
       address = null;
-      return { known: false, secure: false, windows: 0 };
+      return error instanceof GdbusMissing
+        ? { known: false, secure: false, windows: 0, gdbusMissing: true }
+        : { known: false, secure: false, windows: 0 };
     } finally {
       clearTimeout(deadline);
       controller.abort();
@@ -473,6 +480,12 @@ export const gdbusRunner =
           maxBuffer: 256 * 1024,
         },
         (error, stdout, stderr) =>
-          error ? reject(new Error(stderr.trim() || error.message)) : resolve(stdout),
+          error
+            ? reject(
+                error.code === "ENOENT"
+                  ? new GdbusMissing("gdbus is not installed.")
+                  : new Error(stderr.trim() || error.message),
+              )
+            : resolve(stdout),
       );
     });

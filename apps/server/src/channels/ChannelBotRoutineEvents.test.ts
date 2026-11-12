@@ -132,4 +132,57 @@ describe("ChannelBotRoutineEvents", () => {
         assert.strictEqual((yield* Queue.take(lines)).id, "last");
       }).pipe(Effect.scoped),
   );
+
+  describe("a long title is shortened so the whole line fits 200 characters", () => {
+    /** The line a new routine with this title leaves. */
+    const setUpLine = (title: string) =>
+      Effect.gen(function* () {
+        const { lines, subscriptions } = yield* start();
+        const feed = yield* Queue.take(subscriptions);
+        yield* Queue.offer(feed, list());
+        yield* Queue.offer(feed, list(routine("long", { title })));
+        const line = yield* Queue.take(lines);
+        const name = line.subject?.name ?? "";
+        // The chip finds its name in the text, and the subject keeps its 200 cap.
+        assert.strictEqual(line.text, "Routine " + name + " set up");
+        assert.isAtMost(line.text.length, 200);
+        assert.strictEqual(line.subject?.id, "long");
+        return name;
+      }).pipe(Effect.scoped);
+
+    it.effect("a title that fits is kept whole", () =>
+      Effect.gen(function* () {
+        const title = "a".repeat(185);
+        assert.strictEqual(yield* setUpLine(title), title);
+      }),
+    );
+
+    it.effect("one character over, the name ends in an ellipsis and the change word stays", () =>
+      Effect.gen(function* () {
+        assert.strictEqual(yield* setUpLine("b".repeat(186)), "b".repeat(184) + "…");
+      }),
+    );
+
+    it.effect("a title over 192 characters, whose chip the cut used to lose, keeps a name", () =>
+      Effect.gen(function* () {
+        assert.strictEqual(yield* setUpLine("c".repeat(195)), "c".repeat(184) + "…");
+      }),
+    );
+
+    it.effect("a title over 200 characters fits the subject's cap", () =>
+      Effect.gen(function* () {
+        assert.strictEqual(yield* setUpLine("d".repeat(250)), "d".repeat(184) + "…");
+      }),
+    );
+
+    it.effect("the cut never splits an emoji or a letter from its accent", () =>
+      Effect.gen(function* () {
+        assert.strictEqual(yield* setUpLine("a" + "😀".repeat(100)), "a" + "😀".repeat(91) + "…");
+        assert.strictEqual(
+          yield* setUpLine("a" + "e\u0301".repeat(100)),
+          "a" + "e\u0301".repeat(91) + "…",
+        );
+      }),
+    );
+  });
 });

@@ -1,7 +1,6 @@
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 
-import { uuidv4 } from "../../lib/uuid";
-import { generatedBotName } from "./mobileNewBotNames";
+import { generatedBotName } from "./newBotNames.ts";
 
 // One-tap New bot. A create lives here, above the roster, so it outlives the list's mount: one
 // per environment while it runs or waits to be retried. A created bot frees the slot at once and
@@ -97,6 +96,7 @@ export function startNewBot(
   create: CreateNewBot,
   open: OpenIfStillHere,
   owner: object,
+  newRequestId: () => string,
 ): boolean {
   const slot = slotOf(environmentId);
   if (slot.operation !== null) return false;
@@ -106,7 +106,7 @@ export function startNewBot(
     ...slot,
     operation: {
       phase: "creating",
-      clientRequestId: uuidv4(),
+      clientRequestId: newRequestId(),
       name: generatedBotName([...members, ...slot.created]),
     },
   });

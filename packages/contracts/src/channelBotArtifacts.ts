@@ -6,6 +6,8 @@ import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchema
 export const CHANNEL_BOT_ARTIFACT_CHUNK_BYTES = 512 * 1024;
 /** Larger files answer `too_large` and are not sent. */
 export const CHANNEL_BOT_ARTIFACT_MAX_BYTES = 20 * 1024 * 1024;
+/** A read with no chunk by then answers `busy`; clients wait longer for a chunk than this. */
+export const CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS = 20_000;
 
 /** A file a GOAT Bot worker saved in its artifacts folder. */
 export const ChannelBotArtifact = Schema.Struct({
@@ -62,7 +64,10 @@ export const ChannelReadBotArtifactResult = Schema.Union([
   }),
   /** The file changed since the chunk that gave `version`; read it again from offset 0. */
   Schema.Struct({ status: Schema.Literal("changed"), relativePath: Schema.String }),
-  /** Another read on this connection is still running; ask again when it finishes. */
+  /**
+   * No chunk this time: another read on this connection is waiting for its answer, or the server
+   * could not read the file in time. Ask again later.
+   */
   Schema.Struct({ status: Schema.Literal("busy"), relativePath: Schema.String }),
 ]);
 export type ChannelReadBotArtifactResult = typeof ChannelReadBotArtifactResult.Type;

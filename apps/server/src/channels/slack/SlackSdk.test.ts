@@ -8,13 +8,18 @@ import {
   WebAPIPlatformError,
   WebAPIRateLimitedError,
   WebAPIRequestError,
+  WebClient,
 } from "@slack/web-api";
+import * as Effect from "effect/Effect";
+import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   bridgeSocketModeClient,
   classifySlackSdkError,
   isSlackSdkFailure,
+  layer as slackSdkLayer,
+  SlackSdk,
   type SlackSocketEnvelope,
   type SlackSocketLifecycle,
 } from "./SlackSdk.ts";
@@ -230,4 +235,57 @@ describe("bridgeSocketModeClient retirement", () => {
       await new Promise<void>((resolve) => socketServer.close(() => resolve()));
     }
   });
+});
+
+describe("editing and deleting a message GOAT sent", () => {
+  const botApi = Effect.gen(function* () {
+    return (yield* SlackSdk).botApi({ botToken: BOT_TOKEN });
+  }).pipe(Effect.provide(slackSdkLayer));
+
+  effectIt.effect(
+    "sends chat.update and chat.delete with only the channel, ts and text, never as_user",
+    () =>
+      Effect.gen(function* () {
+        const requests: Array<readonly [string, unknown]> = [];
+        vi.spyOn(WebClient.prototype, "apiCall").mockImplementation((method, options) => {
+          requests.push([method, options]);
+          return Promise.resolve({ ok: true });
+        });
+        const bot = yield* botApi;
+        yield* Effect.promise(() =>
+          bot.updateMessage({ channel: "C0ALLOWED", ts: "1760000001.000100", text: "On it." }),
+        );
+        yield* Effect.promise(() =>
+          bot.deleteMessage({ channel: "C0ALLOWED", ts: "1760000001.000100" }),
+        );
+        expect(requests).toEqual([
+          ["chat.update", { channel: "C0ALLOWED", ts: "1760000001.000100", text: "On it." }],
+          ["chat.delete", { channel: "C0ALLOWED", ts: "1760000001.000100" }],
+        ]);
+      }),
+  );
+
+  effectIt.effect("names the failed operation and keeps the category bounded", () =>
+    Effect.gen(function* () {
+      vi.spyOn(WebClient.prototype, "apiCall").mockImplementation(() =>
+        Promise.reject(platformError("missing_scope")),
+      );
+      const bot = yield* botApi;
+      const updated: unknown = yield* Effect.promise(() =>
+        bot.updateMessage({ channel: "C0ALLOWED", ts: "1", text: "x" }).then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+      const deleted: unknown = yield* Effect.promise(() =>
+        bot.deleteMessage({ channel: "C0ALLOWED", ts: "1" }).then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+      expect(updated).toMatchObject({ operation: "chat.update", category: "auth_invalid" });
+      expect(deleted).toMatchObject({ operation: "chat.delete", category: "auth_invalid" });
+      expect(JSON.stringify([updated, deleted])).not.toContain("SENTINEL");
+    }),
+  );
 });

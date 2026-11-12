@@ -12,6 +12,9 @@ export const LINKS = {
   inheritedSecurityPolicy: `${REPOSITORY}/blob/dev/.github/SECURITY.md`,
   issues: `${REPOSITORY}/issues`,
   releases: "https://github.com/goat-si/goat-releases/releases",
+  iosBeta: "https://testflight.apple.com/join/4PXeSgXv",
+  testFlightApp: "https://apps.apple.com/app/testflight/id899247664",
+  androidBeta: "https://appdistribution.firebase.dev/i/b6f930a2e01c9f53",
   nightlyReleases: "https://github.com/goat-si/goat-releases/releases?q=nightly&expanded=true",
   githubPrivacy:
     "https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement",

@@ -105,10 +105,12 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	home := fs.String("home", "", "state directory instead of PEN_HOME (ssh on Windows runs ProxyCommand without a shell)")
 	node := fs.String("node", "", "exact node id, with --noise: no name or prefix lookup")
 	noise := fs.String("noise", "", "the Noise key the --node member must have in this machine's view")
-	pos, err := parse(fs, args)
-	if err != nil {
+	// Flags come before the node only: ssh puts the host name into what follows, and a name that
+	// arrives as several arguments (Win32-OpenSSH quotes nothing) must not be read as flags.
+	if err := fs.Parse(args); err != nil {
 		return 255
 	}
+	pos := fs.Args()
 	exact := *node != "" || *noise != ""
 	if exact && (*node == "" || *noise == "" || len(pos) != 1) {
 		return die(errors.New("usage: pen pipe --node <nodeId> --noise <noisePub> (<port> | @<service>)"))
@@ -118,6 +120,7 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	target := pos[len(pos)-1]
 	var port int
+	var err error
 	service := ""
 	if exact && strings.HasPrefix(target, "@") {
 		service = target[1:]
@@ -157,7 +160,11 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
+	self := p.id.NodeID()
+	revoked, stopWatch, err := watchRevoked(st, p, m)
+	if err != nil {
+		return die(err)
+	}
 	defer stopWatch()
 	// The exact form writes nothing to stderr before its ready line, so it never traces.
 	var tr *openTrace
@@ -181,11 +188,13 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	var wasRevoked atomic.Bool
+	selfRevoked := false
 	spliced := make(chan struct{})
 	defer close(spliced)
 	go func() {
 		select {
-		case <-revoked:
+		case who := <-revoked:
+			selfRevoked = who == self
 			wasRevoked.Store(true)
 			sec.Close(wire.CodeNotAdmitted)
 		case <-spliced:
@@ -199,13 +208,47 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := stream.Splice(ctx, tr.link(sec), Stdin, stdout, closeOut); err != nil {
 		if wasRevoked.Load() {
-			return die(revokedErr(m))
+			return die(revokedNodeErr(m, selfRevoked))
 		}
 		return die(fail(err, true))
 	}
 	return 0
 }
 
-func revokedErr(m mesh.Member) error {
-	return fmt.Errorf("%s (%s) was revoked from the mesh; session closed", m.Name, short(m.NodeID))
+// revokedNodeErr names who left: the member at the other end, or this node itself.
+func revokedNodeErr(m mesh.Member, self bool) error {
+	return errors.New(revokedWho(m, self) + "; session closed")
+}
+
+func revokedWho(m mesh.Member, self bool) string {
+	if self {
+		return "this node left the mesh or was revoked"
+	}
+	return fmt.Sprintf("%s (%s) was revoked from the mesh", m.Name, short(m.NodeID))
+}
+
+// watchRevoked watches m and this node. With no daemon to watch (pen down, or never started) it
+// still serves, unwatched, unless this node has left since p was loaded: a pen leave in between
+// deletes the identity and stops the daemon.
+func watchRevoked(st *state.Store, p *peer, m mesh.Member) (<-chan string, func(), error) {
+	self := p.id.NodeID()
+	revoked, stop, err := daemon.WatchRevoked(st, m.NodeID, self)
+	if err != nil {
+		return nil, stop, err
+	}
+	if revoked != nil {
+		// A revoke already in the daemon's view comes with the watch's first line: start nothing.
+		select {
+		case who := <-revoked:
+			stop()
+			return nil, func() {}, errors.New(revokedWho(m, who == self) + "; nothing was opened")
+		default:
+			return revoked, stop, nil
+		}
+	}
+	id, err := st.LoadIdentity()
+	if errors.Is(err, os.ErrNotExist) || err == nil && id.NodeID() != self {
+		return nil, stop, errors.New("this node left the mesh while this started; nothing was opened")
+	}
+	return nil, stop, err
 }

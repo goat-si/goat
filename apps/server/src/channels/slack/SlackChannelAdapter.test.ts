@@ -379,6 +379,8 @@ describe("makeSlackChannelTransport", () => {
       botUserId: "U0BOT",
       botApi: {
         authTest: () => Promise.reject(new Error("not used")),
+        updateMessage: () => Promise.reject(new Error("not used")),
+        deleteMessage: () => Promise.reject(new Error("not used")),
         postMessage: (input) => {
           posts.push(input);
           return postMessage(input);
@@ -609,4 +611,125 @@ describe("makeSlackChannelTransport", () => {
     );
     assert.equal(error.deliveryOutcome, "unknown");
   });
+});
+
+describe("Slack progress edits and removals", () => {
+  const destination = {
+    kind: "slack" as const,
+    connectionId,
+    teamId: "T0TEAM",
+    channelId: "C0ALLOWED",
+    rootTs: "1760000000.000100",
+  };
+  const message = {
+    deliveryId: ChannelDeliveryId.make("edit-1"),
+    destination,
+    kind: "receipt" as const,
+    text: "On it.\n\nChecking images.",
+    mentionActorId: "U0ALICE",
+  };
+  const ts = "1760000001.000100";
+
+  const setup = (
+    call: () => Promise<void>,
+    options: { readonly teamId?: string; readonly session?: boolean } = {},
+  ) => {
+    const updates: Array<Parameters<SlackBotApi["updateMessage"]>[0]> = [];
+    const deletes: Array<Parameters<SlackBotApi["deleteMessage"]>[0]> = [];
+    const reports: Array<SlackDeliveryFailureReport> = [];
+    const session: SlackActiveSession = {
+      generation: 7,
+      teamId: options.teamId ?? "T0TEAM",
+      botUserId: "U0BOT",
+      botApi: {
+        authTest: () => Promise.reject(new Error("not used")),
+        postMessage: () => Promise.reject(new Error("not used")),
+        updateMessage: (input) => {
+          updates.push(input);
+          return call();
+        },
+        deleteMessage: (input) => {
+          deletes.push(input);
+          return call();
+        },
+      },
+    };
+    const transport = makeSlackChannelTransport({
+      activeSession: () =>
+        Effect.succeed(options.session === false ? Option.none() : Option.some(session)),
+      reportFailure: (_id, _generation, report) =>
+        Effect.sync(() => {
+          reports.push(report);
+        }),
+    });
+    return { transport, updates, deletes, reports };
+  };
+
+  it.effect("edits with the formatted text and removes by ts, and sends nothing else", () =>
+    Effect.gen(function* () {
+      const { transport, updates, deletes } = setup(() => Promise.resolve());
+      assert.deepEqual(yield* transport.edit!({ message, externalMessageId: ts }), {
+        _tag: "done",
+      });
+      assert.deepEqual(yield* transport.remove!({ destination, externalMessageId: ts }), {
+        _tag: "done",
+      });
+      assert.deepEqual(updates, [
+        { channel: "C0ALLOWED", ts, text: "<@U0ALICE> On it.\n\nChecking images." },
+      ]);
+      assert.deepEqual(deletes, [{ channel: "C0ALLOWED", ts }]);
+    }),
+  );
+
+  it.effect.each([
+    ["auth_invalid", { _tag: "refused" }],
+    ["auth_revoked", { _tag: "refused" }],
+    ["not_in_channel", { _tag: "refused" }],
+    ["channel_not_found", { _tag: "refused" }],
+    ["platform", { _tag: "refused" }],
+    ["network", { _tag: "unknown" }],
+    ["timeout", { _tag: "unknown" }],
+    ["http", { _tag: "unknown" }],
+    ["unconfirmed", { _tag: "unknown" }],
+    ["unknown", { _tag: "unknown" }],
+  ] as const)("a %s failure becomes %j and never reports the connection", ([category, expected]) =>
+    Effect.gen(function* () {
+      const failure = new SlackSdkFailure({ operation: "chat.update", category });
+      const { transport, reports } = setup(() => Promise.reject(failure));
+      assert.deepEqual(yield* transport.edit!({ message, externalMessageId: ts }), expected);
+      assert.deepEqual(yield* transport.remove!({ destination, externalMessageId: ts }), expected);
+      assert.deepEqual(reports, []);
+    }),
+  );
+
+  it.effect("a rate limit keeps Slack's Retry-After", () =>
+    Effect.gen(function* () {
+      const failure = new SlackSdkFailure({
+        operation: "chat.update",
+        category: "rate_limited",
+        retryAfterSeconds: 30,
+      });
+      const { transport, reports } = setup(() => Promise.reject(failure));
+      assert.deepEqual(yield* transport.edit!({ message, externalMessageId: ts }), {
+        _tag: "rate_limited",
+        retryAfterSeconds: 30,
+      });
+      assert.deepEqual(reports, []);
+    }),
+  );
+
+  it.effect("skips without a live session or for another workspace, calling nothing", () =>
+    Effect.gen(function* () {
+      for (const options of [{ session: false }, { teamId: "T0OTHER" }]) {
+        const { transport, updates, deletes } = setup(() => Promise.resolve(), options);
+        assert.deepEqual(yield* transport.edit!({ message, externalMessageId: ts }), {
+          _tag: "skipped",
+        });
+        assert.deepEqual(yield* transport.remove!({ destination, externalMessageId: ts }), {
+          _tag: "skipped",
+        });
+        assert.deepEqual([updates, deletes], [[], []]);
+      }
+    }),
+  );
 });

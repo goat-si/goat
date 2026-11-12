@@ -161,6 +161,17 @@ it("keeps previews per listing generation, and forgets the oldest past 12 or 4 M
   expect(cachedGoatBotFilePreview("env", "big2.png", first)).toEqual(big);
 });
 
+it("remembers a file with nothing to show for its generation, counted against the same 12 entries", () => {
+  const first = listingGeneration({});
+  const later = listingGeneration({});
+  storeGoatBotFilePreview("env-empty", "big.txt", first, null);
+  expect(cachedGoatBotFilePreview("env-empty", "big.txt", first)).toBeNull();
+  expect(cachedGoatBotFilePreview("env-empty", "big.txt", later)).toBeUndefined();
+  for (let index = 0; index < 12; index += 1)
+    storeGoatBotFilePreview("env-empty", `empty${index}.txt`, first, null);
+  expect(cachedGoatBotFilePreview("env-empty", "big.txt", first)).toBeUndefined();
+});
+
 it("forgets a chat's previews when the person leaves it, and keeps another chat's", () => {
   const generation = listingGeneration({});
   const text = { kind: "text" as const, text: "hello" };

@@ -76,6 +76,17 @@ export interface SlackBotApi {
     /** Block Kit for choice buttons. Absent when the message has no options. */
     readonly blocks?: ReadonlyArray<SlackChoiceBlock> | undefined;
   }) => Promise<{ readonly ts: string }>;
+  /** chat.update of a message this bot posted; text only, which drops any blocks. */
+  readonly updateMessage: (input: {
+    readonly channel: string;
+    readonly ts: string;
+    readonly text: string;
+  }) => Promise<void>;
+  /** chat.delete of a message this bot posted. */
+  readonly deleteMessage: (input: {
+    readonly channel: string;
+    readonly ts: string;
+  }) => Promise<void>;
 }
 
 /** Web API calls made with the app-level token (`xapp-`). Used to validate it. */
@@ -88,6 +99,8 @@ const SlackSdkOperation = Schema.Literals([
   "auth.test",
   "apps.connections.open",
   "chat.postMessage",
+  "chat.update",
+  "chat.delete",
   "socket.start",
   "socket.disconnect",
 ]);
@@ -326,6 +339,11 @@ const botApi = ({ botToken }: { readonly botToken: string }): SlackBotApi => {
         return { ts: response.ts };
       }, rejectWith("chat.postMessage"));
     },
+    // A bot token edits and deletes only its own messages; as_user is never sent.
+    updateMessage: ({ channel, ts, text }) =>
+      client.chat.update({ channel, ts, text }).then(() => undefined, rejectWith("chat.update")),
+    deleteMessage: ({ channel, ts }) =>
+      client.chat.delete({ channel, ts }).then(() => undefined, rejectWith("chat.delete")),
   };
 };
 

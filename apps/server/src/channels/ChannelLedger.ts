@@ -7,6 +7,7 @@ import * as ChannelWake from "./ChannelWake.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
 import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
+import { insertOutboxRows, progressEndRows } from "./channelProgressMessages.ts";
 /**
  * ChannelLedger - durable state for channel input, tasks, and deliveries.
  *
@@ -72,6 +73,9 @@ export interface ChannelOutboxInsert {
   readonly message: ChannelOutboundMessage;
   readonly inputId?: ChannelInputId | undefined;
   readonly taskId?: ChannelTaskId | undefined;
+  /** An end row ends the Slack message `targetDeliveryId` names; see channelProgressMessages. */
+  readonly operation?: "post" | "end" | undefined;
+  readonly targetDeliveryId?: string | undefined;
 }
 
 export interface ChannelStoredInput {
@@ -103,6 +107,13 @@ export interface ChannelStoredDelivery {
   readonly message: ChannelOutboundMessage;
   readonly attempts: number;
   readonly receiptDeadline?: number | undefined;
+  /** Set when the row changes a message already sent, whose ts this is, instead of posting. */
+  readonly progress?:
+    | {
+        readonly operation: "edit" | "delete" | "restore";
+        readonly externalMessageId: string;
+      }
+    | undefined;
 }
 
 export type ChannelDeliveryOutcome =
@@ -570,7 +581,6 @@ const decodeWorkerRun = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelWo
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
-const encodeOutbound = Schema.encodeSync(Schema.fromJsonString(ChannelOutboundMessage));
 const encodeScopes = Schema.encodeSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const decodeScopes = Schema.decodeUnknownSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const ApprovalCodeCount = Schema.fromJsonString(Schema.Struct({ n: Schema.Number }));
@@ -770,22 +780,7 @@ const make = Effect.gen(function* () {
         );
 
   const insertDeliveries = (deliveries: ReadonlyArray<ChannelOutboxInsert>, now: string) =>
-    Effect.forEach(
-      deliveries,
-      (delivery) => sql`
-        INSERT INTO channel_outbox (
-          delivery_id, cause_key, input_id, task_id, kind, destination_kind, message_json,
-          state, attempts, next_attempt_at, created_at, updated_at
-        ) VALUES (
-          ${delivery.deliveryId}, ${delivery.causeKey}, ${delivery.inputId ?? null},
-          ${delivery.taskId ?? null}, ${delivery.message.kind},
-          ${delivery.message.destination.kind}, ${encodeOutbound(delivery.message)},
-          'pending', 0, ${now}, ${now}, ${now}
-        )
-        ON CONFLICT DO NOTHING
-      `,
-      { discard: true },
-    );
+    insertOutboxRows(sql, deliveries, now);
 
   const readInbox = (inputId: string) =>
     sql<InboxRow>`SELECT * FROM channel_inbox WHERE input_id = ${inputId}`.pipe(
@@ -1398,12 +1393,14 @@ const make = Effect.gen(function* () {
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
-            const rows = yield* sql<{ readonly sequence: number }>`
+            const [done] = yield* sql<{ readonly task_id: string; readonly type: string }>`
               UPDATE channel_task_events SET narration_state = 'done'
               WHERE sequence = ${input.sequence} AND narration_state = 'pending'
-              RETURNING sequence
+              RETURNING task_id, type
             `;
-            if (rows.length > 0) yield* insertDeliveries(input.deliveries, input.now);
+            if (done === undefined) return;
+            yield* insertDeliveries(input.deliveries, input.now);
+            yield* insertDeliveries(yield* progressEndRows(sql, done), input.now);
           }),
         )
         .pipe(Effect.mapError(toLedgerError("completeNarration"))),

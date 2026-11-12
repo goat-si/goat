@@ -29,6 +29,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { CUA_DRIVER_PROBED_SESSION_NAMES } from "@goat/shared/cuaDriverRelease";
+import { resolveNodeExecutable } from "@goat/shared/nodeRuntime";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -669,6 +670,32 @@ const helperEntry = (environment: Readonly<Record<string, string | undefined>>) 
   return NodeFS.existsSync(source) ? { entry: source, packaged: false } : undefined;
 };
 
+/**
+ * What runs the helper's entry, and the check before each start that refuses it with a reason.
+ * The packaged goat binary runs only its own CLI, so it runs the entry with the node on PATH,
+ * looked up before each start so that installing Node needs no restart.
+ */
+export const helperLaunch = Effect.fn("LinuxHelperHost.helperLaunch")(function* (
+  environment: Readonly<Record<string, string | undefined>>,
+  bundleCheck: Effect.Effect<string | undefined> | undefined,
+) {
+  let node = yield* HostProcess.ExecutablePath;
+  if (!(yield* HostProcess.IsExecutable)) return { node: () => node, verify: bundleCheck };
+  const context =
+    yield* Effect.context<Effect.Services<ReturnType<typeof resolveNodeExecutable>>>();
+  const verify = resolveNodeExecutable("Linux computer use", { ...environment }).pipe(
+    Effect.provideContext(context),
+    Effect.matchEffect({
+      onFailure: (error) => Effect.succeed<string | undefined>(error.message),
+      onSuccess: (found) => {
+        node = found;
+        return bundleCheck ?? Effect.undefined;
+      },
+    }),
+  );
+  return { node: () => node, verify };
+});
+
 const spawnHelper =
   (platform: NodeJS.Platform, node: string, entry: string) =>
   (env: Readonly<Record<string, string>>): HelperProcess => {
@@ -723,7 +750,6 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const { latest } = yield* LinuxHelperReport;
     const environment = yield* HostProcess.Environment;
-    const node = yield* HostProcess.ExecutablePath;
     const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
     const helper = platform === "linux" ? helperEntry(environment) : undefined;
     // The desktop app's own helper reports through desktop telemetry instead.
@@ -734,6 +760,10 @@ export const layer = Layer.effect(
       driver.value.driverSession === undefined
     )
       return inert(latest);
+    const launch = yield* helperLaunch(
+      environment,
+      helper.packaged ? Effect.promise(makeHelperBundleCheck(helper.entry)) : undefined,
+    );
     return yield* makeLinuxHelperHost({
       session: driver.value.driverSession.pipe(
         Effect.map(
@@ -760,8 +790,8 @@ export const layer = Layer.effect(
               ),
             },
           }),
-      spawn: spawnHelper(platform, node, helper.entry),
-      ...(helper.packaged ? { verify: Effect.promise(makeHelperBundleCheck(helper.entry)) } : {}),
+      spawn: (env) => spawnHelper(platform, launch.node(), helper.entry)(env),
+      ...(launch.verify === undefined ? {} : { verify: launch.verify }),
       environment,
       report: latest,
       newId: () => NodeCrypto.randomUUID(),

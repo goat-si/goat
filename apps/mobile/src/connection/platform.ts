@@ -243,7 +243,7 @@ const layerEnvironmentOwnedDataCleanup = Layer.succeed(
             await disposeMobileGoatBotEnvironment(environmentId);
           }),
           Effect.promise(async () => {
-            const { forgetNewBotEnvironment } = await import("../features/goat-bot/mobileNewBots");
+            const { forgetNewBotEnvironment } = await import("@goat/client-runtime/goatBot");
             forgetNewBotEnvironment(environmentId);
           }),
           Effect.sync(() => clearThreadComposerErrorsForEnvironment(environmentId)),

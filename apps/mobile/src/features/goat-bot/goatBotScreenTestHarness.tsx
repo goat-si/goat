@@ -101,6 +101,8 @@ vi.mock("../../state/threads", async () => {
   const keyOf = (ref: { environmentId: string; threadId: string }) =>
     ref.environmentId + "\u0000" + ref.threadId;
   return {
+    // The visit write is the transport; a test that needs it stands in for useAtomCommand.
+    threadEnvironment: { visit: "visit" },
     environmentThreadDetails: {
       quietVisibleTurnItemsAtom: (ref: { environmentId: string; threadId: string }) =>
         quiet(keyOf(ref)),
@@ -179,6 +181,7 @@ vi.mock("./GoatBotFace", () => ({
   GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
     <i data-face={`${props.state}:${props.inView}`} />
   ),
+  GoatBotFaceAvatar: (props: { state: string }) => <i data-avatar={props.state} />,
 }));
 vi.mock("./GoatBotShimmerText", () => ({
   GoatBotShimmerText: (props: { label: string; animate: boolean; style?: unknown }) => (
@@ -196,6 +199,20 @@ const picker = vi.hoisted(() => ({
 export type LayoutHandler = (event: { nativeEvent: { layout: { height: number } } }) => void;
 const layouts = vi.hoisted(() => new Map<string, LayoutHandler>());
 const a11y = vi.hoisted(() => ({ announce: vi.fn(), focus: vi.fn() }));
+// The app's state as React Native reports it, and whether the screen has navigation focus; a route
+// test moves them as the system would.
+const device = vi.hoisted(() => {
+  const listeners = new Set<(next: string) => void>();
+  return {
+    focused: true,
+    appState: "active" as "active" | "inactive" | "background",
+    listeners,
+    setAppState(next: "active" | "inactive" | "background") {
+      device.appState = next;
+      for (const listener of listeners) listener(next);
+    },
+  };
+});
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -309,8 +326,23 @@ vi.mock("react-native", () => ({
   Modal: (props: { visible?: boolean; children?: ReactNode }) =>
     props.visible ? <div role="dialog">{props.children}</div> : null,
   Image: (props: { accessibilityLabel?: string }) => <img alt={props.accessibilityLabel} />,
+  ScrollView: (props: { children?: ReactNode }) => <div>{props.children}</div>,
   Platform: { OS: "ios" },
-  AccessibilityInfo: { announceForAccessibility: a11y.announce, setAccessibilityFocus: a11y.focus },
+  AccessibilityInfo: {
+    announceForAccessibility: a11y.announce,
+    setAccessibilityFocus: a11y.focus,
+    addEventListener: () => ({ remove: () => {} }),
+    isReduceMotionEnabled: async () => false,
+  },
+  AppState: {
+    get currentState() {
+      return device.appState;
+    },
+    addEventListener: (_type: "change", listener: (next: string) => void) => {
+      device.listeners.add(listener);
+      return { remove: () => device.listeners.delete(listener) };
+    },
+  },
   findNodeHandle: (node: unknown) => node ?? null,
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
@@ -380,6 +412,7 @@ vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
 }));
 vi.mock("@react-navigation/native", () => ({
+  useIsFocused: () => device.focused,
   useNavigation: () => ({ dispatch: () => {} }),
   StackActions: { push: (name: string, params: object) => ({ name, params }) },
 }));
@@ -477,6 +510,7 @@ export {
   appearance,
   botEditing,
   chatFiles,
+  device,
   layouts,
   list,
   models,

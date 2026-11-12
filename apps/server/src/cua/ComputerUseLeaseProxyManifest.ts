@@ -4,8 +4,11 @@
  * the new child. A stalled child (one that stopped answering) is replaced the same way.
  */
 import * as Effect from "effect/Effect";
-import { type Interruption, LEASE_END_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import type { Interruption } from "./ComputerUseLeaseMessages.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
+
+const DRIVER_REFRESHED =
+  "GOAT started its computer use driver again to pick up a change, so this call was stopped. Observe again before acting.";
 
 /** Built once; state is read through getters each time it runs. */
 export const refreshDriverManifest = Effect.fn("ComputerUseLeaseProxy.refreshManifest")(function* <
@@ -28,7 +31,7 @@ export const refreshDriverManifest = Effect.fn("ComputerUseLeaseProxy.refreshMan
   const token = yield* input.interrupt({
     _tag: "other",
     detail: "helper_restarted",
-    message: LEASE_END_MESSAGES.helper_restarted,
+    message: DRIVER_REFRESHED,
   });
   // Stopping the old child waits; an expiry or a driver exit may have ended the control.
   if (input.stopped()) return undefined;

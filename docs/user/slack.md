@@ -41,6 +41,11 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
   memory or change GOAT Bot's notes.
 - Replies, questions, and results go to the thread where you asked, and
   questions tag the person who asked.
+- While work runs, the thread keeps one message about it, which GOAT updates
+  with the latest step instead of posting each one. The answer always arrives
+  as a new message. After it, GOAT removes that message if it only said the
+  work was under way, or puts its first reply back as it was. If Slack refuses
+  an update, the message stays as it is.
 - **Default project** decides where work from Slack runs when your message
   doesn't name a project. Without it, GOAT picks the project from the
   conversation and asks only when it can't tell, suggesting the one you worked

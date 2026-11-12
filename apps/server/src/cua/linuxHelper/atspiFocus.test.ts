@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { type AtspiCall, type BusReply, BusError } from "./atspiBus.ts";
-import { makeSecureFocusProbe, type GdbusRunner } from "./atspiFocus.ts";
+import { gdbusRunner, makeSecureFocusProbe, type GdbusRunner } from "./atspiFocus.ts";
 
 /** The unique name the bus daemon gives as the AT-SPI registry's owner. */
 const REGISTRY = ":1.1000";
@@ -89,6 +89,13 @@ describe("makeSecureFocusProbe", () => {
       throw new Error("gdbus: timed out");
     };
     expect(await makeSecureFocusProbe(noAddress)(10)).toEqual(UNKNOWN);
+  });
+
+  it("says gdbus is missing, rather than that the bus is silent, when gdbus is not installed (#2247)", async () => {
+    // A PATH with no gdbus on it: running it fails the way a host without GLib's tools does.
+    expect(
+      await makeSecureFocusProbe(gdbusRunner({ PATH: "/nonexistent/goat-no-gdbus" }))(10),
+    ).toEqual({ ...UNKNOWN, gdbusMissing: true });
   });
 
   it("says an app is unregistered only when the registry answered in full without it", async () => {

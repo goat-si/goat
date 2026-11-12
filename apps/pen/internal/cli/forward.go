@@ -65,20 +65,28 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 	return runForward(ctx, ln, st, p, m, port, stdout, stderr, nil)
 }
 
-// runForward serves ln until ctx ends or m is revoked; connDone (may be nil) runs after each connection's last output.
+// runForward serves ln until ctx ends, or m or this node is revoked (pen leave revokes this node);
+// connDone (may be nil) runs after each connection's last output.
 func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, m mesh.Member, port int, stdout, stderr io.Writer, connDone func()) int {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
+	self := p.id.NodeID()
+	revoked, stopWatch, err := watchRevoked(st, p, m)
+	if err != nil {
+		ln.Close()
+		return fail(stderr, err)
+	}
 	defer stopWatch()
 	var mu sync.Mutex
 	open := map[*session.Secure]bool{}
 	var wasRevoked atomic.Bool
+	var revokedErr error
 	go func() {
 		select {
-		case <-revoked:
-			wasRevoked.Store(true)
+		case who := <-revoked:
 			mu.Lock()
+			revokedErr = revokedNodeErr(m, who == self)
+			wasRevoked.Store(true)
 			for sec := range open {
 				sec.Close(wire.CodeNotAdmitted)
 			}
@@ -93,7 +101,9 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 		c, err := ln.Accept()
 		if err != nil {
 			if wasRevoked.Load() {
-				fmt.Fprintln(stderr, "pen forward:", revokedErr(m))
+				mu.Lock()
+				fmt.Fprintln(stderr, "pen forward:", revokedErr)
+				mu.Unlock()
 				return 255
 			}
 			if ctx.Err() != nil {
@@ -127,8 +137,14 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 				mu.Unlock()
 			}()
 			lc := localConn{tc}
-			if err := stream.Splice(ctx, tr.link(sec), lc, lc, lc.CloseWrite); err != nil && !wasRevoked.Load() && !clientGone(err) {
-				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
+			if err := stream.Splice(ctx, tr.link(sec), lc, lc, lc.CloseWrite); err != nil {
+				if !stream.Delivered(err) {
+					// The peer's stream stopped short of its FIN: the client reads a reset, not a clean end.
+					tc.SetLinger(0)
+				}
+				if !wasRevoked.Load() && !clientGone(err) {
+					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
+				}
 			}
 		}()
 	}

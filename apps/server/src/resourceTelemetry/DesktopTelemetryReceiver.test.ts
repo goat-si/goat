@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The regression holds the real native fd write callback.
 import * as NodeFS from "node:fs";
+import * as NodeNet from "node:net";
+import * as NodeStream from "node:stream";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -11,6 +13,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import { describe, expect, vi } from "vite-plus/test";
 
 import {
@@ -22,6 +25,7 @@ import {
 } from "./DesktopTelemetryReceiver.ts";
 
 vi.mock("node:fs", { spy: true });
+vi.mock("node:net", { spy: true });
 
 describe("DesktopTelemetryReceiver", () => {
   it.effect("refuses an app-list request without desktop pipe descriptors", () =>
@@ -210,4 +214,59 @@ it.effect("receiver request completes only after its held native control frame",
       ).pipe(Layer.provideMerge(NodeServices.layer)),
     ),
   ),
+);
+
+it.effect(
+  "a desktop whose telemetry stream ended leaves no computer use readiness behind (#1305)",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The desktop's end of the telemetry descriptor.
+        const desktop = new NodeStream.PassThrough();
+        using _socket = vi.spyOn(NodeNet, "Socket").mockImplementation(function () {
+          return desktop;
+        } as unknown as typeof NodeNet.Socket);
+        const config = yield* ServerConfig.ServerConfig;
+        const receiver = yield* make().pipe(
+          Effect.provideService(ServerConfig.ServerConfig, { ...config, desktopTelemetryFd: 6 }),
+        );
+        const heard = yield* Stream.runHead(receiver.cuaSafety).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        const health = yield* receiver.subscribeHealth;
+        desktop.write(
+          JSON.stringify({
+            version: 1,
+            type: "cuaReadiness",
+            generation: 1,
+            readiness: {
+              grants: { accessibility: "granted", screenCapture: "granted" },
+              helper: "authenticated",
+              capture: "ready",
+              tree: "ready",
+              input: "background",
+              blockers: [],
+              reasons: [],
+            },
+            signals: { privateMode: "supported", humanInput: "supported" },
+          }) + "\n",
+        );
+        yield* Fiber.join(heard);
+        expect(Option.isSome(yield* receiver.cuaReadiness)).toBe(true);
+        // The desktop quits, and its helper's last report said it was running.
+        desktop.end();
+        yield* health.changes.pipe(
+          Stream.filter((next) => next.status === "stopped"),
+          Stream.runHead,
+        );
+        expect(Option.isNone(yield* receiver.cuaReadiness)).toBe(true);
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ServerSettings.layerTest(),
+          ServerConfig.layerTest("/test", { prefix: "goat-cua-readiness-end" }),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    ),
 );

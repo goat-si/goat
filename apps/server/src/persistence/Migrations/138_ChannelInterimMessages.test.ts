@@ -33,6 +33,8 @@ it.effect(
       yield* sql`INSERT INTO channel_outbox ${sql.insert(row("slack-in-flight", "slack"))}`;
       yield* sql`INSERT INTO channel_outbox ${sql.insert(row("goat-in-flight", "goat"))}`;
       yield* runMigrations({ toMigrationInclusive: 138 });
+      // The ledger below is today's, so the schema it reads is too.
+      yield* runMigrations();
       yield* Effect.gen(function* () {
         const ledger = yield* ChannelLedger.ChannelLedger;
         yield* ledger.claimOwnership({ token: OWNER, now: NOW, staleBefore: NOW });

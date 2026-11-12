@@ -78,7 +78,7 @@ export function GoatBotTimeline({
   onRetry,
   onDiscard,
   onPick,
-  onOpenHome,
+  onOpenRoutine,
   onReply,
   taskDetails = false,
   taskThreads = false,
@@ -97,8 +97,8 @@ export function GoatBotTimeline({
   readonly replyingSince?: string | null;
   readonly onReply?: ((text: string) => void) | undefined;
   readonly onRetry: (clientKey: string) => void;
-  /** Opens the bot's home, where a routine an event line names lives. */
-  readonly onOpenHome?: (() => void) | undefined;
+  /** How to open, by id, a routine an event line names; undefined when it no longer exists. */
+  readonly onOpenRoutine?: ((routineId: string) => (() => void) | undefined) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
@@ -303,7 +303,7 @@ export function GoatBotTimeline({
             role="note"
             className="my-3 text-center text-xs leading-4 text-muted-foreground"
           >
-            <GoatBotEventText row={row} onOpenHome={onOpenHome} />
+            <GoatBotEventText row={row} onOpenRoutine={onOpenRoutine} />
           </li>
         );
       case "user": {

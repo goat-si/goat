@@ -17,7 +17,24 @@ import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 
 export const BOT_EVENT_LIMITS = { perBot: 32, bots: 64, total: 256, attempts: 5 } as const;
-const MAX_TEXT = 200;
+/** An event line's length cap, which a subject's name shares. */
+export const MAX_TEXT = 200;
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * Text that fits `max` UTF-16 units, the length the schema caps: whole as it is, or cut between
+ * characters with "…" taking the last place, so no emoji or accented letter is split.
+ */
+export const clipText = (text: string, max: number): string => {
+  if (text.length <= max) return text;
+  let kept = "";
+  for (const { segment } of graphemes.segment(text)) {
+    if (kept.length + segment.length > max - 1) break;
+    kept += segment;
+  }
+  return kept.trimEnd() + "…";
+};
 
 export interface BotEvent {
   readonly ownerId: string;

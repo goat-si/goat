@@ -244,12 +244,20 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
-GOAT's mobile app for iPhone, iPad and Android is in development and is not in the
-App Store or Google Play yet. Today you can get it two ways:
+GOAT's mobile app for iPhone, iPad and Android is in beta and is not in the
+App Store or Google Play yet. Anyone can join the beta from
+[trygoat.ai/mobile](https://trygoat.ai/mobile/):
 
-- **iPhone and iPad:** through TestFlight, which is invite-only for now.
-- **iPhone, iPad or Android:** build it from source and install it on your own
-  device, following the [mobile app README](../../apps/mobile/README.md).
+- **iPhone and iPad (iOS 18 or later):** install TestFlight from the App Store,
+  then open the [TestFlight invite](https://testflight.apple.com/join/4PXeSgXv)
+  on the device.
+- **Android (7.0 or later):** open the
+  [Android beta invite](https://appdistribution.firebase.dev/i/b6f930a2e01c9f53)
+  on the phone, enter your email, and download GOAT from the invitation. Allow
+  your browser to install apps when Android asks.
+
+You can also build it from source, following the
+[mobile app README](../../apps/mobile/README.md).
 
 The phone connects to a GOAT server on another machine. Follow
 [remote access](./remote-access.md) to pair it directly or over Tailscale.

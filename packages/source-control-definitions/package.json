@@ -15,6 +15,7 @@
     "@goat/source-control-azure-devops": "workspace:*",
     "@goat/source-control-bitbucket": "workspace:*",
     "@goat/source-control-core": "workspace:*",
+    "@goat/source-control-cursor-origin": "workspace:*",
     "@goat/source-control-forgejo": "workspace:*",
     "@goat/source-control-gitcafe": "workspace:*",
     "@goat/source-control-github": "workspace:*",

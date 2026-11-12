@@ -129,6 +129,14 @@ async function openMemory(screen: Awaited<ReturnType<typeof render>>) {
 const composer = (screen: Awaited<ReturnType<typeof render>>) =>
   screen.getByRole("textbox", { name: "Message GOAT Bot" });
 
+async function windowSize(width: number, height: number) {
+  const before = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(width, height);
+  return { [Symbol.asyncDispose]: () => page.viewport(before.width, before.height) };
+}
+
+const homeSheet = () => page.getByRole("dialog", { name: "GOAT Bot work" });
+
 it("the home chip toggles by click and keyboard without losing the draft", async () => {
   const { view } = setup();
   await using screen = await render(view());
@@ -147,17 +155,78 @@ it("the home chip toggles by click and keyboard without losing the draft", async
   ).not.toBeNull();
 });
 
-it("closing the narrow home sheet returns focus and keeps the draft", async () => {
+it.each([390, 820])(
+  "at %i px Back to chat closes the home sheet, returns focus to the chip and keeps the draft",
+  async (width) => {
+    const { view } = setup(true);
+    await using _window = await windowSize(width, 844);
+    await using screen = await render(view());
+    const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+    const field = composer(screen);
+    await userEvent.type(field, "Draft on mobile");
+    await userEvent.click(chip);
+    await expect.element(homeSheet()).toBeVisible();
+    const back = page.getByRole("button", { name: "Back to chat", exact: true });
+    // First in the sheet, so a click or key that opens it lands here.
+    await expect.element(back).toHaveFocus();
+    await expect.element(page.getByRole("button", { name: "Close" })).not.toBeInTheDocument();
+    await userEvent.click(back);
+    await expect.element(homeSheet()).not.toBeInTheDocument();
+    await expect.element(chip).toHaveFocus();
+    await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+    await expect.element(field).toHaveValue("Draft on mobile");
+  },
+);
+
+it("at 390 px the home sheet fills the window", async () => {
   const { view } = setup(true);
+  await using _window = await windowSize(390, 844);
+  await using screen = await render(view());
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await expect.element(homeSheet()).toBeVisible();
+  const box = homeSheet().element().getBoundingClientRect();
+  expect({ width: box.width, height: box.height }).toEqual({ width: 390, height: 844 });
+});
+
+it("at 820 px the home stays a side sheet beside the chat (guard)", async () => {
+  const { view } = setup(true);
+  await using _window = await windowSize(820, 900);
+  await using screen = await render(view());
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await expect.element(homeSheet()).toBeVisible();
+  // max-w-md: 28rem.
+  expect(homeSheet().element().getBoundingClientRect().width).toBe(448);
+});
+
+it("a tap on the dimmed chat beside the narrow home closes it, returning focus to the chip and keeping the draft", async () => {
+  const { view } = setup(true);
+  await using _window = await windowSize(820, 900);
   await using screen = await render(view());
   const chip = screen.getByRole("button", { name: "GOAT Bot home" });
   const field = composer(screen);
-  await userEvent.type(field, "Draft on mobile");
+  await userEvent.type(field, "Draft beside the sheet");
   await userEvent.click(chip);
-  await userEvent.click(page.getByRole("button", { name: "Close" }));
+  await expect.element(homeSheet()).toBeVisible();
+  // The sheet's viewport covers the dimmed backdrop; a press on it outside the popup dismisses.
+  const backdrop = document.querySelector<HTMLElement>("[data-slot=sheet-viewport]")!;
+  await userEvent.click(page.elementLocator(backdrop), { position: { x: 40, y: 450 } });
+  await expect.element(homeSheet()).not.toBeInTheDocument();
   await expect.element(chip).toHaveFocus();
-  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
-  await expect.element(field).toHaveValue("Draft on mobile");
+  await expect.element(field).toHaveValue("Draft beside the sheet");
+});
+
+it("at 390 px the composer puts the message above attach, model and Send (guard)", async () => {
+  const { view } = setup(true);
+  await using _window = await windowSize(390, 844);
+  await using screen = await render(view());
+  const field = composer(screen);
+  await userEvent.type(field, "Two rows");
+  const bottom = field.element().getBoundingClientRect().bottom;
+  for (const name of ["Attach files", "Choose model", "Send"]) {
+    const control = screen.getByRole("button", { name, exact: true });
+    await expect.element(control).toBeVisible();
+    expect(control.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(bottom);
+  }
 });
 
 it("in the narrow sheet Escape steps from a task back to Home, then closes the sheet, keeping the draft", async () => {
@@ -279,7 +348,7 @@ it("on a narrow screen the work sheet closes and the composer holds the draft", 
   // Opening and dismissing the sheet afterwards still returns focus to the chip.
   const chip = screen.getByRole("button", { name: "GOAT Bot home" });
   await userEvent.click(chip);
-  await userEvent.click(page.getByRole("button", { name: "Close" }));
+  await userEvent.click(page.getByRole("button", { name: "Back to chat", exact: true }));
   await expect.element(chip).toHaveFocus();
 });
 

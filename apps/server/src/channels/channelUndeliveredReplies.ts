@@ -24,6 +24,8 @@ export interface UndeliveredSourceRow {
   readonly destination_kind: string;
   readonly message_json: string;
   readonly last_error_code: string | null;
+  /** Only a post was ever a reply; an edit or end of a sent message has nothing to copy. */
+  readonly operation: string;
 }
 
 const present = (value: string | null | undefined) =>
@@ -134,6 +136,7 @@ export const copyUndeliveredReply = Effect.fn("channelUndeliveredReplies.copy")(
   now: string,
 ) {
   if (row.destination_kind !== "slack" && row.destination_kind !== "imessage") return;
+  if (row.operation !== "post") return;
   if (!READABLE_KINDS.has(row.kind)) return;
   yield* sql.withTransaction(writeCopy(sql, row, outcome, now)).pipe(
     Effect.catchCause((cause) =>
