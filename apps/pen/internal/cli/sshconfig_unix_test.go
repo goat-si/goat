@@ -82,6 +82,38 @@ func TestTheFallbacksProxyCommandGivesTheShellNothingToRunFromATypedHostName(t *
 	}
 }
 
+// The quoting above is only safe if ssh itself reads the fallback's Host line as meant: every pen- alias but one
+// holding a quote. OpenSSH 9.6 and later refuse such a name outright; older ones must find no fallback for it.
+func TestSSHReadsTheFallbackHostLineAsEveryPenAliasWithoutAQuote(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("no ssh on this machine")
+	}
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(sshConfigText(shellQuote("/bin/pen")+" pipe", "/k/known_hosts", "/k", nil)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proxy := func(host string) (string, bool) {
+		out, err := exec.Command("ssh", "-G", "-F", path, host).Output()
+		if err != nil {
+			return "", false // ssh refused the name itself
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if v, ok := strings.CutPrefix(line, "proxycommand "); ok {
+				return v, true
+			}
+		}
+		return "", true
+	}
+	if got, ok := proxy("pen-studio"); !ok || got != "'/bin/pen' pipe '%n' 22" {
+		t.Fatalf("pen-studio: proxycommand %q (ssh accepted the name: %v), want the fallback's", got, ok)
+	}
+	for _, name := range []string{"pen-it's", "pen-x'$(touch y)'"} {
+		if got, ok := proxy(name); ok && got != "" && got != "none" {
+			t.Fatalf("%s took the fallback's proxycommand %q; a quoted name must not", name, got)
+		}
+	}
+}
+
 func TestSSHConfigLeavesOutConnectionReuseWhenTheControlSocketPathWouldNotFit(t *testing.T) {
 	long := "/" + strings.Repeat("d", 50)
 	got := sshConfigText(shellQuote("/bin/pen")+" pipe", "/k/known_hosts", long, []sshHost{{Name: "studio"}})
