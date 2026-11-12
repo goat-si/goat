@@ -40,6 +40,7 @@ import {
   RemoteTaskError,
   recordRemoteTaskProgress,
   recordRemoteTaskResult,
+  committedTaskResult,
   importRemoteTaskClaim,
   waitForRemoteTask,
   observeRemoteTask,
@@ -360,6 +361,8 @@ const make = Effect.gen(function* () {
         }
         // Claims/monitor commands commit first; result only after the entire backlog.
         const next = hasMore ? null : yield* taskEffect(observeRemoteTask(record, observed));
+        // An earlier result, such as an outage failure committed before a crash, outranks this run.
+        const won = next === null ? null : yield* taskEffect(committedTaskResult(record));
         const at = yield* now;
         const last = fresh.at(-1);
         const known =
@@ -368,7 +371,9 @@ const make = Effect.gen(function* () {
           (!terminal(observed.status) || !hasMore)
             ? observed
             : null;
-        const state = next ?? "running";
+        const state =
+          won === null ? (next ?? "running") : won.status === "cancelled" ? "cancelled" : "settled";
+        const runStatus = won?.status ?? known?.status ?? r.known_run_status;
         yield* db(
           sql.withTransaction(
             Effect.gen(function* () {
@@ -378,7 +383,7 @@ const make = Effect.gen(function* () {
                 VALUES (${r.origin_thread_id}, ${id}, 'needs_input', ${text}, ${at})`;
               yield* sql`UPDATE remote_dispatches SET
       report_cursor = ${last?.sequence ?? r.report_cursor},
-      known_run_id = ${known?.runId ?? r.known_run_id}, known_run_status = ${known?.status ?? r.known_run_status},
+      known_run_id = ${known?.runId ?? r.known_run_id}, known_run_status = ${runStatus},
       latest_kind = ${last?.kind ?? r.latest_kind}, latest_summary = ${last?.summary ?? r.latest_summary},
       latest_at = ${last?.createdAt ?? r.latest_at}, state = ${state}, updated_at = ${at},
       last_error = NULL

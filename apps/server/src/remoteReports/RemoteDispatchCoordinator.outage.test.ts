@@ -288,3 +288,28 @@ it.effect.each([
       }).pipe(Effect.provide(f.layer), steadyRandom);
     }).pipe(Effect.provide(database)),
 );
+
+it.effect(
+  "a host that answers after a crash cannot turn the outage failure the parent committed into a completion",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const c = yield* Coordinator.RemoteDispatchCoordinator;
+        const launched = yield* launchTask(c);
+        yield* Queue.take(f.notifications);
+        const read = yield* Queue.take(f.calls);
+        // The outage result committed, then the server stopped before the row turned lost.
+        const sinceMs = (yield* Clock.currentTimeMillis) - DAY;
+        yield* setSince(f, launched.correlationId, sinceMs);
+        f.recordedTasks.push(
+          subagent("task-A", "failed", `box has not answered since ${iso(sinceMs)}.`),
+        );
+        yield* Queue.offer(read.reply, Effect.succeed(answer([], "completed")));
+        yield* TestClock.adjust("1 hour");
+        const row = (yield* c.get(launched.correlationId))!;
+        assert.equal(row.state, "settled");
+        assert.equal(row.knownRunStatus, "failed");
+      }).pipe(Effect.provide(f.layer), steadyRandom);
+    }).pipe(Effect.provide(database)),
+);

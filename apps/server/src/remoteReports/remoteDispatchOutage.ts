@@ -6,10 +6,10 @@
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
-import { isTerminalDelegatedTaskStatus } from "../orchestration-v2/goat/OrchestratorRunState.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
+  committedTaskResult,
   RemoteTaskError,
   recordRemoteTaskResult,
   type TaskDispatch,
@@ -84,15 +84,10 @@ const endTask = Effect.fnUntraced(function* (
   at: string,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const threads = yield* ThreadManagementService.ThreadManagementService;
   const summary = notAnswering(record.host, since);
   yield* recordRemoteTaskResult({ ...record, status: "failed", summary });
-  // The parent keeps the first terminal result, so the committed one decides the row.
-  const { subagents } = yield* threads
-    .getThreadRecords(record.originThreadId, ["subagents"])
-    .pipe(Effect.mapError(storage));
-  const task = subagents.find((candidate) => candidate.id === record.task.taskId);
-  if (task === undefined || !isTerminalDelegatedTaskStatus(task.status)) return false;
+  const task = yield* committedTaskResult(record);
+  if (task === null) return false;
   const ours = task.status === "failed" && task.result === summary;
   yield* sql`UPDATE remote_dispatches SET
     state = ${ours ? "lost" : task.status === "cancelled" ? "cancelled" : "settled"},
