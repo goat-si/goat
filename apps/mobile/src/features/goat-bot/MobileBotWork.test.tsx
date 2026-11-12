@@ -695,14 +695,23 @@ it("draws the bot's face in the chip Android shows above the chat: its initial, 
     );
     return chip?.querySelector("div.rounded-full.border") ?? null;
   };
+  // The member's colour fills the circle, or, inside a ring, the circle within the ring's gap.
+  const fill = () =>
+    [face(), ...(face()?.querySelectorAll("div") ?? [])].find(
+      (item) => (item as HTMLElement | null)?.style.backgroundColor,
+    ) as HTMLElement | undefined;
   try {
     await render(undefined, undefined, [], [], chipFace({ state: "working" }));
-    // The member's initial on its colour, with the ring a working bot shows.
+    // The member's initial on its colour, with the ring a working bot shows, parted from the
+    // colour by the chip's own fill.
     expect(face()?.textContent).toBe("S");
-    expect((face() as HTMLElement | null)?.style.backgroundColor).toBe("rgb(109, 40, 217)");
+    expect(fill()?.style.backgroundColor).toBe("rgb(109, 40, 217)");
+    expect(fill()).not.toBe(face());
     expect(face()?.className).toContain("border-primary");
+    expect(face()?.className).toContain("bg-goat-bot-message");
     await render(undefined, undefined, [], [], chipFace(null));
     expect(face()?.className).toContain("border-transparent");
+    expect(fill()).toBe(face());
   } finally {
     nativePlatform.OS = "ios";
   }

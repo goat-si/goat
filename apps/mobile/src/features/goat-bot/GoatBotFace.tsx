@@ -168,6 +168,12 @@ const DOT_RING: Record<GoatBotAvatarSurface, string> = {
   chip: "border-goat-bot-message",
 };
 
+const SURFACE_FILL: Record<GoatBotAvatarSurface, string> = {
+  screen: "bg-screen",
+  selected: "bg-thread-selected",
+  chip: "bg-goat-bot-message",
+};
+
 const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
   active: "border-primary",
   failed: "border-danger-foreground",
@@ -199,15 +205,25 @@ export function GoatBotFaceAvatar(props: {
     awake && signal.dimmed && typeof surface === "string"
       ? goatBotSleepingAccent(awake, surface)
       : awake;
+  const place = props.surface ?? "screen";
+  // A ring on a member's colour is parted from the fill by a hairline of the surface behind it, so
+  // it reads on every colour; the circle keeps its size.
+  const inset = accent !== null && signal.ring !== null;
   return (
     <View
       style={{
         width: props.size,
         height: props.size,
-        ...(accent ? { backgroundColor: accent.background } : {}),
+        ...(accent && !inset ? { backgroundColor: accent.background } : {}),
       }}
-      className={`items-center justify-center rounded-full border bg-grouped-card ${signal.ring === null ? "border-transparent" : RING[signal.ring]}`}
+      className={`items-center justify-center rounded-full border ${inset ? SURFACE_FILL[place] : "bg-grouped-card"} ${signal.ring === null ? "border-transparent" : RING[signal.ring]}`}
     >
+      {inset && accent ? (
+        <View
+          className="absolute rounded-full"
+          style={{ top: 1, right: 1, bottom: 1, left: 1, backgroundColor: accent.background }}
+        />
+      ) : null}
       {picture !== null ? (
         <Text
           allowFontScaling={false}
@@ -226,7 +242,7 @@ export function GoatBotFaceAvatar(props: {
       )}
       {signal.waitingDot ? (
         <View
-          className={`absolute rounded-full bg-warning-foreground ${DOT_RING[props.surface ?? "screen"]}`}
+          className={`absolute rounded-full bg-warning-foreground ${DOT_RING[place]}`}
           style={waitingDotStyle(props.size)}
         />
       ) : null}
