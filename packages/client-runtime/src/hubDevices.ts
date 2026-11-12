@@ -221,7 +221,7 @@ export interface HubDeviceRow {
 }
 
 /** The CLIs a machine's own provider probes found missing, as one line; null when none. */
-export function missingCliLabel(entry: HostStatusEntry): string | null {
+function missingCliLabel(entry: HostStatusEntry): string | null {
   const names = (entry.metrics?.providers ?? [])
     .filter((provider) => provider.enabled && provider.cli === "missing")
     .map((provider) => provider.displayName ?? provider.driver);

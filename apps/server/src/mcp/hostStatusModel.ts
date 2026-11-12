@@ -13,6 +13,7 @@ import { GoatHostStatusResult, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/cont
 import { hostCompatibilityOf, ownRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { checksCli } from "../provider/ProviderCliGate.ts";
 
 /** Active work this machine should show. Archived, deleted, and subagent threads are omitted. */
 export interface HostThreadCountSource {
@@ -369,10 +370,13 @@ export function quotaRefreshDue(
 const CLI_ANSWER_FRESH_MS = 15 * 60_000;
 
 const cliOf = (
-  provider: Partial<Pick<ServerProvider, "cli" | "cliCheckedAt" | "version">>,
+  provider: Pick<ServerProvider, "driver"> &
+    Partial<Pick<ServerProvider, "cli" | "cliCheckedAt" | "version">>,
   now: number,
 ): Pick<HostStatusProvider, "cli" | "version" | "cliCheckedAt"> => {
   const checkedAt = provider.cliCheckedAt;
+  // A driver whose probe runs no CLI says nothing; unknown is only for a CLI not checked lately.
+  if (provider.cli !== "none" && !checksCli(provider.driver, provider.cli)) return {};
   const age = checkedAt === undefined ? Number.NaN : now - Date.parse(checkedAt);
   const cli =
     provider.cli === "none"

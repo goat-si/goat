@@ -166,9 +166,10 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
         { instanceId: "api", displayName: "API", fromCache: true },
       ],
     });
-    // Quotas omit claude, which reports no usage limits. Providers lists every instance.
+    // Quotas omit claude, which reports no usage limits. Providers lists every instance; only
+    // codex runs a CLI GOAT checks, and it has not been checked yet.
     expect(decoded.hosts[0]?.metrics?.providers).toEqual([
-      { instanceId: "codex", driver: "codex", displayName: "Codex", enabled: true },
+      { instanceId: "codex", driver: "codex", displayName: "Codex", enabled: true, cli: "unknown" },
       { instanceId: "claude", driver: "claude", enabled: true },
       { instanceId: "api", driver: "api", displayName: "API", enabled: true },
     ]);
