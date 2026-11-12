@@ -44,6 +44,7 @@ vi.mock("~/state/query", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotMemory } from "./GoatBotMemory";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 const environmentId = EnvironmentId.make("env");
 const decodeProfile = Schema.decodeSync(BotProfile);
@@ -142,6 +143,19 @@ it("Ask to change asks for the new wording first, then drafts the quoted change"
   await userEvent.click(screen.getByRole("button", { name: "Fill message" }));
   expect(onDraft).toHaveBeenCalledWith(goatBotChangeNoteMessage(newer.text, "Reply in English"));
   expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
+});
+
+it("new wording being written holds back a New bot open until it is cancelled", async () => {
+  setup();
+  await using screen = await render(
+    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} />,
+  );
+  expect(navigationBlocked()).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).first());
+  await expect.element(screen.getByRole("textbox", { name: "New wording" })).toBeVisible();
+  expect(navigationBlocked()).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("notes reading alike but for spacing are held back, since a request names a note by its words", async () => {

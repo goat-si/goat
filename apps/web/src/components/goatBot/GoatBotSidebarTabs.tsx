@@ -1,23 +1,40 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { BotId, BotProfile, EnvironmentId } from "@goat/contracts";
-import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import {
+  botManageFailure,
+  dismissCreatedBot,
+  dismissNewBot,
+  forgetNewBotIntentsOf,
+  retryNewBot,
+  settleListedNewBots,
+  startNewBot,
+  type CreateNewBot,
+  type OpenIfStillHere,
+} from "@goat/client-runtime/goatBot";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { BotProfile, EnvironmentId } from "@goat/contracts";
+import { useRouter } from "@tanstack/react-router";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { PlusIcon } from "~/components/solar";
 import { selectGlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";
+import { randomUUID } from "~/lib/utils";
 import { channelEnvironment } from "~/state/channels";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { SidebarGroup } from "../ui/sidebar";
+import { SidebarGroup, useSidebar, useSidebarVisibility } from "../ui/sidebar";
 import { Tabs, TabsList, TabsTab } from "../ui/tabs";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotNeedsYou } from "./GoatBotNeedsYou";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
 import { GoatBotChildRows } from "./GoatBotChildRows";
 import { GoatBotMemberRoster } from "./GoatBotMemberRows";
-import { GoatBotNewBotDialog } from "./GoatBotNewBotDialog";
+import { GoatBotNewBotStatus } from "./GoatBotNewBotStatus";
+import { openNewBotChat } from "./goatBotNewBotOpen";
+import { navigationBlocked } from "~/lib/navigationHolds";
 import { useBotRoster } from "./useBotRoster";
 import { useGoatBotHome } from "./useGoatBotHome";
 import { useGoatBotEnabled } from "./useGoatBotSession";
+import { useNewBotSlot } from "./useNewBotSlot";
 
 export function useBotSidebarSelected() {
   const { enabled } = useGoatBotEnabled();
@@ -30,8 +47,18 @@ export function GoatBotSidebarTabs() {
   const { enabled } = useGoatBotEnabled();
   const mode = useGlobalAgentStore(selectGlobalAgentMode);
   const setMode = useGlobalAgentStore((state) => state.setMode);
-  const { bots, roster, groups, rows, environmentId, refresh, slackEnabled, supportsMembers } =
-    useBotRoster();
+  const {
+    bots,
+    botsError,
+    retryBots,
+    roster,
+    groups,
+    rows,
+    environmentId,
+    refresh,
+    slackEnabled,
+    supportsMembers,
+  } = useBotRoster();
   const mainName = roster[0]?.profile?.name ?? "GOAT Bot";
   if (!enabled) return null;
   return (
@@ -65,7 +92,12 @@ export function GoatBotSidebarTabs() {
           {environmentId && supportsMembers ? (
             <>
               <GoatBotMemberRoster environmentId={environmentId} groups={groups} />
-              <NewBotButton environmentId={environmentId} mainName={mainName} bots={bots ?? []} />
+              <NewBotButton
+                environmentId={environmentId}
+                bots={bots}
+                botsError={botsError}
+                retryBots={retryBots}
+              />
             </>
           ) : (
             <NewBotComingSoon />
@@ -78,72 +110,99 @@ export function GoatBotSidebarTabs() {
 
 function NewBotButton({
   environmentId,
-  mainName,
   bots,
+  botsError,
+  retryBots,
 }: {
   environmentId: EnvironmentId;
-  mainName: string;
-  /** The roster's last read; a new bot's row waits until this list holds it. */
-  bots: ReadonlyArray<BotProfile>;
+  /** The roster's last good read, deleted bots included; a created bot's row waits for it. */
+  bots: ReadonlyArray<BotProfile> | undefined;
+  botsError: string | null;
+  retryBots: () => void;
 }) {
   const canCreate = useAtomValue(channelEnvironment.createBot.permissionAtom(environmentId));
-  const [open, setOpen] = useState(false);
-  // The new bot's row shows at once, from the name typed, and stays until the roster lists the
-  // bot the server returned; then the roster's own row replaces it. A failed create clears it.
-  const [creating, setCreating] = useState<{
-    readonly name: string;
-    readonly botId: BotId | null;
-  } | null>(null);
-  const navigate = useNavigate();
-  // A row without an id is still being created; one the roster lists has given way to its row.
-  const listed =
-    creating !== null &&
-    creating.botId !== null &&
-    bots.some((bot) => bot.botId === creating.botId);
-  const pendingName = creating === null || listed ? null : creating.name;
+  const send = useAtomCommand(channelEnvironment.createBot, { reportFailure: false });
+  const { operation, created } = useNewBotSlot(environmentId);
+  const visible = useSidebarVisibility();
+  const { setOpenMobile } = useSidebar();
+  const router = useRouter();
+  // This roster as it is now: mounted, showing, and its environment. A create's answer reads it
+  // then; the open belongs to the roster that was clicked.
+  const mount = useRef({ mounted: true, visible, environmentId });
+  // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this roster's committed state.
+  useLayoutEffect(() => {
+    mount.current = { mounted: true, visible, environmentId };
+  }, [visible, environmentId]);
+  // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Threads tab, the closed narrow sheet) opens nothing when its create answers.
+  useEffect(() => {
+    const owner = mount;
+    return () => {
+      owner.current = { ...owner.current, mounted: false };
+      forgetNewBotIntentsOf(owner);
+    };
+  }, []);
+  const create: CreateNewBot = async (name, clientRequestId) => {
+    const result = await send({
+      environmentId,
+      input: { clientRequestId, name, avatar: null, purpose: "", defaultModelSelection: null },
+    });
+    return result._tag === "Success"
+      ? result.value.bot
+      : botManageFailure(squashAtomCommandFailure(result));
+  };
+  // The chat opens only if, when the create answers, this roster is still mounted and showing the
+  // environment the create went to, the page is the one clicked from, and no bot menu and nothing
+  // modal is open. The narrow sheet closes only after that check.
+  const openIfStillHere = (): OpenIfStillHere => {
+    const clickedAt = router.state.location.href;
+    return (bot, sentTo) => {
+      const now = mount.current;
+      if (!now.mounted || !now.visible || now.environmentId !== sentTo) return;
+      if (router.state.location.href !== clickedAt || navigationBlocked()) return;
+      setOpenMobile(false);
+      openNewBotChat(router, bot);
+    };
+  };
+  const listedIds = new Set((bots ?? []).map((bot) => bot.botId));
+  const settle = () => settleListedNewBots(environmentId, listedIds);
   return (
     <SidebarGroup>
-      {pendingName === null ? null : (
-        <div
-          role="status"
-          className="mb-1 flex items-center gap-2 rounded-lg px-2 py-2 text-sm text-sidebar-muted-foreground"
-        >
-          <span
-            aria-hidden
-            className="flex size-8 shrink-0 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar text-goat-avatar-foreground"
-          >
-            {pendingName.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate text-sidebar-foreground">{pendingName}</span>
-            <span className="text-xs">Creating…</span>
-          </span>
+      {botsError !== null ? (
+        <div className="mb-1 flex items-center gap-2 px-2 py-1">
+          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive-foreground">
+            Couldn't load bots: {botsError}
+          </p>
+          <Button size="xs" variant="outline" aria-label="Retry loading bots" onClick={retryBots}>
+            Retry
+          </Button>
         </div>
-      )}
+      ) : null}
+      <GoatBotNewBotStatus
+        operation={operation}
+        created={created.filter((bot) => !listedIds.has(bot.botId))}
+        onRetry={() => {
+          settle();
+          retryNewBot(environmentId, create, openIfStillHere(), mount);
+        }}
+        onDismiss={() => dismissNewBot(environmentId)}
+        onDismissCreated={(bot) => dismissCreatedBot(environmentId, bot.botId)}
+      />
       <Button
         variant="outline"
         size="sm"
         className="w-full"
-        disabled={!canCreate}
-        onClick={() => setOpen(true)}
+        disabled={!canCreate || bots === undefined}
+        // While a create runs or waits to be retried, New bot stays focusable and does nothing.
+        aria-disabled={operation !== null || undefined}
+        onClick={() => {
+          if (bots === undefined || operation !== null) return;
+          settle();
+          startNewBot(environmentId, bots, create, openIfStillHere(), mount, randomUUID);
+        }}
       >
         <PlusIcon />
         New bot
       </Button>
-      {open ? (
-        <GoatBotNewBotDialog
-          environmentId={environmentId}
-          canSubmit={canCreate}
-          mainName={mainName}
-          onClose={() => setOpen(false)}
-          onPending={(name) => setCreating(name === null ? null : { name, botId: null })}
-          onCreated={(bot) => {
-            // The returned id retires the row as soon as the roster reads it, and no later.
-            setCreating({ name: bot.name, botId: bot.botId });
-            void navigate({ to: "/bot", search: { bot: bot.botId } });
-          }}
-        />
-      ) : null}
     </SidebarGroup>
   );
 }

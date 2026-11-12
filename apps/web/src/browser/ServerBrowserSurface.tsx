@@ -39,6 +39,7 @@ import { CommandBlock } from "~/components/CommandBlock";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
+import { BrowserPagePrompt } from "./BrowserPagePrompt";
 import { cn } from "~/lib/utils";
 import { usePreviewTabAgentDriven } from "~/previewStateStore";
 import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
@@ -928,11 +929,7 @@ export function ServerBrowserSurface(props: {
           }}
         />
         {fileChooser && control?.controller === "you" ? (
-          <div
-            className="absolute inset-x-2 top-2 z-10 flex flex-col gap-2 rounded-lg border border-border bg-background p-3 shadow-lg"
-            role="dialog"
-            aria-label="Choose files for the page"
-          >
+          <BrowserPagePrompt label="Choose files for the page" answering>
             <p className="text-sm">
               The page asks for {fileChooser.multiple ? "files" : "a file"}.
             </p>
@@ -956,14 +953,10 @@ export function ServerBrowserSurface(props: {
                 Choose {fileChooser.multiple ? "files" : "file"}
               </Button>
             </div>
-          </div>
+          </BrowserPagePrompt>
         ) : null}
         {control?.dialog ? (
-          <div
-            className="absolute inset-x-2 top-2 z-10 flex flex-col gap-2 rounded-lg border border-border bg-background p-3 shadow-lg"
-            role="dialog"
-            aria-label="Browser dialog"
-          >
+          <BrowserPagePrompt label="Browser dialog" answering={control.controller === "you"}>
             <p className="break-words text-sm">{control.dialog.message}</p>
             {control.controller === "you" ? (
               <>
@@ -999,7 +992,7 @@ export function ServerBrowserSurface(props: {
             ) : (
               <p className="text-xs text-muted-foreground">Take control to respond.</p>
             )}
-          </div>
+          </BrowserPagePrompt>
         ) : null}
       </div>
       {visible && hostSetup ? (

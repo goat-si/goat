@@ -9,6 +9,7 @@ import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 const NO_RETRY = () => {};
 // Focus moves to Back when the peek opens, as the row that opened it is gone.
@@ -48,6 +49,7 @@ export function GoatBotWorkPeek({
         onBack();
       }}
     >
+      <HoldsNavigation />
       <div className="flex min-w-0 flex-col items-start px-3 pt-14 pb-2">
         <Button
           ref={focusElement}

@@ -4,6 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 import { render } from "../../../test/render";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 const question: Extract<GoatBotRow, { kind: "bot" }> = {
   kind: "bot",
@@ -37,6 +38,19 @@ it("sends a lettered choice, or what the person types as something else, to the 
   await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Both{Enter}");
   expect(onPick).toHaveBeenLastCalledWith("Both", "task-1", "question-1");
   await expect.element(screen.getByRole("textbox", { name: "Something else" })).toHaveValue("");
+});
+
+it("an answer being typed holds back a New bot open until it is sent", async () => {
+  await using screen = await render(
+    <GoatBotQuestionCard row={question} body={question.text} onPick={() => {}} />,
+    { router: false }, // No links inside the card.
+  );
+  const field = screen.getByRole("textbox", { name: "Something else" });
+  await userEvent.type(field, "Both");
+  expect(navigationBlocked()).toBe(true);
+  await userEvent.type(field, "{Enter}");
+  await expect.element(field).toHaveValue("");
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("keeps only the picked row once the question is answered", async () => {

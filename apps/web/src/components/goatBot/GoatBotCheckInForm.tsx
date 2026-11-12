@@ -21,6 +21,7 @@ import { Label } from "../ui/label";
 import { Toggle } from "../ui/toggle";
 import { ToggleGroup } from "../ui/toggle-group";
 import { useGoatBotName } from "./goatBotMemberContext";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
@@ -74,6 +75,7 @@ export function GoatBotCheckInForm(props: {
         void save();
       }}
     >
+      <HoldsNavigation />
       <p className="text-xs text-muted-foreground">
         {botName} looks over your open work and messages you only when something needs you.
       </p>

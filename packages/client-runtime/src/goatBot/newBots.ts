@@ -2,7 +2,7 @@ import type { BotProfile, EnvironmentId } from "@goat/contracts";
 
 import { generatedBotName } from "./newBotNames.ts";
 
-// One-tap New bot. A create lives here, above the roster, so it outlives the list's mount: one
+// New bot in one press. A create lives here, above the roster, so it outlives the list's mount: one
 // per environment while it runs or waits to be retried. A created bot frees the slot at once and
 // keeps a row until the list holds it or the person dismisses it.
 
@@ -19,8 +19,8 @@ export type NewBotOperation =
 export type CreateNewBot = (name: string, clientRequestId: string) => Promise<BotProfile | string>;
 
 /**
- * Opens the created bot's chat if the person is still where they tapped; it decides from what is
- * true when the server answers. It belongs to the roster mount that was tapped.
+ * Opens the created bot's chat if the person is still where they started it; it decides from what
+ * is true when the server answers. It belongs to the surface that started the create.
  */
 export type OpenIfStillHere = (bot: BotProfile, sentTo: EnvironmentId) => void;
 
@@ -87,7 +87,7 @@ async function run(environmentId: EnvironmentId, create: CreateNewBot) {
 }
 
 /**
- * One tap: claims the environment's slot at once, so a second tap while one create runs does
+ * One press: claims the environment's slot at once, so a second press while one create runs does
  * nothing, and sends the create. False when one is under way or waits to be retried.
  */
 export function startNewBot(
@@ -132,7 +132,7 @@ export function retryNewBot(
   void run(environmentId, create);
 }
 
-/** Ends a failed create; a later tap is a new request. */
+/** Ends a failed create; a later press is a new request. */
 export function dismissNewBot(environmentId: EnvironmentId): void {
   const slot = slotOf(environmentId);
   if (slot.operation?.phase !== "failed") return;
@@ -140,7 +140,7 @@ export function dismissNewBot(environmentId: EnvironmentId): void {
   set(environmentId, { ...slot, operation: null });
 }
 
-/** The roster that tapped has gone: its create answers into the list, opening nothing. */
+/** The surface that started the create has gone: its create answers into the list, opening nothing. */
 export function forgetNewBotIntentsOf(owner: object): void {
   for (const [environmentId, intent] of intents)
     if (intent.owner === owner) intents.delete(environmentId);
@@ -150,6 +150,16 @@ export function forgetNewBotIntentsOf(owner: object): void {
 export function dismissCreatedBot(environmentId: EnvironmentId, botId: string): void {
   const slot = slotOf(environmentId);
   set(environmentId, { ...slot, created: slot.created.filter((bot) => bot.botId !== botId) });
+}
+
+/** An edit answered for a created bot the list may not hold yet: its row and chat show the edit. */
+export function replaceCreatedBot(environmentId: EnvironmentId, bot: BotProfile): void {
+  const slot = slotOf(environmentId);
+  if (!slot.created.some((created) => created.botId === bot.botId)) return;
+  set(environmentId, {
+    ...slot,
+    created: slot.created.map((created) => (created.botId === bot.botId ? bot : created)),
+  });
 }
 
 /** The roster's list now holds these bots, in any group: their own rows take over. */

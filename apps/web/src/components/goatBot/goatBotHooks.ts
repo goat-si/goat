@@ -6,17 +6,29 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { type GlobalAgentLegacyRoute, legacyGlobalAgentRoute } from "~/globalAgentRoute";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadShell } from "~/state/entities";
-import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import {
+  useEnvironments,
+  usePrimaryEnvironmentId,
+  type EnvironmentPresentation,
+} from "~/state/environments";
 
 import {
   environmentSupportsChannelLedger,
   type GoatBotEnvironmentInput,
 } from "@goat/client-runtime/goatBot";
+import type { EnvironmentId } from "@goat/contracts";
 
 /** Every machine as GOAT Bot sees it: connected, offering channels, primary. */
 export function useGoatBotEnvironments(): ReadonlyArray<GoatBotEnvironmentInput> {
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  return goatBotEnvironmentInputs(environments, usePrimaryEnvironmentId());
+}
+
+/** The mapping behind useGoatBotEnvironments, shared with readGoatBotEnvironmentId. */
+export function goatBotEnvironmentInputs(
+  environments: ReadonlyArray<EnvironmentPresentation>,
+  primaryEnvironmentId: EnvironmentId | null,
+): ReadonlyArray<GoatBotEnvironmentInput> {
   return environments.map((entry) => ({
     environmentId: entry.environmentId,
     connected: entry.connection.phase === "connected",
