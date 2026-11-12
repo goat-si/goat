@@ -1660,7 +1660,10 @@ export const layer: Layer.Layer<
         });
         const providerEventFiber = yield* eventSink
           .consumeProviderEvents(
-            eventSubscription.events.pipe(Stream.merge(idleWake.events, { haltStrategy: "left" })),
+            eventSubscription.events.pipe(
+              Stream.tap(() => Effect.sync(pendingSnapshotHold.providerEventPulled)),
+              Stream.merge(idleWake.events, { haltStrategy: "left" }),
+            ),
             (event) =>
               Effect.gen(function* () {
                 if (event.type !== "idle_flush") {
