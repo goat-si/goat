@@ -255,8 +255,10 @@ most one row write a minute while the node has traffic.
 read your own node's row in Data Studio after it carried a session.
 
 **Check the numbers against the VM.** Relayed bytes are received once and sent once, so a day's growth of the
-`relay` line's `toNode` plus `fromNode` should be within 10% of the interface's `tx_bytes` growth over the same day
-(TCP, TLS and WebSocket overhead and the VM's own traffic make up the rest). Right after a `relay` line, read
+`relay` line's `toNode` plus `fromNode` tracks the interface's `tx_bytes` growth over the same day; TCP, TLS and
+WebSocket overhead and the VM's own traffic make up the rest. On a relay carrying bulk sessions (model traffic, file
+copies) the gap is expected within about 10%; on a quiet relay, small messages, keepalives and the VM's other traffic
+can make it larger, so read a wider gap there as overhead before suspecting the counts. Right after a `relay` line, read
 `/sys/class/net/<interface>/statistics/tx_bytes` (the interface holding the private address, `ip -br addr`) and note
 the line; repeat a day later and compare the differences. The relay must not restart in between
 (`systemctl show pen-relay -p ExecMainStartTimestamp`). `rx_bytes` grows by the same amount plus scanners and refused
