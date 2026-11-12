@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
@@ -224,7 +225,21 @@ const make = Effect.gen(function* () {
   let checkSequence = 0;
   // Per repo scope: when each worktree's check last started (least recent goes first), and the
   // worktrees decided since remaining last reached 0 (a repeat skips counting them, so it ends).
-  const scopes = new Map<string, { lastStart: Map<string, number>; decided: Set<string> }>();
+  const scopes = new Map<
+    string,
+    { lastStart: Map<string, number>; decided: Set<string>; sweeping: Semaphore.Semaphore }
+  >();
+  const scopeOf = (key: string) => {
+    const existing = scopes.get(key);
+    if (existing !== undefined) return existing;
+    const created = {
+      lastStart: new Map<string, number>(),
+      decided: new Set<string>(),
+      sweeping: Semaphore.makeUnsafe(1),
+    };
+    scopes.set(key, created);
+    return created;
+  };
 
   const real = (target: string) =>
     fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
@@ -825,15 +840,15 @@ const make = Effect.gen(function* () {
     return null;
   };
 
-  const cleanup: WorktreeInventoryService["Service"]["cleanup"] = Effect.fn(
-    "WorktreeInventory.cleanup",
-  )(function* (input) {
+  // Untraced: it runs inside cleanup's span.
+  const sweep = Effect.fnUntraced(function* (
+    input: Parameters<WorktreeInventoryService["Service"]["cleanup"]>[0],
+    deadline: number,
+    scope: ReturnType<typeof scopeOf>,
+    waited: boolean,
+  ) {
     const dryRun = input.dryRun !== false;
-    const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
     const facts = yield* scan(input.repo);
-    const scopeKey = input.repo ?? "";
-    const scope = scopes.get(scopeKey) ?? { lastStart: new Map(), decided: new Set<string>() };
-    scopes.set(scopeKey, scope);
     if (!dryRun)
       facts.sort((a, b) => {
         const order =
@@ -843,14 +858,15 @@ const make = Effect.gen(function* () {
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
     let remaining = 0;
-    let checked = false;
+    let checked = waited;
     // A worktree counts as decided only once its check finished, so an interrupted call leaves it.
     let deciding: string | null = null;
     for (const fact of facts) {
       if (deciding !== null) scope.decided.add(deciding);
       deciding = null;
       if (fact.entry.main) continue;
-      // Every removing call checks at least one worktree, so a slow scan cannot stall repeats.
+      // A call that did not wait checks at least one worktree, so a slow scan cannot stall repeats;
+      // one that waited follows a sweep that made progress.
       if (!dryRun && checked && (yield* Clock.currentTimeMillis) >= deadline) {
         if (!scope.decided.has(fact.entry.path)) remaining++;
         continue;
@@ -890,6 +906,24 @@ const make = Effect.gen(function* () {
     if (deciding !== null) scope.decided.add(deciding);
     if (!dryRun && remaining === 0) scope.decided.clear();
     return { dryRun, removed, kept, remaining };
+  });
+
+  const cleanup: WorktreeInventoryService["Service"]["cleanup"] = Effect.fn(
+    "WorktreeInventory.cleanup",
+  )(function* (input) {
+    const dryRun = input.dryRun !== false;
+    const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
+    const scope = scopeOf(input.repo ?? "");
+    if (dryRun) return yield* sweep(input, deadline, scope, false);
+    // Removing sweeps of a scope share its round, so they take turns; the wait counts against the budget.
+    const now = yield* Semaphore.withPermitsIfAvailable(
+      scope.sweeping,
+      1,
+      sweep(input, deadline, scope, false),
+    );
+    return Option.isSome(now)
+      ? now.value
+      : yield* scope.sweeping.withPermits(1)(sweep(input, deadline, scope, true));
   });
 
   const facts: WorktreeInventoryService["Service"]["facts"] = scan(undefined).pipe(

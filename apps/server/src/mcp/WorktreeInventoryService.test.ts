@@ -456,6 +456,33 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("overlapping removing sweeps of one scope run one at a time within the budget", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const start = yield* Clock.currentTimeMillis;
+      const sweeps = yield* Effect.all(
+        [service.cleanup({ dryRun: false }), service.cleanup({ dryRun: false })],
+        { concurrency: "unbounded" },
+      );
+      // The second waits for the first, then is past its own budget, so it checks nothing and
+      // counts both as remaining in the round the first one closed.
+      expect(sweeps.map((sweep) => [sweep.kept.length, sweep.remaining]).toSorted()).toEqual([
+        [0, 2],
+        [2, 0],
+      ]);
+      expect((yield* Clock.currentTimeMillis) - start).toBe(80_000);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("a worktree whose check was interrupted still counts in remaining", () =>
     Effect.gen(function* () {
       const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
