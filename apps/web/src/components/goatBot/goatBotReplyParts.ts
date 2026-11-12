@@ -25,11 +25,15 @@ const parser = unified().use(remarkParse).use(remarkGfm).freeze();
 
 const MAX_CACHED_REPLIES = 64;
 
-// Streaming re-renders every row; a row whose text did not change keeps its split.
+// Every render of a chat splits each reply it draws; a reply whose text did not change keeps its
+// split. The cache holds at least the replies one chat draws, or drawing it would evict them all.
 const splits = new Map<string, GoatBotReplySplit>();
 
-/** Splits an answer at its top-level tables, so a client can draw each one on its own card. */
-export function goatBotReplySplit(text: string): GoatBotReplySplit {
+/**
+ * Splits an answer at its top-level tables, so a client can draw each one on its own card.
+ * `drawn` is how many replies the caller draws per render, so each stays cached between them.
+ */
+export function goatBotReplySplit(text: string, drawn = 0): GoatBotReplySplit {
   const cached = splits.get(text);
   if (cached !== undefined) {
     splits.delete(text);
@@ -38,8 +42,9 @@ export function goatBotReplySplit(text: string): GoatBotReplySplit {
   }
   const split = splitAtTables(text);
   splits.set(text, split);
+  const limit = Math.max(MAX_CACHED_REPLIES, drawn);
   for (const oldest of splits.keys()) {
-    if (splits.size <= MAX_CACHED_REPLIES) break;
+    if (splits.size <= limit) break;
     splits.delete(oldest);
   }
   return split;
