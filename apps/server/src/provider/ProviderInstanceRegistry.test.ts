@@ -760,7 +760,11 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
+  const redeemClaudeReset = (claim: {
+    result: string;
+    usageFailsAfterClaim: boolean;
+    failOnce?: boolean;
+  }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -804,6 +808,15 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
             enabled: true,
             environment: [
               { name: "GOAT_CLAUDE_RESET_MARKER", value: marker, sensitive: false },
+              ...(claim.failOnce
+                ? [
+                    {
+                      name: "GOAT_CLAUDE_USAGE_FAIL_ONCE",
+                      value: `${marker}.failed`,
+                      sensitive: false,
+                    },
+                  ]
+                : []),
               ...(claim.usageFailsAfterClaim
                 ? [{ name: "GOAT_CLAUDE_USAGE_FAILS_AFTER_CLAIM", value: "1", sensitive: false }]
                 : []),
@@ -834,6 +847,18 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       const { outcome, after } = yield* redeemClaudeReset({
         result: "reset",
         usageFailsAfterClaim: false,
+      });
+      expect(outcome).toMatchObject({ _tag: "Success", success: "reset" });
+      expect(after.usageLimits?.windows[0]?.usedPercent).toBe(0);
+    }),
+  );
+
+  it.live.skipIf(windowsHost)("refreshes Claude limits after the first post-reset read fails", () =>
+    Effect.gen(function* () {
+      const { outcome, after } = yield* redeemClaudeReset({
+        result: "reset",
+        usageFailsAfterClaim: false,
+        failOnce: true,
       });
       expect(outcome).toMatchObject({ _tag: "Success", success: "reset" });
       expect(after.usageLimits?.windows[0]?.usedPercent).toBe(0);

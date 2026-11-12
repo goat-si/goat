@@ -34,6 +34,26 @@ lines.on("line", (line) => {
   if (message.request?.subtype === "get_usage") {
     const marker = process.env.GOAT_CLAUDE_RESET_MARKER;
     const usageFailsUntil = process.env.GOAT_CLAUDE_USAGE_FAILS_UNTIL;
+    const failOnceMarker = process.env.GOAT_CLAUDE_USAGE_FAIL_ONCE;
+    if (
+      marker &&
+      NodeFS.existsSync(marker) &&
+      failOnceMarker &&
+      !NodeFS.existsSync(failOnceMarker)
+    ) {
+      NodeFS.writeFileSync(failOnceMarker, "failed");
+      process.stdout.write(
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            subtype: "error",
+            request_id: message.request_id,
+            error: "transient usage failure",
+          },
+        }) + "\n",
+      );
+      return;
+    }
     if (
       (usageFailsUntil && !NodeFS.existsSync(usageFailsUntil)) ||
       (process.env.GOAT_CLAUDE_USAGE_FAILS_AFTER_CLAIM && marker && NodeFS.existsSync(marker))
