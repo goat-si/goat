@@ -151,7 +151,8 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 					// The peer's stream stopped short of its FIN: the client reads a reset, not a clean end.
 					tc.SetLinger(0)
 				}
-				if !wasRevoked.Load() && !clientGone(err) {
+				// A forward that is stopping ends its connections itself; that is no error.
+				if !wasRevoked.Load() && !clientGone(err) && ctx.Err() == nil {
 					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
 				}
 			}

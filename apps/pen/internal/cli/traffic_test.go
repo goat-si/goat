@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -462,4 +463,7 @@ func TestStoppingForwardReportsItsOpenConnections(t *testing.T) {
 		t.Fatalf("forward exit %d", code)
 	}
 	wantTraffic(t, "b's count for a right after pen forward stopped", trafficOf(t, f.b, "a"), 0, sent)
+	if strings.Contains(f.stderr.String(), "pen forward:") {
+		t.Fatalf("stopping pen forward with an open connection printed an error: %q", f.stderr.String())
+	}
 }

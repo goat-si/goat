@@ -114,3 +114,16 @@ func TestSettingTheClockBackNeitherHidesNorDropsRecentBytes(t *testing.T) {
 		t.Fatalf("after the clock went back one bucket: in %d out %d, want 3 and 4", in, out)
 	}
 }
+
+// The guarantee is in whole buckets: a clock set back by just under 24 hours minus one bucket keeps a count made
+// just after a bucket began.
+func TestAClockSetBackJustUnder23h45KeepsTheCount(t *testing.T) {
+	c := &clock{t: t0.Add(time.Nanosecond)}
+	w := NewWindow(c.now)
+	w.Add("m", "r", 9, 9)
+	c.t = c.t.Add(-(24*time.Hour - Span - time.Nanosecond))
+	w.Add("m", "r", 1, 1)
+	if in, out := totalOf(w, "m", "r"); in != 10 || out != 10 {
+		t.Fatalf("in %d out %d after the clock went back just under 23 h 45 min, want 10 and 10", in, out)
+	}
+}
