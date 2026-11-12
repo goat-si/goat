@@ -22,6 +22,44 @@ type fakeClock struct {
 	t  time.Time
 }
 
+// Shutting the relay down writes the totals once more and stops the summary timer for good: a
+// stopped relay holds no timer, and no later session arms one.
+func TestCloseWritesTheTotalsAndStopsTheSummaryTimer(t *testing.T) {
+	lv, _, log := trafficLive(t)
+	id, _ := ident.Generate(rand.Reader)
+	n := lv.uplink(id, true)
+	c, sid := lv.session(t, n)
+	send(t, c, 42)
+	n.nextFrame(t, sid)
+	lv.s.traffic.mu.Lock()
+	armed := lv.s.traffic.timer != nil
+	lv.s.traffic.mu.Unlock()
+	if !armed {
+		t.Fatal("an admitted session did not arm the summary timer")
+	}
+	lv.s.Close()
+	relay := log.lines(t, "relay")
+	if len(relay) != 1 || relay[0]["toNode"] != float64(42) {
+		t.Fatalf("relay lines after Close: %v", relay)
+	}
+	lv.s.traffic.mu.Lock()
+	stillArmed := lv.s.traffic.timer.Stop()
+	lv.s.traffic.mu.Unlock()
+	if stillArmed {
+		t.Fatal("the summary timer was still armed after Close")
+	}
+	// A relay closed before its first session never arms the timer.
+	early := New(DefaultLimits())
+	early.TrafficLog = &lineLog{}
+	early.Close()
+	early.trafficStart()
+	early.traffic.mu.Lock()
+	defer early.traffic.mu.Unlock()
+	if early.traffic.timer != nil {
+		t.Fatal("a session after Close armed the summary timer")
+	}
+}
+
 func (c *fakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
