@@ -76,7 +76,13 @@ describe("login shell PATH note", () => {
     expect(withLoginShellPathNote(message, { env: {}, platform: "darwin" })).toBe(message);
     for (const platform of ["darwin", "linux"] as const) {
       const noted = withLoginShellPathNote(message, { env: pending, platform });
-      expect(noted.startsWith(message + " GOAT looked for it without the PATH")).toBe(true);
+      // Conditional: the server may be on a cached PATH, or hold a copy made before the shell answered.
+      expect(
+        noted.startsWith(
+          message +
+            " GOAT may not have your login shell's current PATH yet, so it may have searched only",
+        ),
+      ).toBe(true);
       expect(noted).toContain("Binary path");
     }
     // Windows desktop sets the same variable, but has no login shell to wait for.

@@ -10,7 +10,7 @@ export const LOGIN_SHELL_RETRY_DELAYS_MS: ReadonlyArray<number> = [30_000, 120_0
 const SHELL_DISCOVERY_PENDING_ENV = "GOAT_DESKTOP_SHELL_DISCOVERY_PENDING";
 
 const LOGIN_SHELL_PATH_UNREAD_NOTE =
-  "GOAT looked for it without the PATH from your login shell, so it searched only the folders it already knew and the standard install folders. If the CLI is installed somewhere else, set its full path as that provider's Binary path under Settings → Providers.";
+  "GOAT may not have your login shell's current PATH yet, so it may have searched only the folders it already knew and the standard install folders. If the CLI is installed somewhere else, set its full path as that provider's Binary path under Settings → Providers.";
 
 // Never trimmed: a folder name may end in a space.
 const withoutTrailingSlash = (entry: string): string => entry.replace(/(?<=.)\/+$/u, "");

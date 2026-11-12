@@ -444,7 +444,7 @@ it.effect("says the login shell PATH is unread when an installed CLI still canno
       { PATH: "/usr/bin:/bin", GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" },
     );
     expect(unread?.message).toContain("cannot find claude on its PATH here.");
-    expect(unread?.message).toContain("GOAT looked for it without the PATH from your login shell");
+    expect(unread?.message).toContain("GOAT may not have your login shell's current PATH yet");
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 

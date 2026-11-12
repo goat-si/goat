@@ -8,6 +8,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
+import { makeApplyDesktopShellEnvironmentSnapshot } from "../resourceTelemetry/DesktopShellEnvironmentReceiver.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 it.effect("reports a missing probe cwd instead of a missing Claude executable", () =>
@@ -74,9 +75,62 @@ it.effect("says the login shell PATH is unread when claude is missing during dis
     assert.equal(unread.installed, false);
     assert.include(
       unread.message ?? "",
-      notFound + " GOAT looked for it without the PATH from your login shell",
+      notFound + " GOAT may not have your login shell's current PATH yet",
     );
     const windows = yield* check({ GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" }, "win32");
     assert.equal(windows.message, notFound);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "keeps the sentence, in conditional words, while a cached login-shell PATH is in use",
+  () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const environment: NodeJS.ProcessEnv = {
+        PATH: "/usr/bin:/bin",
+        GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+      };
+      const applySnapshot = makeApplyDesktopShellEnvironmentSnapshot(environment, "darwin");
+      const snapshot = (discovered: boolean) =>
+        ({
+          version: 1,
+          type: "shellEnvironment",
+          platform: "darwin",
+          discovered,
+          environment: { PATH: "/goat-test-cached-shell/bin:/usr/bin:/bin" },
+        }) as const;
+      const check = Effect.suspend(() =>
+        checkClaudeProviderStatus(
+          decodeClaudeSettings({ enabled: true, binaryPath: "claude" }),
+          undefined,
+          environment,
+        ),
+      ).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+      );
+      const notFound = "Claude Agent CLI (`claude`) was not found on PATH.";
+
+      // At start the desktop sends last session's login-shell PATH from its cache, not yet confirmed.
+      yield* applySnapshot(snapshot(false));
+      assert.equal(environment.PATH, "/goat-test-cached-shell/bin:/usr/bin:/bin");
+      assert.equal(
+        (yield* check).message,
+        notFound +
+          " GOAT may not have your login shell's current PATH yet, so it may have searched only the folders it already knew and the standard install folders. If the CLI is installed somewhere else, set its full path as that provider's Binary path under Settings → Providers.",
+      );
+
+      yield* applySnapshot(snapshot(true));
+      assert.equal((yield* check).message, notFound);
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
