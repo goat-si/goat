@@ -224,7 +224,7 @@ it("after a forced stop, another server answering on the port does not make the 
     res.end(JSON.stringify(descriptor));
   });
   other.listen(port, "127.0.0.1");
-  await NodeEvents.once(other, "listening");
+  await NodeEvents.EventEmitter.once(other, "listening");
   const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
   NodeFS.writeFileSync(runnerFile, `#!${process.execPath}\nsetInterval(() => {}, 1 << 30);\n`, {
     mode: 0o700,
