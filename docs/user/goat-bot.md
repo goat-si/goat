@@ -14,11 +14,11 @@ task as a card in the conversation.
 ## Bots
 
 The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with its
-own conversation and task list. **New bot**, in the Bots list or the command palette, creates the
-bot at once as "New bot" (or "New bot 2", and so on) and opens its chat, where a row above the
-message box asks for its name; **More** there opens its look, purpose and model. If you move on
-before the bot is ready, it waits in the Bots list instead. A bot answers under its own name and
-purpose from its next conversation session.
+own conversation and task list. **New bot** in the Bots list, or in the command palette on web and
+desktop, creates the bot at once as "New bot" (or "New bot 2", and so on) and opens its chat,
+where a row above the message box asks for its name; **More** there opens its look, purpose and
+model. If you move on before the bot is ready, it waits in the Bots list instead. A bot answers
+under its own name and purpose from its next conversation session.
 
 - Edit any bot, including the main one, from its row menu (long press on mobile), **Edit bot** in
   its home (its name at the top of its chat on web and desktop), or **Settings → GOAT Bot →
