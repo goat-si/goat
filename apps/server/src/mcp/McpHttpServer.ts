@@ -72,6 +72,7 @@ import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { connectionOf } from "../auth/connectionContext.ts";
 import { parseBearerToken } from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
@@ -275,8 +276,10 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     request: HttpServerRequest.HttpServerRequest,
   ) {
     const token = parseBearerToken(request) ?? "";
+    // A thread credential is not a stored session; it never resolves on a Pen connection (§6).
+    const onPen = connectionOf(request)?.kind === "pen";
     const invocation =
-      (yield* registry.resolve(token)) ??
+      (onPen ? undefined : yield* registry.resolve(token)) ??
       (Option.isSome(clients) && token.length > 0
         ? yield* clients.value.authenticate(request)
         : undefined);

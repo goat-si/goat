@@ -250,6 +250,7 @@ const clientSession = (
 ): AuthClientSession => ({
   sessionId: AuthSessionId.make(sessionId),
   subject: "person",
+  principalKind: "person",
   scopes: [...scopes],
   method: "browser-session-cookie",
   client: { deviceType: "desktop" },

@@ -105,6 +105,8 @@ export function authenticatedSession(
       : {}),
     ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
     ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
+    principalKind: session.principalKind,
+    ...(session.penBinding === undefined ? {} : { penBinding: session.penBinding }),
   };
 }
 

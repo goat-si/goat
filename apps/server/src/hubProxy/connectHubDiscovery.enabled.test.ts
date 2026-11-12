@@ -57,6 +57,7 @@ import { requestHubProxyJson } from "../../../../packages/client-runtime/src/con
 import { layerRemoteHttpClient } from "../../../../packages/client-runtime/src/rpc/http.ts";
 import type { RpcSession } from "../../../../packages/client-runtime/src/rpc/session.ts";
 import type { WsRpcProtocolClient } from "../../../../packages/client-runtime/src/rpc/protocol.ts";
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 
 vi.mock("@goat/shared/goatConnect", async (original) => ({
   ...(await original<typeof import("@goat/shared/goatConnect")>()),
@@ -362,7 +363,9 @@ it.effect.each(["managed", "learned direct"] as const)(
           expect([...tokens.keys()]).toEqual([hubId]);
           const token = tokens.get(hubId);
           if (token === undefined) return yield* Effect.die("Expected a cached hub credential");
-          expect((yield* hub.sessionStore.verify(token.accessToken)).scopes).toContain("hub:proxy");
+          expect(
+            (yield* hub.sessionStore.verify(token.accessToken, MAIN_LISTENER)).scopes,
+          ).toContain("hub:proxy");
         }).pipe(Effect.provide(Registry.layer.pipe(Layer.provideMerge(registryDependencies))));
       }).pipe(Effect.provide(Remote.layer.pipe(Layer.provideMerge(clientServices))));
     }).pipe(Effect.scoped, Effect.provide(authLayer)),

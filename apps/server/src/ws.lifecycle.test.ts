@@ -347,6 +347,7 @@ it.effect.each([
               subject: "lifecycle-test",
               method: "browser-session-cookie",
               scopes: [AuthOrchestrationReadScope],
+              principalKind: "person",
             },
             {
               hasHost: Effect.succeed(false),

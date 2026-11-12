@@ -149,6 +149,7 @@ export const withRequests = <A, E, R>(
     const person: AuthClientSession = {
       sessionId,
       subject: "desktop-bootstrap",
+      principalKind: "person",
       method: "browser-session-cookie",
       scopes: ["orchestration:operate", "settings:write"],
       client: { label: "Test person", deviceType: "desktop" },

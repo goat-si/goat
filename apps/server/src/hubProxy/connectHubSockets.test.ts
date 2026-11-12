@@ -27,6 +27,7 @@ import * as HubRpcSocket from "../auth/HubRpcSocket.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Config from "../config.ts";
 import { authLayer, phoneScopes, serve, startHub } from "./testFixtures.ts";
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 
 const decodeSettings = Schema.decodeEffect(Schema.fromJsonString(ServerSettings));
 
@@ -89,12 +90,13 @@ it.effect.each([
         const grant = yield* hub.auth.createCloudConnectPairingLink({ proofKeyThumbprint });
         const token = yield* hub.auth.exchangeBootstrapCredentialForAccessToken(
           grant.credential,
+          MAIN_LISTENER,
           undefined,
           { deviceType: "mobile" },
           { proofKeyThumbprint },
         );
         return yield* hub.sessionStore
-          .verify(token.access_token)
+          .verify(token.access_token, MAIN_LISTENER)
           .pipe(Effect.map((session) => ({ ...session, token: token.access_token })));
       });
       const proxySession = yield* mint;

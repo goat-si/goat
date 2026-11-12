@@ -22,6 +22,13 @@ export const make = Effect.fn("SettingsSessionPermit.make")(function* (
     providerInstanceMutation?: ProviderInstanceMutation,
     agentTerminalBinding?: AgentTerminalBinding,
   ) {
+    // Only PenRuntime.replaceTrustRoot writes the trust root (mesh link design §7).
+    if (Object.hasOwn(patch, "pen"))
+      return yield* new ServerSettingsError({
+        settingsPath: "pen",
+        operation: "write-file",
+        cause: "The Pen trust root changes only through its confirmation.",
+      });
     if (Option.isNone(access))
       return yield* new ServerSettingsError({
         settingsPath: "hub",

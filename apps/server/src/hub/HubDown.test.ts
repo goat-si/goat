@@ -31,6 +31,7 @@ const owner: Inbox.DecisionCaller = {
   sessionId: "owner",
   environmentId: EnvironmentId.make("test"),
   scopes: ["orchestration:operate", "settings:write"],
+  resolver: { kind: "person" },
 };
 
 const provider = (instanceId: ProviderInstanceId, effectiveBaseUrl: string) =>

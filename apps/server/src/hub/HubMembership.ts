@@ -21,6 +21,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
+import { PERSON } from "../handoffs/HumanStepAuthority.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import { makeHubConsent } from "./HubConsent.ts";
@@ -181,6 +182,7 @@ const make = Effect.gen(function* () {
       environmentId: scope.environmentId,
       sessionId: person.sessionId,
       scopes: person.scopes,
+      resolver: PERSON,
     },
     connection: childConnectionAdmission(scope.environmentId, Effect.succeed(true)),
   });

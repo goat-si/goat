@@ -16,6 +16,7 @@ import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "./config.ts";
 import * as Server from "./server.ts";
+import { layerMainHttpServer } from "./pen/PenServerLayers.ts";
 import { HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 
@@ -73,6 +74,7 @@ it.effect(
       const services = yield* Layer.buildWithScope(
         HttpRouter.serve(Layer.mergeAll(rpcRoute, rawRoute), { disableListenLog: true }).pipe(
           Layer.provideMerge(Server.layerHttpServer),
+          Layer.provide(layerMainHttpServer),
           Layer.provide(RpcSerialization.layerJson),
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-heartbeat-" })),
           Layer.provide(NodeServices.layer),

@@ -10,7 +10,6 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import {
-  PERSON,
   mcpResolver,
   type HumanStep,
   type HumanStepResolver,
@@ -27,6 +26,8 @@ export type DecisionCaller =
       readonly environmentId: EnvironmentId;
       readonly sessionId: string;
       readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+      /** From the session's stored principal kind; a client is not assumed to be a person. */
+      readonly resolver: HumanStepResolver;
       readonly reauthorize?: McpInvocationScope["reauthorize"];
     };
 
@@ -54,7 +55,7 @@ export const scopeOf = (caller: DecisionCaller): McpInvocationScope =>
 export const isOwner = (caller: DecisionCaller) =>
   caller.kind === "client" && caller.scopes.includes(AuthSettingsWriteScope);
 export const resolverOf = (caller: DecisionCaller): HumanStepResolver =>
-  caller.kind === "client" ? PERSON : mcpResolver(caller.scope);
+  caller.kind === "client" ? caller.resolver : mcpResolver(caller.scope);
 export const stepOf = (item: DecisionItem): HumanStep =>
   item.pending?.approval === undefined ? "person_only" : "runtime_approval";
 export const writeAccess = (caller: DecisionCaller) =>

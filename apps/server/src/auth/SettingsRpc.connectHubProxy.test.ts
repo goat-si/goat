@@ -27,6 +27,7 @@ import * as Secrets from "./ServerSecretStore.ts";
 import * as Sessions from "./SessionStore.ts";
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 import * as SettingsRpc from "./SettingsRpc.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 
 const layer = Routes.layer.pipe(
   Layer.provideMerge(Layer.mergeAll(Auth.layer, Settings.layer)),
@@ -68,7 +69,7 @@ it.effect.each([false, true])(
       yield* settings.start;
       yield* settings.updateSettings({ hub: { enabled: true, connectDevicesHubProxy: true } });
       const issued = yield* auth.issueSession({ scopes: AuthStandardClientScopes });
-      const update = yield* SettingsRpc.make(issued);
+      const update = yield* SettingsRpc.make({ ...issued, principalKind: "person" });
       const client = yield* RpcTest.makeClient(group).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -143,7 +144,7 @@ it.effect(
           connectAccessGeneration: policy.generation,
         }),
       );
-      const caller = yield* sessions.verify(issued.token);
+      const caller = yield* sessions.verify(issued.token, MAIN_LISTENER);
       const update = yield* SettingsRpc.make(caller);
       const client = yield* RpcTest.makeClient(group).pipe(
         Effect.provide(
@@ -189,7 +190,9 @@ it.effect(
           subject: "cloud-connect",
           scopes: [...AuthStandardClientScopes, AuthHubProxyScope],
         });
-        expect((yield* sessions.verify(issued.token)).connectAccessGeneration).toBe(generation);
+        expect((yield* sessions.verify(issued.token, MAIN_LISTENER)).connectAccessGeneration).toBe(
+          generation,
+        );
         expect(yield* fs.readFileString(config.settingsPath)).toBe(before);
       } finally {
         yield* Deferred.succeed(release, undefined);
@@ -228,18 +231,20 @@ it.effect(
         Effect.forkScoped,
       );
       yield* settings.updateSettings({ hub: { enabled: true, connectDevicesHubProxy: true } });
-      const full = yield* SettingsRpc.make(
-        yield* auth.issueSession({ scopes: AuthStandardClientScopes }),
-      );
+      const full = yield* SettingsRpc.make({
+        ...(yield* auth.issueSession({ scopes: AuthStandardClientScopes })),
+        principalKind: "person",
+      });
       const mixed = yield* full({
         patch: { hub: { enabled: false } },
         providerInstanceMutation: mutation,
       });
       expect(mixed.hub).toMatchObject({ enabled: false, connectDevicesHubProxy: true });
       expect(mixed.providerInstances[instanceId]?.displayName).toBe("Queued provider");
-      const providerOnly = yield* SettingsRpc.make(
-        yield* auth.issueSession({ scopes: ["providers:manage"] }),
-      );
+      const providerOnly = yield* SettingsRpc.make({
+        ...(yield* auth.issueSession({ scopes: ["providers:manage"] })),
+        principalKind: "person",
+      });
       const updated = yield* providerOnly({
         patch: {},
         providerInstanceMutation: {

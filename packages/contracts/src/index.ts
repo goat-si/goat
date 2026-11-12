@@ -133,6 +133,7 @@ export * from "./serverActivity.ts";
 export * from "./repositoryInventory.ts";
 export * from "./repositoryReference.ts";
 export * from "./opencodex.ts";
+export * from "./penSettings.ts";
 export * from "./opencodexChildReady.ts";
 export * from "./hubParity.ts";
 export * from "./hubSettings.ts";

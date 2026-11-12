@@ -33,6 +33,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import type * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import { connectionOf } from "./connectionContext.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
   base64UrlDecodeUtf8,
@@ -423,6 +424,7 @@ const make = Effect.gen(function* () {
       yield* environmentAuth
         .consumeMcpApprovalCode(
           decision.code,
+          connectionOf(input.request),
           decision.access,
           decision.memoryScopes,
           decision.workspaceTerminalScopes,
