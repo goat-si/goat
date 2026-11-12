@@ -92,8 +92,10 @@ const CODEX_CLIENT_NAME = "T3 Code";
 const CODEX_AUTH_PROBE_TIMEOUT_MS = 20_000;
 const CODEX_DISCOVERY_MARGIN_MS = 250;
 // `codex-cli 0.159.0`, `codex-cli 0.160.0-alpha.1` or the npm CLI's bare `0.1.4161006`.
-// Keep a prerelease suffix so compatibility stays unknown for it, as it does for `initialize`.
-const CODEX_CLI_VERSION_PATTERN = /(?:^|\s)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=\s|$)/u;
+// Keep a prerelease suffix so compatibility stays unknown for it, as it does for `initialize`,
+// and a build suffix so an exact pin can tell the builds apart.
+const CODEX_CLI_VERSION_PATTERN =
+  /(?:^|\s)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?=\s|$)/u;
 
 const CODEX_PRESENTATION = {
   displayName: "Codex",
