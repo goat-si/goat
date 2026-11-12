@@ -291,6 +291,32 @@ func TestAKeyDroppedBetweenItsConfirmationAndTheCommitIsNeverDelivered(t *testin
 	}
 }
 
+func TestAKeyDroppedAndListedAgainBeforeTheCommitIsNotDeliveredOnTheDroppedSession(t *testing.T) {
+	f := newClientFixture(t)
+	f.prog.reached, f.prog.hold = make(chan struct{}, 1), make(chan struct{})
+	p := phone(t)
+	f.h.setList(t, 1, p)
+	sec, err := dialAs(f.ctx, f.rs, p, f.a, goatService())
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-f.prog.reached     // the node dialled the program and is waiting for line 2, before its commit
+	f.h.setList(t, 2)    // the drop claims the session's close
+	f.h.setList(t, 3, p) // the key is listed again, with an id, when the commit runs
+	close(f.prog.hold)
+	select {
+	case j := <-f.prog.identities:
+		t.Fatalf("the dropped session reached the program with %s", j)
+	case raw := <-f.prog.raw:
+		if bytes.Contains(raw, []byte("client")) {
+			t.Fatalf("the program read %q", raw)
+		}
+	}
+	if code := closedWith(f.ctx, sec); code != wire.CodeNotAdmitted {
+		t.Fatalf("closed %d, want 4401", code)
+	}
+}
+
 func TestTheEndOfARegistrationClosesItsClientSessions4401AndForgetsItsList(t *testing.T) {
 	f := newClientFixture(t)
 	p := phone(t)

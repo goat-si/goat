@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
@@ -19,10 +20,18 @@ func TestAListDropWaitsForADroppedKeysHandshakeThatConfirmedButIsNotRegisteredYe
 	defer g.open()
 	events := make(chan string, 64)
 	waiting := make(chan int, 4)
+	var answering atomic.Bool
 	a := hookedFounder(t, ctx, rs, func(o *Options) {
 		o.ClientConfirmed = g.hook
 		o.ClientsWaiting = func(n int) { waiting <- n }
 		o.PhoneSlots = func(total int) { events <- fmt.Sprint("slots:", total) }
+		// The holder's writer reports its write as it starts it, on the daemon's goroutine, in order with the slot
+		// counts: the list answer is the only holder line once armed.
+		o.HolderWriting = func() {
+			if answering.Load() {
+				events <- "answer"
+			}
+		}
 	})
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
@@ -38,6 +47,7 @@ func TestAListDropWaitsForADroppedKeysHandshakeThatConfirmedButIsNotRegisteredYe
 		t.Fatal(err)
 	}
 	<-g.reached // confirmed on the node, not yet registered as a session
+	answering.Store(true)
 	if _, err := h.c.Write([]byte(listOp(2) + "\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +63,46 @@ func TestAListDropWaitsForADroppedKeysHandshakeThatConfirmedButIsNotRegisteredYe
 	if err := <-answered; err != nil {
 		t.Fatal(err)
 	}
-	events <- "answer"
 	if got := slotsBefore(t, events, "answer"); got != "slots:0" {
-		t.Fatalf("the list answered with %q; want the handshake closed and its slot returned first", got)
+		t.Fatalf("the list answer was written with %q; want the handshake closed and its slot returned first", got)
+	}
+	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
+		t.Fatalf("closed %d, want 4401", code)
+	}
+}
+
+func TestAListDropDuringADeliveryAnswersBeforeThatDeliveryEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	events := make(chan string, 64)
+	var answering atomic.Bool
+	a := hookedFounder(t, ctx, rs, func(o *Options) {
+		o.ClientEnded = func() { events <- "session goroutine ended" }
+		o.HolderWriting = func() {
+			if answering.Load() {
+				events <- "answer"
+			}
+		}
+	})
+	key := newKey(t)
+	prog := newProgram(t, "goat", key)
+	prog.reached, prog.hold = make(chan struct{}, 1), make(chan struct{})
+	prog.serve()
+	defer close(prog.hold)
+	h := register(t, a, "goat", prog.port(), key)
+	k := phone(t)
+	h.setList(t, 1, k)
+	sec, err := dialAs(ctx, rs, k, a, goatService())
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-prog.reached // the session is registered and its delivery waits for the program's proof
+	answering.Store(true)
+	h.setList(t, 2)
+	if first := <-events; first != "answer" {
+		t.Fatalf("%s before the list answer; want the drop to answer once the session is closed, without waiting for its delivery", first)
 	}
 	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("closed %d, want 4401", code)

@@ -30,9 +30,10 @@ type clientAdmission struct {
 	inv *serviceInvite
 }
 
-// handshake is an admitted client or pairing handshake of a registration, tracked from before message 2 until the
-// goroutine that accepted it is done (done closes then), so the registration's end and a list drop also close the
-// ones whose key confirmation has not arrived. confirmed is guarded by serviceBook.mu.
+// handshake is an admitted client or pairing handshake of a registration, tracked from before message 2 until its
+// session is registered or refused, or its handshake fails (done closes then), so the registration's end and a list
+// drop also close the ones whose key confirmation has not arrived and wait for the confirmed ones not yet registered.
+// confirmed is guarded by serviceBook.mu.
 type handshake struct {
 	conn      relay.Conn
 	key       string
@@ -72,9 +73,14 @@ func (b *serviceBook) confirmHandshake(hs *handshake) {
 	b.mu.Unlock()
 }
 
-// leaveHandshake ends tracking hs once the goroutine that accepted it is done with it.
+// leaveHandshake ends tracking hs: when its session is registered or refused (from then on the session's own close
+// covers it), or when the goroutine that accepted it is done with it. A second call does nothing.
 func (b *serviceBook) leaveHandshake(reg *serviceReg, hs *handshake) {
 	b.mu.Lock()
+	if _, tracked := reg.handshakes[hs]; !tracked {
+		b.mu.Unlock()
+		return
+	}
 	delete(reg.handshakes, hs)
 	b.mu.Unlock()
 	close(hs.done)
@@ -344,8 +350,11 @@ func (d *Daemon) serveClient(ctx context.Context, sec *session.Secure, a clientA
 		if a.slot != nil {
 			d.svc.releasePhone(a.slot)
 		}
+		d.svc.leaveHandshake(a.reg, a.hs)
 		return
 	}
+	// Registered: a list drop or registration end now finds the session itself and waits for its close.
+	d.svc.leaveHandshake(a.reg, a.hs)
 	defer d.closeLive(l, wire.CodeNormal)
 	if !d.svc.acquire() {
 		d.closeLive(l, wire.CodeCaps)

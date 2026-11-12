@@ -103,7 +103,8 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 	}
 	sec, err := session.Respond(hctx, c, d.id, d.nodeID, admit)
 	if client != nil {
-		// Tracked on its registration until this goroutine is done with it (registered first, so it runs last).
+		// Tracked on its registration until serveClient registers or refuses its session, or, for a handshake that
+		// fails, until this goroutine is done with it (deferred first, so it runs last).
 		defer d.svc.leaveHandshake(client.reg, client.hs)
 		if err == nil {
 			d.svc.confirmHandshake(client.hs)
