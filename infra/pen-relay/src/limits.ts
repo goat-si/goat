@@ -1,3 +1,4 @@
+import { isNodeId } from "@goat/pen-protocol/identity";
 import { Timeouts } from "@goat/pen-protocol/wire";
 import type { Room } from "./room.ts";
 import { TOTALS_WRITE_EVERY_MS } from "./traffic.ts";
@@ -12,6 +13,9 @@ export interface Env {
   readonly SID_START?: string;
   // How often a Room may write its traffic totals (tests use 0: at every session end).
   readonly TOTALS_EVERY_MS?: string;
+  // Node ids, comma-separated, whose Rooms keep a traffic row; set as a secret (wrangler secret put
+  // TRAFFIC_NODES) so the ids stay out of the repository. Unset keeps no rows.
+  readonly TRAFFIC_NODES?: string;
 }
 
 export interface RelayLimits {
@@ -35,4 +39,11 @@ export function readLimits(env: Env): RelayLimits {
     totalsEveryMs:
       env.TOTALS_EVERY_MS === "0" ? 0 : clamp(env.TOTALS_EVERY_MS, TOTALS_WRITE_EVERY_MS),
   };
+}
+
+/** Whether nodeId's Room keeps a traffic row: anyone can mint node ids, so only listed ones do. */
+export function tracksTraffic(env: Env, nodeId: string): boolean {
+  return (
+    isNodeId(nodeId) && (env.TRAFFIC_NODES ?? "").split(",").some((id) => id.trim() === nodeId)
+  );
 }

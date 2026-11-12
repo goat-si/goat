@@ -13,7 +13,7 @@ import {
   readClose,
   relayOrigin,
 } from "@goat/pen-protocol/wire";
-import { type Env, readLimits, type RelayLimits } from "./limits.ts";
+import { type Env, readLimits, type RelayLimits, tracksTraffic } from "./limits.ts";
 import {
   addCounts,
   type Counts,
@@ -59,7 +59,8 @@ interface ClientState extends SocketState {
   upEnd: number;
   /** This session's unacked DATA on the uplink; may overcount, never undercounts. */
   upUnacked: number;
-  /** Payload bytes relayed toward the node and from it, and how much of them the totals hold. */
+  /** Set when the node is listed: payload bytes relayed toward the node and from it, and how much of them the totals hold. */
+  track?: true;
   toNode?: number;
   fromNode?: number;
   countedTo?: number;
@@ -175,10 +176,9 @@ export class Room extends DurableObject<Env> {
       pending: true,
       upEnd: 0,
       upUnacked: 0,
-      toNode: 0,
-      fromNode: 0,
-      countedTo: 0,
-      countedFrom: 0,
+      ...(tracksTraffic(this.env, nodeId)
+        ? { track: true, toNode: 0, fromNode: 0, countedTo: 0, countedFrom: 0 }
+        : {}),
     };
     save(server, state);
     const pending = this.clients()
@@ -373,9 +373,9 @@ export class Room extends DurableObject<Env> {
       return this.endSession(ws, state, CloseCode.Timeout);
     }
     ws.send(payload);
-    const fresh = payload.length > 0 && !this.uncounted(state);
+    const fresh = state.track === true && payload.length > 0 && !this.uncounted(state);
     state.sent += payload.length;
-    state.fromNode = (state.fromNode ?? 0) + payload.length;
+    if (state.track) state.fromNode = (state.fromNode ?? 0) + payload.length;
     save(ws, state);
     if (fresh) this.armTotals();
   }
@@ -399,8 +399,8 @@ export class Room extends DurableObject<Env> {
     save(up, upState);
     state.upEnd = upState.sent;
     state.upUnacked = mine;
-    const fresh = payload.length > 0 && !this.uncounted(state);
-    state.toNode = (state.toNode ?? 0) + payload.length;
+    const fresh = state.track === true && payload.length > 0 && !this.uncounted(state);
+    if (state.track) state.toNode = (state.toNode ?? 0) + payload.length;
     save(ws, state);
     if (fresh) this.armTotals();
   }
@@ -454,7 +454,7 @@ export class Room extends DurableObject<Env> {
     const ending = !state.closed;
     const bytes = takeUncounted(state);
     closeSocket(ws, state, code);
-    if (!ending) return;
+    if (!ending || !state.track) return;
     const answered = state.pending ? 0 : 1;
     this.keepTotals(
       addCounts(this.unwritten(), { ...bytes, sessions: answered, unanswered: 1 - answered }),
