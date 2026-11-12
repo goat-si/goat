@@ -405,7 +405,8 @@ in sync `hello` as `"pen":"1.1"` and refuses otherwise); v1.0 nodes reject those
 ### Account join
 
 Kind 0x04, `account`: `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `pen/1` || nodeId || 0x04, valid only with
-`{"v":1,"stream":"account","name"}`. The responder accepts any initiator key on this kind; at most 4 such sessions run at
+`{"v":1,"stream":"account","name"}`. The responder accepts any initiator key on this kind except, from v1.3, a key that
+a service registration lists ("Admission of client keys"); at most 4 such sessions run at
 once, a fifth evicts the oldest one that has not sent its assertion (4429), and a session that sends no assertion within
 10 s after key confirmation, or no card within 10 s after the offer, closes 4408. The slot is taken at message 1, before
 key confirmation, so an initiator that never confirms holds it for up to the 10 s handshake timeout and can evict another

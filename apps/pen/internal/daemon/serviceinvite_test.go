@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -77,12 +78,15 @@ func TestFourPairingHandshakesAreAnsweredTheFifthIsRefusedAndABurnAfterExhaustio
 	id := "PPPPPPPPPPPPPPPP"
 	psk := f.invite(t, id)
 	var ps []*session.Pending
+	var who []*ident.Identity
 	for i := range 4 {
-		p, err := f.pair(t, phone(t), psk, servicePair(id))
+		k := phone(t)
+		p, err := f.pair(t, k, psk, servicePair(id))
 		if err != nil {
 			t.Fatalf("handshake %d: %v, want message 2", i+1, err)
 		}
 		ps = append(ps, p)
+		who = append(who, k)
 	}
 	f.event(t, "invite-exhausted", id)
 	if _, err := f.pair(t, phone(t), psk, servicePair(id)); relay.CodeOf(err) != wire.CodeNotAdmitted {
@@ -96,14 +100,21 @@ func TestFourPairingHandshakesAreAnsweredTheFifthIsRefusedAndABurnAfterExhaustio
 	if err := echo(f.ctx, sec, "pair"); err != nil {
 		t.Fatalf("the winner's stream: %v", err)
 	}
-	var j struct {
-		Pairing *struct{ Invite, NoisePub, Sas string }
+	// The whole line, member by member: the pairing form names the invite, the winner's key and its handshake's sas.
+	var j map[string]any
+	if err := json.Unmarshal(<-f.prog.identities, &j); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal(<-f.prog.identities, &j); err != nil || j.Pairing == nil {
-		t.Fatalf("pairing identity %+v, %v", j, err)
+	want := map[string]any{
+		"v": float64(1), "mesh": f.a.d.view().MeshID, "self": f.a.d.NodeID(), "stream": "goat",
+		"pairing": map[string]any{
+			"invite":   id,
+			"noisePub": noiseText(who[2]),
+			"sas":      ident.B64.EncodeToString(session.PairSAS(sec.HandshakeHash)),
+		},
 	}
-	if want := ident.B64.EncodeToString(session.PairSAS(sec.HandshakeHash)); j.Pairing.Sas != want || j.Pairing.Invite != id {
-		t.Fatalf("pairing line %+v; want invite %s and the sas of the winner's handshake %s", j.Pairing, id, want)
+	if !reflect.DeepEqual(j, want) {
+		t.Fatalf("pairing line %v; want exactly %v", j, want)
 	}
 	refusedAtConfirmation(t, f.ctx, ps[0]) // one burn: a second confirmation gets 4401
 	if m := f.h.op(t, cancelOp(id)); m["was"] != "burned" {
@@ -229,6 +240,41 @@ func TestMeshInvitesAndServiceInvitesNeverMatchEachOthersHandshake(t *testing.T)
 	spsk := f.invite(t, "SSSSSSSSSSSSSSSS")
 	if _, err := f.pair(t, phone(t), spsk, session.Payload{V: 1, Stream: "join", Invite: "SSSSSSSSSSSSSSSS", Name: "x"}); relay.CodeOf(err) != wire.CodeNotAdmitted {
 		t.Fatalf("a service invite on join got %v, want 4401", err)
+	}
+}
+
+func TestAMeshInviteAndAServiceInviteWithTheSameIDEachAcceptOnlyTheirOwnPSK(t *testing.T) {
+	f := newPairFixture(t)
+	tok := f.a.invite(t, time.Minute)
+	id := session.InviteID(tok.Secret)
+	meshPSK, _ := session.JoinPSK(tok.Secret, f.a.d.NodeID(), f.a.id.NoisePub)
+	svcPSK := f.invite(t, id) // the service invite takes the mesh invite's id, with its own psk
+	join := session.Payload{V: 1, Stream: "join", Invite: id, Name: "x"}
+	if _, err := f.pair(t, phone(t), meshPSK, servicePair(id)); !errors.Is(err, session.ErrBadMessage2) {
+		t.Fatalf("service-pair with the mesh psk got %v, want a message 2 that does not verify", err)
+	}
+	if _, err := f.pair(t, phone(t), svcPSK, join); !errors.Is(err, session.ErrBadMessage2) {
+		t.Fatalf("join with the service psk got %v, want a message 2 that does not verify", err)
+	}
+	p, err := f.pair(t, phone(t), svcPSK, servicePair(id))
+	if err != nil {
+		t.Fatalf("service-pair with its own psk got %v, want message 2", err)
+	}
+	p.Abort(wire.CodeNormal)
+	q, err := f.pair(t, phone(t), meshPSK, join)
+	if err != nil {
+		t.Fatalf("join with its own psk got %v, want message 2", err)
+	}
+	q.Abort(wire.CodeNormal)
+}
+
+func TestAReplacedRegistrationsInviteAnswersNoNewHandshake(t *testing.T) {
+	f := newPairFixture(t)
+	const id = "RRRRRRRRRRRRRRRR"
+	psk := f.invite(t, id)
+	register(t, f.a, "goat", f.prog.port(), f.prog.key)
+	if _, err := f.pair(t, phone(t), psk, servicePair(id)); relay.CodeOf(err) != wire.CodeNotAdmitted {
+		t.Fatalf("the replaced registration's invite got %v, want 4401 with no message 2", err)
 	}
 }
 

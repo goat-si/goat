@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -112,18 +113,38 @@ func TestAReplacementClosesTheOldUnconfirmedHandshakesBeforeTheOldRegistrationEn
 }
 
 func TestAListDropClosesTheDroppedKeysUnconfirmedHandshakesBeforeItsAnswer(t *testing.T) {
-	ctx, rs, a, events := orderedNode(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	events := make(chan string, 64)
+	waiting := make(chan int, 4)
+	var answering atomic.Bool
+	a := hookedFounder(t, ctx, rs, func(o *Options) {
+		o.PhoneSlots = func(total int) { events <- fmt.Sprint("slots:", total) }
+		o.ClientsWaiting = func(n int) { waiting <- n }
+		// Reported on the daemon's writer as it starts the write: the list answer is the only holder line once armed.
+		o.HolderWriting = func() {
+			if answering.Load() {
+				events <- "answer"
+			}
+		}
+	})
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
 	prog.serve()
 	h := register(t, a, "goat", prog.port(), key)
 	k := phone(t)
 	h.setList(t, 1, k)
+	<-waiting // the first list dropped nothing
 	p := unconfirmed(t, ctx, rs, a, k, session.KindSession, nil, goatService())
+	answering.Store(true)
 	h.setList(t, 2)
-	events <- "answer"
+	if n := <-waiting; n != 1 {
+		t.Fatalf("the list drop waits for %d handshakes; want the dropped key's unconfirmed one", n)
+	}
 	if got := slotsBefore(t, events, "answer"); got != "slots:0" {
-		t.Fatalf("the list answered with %q; want the dropped key's unconfirmed handshake closed first", got)
+		t.Fatalf("the list answer was written with %q; want the dropped key's unconfirmed handshake closed first", got)
 	}
 	refusedAtConfirmation(t, ctx, p)
 }
