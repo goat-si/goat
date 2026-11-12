@@ -85,6 +85,8 @@ type Hooks struct {
 	// failWrite, when set, is asked before each data write to a socket (role, and for a client its
 	// node id and session id) and fails that write as a timed-out one when it returns an error.
 	failWrite func(nodeID, role string, sid uint32) error
+	// counted, when set, is called once a session's bytes are in the traffic totals.
+	counted func()
 }
 
 // Server is a relay. It is an http.Handler.
@@ -124,12 +126,14 @@ type Server struct {
 	mu sync.Mutex
 	// closing, once Close starts, refuses new sockets.
 	closing bool
-	rooms   map[string]*room
-	socks   map[*sock]struct{}
-	total   int
-	perIP   map[string]int
-	shares  map[string]*source
-	unauth  map[string][]*sock // unauthenticated uplinks per node, oldest first
+	// closeOnce makes Close run once; a concurrent caller waits for it.
+	closeOnce sync.Once
+	rooms     map[string]*room
+	socks     map[*sock]struct{}
+	total     int
+	perIP     map[string]int
+	shares    map[string]*source
+	unauth    map[string][]*sock // unauthenticated uplinks per node, oldest first
 }
 
 // Default caps.
@@ -456,6 +460,10 @@ func (s *Server) ended(k *sock, code uint16) {
 // Close aborts every socket. With a traffic log it waits, at most WriteTimeout, for the sessions
 // it ends to report their bytes, then writes the totals one last time.
 func (s *Server) Close() {
+	s.closeOnce.Do(s.close)
+}
+
+func (s *Server) close() {
 	s.mu.Lock()
 	s.closing = true
 	all := make([]*sock, 0, len(s.socks))

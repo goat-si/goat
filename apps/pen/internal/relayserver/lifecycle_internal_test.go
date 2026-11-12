@@ -39,9 +39,11 @@ type live struct {
 	url    string
 	origin string
 	done   chan struct{}
-	mu     sync.Mutex
-	opened int
-	conns  []*websocket.Conn
+	// counted receives once per session whose bytes reached the traffic totals.
+	counted chan struct{}
+	mu      sync.Mutex
+	opened  int
+	conns   []*websocket.Conn
 	// stall names the client session whose next data write fails as a stalled peer's would;
 	// stalled receives once it did.
 	stallNode string
@@ -71,8 +73,9 @@ func (lv *live) authedCh(nodeID string) chan struct{} {
 
 func newLive(t *testing.T, l Limits) *live {
 	s := New(l)
-	lv := &live{s: s, done: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1), t: t, authed: map[string]chan struct{}{}}
+	lv := &live{s: s, done: make(chan struct{}, 1<<16), counted: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1), t: t, authed: map[string]chan struct{}{}}
 	s.Hooks.OnSocketDone = func(string, string) { lv.done <- struct{}{} }
+	s.Hooks.counted = func() { lv.counted <- struct{}{} }
 	s.Hooks.OnUplink = func(nodeID string) { lv.authedCh(nodeID) <- struct{}{} }
 	s.Hooks.failWrite = func(nodeID, role string, sid uint32) error {
 		lv.mu.Lock()

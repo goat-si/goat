@@ -400,12 +400,8 @@ func (q *outq) endSession(sid uint32) {
 	q.signal()
 }
 
-// delivered counts a written item toward its session.
-func (q *outq) delivered(it outItem) {
-	t := q.writingTally
-	if t == nil || !it.is(itemCharged) || it.is(itemSession) {
-		return
-	}
+// delivered counts a written item toward t, the session it belongs to.
+func delivered(it outItem, t *sessionTally) {
 	if it.sid != 0 {
 		t.toNode.Add(uint64(len(it.data) - wire.HeaderLen))
 	} else {
@@ -437,9 +433,17 @@ func (q *outq) pop() outItem {
 	if it.is(itemMark) {
 		return it
 	}
-	q.writingTally = q.own
-	if it.sid != 0 {
-		q.writingTally = q.tallies[it.sid]
+	// Session data counts toward its session's tally, held until the write's result is counted:
+	// a drop meanwhile must not count the session before this write.
+	q.writingTally = nil
+	if it.is(itemCharged) && !it.is(itemSession) {
+		q.writingTally = q.own
+		if it.sid != 0 {
+			q.writingTally = q.tallies[it.sid]
+		}
+		if q.writingTally != nil {
+			q.writingTally.refs.Add(1)
+		}
 	}
 	c := cost(it)
 	q.bytes -= c
@@ -610,6 +614,8 @@ func (q *outq) run() {
 			continue
 		}
 		it := q.pop()
+		held := q.writingTally
+		q.writingTally = nil
 		q.mu.Unlock()
 		if it.is(itemMark) {
 			q.mu.Lock()
@@ -658,8 +664,14 @@ func (q *outq) run() {
 			q.mu.Lock()
 			q.dropLocked()
 			q.mu.Unlock()
+			if held != nil {
+				held.release()
+			}
 			return
 		}
-		q.delivered(it)
+		if held != nil {
+			delivered(it, held)
+			held.release()
+		}
 	}
 }

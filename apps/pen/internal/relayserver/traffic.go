@@ -112,6 +112,9 @@ func take(total, counted *atomic.Uint64) uint64 {
 func (t *sessionTally) release() {
 	if t.refs.Add(-1) == 0 {
 		t.srv.traffic.ended(t)
+		if f := t.srv.Hooks.counted; f != nil {
+			f()
+		}
 	}
 }
 
@@ -180,17 +183,21 @@ func (t *traffic) sinceLocked(at time.Time) {
 	}
 }
 
-// emitLocked queues a line for the log writer, or drops and counts it when the queue is full.
-func (t *traffic) emitLocked(v any) {
+// emitLocked queues a line for the log writer, or drops and counts it when the queue is full; it
+// reports whether the line was queued. A drop marks the totals changed, so the next summary shows it.
+func (t *traffic) emitLocked(v any) bool {
 	if t.lines == nil || t.closed {
 		t.relay.linesDropped++
-		return
+		return false
 	}
 	b, _ := json.Marshal(v)
 	select {
 	case t.lines <- logItem{b: append(b, '\n')}:
+		return true
 	default:
 		t.relay.linesDropped++
+		t.changed = true
+		return false
 	}
 }
 
@@ -252,8 +259,8 @@ func (t *traffic) summarize(live []liveBytes) {
 	slices.Sort(keys)
 	for _, k := range keys {
 		n := t.nodes[k]
-		n.changed = false
-		t.emitLocked(nodeLine{Event: "node", Node: k, ToNode: n.toNode, FromNode: n.fromNode, Sessions: n.sessions,
+		// A line that did not fit stays changed and goes out at the next summary.
+		n.changed = !t.emitLocked(nodeLine{Event: "node", Node: k, ToNode: n.toNode, FromNode: n.fromNode, Sessions: n.sessions,
 			Since: stamp(n.since), At: stamp(at)})
 	}
 	r := t.relay

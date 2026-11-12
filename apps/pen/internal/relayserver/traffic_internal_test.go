@@ -129,6 +129,19 @@ func (lv *live) socketsDone(t *testing.T, n int) {
 	}
 }
 
+// sessionsCounted waits until n more sessions' bytes have reached the traffic totals: a session is
+// counted once its client socket is done and the uplink has written its last frame.
+func (lv *live) sessionsCounted(t *testing.T, n int) {
+	t.Helper()
+	for range n {
+		select {
+		case <-lv.counted:
+		case <-time.After(failsafe):
+			t.Fatal("a session was never counted")
+		}
+	}
+}
+
 // nextFrame is the next DATA or CLOSE frame the node receives for sid.
 func (n *liveNode) nextFrame(t *testing.T, sid uint32) wire.Frame {
 	t.Helper()
@@ -184,6 +197,7 @@ func (lv *live) exchange(t *testing.T, n *liveNode) {
 	receive(t, c, 1)
 	c.Close(websocket.StatusNormalClosure, "")
 	lv.socketsDone(t, 1)
+	lv.sessionsCounted(t, 1)
 }
 
 func wantSession(t *testing.T, got map[string]any, node string, to, from int, ms int, end string, code int) {
@@ -220,6 +234,7 @@ func TestASessionLineCountsTheBytesRelayedEachWay(t *testing.T) {
 	clk.Add(2500 * time.Millisecond)
 	c.Close(websocket.StatusNormalClosure, "")
 	lv.socketsDone(t, 1)
+	lv.sessionsCounted(t, 1)
 	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 71000, 3000, 2500, "client", 1000)
 }
 
@@ -250,6 +265,7 @@ func TestAClientCutMidStreamCountsWhatWasRelayedBeforeTheCut(t *testing.T) {
 	n.data(t, sid2, 10)
 	receive(t, c2, 10)
 	lv.socketsDone(t, 1)
+	lv.sessionsCounted(t, 1)
 	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 20500, 9000, 1000, "client", 1006)
 }
 
@@ -271,6 +287,7 @@ func TestAnUplinkLostMidStreamEndsTheSessionLineWithWhatWasRelayed(t *testing.T)
 		t.Fatalf("client read %v, want close 4404", err)
 	}
 	lv.socketsDone(t, 2)
+	lv.sessionsCounted(t, 1)
 	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 9100, 6000, 1500, "uplink", 4404)
 }
 
@@ -291,6 +308,7 @@ func TestBytesAWriteNeverDeliveredAreNotCounted(t *testing.T) {
 	n.data(t, sid, 4000)
 	<-lv.stalled
 	lv.socketsDone(t, 1)
+	lv.sessionsCounted(t, 1)
 	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 100, 3000, 0, "client", 1006)
 
 	c2, sid2 := lv.session(t, n)
@@ -304,6 +322,7 @@ func TestBytesAWriteNeverDeliveredAreNotCounted(t *testing.T) {
 	send(t, c2, 500)
 	<-lv.stalled
 	lv.socketsDone(t, 2)
+	lv.sessionsCounted(t, 1)
 	sessions := log.lines(t, "session")
 	if len(sessions) != 2 {
 		t.Fatalf("%d session lines, want 2:\n%s", len(sessions), log.raw())
@@ -334,6 +353,7 @@ func TestTrafficLinesHoldOnlyTheirFieldsAndTheNodeIDPrefix(t *testing.T) {
 	clk.Add(time.Second)
 	c.Close(websocket.StatusNormalClosure, "")
 	lv.socketsDone(t, 1)
+	lv.sessionsCounted(t, 1)
 	lv.s.Summarize()
 	want := map[string][]string{
 		"session": {"at", "code", "end", "event", "fromNode", "ms", "node", "toNode"},
@@ -385,6 +405,7 @@ func TestSummariesCountOpenSessionsOnceAndStaySilentWhenNothingChanged(t *testin
 	n.nextFrame(t, sid)
 	c.Close(websocket.StatusNormalClosure, "")
 	lv.socketsDone(t, 1)
+	lv.sessionsCounted(t, 1)
 	lv.s.Summarize()
 	nodes = log.lines(t, "node")
 	last := nodes[len(nodes)-1]
@@ -451,6 +472,7 @@ func TestFloodsOfUnansweredAndOneByteSessionsStayWithinTheBounds(t *testing.T) {
 		n.nextFrame(t, sid)
 		c.Close(websocket.StatusNormalClosure, "")
 		lv.socketsDone(t, 1)
+		lv.sessionsCounted(t, 1)
 	}
 	for range oneByte {
 		lv.exchange(t, n)
@@ -596,4 +618,83 @@ func TestAClientAbortAfterTheShutdownKeepsTheShutdownsCode(t *testing.T) {
 	if c.endedBy != "relay" || c.endCode != uint16(websocket.StatusGoingAway) {
 		t.Fatalf("session ended as %s %d, want relay 1001", c.endedBy, c.endCode)
 	}
+}
+
+// gatedWS is a socket whose writes wait for the test: entered receives as a write starts, and the
+// write returns once release receives.
+type gatedWS struct{ entered, release chan struct{} }
+
+func (w *gatedWS) Write(context.Context, websocket.MessageType, []byte) error {
+	w.entered <- struct{}{}
+	<-w.release
+	return nil
+}
+func (w *gatedWS) Close(websocket.StatusCode, string) error { return nil }
+func (w *gatedWS) CloseNow() error                          { return nil }
+
+// A frame that is being written when another goroutine drops the uplink's queue still counts once
+// its write succeeds: the session is not counted before that write's result is known.
+func TestAnInFlightWriteCountsAfterTheQueueIsDropped(t *testing.T) {
+	s := New(DefaultLimits())
+	s.TrafficLog = &lineLog{}
+	s.TrafficNodes = map[string]bool{}
+	ws := &gatedWS{entered: make(chan struct{}), release: make(chan struct{})}
+	q := newOutq(ws, time.Hour, nil)
+	tally := &sessionTally{srv: s, node: "n0000000", answered: true}
+	tally.refs.Store(1)
+	if !q.track(7, tally) {
+		t.Fatal("track refused")
+	}
+	q.offerFrame(7, make([]byte, 1234))
+	<-ws.entered
+	q.mu.Lock()
+	q.dropLocked()
+	q.mu.Unlock()
+	tally.release()
+	ws.release <- struct{}{}
+	q.wait()
+	s.traffic.mu.Lock()
+	defer s.traffic.mu.Unlock()
+	if s.traffic.relay.toNode != 1234 || s.traffic.relay.sessions != 1 {
+		t.Fatalf("relay totals %+v, want the in-flight 1234 bytes counted", s.traffic.relay)
+	}
+}
+
+// A summary whose lines did not fit the log queue is written again at the next summary, even when
+// no traffic came in between.
+func TestASummaryThatDidNotFitIsRetried(t *testing.T) {
+	clk := &fakeClock{t: time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)}
+	tr := &traffic{now: clk.Now, lines: make(chan logItem, 1)}
+	tr.mu.Lock()
+	tr.addLocked("n0000000", true, 5, 7, 1, clk.Now())
+	tr.mu.Unlock()
+	tr.summarize(nil)
+	first := <-tr.lines
+	if !strings.Contains(string(first.b), "\"event\":\"node\"") {
+		t.Fatalf("first queued line %s, want the node line", first.b)
+	}
+	clk.Add(SummaryEvery)
+	tr.summarize(nil)
+	select {
+	case retried := <-tr.lines:
+		if !strings.Contains(string(retried.b), "\"event\":\"relay\"") || !strings.Contains(string(retried.b), "\"linesDropped\":1") {
+			t.Fatalf("retried line %s, want the relay line with its drop counted", retried.b)
+		}
+	default:
+		t.Fatal("the relay line that did not fit was never queued again")
+	}
+}
+
+// Close may be called more than once, also at the same time: the second call returns without
+// harm.
+func TestClosingTwiceIsHarmless(t *testing.T) {
+	id := newID(t)
+	lv, _, _ := trafficLive(t, id)
+	lv.exchange(t, lv.uplink(id, true))
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(lv.s.Close)
+	}
+	wg.Wait()
+	lv.s.Close()
 }
