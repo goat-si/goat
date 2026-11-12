@@ -195,13 +195,18 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
           ),
         );
       const ordinal = existing?.ordinal ?? (yield* nextOrdinal);
-      // A greeting changes only while it is still the thread's last item, and only its text:
-      // otherwise the record commits nothing and its caller writes an event line instead.
-      if (record.entry.type === "message" && record.recordKey.startsWith(GREETING_RECORD_PREFIX)) {
-        const next = existing === undefined || existing === null ? ordinal : yield* nextOrdinal;
+      // A first greeting always lands, after whatever came first. Once there, it changes only
+      // its text and only while it is the thread's last item; otherwise the record commits
+      // nothing and its caller writes an event line instead.
+      if (
+        record.entry.type === "message" &&
+        record.recordKey.startsWith(GREETING_RECORD_PREFIX) &&
+        existing !== undefined &&
+        existing !== null
+      ) {
         const sameText =
-          existing?.type === "assistant_message" && existing.text === record.entry.text;
-        if (sameText || next !== (existing?.ordinal ?? 0) + 1) return;
+          existing.type === "assistant_message" && existing.text === record.entry.text;
+        if (sameText || (yield* nextOrdinal) !== existing.ordinal + 1) return;
       }
       const base = {
         id: turnItemId,
