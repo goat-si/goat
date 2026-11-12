@@ -177,6 +177,14 @@ sees a missing or wrong server id, a network error or a timeout stops for good, 
 the port after the dashboard stops would otherwise be trusted by the open tab. Every action goes through
 the same daemon operation as the CLI.
 
+## Byte counters
+
+`pen pipe` and `pen forward` run without the daemon, so the daemon learns their bytes only when they report them over
+the control socket (`traffic.report`, contract "Traffic counters"). A report is best effort and silent, because a
+pipe is ssh's ProxyCommand: a report must never change its output, its exit code or its stderr. The daemon keeps the
+counts in memory only, in fixed buckets with a cap on pairs (`apps/pen/internal/traffic`): losing a day of counts on
+restart costs less than another state file whose format must stay readable.
+
 ## Relay cuts and typed ssh names
 
 A relay can drop a stream, open more sessions than the contract allows, or carry a host name nobody checked. None of

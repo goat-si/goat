@@ -174,6 +174,11 @@ and create invites from it. It is in Korean and English.
 The link works once and only on this machine. Run `pen dashboard` again for a new one, for example
 after Pen restarts. `pen dashboard --stop` closes the page and signs out every open tab.
 
+`pen ls` and the dashboard show how many bytes this machine exchanged with each member in the last 24 hours
+(received / sent), and how much went over each relay: ssh and other `pen pipe` sessions, `pen forward`, and
+connections other members opened to this machine. Counting starts when Pen starts, and the numbers are a little
+below what the network carried, since Pen's own framing is not counted.
+
 ## Remove a machine
 
 | Command                             | Use it when                                                                                                                                                                                                                                                                                                                                                                                                                                                           |

@@ -776,6 +776,33 @@ the other two forms.
 
 No close code is new, and close codes stay unauthenticated.
 
+## Traffic counters (v1.3)
+
+Local to one node: nothing here is sent to a relay or another node, and nodes announce the same version. A node
+counts, per member and per relay, the stream bytes of its sessions for the last 24 hours, so a person can see which
+member's sessions load which relay.
+
+- What counts: the payload of DATA records a `tcp` or `service` session sent to the member (out) and received from
+  it (in). FIN and CREDIT records, record, Noise, WebSocket and TLS framing and the handshake race are not counted,
+  so a counter reads a little below what the process moved on the network.
+- Who counts: `pen pipe` and each `pen forward` connection report their session to the node's daemon; the daemon
+  counts the `tcp` sessions it accepts itself. Service streams it accepts are not counted.
+- Control op `traffic.report`, on the control socket only (the dashboard cannot send it):
+  `{"op":"traffic.report","node":N,"relay":R,"in":I,"out":O}` with exactly these members. N is a node id of a
+  current or revoked member of the node's view, R the relay URL the session used (at most 512 bytes; a relay the
+  node does not list counts as `""`), I and O integers from 0 to 2^53−1: the bytes since that session's last
+  counted report. Answer `{"t":"counted"}`. A refusal is `{"error":"..."}` and counts nothing. A reporter sends
+  one report every 2 minutes and one when the session ends, waits at most 1 s for an answer, and keeps bytes not
+  counted for its next report. A node older than this answers that it does not know the op; the session goes on
+  unchanged, and it prints nothing either way.
+- Window: 96 buckets of 15 minutes by the node's wall clock, so bytes leave the total between 23 h 45 min and 24 h
+  after they were counted. A node holds at most 512 (member, relay) pairs; a new pair past that is refused until a
+  pair's window is empty. The counts live only in the daemon's memory, and a restart starts them at zero.
+- `pen ls --json` adds `traffic24h` (`{"in","out","relays":[{"url","in","out"}]}`) to each member with bytes in the
+  window, and `relays24h` (`[{"url","in","out"}]`) and `trafficSince` (milliseconds since the Unix epoch, where the
+  totals start) to the reply while any bytes are counted. Every other field keeps its name, type and meaning, and a
+  node with nothing counted prints exactly what it printed before.
+
 ## Close codes
 
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
@@ -863,6 +890,9 @@ v1.2 member-only reader refuses both valid new forms.
   OPEN past them with CLOSE 4429; a stream cut before the peer's FIN and all its DATA reached the local socket resets
   that TCP connection instead of closing it; `pen pipe` reads flags only before the node; the Unix `pen-*` ssh block
   quotes `%n` ("SSH config for exact routes").
+- v1.3 (2026-11-12): node side only, no wire change between nodes: control op `traffic.report` and 24-hour byte
+  counters per member and per relay in `pen ls --json` and the dashboard ("Traffic counters"). Nothing new is sent
+  to a relay or a member.
 - v1.3 (2026-11-12): "Service clients": ops on a service registration set a list of client keys and a service
   invite, each answered so an older node fails closed; a listed key reaches only `service` of the name that lists it,
   under phone slots counted before message 2; `service-pair` handshakes (kind 0x03) with a budget of 4 and an atomic
