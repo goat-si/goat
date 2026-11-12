@@ -73,8 +73,11 @@ export function GoatBotWorkPanel({
     readonly title: string;
   } | null>(null);
   // Where focus lands once Home shows again: the row Back returns to, or the Home tab when the
-  // peek closed because its task left the list. It applies once, so later tab switches keep focus.
+  // peek held focus and closed because its task left the list. It applies once, so later tab
+  // switches keep focus.
   const [focusTarget, setFocusTarget] = useState<ChannelTaskId | "home" | null>(null);
+  // A peek removed while focused fires no blur, so this still says it held focus as it closes.
+  const [peekHasFocus, setPeekHasFocus] = useState(false);
   const focusOnce = (element: HTMLElement | null) => {
     if (element === null) return;
     // Only focus that the closed peek dropped moves; someone typing elsewhere keeps theirs.
@@ -110,26 +113,36 @@ export function GoatBotWorkPanel({
   const peekGone = peek !== null && loaded && !failed && peeked === undefined;
   if (peekGone) {
     setPeek(null);
-    setFocusTarget("home");
+    setPeekHasFocus(false);
+    if (peekHasFocus) setFocusTarget("home");
   }
   if (peek !== null && peekRows !== undefined && !peekGone) {
     return (
-      <GoatBotWorkPeek
-        taskId={peek.taskId}
-        title={peeked?.task.title ?? peek.title}
-        statusLabel={
-          peeked === undefined
-            ? ""
-            : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
-        }
-        rows={peekRows(peek.taskId)}
-        environmentId={environmentId}
-        onRetry={onRetryInput}
-        onBack={() => {
-          setFocusTarget(peeked === undefined ? "home" : peek.taskId);
-          setPeek(null);
+      <div
+        className="contents"
+        onFocus={() => setPeekHasFocus(true)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setPeekHasFocus(false);
         }}
-      />
+      >
+        <GoatBotWorkPeek
+          taskId={peek.taskId}
+          title={peeked?.task.title ?? peek.title}
+          statusLabel={
+            peeked === undefined
+              ? ""
+              : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
+          }
+          rows={peekRows(peek.taskId)}
+          environmentId={environmentId}
+          onRetry={onRetryInput}
+          onBack={() => {
+            setFocusTarget(peeked === undefined ? "home" : peek.taskId);
+            setPeekHasFocus(false);
+            setPeek(null);
+          }}
+        />
+      </div>
     );
   }
   return (
