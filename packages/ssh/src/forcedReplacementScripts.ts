@@ -72,7 +72,10 @@ forced_stop_runtime() {
   forced_restore_runner() {
     [ "$FORCED_PUBLISHED" = 1 ] && [ -f "$FORCED_PREVIOUS_RUNNER" ] || return 0
     cp -p "$FORCED_PREVIOUS_RUNNER" "$RUNNER_FILE.forced-restore.$" && mv -f "$RUNNER_FILE.forced-restore.$" "$RUNNER_FILE" &&
-      { sync_runner_alias || :; } || rm -f "$RUNNER_FILE.forced-restore.$"
+      { sync_runner_alias || :; } && return 0
+    # A failed restore must not end the script before it reports why it stopped.
+    rm -f "$RUNNER_FILE.forced-restore.$" 2>/dev/null || :
+    printf 'GOAT could not put the previous runner back at %s; the next update replaces it.\\n' "$RUNNER_FILE" >>"$LOG_FILE" 2>/dev/null || :
   }
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then forced_refused "GOAT cannot signal processes on a Windows host"; fi
   [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || forced_refused "this client no longer holds the replacement lock"
