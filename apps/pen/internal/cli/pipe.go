@@ -105,10 +105,12 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	home := fs.String("home", "", "state directory instead of PEN_HOME (ssh on Windows runs ProxyCommand without a shell)")
 	node := fs.String("node", "", "exact node id, with --noise: no name or prefix lookup")
 	noise := fs.String("noise", "", "the Noise key the --node member must have in this machine's view")
-	pos, err := parse(fs, args)
-	if err != nil {
+	// Flags come before the node only: ssh puts the host name into what follows, and a name that
+	// arrives as several arguments (Win32-OpenSSH quotes nothing) must not be read as flags.
+	if err := fs.Parse(args); err != nil {
 		return 255
 	}
+	pos := fs.Args()
 	exact := *node != "" || *noise != ""
 	if exact && (*node == "" || *noise == "" || len(pos) != 1) {
 		return die(errors.New("usage: pen pipe --node <nodeId> --noise <noisePub> (<port> | @<service>)"))
@@ -118,6 +120,7 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	target := pos[len(pos)-1]
 	var port int
+	var err error
 	service := ""
 	if exact && strings.HasPrefix(target, "@") {
 		service = target[1:]
