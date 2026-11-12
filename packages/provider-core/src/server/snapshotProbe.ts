@@ -185,8 +185,8 @@ export const spawnAndCollect = Effect.fn("snapshotProbe.spawnAndCollect")(functi
 }, Effect.scoped);
 
 export function parseGenericCliVersion(output: string): string | null {
-  // Consume v before the digits; v2 has no internal word boundary.
-  const match = output.match(/\bv?(\d+\.\d+\.\d+)\b/);
+  // Consume v before the digits; v2 has no internal word boundary. A prerelease keeps its suffix.
+  const match = output.match(/\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?)\b/);
   return match?.[1] ?? null;
 }
 

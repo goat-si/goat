@@ -816,3 +816,22 @@ it.effect("regression F5-4: a remote tool's refusal reaches the sync result quot
     );
   }),
 );
+
+it.effect(
+  "regression F6-2: a long remote refusal with its may-have-started note stays within the contract",
+  () =>
+    Effect.gen(function* () {
+      const { layer } = harness({
+        answer: () =>
+          Effect.fail(
+            new Dispatch.SshRemoteDispatchError({
+              reason: "remote_refused",
+              message: "y".repeat(2_000),
+            }),
+          ),
+      });
+      const host = yield* syncedOnBox(layer);
+      expect(isHostState(host)).toBe(true);
+      expect(host?.message).toContain("It may have started installing there;");
+    }),
+);

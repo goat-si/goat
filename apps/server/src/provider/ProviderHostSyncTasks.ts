@@ -67,7 +67,8 @@ const describe = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailu
   if (error.reason === "host_unavailable" && message.includes("goat_ssh_host_prepare"))
     return { status: "not_ready", message };
   if (error.reason === "remote_refused")
-    return { status: "refused", message: quoteRemote("The host answered: ", message, 1_000) };
+    // Room for the note lostTrack may add, within the 1,024-character message limit.
+    return { status: "refused", message: quoteRemote("The host answered: ", message, 800) };
   if (error.reason === "caller_changed") return { status: "refused", message };
   return { status: "unreachable", message };
 };

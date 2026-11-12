@@ -310,6 +310,9 @@ describe("parseGenericCliVersion", () => {
   it("parses a v-prefixed version", () => {
     expect(parseGenericCliVersion("opencode v2.0.3")).toBe("2.0.3");
     expect(parseGenericCliVersion("v22.19.0")).toBe("22.19.0");
+    // A pinned install compares the whole version, so a prerelease keeps its suffix.
+    expect(parseGenericCliVersion("pi 1.2.3-beta.1")).toBe("1.2.3-beta.1");
+    expect(parseGenericCliVersion("opencode v2.0.3-rc.2 (linux)")).toBe("2.0.3-rc.2");
   });
 
   it("parses a version embedded in other output", () => {
