@@ -31,7 +31,7 @@ are described in <a href="/goat/docs/user/remote-access/#reach-every-machine-thr
 <p>In <strong>Settings → Hub → Hub devices</strong>, <strong>Add device to hub</strong> joins a machine to the
 hub’s OpenCodex by its SSH alias; a standalone device in
 the list has <strong>Join</strong> too. The device needs OpenCodex and a direct SSH alias on
-the hub. On a fresh Linux or macOS machine, the
+the hub, such as a Tailscale alias or a <a href="/goat/docs/user/pen/#use-a-member-as-an-opencodex-child">Pen</a> <code>pen-&lt;name&gt;</code> alias. On a fresh Linux or macOS machine, the
 <a href="/goat/docs/user/install/#a-server-only-machine">server installer’s <code>--opencodex</code> option</a>
 installs both; installing does not join the hub. GOAT compares the host key
 OpenCodex is offered with the key GOAT pinned for that alias, links the device,

@@ -118,6 +118,26 @@ does not ask the SSH server for them instead, since another account on the machi
 keys stay as they were.</p>
 <p>To reach another port, <code>pen forward 8080 &lt;member&gt;:8080</code> listens on this machine’s port 8080 and
 connects each connection to port 8080 on the member.</p>
+<h3 id="use-a-member-as-an-opencodex-child">Use a member as an OpenCodex Child</h3>
+<p>A member can join the hub’s OpenCodex Home as a Remote Link Child through its <code>pen-&lt;name&gt;</code> alias,
+so its agents use the hub’s accounts without a sign-in there. On the hub:</p>
+<ol>
+<li>Join the hub to the mesh and run <code>pen ssh-config --install</code> there.</li>
+<li>Make sure the hub’s SSH key can sign in on the member: Pen carries SSH to the member and checks
+its host key, but sign-in is the member’s own <code>~/.ssh/authorized_keys</code>.</li>
+<li>Add the member to GOAT as an SSH host by choosing <code>pen-&lt;name&gt;</code> in <strong>Settings → Connections</strong>,
+and install OpenCodex on it (<code>goat opencodex install</code> there, or the server installer’s
+<code>--opencodex</code> option).</li>
+<li>In <strong>Settings → Hub → Hub devices</strong>, turn on <strong>Join as OpenCodex Child after each SSH setup</strong> on
+the member’s row. GOAT links it with the host key Pen recorded for the member and sets it up as
+described in <a href="/goat/docs/user/hub/#add-repair-or-remove-a-device">Hub devices</a>.</li>
+</ol>
+<p>To detach it, use <strong>Leave</strong> on its row, then remove the machine from the mesh (see
+<a href="#remove-a-machine">Remove a machine</a>). Run <code>pen leave</code> from the machine’s own console, such as
+your cloud platform’s terminal: each member closes its connections to a machine once it learns the
+machine left, which can cut off the SSH session you would run <code>pen leave</code> in, and its output.</p>
+<p>GOAT turns the switch off by itself when the member leaves the mesh, when another machine later
+takes its name, or when its host key changes. Turn it on again after the machine joins again.</p>
 <h2 id="dashboard">Dashboard</h2>
 <p><code>pen dashboard</code> opens a page in your browser, served by Pen on this machine, that shows the mesh:
 members with their status and how each joined, relays and their health, pending approvals, and
@@ -254,6 +274,12 @@ machine, including <code>/etc/machine-id</code>, so a box made from that snapsho
 and the two push each other off the relays. If that happens, on the copy run <code>pen down</code>, delete
 <code>~/.pen</code> and join again; <code>pen leave</code> there would remove the original machine too, since both hold
 the same keys.</p>
+<p>A platform that freezes idle boxes, such as boxes.dev, does not count Pen traffic as activity, and
+no loop or service on the box keeps it awake. A box you reach only through Pen freezes a few minutes
+after it wakes, even while GOAT has it open; frozen, it is offline in Pen and GOAT reports it
+unreachable. Wake it with the platform’s own short command right before you use it
+(<code>dvb wake &lt;machine&gt;</code> on boxes.dev), and run it again each time the box has frozen since. An agent
+working on the box from GOAT does the same.</p>
 <h2 id="not-supported">Not supported</h2>
 <ul>
 <li>Direct connections between machines: all traffic goes through a relay.</li>
