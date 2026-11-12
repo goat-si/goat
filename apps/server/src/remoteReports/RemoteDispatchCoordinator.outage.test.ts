@@ -289,27 +289,30 @@ it.effect.each([
     }).pipe(Effect.provide(database)),
 );
 
-it.effect(
-  "a host that answers after a crash cannot turn the outage failure the parent committed into a completion",
-  () =>
+it.effect.each(["running", "completed"] as const)(
+  "a host that answers %s after a crash still ends the task by the outage failure the parent committed",
+  (status) =>
     Effect.gen(function* () {
       const f = yield* fixture;
       yield* Effect.gen(function* () {
         const c = yield* Coordinator.RemoteDispatchCoordinator;
         const launched = yield* launchTask(c);
         yield* Queue.take(f.notifications);
-        const read = yield* Queue.take(f.calls);
+        const sinceMs = yield* Clock.currentTimeMillis;
+        yield* failNext(f);
+        const read = yield* nextCall(f);
         // The outage result committed, then the server stopped before the row turned lost.
-        const sinceMs = (yield* Clock.currentTimeMillis) - DAY;
-        yield* setSince(f, launched.correlationId, sinceMs);
         f.recordedTasks.push(
           subagent("task-A", "failed", `box has not answered since ${iso(sinceMs)}.`),
         );
-        yield* Queue.offer(read.reply, Effect.succeed(answer([], "completed")));
+        yield* Queue.offer(read.reply, Effect.succeed(answer([], status)));
         yield* TestClock.adjust("1 hour");
         const row = (yield* c.get(launched.correlationId))!;
-        assert.equal(row.state, "settled");
+        assert.equal(row.state, "lost");
+        assert.equal(row.endReason, "host_unreachable");
         assert.equal(row.knownRunStatus, "failed");
+        assert.equal(row.lastError, `box has not answered since ${iso(sinceMs)}.`);
+        assert.equal(yield* Queue.size(f.calls), 0);
       }).pipe(Effect.provide(f.layer), steadyRandom);
     }).pipe(Effect.provide(database)),
 );

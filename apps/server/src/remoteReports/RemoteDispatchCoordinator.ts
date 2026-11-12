@@ -288,6 +288,13 @@ const make = Effect.gen(function* () {
       status: "failed",
       summary: "The remote task's thread or report binding is unavailable.",
     });
+  // True when the drain stops: another drain owns the row, or the outage's committed result ended it.
+  const endOutage = (id: string, owner: number, r: Row) =>
+    r.host_unavailable_since == null
+      ? Effect.succeed(false)
+      : owned(id, owner, taskEffect(clearUnreachable(publicRow(r)))).pipe(
+          Effect.map(Option.getOrElse(() => true)),
+        );
   const importTaskBatch = Effect.fn("RemoteDispatchCoordinator.importTaskBatch")(function* (
     id: string,
     owner: number,
@@ -816,8 +823,7 @@ const make = Effect.gen(function* () {
             return true;
           }
           hostFailures = 0;
-          if (r.host_unavailable_since != null)
-            yield* owned(id, owner, taskEffect(clearUnreachable(id)));
+          if (yield* endOutage(id, owner, r)) return false;
           if (yield* grace.retry) return true;
           if (r.kind === "task") {
             const gone =
@@ -862,8 +868,7 @@ const make = Effect.gen(function* () {
           return false;
         }
         hostFailures = 0;
-        if (r.host_unavailable_since != null)
-          yield* owned(id, owner, taskEffect(clearUnreachable(id)));
+        if (yield* endOutage(id, owner, r)) return false;
         const missingRun = answer.success.observedRun === null && r.launched_run_id === null;
         const waitingForRun = missingRun && (yield* Clock.currentTimeMillis) < runDeadline;
         const imported = yield* importBatch(

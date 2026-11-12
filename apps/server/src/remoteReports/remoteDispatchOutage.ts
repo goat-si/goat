@@ -122,12 +122,31 @@ export const recordUnreachable = Effect.fn("remoteReports.recordUnreachable")(fu
     : yield* endTask({ ...record, task: record.task }, since, at);
 });
 
-/** Any answer, refusal or local failure other than an unreachable host ends the outage. */
+/**
+ * Any answer, refusal or local failure other than an unreachable host ends the outage. True when
+ * the row ends instead: this outage's failure was committed and a crash stopped the row change.
+ */
 export const clearUnreachable = Effect.fn("remoteReports.clearUnreachable")(function* (
-  correlationId: string,
+  record: RemoteDispatchRecord,
 ) {
   const sql = yield* SqlClient.SqlClient;
+  const since = record.hostUnavailableSince;
+  if (record.task !== null && since !== null) {
+    const summary = notAnswering(record.host, since);
+    const task = yield* committedTaskResult({ ...record, task: record.task });
+    if (task?.status === "failed" && task.result === summary) {
+      const at = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`UPDATE remote_dispatches SET state = 'lost', end_reason = 'host_unreachable',
+        ended_at = ${at}, updated_at = ${at}, known_run_status = 'failed', observation = NULL,
+        last_error = ${summary}
+        WHERE correlation_id = ${record.correlationId} AND state = 'running'`.pipe(
+        Effect.mapError(storage),
+      );
+      return true;
+    }
+  }
   yield* sql`UPDATE remote_dispatches SET host_unavailable_since = NULL
-    WHERE correlation_id = ${correlationId} AND state = 'running'
+    WHERE correlation_id = ${record.correlationId} AND state = 'running'
       AND host_unavailable_since IS NOT NULL`.pipe(Effect.mapError(storage));
+  return false;
 });
