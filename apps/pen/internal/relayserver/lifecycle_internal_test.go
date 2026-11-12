@@ -39,14 +39,18 @@ type live struct {
 	url    string
 	origin string
 	done   chan struct{}
-	mu     sync.Mutex
-	opened int
-	conns  []*websocket.Conn
+	// counted receives once per session whose bytes reached the traffic totals.
+	counted chan struct{}
+	mu      sync.Mutex
+	opened  int
+	conns   []*websocket.Conn
 	// stall names the client session whose next data write fails as a stalled peer's would;
 	// stalled receives once it did.
 	stallNode string
 	stallSID  uint32
-	stalled   chan struct{}
+	// stallUplink names the node whose uplink's next write fails the same way.
+	stallUplink string
+	stalled     chan struct{}
 	// authed[nodeID] receives once per uplink the relay accepted (Hooks.OnUplink).
 	t      *testing.T
 	authed map[string]chan struct{}
@@ -69,12 +73,14 @@ func (lv *live) authedCh(nodeID string) chan struct{} {
 
 func newLive(t *testing.T, l Limits) *live {
 	s := New(l)
-	lv := &live{s: s, done: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1), t: t, authed: map[string]chan struct{}{}}
+	lv := &live{s: s, done: make(chan struct{}, 1<<16), counted: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1), t: t, authed: map[string]chan struct{}{}}
 	s.Hooks.OnSocketDone = func(string, string) { lv.done <- struct{}{} }
+	s.Hooks.counted = func() { lv.counted <- struct{}{} }
 	s.Hooks.OnUplink = func(nodeID string) { lv.authedCh(nodeID) <- struct{}{} }
 	s.Hooks.failWrite = func(nodeID, role string, sid uint32) error {
 		lv.mu.Lock()
-		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID
+		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID ||
+			role == "node" && nodeID == lv.stallUplink
 		lv.mu.Unlock()
 		if !hit {
 			return nil
@@ -114,6 +120,8 @@ type liveNode struct {
 	opens []uint32
 	// opened receives each OPEN's sid as it arrives (dropped when full).
 	opened chan uint32
+	// frames receives each DATA and CLOSE frame as it arrives (dropped when full).
+	frames chan wire.Frame
 }
 
 func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
@@ -131,7 +139,7 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 		answer = relay.AnswerChallenge(id, lv.origin, ch)
 	}
 	ws.Write(ctx, websocket.MessageBinary, answer)
-	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64)}
+	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64), frames: make(chan wire.Frame, 1024)}
 	go func() {
 		total, last := uint64(len(ch)), uint64(0)
 		for {
@@ -152,6 +160,11 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 				n.mu.Unlock()
 				select {
 				case n.opened <- f.SID:
+				default:
+				}
+			} else if err == nil {
+				select {
+				case n.frames <- f:
 				default:
 				}
 			}
