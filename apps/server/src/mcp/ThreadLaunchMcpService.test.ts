@@ -42,6 +42,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { newLaunchWatch } from "./launchWatch.ts";
 import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import { fakeCloudCapabilities } from "../orchestration-v2/testkit/FakeCloudAdapter.ts";
+import * as Gate from "../provider/ProviderCliGate.ts";
 
 const projectId = ProjectId.make("project:cloud-launch");
 const instanceId = ProviderInstanceId.make("fakeCloud");
@@ -157,6 +158,8 @@ function fixture(
     readonly onRoute?: () => Effect.Effect<unknown>;
     /** Runs inside the launch, before the thread exists. */
     readonly onLaunch?: () => Effect.Effect<unknown>;
+    /** The launch is refused before the thread exists because the provider CLI is missing. */
+    readonly cliMissing?: Gate.ProviderCliMissingError;
   },
 ) {
   let refusedOnce = false;
@@ -269,59 +272,61 @@ function fixture(
         }).pipe(
           Effect.andThen(() => behavior?.onLaunch?.() ?? Effect.void),
           Effect.andThen(
-            behavior?.createdThenRefused !== undefined && !refusedOnce
-              ? Effect.suspend(() => {
-                  refusedOnce = true;
-                  const sql = behavior.createdThenRefused!.sql();
-                  return sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+            behavior?.cliMissing !== undefined
+              ? Effect.fail(behavior.cliMissing)
+              : behavior?.createdThenRefused !== undefined && !refusedOnce
+                ? Effect.suspend(() => {
+                    refusedOnce = true;
+                    const sql = behavior.createdThenRefused!.sql();
+                    return sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
                     VALUES (${input.threadId!}, ${projectId}, 'Refused', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`.pipe(
-                    Effect.orDie,
-                    Effect.andThen(
-                      Effect.fail(
-                        new ThreadLaunch.ThreadLaunchError({
-                          operation: "dispatch-message",
-                          commandId: input.commandId,
-                          projectId: input.projectId,
-                          cause: "The launcher may no longer start this work.",
-                        }),
+                      Effect.orDie,
+                      Effect.andThen(
+                        Effect.fail(
+                          new ThreadLaunch.ThreadLaunchError({
+                            operation: "dispatch-message",
+                            commandId: input.commandId,
+                            projectId: input.projectId,
+                            cause: "The launcher may no longer start this work.",
+                          }),
+                        ),
                       ),
-                    ),
-                  );
-                })
-              : behavior?.failLaunches === true
-                ? Effect.fail(
-                    new ThreadLaunch.ThreadLaunchError({
-                      operation:
-                        behavior.childThreadVisible === true
-                          ? "dispatch-message"
-                          : "resolve-project",
-                      commandId: input.commandId,
-                      projectId: input.projectId,
-                      cause: new Error("fixture launch failure"),
-                    }),
-                  )
-                : Effect.sync(() => {
-                    launched.push(input);
-                    return {
-                      threadId: input.threadId,
-                      resumed: false,
-                      projection: {
-                        thread: {
-                          id: input.threadId,
-                          projectId,
-                          title: input.title,
-                          modelSelection,
-                        },
-                        runs: [
-                          {
-                            id: "run:cloud-launched",
-                            userMessageId: input.initialMessage?.messageId,
-                            status: "starting",
+                    );
+                  })
+                : behavior?.failLaunches === true
+                  ? Effect.fail(
+                      new ThreadLaunch.ThreadLaunchError({
+                        operation:
+                          behavior.childThreadVisible === true
+                            ? "dispatch-message"
+                            : "resolve-project",
+                        commandId: input.commandId,
+                        projectId: input.projectId,
+                        cause: new Error("fixture launch failure"),
+                      }),
+                    )
+                  : Effect.sync(() => {
+                      launched.push(input);
+                      return {
+                        threadId: input.threadId,
+                        resumed: false,
+                        projection: {
+                          thread: {
+                            id: input.threadId,
+                            projectId,
+                            title: input.title,
+                            modelSelection,
                           },
-                        ],
-                      },
-                    } as unknown as ThreadLaunch.ThreadLaunchResult;
-                  }),
+                          runs: [
+                            {
+                              id: "run:cloud-launched",
+                              userMessageId: input.initialMessage?.messageId,
+                              status: "starting",
+                            },
+                          ],
+                        },
+                      } as unknown as ThreadLaunch.ThreadLaunchResult;
+                    }),
           ),
         ),
     }),
@@ -850,6 +855,36 @@ it.effect(
         expect(fifth).toMatchObject({ code: "capacity_exceeded" });
         expect(f.attempted).toHaveLength(4);
         expect(yield* setup.states()).toEqual(["bound", "bound", "bound", "bound"]);
+      }),
+    );
+  },
+);
+
+it.effect.each([true, false])(
+  "a launch refused for a missing CLI says what to run and releases the reservation (syncable %s)",
+  (syncable) => {
+    const cliMissing = new Gate.ProviderCliMissingError({
+      instanceId,
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Codex",
+      host: "vm-1",
+      binary: syncable ? "codex" : "/opt/codex-beta",
+      syncable,
+      created: false,
+    });
+    const f = fixture(false, "published-ref", undefined, undefined, {}, { cliMissing });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const setup = yield* withChannelAdmission(f);
+        const failed = yield* Effect.flip(setup.launch("Inspect"));
+        expect(failed).toMatchObject({
+          code: "provider_unavailable",
+          classification: "provider_cli_missing",
+          message: cliMissing.message,
+        });
+        // driver tells a caller on another machine that provider.sync is the fix.
+        expect(failed.driver).toBe(syncable ? "codex" : undefined);
+        expect(yield* setup.states()).toEqual(["released"]);
       }),
     );
   },

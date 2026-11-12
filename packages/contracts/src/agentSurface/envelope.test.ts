@@ -312,6 +312,28 @@ describe("fromToolResult", () => {
       message: "Memory storage limit reached: 112.3 MiB of 100.0 MiB used.",
       retryable: false,
     });
+    // A launch refused for a missing CLI ran nothing; the agent installs it, then retries.
+    expect(
+      errorOf(
+        fromToolResult(
+          {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  _tag: "OrchestratorMcpFailure",
+                  code: "provider_unavailable",
+                  classification: "provider_cli_missing",
+                  message: "Codex is not installed on vm-1.",
+                }),
+              },
+            ],
+            isError: true,
+          },
+          write,
+        ),
+      ),
+    ).toMatchObject({ code: "failed_precondition", reason: "provider_cli_missing" });
     expect(
       errorOf(
         fromToolResult(

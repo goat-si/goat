@@ -62,6 +62,7 @@ import {
 } from "./threadAccess.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { checkModelSelection as checkCatalogModelSelection } from "./ModelSelectionValidation.ts";
+import { cliMissingFailure } from "../provider/ProviderCliGate.ts";
 
 type Modes = {
   readonly runtimeMode: RuntimeMode;
@@ -636,6 +637,7 @@ const make = Effect.gen(function* () {
                         message: error.message,
                       });
                     }
+                    if (error._tag === "ProviderCliMissingError") return cliMissingFailure(error);
                     if (error._tag === "ThreadLaunchWorkspaceMissingError") {
                       return new OrchestratorMcpFailure({
                         code: "invalid_request",

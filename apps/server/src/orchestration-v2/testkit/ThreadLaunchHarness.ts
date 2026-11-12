@@ -23,6 +23,7 @@ import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
 import * as ProviderRegistryMock from "../../provider/testUtils/providerRegistryMock.ts";
+import type * as ProviderCliGate from "../../provider/ProviderCliGate.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as TextGeneration from "../../textGeneration/TextGeneration.ts";
 import * as WorkspacePaths from "../../workspace/WorkspacePaths.ts";
@@ -111,6 +112,8 @@ interface HarnessOptions {
   readonly launchEvents?: (
     real: ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"],
   ) => ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"];
+  /** The provider CLI gate the launch service is built with; none unless given. */
+  readonly providerCliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
 }
 
 export function makeHarness(options: HarnessOptions = {}) {
@@ -160,6 +163,7 @@ export function makeHarness(options: HarnessOptions = {}) {
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
   );
   const layerExternalServices = Layer.mergeAll(
+    options.providerCliGate ?? Layer.empty,
     WorktreeSetupTracker.layer,
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
     Layer.mock(TerminalManager.TerminalManager)({ close: closeTerminal }),

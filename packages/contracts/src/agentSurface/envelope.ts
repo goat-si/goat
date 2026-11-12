@@ -121,6 +121,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   not_home: before("conflict"),
   conflict: before("conflict"),
   provider_unavailable: before("unavailable"),
+  // A launch refused because the provider's CLI is missing there; install it, then retry.
+  provider_cli_missing: before("failed_precondition"),
   session_receipt_pending: before("unavailable"),
   model_unavailable: before("unavailable"),
   // A routed call may have reached the remote before it stopped answering.

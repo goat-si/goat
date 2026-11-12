@@ -57,6 +57,7 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
+import { type ProviderCliMissingError, providerCliGuard } from "../provider/ProviderCliGate.ts";
 import { randomUuidV4 } from "@goat/shared/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import {
@@ -251,6 +252,7 @@ export class ThreadLaunchService extends Context.Service<
       | ThreadLaunchError
       | ThreadLaunchWorkspaceMissingError
       | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      | ProviderCliMissingError
     >;
     /** Check before creation for early errors; launch otherwise accepts and reports base failures inside the thread. */
     readonly checkWorktreeBase: (
@@ -290,6 +292,7 @@ const make = Effect.gen(function* () {
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* Effect.serviceOption(ProviderAdapters.ProviderAdapterRegistryV2);
+  const requireCli = yield* providerCliGuard;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
@@ -1164,6 +1167,7 @@ const make = Effect.gen(function* () {
           commandId: input.commandId,
           instanceId: input.modelSelection.instanceId,
         });
+      if (!linkOnly) yield* requireCli(input.modelSelection.instanceId);
       return yield* Effect.gen(function* () {
         // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
         const reusableLaunchReceipt =

@@ -62,7 +62,7 @@ it.live("a Claude CLI that answers --version is present even when sign-in is unk
       });
       const snapshot = yield* checkClaudeProviderStatus(
         decodeClaudeSettings({ enabled: true, binaryPath: executable }),
-        () => Effect.succeed(undefined),
+        undefined,
         {},
       );
       assert.equal(snapshot.cli, "present");

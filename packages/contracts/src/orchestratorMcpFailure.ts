@@ -140,5 +140,7 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
     classification: Schema.optionalKey(Schema.String),
     /** An idle thread a refused placement left behind; its placer archives it. */
     threadId: Schema.optionalKey(Schema.String),
+    /** With classification provider_cli_missing: set only when provider.sync installs that CLI. */
+    driver: Schema.optionalKey(Schema.String),
   },
 ) {}

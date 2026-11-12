@@ -322,7 +322,10 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
           return AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths);
         }
         // Refused before any thread existed.
-        if (error._tag === "ThreadLaunchWorkspaceMissingError") {
+        if (
+          error._tag === "ThreadLaunchWorkspaceMissingError" ||
+          error._tag === "ProviderCliMissingError"
+        ) {
           return AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths);
         }
         // Project/receipt reads precede dispatch; create-thread errors can wrap post-message reads and prove nothing alone.
