@@ -15,6 +15,7 @@ import {
   screenActionGate,
   screenTree,
 } from "./ServerBrowserScreen.ts";
+import { interactiveElementsOf } from "./snapshotInteractive.ts";
 import { SessionControl } from "./SessionControl.ts";
 import { interactiveElementsOf } from "./snapshotInteractive.ts";
 
@@ -147,6 +148,30 @@ describe("refs other content paints over", () => {
     });
     expect(cut.accessibilityTree).toBe("- generic [ref=t3-7-e3] [box=0,0,800,600]:");
     expect(interactiveElementsOf(cut.accessibilityTree)).toEqual([]);
+    expect(cut.treeComplete).toBe(false);
+  });
+});
+
+describe("a tree over the text limit", () => {
+  it("a tree cut inside a line drops that line, so a cut name's text never reads as a ref or box", () => {
+    const named = "- button / [ref=e3] [cursor=pointer] [box=1,2,3,4]";
+    // Page text in a raw /…/ name; a cut after its fake box would leave a lone "/" name.
+    const spoof = "- button / [ref=e1] [cursor=pointer] [box=9,8,7,6] x/ [ref=e4] [box=5,5,5,5]";
+    const tree = `${named}\n${spoof}`;
+    const limit = tree.indexOf("[box=9,8,7,6]") + "[box=9,8,7,6]".length;
+    const cut = screenTree(tree, { limit, unread: [], generation: "7", refs: new Map() });
+    expect(interactiveElementsOf(cut.accessibilityTree, !cut.treeComplete)).toEqual([
+      {
+        tag: "button",
+        role: "button",
+        name: "/",
+        selector: "aria-ref=t3-7-e3",
+        x: 1,
+        y: 2,
+        width: 3,
+        height: 4,
+      },
+    ]);
     expect(cut.treeComplete).toBe(false);
   });
 });

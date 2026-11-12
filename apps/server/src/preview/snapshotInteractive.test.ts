@@ -2,6 +2,7 @@ import { chromium, type Browser, type CDPSession, type Page } from "playwright-c
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import { snapshot } from "./ServerBrowserPage.ts";
+import { interactiveElementsOf } from "./snapshotInteractive.ts";
 import { testActionPage } from "./actionChannel.testkit.ts";
 
 const PAGE = `<p>Article paragraph</p>
@@ -26,6 +27,22 @@ const SPOOFS = `<button id="b1" aria-label="x [ref=e1] [cursor=pointer] [box=1,2
 <p>para [ref=e5] [cursor=pointer] [box=5,5,5,5]</p>
 <div id="d1" style="cursor:pointer"><span>Pay $&amp; now $1 $$ $\` $'</span><div>x</div></div>
 <script>document.addEventListener("click", (event) => { event.preventDefault(); document.body.dataset.hit = event.target.closest("[id]")?.id ?? ""; });</script>`;
+
+// Playwright names a button, link or labelled box after what a field or editor under it shows; the
+// last two are a name the page wrote and a listbox whose options are not in its name.
+const BORROWED = `<button>Card <input value="4111111111111111"></button>
+<a href="#">Card <input value="4111111111111111"></a>
+<div role="button" tabindex="0">Card <input value="4111111111111111"></div>
+<div style="cursor:pointer" aria-labelledby="f">Card <input id="f" value="4111111111111111"></div>
+<button>Card <div contenteditable="true">draft note</div></button>
+<button>Card <div contenteditable="true" style="display:inline-block">draft note</div></button>
+<button>Card <div style="pointer-events:none"><div contenteditable="true">draft note</div></div></button>
+<button>Card <div contenteditable="true"><p>draft note</p></div></button>
+<button>Card <div contenteditable="true"><p>draft</p><h2>note</h2></div></button>
+<button>Card <div role="textbox" contenteditable="true">draft note</div></button>
+<button>Card <select><option>Visa</option></select></button>
+<button aria-label="Pay now">Card <input value="4111111111111111"></button>
+<ul role="listbox" aria-label="Fruits"><li role="option">Apple</li></ul>`;
 
 const withPage = async (html: string, run: (page: Page, cdp: CDPSession) => Promise<void>) => {
   expect(chromiumInstalled).toBe(true);
@@ -128,6 +145,40 @@ it("a pointer container or frame is never named after what was typed or chosen i
       /^- generic "Card" \[ref=\S+\] \[cursor=pointer\]/m,
     );
     expect(full.interactiveElements.some((element) => element.role === "iframe")).toBe(true);
+  }));
+
+it("a button, link or labelled box is never named after what a field or editor under it shows", () =>
+  withPage(BORROWED, async (page, cdp) => {
+    const full = await take(page, cdp);
+    const narrow = await take(page, cdp, true);
+    for (const { interactiveElements } of [full, narrow]) {
+      const names = interactiveElements
+        .filter((element) => ["button", "link", "generic"].includes(element.role ?? ""))
+        .map((element) => element.name);
+      expect(names).toEqual([...Array.from({ length: 11 }, () => "Card"), "Pay now"]);
+    }
+    const lines = String(narrow.accessibilityTree)
+      .split("\n")
+      .filter((line) => /^- (?:button|link|generic) /.test(line));
+    expect(lines).toHaveLength(12);
+    for (const line of lines)
+      expect(line).toMatch(/^- (?:button|link|generic) "(?:Card|Pay now)" \[ref=/);
+  }));
+
+it("a button whose field a cut tree left out is named only by the text lines kept under it", () => {
+  const tree = '- button "Card 4111111111111111" [ref=e2] [box=1,2,3,4]:\n  - text: Card';
+  expect(interactiveElementsOf(tree, true)).toEqual([
+    expect.objectContaining({ role: "button", name: "Card", selector: "aria-ref=e2" }),
+  ]);
+});
+
+it("a name the page wrote stays when nothing under the element shows it", () =>
+  withPage(BORROWED, async (page, cdp) => {
+    const narrow = await take(page, cdp, true);
+    expect(String(narrow.accessibilityTree)).toMatch(/^- button "Pay now" \[ref=/m);
+    expect(String(narrow.accessibilityTree)).toMatch(/^- listbox "Fruits" \[ref=/m);
+    const { interactiveElements } = await take(page, cdp);
+    expect(interactiveElements.find((element) => element.role === "listbox")?.name).toBe("Fruits");
   }));
 
 it("refs, boxes and pointer cursors written in page text never stand in for an element's own", () =>

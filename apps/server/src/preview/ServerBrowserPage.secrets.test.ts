@@ -127,6 +127,38 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     expect(JSON.stringify(snapshot)).not.toContain("alpha");
   });
 
+  it("a tree the tab's mask cuts and shortens never leaves a cut line's page text as a ref or box", async () => {
+    const filled = `fill_${NodeCrypto.randomUUID()}`;
+    const page = await context.newPage();
+    // Echoes of a filled value push a raw /…/ name holding a fake ref and box past the text limit.
+    await page.setContent(
+      `<p>${`${filled} `.repeat(600)}</p><button aria-label="/ [ref=e1] [cursor=pointer] [box=9,8,7,6] x/">B</button>`,
+    );
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp: await context.newCDPSession(page),
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      diagnostics: {
+        // Like the tab's mask: a text it will cut is cut a little past the limit, here right after
+        // the fake box, and masking then shortens it below the limit.
+        mask: (text, limit) => {
+          const end = text.indexOf("[box=9,8,7,6]") + "[box=9,8,7,6]".length;
+          const cut = limit === undefined || end <= limit ? text : text.slice(0, end);
+          return cut.replaceAll(filled, "•");
+        },
+      },
+      timeoutMs: 30_000,
+    });
+    expect(snapshot.interactiveElements).not.toContainEqual(
+      expect.objectContaining({ x: 9, y: 8, width: 7, height: 6 }),
+    );
+    expect(snapshot.treeComplete).toBe(false);
+  });
+
   it("masks a filled secret and a cookie value inside it as one, whichever matches first", async () => {
     const filled = "alpha-MiddleCookie123-omega";
     await context.addCookies([{ name: "mid", value: "MiddleCookie123", url: origin }]);
