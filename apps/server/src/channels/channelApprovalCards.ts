@@ -80,10 +80,13 @@ const actionPhrase = (kind: OrchestrationV2RuntimeRequest["kind"] | undefined): 
 
 const MAX_PROMPT_CHARS = 400;
 
-/** The two buttons on an approval card. A number or a Slack button sends one of these labels. */
+/**
+ * The two buttons on an approval card, Deny first so a quick first pick never approves. A Slack
+ * button or a GOAT app choice sends one of these labels; typed, they are the only approval reply.
+ */
 export const approvalChoiceLabels = (code: string): readonly [string, string] => [
-  "Approve " + code,
   "Deny " + code,
+  "Approve " + code,
 ];
 
 /** Same words a local answer records, and the provenance a remote respond requires. */
@@ -128,22 +131,5 @@ export const approvalCard = (input: {
       "." +
       detail,
     options: approvalChoiceLabels(input.code),
-  };
-};
-
-/** The question asked when a bare "approve" could mean more than one card, or one not yet shown. */
-export const whichApproval = (
-  cards: ReadonlyArray<{ readonly card: OpenApprovalCard; readonly code: string }>,
-  decision: ApprovalReply["decision"],
-): { readonly text: string; readonly options: ReadonlyArray<string> } => {
-  const verb = decision === "accept" ? "Approve" : "Deny";
-  const shown = cards.slice(0, 4);
-  return {
-    text:
-      (cards.length > 1
-        ? "More than one approval is waiting. Which one?\n"
-        : "Which approval do you mean?\n") +
-      shown.map((entry) => "- " + entry.code + ": " + entry.card.task.title).join("\n"),
-    options: shown.map((entry) => verb + " " + entry.code),
   };
 };

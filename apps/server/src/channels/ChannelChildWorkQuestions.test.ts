@@ -246,7 +246,7 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
         yield* reports.reconcile(runtime.ownerToken);
         yield* runtime.drain;
 
-        yield* gateway.ingest(slackInput("deny", "Ev2"), slackContext);
+        yield* gateway.ingest(slackInput("deny A1", "Ev2"), slackContext);
         yield* runtime.drain;
         const [answered] = responses(harness);
         assert.strictEqual(answered?.threadId, ThreadId.make("thread:deploy"));
@@ -256,7 +256,7 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
         yield* reports.reconcile(runtime.ownerToken);
         yield* runtime.drain;
         yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U1" });
-        yield* gateway.ingest(slackInput("approve", "Ev3"), slackContext);
+        yield* gateway.ingest(slackInput("approve A2", "Ev3"), slackContext);
         yield* runtime.drain;
         assert.strictEqual(responses(harness).length, 1);
       }).pipe(Effect.provide(harness.layer));
@@ -288,13 +288,13 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
         yield* runtime.drain;
 
         const root = "1760000000.000100";
-        yield* gateway.ingest(slackInput("approve", "Ev2", root, "U2"), slackContext);
-        yield* gateway.ingest(slackInput("approve", "Ev3", root, "U3"), slackContext);
-        yield* gateway.ingest(slackInput("approve", "Ev4", root, "U9"), slackContext);
+        yield* gateway.ingest(slackInput("approve A1", "Ev2", root, "U2"), slackContext);
+        yield* gateway.ingest(slackInput("approve A1", "Ev3", root, "U3"), slackContext);
+        yield* gateway.ingest(slackInput("approve A1", "Ev4", root, "U9"), slackContext);
         yield* runtime.drain;
         assert.strictEqual(responses(harness).length, 0);
 
-        yield* gateway.ingest(slackInput("approve", "Ev5", root, "U1"), slackContext);
+        yield* gateway.ingest(slackInput("approve A1", "Ev5", root, "U1"), slackContext);
         yield* runtime.drain;
         const [answered] = responses(harness);
         assert.strictEqual(answered?.threadId, ThreadId.make("thread:deploy"));
@@ -387,7 +387,7 @@ describe("GOAT Bot hears about a launched thread's approvals after its task ende
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
       const gateway = yield* ChannelGateway.ChannelGateway;
-      yield* gateway.ingest(goatInput("deny", "late-deny"), rpcContext);
+      yield* gateway.ingest(goatInput("deny A1", "late-deny"), rpcContext);
       yield* runtime.drain;
       assert.strictEqual(responses(harness)[0]?.decision, "decline");
       yield* reports.reconcile(runtime.ownerToken);

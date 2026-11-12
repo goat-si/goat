@@ -94,7 +94,7 @@ describe("GOAT Bot approval cards", () => {
       );
       // Codes are issued in order per conversation and never reused.
       const code = "A1";
-      assert.deepStrictEqual(cards[0]?.channel?.options, ["Approve " + code, "Deny " + code]);
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["Deny " + code, "Approve " + code]);
 
       // The button sends its label, which is answered without the model.
       yield* gateway.ingest(goatInput("Approve " + code, "a2"), rpcContext);
@@ -121,8 +121,12 @@ describe("GOAT Bot approval cards", () => {
       assert.strictEqual(responses(harness).length, 1);
       assert.strictEqual((yield* assistantTexts).at(-1), CHANNEL_COPY.approvalAlreadyAnswered);
 
-      // A bare word answers the only open card.
+      // A bare word answers no card, even the only open one: it gets the code to reply with.
       yield* gateway.ingest(goatInput("approve", "a4"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness).length, 1);
+      assert.include((yield* assistantTexts).at(-1) ?? "", CHANNEL_COPY.approvalNeedsCode);
+      yield* gateway.ingest(goatInput("approve A2", "a5"), rpcContext);
       yield* runtime.drain;
       assert.strictEqual(responses(harness).length, 2);
       assert.strictEqual(responses(harness)[1]?.requestId, approval("rm-again").id);
@@ -149,7 +153,7 @@ describe("GOAT Bot approval cards", () => {
         yield* assistantTexts,
         "research the options: a subagent wants to change files.",
       );
-      yield* gateway.ingest(goatInput("거절", "s2"), rpcContext);
+      yield* gateway.ingest(goatInput("거절 A1", "s2"), rpcContext);
       yield* runtime.drain;
       const [answered] = responses(harness);
       assert.strictEqual(answered?.threadId, ThreadId.make("thread:child"));
@@ -157,64 +161,61 @@ describe("GOAT Bot approval cards", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect(
-    "asks which one when a bare answer fits several cards, and never matches titles",
-    () => {
-      const harness = makeHarness();
-      return Effect.gen(function* () {
-        yield* setupBot;
-        const gateway = yield* ChannelGateway.ChannelGateway;
-        const runtime = yield* ChannelRuntime.ChannelRuntime;
-        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-        const ledger = yield* ChannelLedger.ChannelLedger;
-        yield* gateway.ingest(goatInput("do: fix login", "m1"), rpcContext);
-        yield* gateway.ingest(goatInput("do: bump deps", "m2"), rpcContext);
-        yield* runtime.drain;
-        const tasks = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
-        const login = tasks.find((task) => task.title === "fix login")!;
-        const deps = tasks.find((task) => task.title === "bump deps")!;
-        harness.world.runtimeRequests.set(login.worker!.threadId, [approval("login")]);
-        harness.world.runtimeRequests.set(deps.worker!.threadId, [approval("deps")]);
-        yield* reports.reconcile(runtime.ownerToken);
-        yield* runtime.drain;
+  it.effect("a bare answer asks for the code among several cards, and never matches titles", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* gateway.ingest(goatInput("do: fix login", "m1"), rpcContext);
+      yield* gateway.ingest(goatInput("do: bump deps", "m2"), rpcContext);
+      yield* runtime.drain;
+      const tasks = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+      const login = tasks.find((task) => task.title === "fix login")!;
+      const deps = tasks.find((task) => task.title === "bump deps")!;
+      harness.world.runtimeRequests.set(login.worker!.threadId, [approval("login")]);
+      harness.world.runtimeRequests.set(deps.worker!.threadId, [approval("deps")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
 
-        yield* gateway.ingest(goatInput("deny", "m3"), rpcContext);
-        yield* runtime.drain;
-        assert.strictEqual(responses(harness).length, 0);
-        const ask = (yield* botMessages).messages.findLast(
-          (message) => message.channel?.kind === "question",
-        );
-        // Asking again for an issued request returns the code its card already shows.
-        const codeOf = (requestId: string) =>
-          ledger.issueApprovalCode({
-            conversationId: deps.conversationId,
-            requestId,
-            now: "2026-10-12T00:02:00.000Z",
-          });
-        const depsCode = yield* codeOf("approval:deps");
-        const loginCode = yield* codeOf("approval:login");
-        assert.sameMembers([depsCode, loginCode], ["A1", "A2"]);
-        assert.include(ask?.channel?.options ?? [], "Deny " + depsCode);
+      yield* gateway.ingest(goatInput("deny", "m3"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness).length, 0);
+      const ask = (yield* botMessages).messages.findLast(
+        (message) => message.channel?.kind === "question",
+      );
+      // Asking again for an issued request returns the code its card already shows.
+      const codeOf = (requestId: string) =>
+        ledger.issueApprovalCode({
+          conversationId: deps.conversationId,
+          requestId,
+          now: "2026-10-12T00:02:00.000Z",
+        });
+      const depsCode = yield* codeOf("approval:deps");
+      const loginCode = yield* codeOf("approval:login");
+      assert.sameMembers([depsCode, loginCode], ["A1", "A2"]);
+      assert.include(ask?.channel?.options ?? [], "Deny " + depsCode);
 
-        yield* gateway.ingest(goatInput("Deny " + depsCode, "m4"), rpcContext);
-        yield* runtime.drain;
-        const [answered] = responses(harness);
-        assert.strictEqual(answered?.threadId, deps.worker!.threadId);
-        assert.strictEqual(answered?.decision, "decline");
-        // Words that happen to match a title are conversation, not an approval.
-        yield* gateway.ingest(goatInput("approve the fix login PR", "m5"), rpcContext);
-        yield* runtime.drain;
-        assert.strictEqual(responses(harness).length, 1);
-        // A code no card was issued under is conversation too.
-        yield* gateway.ingest(goatInput("approve A9", "m6"), rpcContext);
-        yield* runtime.drain;
-        assert.strictEqual(responses(harness).length, 1);
-        yield* gateway.ingest(goatInput("approve " + loginCode.toLowerCase(), "m7"), rpcContext);
-        yield* runtime.drain;
-        assert.strictEqual(responses(harness)[1]?.threadId, login.worker!.threadId);
-      }).pipe(Effect.provide(harness.layer));
-    },
-  );
+      yield* gateway.ingest(goatInput("Deny " + depsCode, "m4"), rpcContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.strictEqual(answered?.threadId, deps.worker!.threadId);
+      assert.strictEqual(answered?.decision, "decline");
+      // Words that happen to match a title are conversation, not an approval.
+      yield* gateway.ingest(goatInput("approve the fix login PR", "m5"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness).length, 1);
+      // A code no card was issued under is conversation too.
+      yield* gateway.ingest(goatInput("approve A9", "m6"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness).length, 1);
+      yield* gateway.ingest(goatInput("approve " + loginCode.toLowerCase(), "m7"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness)[1]?.threadId, login.worker!.threadId);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("keeps an old approval answerable behind newer work", () => {
     const harness = makeHarness();
@@ -236,7 +237,7 @@ describe("GOAT Bot approval cards", () => {
       yield* runtime.drain;
       const recent = yield* ledger.listConversationTasks(first.conversationId);
       assert.isFalse(recent.some((task) => task.taskId === first.taskId));
-      yield* gateway.ingest(goatInput("approve", "o-answer"), rpcContext);
+      yield* gateway.ingest(goatInput("approve A1", "o-answer"), rpcContext);
       yield* runtime.drain;
       assert.strictEqual(responses(harness)[0]?.threadId, first.worker!.threadId);
     }).pipe(Effect.provide(harness.layer));
@@ -264,7 +265,7 @@ describe("GOAT Bot approval cards", () => {
       );
 
       yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U1" });
-      yield* gateway.ingest(slackInput("approve", "Ev2"), slackContext);
+      yield* gateway.ingest(slackInput("approve A1", "Ev2"), slackContext);
       yield* runtime.drain;
       assert.strictEqual(responses(harness).length, 0);
     }).pipe(Effect.provide(harness.layer));
@@ -286,7 +287,7 @@ describe("GOAT Bot approval cards", () => {
       yield* runtime.drain;
       // The thread refuses the answer: the card stays open and the person hears so.
       harness.world.dispatchFailures.add(worker);
-      yield* gateway.ingest(goatInput("approve", "r2"), rpcContext);
+      yield* gateway.ingest(goatInput("approve A1", "r2"), rpcContext);
       yield* runtime.drain;
       assert.include(yield* assistantTexts, CHANNEL_COPY.approvalFailed);
       harness.world.dispatchFailures.delete(worker);

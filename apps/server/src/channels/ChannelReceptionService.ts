@@ -102,15 +102,14 @@ import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import * as ChannelRemoteRecall from "./channelRemoteRecall.ts";
 import {
   approvalCard,
-  approvalChoiceLabels,
   approvalReason,
   approvalSent,
   type ApprovalReply,
   type OpenApprovalCard,
   openApprovalCards,
   parseApprovalReply,
-  whichApproval,
 } from "./channelApprovalCards.ts";
+import { askForApprovalCode, pendingApprovals } from "./channelApprovalReplies.ts";
 import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import {
@@ -793,27 +792,9 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * The ledger card can lag the thread: someone may have answered in the thread before this pass
-   * rewrote the observation. A local request that is no longer pending is not an open card. A
-   * remote request stays listed; this machine cannot see its status. A read failure stays listed
-   * so the answer path can say it could not be passed on.
-   */
-  const approvalStillPending = (card: OpenApprovalCard) =>
-    card.approval.host !== undefined
-      ? Effect.succeed(true)
-      : threads.getThreadRecords(card.approval.threadId, ["runtimeRequests"]).pipe(
-          Effect.map((records) =>
-            records.runtimeRequests.some(
-              (request) => request.id === card.approval.requestId && request.status === "pending",
-            ),
-          ),
-          Effect.orElseSucceed(() => true),
-        );
-
-  /**
-   * What an approve or deny reply does: a bare verb answers the only open card (or asks which of
-   * several); a code answers the request it was issued for, or says it was already answered.
-   * Undefined means the message was not about a card and goes to the model as usual.
+   * What an approve or deny reply does: a code answers the request it was issued for, or says it
+   * was already answered; a bare verb answers nothing and repeats the open requests with their
+   * codes (channelApprovalReplies). Undefined means the message was not about a card.
    */
   const decideApprovalReply = (
     reply: ApprovalReply,
@@ -823,36 +804,26 @@ const make = Effect.gen(function* () {
     via: ApprovalVia,
   ) =>
     Effect.gen(function* () {
-      const listed = openApprovalCards(yield* ledger.listConversationNeedsYou(conversationId));
-      const open: Array<OpenApprovalCard> = [];
-      for (const card of listed) {
-        if (yield* approvalStillPending(card)) open.push(card);
-      }
-      const answer = (card: OpenApprovalCard) =>
-        Effect.gen(function* () {
-          return {
-            text: yield* answerApproval(card, reply.decision, yield* answerer, inputId, via),
-            options: undefined,
-            task: card.task,
-          };
-        });
+      const open = yield* pendingApprovals(
+        openApprovalCards(yield* ledger.listConversationNeedsYou(conversationId)),
+        threads,
+      );
       if (reply.code === undefined) {
         if (open.length === 0) return undefined;
-        if (open.length === 1) return yield* answer(open[0]!);
-        const now = DateTime.formatIso(yield* DateTime.now);
-        const coded = yield* Effect.forEach(open, (card) =>
-          ledger
-            .issueApprovalCode({ conversationId, requestId: card.approval.requestId, now })
-            .pipe(Effect.map((code) => ({ card, code }))),
-        );
-        return { ...whichApproval(coded, reply.decision), task: undefined, byWord: true };
+        const lead = CHANNEL_COPY.approvalNeedsCode;
+        return yield* askForApprovalCode({ ledger, threads, conversationId, open, lead });
       }
       const requestId = yield* ledger.approvalRequestForCode({ conversationId, code: reply.code });
       if (requestId === undefined) return undefined;
       const card = open.find((candidate) => candidate.approval.requestId === requestId);
-      return card === undefined
-        ? { text: CHANNEL_COPY.approvalAlreadyAnswered, options: undefined, task: undefined }
-        : yield* answer(card);
+      if (card === undefined) {
+        return { text: CHANNEL_COPY.approvalAlreadyAnswered, options: undefined, task: undefined };
+      }
+      return {
+        text: yield* answerApproval(card, reply.decision, yield* answerer, inputId, via),
+        options: undefined,
+        task: card.task,
+      };
     });
 
   const { inboundChoice, isDeterministicReply, taskViewChoice } = makeInboundChoices(
@@ -941,25 +912,21 @@ const make = Effect.gen(function* () {
         who !== undefined && mayDirect(who, message.connectionId, task);
       const tasks = yield* ledger.listConversationTasks(conversationId);
 
-      // A number or an option label is decided here, before the model. A number on an approval
-      // is refused with the card's words: cards once listed numbers in either order. Agents and
-      // routines never answer approvals or questions.
+      // A number or an option label is decided here, before the model. While an approval is
+      // open a number answers nothing and the open requests are repeated with their words.
+      // Agents and routines never answer approvals or questions.
       const choice = routine
         ? undefined
         : (viewChoice ?? (yield* inboundChoice(message, conversationId, tasks)));
       const numberRefused =
         choice?.type === "approval-number"
-          ? {
-              text:
-                CHANNEL_COPY.approvalNotByNumber +
-                " Reply " +
-                approvalChoiceLabels(choice.code)
-                  .map((label) => '"' + label + '"')
-                  .join(" or ") +
-                ", or use its button.",
-              options: undefined,
-              task: undefined,
-            }
+          ? yield* askForApprovalCode({
+              ledger,
+              threads,
+              conversationId,
+              open: choice.open,
+              lead: CHANNEL_COPY.approvalNotByNumber,
+            })
           : undefined;
       const nativeAnswer =
         choice?.type === "native-question"

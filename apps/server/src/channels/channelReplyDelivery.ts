@@ -7,7 +7,7 @@ import type {
 } from "@goat/contracts";
 
 import type * as ChannelLedger from "./ChannelLedger.ts";
-import { numberedChoiceLines } from "./channelDecisionChoices.ts";
+import { numberedChoiceLines, wordChoiceLine } from "./channelDecisionChoices.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 
 /**
@@ -36,20 +36,17 @@ export const replyDelivery = (input: {
   readonly interim?: boolean | undefined;
   /** Only the task's own question narration passes it; see ChannelMessageMeta.questionKind. */
   readonly questionKind?: "task" | undefined;
-  /** Choices answered by their words, never by number: approvals, where a number could flip. */
+  /** Choices answered only by their words: approvals, where a number names no request. */
   readonly byWord?: boolean | undefined;
 }): ChannelLedger.ChannelOutboxInsert => {
   const deliveryId = deliveryIdFor(input.causeKey);
   const options = input.options === undefined || input.options.length === 0 ? [] : input.options;
   // The GOAT app shows choices as buttons. Slack keeps the labels for Block Kit buttons and
-  // also lists them, so a notification or a typed number still works. iMessage and the rest
-  // get the numbered list only. Choices by word name the words to reply with instead.
+  // also lists them, so a notification or a typed reply still works. iMessage and the rest get
+  // the list only: numbered, or for choices by word the words to reply with.
   const buttons = input.destination.kind === "goat" && options.length > 0;
   const listed = !buttons && options.length > 0;
-  const choices =
-    input.byWord === true
-      ? "Reply " + options.map((option) => '"' + option + '"').join(" or ") + "."
-      : numberedChoiceLines(options);
+  const choices = input.byWord === true ? wordChoiceLine(options) : numberedChoiceLines(options);
   const text = listed ? input.text + "\n" + choices : input.text;
   const keepOptions = buttons || (input.destination.kind === "slack" && options.length > 0);
   return {

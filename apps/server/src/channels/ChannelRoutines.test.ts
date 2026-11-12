@@ -246,13 +246,13 @@ describe("GOAT Bot routines", () => {
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
 
-      yield* admit("Approve", "approve");
+      yield* admit("Approve A1", "approve");
       yield* runtime.drain;
       assert.lengthOf(responses(), 0);
-      assert.deepInclude(seen, { text: "Approve", routine: true });
+      assert.deepInclude(seen, { text: "Approve A1", routine: true });
 
       // The same words from the person approve.
-      yield* gateway.ingest(goatInput("Approve", "person-approve"), rpcContext);
+      yield* gateway.ingest(goatInput("Approve A1", "person-approve"), rpcContext);
       yield* runtime.drain;
       assert.lengthOf(responses(), 1);
     }).pipe(Effect.provide(harness.layer));

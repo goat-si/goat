@@ -103,11 +103,12 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
   running in GOAT on another machine. Subagents that run on another service
   are not counted.
 - When work needs an approval, GOAT Bot sends a card saying what the agent
-  wants to do. Tap Deny or Approve in GOAT. In Slack, tap the button or reply
-  with the words the card shows, such as "deny A1", or just "approve" or
-  "deny". iMessage, which has no buttons, takes the same words. An approval
-  never takes a number. If several approvals are waiting, or the bot isn't
-  sure you saw the card, it asks which one by its code. Only
+  wants to do. Tap Deny or Approve in GOAT or on the Slack card, or reply with
+  the words the card shows, code included, such as "deny A1". iMessage, which
+  has no buttons, takes the same words. A number or a bare "approve" answers
+  no approval: the bot repeats what is waiting with each code, so a reply
+  can't land on a request you hadn't seen yet. While an approval is waiting,
+  answer a question with its choice's words instead of its number. Only
   people with the same access as whoever asked for the work can answer. An
   approval on another GOAT machine is sent there; if that machine can't take
   it, answer it in that thread.
@@ -155,8 +156,8 @@ the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
 
 GOAT can read direct text messages from allowed iMessage handles on the Mac running its server
 and reply in the same conversation. Group chats and attachments are not supported. An approval
-names the words to reply with; a question lists choices as `1.`, `2.`, and so on, and you reply
-with that number to choose it. Give the
+names the words to reply with, such as "deny A1"; a question lists choices as `1.`, `2.`, and so
+on, and you reply with that number, or with the choice's words while an approval is waiting. Give the
 app that launches the server **Full Disk Access** to read Messages. macOS asks separately for
 **Automation** access when GOAT sends through Messages; Messages must be signed in.
 

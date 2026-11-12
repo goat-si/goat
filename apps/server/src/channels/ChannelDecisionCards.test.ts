@@ -10,10 +10,12 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
@@ -145,7 +147,7 @@ const projectFor = (label: string) => {
 };
 
 describe("decision cards", () => {
-  it.effect("asks for a Slack approval by its word, with buttons and no numbers", () => {
+  it.effect("names a Slack approval's words, Deny first, with buttons and no numbers", () => {
     const harness = makeHarness();
     const seen: string[] = [];
     harness.script.current = (input) => {
@@ -168,9 +170,8 @@ describe("decision cards", () => {
         card?.message.text,
         'deploy staging: the agent wants to run a command.\nReply "Deny A1" or "Approve A1".',
       );
-      assert.deepStrictEqual(card?.message.options, ["Approve A1", "Deny A1"]);
+      assert.deepStrictEqual(card?.message.options, ["Deny A1", "Approve A1"]);
 
-      // A number on an approval answers nothing: the card never offered numbers.
       yield* gateway.ingest(slackInput("9", "Ev9"), slackContext);
       yield* runtime.drain;
       assert.strictEqual(responses(harness).length, 0);
@@ -178,15 +179,15 @@ describe("decision cards", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  /** An iMessage chat with one task; `held` titles are never confirmed delivered. */
-  const imessageApprovals = (held: ReadonlyArray<string> = []) =>
+  /** An iMessage chat; a message whose text holds one of the held words never sends. */
+  const imessageChat = (held: ReadonlyArray<string> = []) =>
     Effect.gen(function* () {
       const sent: Array<ChannelOutboundMessage> = [];
       const registry = yield* ChannelTransport.ChannelTransportRegistry;
       yield* registry.register({
         kind: "imessage",
         send: (message) => {
-          if (held.some((title) => message.text.includes(title)))
+          if (held.some((word) => message.text.includes(word)))
             return Effect.fail(new ChannelGatewayError({ reason: "delivery_failed" }));
           sent.push(message);
           return Effect.succeed({
@@ -199,15 +200,30 @@ describe("decision cards", () => {
       return sent;
     });
 
-  // Cards issued before this change listed numbers, once Approve first and once Deny first, and
-  // a server that predates it may still list them. A number never answers an approval, so no
-  // order can flip its meaning.
+  /** Two tasks in one iMessage chat, both with workers. */
+  const twoTasks = Effect.gen(function* () {
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
+    yield* runtime.drain;
+    const first = yield* onlyTask;
+    yield* gateway.ingest(imessageInput("do: drop the cache", "row-2"), imessageContext);
+    yield* runtime.drain;
+    const second = (yield* ledger.listConversationTasks(first.conversationId)).find(
+      (task) => task.taskId !== first.taskId,
+    )!;
+    return { first: first.worker!.threadId, second: second.worker!.threadId };
+  });
+
+  // Cards once listed numbers Approve first, for a few hours Deny first, and an older server
+  // still lists them. No number answers an approval, so no order can flip what one means.
   it.effect.each(["1", "2"])(
-    'refuses "%s" on an approval and asks for the word, then "deny" declines',
+    'the number "%s" answers no approval and is told the words; "deny A1" then declines',
     (number) => {
       const harness = makeHarness();
       return Effect.gen(function* () {
-        const sent = yield* imessageApprovals();
+        const sent = yield* imessageChat();
         const gateway = yield* ChannelGateway.ChannelGateway;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
@@ -216,20 +232,26 @@ describe("decision cards", () => {
         const task = yield* onlyTask;
         const request = approval("ship");
         harness.world.runtimeRequests.set(task.worker!.threadId, [request]);
+        harness.world.approvalPrompts.set(request.id, "make release");
         yield* reports.reconcile(runtime.ownerToken);
         yield* runtime.drain;
-        const card = sent.find((message) => message.kind === "question");
         assert.strictEqual(
-          card?.text,
-          'ship the build: the agent wants to run a command.\nReply "Deny A1" or "Approve A1".',
+          sent.find((message) => message.kind === "question")?.text,
+          'ship the build: the agent wants to run a command.\nmake release\nReply "Deny A1" or "Approve A1".',
         );
 
         yield* gateway.ingest(imessageInput(number, "row-2"), imessageContext);
         yield* runtime.drain;
         assert.strictEqual(responses(harness).length, 0);
-        assert.include(sent.at(-1)?.text ?? "", '"Deny A1"');
+        const refusal = sent.at(-1)?.text ?? "";
+        assert.include(refusal, CHANNEL_COPY.approvalNotByNumber);
+        assert.include(
+          refusal,
+          "A1: ship the build: the agent wants to run a command.\nmake release",
+        );
+        assert.include(refusal, 'Reply "Deny A1" or "Approve A1".');
 
-        yield* gateway.ingest(imessageInput("deny", "row-3"), imessageContext);
+        yield* gateway.ingest(imessageInput("deny A1", "row-3"), imessageContext);
         yield* runtime.drain;
         const [answered] = responses(harness);
         assert.strictEqual(answered?.decision, "decline");
@@ -237,6 +259,124 @@ describe("decision cards", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect(
+    "a number approves nothing while a newer approval's card never reached the chat",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* imessageChat(["drop the cache:"]);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const workers = yield* twoTasks;
+        harness.world.runtimeRequests.set(workers.first, [approval("ship")]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        // The second task's card fails to send: the person has only seen the first.
+        harness.world.runtimeRequests.set(workers.second, [approval("cache")]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+
+        yield* gateway.ingest(imessageInput("1", "row-3"), imessageContext);
+        yield* runtime.drain;
+        assert.deepStrictEqual(responses(harness), []);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "a bare approve answers nothing: the bot repeats the request and asks for its code",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const sent = yield* imessageChat();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        const request = approval("ship");
+        harness.world.runtimeRequests.set(task.worker!.threadId, [request]);
+        harness.world.approvalPrompts.set(request.id, "make release");
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+
+        yield* gateway.ingest(imessageInput("approve", "row-2"), imessageContext);
+        yield* runtime.drain;
+        assert.deepStrictEqual(responses(harness), []);
+        const asked = sent.at(-1)?.text ?? "";
+        assert.include(asked, CHANNEL_COPY.approvalNeedsCode);
+        assert.include(
+          asked,
+          "A1: ship the build: the agent wants to run a command.\nmake release",
+        );
+        assert.include(asked, 'Reply "Deny A1" or "Approve A1".');
+
+        yield* gateway.ingest(imessageInput("Approve A1", "row-3"), imessageContext);
+        yield* runtime.drain;
+        const [answered] = responses(harness);
+        assert.strictEqual(answered?.decision, "accept");
+        assert.strictEqual(answered?.requestId, request.id);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a bare approve sent before a newer approval existed does not approve that one", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const sent = yield* imessageChat();
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const workers = yield* twoTasks;
+      harness.world.runtimeRequests.set(workers.first, [approval("ship")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+
+      // The person answers the one card they see. Before the bot reads the reply, that approval
+      // is answered in GOAT and another task asks for one.
+      yield* gateway.ingest(imessageInput("approve", "row-3"), imessageContext);
+      harness.world.runtimeRequests.set(workers.first, []);
+      harness.world.runtimeRequests.set(workers.second, [approval("cache")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.deepStrictEqual(responses(harness), []);
+      assert.notInclude(sent.at(-1)?.text ?? "", "Approved.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  // A card sent before this change listed "1. Approve A1 / 2. Deny A1"; a number typed for it
+  // must not land on a question asked since.
+  it.effect("with an approval open, a number answers no question either", () => {
+    const harness = makeHarness({ projects: 2 });
+    return Effect.gen(function* () {
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(slackInput("do: deploy staging", "Ev1"), slackContext);
+      yield* runtime.drain;
+      yield* gateway.ingest(slackInput("1", "Ev2"), slackContext);
+      yield* runtime.drain;
+      assert.strictEqual(harness.world.launches.length, 1);
+      const worker = (yield* onlyTask).worker!.threadId;
+      harness.world.runtimeRequests.set(worker, [approval("deploy")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      yield* TestClock.adjust("1 second");
+      yield* gateway.ingest(slackInput("do: which repo?", "Ev3"), slackContext);
+      yield* runtime.drain;
+
+      yield* gateway.ingest(slackInput("2", "Ev4"), slackContext);
+      yield* runtime.drain;
+      assert.strictEqual(harness.world.launches.length, 1);
+      assert.strictEqual(responses(harness).length, 0);
+      const refusal = resultsTo(harness.slackSent, "question").at(-1)?.message.text ?? "";
+      assert.include(refusal, CHANNEL_COPY.approvalNotByNumber);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("lets a number with nothing open through to the model", () => {
     const harness = makeHarness();
