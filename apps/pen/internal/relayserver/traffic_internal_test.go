@@ -22,6 +22,50 @@ type fakeClock struct {
 	t  time.Time
 }
 
+// The first side to end a session names how it ended: a client abort handled after the shutdown
+// recorded its code does not overwrite it.
+func TestAClientAbortAfterTheShutdownKeepsTheShutdownsCode(t *testing.T) {
+	s := New(DefaultLimits())
+	rm := &room{srv: s, clients: map[uint32]*sock{}}
+	testSock(s, rm, roleNode, 0, "192.0.2.1", stalled(t))
+	c := testSock(s, rm, roleClient, 1, "192.0.2.2", stalled(t))
+	rm.mu.Lock()
+	c.endedBy, c.endCode = "relay", uint16(websocket.StatusGoingAway)
+	rm.mu.Unlock()
+	rm.peerGone(c, 1006)
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if c.endedBy != "relay" || c.endCode != uint16(websocket.StatusGoingAway) {
+		t.Fatalf("session ended as %s %d, want relay 1001", c.endedBy, c.endCode)
+	}
+}
+
+// Sessions that a shutdown ends report their bytes before the last summary: once Close returns,
+// their lines are written and the final relay line counts them.
+func TestCloseCountsTheSessionsItEndsInTheFinalSummary(t *testing.T) {
+	lv, _, log := trafficLive(t)
+	id, _ := ident.Generate(rand.Reader)
+	n := lv.uplink(id, true)
+	c, sid := lv.session(t, n)
+	send(t, c, 300)
+	n.nextFrame(t, sid)
+	n.data(t, sid, 700)
+	receive(t, c, 700)
+	lv.s.Close()
+	relay := log.lines(t, "relay")
+	if len(relay) == 0 {
+		t.Fatalf("no relay line once Close returned:\n%s", log.raw())
+	}
+	if last := relay[len(relay)-1]; last["sessions"] != float64(1) || last["toNode"] != float64(300) || last["fromNode"] != float64(700) {
+		t.Fatalf("final relay line %v, want the ended session counted", last)
+	}
+	sessions := log.lines(t, "session")
+	if len(sessions) != 1 {
+		t.Fatalf("%d session lines once Close returned, want 1:\n%s", len(sessions), log.raw())
+	}
+	wantSession(t, sessions[0], id.NodeID()[:8], 300, 700, 0, "relay", 1001)
+}
+
 // Shutting the relay down writes the totals once more and stops the summary timer for good: a
 // stopped relay holds no timer, and no later session arms one.
 func TestCloseWritesTheTotalsAndStopsTheSummaryTimer(t *testing.T) {

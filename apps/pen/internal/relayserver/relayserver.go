@@ -115,14 +115,18 @@ type Server struct {
 
 	queued, reading atomic.Int64
 	traffic         traffic
+	// handlers counts the socket handlers running; Close waits for them before the last summary.
+	handlers sync.WaitGroup
 
-	mu     sync.Mutex
-	rooms  map[string]*room
-	socks  map[*sock]struct{}
-	total  int
-	perIP  map[string]int
-	shares map[string]*source
-	unauth map[string][]*sock // unauthenticated uplinks per node, oldest first
+	mu sync.Mutex
+	// closing, once Close starts, refuses new sockets.
+	closing bool
+	rooms   map[string]*room
+	socks   map[*sock]struct{}
+	total   int
+	perIP   map[string]int
+	shares  map[string]*source
+	unauth  map[string][]*sock // unauthenticated uplinks per node, oldest first
 }
 
 // Default caps.
@@ -240,6 +244,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many sockets", http.StatusTooManyRequests)
 		return
 	}
+	defer s.handlers.Done()
 	if victim != nil {
 		s.evict(victim)
 	}
@@ -275,6 +280,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
+	abort := s.closing
 	rm := s.rooms[nodeID]
 	if rm == nil {
 		rm = &room{srv: s, nodeID: nodeID, clients: map[uint32]*sock{}}
@@ -290,6 +296,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.room = rm
 	evicted := k.evicted
 	s.mu.Unlock()
+	if abort {
+		// Close took its list of sockets before this one joined.
+		ws.CloseNow()
+	}
 	if f := s.Hooks.OnSocketDone; f != nil {
 		// Deferred first so it runs last, once release has given back the socket's room and share.
 		defer func() {
@@ -333,9 +343,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) reserve(k *sock, uplink bool) (bool, *sock) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.total >= orDefault(s.MaxSockets, DefaultMaxSockets) || s.perIP[k.ip] >= orDefault(s.MaxPerIP, DefaultMaxPerIP) {
+	if s.closing || s.total >= orDefault(s.MaxSockets, DefaultMaxSockets) || s.perIP[k.ip] >= orDefault(s.MaxPerIP, DefaultMaxPerIP) {
 		return false, nil
 	}
+	s.handlers.Add(1)
 	s.total++
 	s.perIP[k.ip]++
 	k.budget = &budget{srv: s, src: s.shareLocked(k.ip)}
@@ -439,18 +450,33 @@ func (s *Server) ended(k *sock, code uint16) {
 	}
 }
 
-// Close aborts every socket.
+// Close aborts every socket. With a traffic log it waits, at most WriteTimeout, for the sessions
+// it ends to report their bytes, then writes the totals one last time.
 func (s *Server) Close() {
-	s.trafficStop()
 	s.mu.Lock()
+	s.closing = true
 	all := make([]*sock, 0, len(s.socks))
 	for k := range s.socks {
 		all = append(all, k)
 	}
 	s.mu.Unlock()
+	// Marked before any abort: an uplink's abort ends its sessions too, and the shutdown ended them.
+	for _, k := range all {
+		if k.role == roleClient && s.TrafficLog != nil {
+			k.room.mu.Lock()
+			if !k.closed && k.endedBy == "" {
+				k.endedBy, k.endCode = "relay", uint16(websocket.StatusGoingAway)
+			}
+			k.room.mu.Unlock()
+		}
+	}
 	for _, k := range all {
 		k.ws.CloseNow()
 	}
+	if s.TrafficLog != nil {
+		s.waitHandlers(s.Limits.WriteTimeout)
+	}
+	s.trafficStop()
 }
 
 // DropUplink aborts nodeID's uplink socket as a failing network would.
@@ -977,8 +1003,11 @@ func (rm *room) peerGone(k *sock, code uint16) {
 		rm.dropUplink(k, wire.CodeOffline)
 		return
 	}
-	rm.closeAs(k, sendable(code), "client")
-	k.endCode = code
+	// The line keeps the client's own code (1006 for an abort), not the one a close frame may carry.
+	if k.endedBy == "" {
+		k.endedBy, k.endCode = "client", code
+	}
+	rm.closeSock(k, sendable(code))
 	if code < 1000 || code > 4999 {
 		code = 1000
 	}

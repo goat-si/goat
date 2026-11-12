@@ -318,6 +318,22 @@ func (s *Server) sessionDone(k *sock) {
 	s.traffic.ended(s.TrafficLog, e)
 }
 
+// waitHandlers waits up to d for every socket handler to end. On a timeout the waiting goroutine
+// ends with the last handler.
+func (s *Server) waitHandlers(d time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.handlers.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	}
+}
+
 // trafficStop writes the totals one last time and stops the summary timer.
 func (s *Server) trafficStop() {
 	s.Summarize()
