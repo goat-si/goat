@@ -72,10 +72,7 @@ func Splice(ctx context.Context, link Link, r io.Reader, w io.Writer, closeWrite
 				code = wire.CodeOffline
 			}
 			link.Close(code)
-			s.mu.Lock()
-			delivered := s.delivered
-			s.mu.Unlock()
-			if delivered {
+			if s.delivered() {
 				return &deliveredError{err}
 			}
 			return err
@@ -97,8 +94,15 @@ type splice struct {
 	queue    [][]byte
 	peerFin  bool
 	sentFin  bool
-	// delivered: the peer sent FIN and all its DATA was written to w.
-	delivered bool
+	writing  bool // the writer holds DATA taken from queue that w has not yet returned from
+}
+
+// delivered reports whether the peer sent FIN and every DATA before it has been written to w. It reads the state
+// itself, not the writer's progress, so a writer still busy after its last write (a CREDIT) does not hide it.
+func (s *splice) delivered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerFin && len(s.queue) == 0 && !s.writing
 }
 
 func (s *splice) fail(err error) {
@@ -245,17 +249,20 @@ func (s *splice) writer(w io.Writer, closeWrite func() error) error {
 			return nil
 		}
 		if len(s.queue) == 0 {
-			s.delivered = true
 			s.mu.Unlock()
 			break
 		}
 		p := s.queue[0]
 		s.queue[0] = nil
 		s.queue = s.queue[1:]
+		s.writing = true
 		s.mu.Unlock()
 		if _, err := w.Write(p); err != nil {
 			return err
 		}
+		s.mu.Lock()
+		s.writing = false
+		s.mu.Unlock()
 		consumed += len(p)
 		if consumed >= CreditEvery {
 			// Best effort: a peer that finished may close before our CREDIT; a dead link surfaces
