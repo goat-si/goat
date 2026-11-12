@@ -141,9 +141,14 @@ export function GoatBotFace(props: {
   );
 }
 
-/** The waiting dot keeps clear of the head's ear in a small circle: web's share of it, 6 to 10 px. */
-function waitingDotSize(circle: number): number {
-  return Math.min(10, Math.max(6, Math.round(circle * 0.28)));
+/**
+ * The waiting dot keeps clear of the head's ear in a small circle: web's share of the circle, 6 to
+ * 10 px, and a pixel out on the corner below 32 px, where the ear nearly reaches the edge.
+ */
+function waitingDotStyle(circle: number) {
+  const size = Math.min(10, Math.max(6, Math.round(circle * 0.28)));
+  const out = circle < 32 ? -1 : 0;
+  return { width: size, height: size, top: out, right: out };
 }
 
 const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
@@ -201,10 +206,7 @@ export function GoatBotFaceAvatar(props: {
         <GoatBotFace state={props.state} size={props.size * 0.86} motion={props.motion ?? null} />
       )}
       {signal.waitingDot ? (
-        <View
-          className="absolute top-0 right-0 rounded-full bg-warning"
-          style={{ width: waitingDotSize(props.size), height: waitingDotSize(props.size) }}
-        />
+        <View className="absolute rounded-full bg-warning" style={waitingDotStyle(props.size)} />
       ) : null}
     </View>
   );
