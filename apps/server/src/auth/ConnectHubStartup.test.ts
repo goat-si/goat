@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import { onMainListener } from "./connectionContext.testkit.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -37,7 +38,7 @@ it.effect(
         scopes: ["hub:proxy"],
         connectAccessGeneration: (yield* first.access.current).generation,
       });
-      yield* first.auth.authenticateHttpRequest(request(token.token));
+      yield* first.auth.authenticateHttpRequest(onMainListener(request(token.token)));
       yield* sql`CREATE TRIGGER fail_connect_bump BEFORE UPDATE ON hub_connect_access BEGIN SELECT RAISE(FAIL, 'injected startup write failure'); END`;
       yield* first.settings
         .updateSettings({ hub: { connectDevicesHubProxy: false } })
@@ -82,7 +83,9 @@ it.effect(
       );
       expect(yield* second.access.current).toMatchObject({ allowed: true, fenced: false });
       expect(
-        yield* second.auth.authenticateHttpRequest(request(token.token)).pipe(Effect.result),
+        yield* second.auth
+          .authenticateHttpRequest(onMainListener(request(token.token)))
+          .pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       const changes = yield* second.settings.subscribeChanges;
       yield* fs.writeFileString(

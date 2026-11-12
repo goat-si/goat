@@ -3,11 +3,12 @@ import * as Effect from "effect/Effect";
 import type { AuthenticatedSession } from "../auth/EnvironmentAuth.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import { rpcAuthorizationError } from "../auth/RpcAuthorization.ts";
+import { sessionResolver } from "../handoffs/HumanStepAuthority.ts";
 import type { DecisionCaller } from "./DecisionInbox.ts";
 
 export const caller = Effect.fn("DecisionClient.caller")(function* (
   environmentId: EnvironmentId,
-  session: Pick<AuthenticatedSession, "sessionId" | "scopes">,
+  session: Pick<AuthenticatedSession, "sessionId" | "scopes" | "principalKind">,
 ) {
   const sessions = yield* SessionStore.SessionStore;
   const reauthorize = Effect.fn("DecisionClient.reauthorize")(function* (
@@ -24,6 +25,7 @@ export const caller = Effect.fn("DecisionClient.caller")(function* (
     environmentId,
     sessionId: session.sessionId,
     scopes: session.scopes,
+    resolver: sessionResolver(session),
     reauthorize,
   } satisfies DecisionCaller;
 });

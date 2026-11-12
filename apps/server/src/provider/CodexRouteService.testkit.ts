@@ -25,6 +25,7 @@ export const caller = { kind: "client" as const, sessionId };
 export const session = (now: DateTime.Utc): AuthClientSession => ({
   sessionId,
   subject: "test",
+  principalKind: "person",
   method: "browser-session-cookie",
   scopes: ["orchestration:operate", "providers:manage"],
   permissions: ["orchestration:operate", "providers:manage"],

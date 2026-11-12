@@ -33,7 +33,7 @@ const makeBrowserClaimWindows = Effect.fn("BrowserClaimWindows.make")(function* 
 });
 
 export const makeBrowserClaimsHandlersLive = Effect.fn("BrowserClaimsRpcHandlers.makeLive")(
-  function* (session: { readonly subject: string }) {
+  function* (session: Parameters<typeof makeBrowserClaimsRpcHandlers>[1]) {
     const grants = yield* Effect.serviceOption(BrowserOriginGrants);
     const windows = yield* makeBrowserClaimWindows();
     return makeBrowserClaimsRpcHandlers(grants, session, windows);

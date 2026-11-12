@@ -20,6 +20,7 @@ import * as Environment from "./environment/ServerEnvironment.ts";
 import * as Config from "./config.ts";
 import * as Sqlite from "./persistence/Sqlite.ts";
 import * as Settings from "./serverSettings.ts";
+import { MAIN_LISTENER } from "./auth/connectionContext.testkit.ts";
 
 const app = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
   Layer.provide(Secrets.layer),
@@ -93,6 +94,7 @@ it.effect(
         });
         yield* auth.exchangeBootstrapCredentialForAccessToken(
           control.credential,
+          MAIN_LISTENER,
           ["orchestration:read"],
           { deviceType: "mobile" },
           { proofKeyThumbprint: "device-key" },
@@ -125,7 +127,7 @@ it.effect(
         yield* publish(true, false);
         expect(
           yield* auth
-            .consumeMcpApprovalCode(mcpGrant.credential, "full-access")
+            .consumeMcpApprovalCode(mcpGrant.credential, MAIN_LISTENER, "full-access")
             .pipe(Effect.result),
         ).toMatchObject({ _tag: "Failure" });
         expect(yield* auth.authenticateHttpRequest(request).pipe(Effect.result)).toMatchObject({
@@ -135,6 +137,7 @@ it.effect(
           yield* auth
             .exchangeBootstrapCredentialForAccessToken(
               grant.credential,
+              MAIN_LISTENER,
               ["orchestration:read"],
               { deviceType: "mobile" },
               { proofKeyThumbprint: "device-key" },
@@ -144,7 +147,9 @@ it.effect(
         yield* sql`DROP TRIGGER fail_connect_cleanup`;
         yield* sql`DROP TRIGGER fail_connect_grant_cleanup`;
         yield* publish(true, true);
-        expect(yield* sessions.verify(token.token).pipe(Effect.result)).toMatchObject({
+        expect(
+          yield* sessions.verify(token.token, MAIN_LISTENER).pipe(Effect.result),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { _tag: "SessionTokenRevokedError" },
         });

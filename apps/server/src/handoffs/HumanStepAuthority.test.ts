@@ -37,11 +37,12 @@ describe("who may resolve a human step", () => {
     expect(allowed(mcpResolver(outside(true, true)))).toEqual([]);
   });
 
-  it("treats an MCP client session as no person, and the owning desktop's bootstrap session as one", () => {
-    expect(canResolveHumanStep(sessionResolver({ subject: "mcp-client" }), "person_only")).toBe(
-      false,
+  it("treats an MCP client session as no person, and a person's session as one", () => {
+    expect(
+      canResolveHumanStep(sessionResolver({ principalKind: "outside_client" }), "person_only"),
+    ).toBe(false);
+    expect(canResolveHumanStep(sessionResolver({ principalKind: "person" }), "person_only")).toBe(
+      true,
     );
-    for (const subject of ["desktop-bootstrap", "browser"])
-      expect(canResolveHumanStep(sessionResolver({ subject }), "person_only")).toBe(true);
   });
 });

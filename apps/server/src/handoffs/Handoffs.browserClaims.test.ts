@@ -50,6 +50,7 @@ it.effect(
         const client: AuthClientSession = {
           sessionId,
           subject: "desktop-bootstrap",
+          principalKind: "person",
           method: "browser-session-cookie",
           scopes: ["orchestration:operate", "settings:write"],
           client: { label: "Person", deviceType: "unknown" },
@@ -138,6 +139,7 @@ it.effect("Stop during claim attachment resolves the card as declined without de
       const client: AuthClientSession = {
         sessionId,
         subject: "desktop-bootstrap",
+        principalKind: "person",
         method: "browser-session-cookie",
         scopes: ["orchestration:operate", "settings:write"],
         client: { label: "Person", deviceType: "unknown" },

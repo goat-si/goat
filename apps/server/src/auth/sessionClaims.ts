@@ -4,6 +4,7 @@ import {
   AuthWebSocketTicketUse,
   ChildSetupPurpose,
   RuntimeMode,
+  SessionPrincipalKind,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
@@ -28,6 +29,9 @@ export const WebSocketClaims = Schema.Struct({
   sid: AuthSessionId,
   aud: Schema.optionalKey(AuthWebSocketTicketUse),
   jkt: Schema.optionalKey(Schema.String),
+  /** The row's principal kind and Pen node at issue; verification requires both to match. */
+  pk: Schema.optionalKey(SessionPrincipalKind),
+  pn: Schema.optionalKey(Schema.String),
   iat: Schema.Number,
   exp: Schema.Number,
 });

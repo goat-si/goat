@@ -120,6 +120,7 @@ const waitOver = (orchestrator: Parameters<typeof durableHandoffs>[0]) =>
         {
           sessionId: reviewer,
           subject: "test",
+          principalKind: "person",
           method: "browser-session-cookie",
           scopes: ["orchestration:operate", "providers:manage"],
           client: { label: "Human reviewer", deviceType: "unknown" },
@@ -171,6 +172,7 @@ it.effect("reads an approved provider change as applying, then applied, across a
           {
             sessionId: reviewer,
             subject: "test",
+            principalKind: "person",
             method: "browser-session-cookie",
             scopes: ["orchestration:operate", "providers:manage"],
             client: { label: "Human reviewer", deviceType: "unknown" },
@@ -466,6 +468,7 @@ it.effect(
                         {
                           sessionId: reviewer,
                           subject: "test",
+                          principalKind: "person",
                           method: "browser-session-cookie",
                           scopes: ["orchestration:operate", "providers:manage"],
                           client: { label: "Human reviewer", deviceType: "unknown" },

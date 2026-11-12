@@ -276,6 +276,7 @@ import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Ws from "./ws.ts";
+import * as PenServer from "./pen/PenServerLayers.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
@@ -385,10 +386,12 @@ const layerRelayClient = Layer.unwrap(
 export const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const main = yield* PenServer.MainHttpServer;
     yield* Effect.forkScoped(heartbeat);
     return NodeHttpServer.layer(
       () => {
         const server = createGuardedHttpServer();
+        Deferred.doneUnsafe(main.server, Effect.succeed(server));
         if (config.privateNetworkOnly) {
           server.on("connection", (socket) => {
             if (!acceptsPrivateNetworkConnection(socket)) {
@@ -1016,6 +1019,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
+    PenServer.layer,
   ),
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
@@ -1267,6 +1271,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(layerArchiveGate),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
+      Layer.provideMerge(PenServer.layerMainHttpServer),
       Layer.provide(
         HttpRouter.layer.pipe(
           Layer.provide(Layer.succeed(HttpRouter.RouterConfig, HTTP_ROUTER_CONFIG)),
