@@ -100,6 +100,18 @@ func (s *Server) NextClientMessage(ctx context.Context, nodeID string) error {
 	}
 }
 
+// DrainClientMessages forgets the client messages to nodeID that no NextClientMessage has returned for yet.
+func (s *Server) DrainClientMessages(nodeID string) {
+	ch := s.chanOf(s.clientMsgs, nodeID)
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 // New starts a relay with the contract limits on 127.0.0.1.
 func New() *Server {
 	s := NewUnstarted()

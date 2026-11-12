@@ -145,20 +145,32 @@ func OpenAny(ctx context.Context, relays []string, nodeID string, handshake func
 
 // OpenTCP opens a kind 0x01 tcp stream to port on member m and returns the confirmed session.
 func OpenTCP(ctx context.Context, relays []string, id *ident.Identity, m mesh.Member, port int) (*session.Secure, error) {
+	sec, _, err := OpenTCPVia(ctx, relays, id, m, port)
+	return sec, err
+}
+
+// OpenTCPVia is OpenTCP that also names the relay the session runs on.
+func OpenTCPVia(ctx context.Context, relays []string, id *ident.Identity, m mesh.Member, port int) (*session.Secure, string, error) {
 	noise, err := ident.DecodeKey(m.NoisePub)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "tcp", Port: port})
+	return openMemberVia(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "tcp", Port: port})
 }
 
 // OpenService opens a kind 0x01 service stream for name on member m and returns the confirmed session.
 func OpenService(ctx context.Context, relays []string, id *ident.Identity, m mesh.Member, name string) (*session.Secure, error) {
+	sec, _, err := OpenServiceVia(ctx, relays, id, m, name)
+	return sec, err
+}
+
+// OpenServiceVia is OpenService that also names the relay the session runs on.
+func OpenServiceVia(ctx context.Context, relays []string, id *ident.Identity, m mesh.Member, name string) (*session.Secure, string, error) {
 	noise, err := ident.DecodeKey(m.NoisePub)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "service", Name: name})
+	return openMemberVia(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "service", Name: name})
 }
 
 // Join runs the joiner side of tok against its relay and returns the verified set (not yet saved).

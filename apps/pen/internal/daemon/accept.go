@@ -144,7 +144,7 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		d.markSeen(sec.RemoteStatic, true, relayOf(c))
 		switch sec.Payload.Stream {
 		case "tcp":
-			d.serveTCP(ctx, sec)
+			d.serveTCP(ctx, sec, relayOf(c))
 		case "service":
 			d.serveService(ctx, sec)
 		default:
@@ -167,7 +167,7 @@ func relayOf(c relay.Conn) string {
 	return ""
 }
 
-func (d *Daemon) serveTCP(ctx context.Context, sec *session.Secure) {
+func (d *Daemon) serveTCP(ctx context.Context, sec *session.Secure, relayURL string) {
 	var dialer net.Dialer
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	conn, err := dialer.DialContext(dctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(sec.Payload.Port)))
@@ -178,7 +178,7 @@ func (d *Daemon) serveTCP(ctx context.Context, sec *session.Secure) {
 	}
 	tc := conn.(*net.TCPConn)
 	defer tc.Close()
-	if err := stream.Splice(ctx, sec, tc, tc, tc.CloseWrite); err != nil && !stream.Delivered(err) {
+	if err := stream.Splice(ctx, d.meterAccepted(sec, relayURL), tc, tc, tc.CloseWrite); err != nil && !stream.Delivered(err) {
 		// The peer's stream stopped short of its FIN: the service reads a reset, not a clean end.
 		tc.SetLinger(0)
 	}

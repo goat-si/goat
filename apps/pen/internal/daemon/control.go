@@ -46,16 +46,24 @@ type LsMember struct {
 	AdmittedByName string `json:"admittedByName,omitempty"`
 	// Relay carried the member's last session with this node (mesh sync or accepted session).
 	Relay string `json:"relay,omitempty"`
+	// Traffic24h is the stream bytes of the last 24 hours with this member (traffic.go); absent when none.
+	Traffic24h *MemberTraffic `json:"traffic24h,omitempty"`
+}
+
+// LsRevoked is a revoked key as ls reports it, with the bytes it carried in the last 24 hours (absent when none).
+type LsRevoked struct {
+	mesh.Member
+	Traffic24h *MemberTraffic `json:"traffic24h,omitempty"`
 }
 
 // LsReply is the ls answer.
 type LsReply struct {
-	Self    string        `json:"self"`
-	MeshID  string        `json:"meshId"`
-	Relay   string        `json:"relay"`
-	Uplink  string        `json:"uplink"`
-	Members []LsMember    `json:"members"`
-	Revoked []mesh.Member `json:"revoked"`
+	Self    string      `json:"self"`
+	MeshID  string      `json:"meshId"`
+	Relay   string      `json:"relay"`
+	Uplink  string      `json:"uplink"`
+	Members []LsMember  `json:"members"`
+	Revoked []LsRevoked `json:"revoked"`
 	// Account is the mesh's Google account binding (nil when unbound); Locked is lock mode;
 	// Pending counts requests waiting for this node's approval.
 	Account *mesh.Account `json:"account,omitempty"`
@@ -70,6 +78,10 @@ type LsReply struct {
 	Records   int    `json:"records"`
 	// HostKeysError names sshd public key files that exist but could not be read, and the fix.
 	HostKeysError string `json:"hostKeysError,omitempty"`
+	// Relays24h is the stream bytes of the last 24 hours per relay, every member and revoked key together;
+	// TrafficSince (ms) is where those totals start. Both are absent while nothing was counted.
+	Relays24h    []RelayTraffic `json:"relays24h,omitempty"`
+	TrafficSince int64          `json:"trafficSince,omitempty"`
 	// StateDir is this machine's state folder, filled in by the command line for its advice.
 	StateDir string `json:"-"`
 }
@@ -193,6 +205,13 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 		return
 	case "watch.snapshot":
 		d.controlSnapshot(ctx, c, fail)
+		return
+	case "traffic.report":
+		if res, err := d.reportTraffic(line); err != nil {
+			fail(err)
+		} else {
+			reply(res)
+		}
 		return
 	case "invite":
 		if req.Wait {
@@ -334,7 +353,7 @@ func (d *Daemon) status() Status {
 func (d *Daemon) ls() LsReply {
 	v := d.view()
 	s := d.uplinkState()
-	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked(),
+	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s,
 		Account: v.Account, Locked: v.Locked, Pending: len(d.pending.all(d.now())), Records: d.mesh().Len()}
 	d.mu.Lock()
 	if d.saveErr != nil {
@@ -342,6 +361,12 @@ func (d *Daemon) ls() LsReply {
 	}
 	out.HostKeysError = d.hostKeysErr
 	d.mu.Unlock()
+	perMember, relays, since := d.trafficTotals()
+	out.Relays24h, out.TrafficSince = relays, since
+	out.Revoked = make([]LsRevoked, 0, len(v.Revoked))
+	for _, m := range v.SortedRevoked() {
+		out.Revoked = append(out.Revoked, LsRevoked{Member: m, Traffic24h: perMember[m.NodeID]})
+	}
 	for _, f := range d.forgets.refusedList() {
 		u := Unforgotten{NodeID: f.NodeID, LoginURL: f.LoginURL}
 		if m, ok := v.RevokedByNodeID(f.NodeID); ok {
@@ -353,7 +378,7 @@ func (d *Daemon) ls() LsReply {
 	defer d.mu.Unlock()
 	for _, m := range v.SortedMembers() {
 		noise, _ := ident.DecodeKey(m.NoisePub)
-		lm := LsMember{Member: m, Fingerprint: ident.Fingerprint(noise), Self: m.NodeID == d.nodeID}
+		lm := LsMember{Member: m, Fingerprint: ident.Fingerprint(noise), Self: m.NodeID == d.nodeID, Traffic24h: perMember[m.NodeID]}
 		if a, ok := v.Members[m.AdmittedBy]; ok {
 			lm.AdmittedByName = a.Name
 		} else if a, ok := v.Revoked[m.AdmittedBy]; ok {

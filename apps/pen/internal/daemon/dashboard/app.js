@@ -139,6 +139,12 @@
   const groups = (fp) => fp.split(" ");
   const shortFP = (fp) => groups(fp).slice(0, 2).join(" ");
   const hostOf = (u) => u.replace(/^[a-z]+:\/\//, "");
+  function bytes(n) {
+    let i = 0;
+    for (; n >= 999.5 && i < 5; i++) n /= 1000;
+    return i ? n.toFixed(n < 9.995 ? 2 : n < 99.95 ? 1 : 0) + " " + "kMGTP"[i - 1] + "B" : n + " B";
+  }
+  const inOut = (t) => bytes(t.in) + " / " + bytes(t.out);
   const hexOf = (s) => s.replace(/\s+/g, "").toUpperCase();
 
   function flash(btn, ko, en) {
@@ -366,7 +372,7 @@
     $("members").tBodies[0].replaceChildren(...rows);
     const offline = s.members.some((m) => !m.self && !m.online && m.lastSeen);
     const foot = [
-      "릴레이 열은 이 데몬이 본 세션(메시 동기화, 받은 세션)만 보여 줍니다. 이 기기 CLI의 pen pipe, pen forward 세션은 나오지 않습니다. · The relay column shows only sessions this daemon sees (mesh sync and sessions it accepts); pen pipe and pen forward from this machine's CLI are not shown.",
+      "릴레이 열은 이 데몬이 본 세션(메시 동기화, 받은 세션)만 보여 줍니다. 이 기기 CLI의 pen pipe, pen forward 세션은 나오지 않습니다(24시간 열은 셉니다). · The relay column shows only sessions this daemon sees (mesh sync and sessions it accepts); pen pipe and pen forward from this machine's CLI are not shown there (the 24 h column counts them).",
     ];
     if (s.full) {
       foot.unshift(
@@ -379,6 +385,7 @@
           s.saveError,
       );
     }
+    if (s.revoked24h) foot.push("제거된 멤버 · Removed members, 24 h: " + inOut(s.revoked24h));
     if (offline) {
       foot.unshift(
         "오프라인 멤버: 릴레이는 아무것도 보관하지 않습니다. 기기가 돌아오면 다시 동기화합니다. · Offline members: the relay holds nothing; a member rejoins and syncs when it comes back.",
@@ -491,6 +498,7 @@
       h("td", null, via),
       h("td", null, joined),
       h("td", null, relay),
+      h("td", null, m.traffic24h ? mono(inOut(m.traffic24h)) : muted("—")),
       h("td", { class: "actions" }, action),
     );
   }
@@ -621,13 +629,20 @@
         },
         "제거 · Remove",
       );
+      const t = s.relays24h.find((x) => x.url === r.url);
+      const traffic = t ? h("div", { class: "sub muted" }, "24h " + inOut(t)) : "";
       return h(
         "li",
         { class: "row stack" },
-        h("div", { class: "row-main" }, mono({ class: "url", title: r.url }, r.url), note),
+        h("div", { class: "row-main" }, mono({ class: "url", title: r.url }, r.url), note, traffic),
         h("div", { class: "row-side" }, uplinkBadge(r.uplink), " ", rtt, " ", rm),
       );
     });
+    const other = s.relays24h.find((x) => x.url === "");
+    if (other)
+      rows.push(
+        h("li", { class: "row" }, muted(bi("다른 릴레이", "Other relays"), " 24h " + inOut(other))),
+      );
     $("relays").replaceChildren(...rows);
   }
   async function setRelays(list) {
