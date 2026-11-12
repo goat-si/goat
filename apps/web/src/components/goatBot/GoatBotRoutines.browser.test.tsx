@@ -26,6 +26,7 @@ vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.upsert }) => command.execute,
 }));
 import { GoatBotRoutines } from "./GoatBotRoutines";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 const environmentId = EnvironmentId.make("env");
 const threadId = ThreadId.make("bot");
@@ -90,6 +91,25 @@ it("Check in on me saves a weekday-morning routine in the bot's chat, then stops
   await expect
     .element(screen.getByRole("button", { name: "Check in on me" }))
     .not.toBeInTheDocument();
+});
+
+it("the check-in form holds back a New bot open while it is open", async () => {
+  setup();
+  await using screen = await render(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[]}
+      error={null}
+      onRetry={() => {}}
+    />,
+  );
+  expect(navigationBlocked()).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Check in on me" }));
+  await expect.element(screen.getByRole("form", { name: "Check in on me" })).toBeVisible();
+  expect(navigationBlocked()).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("a refused save keeps the check-in form open and shows why", async () => {

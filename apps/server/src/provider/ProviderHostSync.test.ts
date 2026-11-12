@@ -8,12 +8,15 @@ import {
   type ProviderAuthState,
 } from "@goat/contracts";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -389,6 +392,61 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(wire).not.toContain("npm ERR");
   }).pipe(Effect.provide(layer));
 });
+
+const installClaude = (options: Parameters<typeof harness>[0], environment: NodeJS.ProcessEnv) =>
+  Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const started = yield* sync.sync(
+      { driver: "claudeAgent", login: false },
+      { kind: "client", sessionId: person },
+    );
+    if (started.kind !== "started") return expect.unreachable();
+    return (yield* sync.awaitDone(started.sync.syncId)).hosts[0];
+  }).pipe(
+    Effect.provide(harness(options).layer),
+    Effect.provideService(HostProcess.Environment, environment),
+  );
+
+it.effect("reads a CLI as installed once its installer has put it in a folder on PATH", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-host-sync-" });
+    const bin = path.join(home, ".local", "bin");
+    const host = yield* installClaude(
+      {
+        onInstall: fs
+          .makeDirectory(bin, { recursive: true })
+          .pipe(
+            Effect.andThen(
+              fs.writeFileString(path.join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 }),
+            ),
+            Effect.orDie,
+          ),
+      },
+      { PATH: `/usr/bin:/bin:${bin}` },
+    );
+    expect(host).toMatchObject({ host: null, phase: "installed" });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("says the login shell PATH is unread when an installed CLI still cannot be found", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const read = yield* installClaude({}, { PATH: "/usr/bin:/bin" });
+    expect(read).toMatchObject({ phase: "failed" });
+    expect(read?.message).toBe(
+      "The installer finished, but GOAT cannot find claude on its PATH here. Add the install folder to PATH and restart GOAT.",
+    );
+    const unread = yield* installClaude(
+      {},
+      { PATH: "/usr/bin:/bin", GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" },
+    );
+    expect(unread?.message).toContain("cannot find claude on its PATH here.");
+    expect(unread?.message).toContain("GOAT may not have your login shell's current PATH yet");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.effect(
   "regression #983: a cancel that lands while a host accepts the sync still reaches it",

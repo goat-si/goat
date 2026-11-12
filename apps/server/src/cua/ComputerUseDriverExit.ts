@@ -25,6 +25,23 @@ export const driverExitReason = (
 ): Effect.Effect<ComputerUseDriverEndReason> =>
   (driver.exitCode ?? Effect.succeed(undefined)).pipe(Effect.map(exitReason));
 
+/**
+ * Ends a proxy whose driver exited on its own, for the reason its exit code gives, and tells
+ * ended about it only when that end is the one that took effect.
+ */
+export const endForDriverExit = (
+  driver: LeaseProxyDriver,
+  end: (reason: ComputerUseDriverEndReason) => Effect.Effect<void>,
+  finished: () => unknown,
+  ended: ((reason: ComputerUseDriverEndReason) => Effect.Effect<void>) | undefined,
+): Effect.Effect<void> =>
+  driverExitReason(driver).pipe(
+    Effect.tap(end),
+    Effect.flatMap((reason) =>
+      ended !== undefined && finished() === reason ? ended(reason) : Effect.void,
+    ),
+  );
+
 /** The reason an exit code gives; see driverExitReason. */
 export const exitReason = (code: number | undefined): ComputerUseDriverEndReason =>
   code === HELPER_REFUSED_EXIT

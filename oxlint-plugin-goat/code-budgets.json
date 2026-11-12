@@ -410,7 +410,7 @@
   "apps/server/src/provider/Drivers/antigravityUsageReader.ts": { "nonNull": 10 },
   "apps/server/src/provider/OpenCodexRoute.ts": { "nonNull": 1 },
   "apps/server/src/provider/ProviderDiagnosis.ts": { "lines": 1199, "nonNull": 4 },
-  "apps/server/src/provider/ProviderHostSync.ts": { "lines": 1112, "nonNull": 1 },
+  "apps/server/src/provider/ProviderHostSync.ts": { "lines": 1110, "nonNull": 1 },
   "apps/server/src/provider/ProviderRegistry.test.ts": { "lines": 3328 },
   "apps/server/src/provider/ProviderRegistry.ts": { "lines": 1101 },
   "apps/server/src/provider/ProviderSettings.ts": { "lines": 1103 },

@@ -13,9 +13,9 @@ import {
 
 /**
  * Where the one-switch setup is. saving: the setting is being written. checking: this Mac's
- * grants are read once. granting: a grant is missing; setup resumes on a read newer than
- * afterRead. verifying: the helper restarts and proves a real capture and tree read. ready:
- * that proof passed in this session.
+ * grants are read once. granting: a grant is missing or the read got no answer; setup resumes
+ * on a read newer than afterRead. verifying: the helper restarts and proves a real capture and
+ * tree read. ready: that proof passed in this session.
  */
 export type ComputerUseSetupPhase =
   | { readonly step: "idle" }
@@ -167,7 +167,9 @@ export function useComputerUseAutoSetup({
     localMac && on && !busy,
     phase.step === "granting" ? 1500 : 15_000,
   );
-  const grants = localMac ? polled.grants : null;
+  // Reads that get no answer say nothing about the grants, so the last answer is not used.
+  const unanswered = localMac ? polled.unanswered : null;
+  const grants = localMac && unanswered === null ? polled.grants : null;
   const holder: CuaGrantHolder | null = grants && grants.principal !== "unusable" ? grants : null;
   const missing = holder ? (CUA_PERMISSIONS.find((id) => !cuaGranted(holder, id)) ?? null) : null;
 
@@ -241,16 +243,17 @@ export function useComputerUseAutoSetup({
     setPhase({ step: "checking" });
     const checked = await actions.checkGrants().catch(() => null);
     if (id !== run.current) return;
-    if (checked === null) {
-      setPhase(failed("Could not check permissions on this Mac."));
-      return;
-    }
     const read = polled.record(checked);
-    if (checked.principal === "unusable") {
+    if (checked?.principal === "unusable" && checked.unanswered === undefined) {
       setPhase(failed(checked.message));
       return;
     }
-    if (CUA_PERMISSIONS.some((permission) => !cuaGranted(checked, permission))) {
+    // A read with no answer waits like a missing grant: setup goes on once a read answers.
+    if (
+      checked === null ||
+      checked.principal === "unusable" ||
+      CUA_PERMISSIONS.some((permission) => !cuaGranted(checked, permission))
+    ) {
       setPhase({ step: "granting", afterRead: read });
       return;
     }
@@ -301,6 +304,7 @@ export function useComputerUseAutoSetup({
     busy,
     holder,
     unusable: grants?.principal === "unusable" ? grants.message : null,
+    unanswered,
     missing,
     opened,
     opening,

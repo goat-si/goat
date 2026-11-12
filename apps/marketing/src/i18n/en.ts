@@ -21,6 +21,9 @@ export const en = {
     downloadTitle: "Download GOAT",
     downloadDescription:
       "Download the GOAT desktop app for macOS, Windows and Linux, or install the goat command and a server-only machine.",
+    mobileTitle: "GOAT on your phone: join the beta",
+    mobileDescription:
+      "Install the GOAT beta app on iPhone, iPad or Android and steer the coding agents on your computers from your phone.",
     legalTitle: "Legal",
     legalDescription:
       "Privacy, terms and security disclosure for the GOAT Connect invite-only beta, plus website and product usage data practices.",
@@ -221,15 +224,57 @@ export const en = {
     ],
     mobileTitle: "Phone and tablet",
     mobileBody:
-      "The GOAT app for iPhone, iPad and Android is in development and is not in the App Store or Google Play yet. iPhone and iPad builds come through TestFlight, which is invite-only for now, or you can build the app from source. Until then, pair your phone's browser with an environment.",
+      "The GOAT app for iPhone, iPad and Android is in beta and is not in the App Store or Google Play yet. Anyone can join the beta: iPhone and iPad through TestFlight, Android through Firebase App Distribution. You can also pair your phone's browser with an environment.",
     mobileWarning:
       "The T3 Code app in the stores belongs to the project GOAT is forked from. It is not GOAT and cannot connect to a GOAT server.",
+    mobileBeta: "Get the beta app",
     mobileGuide: "Mobile app guide",
     mobileGuideHref: guide("install", "mobile-app"),
     allBuilds: "All builds and checksums",
     nightlyBuilds: "Nightly builds",
     installGuide: "Install guide",
     installGuideHref: guide("install"),
+  },
+  mobile: {
+    title: "GOAT on your phone",
+    lede: "The GOAT app is in beta. Install it on your phone, connect it to GOAT on your computer, and follow and steer your agents from anywhere.",
+    ios: {
+      name: "iPhone and iPad",
+      cta: "Join the TestFlight beta",
+      helper: "Get TestFlight",
+      steps: [
+        { title: "Install TestFlight", body: "Apple's beta testing app, free in the App Store." },
+        {
+          title: "Open the invite on your iPhone",
+          body: "Tap Join the TestFlight beta on your iPhone or iPad, then Accept and Install in TestFlight.",
+        },
+        { title: "Open GOAT", body: "TestFlight keeps it updated as new beta builds come out." },
+      ],
+      note: "Needs iOS 18 or later.",
+    },
+    android: {
+      name: "Android",
+      cta: "Join the Android beta",
+      steps: [
+        {
+          title: "Open the invite on your phone",
+          body: "Tap Join the Android beta and enter your email. Firebase App Distribution emails you an invitation.",
+        },
+        {
+          title: "Accept and download",
+          body: "Open the invitation, sign in with Google, and tap Download on the newest GOAT build.",
+        },
+        {
+          title: "Install GOAT",
+          body: "If Android asks, let your browser install apps. New builds show up in the same place.",
+        },
+      ],
+      note: "Needs Android 7.0 or later. Beta builds are signed by GOAT and installed outside Google Play.",
+    },
+    pairTitle: "Connect to your computer",
+    pairBody:
+      "The app controls GOAT running on another machine. In the desktop app, open Settings → Connections and choose Show phone QR, then tap Scan QR code in the app. Your phone and computer must reach each other, through Tailscale or the same network.",
+    pairGuide: "Phone pairing guide",
   },
   legal: {
     title: "Legal",

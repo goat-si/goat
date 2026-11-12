@@ -42,6 +42,7 @@ import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBot
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
+import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
@@ -434,6 +435,7 @@ export function GoatBotChatView({
               </GoatBotOpenFileContext>
             </GoatBotStepsReader>
           </div>
+          <GoatBotNameRow composer={composerRef} />
           {ready && !canOperate ? (
             <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">
               You can read this chat but can't send messages.
@@ -484,7 +486,12 @@ export function GoatBotChatView({
       )}
       {bot && narrow && (
         <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
-          <SheetPopup finalFocus={sheetFinalFocus}>
+          {/* A phone-width window gives the home the whole screen; wider, the chat stays beside it. */}
+          <SheetPopup
+            finalFocus={sheetFinalFocus}
+            showCloseButton={false}
+            className="max-sm:w-full max-sm:max-w-none"
+          >
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
               environmentId={bot.environmentId}

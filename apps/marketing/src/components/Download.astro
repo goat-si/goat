@@ -2,6 +2,7 @@
 import { messages, type Locale } from "../i18n";
 import Base from "../layouts/Base.astro";
 import { LINKS } from "../lib/links";
+import { localePath } from "../lib/paths";
 import InstallOptions from "./InstallOptions.astro";
 
 interface Props {
@@ -73,6 +74,9 @@ const d = t.download;
     <div>
       <p>{d.mobileBody}</p>
       <p class="callout">{d.mobileWarning}</p>
+      <div class="actions">
+        <a class="button button-primary" href={localePath(locale, "/mobile/")}>{d.mobileBeta}</a>
+      </div>
       <a class="text-link" href={d.mobileGuideHref}>{d.mobileGuide}</a>
     </div>
   </section>

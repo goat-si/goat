@@ -1,9 +1,7 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from "react";
 
 import { Button } from "../ui/button";
-import { ChevronRightIcon } from "~/components/solar";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   Dialog,
   DialogDescription,
@@ -25,25 +23,21 @@ const PURPOSE_MAX = 4000;
 
 /** Name, avatar and purpose of a GOAT Bot; `onSubmit` resolves to an error to show, or null. */
 export function GoatBotProfileDialog(props: {
-  readonly mode: "edit" | "create";
   readonly initial: BotProfileValues;
+  /** A name typed elsewhere to start from; changes are still those from `initial`. */
+  readonly draftName?: string | undefined;
   readonly canSubmit: boolean;
   readonly onSubmit: (changes: GoatBotProfileChanges) => Promise<string | null>;
   readonly onClose: () => void;
-  /** More fields after the profile, such as a new bot's model. */
+  /** More fields after the profile, such as a member's model. */
   readonly children?: ReactNode;
   /** One of those fields changed, so a save goes through with no profile change. */
   readonly extraChanged?: boolean;
-  /**
-   * The name being saved while a save runs, then null when it failed, so a list can show it at
-   * once. A save that went through leaves the name with the list, which shows it until its own
-   * read of the bots includes it.
-   */
-  readonly onPending?: ((name: string | null) => void) | undefined;
   /** The target server stores a member's color; absent or false hides the swatches. */
   readonly colorEditable?: boolean;
+  readonly finalFocus?: ComponentProps<typeof DialogPopup>["finalFocus"];
 }) {
-  const [name, setName] = useState(props.initial.name);
+  const [name, setName] = useState(props.draftName ?? props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
   const [color, setColor] = useState<string | null>(props.initial.color ?? null);
@@ -64,7 +58,7 @@ export function GoatBotProfileDialog(props: {
       nameRef.current?.focus();
       return;
     }
-    const changes = botProfileChanges(props.mode, props.initial, {
+    const changes = botProfileChanges("edit", props.initial, {
       name,
       avatar,
       purpose,
@@ -74,28 +68,11 @@ export function GoatBotProfileDialog(props: {
     if (Object.keys(changes).length === 0 && props.extraChanged !== true) return props.onClose();
     setBusy(true);
     setError(null);
-    props.onPending?.(name.trim());
     const failure = await props.onSubmit(changes);
     setBusy(false);
     if (failure === null) props.onClose();
-    else {
-      props.onPending?.(null);
-      setError(failure);
-    }
+    else setError(failure);
   }
-
-  const purposeField = (
-    <label className="grid gap-1.5 text-sm">
-      Purpose
-      <Textarea
-        value={purpose}
-        maxLength={PURPOSE_MAX}
-        disabled={busy}
-        placeholder="What should this bot help with?"
-        onChange={(event) => setPurpose(event.target.value)}
-      />
-    </label>
-  );
 
   return (
     <Dialog
@@ -104,14 +81,15 @@ export function GoatBotProfileDialog(props: {
         if (!open && !busy) props.onClose();
       }}
     >
-      <DialogPopup showCloseButton={!busy}>
+      <DialogPopup
+        showCloseButton={!busy}
+        {...(props.finalFocus === undefined ? {} : { finalFocus: props.finalFocus })}
+      >
         <form className="contents" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
-            <DialogTitle>{props.mode === "create" ? "New bot" : "Edit bot"}</DialogTitle>
+            <DialogTitle>Edit bot</DialogTitle>
             <DialogDescription>
-              {props.mode === "create"
-                ? "The bot gets its own conversation."
-                : "Changes reach the bot when it starts its next conversation session."}
+              Changes reach the bot when it starts its next conversation session.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -123,7 +101,7 @@ export function GoatBotProfileDialog(props: {
                 maxLength={NAME_MAX}
                 disabled={busy}
                 aria-invalid={nameMissing}
-                // Leaving a name the person never typed in, say to open More, is not a mistake yet.
+                // Leaving a name the person never typed in is not a mistake yet.
                 onBlur={() => {
                   if (nameEdited) setNameChecked(true);
                 }}
@@ -146,26 +124,17 @@ export function GoatBotProfileDialog(props: {
             {props.colorEditable === true ? (
               <GoatBotColorField value={color} onChange={setColor} disabled={busy} />
             ) : null}
-            {props.mode === "create" ? (
-              // A new bot needs only a name and a look; what it is for can come later.
-              <Collapsible>
-                <CollapsibleTrigger className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring data-panel-open:[&>svg]:rotate-90">
-                  <ChevronRightIcon aria-hidden className="size-3.5" />
-                  More
-                </CollapsibleTrigger>
-                <CollapsiblePanel>
-                  <div className="grid gap-4 pt-3">
-                    {purposeField}
-                    {props.children}
-                  </div>
-                </CollapsiblePanel>
-              </Collapsible>
-            ) : (
-              <>
-                {purposeField}
-                {props.children}
-              </>
-            )}
+            <label className="grid gap-1.5 text-sm">
+              Purpose
+              <Textarea
+                value={purpose}
+                maxLength={PURPOSE_MAX}
+                disabled={busy}
+                placeholder="What should this bot help with?"
+                onChange={(event) => setPurpose(event.target.value)}
+              />
+            </label>
+            {props.children}
             {nameMissing ? (
               <p className="text-sm text-muted-foreground">The bot needs a name.</p>
             ) : null}
@@ -180,13 +149,7 @@ export function GoatBotProfileDialog(props: {
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !props.canSubmit}>
-              {props.mode === "create"
-                ? busy
-                  ? "Creating…"
-                  : "Create"
-                : busy
-                  ? "Saving…"
-                  : "Save"}
+              {busy ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </form>

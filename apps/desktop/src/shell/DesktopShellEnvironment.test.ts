@@ -34,6 +34,11 @@ const cacheCodec = Schema.fromJsonString(
 );
 const encodeCache = Schema.encodeSync(cacheCodec);
 const decodeCache = Schema.decodeUnknownEffect(cacheCodec);
+// The fixture home is /test-home; these always follow whatever the shell and launcher gave.
+const DARWIN_CLI_DIRS =
+  "/test-home/.local/bin:/test-home/.bun/bin:/opt/homebrew/bin:/usr/local/bin";
+const LINUX_CLI_DIRS =
+  "/test-home/.local/bin:/test-home/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin";
 
 function envOutput(values: Readonly<Record<string, string>>): string {
   return Object.entries(values)
@@ -58,14 +63,17 @@ function makeProcess(output: string, exitCode = 0): ChildProcessSpawner.ChildPro
   });
 }
 
-function makeHungProcess(): ChildProcessSpawner.ChildProcessHandle {
+/** Never answers. It counts as running until `exited` completes; without one it never exits. */
+function makeHungProcess(exited?: Deferred.Deferred<void>): ChildProcessSpawner.ChildProcessHandle {
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(124),
     stdout: Stream.never,
     stderr: Stream.never,
     all: Stream.never,
-    exitCode: Effect.never,
-    isRunning: Effect.succeed(true),
+    exitCode: exited
+      ? Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(143)))
+      : Effect.never,
+    isRunning: exited ? Effect.map(Deferred.isDone(exited), (done) => !done) : Effect.succeed(true),
     kill: () => Effect.never,
     stdin: Sink.drain,
     getInputFd: () => Sink.drain,
@@ -105,6 +113,8 @@ function runShellEnvironment(input: {
   ) => string | { output: string; exitCode: number };
   readonly failure?: PlatformError.PlatformError;
   readonly processSpawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  /** Completed when the service moves a finished cache file into place. */
+  readonly cacheWritten?: Deferred.Deferred<void>;
 }) {
   const layerEnvironment = Layer.effect(
     DesktopEnvironment.DesktopEnvironment,
@@ -131,6 +141,19 @@ function runShellEnvironment(input: {
       );
     }),
   );
+  const { cacheWritten } = input;
+  const layerFileSystem = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      if (cacheWritten === undefined) return fs;
+      return {
+        ...fs,
+        rename: (from: string, to: string) =>
+          fs.rename(from, to).pipe(Effect.tap(() => Deferred.succeed(cacheWritten, undefined))),
+      };
+    }),
+  ).pipe(Layer.provide(NodeServices.layer));
 
   const program = Effect.gen(function* () {
     const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
@@ -141,6 +164,7 @@ function runShellEnvironment(input: {
   }).pipe(
     Effect.provide(
       DesktopShellEnvironment.layer.pipe(
+        Layer.provide(layerFileSystem),
         Layer.provide(Layer.mergeAll(layerEnvironment, NodeServices.layer, layerSpawner)),
       ),
     ),
@@ -242,7 +266,7 @@ describe("DesktopShellEnvironment", () => {
             Effect.gen(function* () {
               yield* service.installIntoProcess;
               yield* service.installIntoProcess;
-              assert.equal(env.PATH, "/old/bin:/usr/bin:/launcher/bin");
+              assert.equal(env.PATH, `/old/bin:/usr/bin:/launcher/bin:${DARWIN_CLI_DIRS}`);
               assert.equal(env.SSH_AUTH_SOCK, "/current-session.sock");
               const replay = yield* Stream.runHead(service.updates);
               assert.isTrue(Option.isSome(replay));
@@ -252,7 +276,7 @@ describe("DesktopShellEnvironment", () => {
               assert.equal(calls, 1);
               yield* Deferred.succeed(release, undefined);
               yield* service.awaitDiscovery;
-              assert.equal(env.PATH, "/fresh/bin:/launcher/bin");
+              assert.equal(env.PATH, `/fresh/bin:/launcher/bin:${DARWIN_CLI_DIRS}`);
               assert.equal(env.__MISE_DIFF, "fresh-mise");
               assert.isUndefined(env.JAVA_HOME);
               assert.isUndefined(env.SSL_CERT_FILE);
@@ -300,12 +324,13 @@ describe("DesktopShellEnvironment", () => {
             const startup = yield* service.installIntoProcess.pipe(Effect.forkChild);
             yield* Deferred.await(started);
             assert.isDefined(startup.pollUnsafe());
-            assert.equal(env.PATH, "/usr/bin");
+            // The server may start now, before any snapshot: it already has the well-known folders.
+            assert.equal(env.PATH, `/usr/bin:${DARWIN_CLI_DIRS}`);
             yield* Deferred.succeed(release, undefined);
             return yield* service.awaitDiscovery;
           }),
       });
-      assert.equal(env.PATH, "/fresh/bin:/usr/bin");
+      assert.equal(env.PATH, `/fresh/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -358,7 +383,7 @@ describe("DesktopShellEnvironment", () => {
             }),
         });
         assert.isFalse(prepared);
-        assert.equal(env.PATH, "/cached/bin:/usr/bin");
+        assert.equal(env.PATH, `/cached/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
         assert.equal(env.__MISE_DIFF, "cached-mise");
         assert.equal(env.JAVA_HOME, "/launcher/java");
         assert.equal(env.NODE_EXTRA_CA_CERTS, "/launcher/ca.pem");
@@ -424,7 +449,7 @@ describe("DesktopShellEnvironment", () => {
           }),
         }).pipe(Effect.provide(Logger.layer([])));
 
-        assert.equal(env.PATH, "/shell-only/bin:/usr/bin");
+        assert.equal(env.PATH, `/shell-only/bin:/usr/bin:${LINUX_CLI_DIRS}`);
         assert.deepEqual(commands, ["/test-shell"]);
       }),
   );
@@ -448,7 +473,7 @@ describe("DesktopShellEnvironment", () => {
       }).pipe(Effect.provide(Logger.layer([])));
 
       assert.deepEqual(commands, ["/bin/failing", "/usr/local/bin/fish"]);
-      assert.equal(env.PATH, "/home/test/.local/bin:/usr/bin");
+      assert.equal(env.PATH, `/home/test/.local/bin:/usr/bin:${LINUX_CLI_DIRS}`);
     }),
   );
 
@@ -475,7 +500,10 @@ describe("DesktopShellEnvironment", () => {
 
       assert.equal(commands.length, 1);
       assert.equal(commands[0]?._tag === "StandardCommand" ? commands[0].command : "", "/bin/zsh");
-      assert.equal(env.PATH, "/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
+      assert.equal(
+        env.PATH,
+        "/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin:/test-home/.local/bin:/test-home/.bun/bin:/usr/local/bin",
+      );
       assert.equal(env.SSH_AUTH_SOCK, "/tmp/secretive.sock");
       assert.equal(env.HOMEBREW_PREFIX, "/opt/homebrew");
       assert.isTrue(prepared);
@@ -590,8 +618,36 @@ describe("DesktopShellEnvironment", () => {
       });
 
       assert.deepEqual(commands, ["/opt/homebrew/bin/nu", "/bin/zsh", "/bin/launchctl"]);
-      assert.equal(env.PATH, "/opt/homebrew/bin:/usr/bin");
+      assert.equal(
+        env.PATH,
+        "/opt/homebrew/bin:/usr/bin:/test-home/.local/bin:/test-home/.bun/bin:/usr/local/bin",
+      );
       assert.isFalse(prepared);
+    }),
+  );
+
+  it.effect("waits ten seconds for a slow login shell on macOS before giving up on it", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+      const started = yield* Deferred.make<void>();
+      const fiber = yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () => "",
+        processSpawner: ChildProcessSpawner.make((command) =>
+          command._tag === "StandardCommand" && command.command === "/bin/zsh"
+            ? Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Effect.sleep("7 seconds")),
+                Effect.as(makeProcess(envOutput({ PATH: "/slow-shell/bin" }))),
+              )
+            : Effect.succeed(makeProcess("")),
+        ),
+      }).pipe(Effect.provide(Logger.layer([])), Effect.forkChild({ startImmediately: true }));
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("7 seconds");
+      assert.isTrue(yield* Fiber.join(fiber));
+      assert.equal(env.PATH, `/slow-shell/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
     }),
   );
 
@@ -605,6 +661,103 @@ describe("DesktopShellEnvironment", () => {
 
       assert.isFalse(prepared);
     }),
+  );
+
+  it.effect(
+    "uses a fallback shell's PATH without ending discovery, then finishes when the person's shell answers",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped();
+        const cachePath = `${stateDir}/shell-environment-cache.json`;
+        const env: NodeJS.ProcessEnv = { SHELL: "/usr/local/bin/fish", PATH: "/usr/bin" };
+        const firstProbe = yield* Deferred.make<void>();
+        const cacheWritten = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<void>();
+        let ownShellProbes = 0;
+        yield* runShellEnvironment({
+          env,
+          stateDir,
+          cacheWritten,
+          platform: "darwin",
+          handler: () => "",
+          processSpawner: ChildProcessSpawner.make((command) => {
+            if (command._tag !== "StandardCommand") return Effect.succeed(makeProcess(""));
+            if (command.command === "/bin/zsh")
+              return Effect.succeed(makeProcess(envOutput({ PATH: "/fallback/bin" })));
+            if (command.command !== "/usr/local/bin/fish") return Effect.succeed(makeProcess(""));
+            ownShellProbes++;
+            return ownShellProbes === 1
+              ? Deferred.succeed(firstProbe, undefined).pipe(
+                  Effect.andThen(
+                    // Gone 20 s after the kill, before the retry is due.
+                    Effect.acquireRelease(Effect.succeed(makeHungProcess(exited)), () =>
+                      Effect.sleep("20 seconds").pipe(
+                        Effect.andThen(Deferred.succeed(exited, undefined)),
+                      ),
+                    ),
+                  ),
+                )
+              : Effect.succeed(makeProcess(envOutput({ PATH: "/own/bin" })));
+          }),
+          use: (service) =>
+            Effect.gen(function* () {
+              yield* service.installIntoProcess;
+              yield* Deferred.await(firstProbe);
+              yield* TestClock.adjust("10 seconds");
+              assert.isFalse(yield* service.awaitDiscovery);
+              const pending = Option.getOrUndefined(yield* Stream.runHead(service.updates));
+              assert.isFalse(pending?.discovered);
+              assert.equal(pending?.environment.PATH, `/fallback/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
+              assert.isFalse(yield* Effect.orDie(fs.exists(cachePath)));
+
+              yield* TestClock.adjust("30 seconds");
+              assert.equal(ownShellProbes, 2);
+              const recovered = yield* service.updates.pipe(
+                Stream.filter((snapshot) => snapshot.discovered),
+                Stream.runHead,
+              );
+              assert.equal(
+                Option.getOrUndefined(recovered)?.environment.PATH,
+                `/own/bin:/usr/bin:${DARWIN_CLI_DIRS}`,
+              );
+              yield* Deferred.await(cacheWritten);
+              const cached = yield* fs
+                .readFileString(cachePath)
+                .pipe(Effect.flatMap(decodeCache), Effect.orDie);
+              assert.equal(cached.environment.PATH, "/own/bin:/usr/bin");
+              return true;
+            }),
+        }).pipe(Effect.provide(Logger.layer([])));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps a good cache when only a fallback shell answers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped();
+      const cachePath = `${stateDir}/shell-environment-cache.json`;
+      const contents = encodeCache({
+        version: 1,
+        key: '["darwin","/test-home","/usr/local/bin/fish",""]',
+        environment: { PATH: "/own-cached/bin" },
+      });
+      yield* fs.writeFileString(cachePath, contents);
+      const env: NodeJS.ProcessEnv = { SHELL: "/usr/local/bin/fish", PATH: "/usr/bin" };
+      const prepared = yield* runShellEnvironment({
+        env,
+        stateDir,
+        platform: "darwin",
+        handler: (command) =>
+          command._tag === "StandardCommand" && command.command === "/bin/zsh"
+            ? envOutput({ PATH: "/fallback/bin" })
+            : { output: "", exitCode: 1 },
+      }).pipe(Effect.provide(Logger.layer([])));
+
+      assert.isFalse(prepared);
+      assert.equal(env.PATH, `/own-cached/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
+      assert.equal(yield* fs.readFileString(cachePath), contents);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("loads PowerShell profile environment on Windows", () =>

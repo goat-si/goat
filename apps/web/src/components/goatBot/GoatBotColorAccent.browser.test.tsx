@@ -32,7 +32,10 @@ vi.mock("~/state/use-atom-command", () => ({
     () =>
     async ({ input }: { input: Record<string, unknown> }) => {
       state.updates.push(input);
-      return { _tag: "Success", value: { bot: null } };
+      return {
+        _tag: "Success",
+        value: { bot: member(typeof input.color === "string" ? input.color : undefined) },
+      };
     },
 }));
 vi.mock("./useGoatBotModel", () => ({

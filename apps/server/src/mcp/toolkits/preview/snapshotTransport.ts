@@ -121,7 +121,8 @@ export const boundSnapshotMetadata = (full: SnapshotMetadata) => {
     "interactiveElements",
   ] as const;
   const lists: Record<(typeof shedOrder)[number], ReadonlyArray<unknown>> = {
-    interactiveElements: bounded.interactiveElements,
+    // A text tree carries the same refs in fewer bytes; elements return only for refs its cut drops.
+    interactiveElements: ariaTree === undefined ? bounded.interactiveElements : [],
     consoleEntries: bounded.consoleEntries,
     networkEntries: bounded.networkEntries,
     actionTimeline: bounded.actionTimeline,
@@ -195,6 +196,27 @@ export const boundSnapshotMetadata = (full: SnapshotMetadata) => {
             : lists[key].slice(-keep);
     }
     text = encodeJsonText(value());
+  }
+  if (ariaTree !== undefined && ariaTreeChars < ariaTree.length) {
+    const delivered = cutText(ariaTree, ariaTreeChars);
+    const pastCut = bounded.interactiveElements.filter(
+      (element) =>
+        !("selector" in element) ||
+        typeof element.selector !== "string" ||
+        !delivered.includes(`[ref=${element.selector.replace(/^aria-ref=/, "")}]`),
+    );
+    let sent = pastCut;
+    lists.interactiveElements = sent;
+    text = encodeJsonText(value());
+    while (sent.length > 0 && utf8Length(text) > MAX_SNAPSHOT_TEXT_BYTES) {
+      sent = sent.slice(0, Math.floor(sent.length / 2));
+      lists.interactiveElements = sent;
+      text = encodeJsonText(value());
+    }
+    if (sent.length < pastCut.length)
+      omitted.push(
+        `${pastCut.length - sent.length} of ${pastCut.length} interactiveElements past the tree cut`,
+      );
   }
   if (visibleTextChars < metadata.visibleText.length) {
     omitted.push(

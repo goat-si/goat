@@ -114,6 +114,10 @@ export class ChannelGateway extends Context.Service<
     readonly send: (
       message: ChannelOutboundMessage,
     ) => Effect.Effect<ChannelDeliveryReceipt, ChannelGatewayError>;
+    /** Edits a sent message through its transport; skipped where the channel cannot. */
+    readonly edit: NonNullable<ChannelTransport.ChannelTransport["edit"]>;
+    /** Deletes a sent message through its transport; skipped where the channel cannot. */
+    readonly remove: NonNullable<ChannelTransport.ChannelTransport["remove"]>;
   }
 >()("goat/channels/ChannelGateway") {}
 
@@ -687,7 +691,29 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  return ChannelGateway.of({ ingest, linkIdentity, requestNotice, getInput, send });
+  const skipped = { _tag: "skipped" } as const;
+  const edit: ChannelGateway["Service"]["edit"] = (input) =>
+    registry
+      .resolve(input.message.destination.kind)
+      .pipe(
+        Effect.flatMap((transport) =>
+          Option.isSome(transport) && transport.value.edit !== undefined
+            ? transport.value.edit(input)
+            : Effect.succeed(skipped),
+        ),
+      );
+  const remove: ChannelGateway["Service"]["remove"] = (input) =>
+    registry
+      .resolve(input.destination.kind)
+      .pipe(
+        Effect.flatMap((transport) =>
+          Option.isSome(transport) && transport.value.remove !== undefined
+            ? transport.value.remove(input)
+            : Effect.succeed(skipped),
+        ),
+      );
+
+  return ChannelGateway.of({ ingest, linkIdentity, requestNotice, getInput, send, edit, remove });
 });
 
 export const layer = Layer.effect(ChannelGateway, make);

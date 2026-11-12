@@ -1,14 +1,22 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
 import type { DesktopCuaReadinessReport, DesktopCuaSafetyReport } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import { type DriverSession, makeLinuxHelperHost, TICK_MS } from "./LinuxHelperHost.ts";
+import {
+  type DriverSession,
+  helperLaunch,
+  makeLinuxHelperHost,
+  TICK_MS,
+} from "./LinuxHelperHost.ts";
 import {
   CAPABILITIES,
   type FakeHelperOptions,
@@ -784,5 +792,32 @@ describe("LinuxHelperHost before the first turn, round 1 (#1546)", () => {
       yield* TestClock.adjust(1);
       assert.deepEqual(yield* Ref.get(report), Option.none());
     }).pipe(Effect.scoped),
+  );
+});
+
+describe("Linux helper launch", () => {
+  it.effect(
+    "a packaged goat server runs the helper with installed Node, and refuses it with a reason when there is none (#2247)",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const packaged = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          effect.pipe(
+            Effect.provideService(HostProcess.ExecutablePath, "/opt/goat/goat"),
+            Effect.provideService(HostProcess.IsExecutable, true),
+          );
+        const verified = (launch: {
+          readonly verify: Effect.Effect<string | undefined> | undefined;
+        }) => launch.verify ?? Effect.undefined;
+        const bundle = Effect.undefined;
+        // The packaged binary runs only its own CLI, so it must never be handed the entry.
+        const installed = yield* packaged(
+          helperLaunch({ PATH: path.dirname(process.execPath) }, bundle),
+        );
+        assert.isUndefined(yield* verified(installed));
+        assert.equal(installed.node(), process.execPath);
+        const missing = yield* packaged(helperLaunch({ PATH: "" }, bundle));
+        assert.match((yield* verified(missing)) ?? "", /requires Node\.js/);
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

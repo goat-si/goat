@@ -1,12 +1,19 @@
 import {
+  botArtifactCardReadsFirstChunk,
   botArtifactName,
   botArtifactPreviewSlot,
   botArtifactViewKind,
+  botFileReads,
   goatBotReplyFiles,
   goatBotReplyMayNameFile,
 } from "@goat/client-runtime/goatBot";
-import { runAtomCommand } from "@goat/client-runtime/state/runtime";
-import type { ChannelBotArtifact, EnvironmentId, ThreadId } from "@goat/contracts";
+import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type {
+  ChannelBotArtifact,
+  ChannelReadBotArtifactInput,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import {
   createContext,
   memo,
@@ -26,7 +33,6 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
-import { dropChatPreviewReads, queuePreviewRead } from "./goatBotFileReads";
 import {
   cachedGoatBotFilePreview,
   forgetChatFilePreviews,
@@ -174,7 +180,7 @@ export function GoatBotFilesProvider(props: {
   // oxlint-disable-next-line goat/react-effect-budget -- Previews outlive a render; leaving the chat drops its waiting reads and its cached previews.
   useEffect(
     () => () => {
-      dropChatPreviewReads(chatKey);
+      botFileReads.leaveChat(chatKey);
       forgetChatFilePreviews(chatKey);
     },
     [chatKey],
@@ -258,37 +264,46 @@ function GoatBotFileCard(props: {
   const label = useScaledTextRole("label");
   const key = JSON.stringify([chatKey, path, generation]);
   const cached = cachedGoatBotFilePreview(chatKey, path, generation);
+  // A card with no preview to draw is named from the file's name and reads nothing.
+  const readsFirstChunk = botArtifactCardReadsFirstChunk(path, file.size);
   const [read, setRead] = useState<{
     readonly key: string;
     readonly preview: GoatBotFilePreview | null;
   } | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- The first chunk arrives after render; a card that goes, or changes chat or listing, leaves the queue and drops a late answer.
   useEffect(() => {
-    if (cached !== undefined) return;
+    if (cached !== undefined || !readsFirstChunk) return;
     let stale = false;
-    const pending = queuePreviewRead(environmentId, chatKey, () =>
-      runAtomCommand(
+    const readChunk = async (input: ChannelReadBotArtifactInput) => {
+      const answer = await runAtomCommand(
         appAtomRegistry,
         channelEnvironment.readBotArtifact,
-        { environmentId, input: { relativePath: path } },
+        { environmentId, input },
         { label: "GOAT Bot file preview", reportFailure: false },
-      ),
-    );
-    void pending.result.then(
-      (answer) => {
-        if (stale || answer === null || answer._tag !== "Success") return;
-        const next = goatBotFilePreviewOf(answer.value);
-        if (next !== null) storeGoatBotFilePreview(chatKey, path, generation, next);
-        setRead({ key, preview: next });
-      },
-      () => {},
-    );
+      );
+      if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
+      return answer.value;
+    };
+    const pending = botFileReads.preview(environmentId, readChunk, path, chatKey);
+    void pending.result.then((outcome) => {
+      if (stale || outcome.status === "cancelled") return;
+      const next = outcome.status === "ready" ? goatBotFilePreviewOf(outcome.answer) : null;
+      // A preview, or nothing to show in this version of the file, is kept; a failed, skipped,
+      // changed or invalid read is asked again on the next mount.
+      const stable =
+        outcome.status === "ready" &&
+        (outcome.answer.status === "chunk" || outcome.answer.status === "too_large");
+      if (next !== null || stable) storeGoatBotFilePreview(chatKey, path, generation, next);
+      setRead({ key, preview: next });
+    });
     return () => {
       stale = true;
       pending.cancel();
     };
-  }, [cached, environmentId, chatKey, path, generation, key]);
+  }, [cached, readsFirstChunk, environmentId, chatKey, path, generation, key]);
   const preview = cached ?? (read?.key === key ? read.preview : null);
+  const unavailable =
+    cached === null || (cached === undefined && read?.key === key && read.preview === null);
   const slot = botArtifactPreviewSlot(path, file.size);
   // Before or without a preview, an image name still reads as an image.
   const kind =
@@ -313,7 +328,7 @@ function GoatBotFileCard(props: {
             className="overflow-hidden"
             style={{ height: SLOT_HEIGHT[slot] }}
           >
-            <GoatBotFilePreviewView preview={preview} />
+            <GoatBotFilePreviewView preview={preview} unavailable={unavailable} />
           </View>
         ) : null}
         <View
@@ -335,10 +350,22 @@ function GoatBotFileCard(props: {
   );
 }
 
-function GoatBotFilePreviewView(props: { readonly preview: GoatBotFilePreview | null }) {
+function GoatBotFilePreviewView(props: {
+  readonly preview: GoatBotFilePreview | null;
+  readonly unavailable: boolean;
+}) {
   const label = useScaledTextRole("label");
   const { preview } = props;
-  if (preview === null) return <View className="flex-1" />;
+  if (preview === null)
+    return (
+      <View className="flex-1 justify-center px-3">
+        {props.unavailable ? (
+          <Text className="text-foreground-muted" style={label}>
+            Preview unavailable
+          </Text>
+        ) : null}
+      </View>
+    );
   if (preview.kind === "image")
     return (
       <Image

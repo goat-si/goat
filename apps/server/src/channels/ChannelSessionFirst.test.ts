@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { MessageId, ProviderInstanceId } from "@goat/contracts";
+import { ChannelTaskEventId, MessageId, ProviderInstanceId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -401,6 +401,116 @@ describe("session first receipts", () => {
         outcome: { type: "retry", at: now, errorCode: "late" },
       });
       assert.strictEqual(yield* ledger.getDeliveryState(deliveryId), "ambiguous");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("a GOAT Bot turn that asked the person", () => {
+  /** A session turn asks with channel_task_report, then its run ends waiting for the answer. */
+  const askingTurn = (harness: ReturnType<typeof makeSessionHarness>) =>
+    Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const input = yield* gateway.ingest(goatInput("Kill the server on 3774", "asks"), rpcContext);
+      yield* runtime.drain;
+      const turn = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+      yield* reports.report(
+        {
+          taskId: turn.taskId,
+          eventId: ChannelTaskEventId.make("turn-asks"),
+          generation: turn.generation,
+          status: "waiting_input",
+          summary: "Confirming first.",
+          question: "That is GOAT itself. Kill it anyway?",
+        },
+        turn.worker!.threadId,
+      );
+      harness.world.setStatus(turn.worker!.threadId, 1, "completed");
+      yield* runtime.drain;
+      const waiting = (yield* ledger.getTask(turn.taskId))!.task;
+      assert.strictEqual(waiting.status, "waiting_input");
+      return { turn, question: waiting.openQuestions[0]! };
+    });
+
+  /** The person's next message, run by the session as its own turn and still going. */
+  const nextMessage = (text: string) =>
+    Effect.gen(function* () {
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* TestClock.adjust("1 minute");
+      const input = yield* gateway.ingest(goatInput(text, "next"), rpcContext);
+      yield* runtime.drain;
+      const turn = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+      assert.isDefined(turn.worker);
+      return turn;
+    });
+
+  it.effect(
+    "regression: once the session has taken the next message, the question closes without naming it the answer",
+    () => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        const { turn, question } = yield* askingTurn(harness);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const next = yield* nextMessage("what is the weather tomorrow?");
+        // While the next turn runs, the session has not answered or asked again yet.
+        assert.strictEqual((yield* ledger.getTask(turn.taskId))!.task.status, "waiting_input");
+        harness.world.setStatus(next.worker!.threadId, 2, "completed");
+        // The next turn ends once its first line is sealed, here by the fallback receipt.
+        yield* TestClock.adjust("20 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([next.originInputId]);
+        yield* runtime.drain;
+        assert.strictEqual((yield* ledger.getTask(next.taskId))!.task.status, "completed");
+        const asked = (yield* ledger.getTask(turn.taskId))!.task;
+        assert.strictEqual(asked.status, "completed");
+        assert.deepStrictEqual(asked.openQuestions, []);
+        // An unrelated message is never recorded as the answer to the question.
+        assert.deepStrictEqual(asked.answeredQuestions, [{ questionId: question.questionId }]);
+        const { messages } = yield* botMessages;
+        assert.lengthOf(
+          messages.filter((message) => message.text.includes("Kill it anyway?")),
+          1,
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each(["failed", "cancelled"] as const)(
+    "keeps the question open when the next message's turn %s before the session took it",
+    (status) => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        const { turn } = yield* askingTurn(harness);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const next = yield* nextMessage("yes, kill it");
+        harness.world.setStatus(next.worker!.threadId, 2, status);
+        yield* runtime.drain;
+        assert.notStrictEqual((yield* ledger.getTask(next.taskId))!.task.status, "running");
+        const waiting = (yield* ledger.getTask(turn.taskId))!.task;
+        assert.strictEqual(waiting.status, "waiting_input");
+        assert.lengthOf(waiting.openQuestions, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("keeps waiting while nothing newer came from the person who was asked", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      const { turn } = yield* askingTurn(harness);
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* TestClock.adjust("1 hour");
+      yield* runtime.drain;
+      const waiting = (yield* ledger.getTask(turn.taskId))!.task;
+      assert.strictEqual(waiting.status, "waiting_input");
+      assert.lengthOf(waiting.openQuestions, 1);
     }).pipe(Effect.provide(harness.layer));
   });
 });

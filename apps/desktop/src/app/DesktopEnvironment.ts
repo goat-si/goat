@@ -22,6 +22,7 @@ import type { OtlpProtocol } from "@goat/shared/observability";
 import {
   computerUseHelperBundleIdForChannel,
   DESKTOP_CHANNEL_APP_IDS,
+  type DesktopChannel,
 } from "@goat/shared/cuaDriverRelease";
 import { LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME } from "@goat/contracts/legacyT3Names";
 
@@ -122,6 +123,13 @@ function resolveDesktopAppStageLabel(input: {
   return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
 }
 
+/** The channel a build belongs to; each has its own app id and its own GOAT Computer Use. */
+export const desktopChannel = (input: {
+  readonly isDevelopment: boolean;
+  readonly appVersion: string;
+}): DesktopChannel =>
+  input.isDevelopment ? "dev" : isNightlyDesktopVersion(input.appVersion) ? "nightly" : "stable";
+
 export function resolveDesktopAppBranding(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
@@ -199,11 +207,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appVersion: input.appVersion,
   });
   const displayName = branding.displayName;
-  const channel = isDevelopment
-    ? "dev"
-    : isNightlyDesktopVersion(input.appVersion)
-      ? "nightly"
-      : "stable";
+  const channel = desktopChannel({ isDevelopment, appVersion: input.appVersion });
   const stateDir = resolveDesktopStateDir({
     baseDir,
     isDevelopment,

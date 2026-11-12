@@ -49,12 +49,10 @@ function NativePdfPreview(props: { readonly uri: string; readonly onRetry: () =>
   return (
     <Pdf
       source={{ uri: localUri }}
-      page={pdfInitialPage(props.uri)}
-      fitPolicy={0}
-      trustAllCerts={false}
+      initialPage={pdfInitialPage(props.uri) - 1}
       enableAnnotationRendering
       enableDoubleTapZoom
-      onPressLink={(href) => {
+      onLinkPress={({ url: href }) => {
         const url = pdfLinkUrl(href, props.uri);
         if (url !== null) void tryOpenExternalUrl(url, "file-preview");
       }}

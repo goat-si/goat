@@ -207,6 +207,10 @@
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
+    "./cliPath": {
+      "types": "./src/cliPath.ts",
+      "import": "./src/cliPath.ts"
+    },
     "./semver": {
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"

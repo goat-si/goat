@@ -183,28 +183,33 @@ const MAX_ENTRIES = 12;
 const MAX_BYTES = 4 * 1024 * 1024;
 const cache = new Map<
   string,
-  { readonly chatKey: string; readonly preview: GoatBotFilePreview; readonly bytes: number }
+  { readonly chatKey: string; readonly preview: GoatBotFilePreview | null; readonly bytes: number }
 >();
 let cachedBytes = 0;
 const keyOf = (chatKey: string, path: string, generation: number) =>
   JSON.stringify([chatKey, path, generation]);
-const weight = (preview: GoatBotFilePreview) =>
-  preview.kind === "image"
-    ? preview.uri.length
-    : preview.kind === "text"
-      ? preview.text.length * 2
-      : preview.blocks.reduce(
-          (total, block) =>
-            total + block.inlines.reduce((sum, inline) => sum + inline.text.length * 2, 0),
-          0,
-        );
+const weight = (preview: GoatBotFilePreview | null) =>
+  preview === null
+    ? 0
+    : preview.kind === "image"
+      ? preview.uri.length
+      : preview.kind === "text"
+        ? preview.text.length * 2
+        : preview.blocks.reduce(
+            (total, block) =>
+              total + block.inlines.reduce((sum, inline) => sum + inline.text.length * 2, 0),
+            0,
+          );
 
-/** A preview read in this chat under this listing, so scrolling a card back does not read it again. */
+/**
+ * A preview read in this chat under this listing, so scrolling a card back does not read it again:
+ * the preview, null for a file with nothing to show in that version, undefined when not read.
+ */
 export function cachedGoatBotFilePreview(
   chatKey: string,
   path: string,
   generation: number,
-): GoatBotFilePreview | undefined {
+): GoatBotFilePreview | null | undefined {
   const key = keyOf(chatKey, path, generation);
   const entry = cache.get(key);
   if (entry === undefined) return undefined;
@@ -217,7 +222,7 @@ export function storeGoatBotFilePreview(
   chatKey: string,
   path: string,
   generation: number,
-  preview: GoatBotFilePreview,
+  preview: GoatBotFilePreview | null,
 ): void {
   const key = keyOf(chatKey, path, generation);
   const old = cache.get(key);

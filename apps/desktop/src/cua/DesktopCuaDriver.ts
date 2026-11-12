@@ -24,7 +24,14 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { cuaGrantTarget, readCuaGrants, type CuaGrantTarget } from "./DesktopCuaGrants.ts";
+import {
+  checkedGrantRead,
+  grantsStepFailure,
+  makeCuaGrantAccess,
+  readGrantsForCheck,
+  type CuaGrantTarget,
+} from "./DesktopCuaGrants.ts";
+import { makeCuaGrantReadLog, type CuaGrantReadEntry } from "./cuaGrantReadLog.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
   helperSignals,
@@ -33,11 +40,12 @@ import {
   withGrants,
   withProof,
   withRunning,
+  withUnreadGrants,
   withoutProof,
   type HelperProof,
   type HelperReadinessState,
 } from "./helperReadiness.ts";
-import { ComputerUseHelperError, helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
+import { helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
 import { managerPerChannel } from "./ComputerUseHelperService.ts";
 import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
 import { DesktopCuaGenerationExhausted, nextDesktopCuaGeneration } from "./desktopCuaGeneration.ts";
@@ -90,7 +98,7 @@ export class DesktopCuaDriver extends Context.Service<
     readonly verify: Effect.Effect<DesktopCuaVerification>;
     readonly grantTarget: Effect.Effect<CuaGrantTarget>;
     /** The target's grants without prompting; each call asks a fresh helper process. */
-    readonly grants: Effect.Effect<DesktopCuaGrants, ComputerUseHelperError>;
+    readonly grants: Effect.Effect<DesktopCuaGrants>;
   }
 >()("@goat/desktop/cua/DesktopCuaDriver") {}
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
@@ -105,6 +113,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
 ) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+  const noteGrantRead = makeCuaGrantReadLog(DesktopEnvironment.desktopChannel(environment));
   const mutex = yield* Semaphore.make(1);
   const crashes = yield* Queue.unbounded<OwnedHost>();
   let owned: OwnedHost | undefined;
@@ -438,8 +447,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const checkServicePid = () => checkHost?.host.servicePid?.();
   /** The grant read an agent's start just made, so its automatic check does not repeat it. */
   let knownGrants: Grants | undefined;
+  /** What the running check's own grant read found, for the grant read log. */
+  let checkRead: CuaGrantReadEntry | undefined;
   const check = Effect.gen(function* () {
     checkHost = undefined;
+    checkRead = undefined;
     const known = knownGrants;
     knownGrants = undefined;
     const steps: CuaVerificationStep[] = [];
@@ -473,32 +485,23 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }
     const selected = chosen;
     const principal = selected?.kind === "helper" ? COMPUTER_USE_HELPER_NAME : "GOAT";
-    const grants =
+    const read =
       known ??
-      (yield* Effect.tryPromise(() =>
+      (yield* readGrantsForCheck(() =>
         selected ? engineGrants(selected, false, requests.signal()) : native.checkGrants(),
-      ).pipe(
-        Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })),
       ));
+    checkRead = checkedGrantRead(selected, environment.appUserModelId, read);
     if (selected?.kind === "helper") {
       helperSeen = true;
-      // A check stands on its own reads: until it proves capture and the tree again, they are not.
-      yield* noteHelper((state) => withoutProof(withGrants(state, grants, false)));
+      // A check stands on its own reads: until it proves capture and the tree again, they are
+      // not. A read that got no answer is not macOS saying no, so the grants stay as last read.
+      yield* noteHelper((state) =>
+        "code" in read
+          ? withUnreadGrants(state, read.detail)
+          : withoutProof(withGrants(state, read, false)),
+      );
     }
-    const missing = [
-      ...(grants.accessibility ? [] : ["Accessibility"]),
-      ...(grants.screenRecording ? [] : ["Screen Recording"]),
-    ];
-    if (
-      !record(
-        "grants",
-        grants.detail ??
-          (missing.length === 0
-            ? undefined
-            : `${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} off for ${principal}.`),
-      )
-    )
-      return done();
+    if (!record("grants", grantsStepFailure(read, principal)) || "code" in read) return done();
 
     // macOS caches TCC answers per process, so only a fresh driver sees new grants.
     const request = owned ? currentRequest : undefined;
@@ -509,7 +512,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     // check's own helper may not (the macOS readiness check runs it as an MCP child). It speaks
     // for this desktop only once the helper running before is gone; a check that stopped
     // earlier leaves that helper, and what it said, as they were.
-    if (stopped && selected?.kind === "helper") learnHelper(grants.features);
+    if (stopped && selected?.kind === "helper") learnHelper(read.features);
     if (request)
       yield* stopped
         ? report(request.requestId, "stopped", undefined, undefined, generation)
@@ -721,6 +724,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
       return early ? noteChecked((state) => withoutProof(state, early.detail)) : Effect.void;
     }),
+    Effect.tap((result) =>
+      checkRead
+        ? noteGrantRead({ ...checkRead, failedStep: result.steps.find((step) => !step.ok)?.id })
+        : Effect.void,
+    ),
     // Only the check's own generation is stopped here: nothing else holds it. A driver that was
     // already serving an agent is retired only by the restart step, which reports "stopped".
     Effect.ensuring(
@@ -898,22 +906,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* stop;
     }),
   );
-  const grantTarget = Effect.gen(function* () {
-    const chosen = environment.platform === "darwin" ? yield* engine() : undefined;
-    return cuaGrantTarget({
-      platform: environment.platform,
-      engine: chosen,
-      appBundleId: environment.appUserModelId,
-      readHelper: () =>
-        chosen !== undefined && typeof chosen !== "string"
-          ? engineGrants(chosen, false)
-          : Promise.reject(new Error("no helper")),
-      readApp: native.checkGrants,
-    });
-  }).pipe(Effect.withSpan("desktop.cua.grantTarget"));
-  const grants = grantTarget.pipe(
-    Effect.flatMap((target) => readCuaGrants(target, environment.displayName)),
-  );
+  const { grantTarget, grants } = makeCuaGrantAccess({
+    environment,
+    engine: Effect.suspend(engine),
+    readHelper: (chosen) => engineGrants(chosen, false),
+    readApp: native.checkGrants,
+    note: noteGrantRead,
+  });
 
   return DesktopCuaDriver.of({
     restart,
@@ -975,6 +974,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
                 yield* forgetCrash(entry);
                 if (owned !== entry || entry.cleanup) return;
                 const request = currentRequest;
+                // Said before the cleanup it waits on, which can take seconds.
+                yield* noteHelper((state) => withRunning(state, false));
                 yield* stop;
                 if (request) yield* unavailable(request.requestId);
               }),

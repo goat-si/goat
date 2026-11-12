@@ -1,4 +1,5 @@
 import { DesktopShellEnvironmentSnapshot, ShellEnvironmentPatch } from "@goat/contracts";
+import { appendWellKnownCliDirs, POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS } from "@goat/shared/cliPath";
 import {
   applyShellEnvironment,
   buildEnvironmentCaptureCommand,
@@ -23,6 +24,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { discoverWithRetries, LiveShellProbes, makeLiveShellProbes } from "./loginShellRetry.ts";
 import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 type EnvironmentPatch = Record<string, string>;
@@ -115,6 +117,7 @@ const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
 const FALLBACK_LC_CTYPE = "en_US.UTF-8";
 const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
 const LOGIN_SHELL_TIMEOUT = Duration.seconds(5);
+const POSIX_LOGIN_SHELL_TIMEOUT = Duration.millis(POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS);
 const LAUNCHCTL_TIMEOUT = Duration.seconds(2);
 const PROCESS_TERMINATE_GRACE = Duration.seconds(1);
 
@@ -261,9 +264,10 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
   readonly shell?: boolean;
 }): Effect.fn.Return<string, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const probes = yield* LiveShellProbes;
   const fiber = yield* Effect.scoped(
     Effect.gen(function* () {
-      const child = yield* spawner.spawn(
+      const spawn = spawner.spawn(
         ChildProcess.make(input.command, input.args, {
           shell: input.shell ?? false,
           env: input.env,
@@ -275,6 +279,7 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
           forceKillAfter: PROCESS_TERMINATE_GRACE,
         }),
       );
+      const child = yield* probes.spawned(spawn);
       return yield* Effect.all([Stream.mkString(Stream.decodeText(child.stdout)), child.exitCode], {
         concurrency: 2,
       });
@@ -304,6 +309,7 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
       DesktopShellEnvironmentCommandError: (error) =>
         logShellEnvironmentCommandError(error).pipe(Effect.as("")),
     }),
+    probes.track,
     Effect.forkDetach,
   );
   const output = yield* Fiber.join(fiber).pipe(
@@ -337,7 +343,7 @@ const readLoginShellEnvironment = (
         command: shell,
         args: ["-ilc", buildEnvironmentCaptureCommand(shell, names)],
         env,
-        timeout: LOGIN_SHELL_TIMEOUT,
+        timeout: POSIX_LOGIN_SHELL_TIMEOUT,
       }).pipe(Effect.map((output) => extractEnvironment(output, names)));
 
 const readLaunchctlPath = (env: NodeJS.ProcessEnv) =>
@@ -424,13 +430,18 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
   > {
     const fileSystem = yield* FileSystem.FileSystem;
     const shellEnvironment: EnvironmentPatch = {};
+    const candidates = listLoginShellCandidates(config.platform, config.env.SHELL);
+    let answeredBy: string | undefined;
 
-    for (const shell of listLoginShellCandidates(config.platform, config.env.SHELL)) {
+    for (const shell of candidates) {
       Object.assign(
         shellEnvironment,
         yield* readLoginShellEnvironment(shell, LOGIN_SHELL_ENV_NAMES, config.env),
       );
-      if (shellEnvironment.PATH) break;
+      if (shellEnvironment.PATH) {
+        answeredBy = shell;
+        break;
+      }
     }
 
     const launchctlPath =
@@ -521,7 +532,8 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       }
     }
 
-    return Option.isSome(trimNonEmpty(shellEnvironment.PATH));
+    // A fallback shell's PATH is used but is not the person's, so discovery stays unfinished.
+    return answeredBy === candidates[0] && Option.isSome(trimNonEmpty(shellEnvironment.PATH));
   },
 );
 
@@ -583,10 +595,15 @@ export const make = Effect.gen(function* () {
   const changes = yield* PubSub.sliding<DesktopShellEnvironmentSnapshot>(1);
   const latest = yield* Ref.make<Option.Option<DesktopShellEnvironmentSnapshot>>(Option.none());
   const discovered = yield* Deferred.make<boolean>();
+  const probes = yield* makeLiveShellProbes;
   const publish = Effect.fn("desktop.shellEnvironment.publish")(function* (
-    patch: ShellEnvironmentPatch,
+    shellPatch: ShellEnvironmentPatch,
     discovered = false,
   ) {
+    // Added here and not in refresh, so the cache keeps only what the shell answered.
+    const { platform, homeDirectory } = environment;
+    const path = appendWellKnownCliDirs(shellPatch.PATH, platform, homeDirectory);
+    const patch = path ? { ...shellPatch, PATH: path } : shellPatch;
     applyShellEnvironment(env, patch, environment.platform);
     const message: DesktopShellEnvironmentSnapshot = {
       version: 1,
@@ -624,11 +641,16 @@ export const make = Effect.gen(function* () {
   }).pipe(
     Effect.provideService(FileSystem.FileSystem, fileSystem),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    Effect.provideService(LiveShellProbes, probes),
     Effect.withSpan("desktop.shellEnvironment.refresh"),
     Effect.onExit((exit) => Deferred.done(discovered, exit)),
   );
   const installIntoProcess = yield* Effect.cached(
     Effect.gen(function* () {
+      // The server can start before any snapshot exists; give its first provider checks these folders.
+      const { platform, homeDirectory } = environment;
+      const startPath = appendWellKnownCliDirs(env.PATH, platform, homeDirectory);
+      if (startPath) env.PATH = startPath;
       const cache = yield* Effect.scoped(
         Effect.gen(function* () {
           const file = yield* fileSystem.open(cachePath, { flag: "r" });
@@ -665,7 +687,8 @@ export const make = Effect.gen(function* () {
           ),
         );
       }
-      yield* Effect.forkIn(refresh, scope);
+      const retried = discoverWithRetries(refresh, environment.platform, probes.allGone);
+      yield* Effect.forkIn(retried, scope);
       return true;
     }).pipe(Effect.withSpan("desktop.shellEnvironment.installIntoProcess")),
   );

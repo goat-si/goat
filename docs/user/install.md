@@ -244,12 +244,20 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
-GOAT's mobile app for iPhone, iPad and Android is in development and is not in the
-App Store or Google Play yet. Today you can get it two ways:
+GOAT's mobile app for iPhone, iPad and Android is in beta and is not in the
+App Store or Google Play yet. Anyone can join the beta from
+[trygoat.ai/mobile](https://trygoat.ai/mobile/):
 
-- **iPhone and iPad:** through TestFlight, which is invite-only for now.
-- **iPhone, iPad or Android:** build it from source and install it on your own
-  device, following the [mobile app README](../../apps/mobile/README.md).
+- **iPhone and iPad (iOS 18 or later):** install TestFlight from the App Store,
+  then open the [TestFlight invite](https://testflight.apple.com/join/4PXeSgXv)
+  on the device.
+- **Android (7.0 or later):** open the
+  [Android beta invite](https://appdistribution.firebase.dev/i/b6f930a2e01c9f53)
+  on the phone, enter your email, and download GOAT from the invitation. Allow
+  your browser to install apps when Android asks.
+
+You can also build it from source, following the
+[mobile app README](../../apps/mobile/README.md).
 
 The phone connects to a GOAT server on another machine. Follow
 [remote access](./remote-access.md) to pair it directly or over Tailscale.
@@ -306,8 +314,19 @@ account always stays with you.
 | Muse Code   | Install [Muse Code](https://dev.meta.ai/docs/muse-code) on the server, run `muse login`, then enable it in Settings → Providers.                          |
 | fx          | Install [fx](https://fx.sh) with `curl -fsSL https://fx.sh/setup.sh \| bash`, then run `fx login`.                                                        |
 
-Provider CLIs must be on the server's `PATH`. If GOAT cannot find one, set its
-**Binary path** in provider settings, especially when using a version manager.
+Provider CLIs must be on the server's `PATH`. On macOS and Linux GOAT also looks,
+after your `PATH`, in the folders the usual installers use: `~/.local/bin`,
+`~/.bun/bin`, Homebrew's default location (`/opt/homebrew/bin` on macOS,
+`/home/linuxbrew/.linuxbrew/bin` on Linux) and `/usr/local/bin`. If GOAT cannot find a
+CLI, set its **Binary path** in provider settings, especially when using a version manager
+or a Homebrew installed somewhere else.
+The desktop app reads `PATH` from your login shell. When that shell is slow to start,
+GOAT tries again over the next few minutes, and the status of a missing Claude, Codex,
+Grok, OpenCode, Pi, OmO, fx or Muse Code CLI says that GOAT may not have your shell's
+current `PATH` yet. If a provider still reads
+as not found after your shell has answered, restart GOAT: Claude, OpenCode, Muse Code,
+and any other provider instance with its own environment variables, keep the
+`PATH` they started with.
 Cursor's executable is `cursor-agent`, although its login command is
 `agent login`. Codex connected through ChatGPT and Antigravity can use their
 managed runtimes without a `PATH` entry.

@@ -1,16 +1,20 @@
+import { useAtomValue } from "@effect/atom-react";
 import { goatBotMemberPicture } from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
 import type { useNavigate } from "@tanstack/react-router";
+import { Atom } from "effect/reactivity";
 
 import { BotIcon } from "~/components/solar";
 import { dispatchMenuAction } from "~/shortcuts/dispatcher";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "../CommandPalette.logic";
 import { useGoatBotEnabled } from "./useGoatBotSession";
 
 type BotNavigate = ReturnType<typeof useNavigate>;
+const NO_PERMISSION = Atom.make(false);
 
 /** The bots the palette can open: main, then members that are not deleted. Read while it is open. */
 export function useGoatBotPaletteBots(): ReadonlyArray<BotProfile> {
@@ -24,6 +28,31 @@ export function useGoatBotPaletteBots(): ReadonlyArray<BotProfile> {
     supported ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
   );
   return (profiles.data?.bots ?? []).filter((bot) => bot.state !== "deleted");
+}
+
+/**
+ * What the palette's New bot needs: the environment, its whole bot list (the same read as the
+ * roster's, deleted bots included, for the generated name) and the create command. Null until that
+ * list has loaded, and where the server has no member bots or this person may not create one.
+ */
+export function useGoatBotPaletteNewBotSource() {
+  const { environment } = useGoatBotEnabled();
+  const environmentId = environment?.environmentId ?? null;
+  const configs = useServerConfigs();
+  const supported =
+    environmentId !== null &&
+    configs.get(environmentId)?.environment.capabilities.goatBotMembers === true;
+  const canCreate = useAtomValue(
+    supported ? channelEnvironment.createBot.permissionAtom(environmentId) : NO_PERMISSION,
+  );
+  const profiles = useEnvironmentQuery(
+    supported && canCreate
+      ? channelEnvironment.listBots({ environmentId, input: { includeDeleted: true } })
+      : null,
+  );
+  const send = useAtomCommand(channelEnvironment.createBot, { reportFailure: false });
+  const listed = profiles.data?.bots;
+  return environmentId === null || listed === undefined ? null : { environmentId, listed, send };
 }
 
 /**

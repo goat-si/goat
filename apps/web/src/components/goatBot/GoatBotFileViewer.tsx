@@ -5,7 +5,7 @@ import {
   botArtifactSizeLabel,
   botArtifactViewKind,
   botArtifactsFailure,
-  readWholeBotArtifact,
+  botFileReads,
 } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type {
@@ -20,8 +20,8 @@ import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
-import { afterLastChunkRequest } from "./goatBotFileReads";
 import { useGoatBotName } from "./goatBotMemberContext";
+import { HoldsNavigation } from "~/lib/navigationHolds";
 
 type View =
   | { readonly kind: "opening" }
@@ -71,7 +71,7 @@ function FileViewer({
   const [view, setView] = useState<View>({ kind: "opening" });
   // A new command function arrives every render; reading through an effect event keeps one read per file.
   const readChunk = useEffectEvent(async (input: ChannelReadBotArtifactInput) => {
-    const answer = await afterLastChunkRequest(environmentId, () => read({ environmentId, input }));
+    const answer = await read({ environmentId, input });
     if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
     return answer.value;
   });
@@ -81,8 +81,13 @@ function FileViewer({
     let imageUrl: string | null = null;
     void (async () => {
       try {
-        const result = await readWholeBotArtifact(file.relativePath, readChunk, controller.signal);
-        if (controller.signal.aborted) return;
+        const result = await botFileReads.open(
+          environmentId,
+          readChunk,
+          file.relativePath,
+          controller.signal,
+        );
+        if (result === null || controller.signal.aborted) return;
         if (result.status !== "ok") {
           setView({ kind: "message", message: botArtifactOpenMessage(name, result, botName) });
           return;
@@ -106,7 +111,7 @@ function FileViewer({
       controller.abort();
       if (imageUrl !== null) URL.revokeObjectURL(imageUrl);
     };
-  }, [file.relativePath, name, botName]);
+  }, [environmentId, file.relativePath, name, botName]);
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -116,6 +121,8 @@ function FileViewer({
 
   return (
     <section aria-label={name} onKeyDown={onKeyDown} className="flex min-h-0 flex-1 flex-col">
+      {/* The file covers the chat with no URL change, so a New bot answering now must not leave it. */}
+      <HoldsNavigation />
       <header className="mx-auto flex w-full max-w-3xl items-center gap-2 px-4 pt-3 pb-2">
         <Button
           size="icon-sm"

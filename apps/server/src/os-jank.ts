@@ -1,4 +1,5 @@
 import * as HostProcess from "@goat/shared/HostProcess";
+import { appendWellKnownCliDirs } from "@goat/shared/cliPath";
 import { resolveGoatHome } from "@goat/shared/goatHome";
 import {
   listLoginShellCandidates,
@@ -36,7 +37,11 @@ function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): vo
 
   const shellPath = shellEnvironment.PATH;
   const launchctlPath = platform === "darwin" && !shellPath ? readPathFromLaunchctl() : undefined;
-  const mergedPath = mergePathEntries(shellPath ?? launchctlPath, env.PATH, platform);
+  const mergedPath = appendWellKnownCliDirs(
+    mergePathEntries(shellPath ?? launchctlPath, env.PATH, platform),
+    platform,
+    env.HOME,
+  );
   if (mergedPath) {
     env.PATH = mergedPath;
   }

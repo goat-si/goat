@@ -14,11 +14,11 @@ task as a card in the conversation.
 ## Bots
 
 The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with its
-own conversation and task list. On mobile, **New bot** creates the bot at once as "New bot" and
-opens its chat, where a row above the message box asks for its name; **More** there opens its look,
-purpose and model. On web and desktop, a new bot needs only a name and a look first: its purpose
-and model sit under **More** and can change later. A bot answers under its own name and purpose
-from its next conversation session.
+own conversation and task list. **New bot** in the Bots list, or in the command palette on web and
+desktop, creates the bot at once as "New bot" (or "New bot 2", and so on) and opens its chat,
+where a row above the message box asks for its name; **More** there opens its look, purpose and
+model. If you move on before the bot is ready, it waits in the Bots list instead. A bot answers
+under its own name and purpose from its next conversation session.
 
 - Edit any bot, including the main one, from its row menu (long press on mobile), **Edit bot** in
   its home (its name at the top of its chat on web and desktop), or **Settings → GOAT Bot →
@@ -27,8 +27,8 @@ from its next conversation session.
 - An added bot's model can change in its edit dialog or from the model button in its message
   box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
   bot's model again.
-- On web and desktop, with a server that supports it, an added bot can have a color, picked when
-  you create or edit it. Its chat shows your messages and the send button in that color.
+- On web and desktop, with a server that supports it, an added bot can have a color, picked in
+  its edit dialog. Its chat shows your messages and the send button in that color.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
   history. A bot with open tasks can't be deleted until they finish or you stop them.

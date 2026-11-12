@@ -143,6 +143,7 @@ vi.mock("@goat/client-runtime/state/runtime", async (original) => ({
   },
 }));
 import { MobileBotLibrary } from "./MobileBotLibrary";
+import { botFileReads } from "@goat/client-runtime/goatBot";
 
 const environmentId = EnvironmentId.make("env");
 const pdf = new Uint8Array([37, 80, 68, 70]);
@@ -155,6 +156,8 @@ afterEach(async () => {
   container.remove();
 });
 function setup(options: { data?: unknown; cause?: unknown } = {}) {
+  // The shared Library read lane is one module instance; each test starts it empty.
+  botFileReads.clear();
   state.data =
     options.data === undefined
       ? {
@@ -331,12 +334,14 @@ it("leaving with an image preview open deletes the copy", async () => {
   expect(kept()).toEqual([]);
 });
 
-it("says a file did not open, never that another file is still opening, since opens take turns", async () => {
+it("says a busy open is taking too long, never that another file is still opening", async () => {
   setup();
   state.files.delete("deck.pdf");
   await render();
   await press("Open deck.pdf");
-  expect(container.textContent).toContain("Couldn't open deck.pdf. Try again.");
+  expect(container.textContent).toContain(
+    "deck.pdf is taking too long to open. Try again in a moment.",
+  );
   expect(container.textContent).not.toContain("still opening");
 });
 

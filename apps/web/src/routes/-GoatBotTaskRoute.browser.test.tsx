@@ -1,3 +1,4 @@
+import { forgetNewBotEnvironment, newBotSlot, startNewBot } from "@goat/client-runtime/goatBot";
 import { BotId, ChannelTaskId, EnvironmentId, OrchestrationV2TurnItemJson } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
@@ -13,6 +14,7 @@ const state = vi.hoisted(() => ({
   paneSession: null as object | null,
   navigate: vi.fn(),
   bots: [] as Array<object>,
+  botsLoaded: true,
   shellRefs: [] as Array<unknown>,
   memberArgs: [] as Array<unknown>,
   restore: vi.fn(async () => true),
@@ -108,7 +110,7 @@ vi.mock("../components/goatBot/useGoatBotSession", () => ({
 vi.mock("../components/goatBot/useBotRoster", () => ({
   useBotRoster: () => ({
     bots: state.bots,
-    botsLoaded: true,
+    botsLoaded: state.botsLoaded,
     botsPending: false,
     environmentId: "env",
   }),
@@ -214,6 +216,45 @@ it("says a named bot isn't available instead of opening the main bot", async () 
   await using screen = await render(<Component />);
   await expect.element(screen.getByText("This bot isn't available")).toBeVisible();
   expect(screen.getByText("Main chat").query()).toBeNull();
+});
+
+it("opens a bot the create just returned when the list read after it failed, instead of waiting", async () => {
+  const environmentId = EnvironmentId.make("env");
+  forgetNewBotEnvironment(environmentId);
+  const fresh = {
+    botId: "fresh",
+    role: "member",
+    name: "New bot",
+    environmentId: "env",
+    sessionThreadId: "thread-fresh",
+  };
+  startNewBot(
+    environmentId,
+    [],
+    async () => fresh as never,
+    () => {},
+    {},
+    () => "request-1",
+  );
+  await vi.waitFor(() => expect(newBotSlot(environmentId).created).toHaveLength(1));
+  state.bots = [];
+  state.botsLoaded = false;
+  state.memberArgs = [];
+  state.shellRefs = [];
+  state.chatSession = null;
+  using _search = vi.spyOn(Route, "useSearch").mockReturnValue({ bot: BotId.make("fresh") });
+  const Component = Route.options.component;
+  if (!Component) throw new Error("missing route component");
+  try {
+    await using screen = await render(<Component />, { router: false }); // Search and navigation are mocked.
+    await expect.element(screen.getByText("Main chat")).toBeVisible();
+    expect(state.memberArgs.at(-1)).toMatchObject({ botId: "fresh" });
+    expect(state.shellRefs.at(-1)).toMatchObject({ threadId: "thread-fresh" });
+    expect(state.chatSession).toMatchObject({ availability: { kind: "ready" } });
+  } finally {
+    state.botsLoaded = true;
+    forgetNewBotEnvironment(environmentId);
+  }
 });
 
 it("a deleted member's task beside its chat shows the chat as deleted and offers Restore", async () => {

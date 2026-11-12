@@ -80,6 +80,7 @@ vi.mock("~/state/channels", () => ({
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
   mocks.canEdit = false;
@@ -223,6 +224,25 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   await userEvent.click(screen.getByRole("tab", { name: "Home" }));
   await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
+});
+
+it("a task peek holds back a New bot open until Back, since it has no URL of its own", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+    />,
+  );
+  expect(navigationBlocked()).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  const back = screen.getByRole("button", { name: /Back to Home from Stop the port 3774 server/ });
+  await expect.element(back).toBeVisible();
+  expect(navigationBlocked()).toBe(true);
+  await userEvent.click(back);
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("steps back from a peek to its row with Escape", async () => {

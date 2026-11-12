@@ -91,6 +91,8 @@ const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisR
 export const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
+  /** What the fake installer leaves on disk before it exits. */
+  readonly onInstall?: Effect.Effect<void>;
   readonly providers?: ReadonlyArray<unknown>;
   readonly providersBroken?: boolean;
   /** Real handoffs for approval tests; the default records create and serves nothing else. */
@@ -126,7 +128,11 @@ export const harness = (options: {
       const result = options.installer ?? { stdout: "", stderr: "", code: 0 };
       const running = options.running;
       return Effect.as(
-        running === undefined ? Effect.void : Deferred.succeed(running.started, undefined),
+        (options.onInstall ?? Effect.void).pipe(
+          Effect.andThen(
+            running === undefined ? Effect.void : Deferred.succeed(running.started, undefined),
+          ),
+        ),
         ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
           exitCode:

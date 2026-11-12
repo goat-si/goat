@@ -2,18 +2,6 @@ import type { PreviewAutomationSnapshot, PreviewAutomationSnapshotInput } from "
 import type { Locator, Page } from "playwright-core";
 import { HIDDEN_IN_DOCUMENT } from "./pageScope.ts";
 
-const interactive =
-  /^\s*- '?(?:button|link|textbox|searchbox|combobox|checkbox|radio|switch|tab|menuitem|option|slider|spinbutton|treeitem)(?=[\s"':])/;
-export const narrowTree = (tree: string, interactiveOnly?: boolean) =>
-  interactiveOnly
-    ? tree
-        .split("\n")
-        .filter((line) => interactive.test(line))
-        // Ancestors are filtered out, so their indentation and child markers would invent nesting.
-        .map((line) => line.trimStart().replace(/:$/, ""))
-        .join("\n")
-    : tree;
-
 const baselines = new WeakMap<Page, Map<string, { key: string; lines: string[] }>>();
 export const resetSnapshotDiff = (page: Page) => {
   baselines.delete(page);
@@ -79,11 +67,8 @@ export const snapshotOptionsResult = (
 
 export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
   const metadata = (await page.evaluate(
-    `({ url: location.href, title: document.title, loading: document.readyState !== "complete", visibleText: document.body?.innerText || "", interactiveElements: [] })`,
-  )) as Pick<
-    PreviewAutomationSnapshot,
-    "url" | "title" | "loading" | "visibleText" | "interactiveElements"
-  >;
+    `({ url: location.href, title: document.title, loading: document.readyState !== "complete", visibleText: document.body?.innerText || "" })`,
+  )) as Pick<PreviewAutomationSnapshot, "url" | "title" | "loading" | "visibleText">;
   return scope
     ? {
         ...metadata,

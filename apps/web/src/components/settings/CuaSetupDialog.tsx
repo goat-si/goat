@@ -11,7 +11,7 @@ import {
 } from "../onboarding/OnboardingDialog";
 import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
-import { CuaGrantSteps, useCuaGrants } from "./CuaGrantSteps";
+import { CuaGrantSteps, CuaUnansweredNotice, useCuaGrants } from "./CuaGrantSteps";
 import {
   CUA_WAYLAND_NOTE,
   computerUseUnavailable,
@@ -64,8 +64,10 @@ export function CuaSetupDialog({
     onCheck,
     localMac && busy === null && verification?.verified !== true,
   );
-  const holder = checked.grants && checked.grants.principal !== "unusable" ? checked.grants : null;
-  const unusable = checked.grants?.principal === "unusable" ? checked.grants.message : null;
+  // Reads that get no answer say nothing about the grants, so the last answer is not shown.
+  const answer = checked.unanswered === null ? checked.grants : null;
+  const holder = answer && answer.principal !== "unusable" ? answer : null;
+  const unusable = answer?.principal === "unusable" ? answer.message : null;
   const granted =
     !localMac ||
     (holder !== null && checked.error === null && holder.accessibility && holder.screenRecording);
@@ -106,6 +108,7 @@ export function CuaSetupDialog({
   const needsRelaunch =
     localMac &&
     onRelaunch !== undefined &&
+    checked.unanswered === null &&
     cuaNeedsRelaunch({ grants: holder, opened, verification });
   const verify = () =>
     run("verify", async () => {
@@ -158,7 +161,13 @@ export function CuaSetupDialog({
         <OnboardingBody>
           <div className="space-y-3">
             {localMac && !verified ? (
-              unusable ? (
+              checked.unanswered ? (
+                <CuaUnansweredNotice
+                  unanswered={checked.unanswered}
+                  retrying={checked.retrying}
+                  onRetry={checked.retry}
+                />
+              ) : unusable ? (
                 <p role="alert" className="text-destructive">
                   {unusable}
                 </p>
@@ -291,7 +300,7 @@ export function CuaSetupDialog({
                     ? "Checking…"
                     : !isOn
                       ? "Turn on"
-                      : verification
+                      : verification && checked.unanswered === null
                         ? "Try again"
                         : "Check permissions"}
               </PermissionContinueButton>

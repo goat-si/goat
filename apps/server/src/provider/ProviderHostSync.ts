@@ -76,10 +76,11 @@ import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydra
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { checksCli, ProviderCliGate } from "./ProviderCliGate.ts";
-import { pinnedMismatch, runInstaller, withProbedCli } from "./ProviderHostSyncInstall.ts";
+import { installFailure, runInstaller, withProbedCli } from "./ProviderHostSyncInstall.ts";
 import {
   describeInstall,
   describeInstallFailure,
+  forgetCommandMisses,
   hostPlatform,
   installCommand,
   installMethod,
@@ -747,31 +748,15 @@ const make = Effect.gen(function* () {
             },
             true,
           );
+        yield* forgetCommandMisses;
       }
       const snapshot = yield* refreshDriver(driver);
       const answer = probe && (yield* probe(true));
       const after = withProbedCli(yield* row, answer);
-      if (after?.installed !== true)
-        return yield* update(
-          task,
-          {
-            phase: "failed",
-            message:
-              answer?.kind === "unknown"
-                ? `Installed, but GOAT could not confirm ${recipe.binary} runs here.`
-                : `The installer finished, but GOAT cannot find ${recipe.binary} on its PATH here. Add the install folder to PATH and restart GOAT.`,
-          },
-          true,
-        );
-      const stale = sameVersion
-        ? undefined
-        : pinnedMismatch(recipe.displayName, operation.version, after.version, command);
-      if (stale !== undefined)
-        return yield* update(
-          task,
-          { phase: "failed", version: after.version, message: stale },
-          true,
-        );
+      const host = { env: yield* HostProcess.Environment, platform: runtimePlatform };
+      const failed = installFailure(recipe, operation.version, { after, answer, host }, command);
+      if (failed !== undefined || after === undefined)
+        return yield* update(task, { phase: "failed", ...failed }, true);
       yield* update(task, {
         phase: "installed",
         version: after.version,

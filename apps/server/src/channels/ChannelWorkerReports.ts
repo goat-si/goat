@@ -68,6 +68,7 @@ import {
 import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
+import { settleSupersededTurn } from "./channelSupersededTurns.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { commitWorkerObserved, reconcileLateApprovals } from "./channelLateApprovals.ts";
 import {
@@ -423,6 +424,7 @@ const make = Effect.gen(function* () {
       const worker = task.worker;
       // Workers on another machine report through ChannelRemoteWorkers.
       if (worker === undefined || worker.host !== undefined) return false;
+      if (yield* settleSupersededTurn(ledger, stored, owner)) return true;
       // Child work, then what each coding thread it launched owes, before the worker's runs: a
       // wake already sent is then among those runs, so the hold and the result share one read.
       const childWork = yield* readChildWork(task.taskId);

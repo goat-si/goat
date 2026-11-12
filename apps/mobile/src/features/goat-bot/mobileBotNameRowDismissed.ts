@@ -1,3 +1,8 @@
+import {
+  nameRowDismissalKey,
+  withNewestDismissal,
+  type BotNameRowDismissals,
+} from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 import * as SecureStore from "expo-secure-store";
 import { useSyncExternalStore } from "react";
@@ -8,24 +13,15 @@ import { whenProtectedDataAvailable } from "../../lib/protectedData";
 // dismissal hides the row at once; if storing it fails, nothing says so and the row comes back
 // after a restart. One write runs at a time and always stores the latest list.
 const storageKey = "goat.bot-name-row-dismissed.v1";
-const MAX_KEPT = 200;
 
 let dismissed: ReadonlyArray<string> | null = null;
 let loading: Promise<void> | null = null;
 let writing = false;
 let unwritten = false;
 const listeners = new Set<() => void>();
-const keyOf = (environmentId: EnvironmentId, botId: string) =>
-  JSON.stringify([environmentId, botId]);
 
 function emit() {
   for (const listener of listeners) listener();
-}
-
-/** Adds keys as the newest, once each, and keeps the newest 200. */
-function withNewest(list: ReadonlyArray<string>, keys: ReadonlyArray<string>) {
-  const added = new Set(keys);
-  return [...list.filter((key) => !added.has(key)), ...keys].slice(-MAX_KEPT);
 }
 
 function load() {
@@ -40,7 +36,7 @@ function load() {
     } catch {
       // Unreadable storage reads as nothing dismissed.
     }
-    dismissed = withNewest(stored, dismissed ?? []);
+    dismissed = withNewestDismissal(stored, dismissed ?? []);
     emit();
   })();
 }
@@ -69,22 +65,32 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
+function isDismissed(environmentId: EnvironmentId, botId: string): boolean | null {
+  return dismissed === null ? null : dismissed.includes(nameRowDismissalKey(environmentId, botId));
+}
+
 /** Whether the row is dismissed for this bot; null until this device's list has been read. */
 export function useBotNameRowDismissed(
   environmentId: EnvironmentId | null,
   botId: string | null,
 ): boolean | null {
   return useSyncExternalStore(subscribe, () =>
-    dismissed === null
-      ? null
-      : environmentId === null || botId === null
-        ? false
-        : dismissed.includes(keyOf(environmentId, botId)),
+    environmentId === null || botId === null
+      ? dismissed === null
+        ? null
+        : false
+      : isDismissed(environmentId, botId),
   );
 }
 
 export function dismissBotNameRow(environmentId: EnvironmentId, botId: string): void {
-  dismissed = withNewest(dismissed ?? [], [keyOf(environmentId, botId)]);
+  dismissed = withNewestDismissal(dismissed ?? [], [nameRowDismissalKey(environmentId, botId)]);
   emit();
   persist();
 }
+
+export const mobileBotNameRowDismissals = {
+  dismissed: isDismissed,
+  dismiss: dismissBotNameRow,
+  subscribe,
+} satisfies BotNameRowDismissals;

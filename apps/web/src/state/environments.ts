@@ -56,6 +56,13 @@ export function useEnvironments() {
   };
 }
 
+/** Every environment now, for handlers that decide outside a render. */
+export function readEnvironments(): ReadonlyArray<EnvironmentPresentation> {
+  return [...appAtomRegistry.get(environmentPresentations.presentationsAtom).entries()].map(
+    ([environmentId, presentation]) => projectEnvironmentPresentation(environmentId, presentation),
+  );
+}
+
 /** Provider statuses change on every push, so they live apart from the presentations. */
 export function useEnvironmentProviders() {
   return useAtomValue(environmentPresentations.providersByEnvironmentAtom);

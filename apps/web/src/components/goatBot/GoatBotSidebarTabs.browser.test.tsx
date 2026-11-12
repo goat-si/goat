@@ -1,4 +1,6 @@
-import { BotThreadRow, EnvironmentId } from "@goat/contracts";
+import { forgetNewBotEnvironment, newBotSlot } from "@goat/client-runtime/goatBot";
+import { BotProfile, BotThreadRow, EnvironmentId } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { cloneElement, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -6,7 +8,13 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 
-const actions = vi.hoisted(() => ({ show: vi.fn(), update: vi.fn(), refresh: vi.fn() }));
+const actions = vi.hoisted(() => ({
+  show: vi.fn(),
+  update: vi.fn(),
+  create: vi.fn(),
+  refresh: vi.fn(),
+  retryBots: vi.fn(),
+}));
 const navigation = vi.hoisted(() => ({ pathname: "/", environmentId: "", threadId: "" }));
 const bots = vi.hoisted(() => ({
   roster: [{ kind: "main", profile: { name: "Helper" } }] as Array<object>,
@@ -14,15 +22,13 @@ const bots = vi.hoisted(() => ({
   members: [] as Array<object>,
   supportsMembers: false,
   memberShell: null as object | null,
+  error: null as string | null,
 }));
-const created = vi.hoisted(() => ({
-  bot: {
-    botId: "scout",
-    role: "member",
-    name: "Scout",
-    environmentId: "env-1",
-    sessionThreadId: "scout-session",
-  } as object,
+const channels = vi.hoisted(() => ({
+  updateTaskView: { permissionAtom: () => null },
+  createBot: { permissionAtom: () => null },
+  setBotHidden: { permissionAtom: () => null },
+  updateBot: { permissionAtom: () => null },
 }));
 vi.mock("@tanstack/react-router", async (original) => ({
   ...(await original<typeof import("@tanstack/react-router")>()),
@@ -32,6 +38,14 @@ vi.mock("@tanstack/react-router", async (original) => ({
     navigation.pathname = options.to;
     return Promise.resolve();
   },
+  useRouter: () => ({
+    state: { location: { href: navigation.pathname } },
+    navigate: (options: { to: string }) => {
+      navigation.pathname = options.to;
+      return Promise.resolve();
+    },
+    subscribe: () => () => {},
+  }),
   Link: ({
     to,
     params,
@@ -76,42 +90,19 @@ vi.mock("./GoatBotNeedsYou", () => ({ GoatBotNeedsYou: () => null }));
 vi.mock("./GoatBotSidebarRow", () => ({
   GoatBotSidebarRow: ({ name }: { name: string }) => <div>{name} Main</div>,
 }));
-// The create form has its own test; here its three steps stand in for a create.
-vi.mock("./GoatBotNewBotDialog", () => ({
-  GoatBotNewBotDialog: (props: {
-    onPending?: (name: string | null) => void;
-    onCreated: (bot: object) => void;
-  }) => (
-    <div role="dialog" aria-label="New bot">
-      <button type="button" onClick={() => props.onPending?.("Scout")}>
-        Begin create
-      </button>
-      <button type="button" onClick={() => props.onCreated(created.bot)}>
-        Finish create
-      </button>
-      <button type="button" onClick={() => props.onPending?.(null)}>
-        Fail create
-      </button>
-    </div>
-  ),
-}));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: () => true,
 }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => actions.update }));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: (command: unknown) =>
+    command === channels.createBot ? actions.create : actions.update,
+}));
 vi.mock("~/localApi", () => {
   const api = () => ({ contextMenu: { show: actions.show } });
   return { readLocalApi: api, ensureLocalApi: api };
 });
-vi.mock("~/state/channels", () => ({
-  channelEnvironment: {
-    updateTaskView: { permissionAtom: () => null },
-    createBot: { permissionAtom: () => null },
-    setBotHidden: { permissionAtom: () => null },
-    updateBot: { permissionAtom: () => null },
-  },
-}));
+vi.mock("~/state/channels", () => ({ channelEnvironment: channels }));
 vi.mock("../ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -135,6 +126,8 @@ vi.mock("../ui/sidebar", () => ({
     size?: "default" | "icon" | "lg" | "sm";
     children: ReactNode;
   }) => (link ? cloneElement(link, props, children) : <button {...props}>{children}</button>),
+  useSidebarVisibility: () => true,
+  useSidebar: () => ({ setOpenMobile: () => {} }),
 }));
 const at = "2026-11-04T10:00:00.000Z";
 const decodeRow = Schema.decodeSync(BotThreadRow);
@@ -159,7 +152,9 @@ const rows = [
 ];
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({
-    bots: bots.profiles,
+    bots: bots.supportsMembers ? bots.profiles : undefined,
+    botsError: bots.error,
+    retryBots: actions.retryBots,
     roster: [...bots.roster],
     groups: { main: null, members: bots.members, hidden: [], deleted: [] },
     supportsMembers: bots.supportsMembers,
@@ -171,13 +166,46 @@ vi.mock("./useBotRoster", () => ({
   }),
 }));
 import { GoatBotSidebarTabs } from "./GoatBotSidebarTabs";
+import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
+import { resetNavigationHoldsForTests } from "~/lib/navigationHolds";
+
+/** A create answer the test releases when it chooses. */
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+const decodeProfile = Schema.decodeSync(BotProfile);
+const profile = (botId: string, name: string, state?: "deleted") =>
+  decodeProfile({
+    botId,
+    role: "member",
+    name,
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env-1",
+    sessionThreadId: `thread-${botId}`,
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+    ...(state ? { state } : {}),
+  });
 
 function setup() {
+  forgetNewBotEnvironment(EnvironmentId.make("env-1"));
+  resetNavigationHoldsForTests();
+  resetNameRowFocusForTests();
   bots.roster = [{ kind: "main", profile: { name: "Helper" } }];
   bots.profiles = [];
   bots.members = [];
   bots.supportsMembers = false;
   bots.memberShell = null;
+  bots.error = null;
+  actions.create.mockReset();
   navigation.pathname = "/";
   navigation.environmentId = "";
   navigation.threadId = "";
@@ -276,7 +304,7 @@ it("opens the task actions with the keyboard and returns focus on Escape", async
   await expect.element(action).toHaveFocus();
 });
 
-it("keeps New bot disabled until the server offers member bots", async () => {
+it("keeps New bot disabled until the server offers member bots and its list has loaded", async () => {
   setup();
   useGlobalAgentStore.getState().setMode("bot");
   // The router is mocked to render the roster without the application route tree.
@@ -284,52 +312,110 @@ it("keeps New bot disabled until the server offers member bots", async () => {
   await expect.element(screen.getByRole("button", { name: /New bot/ })).toBeDisabled();
   await expect.element(screen.getByText("Coming soon")).toBeVisible();
   bots.supportsMembers = true;
-  try {
-    await screen.rerender(<GoatBotSidebarTabs />);
-    await expect.element(screen.getByRole("button", { name: "New bot" })).toBeEnabled();
-    await userEvent.click(screen.getByRole("button", { name: "New bot" }));
-    await expect.element(screen.getByRole("dialog", { name: "New bot" })).toBeInTheDocument();
-  } finally {
-    bots.supportsMembers = false;
-  }
-});
-
-it("keeps the creating row until the roster lists the new bot, then shows its own row alone", async () => {
-  setup();
-  bots.supportsMembers = true;
-  useGlobalAgentStore.getState().setMode("bot");
-  // The router is mocked to render the roster without the application route tree.
-  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
-  await userEvent.click(screen.getByRole("button", { name: "New bot" }));
-  await userEvent.click(screen.getByRole("button", { name: "Begin create" }));
-  const creating = screen.getByText("Creating…", { exact: true });
-  await expect.element(creating).toBeVisible();
-  await expect.element(screen.getByText("Scout", { exact: true })).toBeVisible();
-  // The create returned, but the roster has not read the new bot yet: the row stays.
-  await userEvent.click(screen.getByRole("button", { name: "Finish create" }));
-  await expect.element(creating).toBeVisible();
-  expect(navigation.pathname).toBe("/bot");
-  // The roster read lands: its own row replaces the pending one, never both.
-  bots.profiles = [created.bot];
-  bots.members = [created.bot];
   await screen.rerender(<GoatBotSidebarTabs />);
-  await expect.element(screen.getByRole("link", { name: /Scout/ })).toBeVisible();
-  await expect.element(screen.getByText("Creating…", { exact: true })).not.toBeInTheDocument();
-  expect(screen.getByRole("status").query()).toBeNull();
+  await expect.element(screen.getByRole("button", { name: "New bot" })).toBeEnabled();
 });
 
-it("removes the creating row at once when the create fails", async () => {
+it("one click sends createBot named New bot 2 beside a deleted New bot, with no dialog, and a second click sends nothing", async () => {
   setup();
   bots.supportsMembers = true;
+  bots.profiles = [profile("old", "New bot", "deleted")];
+  const answer = deferred<object>();
+  actions.create.mockReturnValue(answer.promise);
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to render the roster without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  const newBot = screen.getByRole("button", { name: "New bot" });
+  await userEvent.click(newBot);
+  await expect.element(screen.getByRole("status").getByText("New bot 2")).toBeVisible();
+  await expect.element(screen.getByRole("status").getByText("Creating…")).toBeVisible();
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(actions.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "env-1",
+    input: {
+      clientRequestId: expect.any(String),
+      name: "New bot 2",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    },
+  });
+  // While it runs the button stays focusable but says it is unavailable, and sends nothing.
+  await expect.element(newBot).toHaveAttribute("aria-disabled", "true");
+  // Playwright will not click an aria-disabled control; a person's click still reaches it.
+  newBot.element().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  expect(actions.create).toHaveBeenCalledOnce();
+  // The create answered before the roster read it: the created row stands in until the list has it.
+  const created = profile("made", "New bot 2");
+  answer.resolve({ _tag: "Success", value: { bot: created } });
+  await expect.element(screen.getByRole("link", { name: "New bot 2" })).toBeVisible();
+  await expect.element(newBot).not.toHaveAttribute("aria-disabled", "true");
+  bots.profiles = [profile("old", "New bot", "deleted"), created];
+  bots.members = [created];
+  await screen.rerender(<GoatBotSidebarTabs />);
+  await expect
+    .element(screen.getByRole("button", { name: "Dismiss New bot 2" }))
+    .not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /New bot 2/ }).elements()).toHaveLength(1);
+});
+
+it("failure shows the reason, Retry resends the same request, Dismiss frees New bot", async () => {
+  setup();
+  bots.supportsMembers = true;
+  actions.create.mockResolvedValueOnce({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("The server is busy.")),
+  });
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to render the roster without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  const newBot = screen.getByRole("button", { name: "New bot" });
+  await userEvent.click(newBot);
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Couldn't create New bot: The server is busy.");
+  await expect.element(newBot).toHaveAttribute("aria-disabled", "true");
+  const firstId = actions.create.mock.calls[0]?.[0].input.clientRequestId;
+  actions.create.mockResolvedValueOnce({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("Still busy.")),
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Retry creating New bot" }));
+  await vi.waitFor(() => expect(actions.create).toHaveBeenCalledTimes(2));
+  expect(actions.create.mock.calls[1]?.[0].input).toMatchObject({
+    clientRequestId: firstId,
+    name: "New bot",
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss creating New bot" }));
+  await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
+  await expect.element(newBot).not.toHaveAttribute("aria-disabled", "true");
+  expect(newBotSlot(EnvironmentId.make("env-1")).operation).toBeNull();
+});
+
+it("a list read that fails after a create keeps New bot enabled, shows the created row and offers Retry", async () => {
+  setup();
+  bots.supportsMembers = true;
+  actions.create.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { bot: profile("made", "New bot") },
+  });
   useGlobalAgentStore.getState().setMode("bot");
   // The router is mocked to render the roster without the application route tree.
   await using screen = await render(<GoatBotSidebarTabs />, { router: false });
   await userEvent.click(screen.getByRole("button", { name: "New bot" }));
-  await userEvent.click(screen.getByRole("button", { name: "Begin create" }));
-  await expect.element(screen.getByText("Creating…", { exact: true })).toBeVisible();
-  await userEvent.click(screen.getByRole("button", { name: "Fail create" }));
-  await expect.element(screen.getByText("Creating…", { exact: true })).not.toBeInTheDocument();
-  expect(screen.getByRole("status").query()).toBeNull();
+  await expect.element(screen.getByRole("link", { name: "New bot" })).toBeVisible();
+  // The re-read after the create failed; the roster keeps its last good list.
+  bots.error = "The environment request failed.";
+  await screen.rerender(<GoatBotSidebarTabs />);
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Couldn't load bots: The environment request failed.");
+  await userEvent.click(screen.getByRole("button", { name: "Retry loading bots" }));
+  expect(actions.retryBots).toHaveBeenCalledOnce();
+  await expect.element(screen.getByRole("link", { name: "New bot" })).toBeVisible();
+  const newBot = screen.getByRole("button", { name: "New bot", exact: true });
+  await expect.element(newBot).toBeEnabled();
+  await expect.element(newBot).not.toHaveAttribute("aria-disabled", "true");
 });
 
 it("draws a member bot's face from its own session, never the main bot's waiting count", async () => {

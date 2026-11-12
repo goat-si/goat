@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -81,9 +82,23 @@ type serviceReg struct {
 	holder net.Conn
 	// wmu orders the holder's registered answer and a replaced notice.
 	wmu sync.Mutex
-	// ended and conns are guarded by serviceBook.mu: conns are the deliveries committed to it.
-	ended bool
-	conns map[net.Conn]struct{}
+	// ended and conns are guarded by serviceBook.mu: conns are the deliveries committed to it; once it ended,
+	// endConns are the deliveries its single teardown (endRegistration) closes.
+	ended    bool
+	conns    map[net.Conn]struct{}
+	endConns []net.Conn
+	// endStarted (guarded by serviceBook.mu) marks that the teardown has an owner, whoever ended the registration
+	// first; endDone closes when it finished.
+	endStarted bool
+	endDone    chan struct{}
+	// handshakes are the admitted client and pairing handshakes, guarded by serviceBook.mu (clients.go).
+	handshakes map[*handshake]struct{}
+	// gen, clients and invite are the v1.3 ops' state, guarded by serviceBook.mu: the last list generation applied,
+	// the listed client keys (noisePub to client id) and the live service invite. out carries answers and events.
+	gen     uint64
+	clients map[string]string
+	invite  *serviceInvite
+	out     *holderQueue
 }
 
 // serviceBook holds the registrations. Its mutex is a leaf: nothing is called while it is held.
@@ -92,13 +107,15 @@ type serviceBook struct {
 	byName   map[string]*serviceReg
 	inflight int
 	logged   map[string]time.Time
+	// phones are the held phone slots (phoneslots.go); onPhones is the PhoneSlots test hook.
+	phones   phoneCounts
+	onPhones func(total int)
 }
 
 var errTooManyServices = fmt.Errorf("this node already holds %d service names", maxServices)
 
-// add makes reg current for its name and returns the registration it replaced, if any, already ended,
-// with the deliveries that were committed to it.
-func (b *serviceBook) add(reg *serviceReg) (*serviceReg, []net.Conn, error) {
+// add makes reg current for its name and returns the registration it replaced, if any, already ended.
+func (b *serviceBook) add(reg *serviceReg) (*serviceReg, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.byName == nil {
@@ -106,36 +123,38 @@ func (b *serviceBook) add(reg *serviceReg) (*serviceReg, []net.Conn, error) {
 	}
 	old := b.byName[reg.name]
 	if old == nil && len(b.byName) >= maxServices {
-		return nil, nil, errTooManyServices
+		return nil, errTooManyServices
 	}
 	b.byName[reg.name] = reg
 	if old == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	return old, b.endLocked(old), nil
+	b.endLocked(old)
+	return old, nil
 }
 
-func (b *serviceBook) endLocked(reg *serviceReg) []net.Conn {
+// endLocked ends reg: it stops being current, forgets its list and invite, and hands its committed deliveries to
+// its teardown.
+func (b *serviceBook) endLocked(reg *serviceReg) {
 	if b.byName[reg.name] == reg {
 		delete(b.byName, reg.name)
 	}
 	if reg.ended {
-		return nil
+		return
 	}
 	reg.ended = true
-	conns := make([]net.Conn, 0, len(reg.conns))
+	reg.clients, reg.invite = nil, nil
 	for c := range reg.conns {
-		conns = append(conns, c)
+		reg.endConns = append(reg.endConns, c)
 	}
 	reg.conns = nil
-	return conns
 }
 
-// end removes reg (only reg, never a newer registration of its name) and returns its committed deliveries.
-func (b *serviceBook) end(reg *serviceReg) []net.Conn {
+// end removes reg (only reg, never a newer registration of its name).
+func (b *serviceBook) end(reg *serviceReg) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.endLocked(reg)
+	b.endLocked(reg)
 }
 
 func (b *serviceBook) lookup(name string) *serviceReg {
@@ -247,16 +266,9 @@ func (d *Daemon) serveService(ctx context.Context, sec *session.Secure) {
 		sec.Close(wire.CodeOffline)
 		return
 	}
-	conn, err := d.deliver(ctx, reg, sec.RemoteStatic)
+	conn, err := d.deliverTo(ctx, reg, sec.RemoteStatic, nil)
 	if err != nil {
-		cause := causeMalformed
-		var de *deliveryError
-		if errors.As(err, &de) {
-			cause = de.cause
-		}
-		if d.svc.shouldLog(cause, d.now()) {
-			d.opt.Logf("service %s: delivery failed (%v); is the program on port %d the one that registered it?", reg.name, err, reg.port)
-		}
+		d.logDelivery(reg, err)
 		sec.Close(wire.CodeOffline)
 		return
 	}
@@ -269,9 +281,22 @@ func (d *Daemon) serveService(ctx context.Context, sec *session.Secure) {
 	}
 }
 
-// deliver dials reg's port and runs the mutual proof for the member with Noise key remote; it returns the
-// connection committed to reg, after line 3, ready for the payload.
-func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, remote []byte) (*net.TCPConn, error) {
+// logDelivery logs a failed delivery under its cause, at most once a minute per cause.
+func (d *Daemon) logDelivery(reg *serviceReg, err error) {
+	cause := causeMalformed
+	var de *deliveryError
+	if errors.As(err, &de) {
+		cause = de.cause
+	}
+	if d.svc.shouldLog(cause, d.now()) {
+		d.opt.Logf("service %s: delivery failed (%v); is the program on port %d the one that registered it?", reg.name, err, reg.port)
+	}
+}
+
+// deliverTo dials reg's port and runs the mutual proof for the caller with Noise key remote: a member when l is
+// nil, otherwise the client or pairing session l. It returns the connection committed to reg, after line 3, ready
+// for the payload.
+func (d *Daemon) deliverTo(ctx context.Context, reg *serviceReg, remote []byte, l *live) (*net.TCPConn, error) {
 	dctx, cancel := context.WithTimeout(ctx, deliveryDialTimeout)
 	c, err := (&net.Dialer{}).DialContext(dctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(reg.port)))
 	cancel()
@@ -304,20 +329,16 @@ func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, remote []byte) (*
 	if !hmac.Equal(a, serviceMAC(reg.key, "pen-svc/1 "+reg.name, nd, ng)) {
 		return nil, failed(causeProof, errors.New("the program's answer does not prove the registered key"))
 	}
-	if !d.svc.commit(reg, tc) {
-		return nil, failed(causeReplaced, errors.New("the registration ended during the delivery"))
-	}
-	// J carries the caller as the view holds it now, after the commit and before line 3.
-	v := d.view()
-	caller, member := v.MemberByNoise(remote)
-	if !member {
-		d.svc.uncommit(reg, tc)
-		return nil, failed(causeReplaced, errors.New("the caller is no longer a member"))
-	}
-	j, err := identityLine(v.MeshID, d.nodeID, caller, reg.name)
-	if err != nil {
-		d.svc.uncommit(reg, tc)
-		return nil, failed(causeMalformed, err)
+	var j []byte
+	if l != nil {
+		// The commit and line 3 happen under the session's gate, which its close owner takes first.
+		l.gate.Lock()
+		defer l.gate.Unlock()
+		if j, err = d.commitClient(reg, tc, l); err != nil {
+			return nil, err
+		}
+	} else if j, err = d.memberLine(reg, tc, remote); err != nil {
+		return nil, err
 	}
 	b := serviceMAC(reg.key, "pen-svc/1 pen", nd, ng, j)
 	if _, err := io.WriteString(tc, string(j)+" "+strictB64.EncodeToString(b)+"\n"); err != nil {
@@ -330,6 +351,26 @@ func (d *Daemon) deliver(ctx context.Context, reg *serviceReg, remote []byte) (*
 	}
 	ok = true
 	return tc, nil
+}
+
+// memberLine commits a member's delivery and renders its identity line: the caller as the view holds it now, after
+// the commit and before line 3.
+func (d *Daemon) memberLine(reg *serviceReg, tc net.Conn, remote []byte) ([]byte, error) {
+	if !d.svc.commit(reg, tc) {
+		return nil, failed(causeReplaced, errors.New("the registration ended during the delivery"))
+	}
+	v := d.view()
+	caller, member := v.MemberByNoise(remote)
+	if !member {
+		d.svc.uncommit(reg, tc)
+		return nil, failed(causeReplaced, errors.New("the caller is no longer a member"))
+	}
+	j, err := identityLine(v.MeshID, d.nodeID, caller, reg.name)
+	if err != nil {
+		d.svc.uncommit(reg, tc)
+		return nil, failed(causeMalformed, err)
+	}
+	return j, nil
 }
 
 // parseAnswer decodes line 2, "<Ng> <A>" LF, exactly: 88 bytes, canonical base64url, no CR.
@@ -407,8 +448,9 @@ func validID(s string) bool {
 }
 
 // controlRegister runs op service.register on the control socket (never on the dashboard path): the
-// registration lives until c closes, the daemon stops, or a newer registration replaces it.
-func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
+// registration lives until c closes, the daemon stops, or a newer registration replaces it. r continues the
+// connection's reader, so ops sent with the request are not lost, and lr is lifted for the ops that follow.
+func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reader, lr *io.LimitedReader, req Request, reply func(any), fail func(error)) {
 	if !ValidServiceName(req.Name) {
 		fail(errors.New("a service name is 1 to 32 of a-z 0-9 -, starts with a letter, and is not pen"))
 		return
@@ -424,32 +466,42 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, req Request, r
 	}
 	idb := make([]byte, 16)
 	rand.Read(idb)
-	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c}
+	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c,
+		out: newHolderQueue(c), endDone: make(chan struct{})}
+	reg.out.whileWriting = d.opt.HolderWriting
+	reg.out.whileFilling = d.opt.HolderFilling
 	reg.wmu.Lock()
-	old, conns, err := d.svc.add(reg)
+	old, err := d.svc.add(reg)
 	if err != nil {
 		reg.wmu.Unlock()
 		fail(err)
 		return
 	}
+	if old != nil {
+		// The old registration's sessions and deliveries start closing before anything is written to either holder,
+		// so no holder write delays them.
+		d.spawn(func() { d.endRegistration(old) })
+	}
+	if d.opt.Registering != nil {
+		d.opt.Registering()
+	}
 	reply(map[string]any{"t": "registered", "id": reg.id, "name": reg.name, "port": reg.port})
+	d.spawn(reg.out.run)
 	reg.wmu.Unlock()
 	if old != nil {
-		closeAll(conns)
+		// The old holder is told beside its teardown, without waiting for its queued lines.
 		old.wmu.Lock()
-		io.WriteString(old.holder, `{"t":"replaced","id":"`+old.id+`"}`+"\n")
 		old.wmu.Unlock()
-		old.holder.Close()
+		d.spawn(func() { old.out.failWith([]byte(`{"t":"replaced","id":"` + old.id + `"}` + "\n")) })
 	}
 	defer func() {
-		closeAll(d.svc.end(reg))
+		reg.out.fail()
+		d.svc.end(reg)
+		d.endRegistration(reg)
 		if d.opt.ServiceEnded != nil {
 			d.opt.ServiceEnded(reg.id)
 		}
 	}()
-	select {
-	case <-clientGone(c):
-	case <-ctx.Done():
-	case <-d.stopCh:
-	}
+	liftOpLimit(lr)
+	d.serveOps(ctx, reg, r)
 }

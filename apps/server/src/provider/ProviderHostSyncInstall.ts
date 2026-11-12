@@ -7,7 +7,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import type { CliAnswer } from "./ProviderCliGate.ts";
-import { versionCore } from "./ProviderHostSyncRecipes.ts";
+import { installedButNotFound, versionCore } from "./ProviderHostSyncRecipes.ts";
 
 const INSTALL_DEADLINE = Duration.minutes(10);
 const OUTPUT_LIMIT = 16_384;
@@ -87,3 +87,25 @@ export const pinnedMismatch = (
       : versionCore(found) === requested
         ? undefined
         : `The installer finished, but ${name} is still ${versionCore(found) ?? found}, not ${requested}.`;
+
+/** Why an install did not take, judged after it: no CLI found or confirmed, or another pin. */
+export const installFailure = (
+  recipe: { readonly binary: string; readonly displayName: string },
+  requested: string | null,
+  seen: {
+    readonly after: { readonly installed: boolean; readonly version: string | null } | undefined;
+    readonly answer: CliAnswer | undefined;
+    readonly host: Parameters<typeof installedButNotFound>[1];
+  },
+  command: { readonly latestOnly: boolean } | null,
+): { readonly message: string; readonly version?: string | null } | undefined => {
+  if (seen.after?.installed !== true)
+    return {
+      message:
+        seen.answer?.kind === "unknown"
+          ? `Installed, but GOAT could not confirm ${recipe.binary} runs here.`
+          : installedButNotFound(recipe.binary, seen.host),
+    };
+  const stale = pinnedMismatch(recipe.displayName, requested, seen.after.version, command);
+  return stale === undefined ? undefined : { message: stale, version: seen.after.version };
+};

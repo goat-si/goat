@@ -3,8 +3,12 @@ import { computerUseReady, type ComputerUseReadiness } from "@goat/contracts";
 
 import {
   CUA_DESKTOP_UPDATE_NEEDED,
+  CUA_GRANT_READS_INITIAL,
+  CUA_READ_FAILED,
   computerUseStatusText,
   computerUseUnavailable,
+  cuaGrantReadsAfter,
+  cuaGrantTroubleshooting,
   hostComputerUseText,
   readCuaGrants,
   withLiveGrants,
@@ -118,6 +122,106 @@ describe("readCuaGrants", () => {
       principal: "unusable",
       message: CUA_DESKTOP_UPDATE_NEEDED,
     });
+  });
+});
+
+describe("cuaGrantReadsAfter", () => {
+  const waiting = {
+    principal: "helper",
+    name: "GOAT Computer Use",
+    bundleId: "si.goat.desktop.computer-use",
+    accessibility: false,
+    screenRecording: false,
+  } as const;
+  const slow = {
+    principal: "unusable",
+    message: "GOAT Computer Use did not answer: it took too long.",
+    unanswered: "tookTooLong",
+  } as const;
+  const answeredOnce = () => cuaGrantReadsAfter(CUA_GRANT_READS_INITIAL, waiting, false);
+
+  it("keeps the last answer through one failed read and says the app did not answer after two in a row", () => {
+    const once = cuaGrantReadsAfter(answeredOnce(), slow, false);
+    expect(once).toMatchObject({
+      grants: waiting,
+      unanswered: null,
+      error: "Could not check permissions. We'll try again automatically.",
+    });
+    const twice = cuaGrantReadsAfter(once, slow, false);
+    expect(twice.unanswered).toEqual({ reason: "tookTooLong", message: slow.message });
+    expect(twice.error).toBeNull();
+    // A read that answers in between starts the count again; one that answers after ends it.
+    const again = cuaGrantReadsAfter(cuaGrantReadsAfter(once, waiting, false), slow, false);
+    expect(again.unanswered).toBeNull();
+    expect(cuaGrantReadsAfter(twice, waiting, false)).toMatchObject({
+      grants: waiting,
+      unanswered: null,
+      error: null,
+    });
+  });
+
+  it("says so at once when the app refused GOAT or when a person asked for the read", () => {
+    const refused = {
+      principal: "unusable",
+      message: "GOAT Computer Use did not answer: it refused GOAT.",
+      unanswered: "refused",
+    } as const;
+    expect(cuaGrantReadsAfter(answeredOnce(), refused, false).unanswered).toEqual({
+      reason: "refused",
+      message: refused.message,
+    });
+    expect(cuaGrantReadsAfter(answeredOnce(), slow, true).unanswered?.reason).toBe("tookTooLong");
+  });
+
+  it("counts a read the desktop could not make at all the same way, with no reason to give", () => {
+    const once = cuaGrantReadsAfter(answeredOnce(), null, false);
+    expect(once.unanswered).toBeNull();
+    expect(cuaGrantReadsAfter(once, null, false).unanswered).toEqual({
+      reason: null,
+      message: CUA_READ_FAILED,
+    });
+  });
+
+  it("takes a helper that can never be used as an answer, not as a read that failed", () => {
+    const broken = { principal: "unusable", message: "It cannot be used (EACCES)." } as const;
+    expect(cuaGrantReadsAfter(answeredOnce(), broken, false)).toMatchObject({
+      grants: broken,
+      unanswered: null,
+      error: null,
+    });
+  });
+});
+
+describe("cuaGrantTroubleshooting", () => {
+  const helper = {
+    principal: "helper",
+    name: "GOAT Computer Use",
+    bundleId: "si.goat.desktop.nightly.computer-use",
+    accessibility: false,
+    screenRecording: false,
+  } as const;
+  const tips = () => cuaGrantTroubleshooting(helper);
+
+  it("does not claim a row that is on belongs to an older copy, and says each GOAT app lists its own helper", () => {
+    const text = tips().join(" ");
+    expect(text).not.toContain("belongs to an older copy");
+    expect(text).toContain("the row that is on may be for another copy");
+    expect(text).toContain(
+      "GOAT and GOAT Nightly each list their own GOAT Computer Use, and only the one for the app you are using counts.",
+    );
+  });
+
+  it("never suggests removing a row without saying the other GOAT app loses its permission", () => {
+    const removal = tips().filter((tip) => /remov/iu.test(tip));
+    expect(removal).not.toHaveLength(0);
+    for (const tip of removal) expect(tip).toContain("the other GOAT app");
+    expect(tips().join(" ")).not.toMatch(/every GOAT Computer Use row/u);
+  });
+
+  it("keeps the reset commands, for the copy GOAT is checking only", () => {
+    expect(tips().at(-1)).toContain(
+      "tccutil reset Accessibility si.goat.desktop.nightly.computer-use and tccutil reset ScreenCapture si.goat.desktop.nightly.computer-use",
+    );
   });
 });
 
