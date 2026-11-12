@@ -14,7 +14,6 @@ import {
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { GoatBotColorField } from "./GoatBotColorField";
-import { HoldsNewBotOpen } from "./newBotOpenHolds";
 
 export type GoatBotProfileChanges = Partial<BotProfileValues>;
 
@@ -86,7 +85,6 @@ export function GoatBotProfileDialog(props: {
         showCloseButton={!busy}
         {...(props.finalFocus === undefined ? {} : { finalFocus: props.finalFocus })}
       >
-        <HoldsNewBotOpen />
         <form className="contents" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
             <DialogTitle>Edit bot</DialogTitle>

@@ -30,7 +30,7 @@ import { GoatBotChildRows } from "./GoatBotChildRows";
 import { GoatBotMemberRoster } from "./GoatBotMemberRows";
 import { GoatBotNewBotStatus } from "./GoatBotNewBotStatus";
 import { openNewBotChat } from "./goatBotNewBotOpen";
-import { newBotOpenHeld } from "./newBotOpenHolds";
+import { newBotOpenBlocked } from "./newBotOpenHolds";
 import { useBotRoster } from "./useBotRoster";
 import { useGoatBotHome } from "./useGoatBotHome";
 import { useGoatBotEnabled } from "./useGoatBotSession";
@@ -151,14 +151,14 @@ function NewBotButton({
       : botManageFailure(squashAtomCommandFailure(result));
   };
   // The chat opens only if, when the create answers, this roster is still mounted and showing the
-  // environment the create went to, the page is the one clicked from, and no roster menu or bot
-  // dialog is open.
+  // environment the create went to, the page is the one clicked from, and no bot menu and nothing
+  // modal is open. The narrow sheet closes only after that check.
   const openIfStillHere = (): OpenIfStillHere => {
     const clickedAt = router.state.location.href;
     return (bot, sentTo) => {
       const now = mount.current;
       if (!now.mounted || !now.visible || now.environmentId !== sentTo) return;
-      if (router.state.location.href !== clickedAt || newBotOpenHeld()) return;
+      if (router.state.location.href !== clickedAt || newBotOpenBlocked()) return;
       setOpenMobile(false);
       openNewBotChat(router, bot);
     };

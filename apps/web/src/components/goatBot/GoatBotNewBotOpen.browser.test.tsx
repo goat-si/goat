@@ -6,6 +6,9 @@ import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render, type Screen } from "../../../test/render";
 import { useGlobalAgentStore } from "~/globalAgentStore";
+import { CommandPaletteDialogFrame } from "../CommandPaletteDialogFrame";
+import { CommandDialog } from "../ui/command";
+import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { SidebarProvider, useSidebar } from "../ui/sidebar";
 import "~/index.css";
 
@@ -143,7 +146,10 @@ function SidebarControls() {
   );
 }
 
-function Roster() {
+/** Something modal the person has open elsewhere in the app. */
+type Overlay = "palette" | "dialog" | null;
+
+function Roster({ overlay = null }: { readonly overlay?: Overlay }) {
   return (
     <SidebarProvider>
       {/* The provider lays out a row; the roster gets a sidebar-sized column. */}
@@ -155,6 +161,18 @@ function Roster() {
           <GoatBotEditBotButton />
         </GoatBotMemberContext>
       </div>
+      <CommandDialog open={overlay === "palette"}>
+        <CommandPaletteDialogFrame mode="command" setOpen={() => {}}>
+          <input aria-label="Search commands" />
+        </CommandPaletteDialogFrame>
+      </CommandDialog>
+      {/* Like the pull request checkout dialog: unrelated to bots, with a field being edited. */}
+      <Dialog open={overlay === "dialog"}>
+        <DialogPopup>
+          <DialogTitle>Check out a pull request</DialogTitle>
+          <input aria-label="Branch" />
+        </DialogPopup>
+      </Dialog>
     </SidebarProvider>
   );
 }
@@ -271,6 +289,28 @@ it("a menu whose row went away while it was open does not block a later open", a
   answer();
   await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env-1/thread-made"));
 });
+
+it.each<[string, Exclude<Overlay, null>, string]>([
+  ["the command palette", "palette", "Command palette"],
+  ["an unrelated dialog", "dialog", "Check out a pull request"],
+])(
+  "nothing opens while %s is open when the create answers, and the created row stays",
+  async (_case, overlay, title) => {
+    const { screen, answer } = await clickNewBot();
+    await using _screen = screen;
+    await screen.rerender(<Roster overlay={overlay} />);
+    await expect.element(page.getByRole("dialog", { name: title })).toBeVisible();
+    const router = screen.router;
+    if (!router) throw new Error("the roster renders under a router");
+    using navigate = vi.spyOn(router, "navigate");
+    answer();
+    await createdInStore();
+    expect(navigate).not.toHaveBeenCalled();
+    await screen.rerender(<Roster />);
+    await expect.element(screen.getByRole("link", { name: "New bot", exact: true })).toBeVisible();
+    expect(router.state.location.pathname).toBe("/bot");
+  },
+);
 
 it("a create outlives the roster: switching to Threads and back shows the created row and frees New bot", async () => {
   const { screen, answer } = await clickNewBot();

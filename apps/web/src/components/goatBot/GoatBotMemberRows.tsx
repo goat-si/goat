@@ -122,7 +122,6 @@ export function GoatBotMemberRoster({
       ) : null}
       <AlertDialog open={deleting !== null} onOpenChange={(open) => open || setDeleting(null)}>
         <AlertDialogPopup>
-          <HoldsNewBotOpen />
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
             <AlertDialogDescription>

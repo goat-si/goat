@@ -5,8 +5,9 @@ import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../../test/render";
+import { act, render, type Screen } from "../../../test/render";
 import { openCommandPalette } from "../../commandPaletteBus";
+import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { ToastProvider } from "../ui/toast";
 
 const decode = Schema.decodeSync(BotProfile);
@@ -62,13 +63,23 @@ function setup() {
   return { send, answer };
 }
 
-async function renderPalette() {
-  return render(
+function App({ dialog = false }: { readonly dialog?: boolean }) {
+  return (
     <ToastProvider>
       <CommandPalette>{null}</CommandPalette>
-    </ToastProvider>,
-    { router: "/" },
+      {/* Like the pull request checkout dialog: unrelated to bots, with a field being edited. */}
+      <Dialog open={dialog}>
+        <DialogPopup>
+          <DialogTitle>Check out a pull request</DialogTitle>
+          <input aria-label="Branch" />
+        </DialogPopup>
+      </Dialog>
+    </ToastProvider>
   );
+}
+
+async function renderPalette() {
+  return render(<App />, { router: "/" });
 }
 
 async function runNewBot() {
@@ -125,18 +136,30 @@ it("the palette closes, the create answers before its exit animation ends, and t
   await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env-1/thread-made"));
 });
 
-it.each<[string, (navigate: (to: string) => Promise<void>) => Promise<void>]>([
+it.each<[string, (screen: Screen) => Promise<void>]>([
   ["the palette was opened again for something else", () => act(() => openCommandPalette())],
-  ["the person went somewhere else", (navigate) => navigate("/fleet")],
+  [
+    "the person went somewhere else",
+    async (screen) => {
+      await act(() => screen.router?.navigate({ to: "/fleet" }));
+    },
+  ],
+  [
+    "an unrelated dialog was opened",
+    async (screen) => {
+      await screen.rerender(<App dialog />);
+      await expect
+        .element(page.getByRole("dialog", { name: "Check out a pull request" }))
+        .toBeVisible();
+    },
+  ],
 ])("nothing opens when, before the answer, %s", async (_case, move) => {
   const { answer } = setup();
   await using screen = await renderPalette();
   const router = screen.router;
   if (!router) throw new Error("the palette renders under a router");
   await runNewBot();
-  await move(async (to) => {
-    await act(() => router.navigate({ to }));
-  });
+  await move(screen);
   const before = router.state.location.href;
   using navigate = vi.spyOn(router, "navigate");
   answer.resolve({ _tag: "Success", value: { bot: made } });

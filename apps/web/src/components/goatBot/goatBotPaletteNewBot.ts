@@ -16,7 +16,7 @@ import { ITEM_ICON_CLASS, type CommandPaletteActionItem } from "../CommandPalett
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { openNewBotChat } from "./goatBotNewBotOpen";
 import { useGoatBotPaletteNewBotSource } from "./goatBotPaletteItems";
-import { newBotOpenHeld } from "./newBotOpenHolds";
+import { newBotOpenBlocked } from "./newBotOpenHolds";
 import { readGoatBotEnvironmentId } from "./readGoatBotEnvironmentId";
 import { useNewBotSlot } from "./useNewBotSlot";
 
@@ -25,10 +25,6 @@ type PaletteNewBotSource = NonNullable<ReturnType<typeof useGoatBotPaletteNewBot
 // Running an item closes the palette, and its components with it, long before a create answers.
 // This owner outlives them; only the environment's cleanup forgets its create.
 const paletteOwner = {};
-
-// Base UI drops data-open as soon as the palette starts to close; the element stays for its exit.
-// The palette's own open state lives in its root component, out of reach of this answer-time check.
-const paletteOpen = () => document.querySelector("[data-command-palette][data-open]") !== null;
 
 /** The palette's New bot: the roster's create, with no roster needed to see it through. */
 export function useGoatBotPaletteNewBot(): CommandPaletteActionItem[] {
@@ -81,10 +77,11 @@ function startPaletteNewBot(
     return failure;
   };
   // The chat opens only if, when the create answers, GOAT Bot is still on the same environment, the
-  // page is the one the command ran on, the palette is closed and no bot menu or dialog is open.
+  // page is the one the command ran on, and no bot menu and nothing modal, the palette included,
+  // is open.
   const open = (bot: BotProfile, sentTo: EnvironmentId) => {
     if (readGoatBotEnvironmentId() !== sentTo || router.state.location.href !== ranAt) return;
-    if (paletteOpen() || newBotOpenHeld()) return;
+    if (newBotOpenBlocked()) return;
     openNewBotChat(router, bot);
   };
   settleListedNewBots(environmentId, new Set(listed.map((bot) => bot.botId)));
