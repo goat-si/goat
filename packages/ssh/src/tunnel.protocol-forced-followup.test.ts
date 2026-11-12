@@ -230,6 +230,33 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
+    it.live("a start time in a file with an access list is not evidence", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        const target = yield* approved(f);
+        // ls marks a file with an access list (which could let another user write) with a +.
+        yield* f.fs.writeFileString(
+          `${f.home}/.test/identity-bin/ls`,
+          `#!/bin/sh
+for last; do :; done
+if [ "$last" = '${f.state}/started' ]; then printf '%s\\n' '-rw-------+ 1 u g 25 Jan  1 00:00 started'; exit 0; fi
+exec /bin/ls "$@"
+`,
+        );
+        yield* f.fs.chmod(`${f.home}/.test/identity-bin/ls`, 0o700);
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: target,
+        });
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+        assert.isTrue(isAlive(f.pid));
+        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+        assert.deepEqual(replaceTargetOf(yield* statusProbe(f)), {});
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live("a launch replaces a started symlink instead of writing through it", () =>
       Effect.gen(function* () {
         const f = yield* makeProtocolFixture({ ...unverified, live: false });

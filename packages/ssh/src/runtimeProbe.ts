@@ -307,7 +307,10 @@ ${
     ? `# The recorded runtime process, alive and this user's: a forced update names it to a person. Only
 # the status probe asks, and only for a runtime that is not the requested one.
 replace_trusted() {
-  [ -e "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -prune -user "$(id -u)" ! -perm -0020 ! -perm -0002 2>/dev/null)" ]
+  [ -e "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -prune -user "$(id -u)" ! -perm -0020 ! -perm -0002 2>/dev/null)" ] || return 1
+  # A + after the mode marks an access list, which could let another user write.
+  replace_mode="$(LC_ALL=C ls -ld "$1" 2>/dev/null)" || return 1
+  case "$replace_mode" in ??????????+*|"") return 1 ;; esac
 }
 replace_target() {
   # Records another user could change prove nothing about the process they name.

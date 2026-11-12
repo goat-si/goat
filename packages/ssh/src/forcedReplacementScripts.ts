@@ -46,9 +46,11 @@ forced_record_file() {
   else rm -f "$forced_record_next"; return 1; fi
 }
 # A record counts as evidence only while it is this user's, no other user can change it, and it is
-# not a link.
+# not a link. A + after the mode marks an access list, which could let another user write.
 forced_trusted() {
-  [ -e "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -prune -user "$(id -u)" ! -perm -0020 ! -perm -0002 2>/dev/null)" ]
+  [ -e "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -prune -user "$(id -u)" ! -perm -0020 ! -perm -0002 2>/dev/null)" ] || return 1
+  forced_mode="$(LC_ALL=C ls -ld "$1" 2>/dev/null)" || return 1
+  case "$forced_mode" in ??????????+*|"") return 1 ;; esac
 }
 forced_stop_runtime() {
   # A person approved stopping exactly this process. Every check runs again under the lock, and

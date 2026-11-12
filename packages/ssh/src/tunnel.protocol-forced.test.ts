@@ -126,7 +126,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(isAlive(f.pid));
           assert.deepEqual(yield* f.snapshot, before);
           assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-          if (mismatch === "port" || mismatch === "no approval") return;
+          if (mismatch === "no approval") return;
+          if (mismatch === "port") {
+            // The records no longer name the approved port, so the stop is refused and logged.
+            assert.include(
+              yield* f.fs.readFileString(`${f.state}/server.log`),
+              `GOAT did not stop PID ${f.pid} for an approved forced update: the launch records no longer name it on port ${f.port + 1}.`,
+            );
+            return;
+          }
           // The person is told how to stop it themselves; the host log says which check failed.
           if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
           assert.include(

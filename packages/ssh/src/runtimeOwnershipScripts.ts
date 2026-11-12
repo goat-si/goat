@@ -453,9 +453,11 @@ FORCE_STOP=0
 # Selects only the approved process, and only while the launch records still name it. The
 # launch re-checks liveness, owner, start time and listener under the lock before any signal.
 forced_target_recorded() {
-  [ "$DRAIN_FORCE" = 1 ] && [ "$OWNING_LAUNCH" = 1 ] && valid_positive "$FORCE_PID" &&
-    [ "$1" = "$FORCE_PID" ] && [ "$2" = "$FORCE_PORT" ] &&
-    fact_file_is "$PID_FILE" "$FORCE_PID" && fact_file_is "$PORT_FILE" "$FORCE_PORT"
+  [ "$DRAIN_FORCE" = 1 ] && [ "$OWNING_LAUNCH" = 1 ] && valid_positive "$FORCE_PID" || return 1
+  [ "$1" = "$FORCE_PID" ] && [ "$2" = "$FORCE_PORT" ] &&
+    fact_file_is "$PID_FILE" "$FORCE_PID" && fact_file_is "$PORT_FILE" "$FORCE_PORT" && return 0
+  printf 'GOAT did not stop PID %s for an approved forced update: the launch records no longer name it on port %s.\\n' "$FORCE_PID" "$FORCE_PORT" >>"\${LOG_FILE:-/dev/null}" 2>/dev/null || :
+  return 1
 }
 select_forced_stop() {
   # A runtime that answered its protocol can be started again if the new one does not start.
