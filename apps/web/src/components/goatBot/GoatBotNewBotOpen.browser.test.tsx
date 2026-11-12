@@ -484,6 +484,39 @@ it("a create answering while a pasted image is still being prepared opens nothin
   expect(router.state.location.pathname).toBe("/bot");
 });
 
+it("an image whose preparation ends as the create answers is staged, and nothing opens", async () => {
+  const { answer } = setup();
+  const prepared = deferred<void>();
+  state.imageGate = prepared.promise;
+  await using screen = await render(<Roster />, { router: "/bot" });
+  await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+  const field = screen.getByRole("textbox", { name: "Message Ada" });
+  await userEvent.click(screen.getByRole("button", { name: "New bot", exact: true }));
+  await expect.element(screen.getByRole("status").getByText("Creating…")).toBeVisible();
+  const data = new DataTransfer();
+  data.items.add(new File(["png"], "photo.png", { type: "image/png" }));
+  await act(() =>
+    field
+      .element()
+      .dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+      ),
+  );
+  const router = screen.router;
+  if (!router) throw new Error("the roster renders under a router");
+  using navigate = vi.spyOn(router, "navigate");
+  // Both settle together: the staged file and the end of staging must land before the answer reads the hold.
+  await act(() => {
+    prepared.resolve();
+    answer();
+  });
+  await createdInStore();
+  expect(navigate).not.toHaveBeenCalled();
+  await expect
+    .element(screen.getByRole("list", { name: "Attachments" }).getByText("photo.png"))
+    .toBeVisible();
+});
+
 /** The chat's message box with a quoted message to reply to, as choosing Reply sets it. */
 function ReplyingComposer() {
   const [replyTo, setReplyTo] = useState<string | null>(null);

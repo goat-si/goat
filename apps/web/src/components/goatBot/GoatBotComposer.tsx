@@ -38,6 +38,16 @@ export interface GoatBotComposerHandle {
   field(): HTMLTextAreaElement | null;
 }
 
+// Outside the component: React Compiler cannot lower try/finally without catch.
+async function settleAfter<T>(work: Promise<T>, settle: (outcome: T | null) => void) {
+  let outcome: T | null = null;
+  try {
+    outcome = await work;
+  } finally {
+    settle(outcome);
+  }
+}
+
 /**
  * GOAT Bot's message box. It clears as soon as a message is handed off, so a double Enter
  * cannot send it twice, and running work never blocks it. It grows with its text up to a cap.
@@ -115,20 +125,25 @@ export function GoatBotComposer({
     const signal = lifetime.current?.signal;
     if (!signal) return false;
     setStaging((count) => count + 1);
-    const { staged, error } = await stageGoatBotFiles(files, {
-      existingCount: draftRef.current.length,
-      support: attachmentSupport,
-      botName,
-    }).finally(() => setStaging((count) => count - 1));
-    if (signal.aborted) {
-      releaseUnownedGoatBotAttachments(staged);
-      return false;
-    }
-    if (staged.length > 0) {
-      retainGoatBotAttachments(staged);
-      setAttachments((current) => [...current, ...staged]);
-    }
-    if (error !== null) toastManager.add({ type: "error", title: error });
+    await settleAfter(
+      stageGoatBotFiles(files, {
+        existingCount: draftRef.current.length,
+        support: attachmentSupport,
+        botName,
+      }),
+      (outcome) => {
+        if (outcome !== null && signal.aborted) releaseUnownedGoatBotAttachments(outcome.staged);
+        else if (outcome !== null) {
+          if (outcome.staged.length > 0) {
+            retainGoatBotAttachments(outcome.staged);
+            setAttachments((current) => [...current, ...outcome.staged]);
+          }
+          if (outcome.error !== null) toastManager.add({ type: "error", title: outcome.error });
+        }
+        // Set in the same block as the attachment, so no commit lacks both the hold and the file.
+        setStaging((count) => count - 1);
+      },
+    );
     return false;
   };
   useImperativeHandle(ref, () => ({
