@@ -788,24 +788,29 @@ member's sessions load which relay.
 - Who counts: `pen pipe` and each `pen forward` connection report their session to the node's daemon; the daemon
   counts the `tcp` sessions it accepts itself. Service streams it accepts are not counted.
 - Control op `traffic.report`, on the control socket only (the dashboard cannot send it):
-  `{"op":"traffic.report","node":N,"relay":R,"in":I,"out":O}` with exactly these members. N is a node id of a
-  current or revoked member of the node's view, R the relay URL the session used (at most 512 bytes; a relay the
-  node does not list, when it reports or when it shows the totals, counts as `""`), I and O integers from 0 to 2^53−1: the bytes since that session's last
-  counted report. A missing or null member refuses the report. Answer `{"t":"counted"}`. A refusal is `{"error":"..."}`
-  and counts nothing. A reporter sends one report every 2 minutes and one when the session ends, gives each report
-  1 s in all (connecting, writing, the answer), and keeps the bytes for its next report only when the node did not
-  take the line or refused it: a report whose answer never came may have been counted and is not sent again. A node
-  older than this answers that it does not know the op; the session goes on unchanged, and it prints nothing either
-  way.
+  `{"op":"traffic.report","node":N,"relay":R,"in":I,"out":O}` with exactly these members, none null. N is a node id
+  of a current or revoked member of the node's view, R the relay URL the session used (at most 512 bytes; a relay the
+  node does not list, when it reports or when it shows the totals, counts as `""`), I and O integers from 0 to
+  2^53−1: the bytes since that session's last settled report. Answer `{"t":"counted"}`. A refusal is
+  `{"error":"..."}` and counts nothing. A node older than this answers that it does not know the op; the session goes
+  on unchanged, and it prints nothing either way.
+- Reporter: one report every 2 minutes, each within 1 s (connecting, writing, the answer), and one when the session
+  ends. The end of a session (a periodic report still in flight, the session's last sends and receives returning,
+  the last report) shares one deadline of 1 s, so a daemon that takes reports and never answers delays the end of a
+  session by at most 1 s. A report whose answer never came may have been counted, so its bytes are not sent again.
+  Bytes the node certainly did not take (the line never reached it whole, or it refused the report) wait for the
+  next report while they are less than one bucket (15 minutes) old, and are dropped after that: while no daemon
+  counts, counts are lost, never moved to a later bucket than the one their bytes crossed the relay in by more than
+  that.
 - Window: 96 buckets of 15 minutes by the node's wall clock, so bytes leave the total between 23 h 45 min and 24 h
   after they were counted. A wall clock set back by less than 23 h 45 min keeps every count; set back further, it can
   drop the counts of the buckets it skips (bucket indices, not elapsed time, decide). A node holds at most 512
   (member, relay) pairs; a new pair past that is refused until a pair's window is empty. The counts live only in the
   daemon's memory, and a restart starts them at zero.
-- `pen ls --json` adds `traffic24h` (`{"in","out","relays":[{"url","in","out"}]}`) to each member with bytes in the
-  window, and `relays24h` (`[{"url","in","out"}]`) and `trafficSince` (milliseconds since the Unix epoch, where the
-  totals start) to the reply while any bytes are counted. Every other field keeps its name, type and meaning, and a
-  node with nothing counted prints exactly what it printed before.
+- `pen ls --json` adds `traffic24h` (`{"in","out","relays":[{"url","in","out"}]}`) to each member and each revoked
+  key with bytes in the window, and `relays24h` (`[{"url","in","out"}]`) and `trafficSince` (milliseconds since the
+  Unix epoch, where the totals start) to the reply while any bytes are counted. Every other field keeps its name,
+  type and meaning, and a node with nothing counted prints exactly what it printed before.
 
 ## Close codes
 

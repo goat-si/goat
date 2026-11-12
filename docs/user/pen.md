@@ -175,9 +175,11 @@ The link works once and only on this machine. Run `pen dashboard` again for a ne
 after Pen restarts. `pen dashboard --stop` closes the page and signs out every open tab.
 
 `pen ls` and the dashboard show how many bytes this machine exchanged with each member in the last 24 hours
-(received / sent), and how much went over each relay: ssh and other `pen pipe` sessions, `pen forward`, and
-connections other members opened to this machine. Counting starts when Pen starts, and the numbers are a little
-below what the network carried, since Pen's own framing is not counted.
+(received / sent), and how much went over each relay. They count ssh and other `pen pipe` sessions, `pen forward`,
+and SSH and other TCP connections other members opened to this machine; connections to a program registered with
+Pen, such as GOAT, are not counted. Only the data each session carried counts, not handshakes or Pen's own framing,
+so the numbers are a little below what the network carried. Counting starts when Pen starts, and bytes moved
+while Pen is stopped are not counted.
 
 ## Remove a machine
 
