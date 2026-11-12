@@ -2,8 +2,7 @@ import type { GoatBotFaceState } from "./face.ts";
 
 /**
  * GOAT Bot's head (direction C): a solid goat head with eyes on their own layer. It shares the
- * goat mark's 20-unit box, so faceMotion's sideways units hold. face.ts keeps the horns-only art
- * that mobile still draws.
+ * goat mark's 20-unit box, so faceMotion's sideways units hold.
  */
 export const GOAT_BOT_HEAD_VIEWBOX = "2 2 20 20";
 

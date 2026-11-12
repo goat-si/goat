@@ -1,22 +1,20 @@
 import {
   FACE_MOTION_RANK,
-  GOAT_BOT_FACE_STROKE_WIDTH,
-  GOAT_BOT_SLEEP_MARK_PATH,
+  GOAT_BOT_HEAD_EYES_ORIGIN,
+  GOAT_BOT_HEAD_PATH,
+  GOAT_BOT_HEAD_SLEEP_MARK_PATH,
+  GOAT_BOT_HEAD_STROKE_WIDTH,
+  GOAT_BOT_HEAD_VIEWBOX,
   goatBotAvatarEmoji,
   goatBotAvatarSignal,
-  goatBotFaceArt,
   goatBotFaceLabel,
+  goatBotHeadArt,
   type GoatBotAvatarSignal,
   type GoatBotAccent,
   type FaceMotion,
   type GoatBotFaceInput,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
-import {
-  GOAT_MARK_HORNS_PATH,
-  GOAT_MARK_HORNS_SOFTEN_WIDTH,
-  GOAT_MARK_VIEWBOX,
-} from "@goat/shared/goatMark";
 import { useCallback, useEffect, useState } from "react";
 import {
   Animated as NativeAnimated,
@@ -39,7 +37,9 @@ import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoa
 const ThemedPath = withUniwind(Path);
 const FACE_ENTERING = FadeIn.duration(150).reduceMotion(ReduceMotion.System);
 const INK = "accent-icon";
-/** The face spans 20 grid units of the mark's viewBox. */
+/** The eyes are cut from the head in the screen's colour, as web's are in its background. */
+const EYES = "accent-screen";
+/** The head spans 20 grid units of its viewBox. */
 const FACE_UNITS = 20;
 const STILL_FRAMES = [
   { at: 0, x: 0, scaleY: 1 },
@@ -47,8 +47,8 @@ const STILL_FRAMES = [
 ] as const;
 
 /**
- * The goat mark's horns over a pair of eyes that show what the bot is doing. The eyes are their
- * own view, so a moving face loops only that view's transform on React Native's native driver
+ * The bot's solid goat head with eyes that show what the bot is doing. The eyes are their own
+ * view, so a moving face loops only that view's transform on React Native's native driver
  * (Reanimated's per-frame commits starve React's here; see docs/internals/performance-regressions.md).
  */
 export function GoatBotFace(props: {
@@ -61,7 +61,7 @@ export function GoatBotFace(props: {
   const [firstState] = useState(props.state);
   const [changed, setChanged] = useState(false);
   if (!changed && props.state !== firstState) setChanged(true);
-  const art = goatBotFaceArt(props.state);
+  const art = goatBotHeadArt(props.state);
   const motion = props.motion ?? null;
   const progress = useAnimatedValue(0);
   // oxlint-disable-next-line goat/react-effect-budget -- drives the eyes' native-driver loop while this face holds the motion
@@ -96,54 +96,59 @@ export function GoatBotFace(props: {
           style={StyleSheet.absoluteFill}
           width={props.size}
           height={props.size}
-          viewBox={GOAT_MARK_VIEWBOX}
+          viewBox={GOAT_BOT_HEAD_VIEWBOX}
         >
-          <ThemedPath
-            d={GOAT_MARK_HORNS_PATH}
-            colorClassName={INK}
-            fill="currentColor"
-            stroke="currentColor"
-            strokeWidth={GOAT_MARK_HORNS_SOFTEN_WIDTH}
-            strokeLinejoin="round"
-          />
+          <ThemedPath d={GOAT_BOT_HEAD_PATH} colorClassName={INK} fill="currentColor" />
           {art.sleepMark ? (
             <ThemedPath
-              d={GOAT_BOT_SLEEP_MARK_PATH}
+              d={GOAT_BOT_HEAD_SLEEP_MARK_PATH}
               colorClassName={INK}
               fill="none"
               stroke="currentColor"
-              strokeWidth={GOAT_BOT_FACE_STROKE_WIDTH}
+              strokeWidth={GOAT_BOT_HEAD_STROKE_WIDTH}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
           ) : null}
         </Svg>
-        {/* The eyes sit at 67% of the face's height; a blink scales around them. */}
+        {/* A blink scales around the eye line. */}
         <NativeAnimated.View
           pointerEvents="none"
           style={[
             StyleSheet.absoluteFill,
-            { transformOrigin: "50% 67%", transform: [{ translateX }, { scaleY }] },
+            { transformOrigin: GOAT_BOT_HEAD_EYES_ORIGIN, transform: [{ translateX }, { scaleY }] },
           ]}
         >
-          <Svg width={props.size} height={props.size} viewBox={GOAT_MARK_VIEWBOX}>
-            {art.stroked ? (
+          <Svg width={props.size} height={props.size} viewBox={GOAT_BOT_HEAD_VIEWBOX}>
+            {art.eyes === "" ? null : (
+              <ThemedPath d={art.eyes} colorClassName={EYES} fill="currentColor" />
+            )}
+            {art.strokes === "" ? null : (
               <ThemedPath
-                d={art.eyes}
-                colorClassName={INK}
+                d={art.strokes}
+                colorClassName={EYES}
                 fill="none"
                 stroke="currentColor"
-                strokeWidth={GOAT_BOT_FACE_STROKE_WIDTH}
+                strokeWidth={GOAT_BOT_HEAD_STROKE_WIDTH}
                 strokeLinecap="round"
+                strokeLinejoin="round"
               />
-            ) : (
-              <ThemedPath d={art.eyes} colorClassName={INK} fill="currentColor" />
             )}
           </Svg>
         </NativeAnimated.View>
       </View>
     </Animated.View>
   );
+}
+
+/**
+ * The waiting dot keeps clear of the head's ear in a small circle: web's share of the circle, 6 to
+ * 10 px, and a pixel out on the corner below 32 px, where the ear nearly reaches the edge.
+ */
+function waitingDotStyle(circle: number) {
+  const size = Math.min(10, Math.max(6, Math.round(circle * 0.28)));
+  const out = circle < 32 ? -1 : 0;
+  return { width: size, height: size, top: out, right: out };
 }
 
 const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
@@ -198,10 +203,10 @@ export function GoatBotFaceAvatar(props: {
           {picture}
         </Text>
       ) : (
-        <GoatBotFace state={props.state} size={props.size * 0.64} motion={props.motion ?? null} />
+        <GoatBotFace state={props.state} size={props.size * 0.86} motion={props.motion ?? null} />
       )}
       {signal.waitingDot ? (
-        <View className="absolute top-0 right-0 h-2.5 w-2.5 rounded-full bg-warning" />
+        <View className="absolute rounded-full bg-warning" style={waitingDotStyle(props.size)} />
       ) : null}
     </View>
   );
