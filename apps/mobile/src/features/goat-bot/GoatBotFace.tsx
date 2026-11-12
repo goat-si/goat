@@ -160,7 +160,7 @@ function waitingDotStyle(circle: number) {
 }
 
 /** What the avatar sits on, so the waiting dot's ring matches it. */
-export type GoatBotAvatarSurface = "screen" | "selected" | "chip";
+type GoatBotAvatarSurface = "screen" | "selected" | "chip";
 
 const DOT_RING: Record<GoatBotAvatarSurface, string> = {
   screen: "border-screen",
@@ -170,7 +170,7 @@ const DOT_RING: Record<GoatBotAvatarSurface, string> = {
 
 const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
   active: "border-primary",
-  failed: "border-danger",
+  failed: "border-danger-foreground",
   finished: "border-adaptive-emerald-600-400",
 };
 
