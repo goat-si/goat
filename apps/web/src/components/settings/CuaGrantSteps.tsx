@@ -50,6 +50,7 @@ export function useCuaGrants(
     let disposed = false;
     let checking = false;
     // A helper that cannot be used or refused GOAT stays that way, so only the person asks again.
+    // It holds only while the latest read says so: a read that fails outright starts the timer again.
     let final = false;
     const refresh = async (asked: boolean) => {
       if (disposed || checking || document.visibilityState === "hidden") return;
@@ -59,7 +60,7 @@ export function useCuaGrants(
       const next = await checkLatest().catch(() => null);
       checking = false;
       if (asked) setRetrying(false);
-      if (next !== null) final = cuaReadIsFinal(next);
+      final = cuaReadIsFinal(next);
       if (!disposed && started === epoch.current) settleLatest(next, asked);
     };
     const asked = attempt !== askedAttempt.current;

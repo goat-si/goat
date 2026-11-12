@@ -187,6 +187,8 @@ it("says the helper is not answering after two failed reads in a row, once, and 
   // The page carries both lines; the preload swaps them, since the page runs no script.
   const page = decodeURIComponent(String(mocks.loadURL.mock.calls[0]?.[0]));
   expect(page).toContain("GOAT Computer Use is not answering. See GOAT for why.");
+  // The line is a polite live region, so a screen reader hears it change.
+  expect(page).toMatch(/<header id="status" role="status"/u);
 });
 
 it("still opens the panel when the opening read fails, and counts it as the first failed read", async () => {

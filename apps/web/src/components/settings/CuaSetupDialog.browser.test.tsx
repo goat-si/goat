@@ -309,6 +309,34 @@ it("shows a helper that refused GOAT at once, and does not promise to keep askin
   expect(button("Try again")).toBeDefined();
 });
 
+it("asks on its timer again once a read after a refusal fails outright, and shows the grants when the helper answers, with no focus or click", async () => {
+  // The polling interval starts with the first render, so the clock is fake before it.
+  using _timers = fakeTimers();
+  const f = fixture();
+  const refused = "GOAT Computer Use did not answer: it refused GOAT.";
+  f.helper.unanswered = { principal: "unusable", message: refused, unanswered: "refused" };
+  await using _screen = await dialog(f);
+  await refocus();
+  expect(text()).toContain(refused);
+  // A refusal stays that way, so the timer leaves it alone.
+  const calls = f.onCheck.mock.calls.length;
+  await act(() => vi.advanceTimersByTime(6000));
+  expect(f.onCheck).toHaveBeenCalledTimes(calls);
+
+  // Coming back to GOAT asks once more, and that read cannot be made at all.
+  f.onCheck.mockRejectedValueOnce(new Error("Error invoking remote method"));
+  await refocus();
+  expect(text()).toContain("GOAT could not check the permissions on this Mac.");
+  expect(text()).toContain("keeps asking");
+
+  // The helper recovers. Only the timer asks from here on.
+  f.helper.unanswered = undefined;
+  await act(() => vi.advanceTimersByTimeAsync(1500));
+  expect(f.onCheck).toHaveBeenCalledTimes(calls + 2);
+  expect(text()).toContain("Step 1 · Accessibility (to do now)");
+  expect(text()).not.toContain("GOAT could not check");
+});
+
 it("shows a broken helper's reason and offers no other app to allow", async () => {
   const f = fixture({ unusable: "GOAT Computer Use at /x cannot be used (EACCES)." });
   await using _screen = await dialog(f);
