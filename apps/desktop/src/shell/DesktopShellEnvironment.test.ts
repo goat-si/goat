@@ -34,6 +34,11 @@ const cacheCodec = Schema.fromJsonString(
 );
 const encodeCache = Schema.encodeSync(cacheCodec);
 const decodeCache = Schema.decodeUnknownEffect(cacheCodec);
+// The fixture home is /test-home; these always follow whatever the shell and launcher gave.
+const DARWIN_CLI_DIRS =
+  "/test-home/.local/bin:/test-home/.bun/bin:/opt/homebrew/bin:/usr/local/bin";
+const LINUX_CLI_DIRS =
+  "/test-home/.local/bin:/test-home/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin";
 
 function envOutput(values: Readonly<Record<string, string>>): string {
   return Object.entries(values)
@@ -242,7 +247,7 @@ describe("DesktopShellEnvironment", () => {
             Effect.gen(function* () {
               yield* service.installIntoProcess;
               yield* service.installIntoProcess;
-              assert.equal(env.PATH, "/old/bin:/usr/bin:/launcher/bin");
+              assert.equal(env.PATH, `/old/bin:/usr/bin:/launcher/bin:${DARWIN_CLI_DIRS}`);
               assert.equal(env.SSH_AUTH_SOCK, "/current-session.sock");
               const replay = yield* Stream.runHead(service.updates);
               assert.isTrue(Option.isSome(replay));
@@ -252,7 +257,7 @@ describe("DesktopShellEnvironment", () => {
               assert.equal(calls, 1);
               yield* Deferred.succeed(release, undefined);
               yield* service.awaitDiscovery;
-              assert.equal(env.PATH, "/fresh/bin:/launcher/bin");
+              assert.equal(env.PATH, `/fresh/bin:/launcher/bin:${DARWIN_CLI_DIRS}`);
               assert.equal(env.__MISE_DIFF, "fresh-mise");
               assert.isUndefined(env.JAVA_HOME);
               assert.isUndefined(env.SSL_CERT_FILE);
@@ -305,7 +310,7 @@ describe("DesktopShellEnvironment", () => {
             return yield* service.awaitDiscovery;
           }),
       });
-      assert.equal(env.PATH, "/fresh/bin:/usr/bin");
+      assert.equal(env.PATH, `/fresh/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -358,7 +363,7 @@ describe("DesktopShellEnvironment", () => {
             }),
         });
         assert.isFalse(prepared);
-        assert.equal(env.PATH, "/cached/bin:/usr/bin");
+        assert.equal(env.PATH, `/cached/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
         assert.equal(env.__MISE_DIFF, "cached-mise");
         assert.equal(env.JAVA_HOME, "/launcher/java");
         assert.equal(env.NODE_EXTRA_CA_CERTS, "/launcher/ca.pem");
@@ -424,7 +429,7 @@ describe("DesktopShellEnvironment", () => {
           }),
         }).pipe(Effect.provide(Logger.layer([])));
 
-        assert.equal(env.PATH, "/shell-only/bin:/usr/bin");
+        assert.equal(env.PATH, `/shell-only/bin:/usr/bin:${LINUX_CLI_DIRS}`);
         assert.deepEqual(commands, ["/test-shell"]);
       }),
   );
@@ -448,7 +453,7 @@ describe("DesktopShellEnvironment", () => {
       }).pipe(Effect.provide(Logger.layer([])));
 
       assert.deepEqual(commands, ["/bin/failing", "/usr/local/bin/fish"]);
-      assert.equal(env.PATH, "/home/test/.local/bin:/usr/bin");
+      assert.equal(env.PATH, `/home/test/.local/bin:/usr/bin:${LINUX_CLI_DIRS}`);
     }),
   );
 
@@ -475,7 +480,10 @@ describe("DesktopShellEnvironment", () => {
 
       assert.equal(commands.length, 1);
       assert.equal(commands[0]?._tag === "StandardCommand" ? commands[0].command : "", "/bin/zsh");
-      assert.equal(env.PATH, "/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
+      assert.equal(
+        env.PATH,
+        "/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin:/test-home/.local/bin:/test-home/.bun/bin:/usr/local/bin",
+      );
       assert.equal(env.SSH_AUTH_SOCK, "/tmp/secretive.sock");
       assert.equal(env.HOMEBREW_PREFIX, "/opt/homebrew");
       assert.isTrue(prepared);
@@ -590,9 +598,86 @@ describe("DesktopShellEnvironment", () => {
       });
 
       assert.deepEqual(commands, ["/opt/homebrew/bin/nu", "/bin/zsh", "/bin/launchctl"]);
-      assert.equal(env.PATH, "/opt/homebrew/bin:/usr/bin");
+      assert.equal(
+        env.PATH,
+        "/opt/homebrew/bin:/usr/bin:/test-home/.local/bin:/test-home/.bun/bin:/usr/local/bin",
+      );
       assert.isFalse(prepared);
     }),
+  );
+
+  it.effect("waits ten seconds for a slow login shell on macOS before giving up on it", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+      const started = yield* Deferred.make<void>();
+      const fiber = yield* runShellEnvironment({
+        env,
+        platform: "darwin",
+        handler: () => "",
+        processSpawner: ChildProcessSpawner.make((command) =>
+          command._tag === "StandardCommand" && command.command === "/bin/zsh"
+            ? Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Effect.sleep("7 seconds")),
+                Effect.as(makeProcess(envOutput({ PATH: "/slow-shell/bin" }))),
+              )
+            : Effect.succeed(makeProcess("")),
+        ),
+      }).pipe(Effect.provide(Logger.layer([])), Effect.forkChild({ startImmediately: true }));
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("7 seconds");
+      assert.isTrue(yield* Fiber.join(fiber));
+      assert.equal(env.PATH, `/slow-shell/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
+    }),
+  );
+
+  it.effect(
+    "probes again after a login shell that did not answer and publishes the recovered PATH",
+    () =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+        const firstProbe = yield* Deferred.make<void>();
+        let shellProbes = 0;
+        yield* runShellEnvironment({
+          env,
+          platform: "darwin",
+          handler: () => "",
+          processSpawner: ChildProcessSpawner.make((command) => {
+            if (command._tag !== "StandardCommand" || command.command !== "/bin/zsh")
+              return Effect.succeed(makeProcess(""));
+            shellProbes++;
+            return shellProbes === 1
+              ? Deferred.succeed(firstProbe, undefined).pipe(
+                  Effect.andThen(
+                    Effect.acquireRelease(Effect.succeed(makeHungProcess()), () => Effect.never),
+                  ),
+                )
+              : Effect.succeed(makeProcess(envOutput({ PATH: "/recovered/bin" })));
+          }),
+          use: (service) =>
+            Effect.gen(function* () {
+              yield* service.installIntoProcess;
+              yield* Deferred.await(firstProbe);
+              yield* TestClock.adjust("10 seconds");
+              assert.isFalse(yield* service.awaitDiscovery);
+              assert.equal(env.PATH, `/usr/bin:${DARWIN_CLI_DIRS}`);
+              yield* TestClock.adjust("29 seconds");
+              assert.equal(shellProbes, 1);
+              yield* TestClock.adjust("1 second");
+              assert.equal(shellProbes, 2);
+              const recovered = yield* service.updates.pipe(
+                Stream.filter((snapshot) => snapshot.discovered),
+                Stream.runHead,
+              );
+              assert.equal(
+                Option.getOrUndefined(recovered)?.environment.PATH,
+                `/recovered/bin:/usr/bin:${DARWIN_CLI_DIRS}`,
+              );
+              assert.equal(env.PATH, `/recovered/bin:/usr/bin:${DARWIN_CLI_DIRS}`);
+              return true;
+            }),
+        }).pipe(Effect.provide(Logger.layer([])));
+      }),
   );
 
   it.effect("leaves macOS preparation incomplete when no login shell returns a PATH", () =>
