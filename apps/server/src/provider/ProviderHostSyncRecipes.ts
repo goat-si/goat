@@ -47,6 +47,16 @@ const RECIPES: Record<ProviderHostSyncDriver, Recipe> = {
     displayName: "Codex",
     binary: "codex",
     npmPackage: "@openai/codex",
+    // OpenAI's installer needs no Node; it writes ~/.local/bin or %LOCALAPPDATA%\Programs\OpenAI\Codex\bin.
+    posixScript: {
+      script:
+        'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh -s -- --release "$1"',
+      pinnable: true,
+    },
+    windowsScript: {
+      script: "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+      pinnable: false,
+    },
     deviceLogin: { args: ["login", "--device-auth"], hosts: ["auth.openai.com"] },
     terminalLogin: "codex login --device-auth",
   },

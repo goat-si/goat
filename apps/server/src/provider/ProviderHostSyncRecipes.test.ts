@@ -16,11 +16,34 @@ describe("installCommand", () => {
       args: ["install", "-g", "opencode-ai@1.2.3"],
       latestOnly: false,
     });
-    expect(installCommand("codex", "win32", null)?.args).toEqual([
+    expect(installCommand("pi", "win32", null)?.args).toEqual([
       "install",
       "-g",
-      "@openai/codex@latest",
+      "@earendil-works/pi-coding-agent@latest",
+      "--ignore-scripts",
     ]);
+  });
+
+  it("installs Codex with OpenAI's installer, pinned on macOS and Linux, latest on Windows", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(installCommand("codex", platform, "0.133.0")).toEqual({
+        method: "script",
+        command: "bash",
+        args: [
+          "-c",
+          'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh -s -- --release "$1"',
+          "goat-install",
+          "0.133.0",
+        ],
+        latestOnly: false,
+      });
+    }
+    const windows = installCommand("codex", "win32", "0.133.0")!;
+    expect(windows.command).toBe("powershell.exe");
+    expect(windows.args.at(-1)).toBe(
+      "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+    );
+    expect(windows.latestOnly).toBe(true);
   });
 
   it("passes a script installer's version as its own argv entry, never inside the script", () => {
