@@ -65,6 +65,7 @@ export type FleetShell = LaunchFoldThread &
  * running, waiting), while it waits on the user (a pending approval, question,
  * or a subagent's request), and while background work holds an idle run open.
  * It leaves once nothing holds it: completed, failed, interrupted, or idle.
+ * A start held behind another Codex turn does not count until it starts.
  * A new run brings it back.
  *
  * Only top-level threads count. Subagents (delegate_task children and
