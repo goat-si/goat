@@ -210,18 +210,24 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
     if (segments === undefined) return yield* notFound();
     // A started read keeps its slot until its OS calls end, since interrupting one only abandons
     // it; waiting for a slot stays interruptible. Only the answer is bounded.
-    const work = yield* reads
-      .withPermits(1)(Effect.uninterruptible(Effect.scoped(readChunk(input, segments))))
-      .pipe(
-        Effect.tapDefect((defect) => Effect.logError("GOAT Bot Library read failed", defect)),
-        Effect.forkDetach,
-      );
-    const answer = yield* Fiber.join(work).pipe(
-      Effect.timeoutOption(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS),
-      Effect.onInterrupt(() => Effect.sync(() => work.interruptUnsafe())),
+    // The mask leaves no moment where the detached work exists without its cleanup; only the
+    // bounded wait for the answer can be interrupted. forkDetach still starts it interruptible.
+    const answer = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const work = yield* reads
+          .withPermits(1)(Effect.uninterruptible(Effect.scoped(readChunk(input, segments))))
+          .pipe(
+            Effect.tapDefect((defect) => Effect.logError("GOAT Bot Library read failed", defect)),
+            Effect.forkDetach,
+          );
+        const joined = yield* restore(
+          Fiber.join(work).pipe(Effect.timeoutOption(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS)),
+        ).pipe(Effect.onInterrupt(() => Effect.sync(() => work.interruptUnsafe())));
+        if (Option.isNone(joined)) work.interruptUnsafe();
+        return joined;
+      }),
     );
     if (Option.isSome(answer)) return answer.value;
-    work.interruptUnsafe();
     return { status: "busy", relativePath: input.relativePath } as const;
   });
 

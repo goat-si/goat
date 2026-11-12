@@ -120,6 +120,26 @@ const statusOf = (fiber: Fiber.Fiber<{ readonly status: string }, unknown>) => {
   return Exit.isSuccess(exit) ? exit.value.status : "failed";
 };
 
+/** Holds the first `count` OS reads, each until it is released on its own. */
+const holdEach = (count: number) => {
+  const started = Deferred.makeUnsafe<void>();
+  const gates = Array.from({ length: count }, () => Deferred.makeUnsafe<void>());
+  let calls = 0;
+  const hold = Effect.suspend(() => {
+    const gate = gates[calls];
+    calls += 1;
+    if (gate === undefined) return Effect.void;
+    const signal = calls === count ? Deferred.succeed(started, undefined) : Effect.void;
+    return Effect.andThen(signal, Effect.uninterruptible(Deferred.await(gate)));
+  });
+  return {
+    hold,
+    started: Deferred.await(started),
+    release: (index: number) => Deferred.succeed(gates[index] ?? started, undefined),
+    releaseAll: Effect.forEach(gates, (gate) => Deferred.succeed(gate, undefined)),
+  };
+};
+
 describe("ChannelBotArtifacts list", () => {
   // Windows refuses colons and trailing spaces in names and needs elevated rights for symlinks.
   it.effect.skipIf(windowsHost)(
@@ -604,5 +624,57 @@ describe("ChannelBotArtifacts over a connection's handlers", () => {
         Effect.provide(handlersLayer({ beforeOpen: lookup.hold })),
       );
     },
+  );
+
+  /**
+   * Two reads hold both server slots and a third waits for one. Once that third request is
+   * `cancel`led, freeing one slot must serve a fourth read, and the third must never open the file.
+   */
+  const queuedReadLeaves = (
+    cancel: (
+      queued: Fiber.Fiber<{ readonly status: string }, unknown>,
+    ) => Effect.Effect<void, never, never>,
+  ) => {
+    const disk = holdEach(2);
+    let opens = 0;
+    return Effect.gen(function* () {
+      const { at } = yield* folders;
+      write(at("a.txt"), "hi", 1_700_000_000);
+      yield* Effect.forkChild((yield* connection)("a.txt"));
+      yield* Effect.forkChild((yield* connection)("a.txt"));
+      yield* disk.started;
+      const queued = yield* Effect.forkChild((yield* connection)("a.txt"));
+      yield* cancel(queued);
+      yield* disk.release(0);
+      assert.strictEqual((yield* (yield* connection)("a.txt")).status, "chunk");
+      assert.strictEqual(opens, 3);
+    }).pipe(
+      Effect.ensuring(disk.releaseAll),
+      Effect.provide(
+        handlersLayer({ beforeOpen: Effect.sync(() => void opens++), afterRead: disk.hold }),
+      ),
+    );
+  };
+
+  it.effect("a queued read that answered busy at the bound leaves the queue and never opens", () =>
+    queuedReadLeaves((queued) =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS);
+        assert.strictEqual(statusOf(queued), "busy");
+      }),
+    ),
+  );
+
+  it.effect("a queued read its client interrupted leaves the queue and never opens", () =>
+    queuedReadLeaves((queued) =>
+      Effect.gen(function* () {
+        // Short of the bound, so the request is waiting for a slot when it is interrupted.
+        yield* TestClock.adjust(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS - 1);
+        assert.strictEqual(statusOf(queued), "no answer");
+        yield* Fiber.interrupt(queued);
+        const exit = queued.pollUnsafe();
+        assert.isTrue(exit !== undefined && Exit.hasInterrupts(exit));
+      }),
+    ),
   );
 });
