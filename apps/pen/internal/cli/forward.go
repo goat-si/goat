@@ -118,7 +118,7 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 			tc := c.(*net.TCPConn)
 			defer tc.Close()
 			tr := newOpenTrace(stderr, fmt.Sprintf(" conn=%d", n))
-			sec, err := daemon.OpenTCP(tr.context(ctx), p.relays, p.id, m, port)
+			sec, used, err := daemon.OpenTCPVia(tr.context(ctx), p.relays, p.id, m, port)
 			if err != nil {
 				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, false))
 				return
@@ -137,7 +137,8 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 				mu.Unlock()
 			}()
 			lc := localConn{tc}
-			if err := stream.Splice(ctx, tr.link(sec), lc, lc, lc.CloseWrite); err != nil {
+			counted := startTraffic(st, m.NodeID, used)
+			if err := stream.Splice(ctx, counted.link(tr.link(sec)), lc, lc, lc.CloseWrite); err != nil {
 				if !stream.Delivered(err) {
 					// The peer's stream stopped short of its FIN: the client reads a reset, not a clean end.
 					tc.SetLinger(0)
@@ -146,6 +147,9 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 					fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
 				}
 			}
+			// The local client sees its end before the last report goes out.
+			tc.Close()
+			counted.finish()
 		}()
 	}
 }

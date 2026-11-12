@@ -172,10 +172,11 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		tr = newOpenTrace(stderr, "")
 	}
 	var sec *session.Secure
+	var used string
 	if service != "" {
-		sec, err = daemon.OpenService(tr.context(ctx), p.relays, p.id, m, service)
+		sec, used, err = daemon.OpenServiceVia(tr.context(ctx), p.relays, p.id, m, service)
 	} else {
-		sec, err = daemon.OpenTCP(tr.context(ctx), p.relays, p.id, m, port)
+		sec, used, err = daemon.OpenTCPVia(tr.context(ctx), p.relays, p.id, m, port)
 	}
 	if err != nil {
 		return die(fail(err, false))
@@ -206,7 +207,9 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		}
 		return nil
 	}
-	if err := stream.Splice(ctx, tr.link(sec), Stdin, stdout, closeOut); err != nil {
+	counted := startTraffic(st, m.NodeID, used)
+	defer counted.finish()
+	if err := stream.Splice(ctx, counted.link(tr.link(sec)), Stdin, stdout, closeOut); err != nil {
 		if wasRevoked.Load() {
 			return die(revokedNodeErr(m, selfRevoked))
 		}

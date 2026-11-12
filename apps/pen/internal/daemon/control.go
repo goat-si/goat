@@ -618,7 +618,7 @@ func Call(st *state.Store, req Request, v any) error {
 // CallWithin is Call that waits at most d for the answer once the request is sent (and dialTimeout
 // to connect): a daemon that takes the connection but never answers cannot hold the caller. The
 // request itself always goes out, so the daemon may still act on it after the caller gave up.
-func CallWithin(st *state.Store, req Request, v any, d time.Duration) error {
+func CallWithin(st *state.Store, req any, v any, d time.Duration) error {
 	c, err := (&net.Dialer{Timeout: dialTimeout}).Dial("unix", SocketPath(st))
 	if err != nil {
 		return ErrNotRunning
