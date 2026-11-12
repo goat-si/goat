@@ -191,9 +191,9 @@ export interface FleetEnvironment {
   readonly os?: ExecutionEnvironmentPlatformOs | null;
   readonly machineKind?: EnvironmentMachineKind | null;
   /**
-   * The server's physical machine. GOAT servers that report the same one, such as the desktop's
-   * own server and the headless server SSH launches keep beside it, are one Fleet machine.
-   * Absent on servers that predate it.
+   * The server's machine and OS account. GOAT servers that report the same one, such as the
+   * desktop's own server and the headless server SSH launches keep beside it, are one Fleet
+   * machine. Absent on servers that predate it.
    */
   readonly machineId?: string | null;
   /**
@@ -201,6 +201,11 @@ export interface FleetEnvironment {
    * alias names the same host on each of them. Absent on servers that predate it.
    */
   readonly machineUserId?: string | null;
+  /**
+   * The server's GOAT install on that machine, shared by one OS account's servers. Clones of one
+   * image report the same `machineId` but their own install. Absent on servers that predate it.
+   */
+  readonly machineInstallId?: string | null;
   /**
    * False draws the machine without counting its threads: a disconnected
    * environment's shells are stale. Absent means connected.
@@ -222,21 +227,53 @@ export interface FleetSummary {
   readonly machines: ReadonlyArray<FleetMachineSummary>;
 }
 
+type FleetMachineIdentity = Pick<FleetEnvironment, "environmentId" | "machineInstallId">;
+
+/**
+ * Which reported machine each environment is on, or none. Servers that report one id are one
+ * machine unless their installs differ. One that predates installs joins only a group whose
+ * installs agree; beside disagreeing clones it stands alone.
+ */
+function fleetMachineKeys<E extends FleetMachineIdentity>(
+  environments: ReadonlyArray<E>,
+  reportedId: (environment: E) => string | null | undefined,
+): ReadonlyMap<EnvironmentId, string | null> {
+  const installs = new Map<string, Set<string>>();
+  for (const environment of environments) {
+    const id = reportedId(environment);
+    if (!id || !environment.machineInstallId) continue;
+    installs.set(id, (installs.get(id) ?? new Set()).add(environment.machineInstallId));
+  }
+  return new Map(
+    environments.map((environment) => {
+      const id = reportedId(environment);
+      if (!id) return [environment.environmentId, null];
+      const known = [...(installs.get(id) ?? [])];
+      const install = environment.machineInstallId ?? (known.length > 1 ? null : (known[0] ?? ""));
+      return [environment.environmentId, install === null ? null : id + "\u0000" + install];
+    }),
+  );
+}
+
 /**
  * The environment that stands for each environment's machine. Environments that report one
  * machine share it: the primary when it is among them, else the first connected one, else the
  * first listed. Every other environment stands for itself.
  */
 function fleetMachineOwners(
-  environments: ReadonlyArray<Pick<FleetEnvironment, "environmentId" | "machineId" | "connected">>,
+  environments: ReadonlyArray<
+    Pick<FleetEnvironment, "environmentId" | "machineId" | "machineInstallId" | "connected">
+  >,
   primaryEnvironmentId: EnvironmentId | null,
 ): ReadonlyMap<EnvironmentId, EnvironmentId> {
+  const keys = fleetMachineKeys(environments, (environment) => environment.machineId);
   const groups = new Map<string, Array<(typeof environments)[number]>>();
   for (const environment of environments) {
-    if (!environment.machineId) continue;
-    const group = groups.get(environment.machineId) ?? [];
+    const key = keys.get(environment.environmentId);
+    if (!key) continue;
+    const group = groups.get(key) ?? [];
     group.push(environment);
-    groups.set(environment.machineId, group);
+    groups.set(key, group);
   }
   const owners = new Map(
     environments.map((environment) => [environment.environmentId, environment.environmentId]),
@@ -262,15 +299,19 @@ function fleetMachineOwners(
  * share it; any other environment, including one that does not say, has its own.
  */
 export function fleetSshConfigScopes(
-  environments: ReadonlyArray<Pick<FleetEnvironment, "environmentId" | "machineUserId">>,
+  environments: ReadonlyArray<
+    Pick<FleetEnvironment, "environmentId" | "machineUserId" | "machineInstallId">
+  >,
 ): ReadonlyMap<EnvironmentId, string> {
+  const keys = fleetMachineKeys(environments, (environment) => environment.machineUserId);
   return new Map(
-    environments.map((environment) => [
-      environment.environmentId,
-      environment.machineUserId
-        ? "user:" + environment.machineUserId
-        : "environment:" + environment.environmentId,
-    ]),
+    environments.map((environment) => {
+      const key = keys.get(environment.environmentId);
+      return [
+        environment.environmentId,
+        key ? "user:" + key : "environment:" + environment.environmentId,
+      ];
+    }),
   );
 }
 
@@ -278,7 +319,10 @@ export function fleetSshConfigScopes(
 export function summarizeFleet(
   shells: ReadonlyArray<FleetShell>,
   environments: ReadonlyArray<
-    Pick<FleetEnvironment, "environmentId" | "label" | "machineId" | "connected">
+    Pick<
+      FleetEnvironment,
+      "environmentId" | "label" | "machineId" | "machineInstallId" | "connected"
+    >
   >,
   primaryEnvironmentId: EnvironmentId | null = null,
 ): FleetSummary {

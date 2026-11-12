@@ -36,6 +36,7 @@ import * as HubAuth from "../memory/MemoryHubAuth.ts";
 import * as Store from "../memory/MemoryStore.ts";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
+import { ensureServerMachineNonce } from "./ServerEnvironmentMachine.ts";
 
 const layerServerEnvironment = (baseDir: string) =>
   ServerEnvironment.layer.pipe(
@@ -380,36 +381,43 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     }),
   );
 
-  it.effect("servers on one machine name the same machine under their own environment ids", () =>
+  it.effect("servers of one account name the same machine under their own environment ids", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const describe = Effect.fn(function* (home?: string) {
+      // Each server's start command creates the machine nonce before the descriptor reads it.
+      const describe = Effect.fn(function* (home: string) {
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "goat-server-environment-test-",
         });
-        const described = Effect.gen(function* () {
+        yield* ensureServerMachineNonce(home + "/.goat");
+        return yield* Effect.gen(function* () {
           const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
           return yield* serverEnvironment.getDescriptor;
-        }).pipe(Effect.provide(layerServerEnvironment(baseDir)));
-        return yield* home === undefined
-          ? described
-          : described.pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        }).pipe(
+          Effect.provide(layerServerEnvironment(baseDir)),
+          Effect.provideService(HostProcess.HomeDirectory, home),
+        );
       });
+      const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-home-" });
       // The desktop app's server and the headless server SSH launches keep in ~/.goat.
-      const desktop = yield* describe();
-      const headless = yield* describe();
-      const otherAccount = yield* describe("/Users/someone-else");
+      const desktop = yield* describe(home);
+      const headless = yield* describe(home);
+      const otherAccount = yield* describe(
+        yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-home-" }),
+      );
 
       expect(desktop.environmentId).not.toBe(headless.environmentId);
       expect(desktop.machineId).toBe(headless.machineId);
-      // One account's servers share an SSH config; another account on the machine has its own.
       expect(desktop.machineUserId).toBe(headless.machineUserId);
+      expect(desktop.machineInstallId).toBe(headless.machineInstallId);
       expect(otherAccount.machineId).toBe(desktop.machineId);
       // Every host GOAT CI and its developers run on exposes an OS machine identifier.
       const platform = yield* HostProcess.Platform;
       if (platform === "darwin" || platform === "linux") {
         expect(desktop.machineId).toMatch(/^[0-9a-f]{32}$/);
+        expect(desktop.machineInstallId).toMatch(/^[0-9a-f]{32}$/);
         expect(otherAccount.machineUserId).not.toBe(desktop.machineUserId);
+        expect(otherAccount.machineInstallId).not.toBe(desktop.machineInstallId);
       }
     }),
   );

@@ -245,6 +245,11 @@ Subagents a provider starts itself, such as Codex agents and Claude Code tasks, 
 The machine count includes only GOAT servers that answer. Machines the page shows without
 counting, such as an unreachable server or an SSH host another machine reported, are listed
 behind the **+N** beside the count.
+GOAT servers one account runs on one machine, such as the desktop app's and the one SSH
+connections start, show as one machine. Machines cloned from one image show separately, unless
+the image contained the account's `~/.goat` folder: leave it out of images and snapshots.
+While some clones or the app you view Fleet from still run an older GOAT, clones can show as one
+machine until they update.
 
 A Boat cloud machine appears while it is starting, running, stopping or failed, while it answers
 as a GOAT server, or while work runs on it. A stopped one that does not answer and has nothing

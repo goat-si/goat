@@ -308,7 +308,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   /**
    * The same for every GOAT server on one machine, whatever its base directory, so clients
    * draw them as one machine. A hash of the OS machine identifier, absent when the OS hides it
-   * and on servers that predate it.
+   * and on servers that predate it. Images and snapshots copy that identifier, so clones report
+   * the same value; `machineInstallId` tells them apart.
    */
   machineId: Schema.optionalKey(TrimmedNonEmptyString),
   /**
@@ -316,6 +317,12 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
    * same SSH config, so an SSH alias names the same host on each of them.
    */
   machineUserId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The same for servers one OS account runs from its GOAT install (~/.goat), and different on
+   * each machine cloned from one image. Servers with one `machineId` but different values are
+   * different machines. Absent when the install cannot hold it and on servers that predate it.
+   */
+  machineInstallId: Schema.optionalKey(TrimmedNonEmptyString),
   /**
    * Set by the server GOAT runs for SSH clients (`~/.goat`) while the GOAT app's own server runs
    * on the same host. New SSH work belongs on the app's server, so a client attached here
