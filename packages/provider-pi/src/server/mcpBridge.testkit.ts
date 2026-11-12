@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off -- Executes the shipped Pi extension at its native JavaScript boundary, including its own fetch.
+import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
@@ -159,6 +160,7 @@ export async function loadMcpBridge(
         },
       },
       AbortSignal,
+      NodeCrypto,
       NodePath,
       Type: { Unsafe: (schema: unknown) => schema },
       fetch: async (
