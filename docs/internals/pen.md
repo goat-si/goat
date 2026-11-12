@@ -184,8 +184,10 @@ these may look like success to a local program.
 
 - **A cut stream resets the local socket.** A plain close after the relay drops a stream reads as a complete reply.
   `serveTCP`, `serveService` and `pen forward` set linger 0 on a splice error unless `stream.Delivered` says the
-  peer's FIN and every byte before it reached the socket, so a cut reads as a reset and a reply that was complete is
-  kept when only the other direction failed. Stopping a forward or a daemon therefore resets connections still open.
+  peer's FIN and every byte before it reached the socket, so a cut reads as a reset, and a reply whose last byte the
+  socket took before the error ends normally when only the other direction failed. The rule is conservative: a reset
+  can drop accepted bytes the program has not read yet, but never ends a short reply cleanly. Stopping a forward or a
+  daemon therefore resets connections still open.
   `pen pipe` reports a cut through its exit status.
 - **A node bounds its sessions itself.** A relay that keeps the contract holds at most 8 pending and 32 active sessions
   per node, and it sends a session's CLOSE before any later OPEN on the same uplink. The node forgets a session as it
