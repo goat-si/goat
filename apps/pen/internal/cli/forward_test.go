@@ -249,4 +249,8 @@ func TestForwardDoesNotStartWhenTheDaemonDropsItsWatch(t *testing.T) {
 	if got := <-code; got == 0 || !strings.Contains(errOut.String(), "daemon") {
 		t.Fatalf("forward exit %d, stderr %q; want a failure naming the daemon", got, errOut.String())
 	}
+	if c, err := net.Dial("tcp", ln.Addr().String()); err == nil {
+		c.Close()
+		t.Fatal("the forward that did not start still holds its port")
+	}
 }
