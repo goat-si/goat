@@ -284,9 +284,13 @@ function GoatBotFileCard(props: {
     const pending = botFileReads.preview(environmentId, readChunk, path, chatKey);
     void pending.result.then((outcome) => {
       if (stale || outcome.status === "cancelled") return;
-      // Only a preview is kept; a failed, skipped or empty read is asked again on the next mount.
       const next = outcome.status === "ready" ? goatBotFilePreviewOf(outcome.answer) : null;
-      if (next !== null) storeGoatBotFilePreview(chatKey, path, generation, next);
+      // A preview, or nothing to show in this version of the file, is kept; a failed, skipped,
+      // changed or invalid read is asked again on the next mount.
+      const stable =
+        outcome.status === "ready" &&
+        (outcome.answer.status === "chunk" || outcome.answer.status === "too_large");
+      if (next !== null || stable) storeGoatBotFilePreview(chatKey, path, generation, next);
       setRead({ key, preview: next });
     });
     return () => {
@@ -295,7 +299,8 @@ function GoatBotFileCard(props: {
     };
   }, [cached, environmentId, chatKey, path, generation, key]);
   const preview = cached ?? (read?.key === key ? read.preview : null);
-  const unavailable = cached === undefined && read?.key === key && read.preview === null;
+  const unavailable =
+    cached === null || (cached === undefined && read?.key === key && read.preview === null);
   const slot = botArtifactPreviewSlot(path, file.size);
   // Before or without a preview, an image name still reads as an image.
   const kind =

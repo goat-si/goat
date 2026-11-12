@@ -782,6 +782,7 @@ it("says a busy open is taking too long, in the words both clients use", async (
   expect(view.container.textContent).toContain(
     "report.md is taking too long to open. Try again in a moment.",
   );
+  expect(view.container.textContent).not.toContain("Another file is still opening");
   expect(card("report.md")?.textContent).not.toContain("Opening");
 });
 it("leaves no card stuck on Opening after its open is stopped by a chat change and the person comes back", async () => {
@@ -800,4 +801,36 @@ it("leaves no card stuck on Opening after its open is stopped by a chat change a
   await settle();
   expect(card("report.md")?.textContent).not.toContain("Opening");
   expect(card("report.md")?.disabled).toBe(false);
+});
+it("remembers a preview with nothing to show for the file's version, and asks again after a failed read or for a new version", async () => {
+  setup();
+  files.listing = listed("broken.png", "busy.md");
+  const rows = [bot("b1", "`broken.png` and `busy.md`")];
+  await show(rows);
+  for (let read = 0; read < 2; read += 1) {
+    const next = files.previews.find((entry) => !entry.answered)?.relativePath ?? "";
+    await answerNext(
+      next,
+      next === "broken.png"
+        ? chunk("broken.png", "image/png", "GIF89a not a png")
+        : { status: "busy", relativePath: next },
+    );
+  }
+  const asked = (path: string) => files.previews.filter((entry) => entry.relativePath === path);
+  expect(asked("broken.png")).toHaveLength(1);
+  expect(asked("busy.md")).toHaveLength(1);
+  // The rows scroll away and back in the same chat: the empty answer is remembered, the failed one asked again.
+  await view.rerender(chat(rows, "thread-a", [], []));
+  await settle();
+  await view.rerender(chat(rows));
+  await settle();
+  expect(card("broken.png")?.textContent).toContain("Preview unavailable");
+  await answerNext("busy.md", chunk("busy.md", "text/markdown", "Back now"));
+  expect(asked("broken.png")).toHaveLength(1);
+  expect(asked("busy.md")).toHaveLength(2);
+  // A new listing answer is a new version of the files: the empty one is asked again.
+  files.listing = listed("broken.png", "busy.md");
+  await view.rerender(chat(rows));
+  await settle();
+  expect(asked("broken.png")).toHaveLength(2);
 });
