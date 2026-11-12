@@ -1,3 +1,4 @@
+import { unlistedApprovalsNotice } from "@goat/client-runtime/state/decision-inbox";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { View } from "react-native";
@@ -115,6 +116,11 @@ function FocusedDecisionsContent(props: {
               <Button label="Retry" tone="secondary" onPress={retry} />
             </View>
           ) : null}
+          {state.unlistedApprovals > 0 ? (
+            <Text className="text-sm text-foreground-muted">
+              {unlistedApprovalsNotice(state.unlistedApprovals)}
+            </Text>
+          ) : null}
           {state.items.length === 0 && !partial ? (
             <EmptyState
               title="No pending thread requests"
@@ -228,12 +234,7 @@ function FocusedDecisionsContent(props: {
                 </Text>
               ) : null}
               <View className="flex-row flex-wrap gap-3">
-                <Button
-                  label="Skip"
-                  tone="secondary"
-                  disabled={responding || paused}
-                  onPress={skip}
-                />
+                <Button label="Skip" tone="secondary" disabled={responding} onPress={skip} />
                 <Button
                   label="Go to thread"
                   tone="secondary"

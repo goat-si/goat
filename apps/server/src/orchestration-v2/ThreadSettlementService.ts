@@ -1,3 +1,4 @@
+import { isPendingApprovalRequest } from "@goat/contracts";
 import {
   backgroundWorkHoldsCompletion,
   turnItemUpdateCanEndBackgroundWork,
@@ -190,6 +191,7 @@ export function isSnoozed(
   if (
     thread.pendingRuntimeRequest !== null &&
     (thread.pendingRuntimeRequest.kind !== "user_input" ||
+      isPendingApprovalRequest(thread.pendingRuntimeRequest) ||
       snoozedAtMs === null ||
       DateTime.toEpochMillis(thread.pendingRuntimeRequest.createdAt) > snoozedAtMs)
   ) {

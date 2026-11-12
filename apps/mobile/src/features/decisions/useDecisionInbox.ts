@@ -334,8 +334,8 @@ export function useDecisionInbox(
   }
 
   function skip() {
-    if (!isFocused() || !current || paused || responding || inFlight.current.has(current.id))
-      return;
+    // An away item can be skipped, so it never blocks answerable ones; its answer stays disabled.
+    if (!isFocused() || !current || responding || inFlight.current.has(current.id)) return;
     const nextSkipped = [...skippedIds.filter((id) => id !== current.id), current.id];
     setSkippedIds(nextSkipped);
     setSelected(orderDecisionQueue(state.items, nextSkipped)[0] ?? null);
