@@ -473,7 +473,20 @@ func (d *Daemon) controlWatch(ctx context.Context, c net.Conn) {
 		case <-ctx.Done():
 			return
 		case <-d.stopCh:
-			return
+			// A leave queues the view revoking this node and then stops the daemon: pass on what is queued.
+			for {
+				select {
+				case line, ok := <-ch:
+					if !ok {
+						return
+					}
+					if _, err := c.Write(line); err != nil {
+						return
+					}
+				default:
+					return
+				}
+			}
 		}
 	}
 }
