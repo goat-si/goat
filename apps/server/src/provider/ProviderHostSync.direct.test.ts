@@ -1,10 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import {
-  EnvironmentAuthorizationError,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ServerProvider,
-} from "@goat/contracts";
+import { EnvironmentAuthorizationError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -14,7 +9,13 @@ import * as Ref from "effect/Ref";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as Gate from "./ProviderCliGate.ts";
 import * as HostSync from "./ProviderHostSync.ts";
-import { harness, threadScope } from "./ProviderHostSync.testkit.ts";
+import {
+  harness,
+  heldGate,
+  openCodeInstance as opencode,
+  pendingOpenCode as pending,
+  threadScope,
+} from "./ProviderHostSync.testkit.ts";
 
 const finished = {
   kind: "started",
@@ -86,22 +87,6 @@ it.effect("a direct install whose check fails before the send sends nothing", ()
     });
   }),
 );
-
-const opencode = ProviderInstanceId.make("opencode");
-const pending = {
-  instanceId: opencode,
-  driver: ProviderDriverKind.make("opencode"),
-  displayName: "OpenCode",
-  enabled: true,
-  installed: true,
-  version: null,
-  status: "warning",
-  auth: { status: "unknown" },
-  checkedAt: "2026-11-12T00:00:00.000Z",
-  models: [],
-  slashCommands: [],
-  skills: [],
-} satisfies ServerProvider;
 
 /** Each probe answers the next entry; a fresh probe is recorded. */
 const gate = (answers: ReadonlyArray<Gate.CliAnswer>, fresh: Array<boolean>) =>
@@ -177,21 +162,6 @@ it.effect(
       });
     }),
 );
-
-/** A probe that says it started, then answers missing once released. */
-const heldGate = (probing: Deferred.Deferred<void>, release: Deferred.Deferred<void>) =>
-  Layer.succeed(
-    Gate.ProviderCliGate,
-    Gate.ProviderCliGate.of({
-      require: () => Effect.void,
-      missing: () => Effect.void.pipe(Effect.as(undefined)),
-      probe: () =>
-        Deferred.succeed(probing, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-          Effect.as({ kind: "missing", provider: { ...pending, cli: "missing" } } as const),
-        ),
-    }),
-  );
 
 it.effect.each([{ who: "thread" }, { who: "person" }] as const)(
   "regression S1-1: an install whose $who loses authority while it waits spawns nothing",
@@ -320,8 +290,21 @@ it.effect.each([
     host: { phase: "failed", message: UNCONFIRMED },
   },
   {
-    start: "is refused by the remote",
-    error: new Dispatch.SshRemoteDispatchError({ reason: "remote_refused", message: "no" }),
+    // The bridge reports a reply without its JSON-RPC envelope this way, after the call was sent.
+    start: "gets an unreadable reply after it was sent",
+    error: new Dispatch.SshRemoteDispatchError({
+      reason: "remote_refused",
+      message: "GOAT on box could not run goat_provider_sync: protocol error",
+    }),
+    host: { phase: "failed", message: UNCONFIRMED },
+  },
+  {
+    start: "is refused by the remote's tool",
+    error: new Dispatch.SshRemoteDispatchError({
+      reason: "remote_refused",
+      message: "The remote goat_provider_sync refused: busy",
+      remoteCode: "unavailable",
+    }),
     host: { phase: "cancelled" },
   },
 ] as const)(
@@ -353,6 +336,49 @@ it.effect.each([
         // No remote sync id came back, so there is nothing to cancel there.
         expect(state.calls.map(({ call }) => call.tool)).toEqual(["goat_provider_sync"]);
         expect(cancelled.hosts[0]).toEqual({ host: "box", version: null, ...host });
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect(
+  "regression S3-2: awaitDone during a held remote cancel waits for what the remote says",
+  () =>
+    Effect.gen(function* () {
+      const accepted = yield* Deferred.make<void>();
+      const cancelling = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { layer } = harness({
+        answer: (call) =>
+          call.tool === "goat_provider_sync"
+            ? Deferred.succeed(accepted, undefined).pipe(
+                Effect.as({ kind: "started", sync: remoteSync(false, { phase: "installing" }) }),
+              )
+            : Deferred.succeed(cancelling, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(remoteSync(true, { phase: "cancelled" })),
+              ),
+      });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", hosts: ["box"], login: false },
+          direct(Effect.void),
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        yield* Deferred.await(accepted);
+        const stopping = yield* sync
+          .cancel({ syncId: started.sync.syncId }, { kind: "mcp", scope: threadScope })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(cancelling);
+        const waiting = yield* sync
+          .awaitDone(started.sync.syncId)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(stopping);
+        expect(yield* Fiber.join(waiting)).toMatchObject({
+          done: true,
+          hosts: [{ host: "box", phase: "cancelled" }],
+        });
       }).pipe(Effect.provide(layer));
     }),
 );

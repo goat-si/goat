@@ -8,10 +8,12 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderDiagnosisReason,
+  type ServerProvider,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
@@ -27,7 +29,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
 import * as Diagnosis from "./ProviderDiagnosisService.ts";
-import type * as ProviderCliGate from "./ProviderCliGate.ts";
+import * as ProviderCliGate from "./ProviderCliGate.ts";
 import * as HostSync from "./ProviderHostSync.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -246,3 +248,35 @@ export const threadScope: McpInvocationScope = {
   grantedScopes: ["orchestration:read"],
   reauthorize: () => Effect.void,
 };
+
+export const openCodeInstance = ProviderInstanceId.make("opencode");
+/** OpenCode as a snapshot reports it before its probe ran: installed, version unknown. */
+export const pendingOpenCode = {
+  instanceId: openCodeInstance,
+  driver: ProviderDriverKind.make("opencode"),
+  displayName: "OpenCode",
+  enabled: true,
+  installed: true,
+  version: null,
+  status: "warning",
+  auth: { status: "unknown" },
+  checkedAt: "2026-11-12T00:00:00.000Z",
+  models: [],
+  slashCommands: [],
+  skills: [],
+} satisfies ServerProvider;
+
+/** A CLI probe that says it started, then answers missing once released. */
+export const heldGate = (probing: Deferred.Deferred<void>, release: Deferred.Deferred<void>) =>
+  Layer.succeed(
+    ProviderCliGate.ProviderCliGate,
+    ProviderCliGate.ProviderCliGate.of({
+      require: () => Effect.void,
+      missing: () => Effect.void.pipe(Effect.as(undefined)),
+      probe: () =>
+        Deferred.succeed(probing, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({ kind: "missing", provider: { ...pendingOpenCode, cli: "missing" } } as const),
+        ),
+    }),
+  );

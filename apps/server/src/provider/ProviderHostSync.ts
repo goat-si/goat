@@ -36,6 +36,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -455,7 +456,10 @@ const make = Effect.gen(function* () {
         ? Effect.void
         : Effect.forEach(operation.settlers.splice(0), (settle) => settle(view(operation)), {
             discard: true,
-          }).pipe(Effect.uninterruptible),
+          }).pipe(
+            Effect.andThen(Deferred.succeed(operation.allFinished, undefined)),
+            Effect.uninterruptible,
+          ),
     );
 
   const prune = Effect.gen(function* () {
@@ -513,6 +517,7 @@ const make = Effect.gen(function* () {
         owners: new Set(owners),
         launchedBy,
         fibers: [],
+        allFinished: yield* Deferred.make<void>(),
         settlers: settle === undefined ? [] : [settle],
       };
       for (const task of operation.hosts) task.onFinished = settleIfDone(operation);
@@ -772,7 +777,7 @@ const make = Effect.gen(function* () {
       yield* update(task, terminal, true);
     }).pipe(
       Effect.catchCause(() =>
-        task.finished
+        task.finished || task.cancelling
           ? Effect.void
           : update(
               task,
@@ -783,7 +788,11 @@ const make = Effect.gen(function* () {
               true,
             ),
       ),
-      Effect.ensuring(Effect.suspend(() => (task.finished ? Effect.void : update(task, {}, true)))),
+      Effect.ensuring(
+        Effect.suspend(() =>
+          task.finished || task.cancelling ? Effect.void : update(task, {}, true),
+        ),
+      ),
     );
 
   const runRemote = (
@@ -1033,12 +1042,13 @@ const make = Effect.gen(function* () {
       launcher.kind === "mcp" && launcher.directInstall && callerKey(launcher) === callerKey(caller)
         ? launcher
         : caller;
-    // Read before interrupting: an interrupted task marks itself finished and would be skipped.
+    // Claim each unfinished host before interrupting, so only its cancel finishes and settles it.
     const pending = operation.hosts.filter((task) => !task.finished);
+    for (const task of pending) task.cancelling = true;
     yield* Effect.forEach(operation.fibers, Fiber.interrupt, { discard: true });
-    yield* Effect.forEach(
-      pending,
-      (task) =>
+    // In the service scope, so a caller that goes away cannot leave a host unfinished.
+    const stopping = yield* Effect.forEach(pending, (task) =>
+      Effect.forkIn(
         cancelTask(task, (host, syncId) =>
           callRemote(remoteCaller, {
             host,
@@ -1047,9 +1057,11 @@ const make = Effect.gen(function* () {
             writes: true,
             timeoutMs: MATRIX_DEADLINE_MS,
           }).pipe(Effect.flatMap((raw) => decodeSyncState(raw))),
-        ),
-      { discard: true },
+        ).pipe(Effect.provideContext(context)),
+        scope,
+      ),
     );
+    yield* Fiber.awaitAll(stopping);
     return view(operation);
   });
 
@@ -1076,7 +1088,7 @@ const make = Effect.gen(function* () {
     respondHandoff: provided(respondHandoff),
     awaitDone: (syncId) =>
       find(syncId).pipe(
-        Effect.tap((operation) => Fiber.awaitAll(operation.fibers)),
+        Effect.tap((operation) => Deferred.await(operation.allFinished)),
         Effect.map(view),
       ),
     resumeApprovals: approvedSyncs.resume,
