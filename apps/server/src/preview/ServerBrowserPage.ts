@@ -568,12 +568,15 @@ const capture = async (
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
+  // An interactive-only tree keeps lines from past the cut, so it is masked in full.
+  const masked = filled(
+    maskTree(redacted, dotted, cookies),
+    input.interactiveOnly ? undefined : MAX_VISIBLE_TEXT_LENGTH,
+  );
+  // The mask can cut a long tree inside a line and shorten it under screenTree's whole-line cut.
+  const cut = !input.interactiveOnly && redacted.length > MAX_VISIBLE_TEXT_LENGTH;
   const narrowed = narrowTree(
-    // An interactive-only tree keeps lines from past the cut, so it is masked in full.
-    filled(
-      maskTree(redacted, dotted, cookies),
-      input.interactiveOnly ? undefined : MAX_VISIBLE_TEXT_LENGTH,
-    ),
+    cut ? masked.slice(0, Math.max(0, masked.lastIndexOf("\n"))) : masked,
     input.interactiveOnly,
   );
   const { accessibilityTree, ...treeFields } = screenTree(`${mask(layersLine)}\n${narrowed}`, {

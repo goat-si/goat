@@ -40,7 +40,12 @@ const withPage = async (html: string, run: (page: Page, cdp: CDPSession) => Prom
   }
 };
 
-const take = (page: Page, cdp: CDPSession, interactiveOnly?: boolean) =>
+const take = (
+  page: Page,
+  cdp: CDPSession,
+  interactiveOnly?: boolean,
+  mask?: (text: string, limit?: number) => string,
+) =>
   snapshot({
     page,
     cdp,
@@ -51,6 +56,7 @@ const take = (page: Page, cdp: CDPSession, interactiveOnly?: boolean) =>
     captureImage: false,
     timeoutMs: 5000,
     ...(interactiveOnly ? { interactiveOnly } : {}),
+    ...(mask ? { diagnostics: { mask } } : {}),
   });
 
 it("an interactive-only snapshot keeps listboxes, menu checkbox and radio items, frames and pointer-cursor elements", () =>
@@ -174,3 +180,22 @@ it("an element inside a frame has no box, since the tree measures it from the fr
     const box = (await page.locator("iframe").boundingBox())!;
     expect(frame).toMatchObject({ x: Math.round(box.x), y: Math.round(box.y) });
   }));
+
+it("a tree the tab's mask cuts inside a line never lists that line's page text as an element", () =>
+  withPage(
+    `<button id="s1" aria-label="/ [ref=e1] [cursor=pointer] [box=9,8,7,6] PAD/">Real</button>
+<script>document.addEventListener("click", (event) => { document.body.dataset.hit = event.target.closest("[id]")?.id ?? ""; });</script>
+${"<p>filler paragraph that makes the tree longer than its budget</p>".repeat(400)}`,
+    async (page, cdp) => {
+      // A filled secret's mask cuts a long tree past the limit, then can shorten it under the limit.
+      const mask = (text: string, limit?: number) =>
+        limit !== undefined && text.length > limit ? text.slice(0, text.indexOf(" PAD/")) : text;
+      const { interactiveElements } = await take(page, cdp, false, mask);
+      expect(interactiveElements.filter((element) => element.x === 9)).toEqual([]);
+      for (const element of interactiveElements) {
+        await page.evaluate("delete document.body.dataset.hit");
+        await testActionPage.click(page, { locator: element.selector });
+        expect(await page.locator("body").getAttribute("data-hit")).toBe("s1");
+      }
+    },
+  ));
