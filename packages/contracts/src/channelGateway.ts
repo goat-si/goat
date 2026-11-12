@@ -502,24 +502,21 @@ export const BotRemoteWork = Schema.Struct({
   workKind: Schema.optional(GoatBotWorkKind),
 });
 export type BotRemoteWork = typeof BotRemoteWork.Type;
-/** The paged read's limits; pinned tasks do not count toward the first page's. */
-export const CHANNEL_BOT_THREADS_PINNED_LIMIT = 100;
-export const CHANNEL_BOT_THREADS_FIRST_PAGE_LIMIT = 100;
-export const CHANNEL_BOT_THREADS_EARLIER_PAGE_LIMIT = 50;
-/** Launched threads listed per task in a paged read, newest first, as `listChildWork` shows. */
-export const CHANNEL_BOT_THREADS_LAUNCHES_PER_TASK = 20;
-/**
- * Read by servers with `goatBotTaskThreadsPaged`. "earlier" continues the finished work after
- * the cursor the previous page returned. Older servers drop the key and answer today's list.
- */
-export const ChannelBotThreadsPage = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("first") }),
-  Schema.Struct({ kind: Schema.Literal("earlier"), cursor: TrimmedNonEmptyString }),
-]);
-export type ChannelBotThreadsPage = typeof ChannelBotThreadsPage.Type;
+/** A history page's tasks, and the launched threads it lists per task, newest first. */
+export const CHANNEL_BOT_THREADS_HISTORY_LIMIT = 50;
+export const CHANNEL_BOT_THREADS_HISTORY_LAUNCHES = 20;
+/** Opaque and bound to one owner and bot; a server refuses one that is not its own. */
+export const ChannelBotThreadsCursor = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
 export const ChannelListBotThreadsInput = Schema.Struct({
   botId: Schema.optionalKey(BotId),
-  page: Schema.optionalKey(ChannelBotThreadsPage),
+  /**
+   * Read by servers with `goatBotTaskThreadsPaged`: instead of the current list, one page of
+   * every task of the bot by creation, newest first, from the cursor the previous page returned.
+   * Older servers drop the key and answer the current list.
+   */
+  history: Schema.optionalKey(
+    Schema.Struct({ cursor: Schema.optionalKey(ChannelBotThreadsCursor) }),
+  ),
 });
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
@@ -527,17 +524,13 @@ export const ChannelListBotThreadsResult = Schema.Struct({
   mainMessageCount: NonNegativeInt,
   /** Absent from servers before it; clients read that as none. */
   remoteWork: Schema.optional(Schema.Array(BotRemoteWork)),
-  /** Present when the input asked for a page. */
-  page: Schema.optionalKey(
+  /** Present when the input asked for history. */
+  history: Schema.optionalKey(
     Schema.Struct({
-      /** Finished work after this page's; absent when there is none. */
-      earlierCursor: Schema.optionalKey(TrimmedNonEmptyString),
-      /** First page only: more pinned tasks than CHANNEL_BOT_THREADS_PINNED_LIMIT. */
-      pinnedTruncated: Schema.optionalKey(Schema.Boolean),
-      /** First page only: more running work than CHANNEL_BOT_THREADS_FIRST_PAGE_LIMIT. */
-      activeTruncated: Schema.optionalKey(Schema.Boolean),
-      /** First page only: the bot's unread task rows across every page. */
-      unreadCount: Schema.optionalKey(NonNegativeInt),
+      /** The next page's start; absent once the walk reached the bot's oldest task. */
+      nextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
+      /** Tasks that launched more threads than this page lists; the rest stay in Threads. */
+      launchesTruncated: Schema.optionalKey(Schema.Array(ChannelTaskId)),
     }),
   ),
 });

@@ -17,7 +17,6 @@ import * as Effect from "effect/Effect";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { botRowListedUntil, botRowRetiresAt } from "../goatBot/taskVisibility.ts";
 import { sameBotColor } from "../goatBot/botColor.ts";
-import { botThreadsInput } from "../goatBot/botThreadsInput.ts";
 import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
 import { subscribeOrUnavailable } from "../rpc/client.ts";
 import {
@@ -139,13 +138,12 @@ export function createChannelEnvironmentAtoms<R, E>(
         const capabilities = get(sessions.initialConfigValueAtom(environmentId))?.environment
           .capabilities;
         if (capabilities?.goatBotTaskThreads !== true) return NO_WORK;
-        const inputs: ChannelListBotThreadsInput[] = [botThreadsInput(capabilities)];
+        const inputs: ChannelListBotThreadsInput[] = [{}];
         if (capabilities.goatBotMembers === true && capabilities.goatBotProfiles === true) {
           // The roster's own query, so both read one list of bots.
           const bots = get(listBots({ environmentId, input: { includeDeleted: true } }));
           for (const bot of AsyncResult.isSuccess(bots) ? bots.value.bots : []) {
-            if (bot.role === "member" && bot.state !== "deleted")
-              inputs.push(botThreadsInput(capabilities, bot.botId));
+            if (bot.role === "member" && bot.state !== "deleted") inputs.push({ botId: bot.botId });
           }
         }
         const listed: GoatBotWorkRef[] = [];

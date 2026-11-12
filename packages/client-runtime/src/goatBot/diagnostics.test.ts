@@ -258,20 +258,6 @@ describe("diagnoseGoatBot", () => {
     expect(line(healthy({ rows: rows(99) }), "work")?.text).toBe("99 running");
   });
 
-  it("trusts a paged server's word on whether open work went past the page", () => {
-    const running = Array.from({ length: 100 }, (_, index) => task(String(index), "running"));
-    const finished = Array.from({ length: 100 }, (_, index) => task(String(index), "completed"));
-    expect(line(healthy({ rows: running, openWorkTruncated: false }), "work")?.text).toBe(
-      "100 running",
-    );
-    expect(line(healthy({ rows: running, openWorkTruncated: true }), "work")?.text).toBe(
-      "At least 100 running",
-    );
-    expect(line(healthy({ rows: finished, openWorkTruncated: false }), "work")?.text).toBe(
-      "No open work",
-    );
-  });
-
   it("does not call a full page of finished tasks no open work", () => {
     const finished = Array.from({ length: 100 }, (_, index) => task(String(index), "completed"));
     const result = healthy({ rows: finished });

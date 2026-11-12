@@ -6,8 +6,7 @@ import {
   ChannelTask,
   type BotRemoteWork,
   type BotThreadRow,
-  CHANNEL_BOT_THREADS_LAUNCHES_PER_TASK,
-  type ChannelBotThreadsPage,
+  CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
   type ChannelListBotThreadsInput,
   type ChannelListBotThreadsResult,
   ChannelTaskView,
@@ -33,7 +32,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
-import { readBotThreadPage } from "./channelBotThreadPages.ts";
+import { readHistoryPage } from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 
@@ -43,9 +42,9 @@ const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildW
 const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
-const isGatewayError = Schema.is(ChannelGatewayError);
 interface ChildRow {
   readonly value_json: string;
+  readonly rank?: number;
   readonly title: string | null;
   readonly project_id: string | null;
   readonly work_kind: unknown;
@@ -61,7 +60,7 @@ export class ChannelBotThreads extends Context.Service<
     readonly list: (
       owner: ChannelConnectionOwner,
       botId?: BotId,
-      page?: ChannelBotThreadsPage,
+      history?: { readonly cursor?: string },
     ) => Effect.Effect<ChannelListBotThreadsResult, ChannelGatewayError>;
     readonly listChildWork: (
       input: ChannelListChildWorkInput,
@@ -81,13 +80,13 @@ const make = Effect.gen(function* () {
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const retry = yield* makeTaskRetry;
-  /** Rows for these tasks; a paged read caps each task's launches and lists ended turns by thread. */
+  /** Rows for these tasks; history caps each task's launches and lists turns by their threads. */
   const rowsFor = Effect.fn("ChannelBotThreads.rows")(function* (
     owner: ChannelConnectionOwner,
     environmentId: EnvironmentId,
     viewsByTask: ReadonlyMap<string, ChannelTaskView>,
     tasks: ReadonlyArray<ChannelTask>,
-    options: { readonly threadsOnly?: ReadonlySet<string>; readonly launchesPerTask?: number },
+    options: { readonly threadsOnly?: ReadonlySet<string>; readonly launchLimit?: number },
   ) {
     const countInputs = encodeJson(
       tasks.map((task) => ({
@@ -111,7 +110,7 @@ const make = Effect.gen(function* () {
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
     const childRows = yield* (
-      options.launchesPerTask === undefined
+      options.launchLimit === undefined
         ? sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
         json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
       FROM channel_runtime_state s
@@ -124,8 +123,8 @@ const make = Effect.gen(function* () {
         AND json_extract(s.value_json, '$.destination.host') IS NULL
         AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
       ORDER BY s.key`
-        : // A paged read lists each task's newest launches, as Show work does.
-          sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
+        : // History lists each task's newest launches, one more to tell whether there are more.
+          sql<ChildRow>`SELECT s.value_json, s.rank, p.title, p.project_id,
         json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
       FROM (
         SELECT launch.key, launch.value_json, ROW_NUMBER() OVER (
@@ -141,12 +140,13 @@ const make = Effect.gen(function* () {
         ON json_extract(s.value_json, '$.surface') = 'thread_launch'
         AND json_extract(s.value_json, '$.destination.host') IS NULL
         AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
-      WHERE s.rank <= ${options.launchesPerTask}
+      WHERE s.rank <= ${options.launchLimit + 1}
       ORDER BY s.key`
     ).pipe(Effect.mapError(failed));
     const children = yield* Effect.try(() =>
       childRows.map((item) => ({
         child: decodeChild(item.value_json),
+        rank: item.rank ?? 0,
         title: item.title,
         projectId: item.project_id,
         recordedKind: isWorkKind(item.work_kind) ? item.work_kind : undefined,
@@ -163,6 +163,7 @@ const make = Effect.gen(function* () {
     const rows: Array<BotThreadRow> = [];
     const remoteWork: Array<BotRemoteWork> = [];
     const seen = new Set<string>();
+    const launchesTruncated: Array<ChannelTask["taskId"]> = [];
     for (const task of tasks) {
       const view = viewsByTask.get(task.taskId) ?? {
         taskId: task.taskId,
@@ -196,8 +197,12 @@ const make = Effect.gen(function* () {
                 },
               }),
         });
-      for (const { child, title, projectId, recordedKind } of children) {
+      for (const { child, rank, title, projectId, recordedKind } of children) {
         if (child.ownerId !== owner.ownerId || child.taskId !== task.taskId) continue;
+        if (options.launchLimit !== undefined && rank > options.launchLimit) {
+          launchesTruncated.push(task.taskId);
+          continue;
+        }
         const destination = child.destination;
         // Work on another machine is listed by its record alone; one never launched ran nothing.
         if (child.surface === "ssh_thread_launch") {
@@ -235,17 +240,12 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    return { rows, remoteWork };
+    return { rows, remoteWork, launchesTruncated };
   });
-  // Traced once by list below.
-  const read = Effect.fnUntraced(function* (
+  const mainMessageCount = Effect.fn("ChannelBotThreads.mainMessageCount")(function* (
     owner: ChannelConnectionOwner,
     botId: BotId,
-    environmentId: EnvironmentId,
-    page: ChannelBotThreadsPage | undefined,
   ) {
-    const now = DateTime.toEpochMillis(yield* DateTime.now);
-    const cutoff = now - 3 * 24 * 60 * 60 * 1000;
     const counts = yield* sql<{
       readonly count: number;
     }>`SELECT count(*) AS count FROM channel_inbox i
@@ -257,6 +257,17 @@ const make = Effect.gen(function* () {
         AND json_extract(i.message_json, '$.actor.senderThreadId') IS NULL`.pipe(
       Effect.mapError(failed),
     );
+    return counts[0]?.count ?? 0;
+  });
+  // Traced once by list below.
+  const current = Effect.fnUntraced(function* (
+    owner: ChannelConnectionOwner,
+    botId: BotId,
+    environmentId: EnvironmentId,
+  ) {
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const cutoff = now - 3 * 24 * 60 * 60 * 1000;
+    const messages = yield* mainMessageCount(owner, botId);
     const viewPrefix = "task-view:" + encodeURIComponent(owner.ownerId) + ":";
     const viewRows = yield* sql<{
       readonly key: string;
@@ -278,27 +289,6 @@ const make = Effect.gen(function* () {
       decodedViews.filter((view) => view.pinnedAt !== null).map((view) => view.taskId),
     );
     const cutoffIso = DateTime.formatIso(DateTime.makeUnsafe(cutoff));
-    if (page !== undefined) {
-      const paged = yield* readBotThreadPage(sql, {
-        ownerId: owner.ownerId,
-        botId,
-        page,
-        pinned: decodedViews.filter((view) => view.pinnedAt !== null).map((view) => view.taskId),
-        cutoffIso,
-        nowIso: DateTime.formatIso(DateTime.makeUnsafe(now)),
-        viewsByTask,
-      }).pipe(Effect.mapError((error) => (isGatewayError(error) ? error : failed())));
-      const built = yield* rowsFor(owner, environmentId, viewsByTask, paged.tasks, {
-        threadsOnly: paged.threadsOnly,
-        launchesPerTask: CHANNEL_BOT_THREADS_LAUNCHES_PER_TASK,
-      });
-      return {
-        rows: built.rows,
-        mainMessageCount: counts[0]?.count ?? 0,
-        ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
-        page: paged.page,
-      };
-    }
     const source = yield* sql<{
       readonly task_json: string;
     }>`SELECT t.task_json FROM channel_tasks t
@@ -322,36 +312,60 @@ const make = Effect.gen(function* () {
     const built = yield* rowsFor(owner, environmentId, viewsByTask, tasks, {});
     return {
       rows: built.rows,
-      mainMessageCount: counts[0]?.count ?? 0,
+      mainMessageCount: messages,
       ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
+    };
+  });
+  // Traced once by list below. Views are read for the page's tasks only.
+  const historyPage = Effect.fnUntraced(function* (
+    owner: ChannelConnectionOwner,
+    botId: BotId,
+    environmentId: EnvironmentId,
+    cursor: string | undefined,
+  ) {
+    const page = yield* readHistoryPage(sql, { ownerId: owner.ownerId, botId, cursor });
+    const keys = page.tasks.map((task) => TaskViews.taskViewKey(owner.ownerId, task.taskId));
+    const viewRows =
+      keys.length === 0
+        ? []
+        : yield* sql<{ readonly key: string; readonly value_json: string }>`SELECT key, value_json
+            FROM channel_runtime_state WHERE key IN ${sql.in(keys)}`.pipe(Effect.mapError(failed));
+    const viewsByTask = new Map<string, ChannelTaskView>();
+    for (const row of viewRows) {
+      const view = yield* Effect.try(() => decodeView(row.value_json)).pipe(
+        Effect.mapError(failed),
+      );
+      if (row.key !== TaskViews.taskViewKey(owner.ownerId, view.taskId)) return yield* failed();
+      viewsByTask.set(view.taskId, view);
+    }
+    const built = yield* rowsFor(owner, environmentId, viewsByTask, page.tasks, {
+      threadsOnly: page.threadsOnly,
+      launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
+    });
+    return {
+      rows: built.rows,
+      mainMessageCount: yield* mainMessageCount(owner, botId),
+      ...(built.remoteWork.length === 0 ? {} : { remoteWork: built.remoteWork }),
+      history: {
+        ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+        ...(built.launchesTruncated.length === 0
+          ? {}
+          : { launchesTruncated: [...new Set(built.launchesTruncated)] }),
+      },
     };
   });
   const list = Effect.fn("ChannelBotThreads.list")(function* (
     owner: ChannelConnectionOwner,
     botId: BotId = BotId.make(MAIN_BOT_ID),
-    page?: ChannelBotThreadsPage,
+    history?: { readonly cursor?: string },
   ) {
     yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
     const bot = yield* ledger.getBotById(owner.ownerId, botId).pipe(Effect.mapError(failed));
     if (bot === undefined)
-      return {
-        rows: [],
-        mainMessageCount: 0,
-        ...(page === undefined
-          ? {}
-          : {
-              page:
-                page.kind === "first"
-                  ? { pinnedTruncated: false, activeTruncated: false, unreadCount: 0 }
-                  : {},
-            }),
-      };
-    const environmentId = bot.bot.environmentId;
-    if (page === undefined) return yield* read(owner, botId, environmentId, page);
-    // A paged read takes its sets from one snapshot, so a task that changes meanwhile is in one.
-    return yield* sql
-      .withTransaction(read(owner, botId, environmentId, page))
-      .pipe(Effect.mapError((error) => (isGatewayError(error) ? error : failed())));
+      return { rows: [], mainMessageCount: 0, ...(history === undefined ? {} : { history: {} }) };
+    return yield* history === undefined
+      ? current(owner, botId, bot.bot.environmentId)
+      : historyPage(owner, botId, bot.bot.environmentId, history.cursor);
   });
   const listChildWorkFor = Effect.fn("ChannelBotThreads.listChildWork")(function* (
     input: ChannelListChildWorkInput,
@@ -373,7 +387,7 @@ export const rpcHandlers = (
   owner: ChannelConnectionOwner,
 ) => ({
   [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: (input: ChannelListBotThreadsInput) =>
-    service.list(owner, input.botId, input.page),
+    service.list(owner, input.botId, input.history),
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: (input: ChannelUpdateTaskViewInput) =>
     service.update(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: (input: ChannelListChildWorkInput) =>

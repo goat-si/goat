@@ -15,7 +15,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 const isGatewayError = Schema.is(ChannelGatewayError);
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskView));
 const encode = Schema.encodeSync(Schema.fromJsonString(ChannelTaskView));
-const keyFor = (ownerId: string, taskId: ChannelTaskId) =>
+export const taskViewKey = (ownerId: string, taskId: ChannelTaskId) =>
   "task-view:" + encodeURIComponent(ownerId) + ":" + encodeURIComponent(taskId);
 const persistenceFailed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 
@@ -41,7 +41,7 @@ const make = Effect.gen(function* () {
   ) {
     const rows = yield* sql<{
       readonly value_json: string;
-    }>`SELECT value_json FROM channel_runtime_state WHERE key = ${keyFor(ownerId, taskId)}`;
+    }>`SELECT value_json FROM channel_runtime_state WHERE key = ${taskViewKey(ownerId, taskId)}`;
     const view = yield* Effect.try(() =>
       rows[0] === undefined
         ? { taskId, pinnedAt: null, doneAt: null, readThrough: null }
@@ -87,7 +87,7 @@ const make = Effect.gen(function* () {
                 ? view.readThrough
                 : input.readThrough,
           };
-          yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${keyFor(owner.ownerId, input.taskId)}, ${encode(next)}, ${now}) ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`;
+          yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${taskViewKey(owner.ownerId, input.taskId)}, ${encode(next)}, ${now}) ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`;
           return next;
         }),
       )

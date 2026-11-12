@@ -13,7 +13,6 @@ import {
   retryGoatBotEnsure,
   settleGoatBotEnsure,
   startGoatBotEnsure,
-  botThreadsInput,
   syncGoatBotEnsure,
   type GoatBotEnsureMachine,
   type GoatBotSendQueue,
@@ -529,7 +528,7 @@ export function useGoatBotSession(
     readyBot !== null && capabilities?.goatBotTaskThreads === true
       ? channelEnvironment.listBotThreads({
           environmentId: readyBot.environmentId,
-          input: botThreadsInput(capabilities, member?.botId),
+          input: member === null ? {} : { botId: member.botId },
         })
       : null,
   );

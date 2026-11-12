@@ -24,8 +24,6 @@ const worker = { environmentId, threadId: ThreadId.make("channel-worker:task") }
 const server = vi.hoisted(() => ({
   answer: (): ChannelListBotThreadsResult => ({ rows: [], mainMessageCount: 0 }),
   failing: false,
-  /** Each bot-thread list input read, in order. */
-  inputs: [] as unknown[],
 }));
 const config = Atom.make<ServerConfig | null>({
   environment: { environmentId: "bot-home", capabilities: { goatBotTaskThreads: true } },
@@ -52,7 +50,6 @@ vi.mock("./runtime.ts", async () => {
         return A.make((get) => {
           if (trigger !== undefined) get(trigger);
           if (options.tag !== "channel.listBotThreads") return R.success({ bots: [], groups: [] });
-          server.inputs.push((target as { readonly input: unknown }).input);
           return server.failing ? R.fail(new Error("offline")) : R.success(server.answer());
         });
       });
@@ -89,12 +86,8 @@ const taskRow = (options: {
     worker,
   });
 
-const setup = (capabilities?: Record<string, boolean>) => {
+const setup = () => {
   const registry = AtomRegistry.make();
-  if (capabilities !== undefined)
-    registry.set(config, {
-      environment: { environmentId: "bot-home", capabilities },
-    } as unknown as ServerConfig);
   const atoms = createChannelEnvironmentAtoms(
     Atom.runtime(Layer.succeed(EnvironmentRegistry, {} as EnvironmentRegistry["Service"])),
   );
@@ -108,7 +101,6 @@ const setup = (capabilities?: Record<string, boolean>) => {
 
 beforeEach(() => {
   server.failing = false;
-  server.inputs = [];
   vi.useFakeTimers({ now: START });
 });
 afterEach(() => {
@@ -269,18 +261,4 @@ it("keeps re-reading a pending remote launch across a failed read", () => {
   listed();
   expect(reads).toBeGreaterThan(beforeRecovery);
   registry.dispose();
-});
-
-it("asks for the paged first page only from a server that advertises it", () => {
-  server.answer = () => ({ rows: [], mainMessageCount: 0 });
-  const older = setup();
-  older.listed();
-  expect(server.inputs).toEqual([{}]);
-  older.registry.dispose();
-
-  server.inputs = [];
-  const paged = setup({ goatBotTaskThreads: true, goatBotTaskThreadsPaged: true });
-  paged.listed();
-  expect(server.inputs).toEqual([{ page: { kind: "first" } }]);
-  paged.registry.dispose();
 });
