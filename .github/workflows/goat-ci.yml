@@ -264,13 +264,32 @@ jobs:
       - name: PostgreSQL prerequisite for relay tests
         if: matrix.task == 'test-relay' || (matrix.task == 'test-changed' && contains(needs.scope.outputs.changed_tests, 'infra/relay/'))
         run: |
-          if ! command -v pg_config >/dev/null; then
+          # The relay fixture runs these from PG_BIN or pg_config --bindir (PostgresFixture.ts).
+          missing_postgres() {
+            bindir=${PG_BIN:-}
+            if [ -z "$bindir" ]; then
+              command -v pg_config >/dev/null || { echo pg_config; return; }
+              bindir=$(pg_config --bindir)
+            fi
+            missing=
+            for name in initdb postgres pg_ctl psql; do
+              [ -x "$bindir/$name" ] || missing="$missing $name"
+            done
+            echo $missing
+          }
+          missing=$(missing_postgres)
+          if [ -n "$missing" ]; then
             if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
-              echo "::error::Relay tests require pre-provisioned PostgreSQL binaries on $RUNNER_NAME (pg_config, initdb, postgres, pg_ctl, psql)"
+              echo "::error::Relay tests need PostgreSQL binaries pre-provisioned on $RUNNER_NAME; missing: $missing"
               exit 1
             fi
             sudo apt-get update -qq
             sudo apt-get install -y -qq postgresql
+            missing=$(missing_postgres)
+            if [ -n "$missing" ]; then
+              echo "::error::Installing postgresql did not provide: $missing"
+              exit 1
+            fi
           fi
           node infra/relay/scripts/test-postgres.ts check
 
