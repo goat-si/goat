@@ -446,7 +446,7 @@ export function GoatBotTimeline({
         );
         // An answer with a table reads as cards: its text, each table, and the rest.
         // The splitter caches by text, so only a row whose text changed is parsed.
-        const reply = toneIcon === null ? goatBotReplySplit(row.text) : null;
+        const reply = toneIcon === null ? goatBotReplySplit(row.text, rows.length) : null;
         const card = (
           <div className="flex w-full min-w-0 items-end gap-2">
             {reply !== null && reply.parts.some((part) => part.kind === "table") ? (
