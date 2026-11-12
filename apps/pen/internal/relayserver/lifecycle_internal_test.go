@@ -46,7 +46,9 @@ type live struct {
 	// stalled receives once it did.
 	stallNode string
 	stallSID  uint32
-	stalled   chan struct{}
+	// stallUplink names the node whose uplink's next write fails the same way.
+	stallUplink string
+	stalled     chan struct{}
 	// authed[nodeID] receives once per uplink the relay accepted (Hooks.OnUplink).
 	t      *testing.T
 	authed map[string]chan struct{}
@@ -74,7 +76,8 @@ func newLive(t *testing.T, l Limits) *live {
 	s.Hooks.OnUplink = func(nodeID string) { lv.authedCh(nodeID) <- struct{}{} }
 	s.Hooks.failWrite = func(nodeID, role string, sid uint32) error {
 		lv.mu.Lock()
-		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID
+		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID ||
+			role == "node" && nodeID == lv.stallUplink
 		lv.mu.Unlock()
 		if !hit {
 			return nil

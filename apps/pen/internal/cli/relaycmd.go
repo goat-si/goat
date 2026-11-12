@@ -21,6 +21,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relayserver"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
@@ -176,10 +177,13 @@ type serveConfig struct {
 	limits      *relayserver.Limits
 	// trafficLog receives the relay's session and totals lines (stderr, so the service journal).
 	trafficLog io.Writer
+	// trafficNodes are the node ids that get totals and session lines.
+	trafficNodes map[string]bool
 }
 
 func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 	var c serveConfig
+	var trafficNodes string
 	fs := flag.NewFlagSet("pen relay serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&c.listen, "listen", ":443", "address to listen on")
@@ -194,12 +198,18 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 	fs.IntVar(&c.maxUnauth, "max-unauth-per-node", relayserver.DefaultMaxUnauthPerNode, "most unauthenticated uplinks per node id (a newer one evicts the oldest)")
 	fs.IntVar(&c.maxQueuedMiB, "max-queued-mib", relayserver.DefaultMaxQueued>>20, "most MiB all sockets' queued and partly read messages hold together; data past it ends its session 4408")
 	fs.IntVar(&c.maxShareMiB, "max-queued-per-source-mib", relayserver.DefaultMaxQueuedPerSource>>20, "most of --max-queued-mib one IPv4 address's or IPv6 /64's sockets hold; data past it ends the session that holds it 4408")
+	fs.StringVar(&trafficNodes, "traffic-nodes", "", "comma-separated node ids that get byte totals and session lines on stderr (relay-wide totals need none)")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
 	if fs.NArg() != 0 {
 		return c, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
+	nodes, err := parseTrafficNodes(trafficNodes)
+	if err != nil {
+		return c, err
+	}
+	c.trafficNodes = nodes
 	if c.maxSockets < 1 || c.maxPerIP < 1 || c.maxUnauth < 1 || c.maxQueuedMiB < 1 || c.maxShareMiB < 1 {
 		return c, errors.New("--max-sockets, --max-per-ip, --max-unauth-per-node, --max-queued-mib and --max-queued-per-source-mib must be at least 1")
 	}
@@ -302,6 +312,7 @@ func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(add
 	rs.MaxQueued = c.maxQueuedMiB << 20
 	rs.MaxQueuedPerSource = c.maxShareMiB << 20
 	rs.TrafficLog = c.trafficLog
+	rs.TrafficNodes = c.trafficNodes
 	rs.Hooks = hooks
 	readTimeout := 30 * time.Second
 	if c.readTimeout > 0 {
@@ -436,4 +447,24 @@ func dnsName(h string) bool {
 		}
 	}
 	return true
+}
+
+// parseTrafficNodes reads --traffic-nodes: full node ids separated by commas, at most
+// relayserver.MaxTrafficNodes of them.
+func parseTrafficNodes(list string) (map[string]bool, error) {
+	nodes := map[string]bool{}
+	for _, id := range strings.Split(list, ",") {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if !ident.ValidNodeID(id) {
+			return nil, fmt.Errorf("--traffic-nodes wants full node ids (26 characters of a-z and 2-7, as pen ls --json shows), not %q", id)
+		}
+		nodes[id] = true
+	}
+	if len(nodes) > relayserver.MaxTrafficNodes {
+		return nil, fmt.Errorf("--traffic-nodes lists %d node ids; at most %d", len(nodes), relayserver.MaxTrafficNodes)
+	}
+	return nodes, nil
 }

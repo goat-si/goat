@@ -112,6 +112,9 @@ type Server struct {
 	// TrafficLog receives one line per session the node answered and the byte totals every
 	// SummaryEvery (traffic.go); nil writes nothing. Set it before the relay serves.
 	TrafficLog io.Writer
+	// TrafficNodes are the node ids (full) that get totals and session lines in TrafficLog; the
+	// relay-wide totals count every session. Set it before the relay serves.
+	TrafficNodes map[string]bool
 
 	queued, reading atomic.Int64
 	traffic         traffic
@@ -474,7 +477,12 @@ func (s *Server) Close() {
 		k.ws.CloseNow()
 	}
 	if s.TrafficLog != nil {
-		s.waitHandlers(s.Limits.WriteTimeout)
+		done := make(chan struct{})
+		go func() {
+			s.handlers.Wait()
+			close(done)
+		}()
+		s.traffic.wait(done, s.Limits.WriteTimeout)
 	}
 	s.trafficStop()
 }
@@ -549,14 +557,14 @@ type sock struct {
 	closeWire uint64
 	upEnd     uint64
 	upUnacked uint64
-	// Traffic (client): payload bytes relayed toward the node and from it, how much of them the
-	// totals hold, whether the node answered, and when and how the session began and ended.
-	toNode, fromNode       uint64
-	countedTo, countedFrom uint64
-	answered               bool
-	admitted, endedAt      time.Time
-	endedBy                string
-	endCode                uint16
+	// Traffic (client): the session's tally and the uplink queue that also holds it, whether the
+	// node answered, and when and how the session began and ended.
+	tally             *sessionTally
+	tallyQ            *outq
+	answered          bool
+	admitted, endedAt time.Time
+	endedBy           string
+	endCode           uint16
 }
 
 // room is one node's uplink and its sessions.
@@ -640,6 +648,7 @@ func (rm *room) acceptClient(k *sock) bool {
 	k.sid = rm.nextSid()
 	k.admitted = rm.srv.traffic.clock()
 	rm.srv.trafficStart()
+	rm.srv.trackSession(k, up)
 	rm.order++
 	k.order = rm.order
 	k.pending = true
@@ -873,7 +882,6 @@ func (rm *room) toClient(c *sock, payload []byte) {
 		return
 	}
 	c.sent += uint64(len(payload))
-	c.fromNode += uint64(len(payload))
 }
 
 func (rm *room) onClientData(c *sock, payload []byte) {
@@ -916,7 +924,6 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	up.sent += uint64(frameLen)
 	c.upEnd = up.sent
 	c.upUnacked = mine
-	c.toNode += uint64(len(payload))
 }
 
 // sendClose tells the node a client session ended, from the reservation made when it was
@@ -979,6 +986,10 @@ func (rm *room) closeSock(k *sock, code uint16) {
 		k.endedAt = rm.srv.traffic.clock()
 		if k.endedBy == "" {
 			k.endedBy, k.endCode = "relay", code
+		}
+		if q := k.tallyQ; q != nil {
+			k.tallyQ = nil
+			q.endSession(k.sid)
 		}
 	}
 	rm.srv.ended(k, code)

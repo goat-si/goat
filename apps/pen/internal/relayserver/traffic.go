@@ -5,46 +5,61 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Traffic accounting: one log line per session the node answered, byte totals per node kept in
-// memory, and a summary every SummaryEvery. Lines carry a node id prefix and counts only: no
-// address, no full node id, nothing from a session's contents.
+// Traffic accounting: payload bytes the relay delivered for each session, relay-wide totals, and
+// for the node ids the operator lists (TrafficNodes) per-node totals and one line per answered
+// session. Lines carry a node id prefix and counts only: no address, no full node id, nothing
+// from a session's contents. Anyone can mint node ids, so only listed ones get entries or lines.
 const (
 	// NodePrefixLen is what lines show of a node id: what pen ls shows, 40 of its 128 bits.
 	NodePrefixLen = 8
-	// MaxTrackedNodes bounds the per-node totals; past it the least recently active node is dropped.
-	MaxTrackedNodes = 256
+	// MaxTrafficNodes is how many node ids TrafficNodes may list.
+	MaxTrafficNodes = 256
 	// SummaryEvery is how often the relay writes its totals (only when something changed).
 	SummaryEvery = 10 * time.Minute
 	// SessionLineBurst and SessionLinesPerSecond bound session lines; past them a line is dropped
 	// and counted, while the totals stay exact.
 	SessionLineBurst      = 120
 	SessionLinesPerSecond = 1
+	// LogQueue is how many lines wait for a slow log; past it a line is dropped and counted.
+	LogQueue = 1024
 )
 
 type traffic struct {
-	// now, maxNodes, burst and rate are the defaults above unless a test sets them.
-	now      func() time.Time
-	maxNodes int
-	burst    float64
-	rate     float64
+	// now, burst, rate, queue and after are the defaults unless a test sets them.
+	now   func() time.Time
+	burst float64
+	rate  float64
+	queue int
+	after func(time.Duration) (<-chan time.Time, func() bool)
 
 	start sync.Once
 	// summary serializes summaries from collection to output, so the last one (Close) never runs
 	// while a timer summary holds bytes it took from sessions but has not counted yet.
 	summary sync.Mutex
-	mu      sync.Mutex
-	timer   *time.Timer
+	// mu is a leaf: nothing is written or locked while it is held.
+	mu    sync.Mutex
+	timer *time.Timer
 	// since is when counting began; tokens and refilled are the session line bucket.
 	since    time.Time
 	tokens   float64
 	refilled time.Time
-	nodes    map[string]*nodeTally
+	nodes    map[string]*nodeTally // listed nodes only
 	relay    relayTally
 	changed  bool
 	closed   bool
+	// lines feeds the log writer; written closes once it has written or dropped the last line.
+	lines   chan logItem
+	written chan struct{}
+}
+
+// logItem is one line for the log writer; ack, when set, is closed once the lines before it are written.
+type logItem struct {
+	b   []byte
+	ack chan struct{}
 }
 
 type tally struct {
@@ -53,24 +68,51 @@ type tally struct {
 
 type nodeTally struct {
 	tally
-	since, last time.Time
-	changed     bool
+	since   time.Time
+	changed bool
 }
 
 type relayTally struct {
 	tally
-	unanswered, linesDropped, evicted uint64
+	unanswered, linesDropped uint64
 }
 
-// sessionEnd is what a session's socket reports when it is done.
-type sessionEnd struct {
-	node             string
-	toNode, fromNode uint64 // the whole session
-	newTo, newFrom   uint64 // not yet in the totals
-	answered         bool
-	admitted, ended  time.Time
-	by               string
-	code             uint16
+// sessionTally is one session's delivered bytes. The writers of its client socket and of the
+// uplink add to it after each write that succeeded; it is counted once both have let go of it.
+type sessionTally struct {
+	srv    *Server
+	node   string
+	listed bool
+	// Payload bytes written toward the node and toward the client, and what the totals hold.
+	toNode, fromNode       atomic.Uint64
+	countedTo, countedFrom atomic.Uint64
+	// refs: the client socket, and the uplink queue while it may hold the session's frames.
+	refs atomic.Int32
+	// Set by the client socket before it lets go.
+	answered        bool
+	admitted, ended time.Time
+	by              string
+	code            uint16
+}
+
+// take is what total grew by since it was last taken, now taken.
+func take(total, counted *atomic.Uint64) uint64 {
+	cur := total.Load()
+	for {
+		prev := counted.Load()
+		if cur <= prev {
+			return 0
+		}
+		if counted.CompareAndSwap(prev, cur) {
+			return cur - prev
+		}
+	}
+}
+
+func (t *sessionTally) release() {
+	if t.refs.Add(-1) == 0 {
+		t.srv.traffic.ended(t)
+	}
 }
 
 func (t *traffic) clock() time.Time {
@@ -87,30 +129,19 @@ func prefix(nodeID string) string {
 	return nodeID
 }
 
-// addLocked adds counts to node's totals, making room for a node not tracked yet.
-func (t *traffic) addLocked(node string, to, from, sessions uint64, at time.Time) {
+// addLocked adds counts to the relay's totals and, for a listed node, to that node's.
+func (t *traffic) addLocked(node string, listed bool, to, from, sessions uint64, at time.Time) {
 	t.relay.toNode += to
 	t.relay.fromNode += from
 	t.relay.sessions += sessions
 	t.changed = true
+	if !listed {
+		return
+	}
 	n := t.nodes[node]
 	if n == nil {
 		if t.nodes == nil {
 			t.nodes = map[string]*nodeTally{}
-		}
-		max := t.maxNodes
-		if max <= 0 {
-			max = MaxTrackedNodes
-		}
-		for len(t.nodes) >= max {
-			var oldest string
-			for k, v := range t.nodes {
-				if oldest == "" || v.last.Before(t.nodes[oldest].last) || v.last.Equal(t.nodes[oldest].last) && k < oldest {
-					oldest = k
-				}
-			}
-			delete(t.nodes, oldest)
-			t.relay.evicted++
 		}
 		n = &nodeTally{since: at}
 		t.nodes[node] = n
@@ -118,7 +149,6 @@ func (t *traffic) addLocked(node string, to, from, sessions uint64, at time.Time
 	n.toNode += to
 	n.fromNode += from
 	n.sessions += sessions
-	n.last = at
 	n.changed = true
 }
 
@@ -150,42 +180,63 @@ func (t *traffic) sinceLocked(at time.Time) {
 	}
 }
 
-// ended accounts for a session whose socket is done and writes its line to w.
-func (t *traffic) ended(w io.Writer, e sessionEnd) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	at := e.ended
-	t.sinceLocked(at)
-	if !e.answered {
-		t.relay.unanswered++
-		t.addLocked(e.node, e.newTo, e.newFrom, 0, at)
+// emitLocked queues a line for the log writer, or drops and counts it when the queue is full.
+func (t *traffic) emitLocked(v any) {
+	if t.lines == nil || t.closed {
+		t.relay.linesDropped++
 		return
 	}
-	t.addLocked(e.node, e.newTo, e.newFrom, 1, at)
+	b, _ := json.Marshal(v)
+	select {
+	case t.lines <- logItem{b: append(b, '\n')}:
+	default:
+		t.relay.linesDropped++
+	}
+}
+
+// ended counts a session both of whose sockets are done with it. It may run under a room's or a
+// queue's lock: it takes only mu and never blocks.
+func (t *traffic) ended(s *sessionTally) {
+	to, from := take(&s.toNode, &s.countedTo), take(&s.fromNode, &s.countedFrom)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	at := s.ended
+	t.sinceLocked(at)
+	var sessions uint64
+	if s.answered {
+		sessions = 1
+	} else {
+		t.relay.unanswered++
+	}
+	t.addLocked(s.node, s.listed, to, from, sessions, at)
+	if !s.answered || !s.listed {
+		return
+	}
 	if !t.takeTokenLocked(at) {
 		t.relay.linesDropped++
 		return
 	}
-	writeLine(w, sessionLine{Event: "session", Node: e.node, ToNode: e.toNode, FromNode: e.fromNode,
-		Ms: e.ended.Sub(e.admitted).Milliseconds(), End: e.by, Code: e.code, At: stamp(at)})
+	t.emitLocked(sessionLine{Event: "session", Node: s.node, ToNode: s.toNode.Load(), FromNode: s.fromNode.Load(),
+		Ms: s.ended.Sub(s.admitted).Milliseconds(), End: s.by, Code: s.code, At: stamp(at)})
 }
 
-// liveBytes is what open sessions of one node relayed since they were last counted.
+// liveBytes is what an open session delivered since it was last counted.
 type liveBytes struct {
 	node     string
+	listed   bool
 	to, from uint64
 }
 
-// summarize adds live sessions' new bytes and writes one line per node that changed since the
-// last summary and one for the relay; it writes nothing when nothing changed.
-func (t *traffic) summarize(w io.Writer, live []liveBytes) {
+// summarize adds live sessions' new bytes and queues one line per listed node that changed since
+// the last summary and one for the relay; it queues nothing when nothing changed.
+func (t *traffic) summarize(live []liveBytes) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	at := t.clock()
 	t.sinceLocked(at)
 	for _, l := range live {
 		if l.to != 0 || l.from != 0 {
-			t.addLocked(l.node, l.to, l.from, 0, at)
+			t.addLocked(l.node, l.listed, l.to, l.from, 0, at)
 		}
 	}
 	if !t.changed {
@@ -202,13 +253,12 @@ func (t *traffic) summarize(w io.Writer, live []liveBytes) {
 	for _, k := range keys {
 		n := t.nodes[k]
 		n.changed = false
-		writeLine(w, nodeLine{Event: "node", Node: k, ToNode: n.toNode, FromNode: n.fromNode, Sessions: n.sessions,
+		t.emitLocked(nodeLine{Event: "node", Node: k, ToNode: n.toNode, FromNode: n.fromNode, Sessions: n.sessions,
 			Since: stamp(n.since), At: stamp(at)})
 	}
 	r := t.relay
-	writeLine(w, relayLine{Event: "relay", ToNode: r.toNode, FromNode: r.fromNode, Sessions: r.sessions,
-		Unanswered: r.unanswered, LinesDropped: r.linesDropped, Nodes: len(t.nodes), Evicted: r.evicted,
-		Since: stamp(t.since), At: stamp(at)})
+	t.emitLocked(relayLine{Event: "relay", ToNode: r.toNode, FromNode: r.fromNode, Sessions: r.sessions,
+		Unanswered: r.unanswered, LinesDropped: r.linesDropped, Nodes: len(t.nodes), Since: stamp(t.since), At: stamp(at)})
 }
 
 type sessionLine struct {
@@ -240,30 +290,60 @@ type relayLine struct {
 	Unanswered   uint64 `json:"unanswered"`
 	LinesDropped uint64 `json:"linesDropped"`
 	Nodes        int    `json:"nodes"`
-	Evicted      uint64 `json:"evicted"`
 	Since        string `json:"since"`
 	At           string `json:"at"`
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-func writeLine(w io.Writer, v any) {
-	b, _ := json.Marshal(v)
-	w.Write(append(b, '\n'))
+// write is the log writer: the only goroutine that writes to the traffic log.
+func write(w io.Writer, lines <-chan logItem, written chan<- struct{}) {
+	defer close(written)
+	for it := range lines {
+		if it.ack != nil {
+			close(it.ack)
+			continue
+		}
+		w.Write(it.b)
+	}
 }
 
-// trafficStart arms the summary timer once, when the relay has a traffic log.
+// wait returns when done closes or d passes, whichever is first.
+func (t *traffic) wait(done <-chan struct{}, d time.Duration) {
+	after := t.after
+	if after == nil {
+		after = func(d time.Duration) (<-chan time.Time, func() bool) {
+			tm := time.NewTimer(d)
+			return tm.C, tm.Stop
+		}
+	}
+	fired, stop := after(d)
+	defer stop()
+	select {
+	case <-done:
+	case <-fired:
+	}
+}
+
+// trafficStart starts the log writer and arms the summary timer once, when the relay has a log.
 func (s *Server) trafficStart() {
 	if s.TrafficLog == nil {
 		return
 	}
 	s.traffic.start.Do(func() {
-		s.traffic.mu.Lock()
-		defer s.traffic.mu.Unlock()
-		if s.traffic.closed {
+		t := &s.traffic
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if t.closed {
 			return
 		}
-		s.traffic.timer = time.AfterFunc(SummaryEvery, s.summaryTick)
+		n := t.queue
+		if n <= 0 {
+			n = LogQueue
+		}
+		t.lines, t.written = make(chan logItem, n), make(chan struct{})
+		go write(s.TrafficLog, t.lines, t.written)
+		t.timer = time.AfterFunc(SummaryEvery, s.summaryTick)
 	})
 }
 
@@ -276,7 +356,7 @@ func (s *Server) summaryTick() {
 	}
 }
 
-// Summarize writes the traffic totals now (the relay also does so every SummaryEvery and on Close).
+// Summarize queues the traffic totals now (the relay also does so every SummaryEvery and on Close).
 func (s *Server) Summarize() {
 	if s.TrafficLog == nil {
 		return
@@ -293,59 +373,60 @@ func (s *Server) Summarize() {
 	for _, rm := range rooms {
 		rm.mu.Lock()
 		for _, c := range rm.clients {
-			if d := c.takeNew(); d.to != 0 || d.from != 0 {
-				live = append(live, liveBytes{node: prefix(rm.nodeID), to: d.to, from: d.from})
+			if t := c.tally; t != nil {
+				live = append(live, liveBytes{node: t.node, listed: t.listed,
+					to: take(&t.toNode, &t.countedTo), from: take(&t.fromNode, &t.countedFrom)})
 			}
 		}
 		rm.mu.Unlock()
 	}
-	s.traffic.summarize(s.TrafficLog, live)
+	s.traffic.summarize(live)
 }
 
-// takeNew is what the session relayed since it was last counted, now counted; rm.mu held.
-func (k *sock) takeNew() (d struct{ to, from uint64 }) {
-	d.to, d.from = k.toNode-k.countedTo, k.fromNode-k.countedFrom
-	k.countedTo, k.countedFrom = k.toNode, k.fromNode
-	return d
-}
-
-// sessionDone reports an admitted client socket's session once the socket is done.
-func (s *Server) sessionDone(k *sock) {
+// trackSession gives an admitted client its tally, counted by its own queue and the uplink's;
+// rm.mu held.
+func (s *Server) trackSession(k, up *sock) {
 	if s.TrafficLog == nil {
+		return
+	}
+	t := &sessionTally{srv: s, node: prefix(k.nodeID), listed: s.TrafficNodes[k.nodeID]}
+	t.refs.Store(1)
+	k.tally = t
+	k.out.setOwn(t)
+	if up.out.track(k.sid, t) {
+		k.tallyQ = up.out
+	}
+}
+
+// sessionDone lets go of an admitted client's tally once its socket is done.
+func (s *Server) sessionDone(k *sock) {
+	if k.tally == nil {
 		return
 	}
 	rm := k.room
 	rm.mu.Lock()
-	d := k.takeNew()
-	e := sessionEnd{node: prefix(k.nodeID), toNode: k.toNode, fromNode: k.fromNode, newTo: d.to, newFrom: d.from,
-		answered: k.answered, admitted: k.admitted, ended: k.endedAt, by: k.endedBy, code: k.endCode}
+	t := k.tally
+	t.answered, t.admitted, t.ended, t.by, t.code = k.answered, k.admitted, k.endedAt, k.endedBy, k.endCode
 	rm.mu.Unlock()
-	s.traffic.ended(s.TrafficLog, e)
+	t.release()
 }
 
-// waitHandlers waits up to d for every socket handler to end. On a timeout the waiting goroutine
-// ends with the last handler.
-func (s *Server) waitHandlers(d time.Duration) {
-	done := make(chan struct{})
-	go func() {
-		s.handlers.Wait()
-		close(done)
-	}()
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-done:
-	case <-t.C:
-	}
-}
-
-// trafficStop writes the totals one last time and stops the summary timer.
+// trafficStop queues the totals one last time, stops the summary timer and waits for the log
+// writer at most WriteTimeout: a log that stopped reading must not hold the shutdown.
 func (s *Server) trafficStop() {
 	s.Summarize()
-	s.traffic.mu.Lock()
-	defer s.traffic.mu.Unlock()
-	s.traffic.closed = true
-	if s.traffic.timer != nil {
-		s.traffic.timer.Stop()
+	t := &s.traffic
+	t.mu.Lock()
+	t.closed = true
+	if t.timer != nil {
+		t.timer.Stop()
+	}
+	if t.lines != nil {
+		close(t.lines)
+	}
+	written := t.written
+	t.mu.Unlock()
+	if written != nil {
+		t.wait(written, s.Limits.WriteTimeout)
 	}
 }

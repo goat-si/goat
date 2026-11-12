@@ -22,88 +22,6 @@ type fakeClock struct {
 	t  time.Time
 }
 
-// The first side to end a session names how it ended: a client abort handled after the shutdown
-// recorded its code does not overwrite it.
-func TestAClientAbortAfterTheShutdownKeepsTheShutdownsCode(t *testing.T) {
-	s := New(DefaultLimits())
-	rm := &room{srv: s, clients: map[uint32]*sock{}}
-	testSock(s, rm, roleNode, 0, "192.0.2.1", stalled(t))
-	c := testSock(s, rm, roleClient, 1, "192.0.2.2", stalled(t))
-	rm.mu.Lock()
-	c.endedBy, c.endCode = "relay", uint16(websocket.StatusGoingAway)
-	rm.mu.Unlock()
-	rm.peerGone(c, 1006)
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	if c.endedBy != "relay" || c.endCode != uint16(websocket.StatusGoingAway) {
-		t.Fatalf("session ended as %s %d, want relay 1001", c.endedBy, c.endCode)
-	}
-}
-
-// Sessions that a shutdown ends report their bytes before the last summary: once Close returns,
-// their lines are written and the final relay line counts them.
-func TestCloseCountsTheSessionsItEndsInTheFinalSummary(t *testing.T) {
-	lv, _, log := trafficLive(t)
-	id, _ := ident.Generate(rand.Reader)
-	n := lv.uplink(id, true)
-	c, sid := lv.session(t, n)
-	send(t, c, 300)
-	n.nextFrame(t, sid)
-	n.data(t, sid, 700)
-	receive(t, c, 700)
-	lv.s.Close()
-	relay := log.lines(t, "relay")
-	if len(relay) == 0 {
-		t.Fatalf("no relay line once Close returned:\n%s", log.raw())
-	}
-	if last := relay[len(relay)-1]; last["sessions"] != float64(1) || last["toNode"] != float64(300) || last["fromNode"] != float64(700) {
-		t.Fatalf("final relay line %v, want the ended session counted", last)
-	}
-	sessions := log.lines(t, "session")
-	if len(sessions) != 1 {
-		t.Fatalf("%d session lines once Close returned, want 1:\n%s", len(sessions), log.raw())
-	}
-	wantSession(t, sessions[0], id.NodeID()[:8], 300, 700, 0, "relay", 1001)
-}
-
-// Shutting the relay down writes the totals once more and stops the summary timer for good: a
-// stopped relay holds no timer, and no later session arms one.
-func TestCloseWritesTheTotalsAndStopsTheSummaryTimer(t *testing.T) {
-	lv, _, log := trafficLive(t)
-	id, _ := ident.Generate(rand.Reader)
-	n := lv.uplink(id, true)
-	c, sid := lv.session(t, n)
-	send(t, c, 42)
-	n.nextFrame(t, sid)
-	lv.s.traffic.mu.Lock()
-	armed := lv.s.traffic.timer != nil
-	lv.s.traffic.mu.Unlock()
-	if !armed {
-		t.Fatal("an admitted session did not arm the summary timer")
-	}
-	lv.s.Close()
-	relay := log.lines(t, "relay")
-	if len(relay) != 1 || relay[0]["toNode"] != float64(42) {
-		t.Fatalf("relay lines after Close: %v", relay)
-	}
-	lv.s.traffic.mu.Lock()
-	stillArmed := lv.s.traffic.timer.Stop()
-	lv.s.traffic.mu.Unlock()
-	if stillArmed {
-		t.Fatal("the summary timer was still armed after Close")
-	}
-	// A relay closed before its first session never arms the timer.
-	early := New(DefaultLimits())
-	early.TrafficLog = &lineLog{}
-	early.Close()
-	early.trafficStart()
-	early.traffic.mu.Lock()
-	defer early.traffic.mu.Unlock()
-	if early.traffic.timer != nil {
-		t.Fatal("a session after Close armed the summary timer")
-	}
-}
-
 func (c *fakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -116,8 +34,9 @@ func (c *fakeClock) Add(d time.Duration) {
 	c.mu.Unlock()
 }
 
-// lineLog is a traffic log the test reads back.
+// lineLog is a traffic log the test reads back once the relay's log writer has caught up.
 type lineLog struct {
+	srv *Server
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
@@ -129,16 +48,33 @@ func (l *lineLog) Write(p []byte) (int, error) {
 }
 
 func (l *lineLog) raw() string {
+	if l.srv != nil {
+		syncLog(l.srv)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.String()
 }
 
-// lines parses every line, failing on one that is not a JSON object, and returns those of event.
-func (l *lineLog) lines(t *testing.T, event string) []map[string]any {
+// syncLog returns once the log writer has written every line queued so far.
+func syncLog(s *Server) {
+	s.traffic.mu.Lock()
+	q := s.traffic.lines
+	if q == nil || s.traffic.closed {
+		s.traffic.mu.Unlock()
+		return
+	}
+	ack := make(chan struct{})
+	q <- logItem{ack: ack}
+	s.traffic.mu.Unlock()
+	<-ack
+}
+
+// parse returns the lines of event in raw, failing on a line that is not a JSON object.
+func parse(t *testing.T, raw, event string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for _, s := range strings.Split(strings.TrimSpace(l.raw()), "\n") {
+	for _, s := range strings.Split(strings.TrimSpace(raw), "\n") {
 		if s == "" {
 			continue
 		}
@@ -153,13 +89,32 @@ func (l *lineLog) lines(t *testing.T, event string) []map[string]any {
 	return out
 }
 
-func trafficLive(t *testing.T) (*live, *fakeClock, *lineLog) {
+func (l *lineLog) lines(t *testing.T, event string) []map[string]any {
+	t.Helper()
+	return parse(t, l.raw(), event)
+}
+
+// trafficLive is a live relay with a traffic log and an injected clock; listed nodes get totals.
+func trafficLive(t *testing.T, listed ...*ident.Identity) (*live, *fakeClock, *lineLog) {
 	lv := newLive(t, DefaultLimits())
 	clk := &fakeClock{t: time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)}
-	log := &lineLog{}
+	log := &lineLog{srv: lv.s}
 	lv.s.TrafficLog = log
+	lv.s.TrafficNodes = map[string]bool{}
+	for _, id := range listed {
+		lv.s.TrafficNodes[id.NodeID()] = true
+	}
 	lv.s.traffic.now = clk.Now
 	return lv, clk, log
+}
+
+func newID(t *testing.T) *ident.Identity {
+	t.Helper()
+	id, err := ident.Generate(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 // socketsDone waits until n more sockets have ended on the relay.
@@ -219,6 +174,18 @@ func (lv *live) session(t *testing.T, n *liveNode) (*websocket.Conn, uint32) {
 	return c, n.nextOpen(t)
 }
 
+// exchange runs one answered session of one byte each way and waits until it has ended.
+func (lv *live) exchange(t *testing.T, n *liveNode) {
+	t.Helper()
+	c, sid := lv.session(t, n)
+	send(t, c, 1)
+	n.nextFrame(t, sid)
+	n.data(t, sid, 1)
+	receive(t, c, 1)
+	c.Close(websocket.StatusNormalClosure, "")
+	lv.socketsDone(t, 1)
+}
+
 func wantSession(t *testing.T, got map[string]any, node string, to, from int, ms int, end string, code int) {
 	t.Helper()
 	want := map[string]any{"event": "session", "node": node, "toNode": float64(to), "fromNode": float64(from),
@@ -228,11 +195,20 @@ func wantSession(t *testing.T, got map[string]any, node string, to, from int, ms
 	}
 }
 
-// The line of a session the node answered carries the payload bytes the relay passed each way,
+func onlyLine(t *testing.T, log *lineLog, event string) map[string]any {
+	t.Helper()
+	got := log.lines(t, event)
+	if len(got) != 1 {
+		t.Fatalf("%d %s lines, want 1:\n%s", len(got), event, log.raw())
+	}
+	return got[0]
+}
+
+// The line of a session the node answered carries the payload bytes the relay delivered each way,
 // its duration and how it ended.
 func TestASessionLineCountsTheBytesRelayedEachWay(t *testing.T) {
-	lv, clk, log := trafficLive(t)
-	id, _ := ident.Generate(rand.Reader)
+	id := newID(t)
+	lv, clk, log := trafficLive(t, id)
 	n := lv.uplink(id, true)
 	c, sid := lv.session(t, n)
 	send(t, c, 1000)
@@ -244,18 +220,14 @@ func TestASessionLineCountsTheBytesRelayedEachWay(t *testing.T) {
 	clk.Add(2500 * time.Millisecond)
 	c.Close(websocket.StatusNormalClosure, "")
 	lv.socketsDone(t, 1)
-	got := log.lines(t, "session")
-	if len(got) != 1 {
-		t.Fatalf("%d session lines, want 1:\n%s", len(got), log.raw())
-	}
-	wantSession(t, got[0], id.NodeID()[:8], 71000, 3000, 2500, "client", 1000)
+	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 71000, 3000, 2500, "client", 1000)
 }
 
 // A client that drops its connection mid-stream: the line counts what the relay passed up to the
 // cut, and DATA the node sends after it is not counted.
 func TestAClientCutMidStreamCountsWhatWasRelayedBeforeTheCut(t *testing.T) {
-	lv, clk, log := trafficLive(t)
-	id, _ := ident.Generate(rand.Reader)
+	id := newID(t)
+	lv, clk, log := trafficLive(t, id)
 	n := lv.uplink(id, true)
 	c, sid := lv.session(t, n)
 	send(t, c, 500)
@@ -278,17 +250,13 @@ func TestAClientCutMidStreamCountsWhatWasRelayedBeforeTheCut(t *testing.T) {
 	n.data(t, sid2, 10)
 	receive(t, c2, 10)
 	lv.socketsDone(t, 1)
-	got := log.lines(t, "session")
-	if len(got) != 1 {
-		t.Fatalf("%d session lines, want 1:\n%s", len(got), log.raw())
-	}
-	wantSession(t, got[0], id.NodeID()[:8], 20500, 9000, 1000, "client", 1006)
+	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 20500, 9000, 1000, "client", 1006)
 }
 
 // An uplink lost mid-stream ends its sessions 4404; each line counts what was relayed until then.
 func TestAnUplinkLostMidStreamEndsTheSessionLineWithWhatWasRelayed(t *testing.T) {
-	lv, clk, log := trafficLive(t)
-	id, _ := ident.Generate(rand.Reader)
+	id := newID(t)
+	lv, clk, log := trafficLive(t, id)
 	n := lv.uplink(id, true)
 	c, sid := lv.session(t, n)
 	send(t, c, 100)
@@ -303,11 +271,44 @@ func TestAnUplinkLostMidStreamEndsTheSessionLineWithWhatWasRelayed(t *testing.T)
 		t.Fatalf("client read %v, want close 4404", err)
 	}
 	lv.socketsDone(t, 2)
-	got := log.lines(t, "session")
-	if len(got) != 1 {
-		t.Fatalf("%d session lines, want 1:\n%s", len(got), log.raw())
+	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 9100, 6000, 1500, "uplink", 4404)
+}
+
+// Bytes the relay accepted but never wrote to the other end are not counted: a client whose write
+// fails, and an uplink whose write fails, with data queued for them.
+func TestBytesAWriteNeverDeliveredAreNotCounted(t *testing.T) {
+	id := newID(t)
+	lv, _, log := trafficLive(t, id)
+	n := lv.uplink(id, true)
+	c, sid := lv.session(t, n)
+	send(t, c, 100)
+	n.nextFrame(t, sid)
+	n.data(t, sid, 3000)
+	receive(t, c, 3000)
+	lv.mu.Lock()
+	lv.stallNode, lv.stallSID = id.NodeID(), sid
+	lv.mu.Unlock()
+	n.data(t, sid, 4000)
+	<-lv.stalled
+	lv.socketsDone(t, 1)
+	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 100, 3000, 0, "client", 1006)
+
+	c2, sid2 := lv.session(t, n)
+	send(t, c2, 200)
+	n.nextFrame(t, sid2)
+	n.data(t, sid2, 10)
+	receive(t, c2, 10)
+	lv.mu.Lock()
+	lv.stallUplink = id.NodeID()
+	lv.mu.Unlock()
+	send(t, c2, 500)
+	<-lv.stalled
+	lv.socketsDone(t, 2)
+	sessions := log.lines(t, "session")
+	if len(sessions) != 2 {
+		t.Fatalf("%d session lines, want 2:\n%s", len(sessions), log.raw())
 	}
-	wantSession(t, got[0], id.NodeID()[:8], 9100, 6000, 1500, "uplink", 4404)
+	wantSession(t, sessions[1], id.NodeID()[:8], 200, 10, 0, "uplink", 4404)
 }
 
 func keys(m map[string]any) []string {
@@ -322,8 +323,8 @@ func keys(m map[string]any) []string {
 // Every line has exactly its documented fields; a node appears only as its 8-character prefix and
 // no address or port of either end appears anywhere.
 func TestTrafficLinesHoldOnlyTheirFieldsAndTheNodeIDPrefix(t *testing.T) {
-	lv, clk, log := trafficLive(t)
-	id, _ := ident.Generate(rand.Reader)
+	id := newID(t)
+	lv, clk, log := trafficLive(t, id)
 	n := lv.uplink(id, true)
 	c, sid := lv.session(t, n)
 	send(t, c, 10)
@@ -337,17 +338,14 @@ func TestTrafficLinesHoldOnlyTheirFieldsAndTheNodeIDPrefix(t *testing.T) {
 	want := map[string][]string{
 		"session": {"at", "code", "end", "event", "fromNode", "ms", "node", "toNode"},
 		"node":    {"at", "event", "fromNode", "node", "sessions", "since", "toNode"},
-		"relay":   {"at", "event", "evicted", "fromNode", "linesDropped", "nodes", "sessions", "since", "toNode", "unanswered"},
+		"relay":   {"at", "event", "fromNode", "linesDropped", "nodes", "sessions", "since", "toNode", "unanswered"},
 	}
 	for event, fields := range want {
-		lines := log.lines(t, event)
-		if len(lines) != 1 {
-			t.Fatalf("%d %s lines, want 1:\n%s", len(lines), event, log.raw())
-		}
-		if got := keys(lines[0]); !slices.Equal(got, fields) {
+		line := onlyLine(t, log, event)
+		if got := keys(line); !slices.Equal(got, fields) {
 			t.Errorf("%s line fields %v, want %v", event, got, fields)
 		}
-		if node, ok := lines[0]["node"]; ok && node != id.NodeID()[:NodePrefixLen] {
+		if node, ok := line["node"]; ok && node != id.NodeID()[:NodePrefixLen] {
 			t.Errorf("%s line node %v, want %s", event, node, id.NodeID()[:NodePrefixLen])
 		}
 	}
@@ -364,8 +362,8 @@ func TestTrafficLinesHoldOnlyTheirFieldsAndTheNodeIDPrefix(t *testing.T) {
 // Long sessions show in the totals before they end, without being counted twice when they do;
 // a summary with nothing new writes nothing.
 func TestSummariesCountOpenSessionsOnceAndStaySilentWhenNothingChanged(t *testing.T) {
-	lv, clk, log := trafficLive(t)
-	id, _ := ident.Generate(rand.Reader)
+	id := newID(t)
+	lv, clk, log := trafficLive(t, id)
 	n := lv.uplink(id, true)
 	c, sid := lv.session(t, n)
 	send(t, c, 300)
@@ -380,8 +378,8 @@ func TestSummariesCountOpenSessionsOnceAndStaySilentWhenNothingChanged(t *testin
 	before := log.raw()
 	clk.Add(SummaryEvery)
 	lv.s.Summarize()
-	if log.raw() != before {
-		t.Fatalf("a summary with nothing new wrote:\n%s", strings.TrimPrefix(log.raw(), before))
+	if after := log.raw(); after != before {
+		t.Fatalf("a summary with nothing new wrote:\n%s", strings.TrimPrefix(after, before))
 	}
 	send(t, c, 2000)
 	n.nextFrame(t, sid)
@@ -399,47 +397,52 @@ func TestSummariesCountOpenSessionsOnceAndStaySilentWhenNothingChanged(t *testin
 	}
 }
 
-// However many nodes pass through the relay, it tracks at most MaxTrackedNodes, dropping the least
-// recently active, while the relay-wide totals keep every byte.
-func TestTotalsTrackAtMostMaxTrackedNodesAndDropTheLeastRecentlyActive(t *testing.T) {
-	clk := &fakeClock{t: time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)}
-	tr := &traffic{now: clk.Now}
-	log := &lineLog{}
-	const nodes, rounds = 1000, 3
-	for range rounds {
-		for i := range nodes {
-			clk.Add(time.Millisecond)
-			tr.ended(log, sessionEnd{node: fmt.Sprintf("n%07d", i), toNode: 3, fromNode: 5, newTo: 3, newFrom: 5,
-				answered: true, ended: clk.Now(), by: "client", code: 1000})
-		}
+// Anyone can mint node ids, so only the nodes the operator lists get totals and session lines:
+// many stranger nodes neither add entries nor lines, and the relay-wide totals still count them.
+// With no list, the relay writes only its relay-wide totals.
+func TestOnlyListedNodesGetTotalsAndSessionLines(t *testing.T) {
+	listed := newID(t)
+	lv, _, log := trafficLive(t, listed)
+	lv.exchange(t, lv.uplink(listed, true))
+	const strangers = 30
+	for range strangers {
+		lv.exchange(t, lv.uplink(newID(t), true))
 	}
-	tr.mu.Lock()
-	tracked, relay := len(tr.nodes), tr.relay
-	_, newest := tr.nodes[fmt.Sprintf("n%07d", nodes-1)]
-	_, oldest := tr.nodes["n0000000"]
-	tr.mu.Unlock()
-	if tracked != MaxTrackedNodes || !newest || oldest {
-		t.Fatalf("tracked %d nodes (newest %v, oldest %v), want %d with the newest", tracked, newest, oldest, MaxTrackedNodes)
+	lv.s.Summarize()
+	if got := onlyLine(t, log, "session")["node"]; got != listed.NodeID()[:NodePrefixLen] {
+		t.Fatalf("session line for %v, want only the listed node", got)
 	}
-	total := uint64(nodes * rounds)
-	if relay.sessions != total || relay.toNode != 3*total || relay.fromNode != 5*total || relay.evicted != total-MaxTrackedNodes {
-		t.Fatalf("relay totals %+v after %d sessions", relay, total)
+	if got := onlyLine(t, log, "node")["node"]; got != listed.NodeID()[:NodePrefixLen] {
+		t.Fatalf("node line for %v, want only the listed node", got)
+	}
+	relay := onlyLine(t, log, "relay")
+	if relay["sessions"] != float64(strangers+1) || relay["toNode"] != float64(strangers+1) || relay["nodes"] != float64(1) {
+		t.Fatalf("relay line %v, want %d sessions over 1 tracked node", relay, strangers+1)
+	}
+
+	open, _, openLog := trafficLive(t)
+	open.exchange(t, open.uplink(newID(t), true))
+	open.s.Summarize()
+	if len(openLog.lines(t, "session")) != 0 || len(openLog.lines(t, "node")) != 0 {
+		t.Fatalf("a relay with no list wrote node or session lines:\n%s", openLog.raw())
+	}
+	if r := onlyLine(t, openLog, "relay"); r["sessions"] != float64(1) || r["nodes"] != float64(0) {
+		t.Fatalf("relay line %v with no list", r)
 	}
 }
 
 // Strangers cannot grow what the relay keeps or logs: uplinks that never authenticate and
-// sessions the node never answers write no line and track nothing new, and a flood of one-byte
-// sessions writes at most the burst of lines while the totals count every byte.
+// sessions the node never answers write no line, and a flood of one-byte sessions writes at most
+// the burst of lines while the totals count every byte.
 func TestFloodsOfUnansweredAndOneByteSessionsStayWithinTheBounds(t *testing.T) {
-	lv, _, log := trafficLive(t)
+	id := newID(t)
+	lv, _, log := trafficLive(t, id)
 	lv.s.traffic.burst = 5
 	for range 20 {
-		stranger, _ := ident.Generate(rand.Reader)
-		if lv.uplink(stranger, false) == nil {
+		if lv.uplink(newID(t), false) == nil {
 			t.Fatal("an unauthenticated uplink was refused before its challenge")
 		}
 	}
-	id, _ := ident.Generate(rand.Reader)
 	n := lv.uplink(id, true)
 	const unanswered, oneByte = 100, 50
 	for range unanswered {
@@ -450,13 +453,7 @@ func TestFloodsOfUnansweredAndOneByteSessionsStayWithinTheBounds(t *testing.T) {
 		lv.socketsDone(t, 1)
 	}
 	for range oneByte {
-		c, sid := lv.session(t, n)
-		send(t, c, 1)
-		n.nextFrame(t, sid)
-		n.data(t, sid, 1)
-		receive(t, c, 1)
-		c.Close(websocket.StatusNormalClosure, "")
-		lv.socketsDone(t, 1)
+		lv.exchange(t, n)
 	}
 	if got := len(log.lines(t, "session")); got != 5 {
 		t.Fatalf("%d session lines, want the burst of 5", got)
@@ -467,5 +464,136 @@ func TestFloodsOfUnansweredAndOneByteSessionsStayWithinTheBounds(t *testing.T) {
 	if tracked != 1 || relay.unanswered != unanswered || relay.sessions != oneByte || relay.linesDropped != oneByte-5 ||
 		relay.toNode != unanswered+oneByte || relay.fromNode != oneByte {
 		t.Fatalf("tracked %d nodes, relay totals %+v", tracked, relay)
+	}
+}
+
+// blockedLog is a log whose writes wait until the test opens its gate.
+type blockedLog struct {
+	lineLog
+	gate chan struct{}
+}
+
+func (b *blockedLog) Write(p []byte) (int, error) {
+	<-b.gate
+	return b.lineLog.Write(p)
+}
+
+// A log that stops taking lines holds no session handler: sessions keep ending, lines past the
+// queue are dropped and counted, the totals stay exact, and Close returns at its deadline.
+func TestABlockedLogHoldsNoHandlerAndCloseStaysBounded(t *testing.T) {
+	id := newID(t)
+	lv := newLive(t, DefaultLimits())
+	log := &blockedLog{gate: make(chan struct{})}
+	var open sync.Once
+	release := func() { open.Do(func() { close(log.gate) }) }
+	t.Cleanup(release)
+	lv.s.TrafficLog = log
+	lv.s.TrafficNodes = map[string]bool{id.NodeID(): true}
+	lv.s.traffic.burst = 1000
+	lv.s.traffic.queue = 8
+	fired := make(chan time.Time)
+	close(fired)
+	lv.s.traffic.after = func(time.Duration) (<-chan time.Time, func() bool) { return fired, func() bool { return false } }
+	n := lv.uplink(id, true)
+	const sessions = 20
+	for range sessions {
+		lv.exchange(t, n)
+	}
+	lv.s.Close()
+	release()
+	select {
+	case <-lv.s.traffic.written:
+	case <-time.After(failsafe):
+		t.Fatal("the log writer never finished")
+	}
+	lv.s.traffic.mu.Lock()
+	relay := lv.s.traffic.relay
+	lv.s.traffic.mu.Unlock()
+	if relay.sessions != sessions || relay.toNode != sessions || relay.fromNode != sessions {
+		t.Fatalf("relay totals %+v, want %d sessions of one byte each way", relay, sessions)
+	}
+	raw := log.lineLog.raw()
+	written := len(parse(t, raw, "session")) + len(parse(t, raw, "node")) + len(parse(t, raw, "relay"))
+	// Each session's line, then the final node and relay lines, each written or dropped once; the
+	// writer holds one line and the queue eight.
+	if attempted := sessions + 2; written+int(relay.linesDropped) != attempted || written > 9 {
+		t.Fatalf("%d lines written and %d dropped, want %d in all with at most 9 written", written, relay.linesDropped, attempted)
+	}
+}
+
+// Sessions that a shutdown ends report their bytes before the last summary: once Close returns,
+// their lines are written and the final relay line counts them.
+func TestCloseCountsTheSessionsItEndsInTheFinalSummary(t *testing.T) {
+	id := newID(t)
+	lv, _, log := trafficLive(t, id)
+	n := lv.uplink(id, true)
+	c, sid := lv.session(t, n)
+	send(t, c, 300)
+	n.nextFrame(t, sid)
+	n.data(t, sid, 700)
+	receive(t, c, 700)
+	lv.s.Close()
+	relay := log.lines(t, "relay")
+	if len(relay) == 0 {
+		t.Fatalf("no relay line once Close returned:\n%s", log.raw())
+	}
+	if last := relay[len(relay)-1]; last["sessions"] != float64(1) || last["toNode"] != float64(300) || last["fromNode"] != float64(700) {
+		t.Fatalf("final relay line %v, want the ended session counted", last)
+	}
+	wantSession(t, onlyLine(t, log, "session"), id.NodeID()[:8], 300, 700, 0, "relay", 1001)
+}
+
+// Shutting the relay down writes the totals once more and stops the summary timer for good: a
+// stopped relay holds no timer, and no later session arms one.
+func TestCloseWritesTheTotalsAndStopsTheSummaryTimer(t *testing.T) {
+	id := newID(t)
+	lv, _, log := trafficLive(t, id)
+	n := lv.uplink(id, true)
+	c, sid := lv.session(t, n)
+	send(t, c, 42)
+	n.nextFrame(t, sid)
+	lv.s.traffic.mu.Lock()
+	armed := lv.s.traffic.timer != nil
+	lv.s.traffic.mu.Unlock()
+	if !armed {
+		t.Fatal("an admitted session did not arm the summary timer")
+	}
+	lv.s.Close()
+	if r := onlyLine(t, log, "relay"); r["toNode"] != float64(42) {
+		t.Fatalf("relay line after Close: %v", r)
+	}
+	lv.s.traffic.mu.Lock()
+	stillArmed := lv.s.traffic.timer.Stop()
+	lv.s.traffic.mu.Unlock()
+	if stillArmed {
+		t.Fatal("the summary timer was still armed after Close")
+	}
+	// A relay closed before its first session never arms the timer.
+	early := New(DefaultLimits())
+	early.TrafficLog = &lineLog{}
+	early.Close()
+	early.trafficStart()
+	early.traffic.mu.Lock()
+	defer early.traffic.mu.Unlock()
+	if early.traffic.timer != nil {
+		t.Fatal("a session after Close armed the summary timer")
+	}
+}
+
+// The first side to end a session names how it ended: a client abort handled after the shutdown
+// recorded its code does not overwrite it.
+func TestAClientAbortAfterTheShutdownKeepsTheShutdownsCode(t *testing.T) {
+	s := New(DefaultLimits())
+	rm := &room{srv: s, clients: map[uint32]*sock{}}
+	testSock(s, rm, roleNode, 0, "192.0.2.1", stalled(t))
+	c := testSock(s, rm, roleClient, 1, "192.0.2.2", stalled(t))
+	rm.mu.Lock()
+	c.endedBy, c.endCode = "relay", uint16(websocket.StatusGoingAway)
+	rm.mu.Unlock()
+	rm.peerGone(c, 1006)
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if c.endedBy != "relay" || c.endCode != uint16(websocket.StatusGoingAway) {
+		t.Fatalf("session ended as %s %d, want relay 1001", c.endedBy, c.endCode)
 	}
 }

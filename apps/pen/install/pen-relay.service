@@ -1,6 +1,8 @@
 # Pen relay (pen relay serve) as a hardened system service. Install and migration steps:
 # docs/operations/pen.md#seoul-relay. /etc/pen-relay.env sets PEN_RELAY_LISTEN (address:443) and
-# PEN_RELAY_HOST (the certificate's DNS name); the ACME cache lives in the service's state directory.
+# PEN_RELAY_HOST (the certificate's DNS name), and may set PEN_RELAY_TRAFFIC_NODES (comma-separated
+# node ids that get traffic lines; unset logs relay-wide totals only); the ACME cache lives in the
+# service's state directory.
 [Unit]
 Description=Pen relay
 After=network-online.target
@@ -8,7 +10,7 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/pen-relay.env
-ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert ${PEN_RELAY_HOST} --cache /var/lib/pen-relay/acme --max-sockets 1024 --max-per-ip 64 --max-queued-mib 128 --max-queued-per-source-mib 16
+ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert ${PEN_RELAY_HOST} --cache /var/lib/pen-relay/acme --max-sockets 1024 --max-per-ip 64 --max-queued-mib 128 --max-queued-per-source-mib 16 --traffic-nodes=${PEN_RELAY_TRAFFIC_NODES}
 # Memory, what each part may hold at worst (the four flags above and the relay's built-in limits).
 # These are not a bound the kernel enforces: GOMEMLIMIT only makes the Go collector work harder near
 # it, so the margin under MemoryMax is headroom checked by measurement, not a proof.
