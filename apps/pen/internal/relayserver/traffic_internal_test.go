@@ -775,3 +775,22 @@ func TestAFinalLineTheLogFailedToTakeIsRetriedBeforeCloseReturns(t *testing.T) {
 		t.Fatalf("last relay line %v, want the failed write counted", last)
 	}
 }
+
+// Sessions can reach the totals out of end-time order (a stalled uplink holds an older one), and
+// that must not refill the line limit twice for the same seconds.
+func TestOutOfOrderSessionEndsDoNotRefillTheLineLimit(t *testing.T) {
+	start := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	tr := &traffic{burst: 2, rate: 1, lines: make(chan logItem, 100)}
+	const ends = 20
+	for i := range ends {
+		at := start
+		if i%2 == 0 {
+			at = start.Add(10 * time.Second)
+		}
+		tr.ended(&sessionTally{node: "n0000000", listed: true, answered: true, admitted: start, ended: at})
+	}
+	// 10 s of end times allow the burst plus one line a second.
+	if got := len(tr.lines); got > 2+10 {
+		t.Fatalf("%d session lines from %d out-of-order ends over 10 s, want at most 12", got, ends)
+	}
+}

@@ -166,12 +166,15 @@ func (t *traffic) takeTokenLocked(at time.Time) bool {
 	if rate <= 0 {
 		rate = SessionLinesPerSecond
 	}
+	// Sessions reach here out of end-time order, so refilled only moves forward: an older end
+	// time must not refill the same seconds again.
 	if t.refilled.IsZero() {
 		t.tokens = burst
+		t.refilled = at
 	} else if d := at.Sub(t.refilled); d > 0 {
 		t.tokens = min(burst, t.tokens+d.Seconds()*rate)
+		t.refilled = at
 	}
-	t.refilled = at
 	if t.tokens < 1 {
 		return false
 	}
