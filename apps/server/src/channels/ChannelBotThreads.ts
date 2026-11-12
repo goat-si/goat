@@ -32,7 +32,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
-import { readHistoryPage } from "./channelBotThreadHistory.ts";
+import { launchesStatement, readHistoryPage } from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 
@@ -43,6 +43,7 @@ const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 interface ChildRow {
+  readonly key?: string;
   readonly value_json: string;
   readonly rank?: number;
   readonly title: string | null;
@@ -109,9 +110,10 @@ const make = Effect.gen(function* () {
       GROUP BY json_extract(target.value, '$.taskId')`.pipe(Effect.mapError(failed));
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
-    const childRows = yield* (
-      options.launchLimit === undefined
-        ? sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
+    const launchLimit = options.launchLimit;
+    const childRows: ReadonlyArray<ChildRow> =
+      launchLimit === undefined
+        ? yield* sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
         json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
       FROM channel_runtime_state s
       JOIN json_each(${taskIds}) ids
@@ -122,27 +124,20 @@ const make = Effect.gen(function* () {
         ON json_extract(s.value_json, '$.surface') = 'thread_launch'
         AND json_extract(s.value_json, '$.destination.host') IS NULL
         AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
-      ORDER BY s.key`
-        : // History lists each task's newest launches, one more to tell whether there are more.
-          sql<ChildRow>`SELECT s.value_json, s.rank, p.title, p.project_id,
-        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
-      FROM (
-        SELECT launch.key, launch.value_json, ROW_NUMBER() OVER (
-          PARTITION BY ids.value
-          ORDER BY json_extract(launch.value_json, '$.createdAt') DESC, launch.key DESC) AS rank
-        FROM channel_runtime_state launch
-        JOIN json_each(${taskIds}) ids
-          ON launch.key >= ('child-work:' || ids.value || ':')
-          AND launch.key < ('child-work:' || ids.value || ';')
-        WHERE json_extract(launch.value_json, '$.surface') IN ('thread_launch', 'ssh_thread_launch')
-      ) s
-      LEFT JOIN orchestration_v2_projection_threads p
-        ON json_extract(s.value_json, '$.surface') = 'thread_launch'
-        AND json_extract(s.value_json, '$.destination.host') IS NULL
-        AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
-      WHERE s.rank <= ${options.launchLimit + 1}
-      ORDER BY s.key`
-    ).pipe(Effect.mapError(failed));
+      ORDER BY s.key`.pipe(Effect.mapError(failed))
+        : // History seeks each task's newest launches, one more to tell whether there are more.
+          (yield* Effect.forEach(tasks, (task) =>
+            launchesStatement(sql, {
+              ownerId: owner.ownerId,
+              taskId: task.taskId,
+              limit: launchLimit + 1,
+            }).pipe(
+              Effect.map((rows) => rows.map((row, index) => ({ ...row, rank: index + 1 }))),
+              Effect.mapError(failed),
+            ),
+          ))
+            .flat()
+            .toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const children = yield* Effect.try(() =>
       childRows.map((item) => ({
         child: decodeChild(item.value_json),
@@ -199,14 +194,16 @@ const make = Effect.gen(function* () {
         });
       for (const { child, rank, title, projectId, recordedKind } of children) {
         if (child.ownerId !== owner.ownerId || child.taskId !== task.taskId) continue;
-        if (options.launchLimit !== undefined && rank > options.launchLimit) {
+        if (launchLimit !== undefined && rank > launchLimit) {
           launchesTruncated.push(task.taskId);
           continue;
         }
         const destination = child.destination;
         // Work on another machine is listed by its record alone; one never launched ran nothing.
         if (child.surface === "ssh_thread_launch") {
-          if (destination?.host === undefined || child.state === "released") continue;
+          // History lists a released launch that got its remote thread, which it can open.
+          const ran = launchLimit !== undefined && destination?.threadId !== undefined;
+          if (destination?.host === undefined || (child.state === "released" && !ran)) continue;
           remoteWork.push({
             childWorkId: child.childWorkId,
             taskId: task.taskId,
@@ -351,6 +348,7 @@ const make = Effect.gen(function* () {
         ...(built.launchesTruncated.length === 0
           ? {}
           : { launchesTruncated: [...new Set(built.launchesTruncated)] }),
+        ...(page.endedEarly === true ? { endedEarly: true } : {}),
       },
     };
   });

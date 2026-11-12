@@ -505,8 +505,11 @@ export type BotRemoteWork = typeof BotRemoteWork.Type;
 /** A history page's tasks, and the launched threads it lists per task, newest first. */
 export const CHANNEL_BOT_THREADS_HISTORY_LIMIT = 50;
 export const CHANNEL_BOT_THREADS_HISTORY_LAUNCHES = 20;
+export const CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH = 512;
 /** Opaque and bound to one owner and bot; a server refuses one that is not its own. */
-export const ChannelBotThreadsCursor = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
+export const ChannelBotThreadsCursor = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH),
+);
 export const ChannelListBotThreadsInput = Schema.Struct({
   botId: Schema.optionalKey(BotId),
   /**
@@ -531,6 +534,8 @@ export const ChannelListBotThreadsResult = Schema.Struct({
       nextCursor: Schema.optionalKey(ChannelBotThreadsCursor),
       /** Tasks that launched more threads than this page lists; the rest stay in Threads. */
       launchesTruncated: Schema.optionalKey(Schema.Array(ChannelTaskId)),
+      /** The walk cannot go on: the next task's stored id is too long to name in a cursor. */
+      endedEarly: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 });

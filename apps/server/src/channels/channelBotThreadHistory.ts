@@ -1,4 +1,5 @@
 import {
+  CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH,
   CHANNEL_BOT_THREADS_HISTORY_LIMIT,
   ChannelGatewayError,
   ChannelTask,
@@ -64,10 +65,43 @@ export const decodeHistoryCursor = Effect.fn("ChannelBotThreads.decodeHistoryCur
 });
 
 /**
- * One page of a bot's tasks by creation, newest first. created_at and task_id never change after
- * insert, so a task keeps its place however its state changes between pages. A bot turn is listed
- * once it launched a thread, which it never undoes. The terms keep channel_tasks the outer loop on
- * channel_tasks_owner_bot_created, and the redundant "<=" makes the cursor a seek.
+ * A launch with a thread to open, the only kind history lists. Its destination is set when the
+ * launch is claimed or bound and is replaced, never removed, so a record only ever enters this set.
+ * The terms are channel_child_work_launches' own, which SQLite needs to use that index.
+ */
+const openableLaunch = (sql: SqlClient.SqlClient) =>
+  sql`s.key >= 'child-work:' AND s.key < 'child-work;'
+    AND json_extract(s.value_json, '$.surface') IN ('thread_launch', 'ssh_thread_launch')
+    AND json_extract(s.value_json, '$.destination.threadId') IS NOT NULL`;
+
+/** A task's newest openable launches, read from their index; one more tells whether there are more. */
+export const launchesStatement = (
+  sql: SqlClient.SqlClient,
+  input: { readonly ownerId: string; readonly taskId: string; readonly limit: number },
+) =>
+  sql<{
+    readonly key: string;
+    readonly value_json: string;
+    readonly title: string | null;
+    readonly project_id: string | null;
+    readonly work_kind: unknown;
+  }>`SELECT s.key, s.value_json, p.title, p.project_id,
+      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
+    FROM channel_runtime_state s
+    -- Only a local launch's thread is in this machine's projection.
+    LEFT JOIN orchestration_v2_projection_threads p
+      ON json_extract(s.value_json, '$.surface') = 'thread_launch'
+      AND json_extract(s.value_json, '$.destination.host') IS NULL
+      AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
+    WHERE json_extract(s.value_json, '$.taskId') = ${input.taskId} AND ${openableLaunch(sql)}
+      AND json_extract(s.value_json, '$.ownerId') = ${input.ownerId}
+    ORDER BY json_extract(s.value_json, '$.createdAt') DESC, s.key DESC
+    LIMIT ${input.limit}`;
+
+/**
+ * A bot's tasks by creation, newest first; created_at and task_id never change, so a task keeps its
+ * place between pages. A turn joins once a launch has a thread to open, and never leaves. The terms
+ * keep channel_tasks the outer loop on its index; the redundant "<=" makes the cursor a seek.
  */
 export const historyStatement = (
   sql: SqlClient.SqlClient,
@@ -88,8 +122,7 @@ export const historyStatement = (
         AND c.owner_id = ${input.ownerId} AND c.kind = 'goat')
       AND (COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' OR EXISTS (
         SELECT 1 FROM channel_runtime_state s
-        WHERE s.key >= ('child-work:' || t.task_id || ':') AND s.key < ('child-work:' || t.task_id || ';')
-          AND json_extract(s.value_json, '$.surface') IN ('thread_launch', 'ssh_thread_launch')))
+        WHERE json_extract(s.value_json, '$.taskId') = t.task_id AND ${openableLaunch(sql)}))
       ${after}
     ORDER BY t.created_at DESC, t.task_id DESC LIMIT ${input.limit}`;
 };
@@ -110,19 +143,23 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
     Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
   );
   const last = page.at(-1);
+  const next =
+    rows.length > page.length && last !== undefined
+      ? encodeHistoryCursor(scope, { createdAt: last.created_at, taskId: last.task_id })
+      : undefined;
+  // Ids GOAT generates are short digests; a longer stored one cannot be named in a cursor.
+  const endedEarly = next !== undefined && next.length > CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH;
+  if (endedEarly)
+    yield* Effect.logWarning("GOAT Bot task history stops at a task id too long for a cursor", {
+      taskId: last?.task_id,
+    });
   return {
     tasks,
     // A turn's answer is in the chat; it is listed by the threads it launched.
     threadsOnly: new Set<ChannelTaskId>(
       tasks.flatMap((task) => (task.kind === "turn" ? [task.taskId] : [])),
     ),
-    ...(rows.length > page.length && last !== undefined
-      ? {
-          nextCursor: encodeHistoryCursor(scope, {
-            createdAt: last.created_at,
-            taskId: last.task_id,
-          }),
-        }
-      : {}),
+    ...(next === undefined || endedEarly ? {} : { nextCursor: next }),
+    ...(endedEarly ? { endedEarly } : {}),
   };
 });

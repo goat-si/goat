@@ -3,6 +3,7 @@ import {
   BotId,
   CHANNEL_BOT_THREADS_HISTORY_LIMIT,
   ChannelChildWorkId,
+  ChannelInputId,
   ChannelTaskId,
   ThreadId,
   type BotThreadRow,
@@ -18,15 +19,22 @@ import {
   decodeHistoryCursor,
   encodeHistoryCursor,
   historyStatement,
+  launchesStatement,
 } from "./channelBotThreadHistory.ts";
+import { taskIdFor } from "./channelIds.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import * as ChildStore from "./channelChildWorkStore.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
 import {
   botThreadId,
   environmentId,
+  goatInput,
   makeHarness,
+  onlyTask,
   owner,
   ownerId,
+  rpcContext,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
 
@@ -42,6 +50,7 @@ const insertTask = (
     readonly createdAt: string;
     readonly kind?: "turn";
     readonly botId?: string;
+    readonly conversationId?: string;
   },
 ) =>
   Effect.gen(function* () {
@@ -50,7 +59,7 @@ const insertTask = (
     const data = JSON.stringify({
       taskId: id,
       ...(options.kind === undefined ? {} : { kind: options.kind }),
-      conversationId: "conv:bot",
+      conversationId: options.conversationId ?? "conv:bot",
       originBindingId: "binding:1",
       originInputId: "input:1",
       originAddress: { kind: "goat", environmentId, threadId: botThreadId },
@@ -72,7 +81,7 @@ const insertTask = (
       updatedAt: options.createdAt,
       ...(terminal ? { completedAt: options.createdAt } : {}),
     });
-    yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version, generation, task_json, created_at, updated_at, bot_id) VALUES (${id}, ${ownerId}, 'conv:bot', ${options.status}, 1, 1, ${data}, ${options.createdAt}, ${options.createdAt}, ${options.botId ?? "main"})`;
+    yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version, generation, task_json, created_at, updated_at, bot_id) VALUES (${id}, ${ownerId}, ${options.conversationId ?? "conv:bot"}, ${options.status}, 1, 1, ${data}, ${options.createdAt}, ${options.createdAt}, ${options.botId ?? "main"})`;
   });
 
 /** What the ledger writes on a transition: status, task_json and updated_at, never created_at. */
@@ -113,6 +122,31 @@ const launch = (
       },
       100,
     );
+  });
+
+/** A child record as the store keeps it, in any state and with or without a destination. */
+const childRecord = (
+  taskId: string,
+  childWorkId: string,
+  record: { readonly surface: string; readonly state: string; readonly destination?: object },
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const value = JSON.stringify({
+      childWorkId,
+      ownerId,
+      taskId,
+      generation: 1,
+      callerThreadId: botThreadId,
+      requestKey: childWorkId,
+      promptDigest: "digest",
+      createdAt: at(1),
+      updatedAt: at(1),
+      ...record,
+    });
+    yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+      VALUES (${"child-work:" + taskId + ":" + childWorkId}, ${value}, ${at(1)})
+      ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json`;
   });
 
 const setup = Effect.gen(function* () {
@@ -426,4 +460,138 @@ describe("ChannelBotThreads history", () => {
       }),
     ),
   );
+  it.effect("counts a turn only once one of its launches has a thread to open", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (const id of ["reserved", "released", "remote-released", "bound"])
+          yield* insertTask(id, { status: "completed", createdAt: at(1), kind: "turn" });
+        yield* childRecord("reserved", "a", { surface: "thread_launch", state: "reserved" });
+        yield* childRecord("released", "b", { surface: "ssh_thread_launch", state: "reserved" });
+        yield* childRecord("released", "b", {
+          surface: "ssh_thread_launch",
+          state: "released",
+          destination: { host: "box" },
+        });
+        // A launch that got its remote thread stays listed after it is released.
+        yield* childRecord("remote-released", "c", {
+          surface: "ssh_thread_launch",
+          state: "released",
+          destination: { host: "box", threadId: "remote:c" },
+        });
+        yield* childRecord("bound", "d", {
+          surface: "thread_launch",
+          state: "bound",
+          destination: { threadId: "thread:d" },
+        });
+        const page = yield* history();
+        assert.deepStrictEqual(
+          page.rows.map((row) => (row.kind === "coding" ? String(row.taskId) : row.kind)),
+          ["bound"],
+        );
+        assert.deepStrictEqual(
+          (page.remoteWork ?? []).map((item) => String(item.taskId)),
+          ["remote-released"],
+        );
+        assert.isUndefined(page.history?.nextCursor);
+        const sql = yield* SqlClient.SqlClient;
+        const listed = yield* historyStatement(sql, {
+          ownerId,
+          botId: "main",
+          after: undefined,
+          limit: 51,
+        });
+        assert.deepStrictEqual(listed.map((row) => row.task_id).toSorted(), [
+          "bound",
+          "remote-released",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("seeks a task's newest launches from their index, without sorting", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("busy", { status: "running", createdAt: at(1) });
+        for (let index = 0; index < 5000; index++)
+          yield* childRecord("busy", `launch-${String(index).padStart(4, "0")}`, {
+            surface: index % 2 === 0 ? "thread_launch" : "delegate_local",
+            state: "completed",
+            destination: { threadId: `thread:${index}` },
+          });
+        const sql = yield* SqlClient.SqlClient;
+        const plan = (yield* sql<{
+          readonly detail: string;
+        }>`EXPLAIN QUERY PLAN ${launchesStatement(sql, { ownerId, taskId: "busy", limit: 21 })}`).map(
+          (row) => row.detail,
+        );
+        const text = plan.join("\n");
+        assert.include(text, "USING INDEX channel_child_work_launches", text);
+        assert.notInclude(text, "TEMP B-TREE", text);
+      }),
+    ),
+  );
+
+  it.effect("ends the walk with a flag instead of a cursor it would refuse", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const long = "🐐".repeat(100);
+        for (let index = 0; index < 50; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        yield* insertTask(long, { status: "completed", createdAt: at(49) });
+        yield* insertTask("after", { status: "completed", createdAt: at(60) });
+        const page = yield* history();
+        assert.strictEqual(taskIds([page]).at(-1), long);
+        assert.isUndefined(page.history?.nextCursor);
+        assert.isTrue(page.history?.endedEarly);
+        // Ids GOAT generates always fit: a stable digest of the input, whatever its length.
+        const generated = taskIdFor(ChannelInputId.make("x".repeat(5000)), 999);
+        const cursor = encodeHistoryCursor(
+          { ownerId: "o".repeat(500), botId: "b".repeat(500) },
+          { createdAt: at(0), taskId: generated },
+        );
+        assert.isAtMost(cursor.length, 512);
+      }),
+    ),
+  );
+
+  it.effect("keeps a task retried through the retry service in its place between pages", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW - 60 * 60_000);
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("do: tidy the docs", "history-retry"), rpcContext);
+      yield* runtime.drain;
+      const started = yield* onlyTask;
+      harness.world.setStatus(started.worker!.threadId, 1, "failed");
+      yield* runtime.drain;
+      const failed = yield* onlyTask;
+      assert.strictEqual(failed.status, "failed");
+      yield* TestClock.setTime(NOW);
+      for (let index = 0; index < 60; index++)
+        yield* insertTask(name(index), {
+          status: "completed",
+          createdAt: at(index),
+          conversationId: failed.conversationId,
+        });
+      const service = yield* BotThreads.ChannelBotThreads;
+      const first = yield* history();
+      const retried = yield* service.retry(
+        { taskId: failed.taskId, clientRequestId: "history-retry" },
+        owner,
+      );
+      assert.notStrictEqual(retried.status, "refused");
+      const second = yield* history(first.history?.nextCursor);
+      assert.deepStrictEqual(taskIds([first, second]), [...newestFirst(60), failed.taskId]);
+      const row = second.rows.find(
+        (item): item is TaskRow => item.kind === "task" && item.task.taskId === failed.taskId,
+      );
+      assert.notStrictEqual(row?.task.status, "failed", "the row shows the new attempt");
+      assert.isUndefined(second.history?.nextCursor);
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
