@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { MessageId, type OrchestrationV2DomainEvent } from "@goat/contracts";
+import { MessageId, type OrchestrationV2StoredEvent } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -123,7 +123,7 @@ it.effect(
                 yield* Queue.offer(barriers, event.message.text);
               // The run only trusts a snapshot that was stored.
               return event.type === "provider_thread.updated"
-                ? [{} as OrchestrationV2DomainEvent]
+                ? [{} as OrchestrationV2StoredEvent]
                 : [];
             }),
         }).pipe(Effect.forkScoped);
