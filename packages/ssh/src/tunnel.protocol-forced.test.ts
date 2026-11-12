@@ -92,12 +92,21 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live.each(["start time", "port", "uid", "no approval"] as const)(
+    const refusedBecause = {
+      "start time": "its start time differs from the approved one",
+      uid: "another user owns it",
+      "start tick": "the start tick recorded at its launch differs",
+    } as const;
+
+    it.live.each(["start time", "port", "uid", "start tick", "no approval"] as const)(
       "a runtime that fails the %s check is never signalled",
       (mismatch) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture(unverified);
           if (mismatch === "uid") yield* f.fs.writeFileString(`${f.test}/foreign-uid`, "4242\n");
+          // On Linux the live tick is real and on macOS it is empty; neither is this record.
+          if (mismatch === "start tick")
+            yield* f.fs.writeFileString(`${f.state}/started.ticks`, "1\n");
           const startedAt = yield* startOf(f, f.pid);
           const before = yield* f.snapshot;
           const result = yield* f.run("launch", false, {
@@ -117,6 +126,13 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(isAlive(f.pid));
           assert.deepEqual(yield* f.snapshot, before);
           assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+          if (mismatch === "port" || mismatch === "no approval") return;
+          // The person is told how to stop it themselves; the host log says which check failed.
+          if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+          assert.include(
+            yield* f.fs.readFileString(`${f.state}/server.log`),
+            `GOAT did not stop PID ${f.pid} for an approved forced update: ${refusedBecause[mismatch]}.`,
+          );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 

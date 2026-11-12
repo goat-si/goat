@@ -28,6 +28,15 @@ const approved = (f: Fixture) =>
 const foreignCommand = (f: Fixture) =>
   f.fs.writeFileString(`${f.test}/foreign-command`, "node /srv/other/server.js --port 1\n");
 
+/** The host log names the PID and the check that failed, so a refusal can be diagnosed later. */
+const loggedRefusal = (f: Fixture, reason: string) =>
+  Effect.gen(function* () {
+    assert.include(
+      yield* f.fs.readFileString(`${f.state}/server.log`),
+      `GOAT did not stop PID ${f.pid} for an approved forced update: ${reason}.`,
+    );
+  });
+
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH forced replacement only stops a process GOAT can show it started",
   () => {
@@ -46,6 +55,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
           assert.isTrue(isAlive(f.pid));
           assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+          yield* loggedRefusal(f, "its command is not GOAT's recorded launch");
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
@@ -63,6 +73,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+        yield* loggedRefusal(f, "no start time was recorded at its launch");
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 

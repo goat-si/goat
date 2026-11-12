@@ -53,9 +53,13 @@ forced_trusted() {
 forced_stop_runtime() {
   # A person approved stopping exactly this process. Every check runs again under the lock, and
   # a process that fails one is left running. Nothing is matched by name.
+  forced_log_refusal() {
+    printf 'GOAT did not stop PID %s for an approved forced update: %s.\\n' "$FORCE_PID" "$1" >>"$LOG_FILE" 2>/dev/null || :
+  }
   forced_refused() {
     forced_restore_runner
-    printf 'GOAT did not stop PID %s on the remote host because %s; it was left running. Ask again so the approval names the runtime running now.\\n' "$FORCE_PID" "$1" >&2; exit 1
+    forced_log_refusal "$1"
+    printf 'GOAT did not stop PID %s on the remote host because %s; it was left running. Ask again so the approval names the runtime running now, or check it on the host and stop it yourself (kill %s).\\n' "$FORCE_PID" "$1" "$FORCE_PID" >&2; exit 1
   }
   # Once the new runner is published, a stop that does not happen puts the old one back.
   FORCED_PUBLISHED=0
@@ -86,8 +90,14 @@ forced_stop_runtime() {
     fact_slurp "$STATE_DIR/started" && forced_recorded_start="$FACT_TEXT"
     fact_slurp "$STATE_DIR/started.ticks" && forced_recorded_ticks="$FACT_TEXT"
   fi
-  if [ "$forced_identity_verified" != 1 ] || [ "$forced_recorded_start" != "$FORCE_START" ] ||
-     [ "$forced_recorded_ticks" != "$(forced_ticks_of "$FORCE_PID")" ]; then
+  forced_unproven=
+  if [ "$forced_identity_verified" != 1 ]; then forced_unproven="its command is not GOAT's recorded launch"
+  elif [ -z "$forced_recorded_start" ]; then forced_unproven="no start time was recorded at its launch"
+  elif [ "$forced_recorded_start" != "$FORCE_START" ]; then forced_unproven="the start time recorded at its launch differs"
+  elif [ "$forced_recorded_ticks" != "$(forced_ticks_of "$FORCE_PID")" ]; then forced_unproven="the start tick recorded at its launch differs"
+  fi
+  if [ -n "$forced_unproven" ]; then
+    forced_log_refusal "$forced_unproven"
     printf 'GOAT did not stop PID %s on the remote host: it cannot show this is the runtime it started (the start time recorded at its launch and its launch command must both match, and runtimes started before GOAT kept that record have none). Check it on the host and stop it yourself (kill %s), then update again.\\n' "$FORCE_PID" "$FORCE_PID" >&2; exit 1
   fi
   forced_root_ticks="$(forced_ticks_of "$FORCE_PID")"
@@ -154,7 +164,8 @@ GOAT_FORCED_RECORDS
     sleep 1; forced_waited=$((forced_waited + 1))
   done
   if server_alive "$FORCE_PID"; then
-    forced_signal_same KILL "$FORCE_PID" "" "$FORCE_START" "$forced_root_ticks" || :
+    forced_signal_same KILL "$FORCE_PID" "" "$FORCE_START" "$forced_root_ticks" ||
+      printf 'GOAT did not send SIGKILL to PID %s: it exited or no longer matched the approved runtime.\\n' "$FORCE_PID" >>"$LOG_FILE" 2>/dev/null || :
     forced_waited=0
     while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1; forced_waited=$((forced_waited + 1)); done
     if forced_parent_holds; then
