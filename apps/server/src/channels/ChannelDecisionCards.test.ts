@@ -328,6 +328,32 @@ describe("decision cards", () => {
     },
   );
 
+  // Hangul typed on a Mac can arrive decomposed; "승인 A1" must read the same either way.
+  it.effect("a decomposed Korean approval word with its code answers the approval", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* imessageChat();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
+      yield* runtime.drain;
+      const request = approval("ship");
+      harness.world.runtimeRequests.set((yield* onlyTask).worker!.threadId, [request]);
+      harness.world.approvalPrompts.set(request.id, "make release");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+
+      const decomposed = "승인 A1".normalize("NFD");
+      assert.notStrictEqual(decomposed, "승인 A1");
+      yield* gateway.ingest(imessageInput(decomposed, "row-2"), imessageContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.strictEqual(answered?.decision, "accept");
+      assert.strictEqual(answered?.requestId, request.id);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("a bare approve sent before a newer approval existed does not approve that one", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

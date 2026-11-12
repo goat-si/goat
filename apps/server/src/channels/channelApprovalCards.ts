@@ -50,7 +50,8 @@ export interface ApprovalReply {
  * ("approve the PR") is conversation, never an approval of whatever happens to be waiting.
  */
 export const parseApprovalReply = (text: string): ApprovalReply | undefined => {
-  const trimmed = text.trim();
+  // Hangul typed on a Mac can arrive decomposed.
+  const trimmed = text.normalize("NFC").trim();
   if (trimmed === "" || trimmed.length > MAX_REPLY_LENGTH) return undefined;
   const [first = "", ...rest] = trimmed.split(/\s+/);
   const verb = first.toLowerCase().replace(/[.!,:]+$/, "");
