@@ -6,6 +6,7 @@ import {
   installMethod,
   parseDeviceLogin,
   relayableBrowserUrl,
+  versionCore,
 } from "./ProviderHostSyncRecipes.ts";
 
 describe("installCommand", () => {
@@ -154,5 +155,20 @@ describe("describeInstallFailure", () => {
     expect(message).toMatch(/could not write its install folder/);
     expect(describeInstallFailure(7, "token=abc")).toBe("The installer exited with code 7.");
     expect(describeInstallFailure(null, "")).toMatch(/did not finish/);
+  });
+});
+
+describe("pinned prerelease versions", () => {
+  it("regression F7-1: keeps a hyphenated prerelease whole, and never a prefix of it", () => {
+    expect(versionCore("pi 1.2.3-beta-2")).toBe("1.2.3-beta-2");
+    expect(versionCore("1.2.3-beta.1 (build)")).toBe("1.2.3-beta.1");
+    expect(versionCore("version 1.2.3.")).toBe("1.2.3");
+    // An identifier longer than a pin can name is no version GOAT can match.
+    expect(versionCore("1.2.3-" + "a".repeat(25))).toBeNull();
+    expect(installCommand("opencode", "linux", "1.2.3-beta-2")?.args).toEqual([
+      "install",
+      "-g",
+      "opencode-ai@1.2.3-beta-2",
+    ]);
   });
 });

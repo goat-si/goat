@@ -36,7 +36,7 @@ it.effect("reports old, stopped, and mismatched hosts instead of failing the mat
       call.host === "old"
         ? Effect.fail(
             new Dispatch.SshRemoteDispatchError({
-              reason: "remote_refused",
+              reason: "remote_outdated",
               message: "GOAT on old does not have goat_provider_host_matrix; update GOAT on old.",
             }),
           )

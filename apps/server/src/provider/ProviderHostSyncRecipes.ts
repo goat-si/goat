@@ -137,7 +137,8 @@ export function describeInstallFailure(exitCode: number | null, output: string):
 /** `codex-cli 0.42.0` and `0.42.0 (Claude Code)` both pin to 0.42.0. */
 export function versionCore(version: string): string | null {
   return (
-    /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?/u.exec(
+    // A whole version or none: an identifier that runs on past a pin's bounds is not cut short.
+    /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?(?![0-9A-Za-z-]|\.[0-9A-Za-z])/u.exec(
       version,
     )?.[0] ?? null
   );
@@ -147,7 +148,7 @@ export const hostPlatform = (platform: string): HostPlatform =>
   platform === "darwin" || platform === "linux" || platform === "win32" ? platform : "other";
 
 const VERSION =
-  /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?)$/u;
+  /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?)$/u;
 
 /** The command to install `driver` on this platform, or null when a person must. */
 export function installCommand(

@@ -62,8 +62,8 @@ export const classify = (error: Dispatch.SshRemoteDispatchError | Failure): Remo
 const describe = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
   const message = error.message;
   if (error._tag !== "SshRemoteDispatchError") return { status: "refused", message };
-  if (Dispatch.refusedByRemote(error.reason) && message.includes(" does not have "))
-    return { status: "update_runtime", message };
+  // From the structured reason only: a remote's own text could say anything.
+  if (error.reason === "remote_outdated") return { status: "update_runtime", message };
   if (error.reason === "host_unavailable" && message.includes("goat_ssh_host_prepare"))
     return { status: "not_ready", message };
   if (error.reason === "remote_refused")

@@ -213,7 +213,7 @@ export type ProviderSyncState = typeof ProviderSyncState.Type;
 /** Exact release or `latest`. The strict pattern keeps it safe as an installer argument. */
 export const ProviderSyncVersion = Schema.String.check(
   Schema.isPattern(
-    /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?)$/u,
+    /^(?:latest|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z-]{1,20}(?:\.[0-9A-Za-z-]{1,20}){0,4})?)$/u,
   ),
 );
 
