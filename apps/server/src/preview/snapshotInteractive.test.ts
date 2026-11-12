@@ -185,6 +185,18 @@ it("a button whose field a cut tree left out is named only by the text lines kep
   ]);
 });
 
+it("beside a field, a name holding any of the element's own text lines falls back, however long the lines before it", () => {
+  const tree = [
+    '- button "Save ZZZ" [ref=e2] [box=1,2,3,4]:',
+    `  - text: ${"X".repeat(120)}`,
+    "  - text: Save",
+    "  - textbox [ref=e3] [box=5,6,7,8]: Hint",
+  ].join("\n");
+  expect(interactiveElementsOf(tree, false)).toContainEqual(
+    expect.objectContaining({ role: "button", name: "X".repeat(100) }),
+  );
+});
+
 it("a name the page wrote stays when nothing under the element shows it", () =>
   withPage(BORROWED, async (page, cdp) => {
     const narrow = await take(page, cdp, true);

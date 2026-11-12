@@ -95,7 +95,7 @@ type Row = ReturnType<typeof rowsOf>[number];
  * The text lines directly under an element. Every element under it keeps its text: the tree draws
  * an editable region like any wrapper, so its words may be input.
  */
-const ownTexts = (rows: ReadonlyArray<Row>, index: number) => {
+const ownText = (rows: ReadonlyArray<Row>, index: number) => {
   const depth = rows[index]?.indent ?? 0;
   const parts: string[] = [];
   let skipped = Infinity;
@@ -107,11 +107,8 @@ const ownTexts = (rows: ReadonlyArray<Row>, index: number) => {
     if (text) parts.push(text);
     if (parts.join(" ").length >= NAME_LIMIT) break;
   }
-  return parts;
+  return parts.join(" ").slice(0, NAME_LIMIT);
 };
-
-const ownText = (rows: ReadonlyArray<Row>, index: number) =>
-  ownTexts(rows, index).join(" ").slice(0, NAME_LIMIT);
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
 
@@ -143,17 +140,23 @@ const showsContent = (rows: ReadonlyArray<Row>, index: number, field: Entry) => 
 const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut: boolean) => {
   const depth = rows[index]?.indent ?? 0;
   const own = squash(name);
-  const parts = ownTexts(rows, index).map(squash).filter(Boolean);
-  const fromContent = parts.length === 0 || parts.some((part) => own.includes(part));
+  let ownLines = 0;
+  let fromContent = false;
   let field = false;
   let nested = Infinity;
+  const settled = () => field && (fromContent || ownLines === 0);
   for (let next = index + 1; ; next++) {
     const row = rows[next];
-    if (row === undefined) return cut || (field && fromContent);
-    if (row.indent <= depth) return field && fromContent;
+    if (row === undefined) return cut || settled();
+    if (row.indent <= depth) return settled();
     if (row.indent <= nested) nested = Infinity;
     const { entry } = row;
-    if (nested === Infinity && entry?.role === "text") continue;
+    if (nested === Infinity && entry?.role === "text") {
+      const line = squash(entry.value ?? "");
+      ownLines += line ? 1 : 0;
+      fromContent ||= line !== "" && own.includes(line);
+      continue;
+    }
     nested = Math.min(nested, row.indent);
     // An image's name is its alt text, which the page writes.
     if (entry === undefined || entry.role === "img") continue;
