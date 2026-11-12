@@ -44,11 +44,11 @@ import { capturePaint, occludedRefs } from "./paintOcclusion.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
 import {
-  narrowTree,
   resetSnapshotDiff,
   snapshotOptionsResult,
   snapshotPageMetadata,
 } from "./snapshotOptions.ts";
+import { interactiveElementsOf, narrowTree } from "./snapshotInteractive.ts";
 import { readLayersHeader } from "./blockingLayers.ts";
 import {
   frameUrls,
@@ -592,6 +592,7 @@ const capture = async (
       // Mask text before truncating so a value crossing the cut cannot leak its prefix.
       visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
       accessibilityTree,
+      interactiveElements: interactiveElementsOf(accessibilityTree),
       ...treeFields,
       ...maskSnapshotRecords(mask, input),
       ...(screenshot === undefined ? {} : { screenshot }),
