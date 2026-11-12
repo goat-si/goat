@@ -208,9 +208,9 @@ forced_supervise_start() {
   if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then forced_spawn="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
   else forced_spawn="$GOAT_NODE_SCRIPT_PATH"; fi
   forced_result="$STATE_DIR/replacement.result.$"
-  rm -f "$forced_result"
+  rm -f "$forced_result" 2>/dev/null || :
   set --
-  [ -n "$FORCED_PREVIOUS_VERSION" ] || rm -f "$FORCED_PREVIOUS_RUNNER"
+  [ -n "$FORCED_PREVIOUS_VERSION" ] || rm -f "$FORCED_PREVIOUS_RUNNER" 2>/dev/null || :
   if [ -n "$FORCED_PREVIOUS_VERSION" ]; then
     set -- --previous-runner "$FORCED_PREVIOUS_RUNNER" --previous-version "$FORCED_PREVIOUS_VERSION" --previous-identity "$FORCED_PREVIOUS_IDENTITY"
   fi

@@ -947,15 +947,18 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
       else DRAIN_UNCERTAIN=1; rm -f "$PREVIOUS_RUNNER"; emit_pending unknown; fi ;;
   esac
   LEGACY_TERMINATED=1
-  rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
-  publish_selected_runner
+  # A forced stop already did both; repeating them on a read-only host would end the script early.
+  if [ "$DRAIN_FORCED" != 1 ]; then
+    rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
+    publish_selected_runner
+  fi
   if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then
     SPAWN_IDENTITY="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
   else
     SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
-  SUPERVISE_RESULT="$STATE_DIR/replacement.result.$$"
-  rm -f "$SUPERVISE_RESULT"
+  SUPERVISE_RESULT="$STATE_DIR/replacement.result.$"
+  rm -f "$SUPERVISE_RESULT" 2>/dev/null || :
   # Detached, so a dropped SSH session cannot leave the host without a server.
   trap '' HUP
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
