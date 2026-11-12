@@ -7,6 +7,7 @@ import * as NodeFS from "node:fs";
 import * as NodeBuffer from "node:buffer";
 
 import {
+  CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS,
   CHANNEL_BOT_ARTIFACT_CHUNK_BYTES,
   CHANNEL_BOT_ARTIFACT_MAX_BYTES,
   CHANNEL_GATEWAY_WS_METHODS,
@@ -76,8 +77,6 @@ const versionOf = (stat: NodeFS.BigIntStats) =>
 const plainName = (name: string) =>
   !name.startsWith(".") && !/[:\\]/u.test(name) && name === name.trim();
 const PATH_MAX = 512;
-/** A read request answers busy after this; clients give up on a chunk after 30 seconds. */
-const READ_ANSWER_BOUND = "20 seconds";
 
 /** The path's components, or undefined when it is not plainly inside the folder. */
 const segmentsOf = (relativePath: string) => {
@@ -218,7 +217,7 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
         Effect.forkDetach,
       );
     const answer = yield* Fiber.join(work).pipe(
-      Effect.timeoutOption(READ_ANSWER_BOUND),
+      Effect.timeoutOption(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS),
       Effect.onInterrupt(() => Effect.sync(() => work.interruptUnsafe())),
     );
     if (Option.isSome(answer)) return answer.value;

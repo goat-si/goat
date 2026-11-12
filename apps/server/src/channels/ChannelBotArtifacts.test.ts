@@ -5,7 +5,12 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
-import { CHANNEL_GATEWAY_WS_METHODS, ChannelGatewayError, EnvironmentId } from "@goat/contracts";
+import {
+  CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS,
+  CHANNEL_GATEWAY_WS_METHODS,
+  ChannelGatewayError,
+  EnvironmentId,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -519,7 +524,7 @@ describe("ChannelBotArtifacts over a connection's handlers", () => {
   );
 
   it.effect(
-    "a read with no answer within 20 seconds answers busy, and the connection reads again",
+    "a read with no answer by the contract answer bound answers busy, and the connection reads again",
     () => {
       const disk = holdFirst(1);
       return Effect.gen(function* () {
@@ -528,9 +533,9 @@ describe("ChannelBotArtifacts over a connection's handlers", () => {
         const readHere = yield* connection;
         const first = yield* Effect.forkChild(readHere("a.txt"));
         yield* disk.started;
-        yield* TestClock.adjust("19999 millis");
+        yield* TestClock.adjust(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS - 1);
         assert.strictEqual(statusOf(first), "no answer");
-        yield* TestClock.adjust("1 millis");
+        yield* TestClock.adjust(1);
         assert.strictEqual(statusOf(first), "busy");
         assert.strictEqual((yield* readHere("a.txt")).status, "chunk");
       }).pipe(
@@ -553,7 +558,7 @@ describe("ChannelBotArtifacts over a connection's handlers", () => {
         ];
         yield* disk.started;
         const third = yield* Effect.forkChild((yield* connection)("a.txt"));
-        yield* TestClock.adjust("20 seconds");
+        yield* TestClock.adjust(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS);
         assert.deepStrictEqual([...stuck, third].map(statusOf), ["busy", "busy", "busy"]);
         yield* disk.release;
         assert.strictEqual((yield* (yield* connection)("a.txt")).status, "chunk");
@@ -576,10 +581,10 @@ describe("ChannelBotArtifacts over a connection's handlers", () => {
           yield* Effect.forkChild((yield* connection)("a.txt")),
         ];
         yield* lookup.started;
-        yield* TestClock.adjust("20 seconds");
+        yield* TestClock.adjust(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS);
         assert.deepStrictEqual(stuck.map(statusOf), ["busy", "busy"]);
         const third = yield* Effect.forkChild((yield* connection)("a.txt"));
-        yield* TestClock.adjust("20 seconds");
+        yield* TestClock.adjust(CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS);
         assert.strictEqual(statusOf(third), "busy");
         yield* lookup.release;
         // Two later reads both get a slot only once both held lookups ran to their end.

@@ -6,6 +6,8 @@ import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchema
 export const CHANNEL_BOT_ARTIFACT_CHUNK_BYTES = 512 * 1024;
 /** Larger files answer `too_large` and are not sent. */
 export const CHANNEL_BOT_ARTIFACT_MAX_BYTES = 20 * 1024 * 1024;
+/** A read with no chunk by then answers `busy`; clients wait longer for a chunk than this. */
+export const CHANNEL_BOT_ARTIFACT_ANSWER_BOUND_MS = 20_000;
 
 /** A file a GOAT Bot worker saved in its artifacts folder. */
 export const ChannelBotArtifact = Schema.Struct({
