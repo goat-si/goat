@@ -3,7 +3,7 @@ import { useState } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow, ChannelTaskId } from "@goat/contracts";
+import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -14,6 +14,14 @@ vi.mock("react-native-safe-area-context", () => ({
 }));
 vi.mock("react-native", () => ({
   Platform: nativePlatform,
+  Easing: { linear: (value: number) => value },
+  StyleSheet: { absoluteFill: {} },
+  useAnimatedValue: () => ({ setValue: () => {}, interpolate: () => 0 }),
+  Animated: {
+    View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    timing: () => ({}),
+    loop: () => ({ start: () => {}, stop: () => {} }),
+  },
   Switch: ({
     value,
     disabled,
@@ -34,7 +42,19 @@ vi.mock("react-native", () => ({
       onChange={() => onValueChange?.(!value)}
     />
   ),
-  View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  View: ({
+    children,
+    className,
+    style,
+  }: {
+    children?: ReactNode;
+    className?: string;
+    style?: React.CSSProperties;
+  }) => (
+    <div className={className} style={style}>
+      {children}
+    </div>
+  ),
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   FlatList: (
     props: {
@@ -104,7 +124,26 @@ const state = vi.hoisted(() => ({
   openThread: vi.fn(),
 }));
 
-vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
+// The real face module draws the chip's face; only its native drawing and styling stand in.
+vi.mock("react-native-reanimated", () => {
+  const chain = { duration: () => chain, reduceMotion: () => chain };
+  return {
+    default: { View: ({ children }: { children?: ReactNode }) => <div>{children}</div> },
+    FadeIn: chain,
+    ReduceMotion: { System: "system" },
+  };
+});
+vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+vi.mock("uniwind", () => ({
+  withUniwind: (component: unknown) => component,
+  useResolveClassNames: () => ({ backgroundColor: "#f3f3f3" }),
+}));
+vi.mock("../../lib/appState", () => ({
+  useAppActive: () => true,
+  useReduceMotionEnabled: () => false,
+}));
+vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
@@ -213,6 +252,7 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { MobileBotWork } from "./MobileBotWork";
+import { GoatBotChipFace } from "./GoatBotFace";
 
 // The chat's header chip opens the home; this stands in for it.
 function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
@@ -638,16 +678,31 @@ it("offers the Work sheet, and with it Open the chat, only on the chat screen", 
   expect(container.textContent).not.toContain("waiting for your answer in the chat");
 });
 
-it("shows the bot's face in the chip Android draws above the chat", async () => {
+it("draws the bot's face in the chip Android shows above the chat: its initial, colour and state", async () => {
   reset();
   nativePlatform.OS = "android";
-  try {
-    await render(undefined, undefined, [], [], <i data-chip-face="S" />);
+  const chipFace = (activity: { state: "working" } | null) => (
+    <GoatBotChipFace
+      activity={activity}
+      emoji="S"
+      accent={{ background: "#6D28D9", foreground: "#FFFFFF" }}
+      conversation={{ environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("scout") }}
+    />
+  );
+  const face = () => {
     const chip = [...container.querySelectorAll("button")].find(
       (item) => item.getAttribute("aria-label") === "GOAT Bot",
     );
-    expect(chip).toBeDefined();
-    expect(chip?.querySelector("[data-chip-face]")).toBeTruthy();
+    return chip?.querySelector("div.rounded-full.border") ?? null;
+  };
+  try {
+    await render(undefined, undefined, [], [], chipFace({ state: "working" }));
+    // The member's initial on its colour, with the ring a working bot shows.
+    expect(face()?.textContent).toBe("S");
+    expect((face() as HTMLElement | null)?.style.backgroundColor).toBe("rgb(109, 40, 217)");
+    expect(face()?.className).toContain("border-primary");
+    await render(undefined, undefined, [], [], chipFace(null));
+    expect(face()?.className).toContain("border-transparent");
   } finally {
     nativePlatform.OS = "ios";
   }
