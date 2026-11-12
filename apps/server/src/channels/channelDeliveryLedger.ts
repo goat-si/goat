@@ -111,8 +111,9 @@ export const claimDueStatement = (
             AND earlier.operation = 'post')))
       AND (due.operation = 'post' OR NOT EXISTS (SELECT 1 FROM channel_outbox busy
         WHERE busy.target_delivery_id = due.target_delivery_id AND busy.state = 'delivering'))
+      -- The unary plus keeps this off the pending-narration index, so it searches by task.
       AND (due.operation != 'end' OR (NOT EXISTS (SELECT 1 FROM channel_task_events told
-          WHERE told.task_id = due.task_id AND told.narration_state = 'pending'
+          WHERE told.task_id = due.task_id AND +told.narration_state = 'pending'
             AND told.type IN ('task.completed', 'task.failed', 'task.cancelled'))
         AND NOT EXISTS (SELECT 1 FROM channel_outbox answer
           WHERE answer.cause_key = 'narration:' || (SELECT latest.event_id
