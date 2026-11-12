@@ -725,6 +725,7 @@ export const fixture = Effect.fn(function* (
     restart: driver.restart,
     verify: driver.verify,
     grants: driver.grants,
+    grantTarget: driver.grantTarget,
     toolCalls,
     clientsOpen: () => clientsOpen,
     socketConnections: () => socketConnections,

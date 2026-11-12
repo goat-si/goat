@@ -324,6 +324,27 @@ refuses it; switch **GOAT Computer Use** off and on again in **Privacy & Securit
 turn a permission off in **System Settings → Privacy & Security**, the setting
 shows it as off; choose **Set up** to allow it again.
 
+System Settings can list more than one **GOAT Computer Use**. GOAT and GOAT
+(Nightly) each have their own, and only the one for the app you are using
+counts. If setup keeps waiting although a row is on, open **Still not allowed?**
+under the permission steps: it shows the path and bundle ID of the copy GOAT is
+checking, and the Terminal commands that reset that copy only. Removing a row
+that belongs to the other app takes away that app's permission.
+
+If setup says **GOAT Computer Use did not answer**, the permissions could not be
+read: the helper did not answer when started, stopped, took too long or refused
+GOAT. GOAT then does not know whether a permission is missing, so choose **Try
+again** before allowing anything again in System Settings. Unless the helper
+refused GOAT, setup also keeps asking and goes on by itself once it answers.
+
+When you report a setup that does not finish, send the lines that contain
+`Computer use grant read changed` or `desktop.cua.grantRead` from
+`desktop.trace.ndjson` in the logs folder (`~/.goat/desktop/userdata/logs` for
+GOAT, `~/.goat/desktop-nightly/userdata/logs` for GOAT (Nightly)). Each line
+names the copy that was asked, which check asked, and either what it answered
+for each permission or why it gave no answer. They hold no screenshots, window
+titles or anything you typed.
+
 If agent connections to computer use keep failing on a computer even though its
 checks pass, the setting shows why, and agents are told computer use is
 unavailable there instead of retrying. It clears as soon as an agent connection

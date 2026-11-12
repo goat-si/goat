@@ -1,7 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import { CUA_STALE_ACCESSIBILITY_ADVICE } from "@goat/contracts";
 
-import { initialHelperReadiness, toReadiness, withGrants, withProof } from "./helperReadiness.ts";
+import {
+  initialHelperReadiness,
+  toReadiness,
+  withGrants,
+  withProof,
+  withUnreadGrants,
+} from "./helperReadiness.ts";
 
 const accessibilityOff = withGrants(
   initialHelperReadiness,
@@ -19,6 +25,41 @@ describe("helper readiness reasons", () => {
   it("does not give that macOS advice on Windows", () => {
     expect(toReadiness(accessibilityOff, "GOAT Computer Use", "win32").reasons).not.toContain(
       CUA_STALE_ACCESSIBILITY_ADVICE,
+    );
+  });
+});
+
+describe("a grant read the helper did not answer", () => {
+  const unread = "GOAT Computer Use did not answer: it took too long.";
+  const reasons = (state: Parameters<typeof toReadiness>[0]) =>
+    toReadiness(state, "GOAT Computer Use", "darwin").reasons;
+
+  it("says the grants could not be read, and calls no grant macOS never answered about off", () => {
+    const first = withUnreadGrants(initialHelperReadiness, unread);
+    expect(toReadiness(first, "GOAT Computer Use", "darwin").grants).toEqual({
+      accessibility: "unknown",
+      screenCapture: "unknown",
+    });
+    expect(reasons(first)[0]).toBe(unread);
+    expect(reasons(first).join(" ")).not.toContain("not on for");
+    expect(reasons(first)).not.toContain(CUA_STALE_ACCESSIBILITY_ADVICE);
+  });
+
+  it("still reports a grant macOS last answered was off as off", () => {
+    expect(reasons(withUnreadGrants(accessibilityOff, unread))).toEqual(
+      expect.arrayContaining([unread, "Accessibility is not on for GOAT Computer Use."]),
+    );
+  });
+
+  it("drops the unanswered read once a read answers", () => {
+    const answered = withGrants(
+      withUnreadGrants(initialHelperReadiness, unread),
+      { accessibility: false, screenRecording: false },
+      false,
+    );
+    expect(reasons(answered)).not.toContain(unread);
+    expect(reasons(answered)).toContain(
+      "Accessibility and Screen Recording are not on for GOAT Computer Use.",
     );
   });
 });

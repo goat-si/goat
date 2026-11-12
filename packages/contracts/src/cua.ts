@@ -530,9 +530,31 @@ export const DesktopCuaVerification = Schema.Struct({
 export type DesktopCuaVerification = typeof DesktopCuaVerification.Type;
 
 /**
+ * Why the app that holds the grants gave no answer when asked about them. Such a read says
+ * nothing about the grants, so no surface may show it as a permission that is off, or as one
+ * that is on. noHello: it was started and never greeted, which is not known to mean it did not
+ * start.
+ */
+export const CuaGrantReadFailure = Schema.Literals([
+  "noHello",
+  "stopped",
+  "tookTooLong",
+  "refused",
+]);
+export type CuaGrantReadFailure = typeof CuaGrantReadFailure.Type;
+
+/**
+ * Failed grant reads in a row before a surface stops showing the last answer. One read can fail
+ * while an update swaps the helper or the Mac is busy. Each read already waits up to 10 seconds
+ * for the helper to start and 30 for its answer, so a second failure means it is not answering.
+ */
+export const CUA_UNANSWERED_AFTER = 2;
+
+/**
  * The macOS grants of whichever app computer use runs as. helper: GOAT Computer Use.app, read
  * from a fresh helper process; app: GOAT itself, for builds without the helper; unusable: the
- * helper ships and cannot run, so no other app may stand in for it.
+ * helper ships and cannot run, so no other app may stand in for it. unanswered marks a read the
+ * helper did not answer, which a later read may; without it the helper cannot be used at all.
  */
 export const DesktopCuaGrants = Schema.Union([
   Schema.Struct({
@@ -545,7 +567,11 @@ export const DesktopCuaGrants = Schema.Union([
     accessibility: Schema.Boolean,
     screenRecording: Schema.Boolean,
   }),
-  Schema.Struct({ principal: Schema.Literal("unusable"), message: Schema.String }),
+  Schema.Struct({
+    principal: Schema.Literal("unusable"),
+    message: Schema.String,
+    unanswered: Schema.optionalKey(CuaGrantReadFailure),
+  }),
 ]);
 export type DesktopCuaGrants = typeof DesktopCuaGrants.Type;
 

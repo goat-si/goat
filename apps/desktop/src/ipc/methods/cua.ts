@@ -54,10 +54,12 @@ export const openCuaPermissionGuide = DesktopIpc.makeIpcMethod({
     const opened = yield* (yield* ElectronShell.ElectronShell).openSystemSettings(pane);
     if (!opened) return false;
     const key = pane === "accessibility" ? "accessibility" : "screenRecording";
+    // The panel polls from a timer; its reads run in this handler's context so they are logged.
+    const run = Effect.runPromiseWith(yield* Effect.context<never>());
     yield* (yield* MacPermissions.MacPermissions).showHelper(
       pane,
       owner,
-      () => target.read().then((grants) => grants[key]),
+      () => run(target.read("panel").pipe(Effect.map((grants) => grants[key]))),
       target.kind === "helper" ? { bundlePath: target.bundlePath, name: target.name } : undefined,
     );
     return true;
