@@ -69,11 +69,16 @@ export const undeclaredLaunchArguments = (
 /** What a failed call says of a launch: the RPC error's own message, never its data. */
 export const rpcLaunchFacts = (
   tool: string,
-  error: { readonly rpcCode?: number | undefined; readonly rpcMessage?: string | undefined },
+  error: {
+    readonly rpcCode?: number | undefined;
+    readonly rpcMessage?: string | undefined;
+    readonly rpcMayHaveStarted?: boolean | undefined;
+  },
 ) => {
   const undeclared = undeclaredLaunchArguments(tool, {
     rpcCode: error.rpcCode,
     message: error.rpcMessage,
+    mayHaveStarted: error.rpcMayHaveStarted,
   });
   if (undeclared !== undefined) return { undeclaredArguments: undeclared };
   return tool === "goat_thread_launch" ? { launchMayHaveStarted: true } : {};

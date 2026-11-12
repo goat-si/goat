@@ -28,6 +28,8 @@ export class AcpMcpBridgeError extends Error {
   readonly rpcCode: number | undefined;
   /** The JSON-RPC error's own message, without its data. */
   readonly rpcMessage: string | undefined;
+  /** True when the JSON-RPC error's data says the call may have started. */
+  readonly rpcMayHaveStarted: boolean;
   constructor(
     message: string,
     options?: {
@@ -36,6 +38,7 @@ export class AcpMcpBridgeError extends Error {
       readonly status?: number;
       readonly rpcCode?: number;
       readonly rpcMessage?: string;
+      readonly rpcMayHaveStarted?: boolean;
     },
   ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
@@ -43,6 +46,7 @@ export class AcpMcpBridgeError extends Error {
     this.status = options?.status;
     this.rpcCode = options?.rpcCode;
     this.rpcMessage = options?.rpcMessage;
+    this.rpcMayHaveStarted = options?.rpcMayHaveStarted === true;
   }
 }
 
@@ -240,9 +244,14 @@ function requestResult(
 ): Effect.Effect<unknown, AcpMcpBridgeError> {
   const envelope = asEnvelope(responses.find((entry) => asEnvelope(entry)?.id === id));
   if (envelope === null || envelope.error !== undefined) {
-    const { code, message } =
-      (envelope?.error as { readonly code?: unknown; readonly message?: unknown } | undefined) ??
-      {};
+    const { code, message, data } =
+      (envelope?.error as
+        | { readonly code?: unknown; readonly message?: unknown; readonly data?: unknown }
+        | undefined) ?? {};
+    const mayHaveStarted =
+      typeof data === "object" &&
+      data !== null &&
+      (data as { readonly mayHaveStarted?: unknown }).mayHaveStarted === true;
     return Effect.fail(
       new AcpMcpBridgeError(
         `${describe} failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
@@ -250,6 +259,7 @@ function requestResult(
           kind: envelope === null ? "protocol" : "rpc",
           ...(typeof code === "number" ? { rpcCode: code } : {}),
           ...(typeof message === "string" ? { rpcMessage: message } : {}),
+          ...(mayHaveStarted ? { rpcMayHaveStarted: true } : {}),
         },
       ),
     );

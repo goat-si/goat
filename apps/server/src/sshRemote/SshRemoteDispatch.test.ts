@@ -3903,6 +3903,16 @@ describe("SSH launcher transport", () => {
       success: false,
       uncertain: true,
     },
+    {
+      // A stated may-have-started in the error's data wins over its admission sentence.
+      name: "rpc-data-may-have-started",
+      refusal: "goat_thread_launch does not take launchedBy, so nothing ran",
+      rpcData: { mayHaveStarted: true },
+      launchedBy: true,
+      expectedCalls: 1,
+      success: false,
+      uncertain: true,
+    },
   ])("passes launcher and retries only a strict pre-handler refusal: $name", (scenario) =>
     Effect.gen(function* () {
       const target = { alias: "box", hostname: "box", username: null, port: null };
@@ -4063,8 +4073,11 @@ describe("SSH launcher transport", () => {
       );
       expect(calls).toHaveLength(scenario.expectedCalls);
       expect(result._tag).toBe(scenario.success ? "Success" : "Failure");
-      if ("uncertain" in scenario && result._tag === "Failure")
+      if ("uncertain" in scenario && result._tag === "Failure") {
         expect(result.failure).toMatchObject({ launchMayHaveStarted: true });
+        // Neither the launchedBy retry nor the report fallback may read an undeclared argument.
+        expect(result.failure.undeclaredArguments).toBeUndefined();
+      }
       expect(calls[0]).toEqual({
         projectId: "project-1",
         title: "Work",
