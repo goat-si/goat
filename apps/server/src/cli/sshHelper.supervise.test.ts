@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -196,6 +197,61 @@ it("after a forced stop the launch saw complete, a live process on the old PID i
   });
   assert.isTrue(ran, "the replacement ran");
   assert.equal(result.status, "failed");
+});
+
+it("after a forced stop, another server answering on the port does not make the replacement ready", async () => {
+  const port = await reserveLoopbackPort();
+  const { baseDir, stateDir, logFile } = tempSuperviseHome();
+  // A GOAT of the target version for other data takes the port; the new child never binds it.
+  const descriptor = {
+    environmentId: "other",
+    label: "Other",
+    platform: { os: "linux", arch: "x64" },
+    serverVersion: "2.0.0",
+    sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+    protocol: {
+      ssh: { min: SSH_RUNTIME_PROTOCOL_VERSION, max: SSH_RUNTIME_PROTOCOL_VERSION },
+      orchestration: { min: ORCHESTRATION_PROTOCOL_VERSION, max: ORCHESTRATION_PROTOCOL_VERSION },
+    },
+    capabilities: { drainRestart: true },
+    instanceId: "other-instance",
+  };
+  const other = NodeHttp.createServer((req, res) => {
+    res.writeHead(req.url === "/.well-known/goat/environment" ? 200 : 404, {
+      "content-type": "application/json",
+    });
+    res.end(JSON.stringify(descriptor));
+  });
+  other.listen(port, "127.0.0.1");
+  await NodeEvents.once(other, "listening");
+  const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
+  NodeFS.writeFileSync(runnerFile, `#!${process.execPath}\nsetInterval(() => {}, 1 << 30);\n`, {
+    mode: 0o700,
+  });
+  try {
+    const result = await superviseSshRuntimeReplacement({
+      oldPid: process.pid,
+      oldInstanceId: "forced",
+      port,
+      baseDir,
+      stateDir,
+      runnerFile,
+      previousRunnerFile: "",
+      targetVersion: "2.0.0",
+      previousVersion: "",
+      identity: "replacement-identity",
+      previousIdentity: "",
+      exitTimeoutMs: 1_000,
+      readyTimeoutMs: 2_000,
+      logFile,
+      forced: true,
+      oldStopped: true,
+    });
+    assert.equal(result.status, "failed");
+  } finally {
+    other.close();
+  }
 });
 
 it("keeps writes from another server that owned the data since the backup", async () => {

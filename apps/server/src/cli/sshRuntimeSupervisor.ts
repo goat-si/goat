@@ -76,6 +76,26 @@ const writeAtomically = (file: string, contents: string, mode = 0o600) => {
   NodeFS.renameSync(next, file);
 };
 
+// After a forced stop another server may answer on the port; only the runtime record the child
+// writes for this base directory proves the answer came from it.
+const recordsChild = (baseDir: string, pid: number, port: number) => {
+  try {
+    const record: unknown = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(baseDir, "userdata", "server-runtime.json"), "utf8"),
+    );
+    return (
+      typeof record === "object" &&
+      record !== null &&
+      "pid" in record &&
+      record.pid === pid &&
+      "port" in record &&
+      record.port === port
+    );
+  } catch {
+    return false;
+  }
+};
+
 // Runs after a runtime is ready and recorded: a leftover file is logged and never changes the result.
 const cleanUpAfterStart = (path: string) => {
   try {
@@ -426,7 +446,9 @@ const superviseReplacement = async (
           value.serverVersion === version &&
           accepts(value.verdict) &&
           (requireInstance
-            ? value.instanceId !== undefined && value.instanceId !== input.oldInstanceId
+            ? value.instanceId !== undefined &&
+              value.instanceId !== input.oldInstanceId &&
+              (input.oldStopped !== true || recordsChild(input.baseDir, pid, input.port))
             : input.oldStopped === true || !processExists(input.oldPid))
         ) {
           writeLaunchRecords(input.stateDir, identity, pid, input.port, input.platform);

@@ -170,6 +170,7 @@ GOAT_FORCED_RECORDS
     forced_refused "the detached supervisor that starts the new runtime cannot run"
   printf 'Stopping GOAT PID %s (started %s, port %s) for an approved forced update.\\n' "$FORCE_PID" "$FORCE_START" "$FORCE_PORT" >>"$LOG_FILE" 2>/dev/null || :
   if ! forced_parent_holds; then forced_refused "it changed before the signal"; fi
+  server_owns_listener "$FORCE_PID" "$FORCE_PORT" || forced_refused "it no longer listens on port $FORCE_PORT"
   if ! forced_signal_same TERM "$FORCE_PID" "" "$FORCE_START" "$forced_root_ticks" && server_alive "$FORCE_PID"; then
     forced_refused "it changed before the signal"
   fi
