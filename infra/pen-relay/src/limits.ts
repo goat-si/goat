@@ -1,5 +1,6 @@
 import { Timeouts } from "@goat/pen-protocol/wire";
 import type { Room } from "./room.ts";
+import { TOTALS_WRITE_EVERY_MS } from "./traffic.ts";
 
 export interface Env {
   readonly ROOM: DurableObjectNamespace<Room>;
@@ -9,12 +10,15 @@ export interface Env {
   readonly AUTH_TIMEOUT_MS?: string;
   // Where a node's first session id counts from (tests of the u32 wrap); unset starts at 0.
   readonly SID_START?: string;
+  // How often a Room may write its traffic totals (tests use 0: at every session end).
+  readonly TOTALS_EVERY_MS?: string;
 }
 
 export interface RelayLimits {
   readonly pendingTimeoutMs: number;
   readonly idleTimeoutMs: number;
   readonly authTimeoutMs: number;
+  readonly totalsEveryMs: number;
 }
 
 function clamp(raw: string | undefined, max: number): number {
@@ -28,5 +32,7 @@ export function readLimits(env: Env): RelayLimits {
     pendingTimeoutMs: clamp(env.PENDING_TIMEOUT_MS, Timeouts.PENDING_TIMEOUT_MS),
     idleTimeoutMs: clamp(env.IDLE_TIMEOUT_MS, Timeouts.IDLE_TIMEOUT_MS),
     authTimeoutMs: clamp(env.AUTH_TIMEOUT_MS, Timeouts.AUTH_TIMEOUT_MS),
+    totalsEveryMs:
+      env.TOTALS_EVERY_MS === "0" ? 0 : clamp(env.TOTALS_EVERY_MS, TOTALS_WRITE_EVERY_MS),
   };
 }
