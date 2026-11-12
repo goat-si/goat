@@ -25,6 +25,7 @@ import Migration0073 from "../persistence/Migrations/091_MemoryTaskGrantCeiling.
 import Migration0089 from "../persistence/Migrations/104_RemoteDispatchObservation.ts";
 import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
 import Migration0137 from "../persistence/Migrations/137_RemoteDispatchDeleteIntent.ts";
+import Migration0143 from "../persistence/Migrations/143_RemoteDispatchHostOutage.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -68,6 +69,7 @@ export const fixture = Effect.gen(function* () {
   yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
   for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
   yield* Migration0137;
+  yield* Migration0143;
   const calls = yield* Queue.unbounded<{
     call: Ssh.SshHostToolCall;
     ceiling: RuntimeMode;

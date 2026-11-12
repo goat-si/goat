@@ -23,6 +23,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 
+/** Why GOAT stopped tracking a dispatch on its own or at a person's or agent's request. */
+export const RemoteDispatchEndReason = Schema.Literals(["host_unreachable", "dismissed"]);
+export type RemoteDispatchEndReason = typeof RemoteDispatchEndReason.Type;
+
 export const RemoteDispatchRow = Schema.Struct({
   memory_grant_ceiling: Schema.optional(MemoryTaskGrantCeiling),
   correlation_id: Schema.String,
@@ -51,6 +55,9 @@ export const RemoteDispatchRow = Schema.Struct({
   relay_attempted: Schema.Number,
   delete_requested_at: Schema.optional(Schema.NullOr(IsoDateTime)),
   delete_request_key: Schema.optional(Schema.NullOr(Schema.String)),
+  host_unavailable_since: Schema.optional(Schema.NullOr(IsoDateTime)),
+  end_reason: Schema.optional(Schema.NullOr(RemoteDispatchEndReason)),
+  ended_at: Schema.optional(Schema.NullOr(IsoDateTime)),
   last_error: Schema.NullOr(Schema.String),
   created_at: IsoDateTime,
   updated_at: IsoDateTime,
