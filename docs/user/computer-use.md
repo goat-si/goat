@@ -338,11 +338,12 @@ again** before allowing anything again in System Settings. Unless the helper
 refused GOAT, setup also keeps asking and goes on by itself once it answers.
 
 When you report a setup that does not finish, send the lines that contain
-`Computer use grant read changed` from `desktop.trace.ndjson` in the logs folder
-(`~/.goat/desktop/userdata/logs` for GOAT, `~/.goat/desktop-nightly/userdata/logs`
-for GOAT (Nightly)). Each line names the copy that was asked, which check asked,
-and either what it answered for each permission or why it gave no answer. They
-hold no screenshots, window titles or anything you typed.
+`Computer use grant read changed` or `desktop.cua.grantRead` from
+`desktop.trace.ndjson` in the logs folder (`~/.goat/desktop/userdata/logs` for
+GOAT, `~/.goat/desktop-nightly/userdata/logs` for GOAT (Nightly)). Each line
+names the copy that was asked, which check asked, and either what it answered
+for each permission or why it gave no answer. They hold no screenshots, window
+titles or anything you typed.
 
 If agent connections to computer use keep failing on a computer even though its
 checks pass, the setting shows why, and agents are told computer use is

@@ -616,23 +616,31 @@ describe("a macOS Automation block", () => {
 });
 
 describe("a grant read that got no answer", () => {
-  const unanswered = {
-    principal: "unusable",
-    message: "GOAT Computer Use did not answer: it took too long.",
-    unanswered: "tookTooLong",
-  } as const;
+  const reads = [
+    {
+      principal: "unusable",
+      message: "GOAT Computer Use did not answer: it did not answer when started.",
+      unanswered: "noHello",
+    },
+    {
+      principal: "unusable",
+      message: "GOAT Computer Use did not answer: it took too long.",
+      unanswered: "tookTooLong",
+    },
+  ] as const;
 
   it("keeps its reason on the wire, and a desktop from before the reason still decodes", () => {
-    expect(decodeDesktopGrants(unanswered)).toEqual(unanswered);
+    for (const unanswered of reads) expect(decodeDesktopGrants(unanswered)).toEqual(unanswered);
     // An older desktop names no reason: its helper reads as unusable, as it did before.
     const fromOlderDesktop = { principal: "unusable", message: "It cannot be used." };
     expect(decodeDesktopGrants(fromOlderDesktop)).toEqual(fromOlderDesktop);
   });
 
   it("reads as an unusable helper with its message to a client from before the reason", () => {
-    expect(decodeDesktopGrantsBeforeUnanswered(unanswered)).toEqual({
-      principal: "unusable",
-      message: unanswered.message,
-    });
+    for (const unanswered of reads)
+      expect(decodeDesktopGrantsBeforeUnanswered(unanswered)).toEqual({
+        principal: "unusable",
+        message: unanswered.message,
+      });
   });
 });
