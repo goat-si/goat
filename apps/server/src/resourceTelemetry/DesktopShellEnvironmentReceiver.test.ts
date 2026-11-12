@@ -12,6 +12,39 @@ import { describe, expect } from "vite-plus/test";
 import { makeApplyDesktopShellEnvironmentSnapshot } from "./DesktopShellEnvironmentReceiver.ts";
 
 describe("desktop shell environment", () => {
+  it.effect("reports a changed PATH or a finished discovery once, not on every snapshot", () =>
+    Effect.gen(function* () {
+      const environment: NodeJS.ProcessEnv = {
+        PATH: "/old/bin",
+        GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+      };
+      let reported = 0;
+      const applySnapshot = makeApplyDesktopShellEnvironmentSnapshot(
+        environment,
+        "darwin",
+        Effect.sync(() => {
+          reported++;
+        }),
+      );
+      const snapshot = (PATH: string, discovered: boolean) =>
+        ({
+          version: 1,
+          type: "shellEnvironment",
+          platform: "darwin",
+          discovered,
+          environment: { PATH },
+        }) as const;
+      yield* applySnapshot(snapshot("/old/bin", false));
+      expect(reported).toBe(0);
+      yield* applySnapshot(snapshot("/recovered/bin", false));
+      yield* applySnapshot(snapshot("/recovered/bin", false));
+      expect(reported).toBe(1);
+      yield* applySnapshot(snapshot("/recovered/bin", true));
+      yield* applySnapshot(snapshot("/recovered/bin", true));
+      expect(reported).toBe(2);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("updates live TLS trust when shell certificates arrive after startup", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

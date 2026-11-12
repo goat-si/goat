@@ -314,8 +314,13 @@ account always stays with you.
 | Muse Code   | Install [Muse Code](https://dev.meta.ai/docs/muse-code) on the server, run `muse login`, then enable it in Settings → Providers.                          |
 | fx          | Install [fx](https://fx.sh) with `curl -fsSL https://fx.sh/setup.sh \| bash`, then run `fx login`.                                                        |
 
-Provider CLIs must be on the server's `PATH`. If GOAT cannot find one, set its
-**Binary path** in provider settings, especially when using a version manager.
+Provider CLIs must be on the server's `PATH`. On macOS and Linux GOAT also looks,
+after your `PATH`, in the folders the usual installers use: `~/.local/bin`,
+`~/.bun/bin`, Homebrew's `bin` folder and `/usr/local/bin`. If GOAT cannot find a
+CLI, set its **Binary path** in provider settings, especially when using a version manager.
+The desktop app reads `PATH` from your login shell. When that shell is slow to start,
+GOAT tries again over the next few minutes, and a missing provider's status says
+that the shell has not answered yet.
 Cursor's executable is `cursor-agent`, although its login command is
 `agent login`. Codex connected through ChatGPT and Antigravity can use their
 managed runtimes without a `PATH` entry.

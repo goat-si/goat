@@ -10,6 +10,7 @@ import {
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelCapabilities } from "@goat/shared/model";
+import { withLoginShellPathNote } from "@goat/shared/cliPath";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -154,10 +155,11 @@ function acpRegistrySnapshotReadiness(
         installed: false,
         version: inspection.version,
         status: "error",
-        message:
+        message: withLoginShellPathNote(
           inspection.distribution === "local"
             ? "Local ACP executable is not available on this environment's PATH."
             : `ACP executable '${inspection.runner}' is not available on this environment's PATH.`,
+        ),
       };
     case "unprepared":
       return {

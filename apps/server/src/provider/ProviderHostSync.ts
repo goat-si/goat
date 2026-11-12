@@ -76,8 +76,10 @@ import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import {
   describeInstallFailure,
+  forgetCommandMisses,
   hostPlatform,
   installCommand,
+  installedButNotFound,
   installMethod,
   PROVIDER_HOST_SYNC_DRIVERS,
   parseDeviceLogin,
@@ -748,18 +750,13 @@ const make = Effect.gen(function* () {
             { phase: "failed", message: describeInstallFailure(result.exitCode, result.output) },
             true,
           );
+        yield* forgetCommandMisses;
       }
       const snapshot = yield* refreshDriver(driver);
       const after = (yield* localProviders).find((provider) => provider.driver === driver);
+      const notFound = installedButNotFound(recipe.binary, yield* HostProcess.Environment);
       if (after?.installed !== true)
-        return yield* update(
-          task,
-          {
-            phase: "failed",
-            message: `The installer finished, but GOAT cannot find ${recipe.binary} on its PATH here. Add the install folder to PATH and restart GOAT.`,
-          },
-          true,
-        );
+        return yield* update(task, { phase: "failed", message: notFound }, true);
       yield* update(task, {
         phase: "installed",
         version: after.version,

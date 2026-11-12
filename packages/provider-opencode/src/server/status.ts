@@ -15,6 +15,7 @@ import * as Schedule from "effect/Schedule";
 
 import { createModelCapabilities } from "@goat/shared/model";
 import { compareSemverVersions } from "@goat/shared/semver";
+import { withLoginShellPathNote } from "@goat/shared/cliPath";
 import {
   buildServerProvider,
   classifySpawnFailure,
@@ -66,6 +67,8 @@ function normalizedErrorMessage(cause: unknown): string | undefined {
 
   return normalizeProbeMessage(cause.message);
 }
+
+const OPENCODE_MISSING = "OpenCode CLI (`opencode`) is not installed or not on PATH.";
 
 function formatOpenCodeProbeError(input: {
   readonly cause: unknown;
@@ -124,10 +127,7 @@ function formatOpenCodeProbeError(input: {
       env: { PATH: spawn.path },
     });
     if (failure === "missing")
-      return {
-        installed: false,
-        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
-      };
+      return { installed: false, message: withLoginShellPathNote(OPENCODE_MISSING) };
     const message = spawnFailureMessage(failure, spawn.cwd, input.binaryPath);
     if (message) return { installed: true, message };
   }
@@ -136,10 +136,7 @@ function formatOpenCodeProbeError(input: {
   while (cause && typeof cause === "object" && !seen.has(cause)) {
     seen.add(cause);
     if (isCommandMissingCause(cause)) {
-      return {
-        installed: false,
-        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
-      };
+      return { installed: false, message: withLoginShellPathNote(OPENCODE_MISSING) };
     }
     cause = "cause" in cause ? cause.cause : undefined;
   }

@@ -14,6 +14,7 @@ import * as CodexRoutes from "./provider/CodexRouteService.ts";
 import * as HomeRoute from "./provider/OpenCodexRoute.ts";
 import * as ProviderOnboarding from "./provider/ProviderOnboarding.ts";
 import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
+import * as ProviderPathRefresh from "./provider/ProviderPathRefresh.ts";
 import * as ProviderSettings from "./provider/ProviderSettings.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
@@ -876,6 +877,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
         Layer.provide(layerLinuxHelperHost),
       ),
       CloudProviderAutoSetup.layer,
+      ProviderPathRefresh.layer,
     ),
   ),
   Layer.provideMerge(layerServerSettings),

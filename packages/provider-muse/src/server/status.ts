@@ -1,6 +1,7 @@
 import { ServerProviderModel } from "@goat/contracts";
 import { MuseSettings } from "../settings.ts";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { withLoginShellPathNote } from "@goat/shared/cliPath";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -101,7 +102,10 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       status: "error",
       auth: { status: "unknown" },
       message: missing
-        ? "Muse Code CLI (`muse`) was not found. Install Muse Code and run `muse login` on this GOAT server host."
+        ? withLoginShellPathNote(
+            "Muse Code CLI (`muse`) was not found. Install Muse Code and run `muse login` on this GOAT server host.",
+            museEnvironment,
+          )
         : (spawnFailureMessage(failure, spawnCwd, settings.binaryPath) ??
           "Failed to execute Muse Code CLI. Check its binary path on this GOAT server host."),
     });

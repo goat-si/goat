@@ -7,6 +7,7 @@ import type { PiSettings } from "../settings.ts";
 import { PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
 import { causeErrorTag } from "@goat/shared/observability";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { withLoginShellPathNote } from "@goat/shared/cliPath";
 import { compareSemverVersions } from "@goat/shared/semver";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -407,7 +408,10 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         auth: { status: "unknown" },
         message:
           failure === "missing"
-            ? `${profile.displayName} CLI (\`${profile.defaultBinary}\`) is not installed or not on PATH. Install with \`npm install -g --ignore-scripts ${profile.npmPackage}\`.`
+            ? withLoginShellPathNote(
+                `${profile.displayName} CLI (\`${profile.defaultBinary}\`) is not installed or not on PATH. Install with \`npm install -g --ignore-scripts ${profile.npmPackage}\`.`,
+                environment,
+              )
             : (spawnFailureMessage(
                 failure,
                 spawnCwd,
