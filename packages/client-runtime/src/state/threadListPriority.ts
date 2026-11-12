@@ -21,6 +21,7 @@ type ThreadListStatusInput = Pick<
   readonly pendingSubagentRequest?: EnvironmentThreadShell["pendingSubagentRequest"] | undefined;
   readonly pendingGuestMessageCount?: number | undefined;
   readonly blockedOnThreadWait?: boolean | undefined;
+  readonly latestRunStartHeld?: boolean | undefined;
 };
 
 export function resolveThreadListStatus(thread: ThreadListStatusInput): ThreadListStatus {
@@ -37,6 +38,7 @@ export function resolveThreadListStatus(thread: ThreadListStatusInput): ThreadLi
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
     return "waiting";
   }
+  if (thread.runtime?.status === "starting" && thread.latestRunStartHeld === true) return "waiting";
   if (
     thread.runtime !== null &&
     ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)

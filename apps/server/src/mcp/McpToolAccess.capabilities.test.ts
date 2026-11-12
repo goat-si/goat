@@ -25,7 +25,7 @@ import * as McpToolAccess from "./McpToolAccess.ts";
 import { liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import { serveOverHttp } from "./agentSurface.testkit.ts";
 import { DEPRECATED_META_KEY } from "./ToolDispatch.ts";
-import { NodeHttpServer } from "@effect/platform-node";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const writes = (
   Object.values(agentSurfaceRegistry) as ReadonlyArray<
@@ -192,11 +192,11 @@ const caller = ThreadId.make("thread:caller");
 // Admission only: capability "none" writes pass this gate for every profile. The client-only ones
 // (requires "client") then refuse thread callers in their own handlers.
 const ALLOWED_WRITES: Readonly<Record<string, number>> = {
-  observer: 75,
-  worker: 130,
-  manager: 144,
-  "merge-manager": 146,
-  owner: 179,
+  observer: 76,
+  worker: 131,
+  manager: 145,
+  "merge-manager": 147,
+  owner: 181,
 };
 
 it("classifies login fill with the same capability and effect as secret fill", () => {
@@ -344,6 +344,7 @@ it.effect("applies the host allowlist to every argument a write declares names a
       "host.uncordon",
       "hub.device_join",
       "hub.device_leave",
+      "hub.device_move",
       "hub.device_repair",
       "hub.device_setup",
       "ssh.host_forget",
@@ -394,11 +395,22 @@ it.effect("holds hub device writes to threads.remote for the device they name", 
         },
       },
     });
-    for (const path of ["hub.device_join", "hub.device_leave", "hub.device_repair"]) {
+    for (const path of [
+      "hub.device_join",
+      "hub.device_leave",
+      "hub.device_repair",
+      "hub.device_move",
+    ]) {
       const entry = entryAt(path);
       expect(entry.capability).toBe("hub.manage");
       expect(
-        yield* call(listedToolName(entry), threadCaller(caller), { deviceAlias: "box" }),
+        yield* call(
+          listedToolName(entry),
+          threadCaller(caller),
+          path === "hub.device_move"
+            ? { fromAlias: "box", toAlias: "box-pen" }
+            : { deviceAlias: "box" },
+        ),
       ).toEqual({
         code: "capability_denied",
         message: `${entry.name} acts on host box, which needs the goatclaw threads.remote capability and a host the profile allows. Profile owner does not allow threads.remote.`,
@@ -511,5 +523,5 @@ it.effect("gates a legacy tool name over /mcp exactly as its listed name", () =>
     expect(yield* outcome(yield* http.callTool("outside", legacy!, {}))).toEqual({
       ran: entry.name,
     });
-  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );

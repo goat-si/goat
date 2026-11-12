@@ -418,6 +418,21 @@
       ]
     },
     {
+      "path": "pen.md",
+      "tier": 3,
+      "title": "Pen",
+      "scope": "The Pen mesh outside the server: the Go node and relay, the wire contract, the relay and sign-in Workers, node state, and its CI task.",
+      "documents": [
+        "apps/pen",
+        "apps/pen/install",
+        "apps/pen/scripts",
+        "packages/pen-protocol",
+        "packages/pen-protocol/CONTRACT.md",
+        "infra/pen-relay",
+        "infra/pen-login"
+      ]
+    },
+    {
       "path": "web.md",
       "tier": 4,
       "title": "Web",

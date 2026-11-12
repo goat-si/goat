@@ -764,6 +764,7 @@ it.effect.each([
   ["goat_hub_device_join", { deviceAlias: "box" }],
   ["goat_hub_device_leave", { deviceAlias: "box" }],
   ["goat_hub_device_repair", { deviceAlias: "box" }],
+  ["goat_hub_device_move", { fromAlias: "box", toAlias: "box-pen" }],
   ["goat_host_link_create", { name: "box", url: "https://example.test", code: "test-code" }],
   ["goat_ssh_runtime_update", { host: "box", mode: "when_idle" }],
   [
@@ -778,11 +779,14 @@ it.effect.each([
       runs.push(input);
     });
   const hub =
-    (action: "join" | "leave" | "repair") =>
-    (_scope: McpInvocationContext.McpInvocationScope, input: { readonly deviceAlias: string }) =>
+    (action: "join" | "leave" | "repair" | "move") =>
+    (
+      _scope: McpInvocationContext.McpInvocationScope,
+      input: { readonly deviceAlias: string } | { readonly toAlias: string },
+    ) =>
       record(input).pipe(
         Effect.as({
-          deviceAlias: input.deviceAlias,
+          deviceAlias: "deviceAlias" in input ? input.deviceAlias : input.toAlias,
           action,
           state: "ready" as const,
           message: "Done",
@@ -827,6 +831,7 @@ it.effect.each([
       join: hub("join"),
       leave: hub("leave"),
       repair: hub("repair"),
+      move: hub("move"),
     }),
     Layer.mock(LinkedHosts.LinkedHosts)({
       link: (input) =>

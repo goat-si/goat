@@ -254,10 +254,7 @@ interface MessagesTimelineProps {
     readonly title: string;
   } | null;
   workflowOpening?: WorkflowOpening | null;
-  onForkFromRun?: (input: {
-    readonly sourceThreadId: ThreadId;
-    readonly runId: RunId;
-  }) => Promise<void>;
+  onForkFromRun?: TimelineRowSharedState["onForkFromRun"];
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;

@@ -15,7 +15,6 @@ import {
   EnvironmentId,
   isCloudMachineAlias,
   ProjectId,
-  ThreadId,
   OrchestratorMcpCapabilitiesResult,
   type ProjectScript,
   type DesktopSshEnvironmentTarget,
@@ -94,6 +93,7 @@ import {
   type RemoteWorktree,
 } from "./remoteBrowse.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import * as PlacedLaunch from "./placedLaunch.ts";
 
 /**
  * Lets an agent in this environment reach another machine over SSH: list the
@@ -180,6 +180,8 @@ export type SshLaunchInput = SshDispatchDestination & {
    * message. Forwarded only to a remote whose goat_thread_launch declares it.
    */
   readonly standingInstructions?: boolean | undefined;
+  readonly placement?: PlacedLaunch.PlacementArgument | undefined;
+  readonly attachmentDigests?: Readonly<Record<string, string>> | undefined;
 };
 
 export interface SshLaunchResult {
@@ -238,18 +240,21 @@ export interface SshHostToolCall {
   readonly requireHostRoutable?: true;
 }
 
+type SshRuntimeUpdateOptions = {
+  readonly confirmReplacement: boolean;
+  /** The runtime process a person approved stopping; used only with confirmReplacement. */
+  readonly forceReplace?: SshTunnel.SshEnvironmentEnsureOptions["forceReplace"];
+  readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
+  readonly operationId?: string;
+  readonly generation?: number;
+};
 export class SshRemoteDispatch extends Context.Service<
   SshRemoteDispatch,
   {
     readonly runtimeStatus: (host: string) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
     readonly runtimeUpdate: (
       host: string,
-      options: {
-        readonly confirmReplacement: boolean;
-        readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
-        readonly operationId?: string;
-        readonly generation?: number;
-      },
+      options: SshRuntimeUpdateOptions,
     ) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
     readonly beginSetupOperation: (
       host: string,
@@ -367,10 +372,6 @@ const decodeRemoteIdentity = Schema.decodeUnknownEffect(
 const decodeRemoteCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
 
 const decodeRemoteProject = Schema.decodeUnknownEffect(Schema.Struct({ id: ProjectId }));
-const decodeRemoteThread = Schema.decodeUnknownEffect(
-  Schema.Struct({ threadId: ThreadId, runId: Schema.optional(Schema.NullOr(Schema.String)) }),
-);
-
 const BROWSE_TIMEOUT_MS = 20_000;
 const ATTACHMENT_PREPARE_TIMEOUT_MS = 20_000;
 const ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
@@ -591,12 +592,7 @@ const make = Effect.gen(function* () {
 
   const runtimeUpdate = Effect.fn("SshRemoteDispatch.runtimeUpdate")(function* (
     host: string,
-    options: {
-      readonly confirmReplacement: boolean;
-      readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
-      readonly operationId?: string;
-      readonly generation?: number;
-    },
+    options: SshRuntimeUpdateOptions,
   ) {
     const target = yield* resolveHost(host);
     if (options.operationId !== undefined) {
@@ -614,6 +610,7 @@ const make = Effect.gen(function* () {
         issuePairingToken: false,
         refreshRuntime: true,
         confirmReplacement: options.confirmReplacement,
+        forceReplace: options.forceReplace,
         ...(options.onPhase === undefined ? {} : { onPhase: options.onPhase }),
       }),
     ).pipe(Effect.result);
@@ -944,6 +941,7 @@ const make = Effect.gen(function* () {
       }>,
       preparedIds: string[],
       beforeLaunch: Effect.Effect<void, E, R>,
+      digests?: Readonly<Record<string, string>>,
     ) {
       const uploaded: Array<ChatImageAttachment | ChatFileAttachment> = [];
       for (const { attachment, path } of sources) {
@@ -1013,10 +1011,12 @@ const make = Effect.gen(function* () {
           return yield* failure("remote_refused", "The remote attachment upload URL has expired.");
         }
         const request = HttpClientRequest.post(url.toString()).pipe(
-          HttpClientRequest.bodyStream(fileSystem.stream(path), {
-            contentType: attachment.mimeType,
-            contentLength: attachment.sizeBytes,
-          }),
+          yield* PlacedLaunch.attachmentBody(
+            fileSystem,
+            path,
+            attachment,
+            digests?.[attachment.id],
+          ),
         );
         // HttpClient's automatic span records url.full/url.path, which contain the
         // signed upload capability. Keep this request out of URL-bearing telemetry.
@@ -1429,6 +1429,7 @@ const make = Effect.gen(function* () {
         });
       if (capabilities === null && input.memoryGrantCeiling !== undefined)
         return yield* memoryRefusal("Remote task memory admission could not be verified.");
+      yield* PlacedLaunch.refuseUndeclared(input.placement, capabilities, target.alias);
       if (
         memoryGrantCeiling !== "none" &&
         capabilities?.declared.has("memoryGrantCeiling") !== true
@@ -1522,6 +1523,7 @@ const make = Effect.gen(function* () {
         sources,
         preparedIds,
         beforeLaunch,
+        input.attachmentDigests,
       );
       // Authority may have changed while the last upload completed.
       yield* beforeLaunch;
@@ -1556,6 +1558,7 @@ const make = Effect.gen(function* () {
             ...(forwardReport ? { report: input.report } : {}),
             ...(forwardStandingOptOut ? { standingInstructions: false } : {}),
             ...(forwardWatchOptOut ? { notifyOnCompletion: false } : {}),
+            ...PlacedLaunch.launchArguments(input.placement),
           },
         });
       const rawLaunched = yield* launch(forwardLaunchedBy, admission.memoryArguments).pipe(
@@ -1575,16 +1578,10 @@ const make = Effect.gen(function* () {
             : Effect.fail(error),
         ),
       );
-      const launched = yield* decodeRemoteThread(rawLaunched).pipe(
-        Effect.mapError(
-          () =>
-            new SshRemoteDispatchError({
-              reason: "remote_refused",
-              launchMayHaveStarted: true,
-              message:
-                "The remote launch returned no thread acknowledgement; inspect its threads before retrying.",
-            }),
-        ),
+      const launched = yield* PlacedLaunch.decodeLaunched(
+        rawLaunched,
+        input.placement,
+        target.alias,
       );
       const launchedReport = (rawLaunched as { readonly report?: unknown } | null)?.report as
         | { readonly correlationId?: string }

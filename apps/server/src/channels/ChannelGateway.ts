@@ -49,6 +49,9 @@ import type * as DocumentText from "../provider/DocumentText.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import type { ChannelConnectionOwner, ChannelIngressContext } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
+import { answerVerdict } from "./channelPersonMessage.ts";
+
+const FINISHED_TASK_STATUSES = new Set(["completed", "failed", "cancelled"]);
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -58,6 +61,7 @@ import {
   bindingIdFor,
   contentHashFor,
   conversationIdFor,
+  goatConversationKeyFor,
   deliveryIdFor,
   inputIdFor,
   linkCodeHashFor,
@@ -68,7 +72,6 @@ export const GOAT_CONNECTION_ID = "goat";
 /** The fixed connection id of agent input over MCP; the request namespace scopes it. */
 export const MCP_CONNECTION_ID = "mcp";
 /** The owner's GOAT bot is one conversation, also across a bot thread replaced after deletion. */
-const GOAT_CONVERSATION_KEY = "goat-bot";
 
 /**
  * The GOAT bot takes only files this server just received as uploads: a node hands the provider
@@ -262,8 +265,7 @@ const scopedForCaller = (
   if (input.kind === "goat")
     return {
       ...input,
-      conversationKey:
-        botId === MAIN_BOT_ID ? GOAT_CONVERSATION_KEY : GOAT_CONVERSATION_KEY + ":" + botId,
+      conversationKey: goatConversationKeyFor(botId),
     };
   if (input.kind !== "mcp" || context.caller.type !== "mcp") return input;
   const namespace = context.caller.requestNamespace;
@@ -444,15 +446,17 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (input.replyAddress.kind !== "goat") return result;
       const target =
-        input.intent === "message" && input.taskId !== undefined
+        input.intent !== "report" && input.taskId !== undefined
           ? yield* ledger.getTask(input.taskId).pipe(Effect.mapError(ledgerFailure))
           : undefined;
+      // A finished task's thread takes no more work: the message is handled in the main chat.
       const validatedTaskId =
         target !== undefined &&
         requester !== undefined &&
         target.ownerId === requester.ownerId &&
         target.task.conversationId === result.conversationId &&
-        mayDirect(requester, input.connectionId, target.task)
+        mayDirect(requester, input.connectionId, target.task) &&
+        !FINISHED_TASK_STATUSES.has(target.task.status)
           ? target.task.taskId
           : undefined;
       const sequence = yield* timeline.record({
@@ -470,6 +474,12 @@ const make = Effect.gen(function* () {
               kind: "inbound",
               inputId: result.inputId,
               clientMessageId: input.externalMessageId,
+              ...answerVerdict({
+                message: input,
+                requester,
+                conversationId: result.conversationId,
+                task: target,
+              }),
               ...(validatedTaskId === undefined ? {} : { taskId: validatedTaskId }),
             },
           },

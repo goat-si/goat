@@ -12,6 +12,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { ChannelLedgerError } from "./channelLedgerError.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { deliveryIdFor } from "./channelIds.ts";
@@ -171,6 +172,8 @@ describe("undelivered replies", () => {
         receiptsOnly: true,
       });
       assert.strictEqual(claimed[0]?.deliveryId, deliveryId);
+      // Handed to Slack before the restart or the deadline.
+      yield* ledger.markSending({ owner: runtime.ownerToken, deliveryId, attempt: 1, now });
       yield* ledger.settleInterruptedDeliveries({ owner: runtime.ownerToken, now });
       assert.strictEqual(yield* ledger.getDeliveryState(deliveryId), "ambiguous");
       yield* runtime.drain;
@@ -228,6 +231,8 @@ describe("undelivered replies", () => {
         receiptsOnly: true,
       });
       assert.strictEqual(claimed[0]?.deliveryId, deliveryId);
+      // Handed to Slack before the restart or the deadline.
+      yield* ledger.markSending({ owner: runtime.ownerToken, deliveryId, attempt: 1, now });
       yield* TestClock.setTime(started + 61_000);
       const later = DateTime.formatIso(yield* DateTime.now);
       yield* ledger.expireReceipts({ owner: runtime.ownerToken, now: later });
@@ -244,4 +249,89 @@ describe("undelivered replies", () => {
       );
     }).pipe(Effect.provide(harness.layer));
   });
+});
+
+/** The real ledger with its hand-over record replaced, as a database that refuses or loses it would. */
+const layerWithHandOver = (
+  markSending: ChannelLedger.ChannelLedger["Service"]["markSending"],
+  sent: Array<string>,
+) =>
+  ChannelDeliveryWorker.layer.pipe(
+    Layer.provideMerge(
+      Layer.mock(ChannelGateway.ChannelGateway)({
+        send: (message) =>
+          Effect.sync(() => {
+            sent.push(message.text);
+            return { deliveryId: message.deliveryId, acceptedAt: NOW };
+          }),
+      }),
+    ),
+    Layer.provide(ChannelWake.layer),
+    Layer.provideMerge(
+      Layer.effect(
+        ChannelLedger.ChannelLedger,
+        Effect.map(ChannelLedger.ChannelLedger, (ledger) => ({ ...ledger, markSending })),
+      ).pipe(Layer.provideMerge(ChannelLedger.layer)),
+    ),
+    Layer.provideMerge(SqlitePersistence.layerMemory),
+  );
+
+describe("handing a delivery to its transport", () => {
+  const run = (markSending: ChannelLedger.ChannelLedger["Service"]["markSending"]) => {
+    const sent: Array<string> = [];
+    return Effect.gen(function* () {
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+      yield* TestClock.setTime(Date.parse(NOW));
+      yield* ledger.claimOwnership({
+        token: OWNER,
+        now: NOW,
+        staleBefore: "2026-10-11T23:59:30.000Z",
+      });
+      yield* ledger.enqueueDeliveries([delivery("asked")], NOW);
+      yield* worker.deliverDue(OWNER);
+      return { sent, state: yield* ledger.getDeliveryState(deliveryIdFor("asked")) };
+    }).pipe(Effect.provide(layerWithHandOver(markSending, sent)));
+  };
+
+  it.effect("a hand-over the database could not record sends nothing and frees the row", () =>
+    Effect.gen(function* () {
+      const result = yield* run(() =>
+        Effect.fail(new ChannelLedgerError({ reason: "persistence", detail: "database busy" })),
+      );
+      assert.deepStrictEqual(result.sent, []);
+      assert.strictEqual(result.state, "pending");
+    }),
+  );
+
+  it.effect("a row that stopped being this claim's before the hand-over is not sent", () =>
+    Effect.gen(function* () {
+      const result = yield* run(() => Effect.succeed(false));
+      assert.deepStrictEqual(result.sent, []);
+    }),
+  );
+
+  it.effect("the hand-over record refuses a row recovery took back", () =>
+    Effect.gen(function* () {
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* ledger.claimOwnership({
+        token: OWNER,
+        now: NOW,
+        staleBefore: "2026-10-11T23:59:30.000Z",
+      });
+      yield* ledger.enqueueDeliveries([delivery("taken")], NOW);
+      const [claimed] = yield* ledger.claimDueDeliveries({ owner: OWNER, now: NOW, limit: 1 });
+      yield* ledger.settleInterruptedDeliveries({ owner: OWNER, now: NOW });
+      assert.isFalse(
+        yield* ledger.markSending({
+          owner: OWNER,
+          deliveryId: claimed!.deliveryId,
+          attempt: claimed!.attempts,
+          now: NOW,
+        }),
+      );
+    }).pipe(
+      Effect.provide(ChannelLedger.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+    ),
+  );
 });

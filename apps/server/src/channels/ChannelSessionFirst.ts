@@ -30,6 +30,7 @@ import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
 import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
+import { personMessageEntry } from "./channelPersonMessage.ts";
 import { isMemoryTabEdit } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
@@ -92,22 +93,7 @@ const make = Effect.gen(function* () {
         threadId: origin.threadId,
         record: {
           recordKey: "input:" + stored.snapshot.inputId,
-          entry: {
-            type: "message",
-            role: "user",
-            text: stored.message.text,
-            meta: {
-              conversationId: stored.snapshot.conversationId,
-              originKind: "goat",
-              kind: "inbound",
-              inputId: stored.snapshot.inputId,
-              clientMessageId: stored.message.externalMessageId,
-              ...(stored.message.intent === "message" && stored.message.taskId !== undefined
-                ? { taskId: stored.message.taskId }
-                : {}),
-              readAt,
-            },
-          },
+          entry: personMessageEntry(stored, { readAt }),
         },
         revision: "read",
       })

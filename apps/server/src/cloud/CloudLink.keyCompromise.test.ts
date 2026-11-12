@@ -37,6 +37,7 @@ import * as CliTokens from "./CliTokenManager.ts";
 import * as Reachability from "./ConnectReachability.ts";
 import * as Awareness from "../relay/AgentAwarenessRelay.ts";
 import * as HookProof from "../scheduledTasks/RelayDeliveryProof.ts";
+import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
 
 vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/shared/goatConnect")>()),
@@ -168,11 +169,12 @@ it.effect(
       const hubGrant = yield* mint(oldKey.privateKey);
       const hubToken = yield* auth.exchangeBootstrapCredentialForAccessToken(
         hubGrant.credential,
+        MAIN_LISTENER,
         undefined,
         { deviceType: "unknown" },
         { proofKeyThumbprint: "fixture-thumbprint" },
       );
-      const hub = yield* sessions.verify(hubToken.access_token);
+      const hub = yield* sessions.verify(hubToken.access_token, MAIN_LISTENER);
       expect(hub.scopes).toContain(AuthHubProxyScope);
       const independent = yield* auth.issueSession({ subject: "independent-pairing" });
       const ticket = yield* sessions.issueWebSocketToken(hub.sessionId);
@@ -205,25 +207,31 @@ it.effect(
       };
       expect(Option.isSome(yield* hooks.verify(hookInput))).toBe(true);
       yield* cloud.unlink();
-      expect((yield* sessions.verify(standard.token).pipe(Effect.result))._tag).toBe("Failure");
-      expect((yield* sessions.verify(hubToken.access_token).pipe(Effect.result))._tag).toBe(
+      expect((yield* sessions.verify(standard.token, MAIN_LISTENER).pipe(Effect.result))._tag).toBe(
         "Failure",
       );
-      expect((yield* sessions.verifyWebSocketToken(ticket.token).pipe(Effect.result))._tag).toBe(
-        "Failure",
-      );
+      expect(
+        (yield* sessions.verify(hubToken.access_token, MAIN_LISTENER).pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(
+        (yield* sessions.verifyWebSocketToken(ticket.token, MAIN_LISTENER).pipe(Effect.result))
+          ._tag,
+      ).toBe("Failure");
       yield* sessions.awaitInvalidation(hub.sessionId);
       expect(
         (yield* auth
           .exchangeBootstrapCredentialForAccessToken(
             bootstrap.credential,
+            MAIN_LISTENER,
             undefined,
             { deviceType: "unknown" },
             { proofKeyThumbprint: "fixture-thumbprint" },
           )
           .pipe(Effect.result))._tag,
       ).toBe("Failure");
-      expect((yield* sessions.verify(independent.token)).subject).toBe("independent-pairing");
+      expect((yield* sessions.verify(independent.token, MAIN_LISTENER)).subject).toBe(
+        "independent-pairing",
+      );
       yield* install(nextKey.publicKey);
       expect((yield* Effect.flip(mint(oldKey.privateKey)))._tag).toBe(
         "CloudLinkProofRejectedError",
@@ -312,7 +320,9 @@ it.effect.each([
           expect((yield* Fiber.join(withdrawal))._tag).toBe("Failure");
           expect((yield* Fiber.join(relink))._tag).toBe("Failure");
           expect(
-            (yield* (yield* SessionStore.SessionStore).verify(old.token).pipe(Effect.result))._tag,
+            (yield* (yield* SessionStore.SessionStore)
+              .verify(old.token, MAIN_LISTENER)
+              .pipe(Effect.result))._tag,
           ).toBe("Failure");
         }).pipe(Effect.provide(Layer.fresh(services)));
         failSettlement = false;
@@ -324,9 +334,9 @@ it.effect.each([
           yield* install(cloud, "new-installation");
           let fresh = yield* auth.issueSession({ subject: "cloud-connect" });
           yield* revoke.resumeLocal;
-          expect((yield* (yield* SessionStore.SessionStore).verify(fresh.token)).subject).toBe(
-            "cloud-connect",
-          );
+          expect(
+            (yield* (yield* SessionStore.SessionStore).verify(fresh.token, MAIN_LISTENER)).subject,
+          ).toBe("cloud-connect");
           const secrets = yield* ServerSecretStore.ServerSecretStore;
           expect(
             new TextDecoder().decode(
@@ -338,8 +348,9 @@ it.effect.each([
             yield* secrets.set(CLOUD_WITHDRAWAL_FENCE, new TextEncoder().encode("pending"));
             yield* revoke.resumeLocal;
             expect(
-              (yield* (yield* SessionStore.SessionStore).verify(fresh.token).pipe(Effect.result))
-                ._tag,
+              (yield* (yield* SessionStore.SessionStore)
+                .verify(fresh.token, MAIN_LISTENER)
+                .pipe(Effect.result))._tag,
             ).toBe("Failure");
             expect(Option.isNone(yield* secrets.get(RELAY_ENVIRONMENT_CREDENTIAL_SECRET))).toBe(
               true,
@@ -364,9 +375,9 @@ it.effect.each([
           expect((yield* install(cloud, "third-installation").pipe(Effect.result))._tag).toBe(
             "Failure",
           );
-          expect((yield* (yield* SessionStore.SessionStore).verify(fresh.token)).subject).toBe(
-            "cloud-connect",
-          );
+          expect(
+            (yield* (yield* SessionStore.SessionStore).verify(fresh.token, MAIN_LISTENER)).subject,
+          ).toBe("cloud-connect");
           expect(
             new TextDecoder().decode(
               Option.getOrThrow(yield* secrets.get(RELAY_ENVIRONMENT_CREDENTIAL_SECRET)),

@@ -80,13 +80,10 @@ const actionPhrase = (kind: OrchestrationV2RuntimeRequest["kind"] | undefined): 
 
 const MAX_PROMPT_CHARS = 400;
 
-/**
- * The two buttons on an approval card, Deny first so a quick first pick never approves. A number
- * or a Slack button sends one of these labels.
- */
+/** The two buttons on an approval card. A number or a Slack button sends one of these labels. */
 export const approvalChoiceLabels = (code: string): readonly [string, string] => [
-  "Deny " + code,
   "Approve " + code,
+  "Deny " + code,
 ];
 
 /** Same words a local answer records, and the provenance a remote respond requires. */

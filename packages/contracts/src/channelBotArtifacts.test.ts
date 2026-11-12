@@ -1,12 +1,27 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { ChannelReadBotArtifactInput, ChannelReadBotArtifactResult } from "./index.ts";
+import {
+  ChannelListBotArtifactsResult,
+  ChannelReadBotArtifactInput,
+  ChannelReadBotArtifactResult,
+} from "./index.ts";
 
 const roundTrip = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelReadBotArtifactResult));
 const toJson = Schema.encodeSync(Schema.fromJsonString(ChannelReadBotArtifactResult));
 
 describe("GOAT Bot artifact reads on the wire", () => {
+  it("decodes a listing with the server's artifacts folder and an older one without it", () => {
+    const decode = Schema.decodeUnknownSync(ChannelListBotArtifactsResult);
+    const artifacts = [{ relativePath: "README", size: 3, modifiedAt: "2026-11-07T10:00:00.000Z" }];
+    expect(decode({ root: "/srv/goat-bot/artifacts", artifacts, truncated: false })).toEqual({
+      root: "/srv/goat-bot/artifacts",
+      artifacts,
+      truncated: false,
+    });
+    expect(decode({ artifacts, truncated: false })).toEqual({ artifacts, truncated: false });
+  });
+
   it("carries every read outcome through JSON unchanged", () => {
     for (const result of [
       {

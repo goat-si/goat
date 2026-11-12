@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
 
 const decodeSiblingSettings = Schema.decodeUnknownEffect(AcpRegistrySettings);
 const decodeInstanceId = Schema.decodeUnknownOption(ProviderInstanceId);
@@ -239,7 +240,7 @@ const make = Effect.gen(function* () {
           const handle = yield* spawner.spawn(
             ChildProcess.make(launch.command, args, {
               cwd: launch.cwd,
-              env: launch.env,
+              env: providerProbeEnvironment(launch.env),
               shell: false,
               stdin: "ignore",
             }),

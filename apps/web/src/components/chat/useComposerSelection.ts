@@ -3,6 +3,7 @@ import type { UnifiedSettings } from "@goat/contracts";
 import type { Dispatch } from "react";
 import type { ComposerThreadTarget, DraftSessionState } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import {
   type EnvironmentId,
   type ModelSelection,
@@ -92,6 +93,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     (store) => store.setInteractionMode,
   );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const applyThreadModelPick = useApplyThreadModelPick();
 
   const handleRuntimeModeChange = (mode: RuntimeMode) => {
     if (mode === runtimeMode) return;
@@ -216,6 +218,8 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       { explicit: true, replaceOptions: true },
     );
     setStickyComposerModelSelection(nextModelSelection);
+    if (!isLocalDraftThread)
+      void applyThreadModelPick(scopeThreadRef(activeThread.environmentId, activeThread.id));
     if (options?.focusComposer !== false) scheduleComposerFocus();
   };
   const onProviderModelSelectStable = useStableCallback(onProviderModelSelect);

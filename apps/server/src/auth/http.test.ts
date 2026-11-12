@@ -2,6 +2,7 @@ import {
   LEGACY_SESSION_COOKIE_NAME,
   LEGACY_DEV_SESSION_COOKIE_PREFIX,
 } from "@goat/contracts/legacyT3Names";
+import { onMainListenerWeb } from "./connectionContext.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthTokenExchangeGrantType,
@@ -90,8 +91,8 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
       Effect.sync(
         () =>
           [
-            HttpRouter.toWebHandler(layerRoutes, { disableLogger: true }),
-            HttpRouter.toWebHandler(layerRoutes, { disableLogger: true }),
+            onMainListenerWeb(HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+            onMainListenerWeb(HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
           ] as const,
       ),
       ([environmentA, environmentB]) =>
@@ -204,7 +205,9 @@ it.effect.each(["DPoP", "dpop"])("challenges a refused %s request with DPoP", (s
       Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
     );
     return yield* Effect.acquireUseRelease(
-      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      Effect.sync(() =>
+        onMainListenerWeb(HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      ),
       (environment) =>
         Effect.promise(async () => {
           const refused = await environment.handler(

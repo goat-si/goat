@@ -1,4 +1,5 @@
-import { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { BotId, ChannelTaskId, EnvironmentId, OrchestrationV2TurnItemJson } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../test/render";
 
@@ -15,6 +16,9 @@ const state = vi.hoisted(() => ({
   shellRefs: [] as Array<unknown>,
   memberArgs: [] as Array<unknown>,
   restore: vi.fn(async () => true),
+  items: [] as Array<unknown>,
+  sessionReads: [] as Array<string>,
+  boundedSnapshots: true,
 }));
 vi.mock("../hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("../hooks/useSettings", () => ({ useClientSettings: () => state.beside }));
@@ -24,24 +28,60 @@ vi.mock("../state/entities", () => ({
     return {};
   },
   resolveThreadDetailRef: () => null,
-  useThreadVisibleTurnItems: () => [],
+  useThreadVisibleTurnItems: () => state.items,
+  // Activity lines read a session only from a server that sends a thread's newest part.
+  useServerConfigs: () =>
+    new Map([
+      ["env", { environment: { capabilities: { goatBotOpenAsks: state.boundedSnapshots } } }],
+    ]),
 }));
-vi.mock("../components/goatBot/GoatBotChatView", () => ({
-  GoatBotChatView: (props: { removal?: string | null; onRestore?: () => void }) => {
-    state.chatSession = props;
-    return (
-      <div>
-        Main chat
-        {props.removal === "deleted" ? <span>Chat removed</span> : null}
-        {props.onRestore ? (
-          <button type="button" onClick={props.onRestore}>
-            Restore
-          </button>
-        ) : null}
-      </div>
-    );
-  },
-}));
+// Records which threads' steps a view reads; reading one is what subscribes to it.
+vi.mock("../state/threads", async (importOriginal) => {
+  const { Atom } = await import("effect/reactivity");
+  const quiet = new Map<string, unknown>();
+  const history = Atom.make({ hasMoreHistory: false });
+  const actual = await importOriginal<typeof import("../state/threads")>();
+  return {
+    ...actual,
+    environmentThreadDetails: {
+      ...actual.environmentThreadDetails,
+      quietVisibleTurnItemsAtom: (ref: { threadId: string }) => {
+        if (!quiet.has(ref.threadId))
+          quiet.set(
+            ref.threadId,
+            Atom.make(() => {
+              state.sessionReads.push(ref.threadId);
+              return [];
+            }),
+          );
+        return quiet.get(ref.threadId);
+      },
+      historyAtom: () => history,
+    },
+  };
+});
+// The real chat reads its steps through GoatBotStepsReader around its conversation.
+vi.mock("../components/goatBot/GoatBotChatView", async () => {
+  const { GoatBotStepsReader } = await import("../components/goatBot/GoatBotStepsProvider");
+  return {
+    GoatBotChatView: (props: { removal?: string | null; onRestore?: () => void }) => {
+      state.chatSession = props;
+      return (
+        <GoatBotStepsReader rows={[]}>
+          <div>
+            Main chat
+            {props.removal === "deleted" ? <span>Chat removed</span> : null}
+            {props.onRestore ? (
+              <button type="button" onClick={props.onRestore}>
+                Restore
+              </button>
+            ) : null}
+          </div>
+        </GoatBotStepsReader>
+      );
+    },
+  };
+});
 vi.mock("../components/goatBot/useBotManage", () => ({
   useBotManage: () => ({ canManage: true, restore: state.restore }),
 }));
@@ -52,11 +92,13 @@ vi.mock("../components/goatBot/GoatBotTaskPane", () => ({
   },
 }));
 vi.mock("../components/goatBot/useGoatBotSession", () => ({
-  useGoatBotSession: (_items: unknown, _task: unknown, member: unknown) => {
+  useGoatBotSession: (items: unknown, _task: unknown, member: unknown) => {
     state.memberArgs.push(member ?? null);
     const session = {
       availability: { kind: "ready", bot: { environmentId: "env", threadId: "bot" } },
       supportsTaskThreads: state.supported,
+      rows: [],
+      visibleTurnItems: items,
       marker: {},
     };
     state.sessions.push(session);
@@ -92,7 +134,9 @@ it.each([
     await using screen = await render(
       <GoatBotTaskRoute
         environmentId={EnvironmentId.make("env")}
-        session={{} as ReturnType<typeof useGoatBotSession>}
+        session={
+          { visibleTurnItems: [], rows: [] } as unknown as ReturnType<typeof useGoatBotSession>
+        }
         taskId={ChannelTaskId.make("task")}
       />,
       { router: false },
@@ -200,3 +244,79 @@ it("a deleted member's task beside its chat shows the chat as deleted and offers
     state.bots = [];
   }
 });
+
+const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
+const turnChip = (() => {
+  const at = "2026-11-12T03:00:00.000Z";
+  const item = decodeItem({
+    id: "chip",
+    threadId: "bot",
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "completed",
+    title: null,
+    startedAt: at,
+    completedAt: at,
+    updatedAt: at,
+    type: "notification",
+    source: { kind: "background_task" },
+    outcome: "updated",
+    summary: "Work updated",
+    ledgerTask: {
+      taskId: "turn-1",
+      kind: "turn",
+      conversationId: "conv-1",
+      taskVersion: 1,
+      title: "Turn",
+      status: "running",
+      originKind: "goat",
+      requesterLabel: "Jun",
+      createdAt: at,
+      updatedAt: at,
+      worker: { environmentId: "env", threadId: "goat-bot-session:s1", runId: "run-1" },
+      openQuestionCount: 0,
+    },
+  });
+  return {
+    position: 0,
+    visibility: "local",
+    sourceThreadId: item.threadId,
+    sourceItemId: item.id,
+    item,
+  };
+})();
+
+it.each([
+  { narrow: true, bounded: true, reads: [] },
+  { narrow: false, bounded: true, reads: ["goat-bot-session:s1"] },
+  { narrow: false, bounded: false, reads: [] },
+])(
+  "reads the main chat's turn sessions only while that chat shows beside the task, from a bounded server %#",
+  async ({ narrow, bounded, reads }) => {
+    state.narrow = narrow;
+    state.boundedSnapshots = bounded;
+    state.beside = true;
+    state.supported = true;
+    state.bots = [];
+    state.items = [turnChip];
+    state.sessionReads = [];
+    using _search = vi
+      .spyOn(Route, "useSearch")
+      .mockReturnValue({ task: ChannelTaskId.make("task") });
+    const Component = Route.options.component;
+    if (!Component) throw new Error("missing route component");
+    try {
+      await using screen = await render(<Component />, { router: false }); // Search and navigation are mocked.
+      await expect.element(screen.getByText(narrow ? "Back to Tasks" : "Close")).toBeVisible();
+      expect([...new Set(state.sessionReads)]).toEqual(reads);
+    } finally {
+      state.items = [];
+      state.boundedSnapshots = true;
+    }
+  },
+);

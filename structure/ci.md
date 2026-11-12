@@ -79,6 +79,11 @@ changes reach, `ci:server` adds the full server suite, `ci:memory` the memory gr
 `goat-ci-scope.cjs`) on hosted `windows-2025`, the only CI that sees Windows-only failures
 (#1385). It runs in `lane=all`, in the `windows` lane, with `ci:windows`, and on a pull request
 that changes a file under one of those suites. Its job stops at 30 minutes.
+`test-pen` runs Pen's suites on hosted `ubuntu-24.04` ([pen.md](pen.md#checks)): in `lane=all` and on a pull
+request that changes `apps/pen/`, `packages/pen-protocol/`, `infra/pen-relay/` or `infra/pen-login/`
+(`PEN_PATHS`), whose suites it owns, so `test-packages` and `test-changed` leave them out. The Go module has no
+`package.json`, so paths select it instead of the workspace graph, and the guard allows no `setup-go` action: the
+image's `go` switches to the toolchain `apps/pen/go.mod` names.
 Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and supersedes
 the old one. Any other label, and any edit that keeps the base, runs no task, but GitHub still
 creates a goat-ci suite for it and reads the required `goat-ci-result` from the newest suite on the

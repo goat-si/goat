@@ -1,0 +1,85 @@
+package cli
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
+)
+
+// Resolve finds one member by name, nodeId or a unique nodeId prefix of at least 4 characters.
+// A leading "pen-" (the ssh host alias form) is ignored.
+func Resolve(members []mesh.Member, arg string) (mesh.Member, error) {
+	q := strings.ToLower(strings.TrimPrefix(arg, "pen-"))
+	if q == "" {
+		return mesh.Member{}, fmt.Errorf("no node named %q", arg)
+	}
+	var byName []mesh.Member
+	for _, m := range members {
+		if m.NodeID == q {
+			return m, nil
+		}
+		if m.Name == q {
+			byName = append(byName, m)
+		}
+	}
+	if len(byName) == 1 {
+		return byName[0], nil
+	}
+	if len(byName) > 1 {
+		return mesh.Member{}, ambiguous(arg, byName)
+	}
+	// A name that itself starts with "pen-": the alias reading above wins, the literal name comes next.
+	if full := strings.ToLower(arg); full != q {
+		for _, m := range members {
+			if m.Name == full {
+				byName = append(byName, m)
+			}
+		}
+		if len(byName) == 1 {
+			return byName[0], nil
+		}
+		if len(byName) > 1 {
+			return mesh.Member{}, ambiguous(arg, byName)
+		}
+	}
+	if len(q) < 4 {
+		return mesh.Member{}, fmt.Errorf("no node named %q (a nodeId prefix needs at least 4 characters)", arg)
+	}
+	var byPrefix []mesh.Member
+	for _, m := range members {
+		if strings.HasPrefix(m.NodeID, q) {
+			byPrefix = append(byPrefix, m)
+		}
+	}
+	switch len(byPrefix) {
+	case 1:
+		return byPrefix[0], nil
+	case 0:
+		return mesh.Member{}, fmt.Errorf("no node named %q", arg)
+	}
+	return mesh.Member{}, ambiguous(arg, byPrefix)
+}
+
+// ResolveExact finds the member whose node id is exactly nodeID, and only if its Noise key is noise.
+// It never falls back to a name or a prefix, so a departed node's id used as a name cannot redirect it.
+func ResolveExact(members []mesh.Member, nodeID, noise string) (mesh.Member, error) {
+	for _, m := range members {
+		if m.NodeID != nodeID {
+			continue
+		}
+		if m.NoisePub != noise {
+			return mesh.Member{}, fmt.Errorf("node %s has a different Noise key in this machine's view than --noise", nodeID)
+		}
+		return m, nil
+	}
+	return mesh.Member{}, fmt.Errorf("node %s is not a member", nodeID)
+}
+
+func ambiguous(arg string, ms []mesh.Member) error {
+	var c []string
+	for _, m := range ms {
+		c = append(c, m.Name+" ("+short(m.NodeID)+")")
+	}
+	return fmt.Errorf("%q matches %s; use a longer nodeId", arg, strings.Join(c, ", "))
+}

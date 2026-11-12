@@ -3,9 +3,12 @@
 // chat and settings routes, the sidebar and the right panel, through the same stores and
 // atoms the app reads. See renderScenarios.renders.tsx for the counting rules.
 import { createMemoryHistory } from "@tanstack/react-router";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ThreadId } from "@goat/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
+import { isMacPlatform } from "@goat/shared/keybindings";
 import type * as Context from "effect/Context";
+import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { commands, page, userEvent } from "vite-plus/test/browser";
 
@@ -14,6 +17,9 @@ import "~/index.css";
 import { AppRoot } from "~/AppRoot";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter, type AppRouter } from "~/router";
+import { useRightPanelStore } from "~/rightPanelStore";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { vcsEnvironment } from "~/state/vcs";
 import {
   ENVIRONMENT_ID,
   assistantItem,
@@ -49,6 +55,7 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
+const GIT_STATUS_UPDATES = 20;
 const HISTORY_TURNS = 20;
 const STREAM_DELTAS = 30;
 const TYPED_TEXT = "fix the flaky tests!";
@@ -64,7 +71,12 @@ const [WARM, A, B, LIVE] = THREADS.map((thread) => thread.id) as [
   ThreadId,
 ];
 
-installFakeEnvironment(THREADS);
+const SIDE_CHAT = {
+  ...threadWithHistory("thread-side", HISTORY_TURNS),
+  shell: { sideChatOf: WARM },
+};
+
+installFakeEnvironment([...THREADS, SIDE_CHAT]);
 // Desktop-sized, so the sidebar, composer and right panel lay out as they do in the app.
 await page.viewport(1400, 900);
 // A returning user: the first-run gate would otherwise wait on onboarding evidence.
@@ -276,9 +288,10 @@ it("app-switch-thread", async () => {
   await report("app-switch-thread", windows);
 });
 
-// Through the diff.toggle shortcut, the same handler as the header's diff button.
+// Through the diff.toggle shortcut (mod+d), the same handler as the header's diff button.
+const modD = isMacPlatform(navigator.platform) ? "{Meta>}d{/Meta}" : "{Control>}d{/Control}";
 const toggleDiff = (to: "open" | "close") => async () => {
-  await userEvent.keyboard("{Control>}d{/Control}");
+  await userEvent.keyboard(modD);
   const diff = page.getByRole("group", { name: "Diff layout" });
   if (to === "open") await expect.element(diff).toBeVisible();
   else await expect.element(diff).not.toBeInTheDocument();
@@ -325,9 +338,55 @@ it("app-switch-settings-section", async () => {
   ]);
 });
 
-it("VCS status changes do not redraw the composer", async () => {
+// The status these scenarios leave cached adds renders to later ones, so keep them last.
+// ChatView reads only a few status fields, so changing file counts should not reach it.
+it("app-git-file-counts-with-side-chat", async () => {
   using _clock = frozenClock();
+  useRightPanelStore.getState().open(scopeThreadRef(ENVIRONMENT_ID, WARM), "side-chat");
   await using _app = (await openThread(WARM)).screen;
+  await expect.element(lastAnswer(SIDE_CHAT.id)).toBeVisible();
+  const gitStatus = vcsEnvironment.status({
+    environmentId: ENVIRONMENT_ID,
+    input: { cwd: "/workspace/render" },
+  });
+  const local = (insertions: number, refName = "main") => ({
+    isRepo: true,
+    hasPrimaryRemote: true,
+    isDefaultRef: true,
+    refName,
+    hasWorkingTreeChanges: true,
+    workingTree: {
+      files: [{ path: "src/app.ts", insertions, deletions: 0 }],
+      insertions,
+      deletions: 0,
+    },
+  });
+  await act(() => emitVcsStatus({ _tag: "snapshot", local: local(0), remote: null }));
+  const counted = await measure(async () => {
+    for (let update = 1; update <= GIT_STATUS_UPDATES; update++) {
+      await act(() => emitVcsStatus({ _tag: "localUpdated", local: local(update) }));
+    }
+    // Zero renders only counts if the last update arrived inside this window.
+    await vi.waitFor(() => {
+      const status = AsyncResult.getOrElse(appAtomRegistry.get(gitStatus), () => null);
+      expect(status?.workingTree.insertions).toBe(GIT_STATUS_UPDATES);
+    });
+  });
+  expect(counted.components.ChatView).toBeUndefined();
+  // A field the chat view does read still reaches both chats.
+  const branchSwitch = await measure(() =>
+    act(() => emitVcsStatus({ _tag: "localUpdated", local: local(0, "feature") })),
+  );
+  expect(branchSwitch.components.ChatView).toBe(2);
+  await report("app-git-file-counts-with-side-chat", [counted]);
+});
+
+// ChatView re-renders when the tree goes dirty or clean; the composer and side chat timeline should not.
+it("app-git-status-updates-with-side-chat", async () => {
+  using _clock = frozenClock();
+  useRightPanelStore.getState().open(scopeThreadRef(ENVIRONMENT_ID, WARM), "side-chat");
+  await using _app = (await openThread(WARM)).screen;
+  await expect.element(lastAnswer(SIDE_CHAT.id)).toBeVisible();
   const local = (insertions: number) => ({
     isRepo: true,
     hasPrimaryRemote: true,
@@ -342,11 +401,11 @@ it("VCS status changes do not redraw the composer", async () => {
   });
   await act(() => emitVcsStatus({ _tag: "snapshot", local: local(0), remote: null }));
   const counted = await measure(async () => {
-    for (let update = 1; update <= 20; update++) {
+    for (let update = 1; update <= GIT_STATUS_UPDATES; update++) {
       await act(() => emitVcsStatus({ _tag: "localUpdated", local: local(update) }));
     }
   });
-  expect(counted.components.ChatView).toBeGreaterThan(0);
+  expect(counted.components.ChatView).toBe(GIT_STATUS_UPDATES * 2);
   expect(counted.components.ChatComposer).toBeUndefined();
-  await report("vcs-status-composer", [counted]);
+  await report("app-git-status-updates-with-side-chat", [counted]);
 });

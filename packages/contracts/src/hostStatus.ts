@@ -255,6 +255,11 @@ export const HostStatusEntry = Schema.Struct({
   ),
   /** GOAT version that machine runs. Older hosts omit it. */
   serverVersion: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The machine admits placed launches itself (goat_thread_launch placement). Placers still check
+   * the argument on the session they launch with. Hosts that do not admit placements omit it.
+   */
+  placementAdmission: Schema.optional(Schema.Literal(1)),
   /** Protocol ranges that machine serves. Older hosts omit it. Partial or malformed ranges decode
       away, so a host that sends them stays reachable and is judged `degraded`. */
   protocol: ForwardCompatibleOptional(RuntimeProtocolRanges),

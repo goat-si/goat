@@ -8,6 +8,8 @@ import {
 import * as Base64 from "effect/encoding/Base64";
 import * as Result from "effect/Result";
 
+import { goatBotDayLabel, goatBotLocalDate } from "./labels.ts";
+
 export type BotArtifactRead =
   | {
       readonly status: "ok";
@@ -91,6 +93,166 @@ export async function readWholeBotArtifact(
 
 export const botArtifactName = (relativePath: string) =>
   relativePath.split("/").at(-1) ?? relativePath;
+
+const INLINE_CODE = /`([^`\n]+)`/g;
+
+// Fences CommonMark is certain of without tracking containers: 3+ backticks (none in the info
+// string) or tildes, unindented, or indented up to 3 spaces before any list item or quote. After
+// an indented fence that follows one, or a line that may open an HTML block, the rest of the reply
+// is read as it is: such a fence may close with its container, and a marker in HTML is HTML.
+const FENCE_OPEN = /^( {0,3})(`{3,}(?=[^`]*$)|~{3,})/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+const CONTAINER_START = /^ {0,3}(?:>|[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$))/;
+const HTML_START = /^ {0,3}</;
+
+/** The reply without the lines of its top-level fenced code blocks; an unclosed one runs to the end. */
+function outsideFences(text: string): string {
+  const kept: Array<string> = [];
+  let fence: { readonly char: string; readonly length: number } | null = null;
+  let containerSeen = false;
+  const lines = text.split(/\r?\n/);
+  // The rest of the reply from `index` on, as it is; joined, never spread, so a long reply is fine.
+  const readAsIs = (index: number) => [...kept, lines.slice(index).join("\n")].join("\n");
+  for (const [index, line] of lines.entries()) {
+    if (fence !== null) {
+      const close = FENCE_CLOSE.exec(line)?.[1];
+      if (close !== undefined && close[0] === fence.char && close.length >= fence.length)
+        fence = null;
+      kept.push("");
+      continue;
+    }
+    const opening = FENCE_OPEN.exec(line);
+    const open = opening?.[2];
+    if (HTML_START.test(line) || (open !== undefined && opening?.[1] !== "" && containerSeen))
+      return readAsIs(index);
+    if (open === undefined) {
+      if (CONTAINER_START.test(line)) containerSeen = true;
+      kept.push(line);
+    } else {
+      fence = { char: open[0] ?? "`", length: open.length };
+      kept.push("");
+    }
+  }
+  return kept.join("\n");
+}
+
+const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/;
+// The names the server lists (plainName in ChannelBotArtifacts): no leading dot, colon, backslash or edge spaces.
+const listableName = (name: string) =>
+  name !== "" && !name.startsWith(".") && !/[:\\]/.test(name) && name === name.trim();
+
+/**
+ * `path` with `.` and repeated separators removed, or null when it is not absolute or has a `..`
+ * segment: a link inside the folder can make `..` lead elsewhere, so it is never resolved here.
+ */
+function normalizedAbsolute(path: string, windows: boolean): string | null {
+  if (windows ? !WINDOWS_ABSOLUTE.test(path) : !path.startsWith("/")) return null;
+  const parts = path.split(windows ? /[\\/]/ : "/");
+  // A drive ("C:") stays first; a UNC path keeps a "//" start so it never equals a drive path.
+  const head = !windows
+    ? []
+    : /^[A-Za-z]:$/.test(parts[0] ?? "")
+      ? [parts.shift() ?? ""]
+      : ["", ""];
+  const kept: Array<string> = [];
+  for (const part of parts) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") return null;
+    kept.push(part);
+  }
+  const joined = [...head, ...kept].join("/");
+  // Windows compares paths without regard to case; elsewhere a different case is a different file.
+  return windows ? joined.toLowerCase() : joined;
+}
+
+/**
+ * Library files a reply names in inline code, in order, each once.
+ * Rule: a relative path names a file only when it is exactly the listed path; an absolute path
+ * only when, normalized, it is `root` + "/" + the listed path; without `root` (an older server),
+ * absolute paths name nothing, and a caller that passes none gets that rule too.
+ */
+export function goatBotReplyFiles<File extends { readonly relativePath: string }>(
+  text: string,
+  files: ReadonlyArray<File>,
+  root?: string,
+): ReadonlyArray<File> {
+  const windows = root !== undefined && (root.includes("\\") || /^[A-Za-z]:/.test(root));
+  const folder = root === undefined ? null : normalizedAbsolute(root, windows);
+  const named: Array<File> = [];
+  for (const match of outsideFences(text).matchAll(INLINE_CODE)) {
+    const code = (match[1] ?? "").trim();
+    const absolute = folder === null ? null : normalizedAbsolute(code, windows);
+    const file = files.find((candidate) =>
+      absolute === null
+        ? code === candidate.relativePath
+        : absolute ===
+          (windows
+            ? `${folder}/${candidate.relativePath.toLowerCase()}`
+            : `${folder}/${candidate.relativePath}`),
+    );
+    if (file !== undefined && !named.includes(file)) named.push(file);
+  }
+  return named;
+}
+
+/**
+ * True when a reply has inline code that could name a file the Library can list, so it is worth
+ * reading: a relative path of listable names, or an absolute path ending in one.
+ */
+export function goatBotReplyMayNameFile(text: string): boolean {
+  for (const match of outsideFences(text).matchAll(INLINE_CODE)) {
+    const code = (match[1] ?? "").trim();
+    if (code.startsWith("/") || WINDOWS_ABSOLUTE.test(code)) {
+      if (listableName(code.split(/[\\/]/).at(-1) ?? "")) return true;
+    } else if (code.length <= 512 && code.split("/").every(listableName)) return true;
+  }
+  return false;
+}
+
+const TEXT_TYPES = new Set(["application/json", "text/csv"]);
+/** Larger text stays a download: decoding and rendering it would stall the chat. */
+export const BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES = 1024 * 1024;
+
+/** How the Library shows a file: rendered markdown, plain text, an image, or a download. */
+export function botArtifactViewKind(
+  mimeType: string,
+  relativePath: string,
+  size = 0,
+): "markdown" | "text" | "image" | "download" {
+  const type = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (type.startsWith("image/")) return "image";
+  if (size > BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES) return "download";
+  if (type === "text/markdown" || /\.(md|markdown)$/i.test(relativePath)) return "markdown";
+  if (type.startsWith("text/") || TEXT_TYPES.has(type)) return "text";
+  return "download";
+}
+
+/**
+ * Newest-first Library files under one heading per local calendar day, order kept. `key` is that
+ * day as YYYY-MM-DD and unique; a date from another year shows its year in the label.
+ */
+export function goatBotArtifactDays<File extends { readonly modifiedAt: string }>(
+  files: ReadonlyArray<File>,
+  nowMs: number,
+): ReadonlyArray<{
+  readonly key: string;
+  readonly label: string;
+  readonly files: ReadonlyArray<File>;
+}> {
+  const days = new Map<string, { key: string; label: string; files: File[] }>();
+  for (const file of files) {
+    const key = goatBotLocalDate(file.modifiedAt);
+    const day = days.get(key);
+    if (day !== undefined) day.files.push(file);
+    else
+      days.set(key, {
+        key,
+        label: goatBotDayLabel(file.modifiedAt, nowMs, { yearWhenOther: true }),
+        files: [file],
+      });
+  }
+  return [...days.values()];
+}
 
 export function botArtifactSizeLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -177,4 +339,41 @@ export function botComputers(tasks: ReadonlyArray<BotComputerTask>): ReadonlyArr
       host,
       tasks: [...items].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     }));
+}
+
+const PREVIEW_TEXT_CHARS = 1200;
+
+/**
+ * The preview a reply's file card makes room for before the file is read, judged by its name
+ * and size, so the card keeps its height when the preview arrives.
+ */
+export function botArtifactPreviewSlot(
+  relativePath: string,
+  size: number,
+): "image" | "text" | null {
+  if (/\.(png|jpe?g|gif|webp|svg|avif)$/i.test(relativePath))
+    return size <= CHANNEL_BOT_ARTIFACT_CHUNK_BYTES ? "image" : null;
+  if (/\.(md|markdown|txt|csv|json|log)$/i.test(relativePath)) return "text";
+  return null;
+}
+
+/**
+ * What a reply's file card previews from the file's first chunk: the start of a text or
+ * markdown file, or an image that fits in that chunk. Anything else shows no preview.
+ */
+export function botArtifactPreview(
+  answer: ChannelReadBotArtifactResult,
+):
+  | { readonly kind: "markdown" | "text"; readonly text: string }
+  | { readonly kind: "image"; readonly bytes: Uint8Array<ArrayBuffer>; readonly mimeType: string }
+  | null {
+  if (answer.status !== "chunk" || answer.offset !== 0) return null;
+  const kind = botArtifactViewKind(answer.mimeType, answer.relativePath, answer.size);
+  if (kind === "download" || (kind === "image" && !answer.done)) return null;
+  const decoded = Base64.decode(answer.bytesBase64);
+  if (Result.isFailure(decoded)) return null;
+  const bytes = new Uint8Array(decoded.success);
+  if (kind === "image") return { kind, bytes, mimeType: answer.mimeType };
+  const text = new TextDecoder().decode(bytes.subarray(0, PREVIEW_TEXT_CHARS * 4));
+  return { kind, text: text.slice(0, PREVIEW_TEXT_CHARS) };
 }

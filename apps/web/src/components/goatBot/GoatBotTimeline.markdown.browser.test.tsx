@@ -107,6 +107,75 @@ it("opens thread links in the environment whose history is shown", async () => {
   await expect.element(screen.getByText("CJK 렌더링")).toBeVisible();
   expect(screen.container.querySelector(".chat-markdown a")).toBeNull();
 });
+
+it("draws an answer's table on its own card between the text around it", async () => {
+  const text = [
+    "요금제를 비교했어요.",
+    "",
+    "| Plan | Price |",
+    "| --- | --- |",
+    "| Basic | $5 |",
+    "| Pro | $20 |",
+    "",
+    "Pro adds sync.",
+  ].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[bot("table", text)]}
+    />,
+  );
+  await expect.element(screen.getByRole("table")).toBeVisible();
+  const cards = [...screen.container.querySelectorAll(".goat-bot-card")];
+  expect(cards.map((card) => card.textContent?.includes("Basic"))).toEqual([false, true, false]);
+  expect(cards[0]?.textContent).toBe("요금제를 비교했어요.");
+  expect(cards[2]?.textContent).toBe("Pro adds sync.");
+  const copy = screen.getByRole("button", { name: "Copy table" });
+  expect(cards[1]?.contains(copy.element())).toBe(true);
+  expect(screen.getByRole("button", { name: "Copy table" }).all()).toHaveLength(1);
+});
+
+it("draws a reply that is only a table on its table card with the copy control", async () => {
+  const text = ["| Plan | Price |", "| --- | --- |", "| Basic | $5 |"].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline environmentId={environmentId} onRetry={() => {}} rows={[bot("only", text)]} />,
+  );
+  await expect.element(screen.getByRole("table")).toBeVisible();
+  const cards = [...screen.container.querySelectorAll(".goat-bot-card")];
+  expect(cards).toHaveLength(1);
+  expect(cards[0]?.classList.contains("goat-bot-table")).toBe(true);
+  const copy = screen.getByRole("button", { name: "Copy table" });
+  expect(cards[0]?.contains(copy.element())).toBe(true);
+});
+
+it("resolves a reference link defined after the table in the card that uses it", async () => {
+  const text = [
+    "Start with [the docs][docs].",
+    "",
+    "| Plan | Price |",
+    "| --- | --- |",
+    "| Basic | $5 |",
+    "",
+    "More in [the docs][docs].",
+    "",
+    "[docs]: https://example.test/docs",
+  ].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[bot("definitions", text)]}
+    />,
+  );
+  const links = await screen.getByRole("link", { name: "the docs" }).all();
+  expect(links).toHaveLength(2);
+  for (const link of links) {
+    expect(link).toHaveAttribute("href", "https://example.test/docs");
+  }
+  expect(screen.container.textContent).not.toContain("[docs]:");
+});
+
 it("names the conversation and an update after the renamed main bot", async () => {
   const main = { botId: "main", role: "main", name: "Goaty" } as BotProfile;
   await using screen = await render(
@@ -120,4 +189,84 @@ it("names the conversation and an update after the renamed main bot", async () =
   );
   await expect.element(screen.getByRole("list", { name: "Conversation with Goaty" })).toBeVisible();
   await expect.element(screen.getByText("Goaty · Update")).toBeVisible();
+});
+
+it("shows a pull request link as its short reference and links a bare one to the reply's repository", async () => {
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[
+        bot("prs", "Merged https://github.com/goat-si/goat/pull/2851 after CI. #2816 follows it."),
+        bot(
+          "two",
+          "See https://github.com/other/repo/pull/7 and https://github.com/b/two/pull/2, not #3.",
+        ),
+      ]}
+    />,
+  );
+  await expect
+    .element(screen.getByRole("link", { name: "#2851", exact: true }))
+    .toHaveAttribute("href", "https://github.com/goat-si/goat/pull/2851");
+  await expect
+    .element(screen.getByRole("link", { name: "#2816", exact: true }))
+    .toHaveAttribute("href", "https://github.com/goat-si/goat/issues/2816");
+  await expect
+    .element(screen.getByRole("link", { name: "other/repo#7", exact: true }))
+    .toHaveAttribute("href", "https://github.com/other/repo/pull/7");
+  await expect.element(screen.getByRole("link", { name: "b/two#2", exact: true })).toBeVisible();
+  // Two repositories in one reply: a bare number could mean either, so it stays text.
+  expect(screen.getByRole("link", { name: "#3", exact: true }).query()).toBeNull();
+});
+
+it("takes the reply's repository from its links, not from an address quoted in code", async () => {
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[
+        bot("code", "Run `gh pr view https://github.com/goat-si/goat/pull/1`, then check #2."),
+        bot("fake", "Opened https://github.com.evil.example/a/b/pull/7 for you."),
+      ]}
+    />,
+  );
+  // The address in code names no repository, so the bare number stays text.
+  expect(screen.getByRole("link", { name: "#2", exact: true }).query()).toBeNull();
+  // A look-alike host keeps its full address as its label.
+  await expect
+    .element(screen.getByRole("link", { name: "https://github.com.evil.example/a/b/pull/7" }))
+    .toBeVisible();
+  expect(screen.getByRole("link", { name: "#7", exact: true }).query()).toBeNull();
+});
+
+it("reads a bare reference after a table against the whole reply's repository", async () => {
+  const table = ["| Check | State |", "| --- | --- |", "| build | green |"];
+  const single = [
+    "Opened https://github.com/goat-si/goat/pull/2850.",
+    "",
+    ...table,
+    "",
+    "It replaces #2849.",
+  ].join("\n");
+  const mixed = [
+    "Opened https://github.com/goat-si/goat/pull/2850 and https://github.com/other/repo/pull/7.",
+    "",
+    ...table,
+    "",
+    "It replaces #2849.",
+  ].join("\n");
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={environmentId}
+      onRetry={() => {}}
+      rows={[bot("single", single), bot("mixed", mixed)]}
+    />,
+  );
+  // One repository in the reply: the reference after the table links there.
+  const references = await screen.getByRole("link", { name: "#2849" }).all();
+  expect(references).toHaveLength(1);
+  expect(references[0]).toHaveAttribute("href", "https://github.com/goat-si/goat/issues/2849");
+  // Two repositories: the reference could mean either, so it stays text in that reply.
+  const mixedRow = screen.container.querySelectorAll("li")[1];
+  expect(mixedRow?.textContent).toContain("It replaces #2849.");
 });

@@ -1,5 +1,4 @@
 import { expect, it } from "@effect/vitest";
-import { NodeHttpServer } from "@effect/platform-node";
 import { EnvironmentId, type ProviderUpdateInput } from "@goat/contracts";
 import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
@@ -16,6 +15,8 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
 import { ScreenToolkit } from "./toolkits/screen/tools.ts";
+import { PlacementAdmissionEnabled } from "../fleet/admission/PlacementKey.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const clientInfo = { name: "schema-test", version: "1.0.0" };
 const client = McpSchema.McpServerClient.of({
@@ -141,7 +142,8 @@ it.effect("preserves nullable input paths across the entire registered catalog",
           lost.push({ path: entry.path, nullable });
     }
     expect(lost).toEqual([]);
-  }).pipe(Effect.provide(registered)),
+    // Every argument advertised, including the ones a switch hides while it is off.
+  }).pipe(Effect.provide(registered), Effect.provideService(PlacementAdmissionEnabled, true)),
 );
 
 it.effect(
@@ -233,7 +235,7 @@ it.effect(
           Layer.mock(Settings.ServerSettingsService)({
             getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, agentToolListing: "full" }),
           }),
-          NodeHttpServer.layerTest,
+          layerTestLoopback,
         ),
       ),
     );

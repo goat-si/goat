@@ -763,6 +763,17 @@ it, ends that URL as part of the write, and a later webhook trigger gets a new U
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call
 ([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
+
+A thread holds one open approval at a time
+([approvalHold.ts](../../apps/server/src/handoffs/approvalHold.ts)): while a person has
+not answered it, asking for another approval, or the same one again, is refused with
+the open card's id and an instruction to end the turn or withdraw it
+(`handoff.withdraw`). The check runs under the Handoffs lock, so it covers every gated
+path at once; computer use and browser tab admissions keep their own supersede rules. An
+approval the agent continues itself (hub, cloud launch, storage clean) is recorded in
+`approval_consumptions`: a hub approval only once its change succeeded, the other two
+as their change starts, since a failed launch may still have billed. A recorded approval
+gets no "call again" wake, and its wake is withdrawn while it still waits in the queue.
 Who may resolve a step is one predicate
 ([HumanStepAuthority.ts](../../apps/server/src/handoffs/HumanStepAuthority.ts)),
 used by pending-question MCP, the decision inbox, and handoffs, so an outside

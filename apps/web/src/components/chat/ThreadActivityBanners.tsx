@@ -24,11 +24,21 @@ import {
   SquareIcon,
   TriangleAlertIcon,
 } from "~/components/solar";
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import { cn } from "~/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
+import { BackgroundWorkDetails } from "./BackgroundWorkDetails";
 
 export function withPiExtensionStatus(
   items: ComposerBannerStackItem[],
@@ -148,18 +158,45 @@ export function startHoldBannerItem(input: {
     description: input.hold.description,
     actions:
       input.canStop && input.hold.reason === "unowned_turn" && input.hold.nativeTurnId ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button size="xs" variant="ghost" disabled={input.stopping} onClick={input.onStop}>
-                {input.stopping ? "Stopping..." : "Stop that turn"}
-              </Button>
-            }
-          />
-          <TooltipPopup side="top">{HELD_TURN_STOP_NOTE}</TooltipPopup>
-        </Tooltip>
+        <StopHeldTurnAction
+          key={input.hold.nativeTurnId}
+          stopping={input.stopping}
+          onStop={input.onStop}
+        />
       ) : undefined,
   };
+}
+
+function StopHeldTurnAction({ stopping, onStop }: { stopping: boolean; onStop: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button size="xs" variant="ghost" disabled={stopping} onClick={() => setOpen(true)}>
+        {stopping ? "Stopping..." : "Stop that turn"}
+      </Button>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop that turn?</AlertDialogTitle>
+            <AlertDialogDescription>{HELD_TURN_STOP_NOTE}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={stopping}
+              onClick={() => {
+                setOpen(false);
+                onStop();
+              }}
+            >
+              Stop turn
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
+  );
 }
 
 /** A Stop the provider has not finished; Force stop once it stops answering. */
@@ -251,14 +288,17 @@ export function backgroundWorkBannerItem(input: {
             );
           }),
     actions: (
-      <Button
-        size="xs"
-        variant="ghost"
-        disabled={input.stopDisabled}
-        onClick={() => void input.onStop()}
-      >
-        {input.stopping ? "Stopping..." : "Stop"}
-      </Button>
+      <>
+        <BackgroundWorkDetails tasks={input.tasks} />
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={input.stopDisabled}
+          onClick={() => void input.onStop()}
+        >
+          {input.stopping ? "Stopping..." : "Stop"}
+        </Button>
+      </>
     ),
   };
 }

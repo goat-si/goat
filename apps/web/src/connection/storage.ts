@@ -1,3 +1,9 @@
+import {
+  catalogError,
+  makeThreadWriteOrder,
+  removeDatabaseValueOnConnection,
+  writeDatabaseValueOnConnection,
+} from "./databaseWrites";
 import { withDatabase, type DatabaseHandle } from "./databaseHandle";
 import { makeQueryStore, QUERY_STORE_NAME, QUERY_UPDATED_INDEX_NAME } from "./queryStorage";
 import { goatStorageKey } from "@goat/contracts/legacyT3Names";
@@ -92,13 +98,6 @@ const decodeStoredServerConfig = Schema.decodeUnknownEffect(StoredServerConfigJs
 const encodeStoredServerConfig = Schema.encodeEffect(StoredServerConfigJson);
 const decodeStoredVcsRefs = Schema.decodeUnknownEffect(StoredVcsRefsJson);
 const encodeStoredVcsRefs = Schema.encodeEffect(StoredVcsRefsJson);
-
-function catalogError(operation: string, cause: unknown) {
-  return new ConnectionTransientError({
-    reason: "remote-unavailable",
-    detail: `Could not ${operation} the local connection catalog: ${String(cause)}`,
-  });
-}
 
 function persistenceError(
   operation:
@@ -205,60 +204,11 @@ function readDatabaseValueOnConnection(database: IDBDatabase, storeName: string,
   }).pipe(Effect.withSpan("web.connectionStorage.readDatabaseValue"));
 }
 
-function writeDatabaseValueOnConnection(
-  database: IDBDatabase,
-  storeName: string,
-  key: IDBValidKey,
-  value: unknown,
-) {
-  return Effect.callback<void, ConnectionTransientError>((resume) => {
-    try {
-      const transaction = database.transaction(storeName, "readwrite");
-      // Commit failures can fire abort without error; every failed write fires abort.
-      transaction.addEventListener("abort", () => {
-        resume(
-          Effect.fail(catalogError("write", transaction.error ?? "Unknown IndexedDB write error")),
-        );
-      });
-      transaction.addEventListener("complete", () => {
-        resume(Effect.void);
-      });
-      transaction.objectStore(storeName).put(value, key);
-    } catch (cause) {
-      resume(Effect.fail(catalogError("write", cause)));
-    }
-  }).pipe(Effect.withSpan("web.connectionStorage.writeDatabaseValue"));
-}
-
-function removeDatabaseValueOnConnection(
-  database: IDBDatabase,
-  storeName: string,
-  key: IDBValidKey,
-) {
-  return Effect.callback<void, ConnectionTransientError>((resume) => {
-    try {
-      const transaction = database.transaction(storeName, "readwrite");
-      transaction.addEventListener("abort", () => {
-        resume(
-          Effect.fail(
-            catalogError("remove", transaction.error ?? "Unknown IndexedDB remove error"),
-          ),
-        );
-      });
-      transaction.addEventListener("complete", () => {
-        resume(Effect.void);
-      });
-      transaction.objectStore(storeName).delete(key);
-    } catch (cause) {
-      resume(Effect.fail(catalogError("remove", cause)));
-    }
-  }).pipe(Effect.withSpan("web.connectionStorage.removeDatabaseValue"));
-}
-
 function removeDatabaseValuesInRangeOnConnection(
   database: IDBDatabase,
   storeName: string,
   range: IDBKeyRange,
+  shouldDelete: (key: IDBValidKey) => boolean = () => true,
 ) {
   return Effect.callback<void, ConnectionTransientError>((resume) => {
     try {
@@ -285,7 +235,7 @@ function removeDatabaseValuesInRangeOnConnection(
           return;
         }
         try {
-          cursor.delete();
+          if (shouldDelete(cursor.primaryKey)) cursor.delete();
           cursor.continue();
         } catch (cause) {
           resume(Effect.fail(catalogError("remove", cause)));
@@ -322,9 +272,10 @@ function removeDatabaseValuesInRange(
   database: DatabaseHandle,
   storeName: string,
   range: IDBKeyRange,
+  shouldDelete?: (key: IDBValidKey) => boolean,
 ) {
   return withDatabase(database, (opened) =>
-    removeDatabaseValuesInRangeOnConnection(opened, storeName, range),
+    removeDatabaseValuesInRangeOnConnection(opened, storeName, range, shouldDelete),
   );
 }
 
@@ -667,6 +618,8 @@ export const layer = Layer.effectContext(
     const encodeStoredShellSnapshot = makeStoredShellSnapshotEncoder({
       yieldToHost: yieldToBrowserTask,
     });
+    const { threadWrites, threadWrite } = makeThreadWriteOrder();
+    const threadClears = new Map<EnvironmentId, Set<Set<string>>>();
 
     const targetStore = Persistence.ConnectionTargetStore.of({
       list: catalog.read.pipe(
@@ -896,18 +849,26 @@ export const layer = Layer.effectContext(
         },
       ),
       saveThread: Effect.fn("storage.saveThread")(
-        function* (environmentId, snapshot) {
-          const encoded = yield* encodeStoredThreadSnapshot({
-            schemaVersion: ORCHESTRATION_THREAD_CACHE_SCHEMA_VERSION,
-            environmentId,
-            threadId: snapshot.projection.thread.id,
-            snapshot,
-          }).pipe(Effect.mapError((cause) => persistenceError("save-thread", cause)));
-          yield* writeDatabaseValue(
-            database,
-            THREAD_STORE_NAME,
-            threadCacheKey(environmentId, snapshot.projection.thread.id),
-            encoded,
+        function (environmentId, snapshot) {
+          const key = threadCacheKey(environmentId, snapshot.projection.thread.id);
+          return threadWrite(key, (isCurrent) =>
+            Effect.gen(function* () {
+              const encoded = yield* encodeStoredThreadSnapshot({
+                schemaVersion: ORCHESTRATION_THREAD_CACHE_SCHEMA_VERSION,
+                environmentId,
+                threadId: snapshot.projection.thread.id,
+                snapshot,
+              }).pipe(Effect.mapError((cause) => persistenceError("save-thread", cause)));
+              yield* withDatabase(database, (opened) =>
+                writeDatabaseValueOnConnection(opened, THREAD_STORE_NAME, key, encoded, () => {
+                  if (!isCurrent()) return false;
+                  for (const protectedKeys of threadClears.get(environmentId) ?? []) {
+                    protectedKeys.add(key);
+                  }
+                  return true;
+                }),
+              );
+            }),
           );
         },
         Effect.mapError((cause) =>
@@ -985,38 +946,66 @@ export const layer = Layer.effectContext(
       ),
       removeThread: Effect.fn("Persistence.EnvironmentCacheStore.removeThread")(
         function (environmentId, threadId) {
-          return removeDatabaseValue(
-            database,
-            THREAD_STORE_NAME,
-            threadCacheKey(environmentId, threadId),
+          const key = threadCacheKey(environmentId, threadId);
+          return threadWrite(key, (isCurrent) =>
+            withDatabase(database, (opened) =>
+              removeDatabaseValueOnConnection(opened, THREAD_STORE_NAME, key, isCurrent),
+            ).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (isCurrent()) {
+                    for (const protectedKeys of threadClears.get(environmentId) ?? [])
+                      protectedKeys.delete(key);
+                  }
+                }),
+              ),
+            ),
           ).pipe(Effect.mapError((cause) => persistenceError("remove-thread", cause)));
         },
       ),
       clear: Effect.fn("Persistence.EnvironmentCacheStore.clear")(function (environmentId) {
-        return Effect.all(
-          [
-            Effect.promise(() => projectFaviconCache.clearEnvironment(environmentId)),
-            removeDatabaseValue(database, SHELL_STORE_NAME, environmentId),
-            removeDatabaseValue(database, SHELL_STORE_NAME, `${environmentId}:meta`),
-            removeDatabaseValuesInRange(
-              database,
-              THREAD_STORE_NAME,
-              IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
+        return Effect.suspend(() => {
+          const protectedKeys = new Set<string>();
+          const clears = threadClears.get(environmentId) ?? new Set<Set<string>>();
+          clears.add(protectedKeys);
+          threadClears.set(environmentId, clears);
+          for (const key of threadWrites.keys()) {
+            if (key.startsWith(`${environmentId}:`)) threadWrites.delete(key);
+          }
+          return Effect.all(
+            [
+              Effect.promise(() => projectFaviconCache.clearEnvironment(environmentId)),
+              removeDatabaseValue(database, SHELL_STORE_NAME, environmentId),
+              removeDatabaseValue(database, SHELL_STORE_NAME, `${environmentId}:meta`),
+              removeDatabaseValuesInRange(
+                database,
+                THREAD_STORE_NAME,
+                IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
+                (key) => typeof key !== "string" || !protectedKeys.has(key),
+              ),
+              removeDatabaseValue(database, SERVER_CONFIG_STORE_NAME, environmentId),
+              removeDatabaseValuesInRange(
+                database,
+                VCS_REFS_STORE_NAME,
+                IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
+              ),
+              removeDatabaseValuesInRange(
+                database,
+                QUERY_STORE_NAME,
+                IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
+              ),
+            ],
+            { concurrency: "unbounded", discard: true },
+          ).pipe(
+            Effect.mapError((cause) => persistenceError("clear-environment", cause)),
+            Effect.ensuring(
+              Effect.sync(() => {
+                clears.delete(protectedKeys);
+                if (clears.size === 0) threadClears.delete(environmentId);
+              }),
             ),
-            removeDatabaseValue(database, SERVER_CONFIG_STORE_NAME, environmentId),
-            removeDatabaseValuesInRange(
-              database,
-              VCS_REFS_STORE_NAME,
-              IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
-            ),
-            removeDatabaseValuesInRange(
-              database,
-              QUERY_STORE_NAME,
-              IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
-            ),
-          ],
-          { concurrency: "unbounded", discard: true },
-        ).pipe(Effect.mapError((cause) => persistenceError("clear-environment", cause)));
+          );
+        });
       }),
     });
 

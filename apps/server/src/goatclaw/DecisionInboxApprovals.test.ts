@@ -93,6 +93,7 @@ const person: Inbox.DecisionCaller = {
   sessionId: "person",
   environmentId: EnvironmentId.make("test"),
   scopes: ["orchestration:operate"],
+  resolver: { kind: "person" },
 };
 const outsideClient = (approvals: boolean, access: AuthMcpClientAccess = "full-access") =>
   ({

@@ -1,64 +1,138 @@
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
-import type { BotProfile, BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
-import { Alert, Text, View } from "react-native";
-import { useNavigationThreadShells } from "../../state/entities";
-import { resolveThreadListV2Status, threadHasUnseenCompletion } from "../threads/threadListV2";
-import { MobileBotProfileSheet } from "./MobileBotProfileSheet";
-import { MobileNewBotModel } from "./MobileNewBotModel";
+import type { BotProfile, ChannelTaskId } from "@goat/contracts";
+import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
+import { Alert, type AlertButton, AppState, Pressable, Text, View } from "react-native";
+import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { MobileBotRosterView } from "./MobileBotRosterView";
+import {
+  dismissCreatedBot,
+  dismissNewBot,
+  forgetNewBotIntentsOf,
+  newBotSlot,
+  retryNewBot,
+  settleListedNewBots,
+  startNewBot,
+  subscribeNewBots,
+  type CreateNewBot,
+  type OpenIfStillHere,
+} from "./mobileNewBots";
+import { MobileNewBotStatus } from "./MobileNewBotStatus";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
+import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
-import { useMobileGoatBotMemberModelEditable } from "./useMobileGoatBotMemberModel";
-import { uuidv4 } from "../../lib/uuid";
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
   selectedKey: string | null;
   onOpenBot: (bot: BotRosterEntry) => void;
-  onOpenChild: (row: BotThreadRow) => void;
+  onOpenTask?: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
+  visible?: boolean;
 }) {
-  const roster = useMobileBotRoster(props.selectedKey);
-  const preview = useMobileBotPreview();
-  const shells = useNavigationThreadShells();
+  const roster = useMobileBotRoster();
+  const preview = useMobileBotPreview(useMobileGoatBotHomeMode().botRef);
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
-  const [sheet, setSheet] = useState<
-    { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile } | null
-  >(null);
-  const codingStatuses = useMemo(
-    () =>
-      new Map(
-        shells.map((shell) => {
-          const status = resolveThreadListV2Status(shell);
-          return [
-            `coding:${shell.environmentId}:${shell.id}`,
-            status === "ready" && threadHasUnseenCompletion(shell) ? ("done" as const) : status,
-          ] as const;
-        }),
-      ),
-    [shells],
-  );
-  const update = (input: ChannelUpdateTaskViewInput) => {
-    void roster.update(input).catch((error: unknown) => {
-      Alert.alert(
-        "Could not update task",
-        error instanceof Error ? error.message : "Please try again.",
-      );
-    });
+  const [editing, setEditing] = useState<BotProfile | null>(null);
+  // A row's action menu is a native alert: open from the long press until a choice or dismissal.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = (
+    title: string,
+    message: string | undefined,
+    buttons: ReadonlyArray<AlertButton>,
+  ) => {
+    setMenuOpen(true);
+    Alert.alert(
+      title,
+      message,
+      buttons.map((button) => ({
+        ...button,
+        onPress: () => {
+          setMenuOpen(false);
+          button.onPress?.();
+        },
+      })),
+      { cancelable: true, onDismiss: () => setMenuOpen(false) },
+    );
   };
+  const environmentId = roster.environmentId;
+  const slot = useSyncExternalStore(subscribeNewBots, () => newBotSlot(environmentId));
+  const operation = slot.operation;
+  const create: CreateNewBot = (name, clientRequestId) =>
+    manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
+  const { onOpenBot } = props;
+  const navigation = useNavigation();
+  // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, and
+  // its environment. A create's answer reads it then; the open belongs to the mount that was tapped.
+  const visible = props.visible !== false;
+  const presenting = editing !== null || menuOpen;
+  const mount = useRef({ mounted: true, visible, presenting, environmentId });
+  // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this mount's committed state.
+  useLayoutEffect(() => {
+    mount.current = { mounted: true, visible, presenting, environmentId };
+  }, [visible, presenting, environmentId]);
+  // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers.
+  useEffect(() => {
+    const owner = mount;
+    return () => {
+      owner.current = { ...owner.current, mounted: false };
+      forgetNewBotIntentsOf(owner);
+    };
+  }, []);
+  // The new chat opens only if, when the create answers: the app is in front; this roster is still
+  // mounted, on screen and presenting nothing of its own; the focused route at every level reads as
+  // at the tap; and the roster still shows the environment the create was sent to. Read then.
+  const openIfStillHere = (): OpenIfStillHere => {
+    const tapped = whereNow(navigation);
+    return (bot, sentTo) => {
+      const now = mount.current;
+      if (
+        AppState.currentState === "active" &&
+        now.mounted &&
+        now.visible &&
+        !now.presenting &&
+        whereNow(navigation) === tapped &&
+        now.environmentId === sentTo
+      )
+        onOpenBot({ kind: "member", profile: bot });
+    };
+  };
+  const listed = roster.listedBots;
+  const refreshBots = roster.refreshBots;
+  const refreshedFor = useRef(new Set<string>());
+  const created = slot.created;
+  // oxlint-disable-next-line goat/react-effect-budget -- A created bot's own row arrives with the next list read; until then its row here stands in.
+  useEffect(() => {
+    if (environmentId === null || listed === null || created.length === 0) return;
+    const ids = new Set(listed.map((bot) => bot.botId));
+    settleListedNewBots(environmentId, ids);
+    // One list read per created bot; a read that fails or still lacks it leaves the row and the list's error.
+    const unlisted = created.filter(
+      (bot) => !ids.has(bot.botId) && !refreshedFor.current.has(bot.botId),
+    );
+    if (unlisted.length === 0 || refreshBots === null) return;
+    for (const bot of unlisted) refreshedFor.current.add(bot.botId);
+    refreshBots();
+  }, [environmentId, listed, created, refreshBots]);
   const askAbout = (entry: BotRosterEntry) => {
     const bot = entry.profile;
     if (bot === null) return;
-    const edit = { text: "Edit", onPress: () => setSheet({ mode: "edit", bot }) };
+    const edit = { text: "Edit", onPress: () => setEditing(bot) };
     const cancel = { text: "Cancel", style: "cancel" as const };
     if (entry.kind === "main") {
-      if (manage.canEdit) Alert.alert(bot.name, undefined, [edit, cancel]);
+      if (manage.canEdit) menu(bot.name, undefined, [edit, cancel]);
       return;
     }
     if (!manage.canManage) return;
-    Alert.alert(bot.name, undefined, [
+    menu(bot.name, undefined, [
       ...(manage.canEdit ? [edit] : []),
       {
         text: bot.hidden === true ? "Show" : "Hide",
@@ -68,7 +142,7 @@ export function MobileBotRoster(props: {
         text: "Delete",
         style: "destructive",
         onPress: () =>
-          Alert.alert(`Delete ${bot.name}?`, "Its conversation is archived; you can restore it.", [
+          menu(`Delete ${bot.name}?`, "Its conversation is archived; you can restore it.", [
             cancel,
             { text: "Delete", style: "destructive", onPress: () => void manage.remove(bot) },
           ]),
@@ -83,146 +157,94 @@ export function MobileBotRoster(props: {
           <>
             {props.header}
             {roster.error ? (
-              <Text className="px-4 text-danger-foreground">{roster.error}</Text>
+              <View className="flex-row items-center gap-2 px-4">
+                <Text className="flex-1 text-danger-foreground">{roster.error}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={roster.retryBots}
+                  className="min-h-[44px] min-w-[44px] justify-center px-2"
+                >
+                  <Text className="font-goat-medium text-primary-text">Retry</Text>
+                </Pressable>
+              </View>
             ) : null}
           </>
         }
         selectedKey={props.selectedKey}
-        codingStatuses={codingStatuses}
-        expanded={roster.expanded}
-        hiddenCount={roster.hiddenCount}
         bots={roster.bots}
         members={
           roster.supportsMembers
             ? {
                 hidden: roster.groups.hidden,
                 deleted: roster.groups.deleted,
-                canCreate: manage.canCreate,
-                onNewBot: () => setSheet({ mode: "create" }),
+                // The generated name needs the whole list, hidden and deleted included.
+                canCreate: manage.canCreate && listed !== null && operation === null,
+                onNewBot: () => {
+                  if (environmentId !== null && listed !== null)
+                    startNewBot(environmentId, listed, create, openIfStillHere(), mount);
+                },
                 onLongPressBot: askAbout,
                 canRestore: manage.canManage,
                 onRestoreDeleted: (bot) =>
-                  Alert.alert(`Restore ${bot.name}?`, "Its conversation comes back.", [
+                  menu(`Restore ${bot.name}?`, "Its conversation comes back.", [
                     { text: "Cancel", style: "cancel" },
                     { text: "Restore", onPress: () => void manage.restore(bot) },
                   ]),
               }
             : undefined
         }
-        rows={roster.children.rows}
-        hasMore={roster.children.hasMore}
         slackEnabled={roster.slackEnabled}
         preview={preview?.text}
         unread={preview?.unread}
         onOpenBot={props.onOpenBot}
-        onOpenChild={props.onOpenChild}
-        onShowMore={roster.showMore}
-        onTaskAction={(row, action) => {
-          if (action === "pin") update({ taskId: row.task.taskId, pinned: !row.view.pinnedAt });
-          if (action === "done") update({ taskId: row.task.taskId, done: !row.view.doneAt });
-          if (action === "read")
-            update({ taskId: row.task.taskId, readThrough: row.lastActivityAt });
-        }}
-        onLongPressTask={(row) =>
-          Alert.alert(row.task.title, undefined, [
-            {
-              text: row.view.pinnedAt ? "Unpin" : "Pin",
-              onPress: () => update({ taskId: row.task.taskId, pinned: !row.view.pinnedAt }),
-            },
-            {
-              text: row.view.doneAt ? "Reopen" : "Mark done",
-              onPress: () => update({ taskId: row.task.taskId, done: !row.view.doneAt }),
-            },
-            {
-              text: "Mark read",
-              onPress: () => update({ taskId: row.task.taskId, readThrough: row.lastActivityAt }),
-            },
-            { text: "Cancel", style: "cancel" },
-          ])
+        onOpenTask={props.onOpenTask}
+        onUnknownBot={roster.refreshBots ?? undefined}
+        visible={props.visible}
+        newBotRow={
+          environmentId !== null && (operation !== null || created.length > 0) ? (
+            <MobileNewBotStatus
+              operation={operation}
+              created={created}
+              onRetry={() => retryNewBot(environmentId, create, openIfStillHere(), mount)}
+              onDismiss={() => dismissNewBot(environmentId)}
+              onOpen={(bot) => onOpenBot({ kind: "member", profile: bot })}
+              onDismissCreated={(bot) => dismissCreatedBot(environmentId, bot.botId)}
+            />
+          ) : null
         }
       />
-      {sheet !== null && roster.environmentId !== null ? (
-        <BotSheet
-          // A new sheet starts from its own bot's model.
-          key={sheet.mode === "edit" ? sheet.bot.botId : "create"}
-          sheet={sheet}
-          environmentId={roster.environmentId}
+      {editing !== null && environmentId !== null ? (
+        <MobileBotEditSheet
+          key={editing.botId}
+          bot={editing}
+          environmentId={environmentId}
           manage={manage}
           mainName={mainName}
-          onCreated={(bot) => props.onOpenBot({ kind: "member", profile: bot })}
-          onClose={() => setSheet(null)}
+          onClose={() => setEditing(null)}
         />
       ) : null}
     </View>
   );
 }
 
-function BotSheet(props: {
-  readonly sheet: { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile };
-  readonly environmentId: NonNullable<ReturnType<typeof useMobileBotRoster>["environmentId"]>;
-  readonly manage: ReturnType<typeof useMobileBotManage>;
-  readonly mainName: string;
-  readonly onCreated: (bot: BotProfile) => void;
-  readonly onClose: () => void;
-}) {
-  const { sheet, manage } = props;
-  const initialModel = sheet.mode === "edit" ? sheet.bot.defaultModelSelection : null;
-  const [model, setModel] = useState<BotProfile["defaultModelSelection"]>(initialModel);
-  const [clientRequestId] = useState(uuidv4);
-  // Only a member has a model of its own; the main bot's is the GOAT Bot model setting.
-  const modelEditable =
-    useMobileGoatBotMemberModelEditable(props.environmentId).editable &&
-    sheet.mode === "edit" &&
-    sheet.bot.role === "member";
-  if (sheet.mode === "edit") {
-    const modelChanged = modelEditable && !sameModel(model, initialModel);
-    return (
-      <MobileBotProfileSheet
-        mode="edit"
-        initial={sheet.bot}
-        canSubmit={manage.canEdit}
-        extraChanged={modelChanged}
-        onClose={props.onClose}
-        onSubmit={(changes) => manage.update(sheet.bot, changes, modelChanged ? model : undefined)}
-      >
-        {modelEditable ? (
-          <MobileNewBotModel
-            environmentId={props.environmentId}
-            model={model}
-            onChange={setModel}
-            mainName={props.mainName}
-          />
-        ) : null}
-      </MobileBotProfileSheet>
-    );
-  }
-  return (
-    <MobileBotProfileSheet
-      mode="create"
-      initial={{ name: "", avatar: null, purpose: "" }}
-      canSubmit={manage.canCreate}
-      onClose={props.onClose}
-      onSubmit={async (changes) => {
-        const result = await manage.create(changes, model, clientRequestId);
-        if (typeof result === "string") return result;
-        props.onCreated(result);
-        return null;
-      }}
-    >
-      <MobileNewBotModel
-        environmentId={props.environmentId}
-        model={model}
-        onChange={setModel}
-        mainName={props.mainName}
-      />
-    </MobileBotProfileSheet>
-  );
-}
+type Navigation = Omit<NavigationProp<ParamListBase>, "getParent"> & {
+  getParent: () => Navigation | undefined;
+};
+type Route = { readonly key: string; readonly params?: object; readonly state?: State };
+type State = { readonly index?: number; readonly routes: ReadonlyArray<Route> };
 
-function sameModel(
-  left: BotProfile["defaultModelSelection"],
-  right: BotProfile["defaultModelSelection"],
-) {
-  if (left === null || right === null) return left === right;
-  return left.instanceId === right.instanceId && left.model === right.model;
+/** The focused route at every level, with its params. */
+function whereNow(navigation: ReturnType<typeof useNavigation>): string {
+  let root = navigation as unknown as Navigation;
+  for (let parent = root.getParent(); parent !== undefined; parent = parent.getParent())
+    root = parent;
+  const focused: Array<[string, object | null]> = [];
+  let state: State | undefined = root.getState() as State;
+  while (state !== undefined) {
+    const route: Route | undefined = state.routes[state.index ?? 0];
+    if (route === undefined) break;
+    focused.push([route.key, route.params ?? null]);
+    state = route.state;
+  }
+  return JSON.stringify(focused);
 }

@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Observes only the fixture children this launcher spawns.
 import type * as NodeChildProcess from "node:child_process";
 
-import { NodeHttpServer, NodeServices } from "@effect/platform-node";
+import { NodeServices } from "@effect/platform-node";
 import { assert, it } from "@effect/vitest";
 import { cliArchiveFileName, cliArchivePlatformKey } from "@goat/shared/cliRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -17,6 +17,7 @@ import { ensurePinnedRuntimeInstalled } from "./cloud/pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL, SERVICE_STATE_FILE } from "./cloud/serviceProtocol.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const observed = vi.hoisted(() => ({
   onChild: undefined as ((child: NodeChildProcess.ChildProcess) => void) | undefined,
@@ -212,7 +213,7 @@ setInterval(() => {}, 1000);
             HttpRouter.serve(makeMockUpdateRouteLayer(yield* fs.realPath(releaseRoot)), {
               disableListenLog: true,
               disableLogger: true,
-            }).pipe(Layer.provideMerge(NodeHttpServer.layerTest)),
+            }).pipe(Layer.provideMerge(layerTestLoopback)),
           ),
         );
       }).pipe(Effect.provide(ProcessRunner.layer)),

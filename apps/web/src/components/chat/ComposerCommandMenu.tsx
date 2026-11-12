@@ -39,6 +39,7 @@ import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { ComposerBanner } from "./ComposerBanner";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
+import type { ComposerModelItem } from "./composerModelMentions";
 
 export type ComposerCommandItem =
   | {
@@ -88,6 +89,7 @@ export type ComposerCommandItem =
       description: string;
     }
   | ComposerCapabilityItem
+  | ComposerModelItem
   | {
       id: string;
       type: "preview-tab";
@@ -228,6 +230,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       ) : null}
       {props.item.type === "thread" ? (
         <MessagesSquareIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
+      ) : null}
+      {props.item.type === "model" ? (
+        <SparklesIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
       ) : null}
       {props.item.type === "preview-tab" ? (
         <GlobeIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />

@@ -36,6 +36,7 @@ import {
 import type {
   BotProfile,
   ChannelBotRef,
+  ChannelQuestionId,
   ChannelTaskId,
   EnvironmentId,
   ScopedThreadRef,
@@ -67,6 +68,7 @@ import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { useReplying } from "./useReplying";
+import { goatBotWorkRevision } from "./goatBotWorkRevision";
 import { markMobileGoatBotMember, mobileGoatBotMemberActive } from "./mobileGoatBotMembers";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
@@ -247,7 +249,7 @@ function newSession(environmentId: EnvironmentId): Session {
         sendTarget(current, bot) !== null
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId, questionId }) => {
       const main = sendTarget(sessions.get(environmentId), bot);
       if (!main) throw new Error("GOAT Bot isn't available");
       // Each message goes to the bot it was written to, in the main bot's project.
@@ -310,6 +312,7 @@ function newSession(environmentId: EnvironmentId): Session {
           clientMessageId: clientKey,
           receivedAt,
           ...(taskId === undefined ? {} : { taskId }),
+          ...(questionId === undefined ? {} : { questionId }),
         }),
       });
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
@@ -650,24 +653,17 @@ export function useMobileGoatBotSession(
     }
     queue.acknowledge(keys);
   }, [visible, queue, visibleTurnItems]);
-  // The roster refreshes the main bot's task list; a member's follows its own conversation here.
-  const channelRevision =
-    member === null
-      ? null
-      : visibleTurnItems
-          .filter(
-            ({ item }) =>
-              (item.type === "notification" && item.ledgerTask !== undefined) ||
-              ((item.type === "user_message" || item.type === "assistant_message") &&
-                item.channel !== undefined),
-          )
-          .map(({ sourceItemId, item }) => sourceItemId + ":" + item.updatedAt)
-          .join("|");
+  // The bot's work list (its home sheet and known task ids) follows its own conversation, main
+  // bot and members alike; a streaming answer does not refetch it.
+  const workRevision = useMemo(
+    () => (visible ? goatBotWorkRevision(visibleTurnItems) : null),
+    [visible, visibleTurnItems],
+  );
   const refreshThreads = threads.refresh;
-  // oxlint-disable-next-line goat/react-effect-budget -- Refresh a member's task list when channel records in its conversation change.
+  // oxlint-disable-next-line goat/react-effect-budget -- Refresh the bot's task list when its conversation's task records change.
   useEffect(() => {
-    if (channelRevision !== null) refreshThreads();
-  }, [channelRevision, refreshThreads]);
+    if (workRevision !== null) refreshThreads();
+  }, [workRevision, refreshThreads]);
   const targetThreadId = target?.threadId ?? null;
   const allPending = session?.pending ?? EMPTY_PENDING;
   const pendingInputs = useMemo(
@@ -685,11 +681,24 @@ export function useMobileGoatBotSession(
         readers: goatBotItemReaders,
         knownTaskIds,
         ...(taskId === undefined ? {} : { taskId }),
+        // Work cards leave the chat only where the bot's work list can open every task.
+        conversationOnly: supportsTaskThreads,
+        // A question card sends its answer with the question, so the server's record decides.
+        answerReferences: true,
       }),
-    [visibleTurnItems, pendingInputs, taskId, knownTaskIds],
+    [visibleTurnItems, pendingInputs, taskId, knownTaskIds, supportsTaskThreads],
   );
   const replyingSince = useMemo(
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
+    [visibleTurnItems],
+  );
+  const streamingReplyIds = useMemo(
+    () =>
+      new Set<string>(
+        visibleTurnItems.flatMap(({ item }) =>
+          item.type === "assistant_message" && item.streaming ? [item.id] : [],
+        ),
+      ),
     [visibleTurnItems],
   );
   const reading = useReplying(replyingSince, visible);
@@ -756,9 +765,12 @@ export function useMobileGoatBotSession(
     [canSend, sendBot, queue, session, taskId],
   );
   const onAnswer = useCallback(
-    (answer: string, answerTask?: ChannelTaskId) => {
+    (answer: string, answerTask?: ChannelTaskId, questionId?: ChannelQuestionId) => {
       if (!canSend || !sendBot || !queue || !session) return false;
-      session.retain(queue.submit(answer, sendBot, [], answerTask ?? taskId ?? undefined), []);
+      const target = answerTask ?? taskId ?? undefined;
+      // A question id goes only with the task that asked it.
+      const asked = answerTask === undefined ? undefined : questionId;
+      session.retain(queue.submit(answer, sendBot, [], target, asked), []);
       return true;
     },
     [canSend, sendBot, queue, session, taskId],
@@ -782,11 +794,21 @@ export function useMobileGoatBotSession(
   }, [environmentId, homeKey, settingsSnapshot]);
   return {
     rows,
+    /** The conversation's items the rows were built from; empty while the chat is hidden. */
+    visibleTurnItems,
+    /** The history's server sends a thread's newest part, so GOAT Bot's steps may be read. */
+    boundedSnapshots:
+      (target ? configs.get(target.environmentId) : undefined)?.environment.capabilities
+        .goatBotOpenAsks === true,
     supportsTaskThreads,
+    /** Changes when a task record in the conversation changes; null while the chat is hidden. */
+    workRevision,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */
     threadId: target?.threadId ?? null,
+    /** Bot replies still arriving, by row id. */
+    streamingReplyIds,
     replyingSince,
     activity,
     /** The bot's own turns asking a question in this chat, which the task list never shows. */

@@ -14,12 +14,22 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 export const RETIRE_PROBE_MS = 5_000;
 export const RETIRED_DETAIL = "The provider's settings changed; its process restarts with them.";
 
-/** A turn cannot start on a process that still runs work under the previous settings. */
+/** A turn cannot start on the current process: its settings changed, or it cannot run the turn's model. */
 export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRestartRequiredError>()(
   "ProviderRestartRequiredError",
-  { runningTurns: Schema.Number },
+  {
+    runningTurns: Schema.Number,
+    model: Schema.optional(Schema.String),
+    modelStatus: Schema.optional(Schema.Literals(["predated", "missing"])),
+  },
 ) {
   override get message(): string {
+    switch (this.model === undefined ? undefined : this.modelStatus) {
+      case "missing":
+        return `This provider's process does not know ${this.model}, and a restart would not help: GOAT's model list either lacks it or already had it when that process started. Pick another model, or check this project's provider configuration for its model catalog.`;
+      case "predated":
+        return `This provider's process started before ${this.model} was added to its model list, so it cannot run that model. Once the work still running on it finishes, sending again starts a new process that knows it. Stop that work or pick another model to continue now.`;
+    }
     const work =
       this.runningTurns === 0
         ? "an active goal, a subagent or a pending approval"
@@ -56,18 +66,69 @@ export interface RetirableSession {
   readonly sessionConfigKey: string | undefined;
   readonly retiring: boolean;
   readonly busyTurns: ReadonlySet<string>;
+  /** Advances with session activity; a release removes the entry only while it still matches. */
+  readonly idleGeneration: number;
+  /** Run ids of turn starts that opened here and have neither registered busy nor exited, by thread. */
+  readonly turnOpens: ReadonlyMap<string, string>;
   readonly runtime: Pick<
     ProviderAdapter.ProviderAdapterV2SessionRuntime,
-    "instanceId" | "providerSessionId" | "holdsLiveWork"
+    | "instanceId"
+    | "providerSessionId"
+    | "holdsLiveWork"
+    | "hasPendingBackgroundWork"
+    | "modelStatus"
   >;
 }
 
-export type Retirement = "current" | "released" | "retiring";
+/** An unconfirmed model never refuses or restarts: when GOAT cannot ask, the turn runs as before. */
+type ModelRefusal = Exclude<ProviderAdapter.ProviderModelStatus, "ready" | "unconfirmed">;
+
+/** A model state refuses the turn without marking the session; nothing is drained for it. */
+export type Retirement = "current" | "released" | "retiring" | ModelRefusal;
+
+const isModelRefusal = (retired: Retirement): retired is ModelRefusal =>
+  retired === "predated" || retired === "missing";
+
+/** A retiring session still takes turns from threads with a turn running on it; a model state refuses this turn. */
+export const refuses = (retired: Retirement, threadHasRunningTurn: boolean) =>
+  isModelRefusal(retired) || (retired === "retiring" && !threadHasRunningTurn);
+
+export const restartRequired = (retired: Retirement, runningTurns: number, model?: string) =>
+  new ProviderRestartRequiredError({
+    runningTurns,
+    ...(model === undefined || !isModelRefusal(retired) ? {} : { model, modelStatus: retired }),
+  });
+
+/** `runId` keeps a finished attempt from clearing a newer one on the same thread. */
+export const withoutTurnOpen = <K extends string>(
+  opens: ReadonlyMap<K, string>,
+  threadId: K,
+  runId?: string,
+) => {
+  const open = opens.get(threadId);
+  if (open === undefined || (runId !== undefined && open !== runId)) return opens;
+  const next = new Map(opens);
+  next.delete(threadId);
+  return next;
+};
+
+/** Refuses a turn on a process, however it was opened, that cannot run the turn's model. */
+export const refuseUnready = Effect.fnUntraced(function* <E>(
+  runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "modelStatus">,
+  turn: { readonly model?: string | undefined; readonly since?: number } | undefined,
+  refuse: (cause: ProviderRestartRequiredError) => E,
+) {
+  const model = turn?.model;
+  if (model === undefined || runtime.modelStatus === undefined) return;
+  const status = yield* runtime.modelStatus(model, { since: turn?.since });
+  if (status === "predated" || status === "missing")
+    return yield* Effect.fail(refuse(restartRequired(status, 0, model)));
+});
 
 /**
- * Retires sessions opened under provider settings that have since changed: a session with nothing
- * running is released, one still running work is marked so it stops within a probe after the work
- * ends, and turns that would add work to it are refused by the caller.
+ * Settings changed: an idle session is released; a busy one is marked to stop within a probe after
+ * its work ends, and the caller refuses turns that would add work. A process that predates the
+ * requested model is released when idle; otherwise only that turn is refused.
  */
 export const make = <
   Entry extends RetirableSession,
@@ -81,8 +142,11 @@ export const make = <
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<{ readonly sessionConfigKey?: string | undefined }, LookupError>;
   };
-  /** Releases unless a turn is busy on the session. */
-  readonly release: (providerSessionId: ProviderSessionId) => Effect.Effect<void, ReleaseError>;
+  /** Releases unless a turn is busy on the session or its activity moved past `idleGeneration`. */
+  readonly release: (
+    providerSessionId: ProviderSessionId,
+    idleGeneration: number,
+  ) => Effect.Effect<void, ReleaseError>;
   readonly reschedule: (providerSessionId: ProviderSessionId) => Effect.Effect<void, ActivityError>;
   readonly withOpenLock: <A, E, R>(
     providerSessionId: ProviderSessionId,
@@ -115,16 +179,65 @@ export const make = <
    */
   const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
     providerSessionId: ProviderSessionId,
+    turn?: {
+      readonly model?: string | undefined;
+      readonly threadId: string;
+      readonly id?: string | undefined;
+      readonly since?: number;
+    },
   ) {
     const key = String(providerSessionId);
+    const model = turn?.model;
     // Turn starts and ends replace the entry, so every decision reads it again after a yield.
     const read = Ref.get(input.sessions).pipe(Effect.map((current) => current.get(key)));
+    const runId = turn?.id;
+    // Held until the start attempt registers its turn or exits; its own lifecycle ends it. The
+    // same update moves the idle generation, so an idle release already under way keeps the entry.
+    if (turn !== undefined && runId !== undefined)
+      yield* Ref.update(input.sessions, (current) => {
+        const entry = current.get(key);
+        if (entry === undefined) return current;
+        const turnOpens = new Map(entry.turnOpens).set(turn.threadId, runId);
+        const idleGeneration = entry.idleGeneration + 1;
+        return new Map(current).set(key, { ...entry, turnOpens, idleGeneration });
+      });
+    // The model check below waits on the process; an idle deadline must not fall inside it.
+    if (turn !== undefined)
+      yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
+    const releaseIdle = Effect.fnUntraced(function* (busy: "retiring" | "predated") {
+      const latest = yield* read;
+      if (latest === undefined) return "released" as Retirement;
+      if (latest.busyTurns.size > 0) return busy;
+      // Another thread's turn opened here and has not registered yet; releasing would fail its start.
+      const starting = [...latest.turnOpens.keys()].some((threadId) => threadId !== turn?.threadId);
+      if (busy !== "retiring" && starting) return busy;
+      // Activity seen while the probes below yield keeps the session, as it does for idle release.
+      const generation = latest.idleGeneration;
+      const held =
+        latest.runtime.holdsLiveWork !== undefined &&
+        (yield* latest.runtime
+          .holdsLiveWork({ pastPinCeiling: false })
+          .pipe(unlessInterrupted(true)));
+      if (held) return busy;
+      // Commands and tools still running in the process end with it; only a catalog restart waits.
+      // Read last, from memory, so nothing but the release's own busy-turn check follows it.
+      const working =
+        busy !== "retiring" &&
+        latest.runtime.hasPendingBackgroundWork !== undefined &&
+        (yield* latest.runtime.hasPendingBackgroundWork.pipe(unlessInterrupted(true)));
+      if (working) return busy;
+      yield* input.release(providerSessionId, generation).pipe(logged(providerSessionId));
+      return (yield* read) === undefined ? "released" : busy;
+    });
     const opened = yield* read;
     if (opened === undefined) return "released" as Retirement;
-    if (opened.sessionConfigKey === undefined) return "current";
-    const current = yield* input.adapters.get(opened.runtime.instanceId).pipe(Effect.option);
+    const current =
+      opened.sessionConfigKey === undefined
+        ? undefined
+        : yield* input.adapters.get(opened.runtime.instanceId).pipe(Effect.option);
     const stale =
-      Option.isNone(current) || current.value.sessionConfigKey !== opened.sessionConfigKey;
+      current !== undefined &&
+      (Option.isNone(current) || current.value.sessionConfigKey !== opened.sessionConfigKey);
     const marked = yield* read;
     if (marked === undefined) return "released";
     if (stale !== marked.retiring) {
@@ -132,18 +245,11 @@ export const make = <
       // Clearing goes back to the normal idle wait; setting starts the probe.
       yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
     }
-    if (!stale) return "current";
-    const latest = yield* read;
-    if (latest === undefined) return "released";
-    if (latest.busyTurns.size > 0) return "retiring";
-    const held =
-      latest.runtime.holdsLiveWork !== undefined &&
-      (yield* latest.runtime
-        .holdsLiveWork({ pastPinCeiling: false })
-        .pipe(unlessInterrupted(true)));
-    if (held) return "retiring";
-    yield* input.release(providerSessionId).pipe(logged(providerSessionId));
-    return (yield* read) === undefined ? "released" : "retiring";
+    if (stale) return yield* releaseIdle("retiring");
+    if (model === undefined || marked.runtime.modelStatus === undefined) return "current";
+    const status = yield* marked.runtime.modelStatus(model, { since: turn?.since });
+    if (status === "ready" || status === "unconfirmed") return "current";
+    return status === "missing" ? status : yield* releaseIdle(status);
   });
 
   /** Rechecks every live session whenever provider instances change. */
@@ -169,5 +275,25 @@ export const make = <
     );
   });
 
-  return { retireIfStale, follow };
+  /** A turn-start open: one with a run reserves the process until it settles; one with a model is checked. */
+  const turnFor = <T extends string>(
+    model: string | undefined,
+    threadId: T,
+    runId: string | undefined,
+    since: number,
+  ) =>
+    model === undefined && runId === undefined ? undefined : { model, threadId, id: runId, since };
+
+  /** Ends a start attempt's reservation on every session once it exits, registered or not. */
+  const settleTurnStart = (turn: { readonly threadId: string; readonly id: string }) =>
+    Ref.update(input.sessions, (current) => {
+      let next = current;
+      for (const [key, entry] of current) {
+        const turnOpens = withoutTurnOpen(entry.turnOpens, turn.threadId, turn.id);
+        if (turnOpens !== entry.turnOpens) next = new Map(next).set(key, { ...entry, turnOpens });
+      }
+      return next;
+    });
+
+  return { retireIfStale, follow, settleTurnStart, turnFor };
 };

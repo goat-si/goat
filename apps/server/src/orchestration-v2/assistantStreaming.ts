@@ -69,6 +69,9 @@ export function splitBufferedAssistantText(text: string): { ready: string; rest:
   return { ready: text.slice(0, boundary), rest: text.slice(boundary) };
 }
 
+// Per run; a forgotten item only loses its throttle state, and its final update still arrives whole.
+const MAX_STREAMING_ITEMS = 256;
+
 export function makeAssistantStreamingFilter(
   mode: ResponseStreamingMode,
   options?: { readonly receiptLine: boolean },
@@ -122,7 +125,12 @@ export function makeAssistantStreamingFilter(
     if (!firstReceipt && previous && now - previous.at < 400) return null;
     const ready = firstReceipt ? receiptText : splitBufferedAssistantText(message.text).ready;
     if (!ready || ready === previous?.text) return null;
+    delivered.delete(key);
     delivered.set(key, { text: ready, at: now });
+    if (delivered.size > MAX_STREAMING_ITEMS) {
+      const oldest = delivered.keys().next().value;
+      if (oldest !== undefined) delivered.delete(oldest);
+    }
     if (event.type === "message.updated")
       return { ...event, message: { ...event.message, text: ready } };
     if (

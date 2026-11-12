@@ -1,3 +1,4 @@
+import { atomJsonForSegment } from "./composerAtomJson";
 import { styledEdge, touchesMarkdownSource } from "./composerMarkdownSourceHelpers";
 import { joinTextblockBackward, joinTextblockForward } from "@tiptap/pm/commands";
 import {
@@ -520,10 +521,6 @@ export const ComposerBlockExtensions = [
   ComposerHeadingExtension,
 ];
 
-function randomNodeKey(): string {
-  return `tiptap-${Math.random().toString(36).slice(2)}`;
-}
-
 interface TaskLinePrefix {
   indent: string;
   checked: boolean;
@@ -599,46 +596,6 @@ type InlineJson = Record<string, unknown>;
 interface DocLine {
   list: ListLinePrefix | null;
   inline: InlineJson[];
-}
-
-/** Null for a `$name` that is not one of the provider's skills: it stays editable text. */
-function atomJsonForSegment(
-  segment: Exclude<ReturnType<typeof splitPromptIntoComposerSegments>[number], { type: "text" }>,
-  skillLabelFor: (name: string) => SkillMeta | null,
-): InlineJson | null {
-  if (segment.type === "mention") {
-    return {
-      type: "composer-mention",
-      attrs: { path: segment.path, source: segment.source },
-    };
-  }
-  if (segment.type === "skill") {
-    const meta = skillLabelFor(segment.name);
-    if (!meta) return null;
-    return {
-      type: "composer-skill",
-      attrs: {
-        skillName: segment.name,
-        skillLabel: meta.label,
-        skillDescription: meta.description,
-      },
-    };
-  }
-  if (segment.type === "citation") {
-    return {
-      type: "composer-citation",
-      attrs: { citation: segment.citation, source: segment.source, citeKey: randomNodeKey() },
-    };
-  }
-  return {
-    type: "composer-context-reference",
-    attrs: {
-      kind: segment.kind,
-      contextId: segment.contextId,
-      label: segment.label,
-      source: segment.source,
-    },
-  };
 }
 
 interface PendingItem {
@@ -973,6 +930,7 @@ function readAtomSource(node: ProseMirrorNode): string {
   const attrs = node.attrs as Record<string, unknown>;
   switch (node.type.name) {
     case "composer-mention":
+    case "composer-model":
     case "composer-citation":
     case "composer-context-reference":
       return typeof attrs.source === "string" ? attrs.source : "";

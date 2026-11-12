@@ -96,6 +96,7 @@ const withConsent = <A, E>(
                     {
                       sessionId: ownerSession,
                       subject: "browser",
+                      principalKind: "person",
                       method: "browser-session-cookie",
                       scopes: signedIn.scopes,
                       client: { label: "Laptop", deviceType: "unknown" },
@@ -194,6 +195,7 @@ it.effect("a decision approves a deletion only for a person who may delete GOAT 
           environmentId: EnvironmentId.make("origin"),
           sessionId: ownerSession,
           scopes: signedIn.scopes,
+          resolver: { kind: "person" },
         },
         { id: request.decisionId, optionId: "approve", reason: "Free the space." },
       );

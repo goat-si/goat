@@ -83,6 +83,27 @@ async function renderDialog(onConfirm = vi.fn()) {
   return { screen, onConfirm };
 }
 
+it("names machines whose provider check failed instead of reporting no runtime updates", async () => {
+  const empty = buildRuntimesTab({ providerMachines: [], opencodex: null });
+  await using _screen = await render(
+    <AlertDialog open>
+      <AlertDialogPopup className="sm:max-w-xl">
+        <UpdateDialogView
+          app={app}
+          runtimes={empty}
+          onConfirm={vi.fn()}
+          checkFailures={["build-box: Connection lost"]}
+        />
+      </AlertDialogPopup>
+    </AlertDialog>,
+    // The dialog renders no links and reads no route.
+    { router: false },
+  );
+  await userEvent.click(page.getByRole("tab", { name: /Runtimes/ }));
+  await expect.element(page.getByText("Could not check build-box: Connection lost")).toBeVisible();
+  await expect.element(page.getByText("No runtime updates.")).not.toBeInTheDocument();
+});
+
 it("follows the active tab and the checked rows", async () => {
   const { screen, onConfirm } = await renderDialog();
   await using _screen = screen;

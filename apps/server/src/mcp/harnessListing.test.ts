@@ -10,7 +10,6 @@ import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSes
 import { cursorMcpServers } from "@goat/provider-cursor/testing";
 import { goatRemoteMcpConfig } from "@goat/provider-opencode/testing";
 import { buildPiRpcLaunch, loadMcpBridge } from "@goat/provider-pi/testing";
-import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
 import * as NodeStream from "node:stream";
 
@@ -20,6 +19,7 @@ import { buildCodexAdditionalContext } from "../provider/CodexDeveloperInstructi
 import { runAcpMcpStdioBridge } from "./AcpMcpStdioBridge.ts";
 import { type ListedTool, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 /**
  * What each harness is offered of GOAT's tools: its adapter's own MCP configuration, pointed at a
@@ -159,7 +159,7 @@ const forEachListing = <R>(
       serveCatalogOverHttp({ thread }, listing).pipe(
         Effect.flatMap((http) => run(http.endpoint, listing)),
         Effect.scoped,
-        Effect.provide(NodeHttpServer.layerTest),
+        Effect.provide(layerTestLoopback),
       ),
     { discard: true },
   );

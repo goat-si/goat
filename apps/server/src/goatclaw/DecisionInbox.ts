@@ -32,7 +32,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as SqlClient from "effect/sql/SqlClient";
 import { clientRuntimeModeCeiling } from "../mcp/McpInvocationContext.ts";
-import { PERSON, canResolveHumanStep } from "../handoffs/HumanStepAuthority.ts";
+import { canResolveHumanStep } from "../handoffs/HumanStepAuthority.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -56,6 +56,7 @@ import {
 import { validateTransport } from "./DecisionDestination.ts";
 import { makeDecisionRouting } from "./DecisionRouting.ts";
 import { compareDecisions } from "./decisionOrder.ts";
+import { openApprovalHandoffs } from "./openApprovalHandoffs.ts";
 
 export type { DecisionCaller } from "./DecisionAuthority.ts";
 
@@ -589,6 +590,7 @@ const make = Effect.gen(function* () {
       environmentId,
       sessionId: "decision-feed",
       scopes: [],
+      resolver: { kind: "outside_client", approvals: false },
     };
     // An answer to a deleted or archived thread has nowhere to go, so neither lists here.
     const rows = yield* sql<DecisionRow>`SELECT d.* FROM decision_items d
@@ -601,11 +603,17 @@ const make = Effect.gen(function* () {
     // Archived threads stay out of the inbox, as they do from thread shells.
     for (const row of yield* pendingRows(undefined, -1))
       if (row.archived_at === null) items.push(yield* project(row, undefined));
+    const approvals = yield* openApprovalHandoffs().pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.mapError(storageFailure),
+    );
     return {
       items: yield* presentItems(
         viewer,
         yield* routing.annotate(environmentId, items.sort(compareDecisions)),
       ),
+      handoffs: approvals.handoffs,
+      ...(approvals.total > approvals.handoffs.length ? { handoffsTotal: approvals.total } : {}),
     };
   });
   return DecisionInbox.of({
@@ -775,7 +783,7 @@ const make = Effect.gen(function* () {
               ...(input.decision === undefined ? {} : { decision: input.decision }),
             },
             commandId,
-            caller.kind === "client" ? PERSON : undefined,
+            caller.kind === "client" ? caller.resolver : undefined,
           )
           .pipe(
             Effect.provideService(

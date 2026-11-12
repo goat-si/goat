@@ -195,6 +195,7 @@ export async function loadMcpBridge(
         });
       },
       pi: {
+        registerCommand: () => {},
         on: (name: string, handler: AgentStartHook) => handlers.set(name, handler),
         registerTool: (tool: RegisteredTool) => {
           registrations.push(tool.name);

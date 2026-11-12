@@ -17,6 +17,7 @@ import type {
   RunId,
   ThreadId,
 } from "@goat/contracts";
+import { isPendingApprovalRequest, isPendingUserInputRequest } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
@@ -168,6 +169,7 @@ export interface EnvironmentThreadShell {
   readonly latestRun: ThreadRunSummary | null;
   readonly runtime: ThreadRuntimeSummary | null;
   readonly blockedOnThreadWait?: boolean;
+  readonly latestRunStartHeld?: boolean;
   readonly latestUserMessageAt: string | null;
   readonly latestUserAuthoredMessageAt?: string | null;
   readonly hasPendingApprovals: boolean;
@@ -334,19 +336,17 @@ export function presentThreadShell(
     latestRun,
     runtime,
     blockedOnThreadWait: thread.blockedOnThreadWait ?? false,
+    latestRunStartHeld: thread.latestRunStartHeld ?? false,
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
     ...(thread.latestUserAuthoredMessageAt === undefined
       ? {}
       : { latestUserAuthoredMessageAt: nullableIso(thread.latestUserAuthoredMessageAt) }),
-    hasPendingApprovals:
-      thread.pendingRuntimeRequest !== null &&
-      thread.pendingRuntimeRequest.kind !== "user_input" &&
-      thread.pendingRuntimeRequest.kind !== "auth_refresh",
+    hasPendingApprovals: isPendingApprovalRequest(thread.pendingRuntimeRequest),
     hasPendingUserInput:
-      thread.pendingRuntimeRequest?.kind === "user_input" &&
-      (thread.pendingRuntimeRequest.blocking !== false || !runtimeIsWorking),
+      isPendingUserInputRequest(thread.pendingRuntimeRequest) &&
+      (thread.pendingRuntimeRequest?.blocking !== false || !runtimeIsWorking),
     pendingUserInputAt:
-      thread.pendingRuntimeRequest?.kind === "user_input"
+      thread.pendingRuntimeRequest && isPendingUserInputRequest(thread.pendingRuntimeRequest)
         ? iso(thread.pendingRuntimeRequest.createdAt)
         : null,
     pendingSubagentRequest,

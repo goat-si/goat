@@ -21,6 +21,7 @@ import {
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -35,6 +36,14 @@ import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import { resolveRuntimeMode } from "../../mcp/OrchestratorMcpService.ts";
 import { assertTargetWithinLimits } from "../../mcp/threadAccess.ts";
 import * as ThreadLaunchMcpService from "../../mcp/ThreadLaunchMcpService.ts";
+import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
+import { PlacementPlacer } from "../admission/PlacementPlacer.ts";
+import {
+  goalPlacementOwner,
+  placeLocalWorker,
+  placeRemoteWorker,
+  recoverPlacedWorker,
+} from "./GoalPlacement.ts";
 import { DispatchModeLimit } from "../../orchestration-v2/DispatchModeLimit.ts";
 import { ProjectStoreV2 } from "../../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
@@ -96,6 +105,11 @@ export interface Launched {
 }
 
 export { RemoteLaunchUnconfirmed } from "./GoalRemoteWorkers.ts";
+
+type LocalWorkerPayload = {
+  readonly input: Parameters<ThreadLaunchMcpService.ThreadLaunchMcpService["Service"]["launch"]>[1];
+  readonly modes: Parameters<ThreadLaunchMcpService.ThreadLaunchMcpService["Service"]["launch"]>[2];
+};
 
 /** What a move to another host may do, as the Rescheduler's request carries it. */
 export interface MoveAuthority {
@@ -263,6 +277,10 @@ const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const clients = yield* McpClientAuthority.McpClientAuthority;
   const permissions = yield* Profiles.PermissionProfiles;
+  // Placement admission (off until enabled): each goal action is one placement owner.
+  const placer = (yield* PlacementAdmissionEnabled)
+    ? yield* Effect.serviceOption(PlacementPlacer)
+    : Option.none<PlacementPlacer["Service"]>();
   const remote = makeRemoteWorkers({
     dispatch: yield* SshRemoteDispatch.SshRemoteDispatch,
     permissions,
@@ -450,6 +468,19 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /** A local worker launch from its payload; a placed one gets the placement's command id. */
+  const localWorkerLaunch =
+    (access: OwnerAccess, actionId: string, confirm: Effect.Effect<boolean>) =>
+    (commandId: CommandId | undefined, payload: LocalWorkerPayload) =>
+      asOwner(
+        access,
+        launches.launch(access.scope, payload.input, payload.modes, {
+          threadId: workerThreadId(actionId),
+          confirm,
+          ...(commandId === undefined ? {} : { commandId }),
+        }),
+      );
+
   return GoalWorkerRuntime.of({
     owner,
     observeWorker: (access, goal, worker) =>
@@ -569,7 +600,18 @@ const make = Effect.gen(function* () {
               }),
               Effect.orElseSucceed(() => "unknown" as const),
             ),
-    findLaunched: (_access, goal, actionId, host) => {
+    findLaunched: (access, goal, actionId, host) => {
+      if (Option.isSome(placer))
+        return recoverPlacedWorker(placer.value, {
+          ownerKey: goalPlacementOwner(goal.id, actionId),
+          authorize:
+            host === null
+              ? Effect.succeed(effectiveRuntimeMode(access, goal))
+              : admitRemote(access, goal, host, true, Effect.void).pipe(
+                  Effect.flatMap((authority) => authority.authorize),
+                ),
+          local: localWorkerLaunch(access, actionId, Effect.succeed(true)),
+        });
       if (host === null)
         return threads.getThreadShell(workerThreadId(actionId)).pipe(
           Effect.mapError(
@@ -607,30 +649,36 @@ const make = Effect.gen(function* () {
             Effect.as(true),
             Effect.catch((lost) => Ref.set(refused, lost).pipe(Effect.as(false))),
           );
-          const launched = yield* asOwner(
-            access,
-            launches.launch(
-              access.scope,
-              {
-                projectId,
-                title: request.title,
-                message: request.message,
-                modelSelection: request.modelSelection,
-                runtimeMode,
-                interactionMode: "default",
-                workspaceStrategy: {
-                  type: "worktree",
-                  branch: request.branch,
-                  baseRef: workspace.baseRef,
-                  startFromOrigin: workspace.startFromOrigin,
-                },
-                // The goal follows its workers itself; the owner thread is not woken per run.
-                notifyOnCompletion: false,
+          const payload: LocalWorkerPayload = {
+            input: {
+              projectId,
+              title: request.title,
+              message: request.message,
+              modelSelection: request.modelSelection,
+              runtimeMode,
+              interactionMode: "default",
+              workspaceStrategy: {
+                type: "worktree",
+                branch: request.branch,
+                baseRef: workspace.baseRef,
+                startFromOrigin: workspace.startFromOrigin,
               },
-              { runtimeMode, interactionMode: "default" },
-              { threadId: workerThreadId(request.actionId), confirm: stillAllowed },
-            ),
-          ).pipe(
+              // The goal follows its workers itself; the owner thread is not woken per run.
+              notifyOnCompletion: false,
+            },
+            modes: { runtimeMode, interactionMode: "default" },
+          };
+          const placed: Effect.Effect<
+            { readonly threadId: ThreadId; readonly runId: RunId | null },
+            OrchestratorMcpFailure
+          > = Option.isSome(placer)
+            ? placeLocalWorker(placer.value, {
+                ownerKey: goalPlacementOwner(goal.id, request.actionId),
+                payload,
+                launch: localWorkerLaunch(access, request.actionId, stillAllowed),
+              })
+            : localWorkerLaunch(access, request.actionId, stillAllowed)(undefined, payload);
+          const launched = yield* placed.pipe(
             Effect.catch((failure) =>
               Effect.flatMap(Ref.get(refused), (lost) =>
                 Effect.fail<OrchestratorMcpFailure | GoalOwnerAuthorityLost>(lost ?? failure),
@@ -649,11 +697,40 @@ const make = Effect.gen(function* () {
           });
         // Admitted before anything reaches the host; the authorize reruns before each remote write.
         const authority = yield* admitRemote(access, goal, host, true, confirm);
+        const title = remoteTitle(request.title, remoteMarker(goal.id, request.actionId));
+        if (Option.isSome(placer)) {
+          yield* keepLost(remote.prepare(authority, host));
+          return yield* keepLost(
+            placeRemoteWorker(placer.value, {
+              ownerKey: goalPlacementOwner(goal.id, request.actionId),
+              host,
+              launch: {
+                cwd: project.cwd,
+                workspace: {
+                  type: "worktree",
+                  branch: request.branch,
+                  baseRef: workspace.baseRef,
+                  startFromOrigin: workspace.startFromOrigin,
+                },
+                title,
+                message: request.message,
+                modelSelection: request.modelSelection,
+                runtimeMode: authority.workerMode,
+                callerRuntimeMode: authority.sessionMode,
+                interactionMode: "default",
+                ...(authority.ceiling === undefined
+                  ? {}
+                  : { permissionProfileCeiling: authority.ceiling }),
+              },
+              authorize: authority.authorize,
+            }),
+          );
+        }
         return yield* keepLost(
           remote.launch(authority, {
             host,
             cwd: project.cwd,
-            title: remoteTitle(request.title, remoteMarker(goal.id, request.actionId)),
+            title,
             message: request.message,
             branch: request.branch,
             baseRef: workspace.baseRef,

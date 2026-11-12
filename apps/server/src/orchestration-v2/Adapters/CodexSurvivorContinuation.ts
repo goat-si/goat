@@ -22,11 +22,13 @@ import type {
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
+  CodexStopObligation,
   CodexSurvivors,
 } from "../../provider/CodexSurvivors.ts";
 import { settleSurvivorSessionLoss } from "./CodexSurvivorSessionLoss.ts";
 import { makeCodexSessionEvents } from "./CodexAppServerExit.ts";
 import { makeGoalTurnFences } from "./CodexGoalTurnFences.ts";
+import { awaitingNativeStart } from "./CodexQueuedTurnStop.ts";
 import {
   refreshSurvivorGoalBlock,
   observeSurvivorNotification,
@@ -54,6 +56,35 @@ export function mapCodexTurnStatus(
       return "running";
   }
 }
+
+/** The root turns Codex has started on a session, as the stop obligations they would hold. */
+export const startedRootTurns = (
+  turns: ReadonlyMap<
+    string,
+    {
+      readonly nativeTurnId: string;
+      readonly nativeStartReady?: Deferred.Deferred<void>;
+      readonly subagent: unknown;
+      readonly projectionThreadId: import("@goat/contracts").ThreadId;
+      readonly providerThread: {
+        readonly nativeThreadRef: { readonly nativeId: string | null } | null;
+      };
+    }
+  >,
+): ReadonlyArray<CodexStopObligation> =>
+  [...turns.values()].flatMap((turn) =>
+    turn.subagent !== null ||
+    awaitingNativeStart(turn) ||
+    !turn.providerThread.nativeThreadRef?.nativeId
+      ? []
+      : [
+          {
+            threadId: turn.projectionThreadId,
+            nativeThreadId: turn.providerThread.nativeThreadRef.nativeId,
+            nativeTurnId: turn.nativeTurnId,
+          },
+        ],
+  );
 
 export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.notifications")(
   function* (input: {
@@ -253,6 +284,31 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
           ),
         );
     });
+    /**
+     * A process a goal block keeps runs the turns in flight at a dropped connection on with no run
+     * owning them, so each holds its thread; any other process stops with the session, and they with it.
+     */
+    const holdInFlight = Effect.fn("CodexSurvivorContinuation.holdInFlight")(
+      function* (inFlight: Effect.Effect<ReadonlyArray<CodexStopObligation>>) {
+        if (Option.isNone(input.survivors) || input.providerSessionId === undefined) return;
+        const service = input.survivors.value;
+        const records = new Map<string, CodexInstanceRecordKey>();
+        for (const { record } of yield* service.listGoalBlocksByInstance(input.instanceId))
+          if (serves(record)) records.set(record.recordName, record);
+        const [record] = records.values();
+        if (record === undefined || records.size > 1) return;
+        for (const stop of yield* inFlight)
+          yield* service.holdLostConnectionTurn?.(record, stop) ?? Effect.void;
+      },
+      (effect) =>
+        effect.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not hold Codex turns that outlived their connection", {
+              cause,
+            }),
+          ),
+        ),
+    );
     return {
       waiting,
       tracked,
@@ -261,8 +317,18 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
       pendingGoalThreads: goalFences.pending,
       fencedGoalThreads: goalFences.fenced().pipe(Effect.option),
       resumeGoalThreads: goalFences.resume(),
-      makeSessionEvents: (providerSessionId: import("@goat/contracts").ProviderSessionId) =>
-        makeCodexSessionEvents(client, providerSessionId, sessionLost),
+      /** `inFlight` names the root turns running when the connection drops. */
+      makeSessionEvents: (
+        providerSessionId: import("@goat/contracts").ProviderSessionId,
+        inFlight?: Effect.Effect<ReadonlyArray<CodexStopObligation>>,
+      ) =>
+        makeCodexSessionEvents(
+          client,
+          providerSessionId,
+          inFlight === undefined
+            ? sessionLost
+            : Effect.andThen(holdInFlight(inFlight), sessionLost),
+        ),
     };
   },
 );

@@ -28,6 +28,7 @@ it.effect("an owner joins a pinned device: GOAT's pin becomes --expect-fingerpri
       "home link probe mac-studio --json",
       `home link add mac-studio --expect-fingerprint ${PINNED} --json`,
       "verify mac-studio",
+      "home link status --json",
     ]);
     expect(yield* hub.audit).toEqual([
       { action: "hub.join", target: "mac-studio", outcome: "started", decision_id: null },
@@ -36,7 +37,7 @@ it.effect("an owner joins a pinned device: GOAT's pin becomes --expect-fingerpri
   }),
 );
 
-it.effect("an unpinned key waits for a person, then joins with the approved key once", () =>
+it.effect("an unpinned key waits for a person; a link add that fails keeps the approval", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ addFails: true });
     const first = yield* hub.membership.join(scope, { deviceAlias: "lidge-ts" });
@@ -60,10 +61,13 @@ it.effect("an unpinned key waits for a person, then joins with the approved key 
     expect(second.message).toContain("child_relay_failed");
     expect(hub.calls).toContain(`home link add lidge-ts --expect-fingerprint ${PINNED} --json`);
 
-    const reused = yield* hub.membership
-      .join(scope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
-      .pipe(Effect.flip);
-    expect(reused.message).toContain("already used");
+    const retried = yield* hub.membership.join(scope, {
+      deviceAlias: "lidge-ts",
+      decisionId: first.decisionId!,
+    });
+    expect(retried.state).toBe("failed");
+    expect(hub.calls.filter((call) => call.includes("link add"))).toHaveLength(2);
+    expect(yield* hub.consumed).toEqual([]);
   }),
 );
 
@@ -607,35 +611,41 @@ it.effect(
     }),
 );
 
-it.effect("a thread's unpinned join asks through a handoff whose id continues it once", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ addFails: true });
-    const first = yield* hub.membership.join(threadScope, { deviceAlias: "lidge-ts" });
-    expect(first).toMatchObject({
-      kind: "needs_human",
-      state: "needs_human",
-      handoff: { kind: "approval", state: "pending", targetPath: "hub.device_join" },
-      next: { after: "approval", call: "goat_hub_device_join" },
-    });
-    expect(first.decisionId).toBe((first as { handoff: { handoffId: string } }).handoff.handoffId);
-    expect((yield* hub.inboxItems).items).toEqual([]);
-    const early = yield* hub.membership
-      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
-      .pipe(Effect.flip);
-    expect(early.message).toContain("still open");
+it.effect(
+  "a thread's unpinned join asks through a handoff whose id survives a failed link add",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ addFails: true });
+      const first = yield* hub.membership.join(threadScope, { deviceAlias: "lidge-ts" });
+      expect(first).toMatchObject({
+        kind: "needs_human",
+        state: "needs_human",
+        handoff: { kind: "approval", state: "pending", targetPath: "hub.device_join" },
+        next: { after: "approval", call: "goat_hub_device_join" },
+      });
+      expect(first.decisionId).toBe(
+        (first as { handoff: { handoffId: string } }).handoff.handoffId,
+      );
+      expect((yield* hub.inboxItems).items).toEqual([]);
+      const early = yield* hub.membership
+        .join(threadScope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
+        .pipe(Effect.flip);
+      expect(early.message).toContain("still open");
 
-    yield* hub.answer(first.decisionId!);
-    const joined = yield* hub.membership.join(threadScope, {
-      deviceAlias: "lidge-ts",
-      decisionId: first.decisionId!,
-    });
-    expect(joined.state).toBe("failed");
-    expect(hub.calls).toContain(`home link add lidge-ts --expect-fingerprint ${PINNED} --json`);
-    const reused = yield* hub.membership
-      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
-      .pipe(Effect.flip);
-    expect(reused.message).toContain("already used");
-  }),
+      yield* hub.answer(first.decisionId!);
+      const joined = yield* hub.membership.join(threadScope, {
+        deviceAlias: "lidge-ts",
+        decisionId: first.decisionId!,
+      });
+      expect(joined.state).toBe("failed");
+      expect(hub.calls).toContain(`home link add lidge-ts --expect-fingerprint ${PINNED} --json`);
+      const retried = yield* hub.membership.join(threadScope, {
+        deviceAlias: "lidge-ts",
+        decisionId: first.decisionId!,
+      });
+      expect(retried.state).toBe("failed");
+      expect(hub.calls.filter((call) => call.includes("link add"))).toHaveLength(2);
+    }),
 );
 
 it.effect("a handoff covers only the change it was asked for", () =>

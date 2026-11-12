@@ -8,6 +8,7 @@ import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
@@ -113,7 +114,7 @@ export type ClaudeCloudRun = (
   login: ClaudeCloudLogin,
   cwd: string,
   args: string[],
-  options?: { readonly timeout?: Duration.Input },
+  options?: { readonly timeout?: Duration.Input; readonly probe?: boolean },
 ) => Effect.Effect<{ code: number; stdout: string }, ClaudeCloudError>;
 
 const run = Effect.fn("ClaudeCloudCli.run")(function* (
@@ -130,7 +131,7 @@ const run = Effect.fn("ClaudeCloudCli.run")(function* (
         .spawn(
           ChildProcess.make(login.binary, args, {
             cwd,
-            env: environment,
+            env: options?.probe === true ? providerProbeEnvironment(environment) : environment,
             shell: false,
             stdin: "ignore",
           }),
@@ -184,7 +185,7 @@ const run = Effect.fn("ClaudeCloudCli.run")(function* (
  */
 export const probeReadiness = Effect.fn("ClaudeCloudCli.readiness")(
   function* (login: ClaudeCloudLogin, cwd: string) {
-    const auth = yield* run(login, cwd, ["auth", "status"]);
+    const auth = yield* run(login, cwd, ["auth", "status"], { probe: true });
     const account = yield* parseAuthEffect(auth.stdout).pipe(
       Effect.mapError(
         (cause) =>
@@ -206,8 +207,8 @@ export const probeReadiness = Effect.fn("ClaudeCloudCli.readiness")(
         ...(signedIn ? { authMethod: account.authMethod } : {}),
       });
     }
-    const version = yield* run(login, cwd, ["--version"]);
-    const help = yield* run(login, cwd, ["--help"]);
+    const version = yield* run(login, cwd, ["--version"], { probe: true });
+    const help = yield* run(login, cwd, ["--help"], { probe: true });
     if (version.code !== 0 || help.code !== 0 || !/--cloud(?:\s|\[)/.test(help.stdout)) {
       return yield* new ClaudeCloudError({
         detail: "The sibling Claude CLI does not advertise cloud sessions. Update that CLI.",

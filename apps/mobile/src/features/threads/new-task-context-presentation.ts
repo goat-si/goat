@@ -5,6 +5,10 @@ import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-d
 
 type WorkspaceMode = "local" | "worktree";
 
+export function draftContextPlacement(viewportHeight: number): "hero" | "compact" {
+  return viewportHeight < 380 ? "compact" : "hero";
+}
+
 export function resolveNewTaskWorkspaceSelection(input: {
   readonly selection: ComposerDraftWorkspaceSelection | undefined;
   readonly fallback: ComposerDraftWorkspaceSelection;

@@ -1,4 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
+import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./modelPickPending";
+import { sameDrafts } from "./draftEquality";
 import {
   EnvironmentId as EnvironmentIdSchema,
   ModelSelection as ModelSelectionSchema,
@@ -1452,6 +1454,7 @@ export function subscribeComposerDraftModelReconciliation(input: {
   readonly shellStateAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<AsyncResult.AsyncResult<EnvironmentShellState, unknown>>;
+  readonly pendingThreadIdsAtom?: PendingThreadIdsAtom;
 }): () => void {
   const draftsAtom = Atom.make(appAtomRegistry.get(composerDraftsAtom));
   const unsubscribeDrafts = appAtomRegistry.subscribe(composerDraftsAtom, (drafts) =>
@@ -1471,7 +1474,7 @@ export function subscribeComposerDraftModelReconciliation(input: {
       const thread = get(input.threadShellAtom(ref));
       if (!thread || !draftModelPickMatchesThread(draft.modelSelection, thread.modelSelection))
         continue;
-      // Status and selection must come from the same emission; derived atoms can update apart.
+      if (hasPendingThreadPick(get, input.pendingThreadIdsAtom, ref)) continue;
       const shell = Option.getOrNull(
         AsyncResult.value(get(input.shellStateAtom(ref.environmentId))),
       );
@@ -1928,10 +1931,6 @@ const EMPTY_DRAFT_ATOM = Atom.make(EMPTY_DRAFT);
 
 type ComposerDraftsByKey = Readonly<Record<string, ComposerDraft>>;
 const EMPTY_DRAFTS: ComposerDraftsByKey = {};
-function sameDrafts(a: ComposerDraftsByKey, b: ComposerDraftsByKey): boolean {
-  const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
-}
 export const questionAttachmentDraftsAtom = Atom.family((prefix: string) =>
   Atom.make((get): ComposerDraftsByKey => {
     if (prefix === "") return EMPTY_DRAFTS;

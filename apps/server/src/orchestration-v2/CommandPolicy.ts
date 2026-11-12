@@ -316,6 +316,8 @@ export interface CommandPolicyV2Shape {
       readonly hasStrongNativeSource: boolean;
       readonly sourceRunStatus: OrchestrationV2Run["status"];
       readonly fromSpecificTurn: boolean;
+      /** The fork works in another checkout than its source. */
+      readonly crossWorkspace: boolean;
     },
   ) => Effect.Effect<ForkExecutionPolicyV2, CommandPolicyV2Error>;
   readonly ensureRollback: (
@@ -491,7 +493,8 @@ const decideForkExecution: CommandPolicyV2Shape["decideForkExecution"] = (input)
     input.hasStrongNativeSource &&
     input.capabilities.threads.canForkThread &&
     (!input.fromSpecificTurn || input.capabilities.threads.canForkFromTurn) &&
-    input.capabilities.identity.nativeThreadIds === "strong";
+    input.capabilities.identity.nativeThreadIds === "strong" &&
+    (!input.crossWorkspace || input.capabilities.threads.forkHonorsTargetCwd === true);
 
   if (canForkNatively) {
     return Effect.succeed("native_fork");

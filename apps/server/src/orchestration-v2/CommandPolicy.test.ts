@@ -287,9 +287,40 @@ layer("CommandPolicyV2", (it) => {
         hasStrongNativeSource: true,
         sourceRunStatus: "completed",
         fromSpecificTurn: true,
+        crossWorkspace: false,
       });
 
       assert.equal(result, "portable_context");
+    }),
+  );
+
+  it.effect("forks natively into another checkout only when the provider honors its cwd", () =>
+    Effect.gen(function* () {
+      const policy = yield* CommandPolicy.CommandPolicyV2;
+      const decide = (crossWorkspace: boolean, forkHonorsTargetCwd: boolean | undefined) =>
+        policy.decideForkExecution({
+          commandId,
+          threadId,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          capabilities: capabilities((current) => {
+            const { forkHonorsTargetCwd: _flag, ...threads } = current.threads;
+            return {
+              ...current,
+              threads:
+                forkHonorsTargetCwd === undefined ? threads : { ...threads, forkHonorsTargetCwd },
+            };
+          }),
+          sameProvider: true,
+          hasStrongNativeSource: true,
+          sourceRunStatus: "completed",
+          fromSpecificTurn: true,
+          crossWorkspace,
+        });
+
+      assert.equal(yield* decide(true, undefined), "portable_context");
+      assert.equal(yield* decide(true, false), "portable_context");
+      assert.equal(yield* decide(true, true), "native_fork");
+      assert.equal(yield* decide(false, undefined), "native_fork");
     }),
   );
 });

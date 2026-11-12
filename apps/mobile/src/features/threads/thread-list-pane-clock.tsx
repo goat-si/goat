@@ -1,5 +1,6 @@
 import { formatWorkingDurationLabel } from "@goat/client-runtime/state/models";
 import { createContext, use } from "react";
+import { Platform, Text as NativeText } from "react-native";
 
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 
@@ -16,5 +17,18 @@ export function ThreadListV2Duration(props: { readonly startedAt: string | null 
     paneVisible: use(ThreadListPaneVisibleContext),
   });
   if (!Number.isFinite(startedAtMs)) return null;
-  return ` ${formatWorkingDurationLabel(nowMs - startedAtMs)}`;
+  return (
+    <>
+      {" "}
+      <NativeText
+        style={{
+          fontFamily: Platform.OS === "ios" ? "System" : "sans-serif",
+          fontWeight: "700",
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {formatWorkingDurationLabel(nowMs - startedAtMs)}
+      </NativeText>
+    </>
+  );
 }

@@ -6,7 +6,17 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@goat/contracts";
-import { lazy, memo, Suspense, useRef, useState } from "react";
+import { RegistryContext } from "@effect/atom-react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react";
 import { Badge } from "../ui/badge";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -25,6 +35,8 @@ import { useComposerMenuProps } from "./composerEventScope";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { useEnvironment } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 // The wizard only loads once someone presses "Add provider" in the rail.
 const AddProviderInstanceDialog = lazy(() =>
@@ -111,6 +123,24 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
+  const registry = useContext(RegistryContext);
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
+  const refreshCatalog = useEffectEvent(() => {
+    const environmentId = props.environmentId;
+    if (
+      environmentId === null ||
+      registry.get(serverEnvironment.configValueAtom(environmentId))?.environment.capabilities
+        .modelCatalogRefresh !== true
+    )
+      return;
+    void refreshProviders({ environmentId, input: { modelCatalogOnly: true } });
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- controlled and keyboard openings also refresh the catalog
+  useEffect(() => {
+    if (isMenuOpen) refreshCatalog();
+  }, [isMenuOpen]);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const size = props.size ?? "sm";
   // Only the composer's picker offers "Add provider"; settings pickers already sit next to provider settings.

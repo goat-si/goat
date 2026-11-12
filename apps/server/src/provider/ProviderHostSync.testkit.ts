@@ -43,6 +43,7 @@ export const session = (
 ): AuthClientSession => ({
   sessionId,
   subject: "test",
+  principalKind: "person",
   method: "browser-session-cookie",
   scopes: permissions,
   permissions,

@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import type { BotProfile } from "@goat/contracts";
+import type { BotProfile, ChannelGetBotStatusResult } from "@goat/contracts";
 import { useEffect } from "react";
 
 import { useThreadShell } from "~/state/entities";
@@ -8,10 +8,15 @@ import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 
 /**
- * How many of a member's tasks wait on a person. One cached read per member, read again only
- * when that member's conversation changes or is visited; main keeps its own observer.
+ * How many of a member's tasks wait on a person, whether its tasks are going, and its
+ * conversation's newest message. One cached read per member, read again only when that member's
+ * conversation changes or is visited; main keeps its own observer.
  */
-export function useGoatBotMemberWaitingCount(member: BotProfile | null): number {
+export function useGoatBotMemberStatus(member: BotProfile | null): {
+  readonly waitingCount: number;
+  readonly latest: ChannelGetBotStatusResult["latest"];
+  readonly tasks: ChannelGetBotStatusResult["tasks"];
+} {
   const environmentId = member?.environmentId ?? null;
   const presentation = useEnvironment(environmentId);
   const supported =
@@ -36,5 +41,13 @@ export function useGoatBotMemberWaitingCount(member: BotProfile | null): number 
   useEffect(() => {
     if (supported && revision !== null) refresh();
   }, [supported, revision, refresh]);
-  return status.data?.waitingCount ?? 0;
+  return {
+    waitingCount: status.data?.waitingCount ?? 0,
+    latest: status.data?.latest,
+    tasks: status.data?.tasks,
+  };
+}
+
+export function useGoatBotMemberWaitingCount(member: BotProfile | null): number {
+  return useGoatBotMemberStatus(member).waitingCount;
 }

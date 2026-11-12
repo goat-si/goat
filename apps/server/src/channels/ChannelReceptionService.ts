@@ -121,6 +121,7 @@ import {
 import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { mayAnswerTask, openQuestionTask, questionTextForModel } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
+import { personMessageEntry } from "./channelPersonMessage.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import {
@@ -922,24 +923,13 @@ const make = Effect.gen(function* () {
       }
 
       if (origin.kind === "goat" && !routine) {
+        // The task and answer the accepted copy decided stay on the message (TimelineRecords).
         yield* timeline
           .record({
             threadId: origin.threadId,
             record: {
               recordKey: "input:" + inputId,
-              entry: {
-                type: "message",
-                role: "user",
-                text: message.text,
-                meta: {
-                  conversationId,
-                  originKind: "goat",
-                  kind: "inbound",
-                  inputId,
-                  clientMessageId: message.externalMessageId,
-                  readAt: stored.snapshot.readAt ?? readAt,
-                },
-              },
+              entry: personMessageEntry(stored, { readAt: stored.snapshot.readAt ?? readAt }),
             },
             revision: "read",
           })
@@ -1268,13 +1258,17 @@ const make = Effect.gen(function* () {
             : quotedFromInput(asked.notesChangeRequested, message.text)
               ? undefined
               : "quote_not_in_input";
-      const noteNotice =
-        (decision.remember !== undefined && rememberRefusal === undefined
+      const saved =
+        decision.remember !== undefined && rememberRefusal === undefined
           ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
-          : droppedNoteNotice(rememberRefusal)) ?? droppedNoteNotice(editRefusal);
+          : undefined;
+      const noteNotice =
+        (saved === undefined ? droppedNoteNotice(rememberRefusal) : saved.notice) ??
+        droppedNoteNotice(editRefusal);
       let replyText = decision.replyText;
       let finalDecision = decision;
-      if (noteNotice === CHANNEL_COPY.noteEditBusy) {
+      // Nothing was saved, so the model's reply, which says it was, gives way to the notice.
+      if (saved?.held === true && noteNotice !== undefined) {
         replyText = noteNotice;
         finalDecision = { replyText, action: { type: "report_only" } };
       }
@@ -1524,6 +1518,7 @@ const make = Effect.gen(function* () {
               payload: {
                 questionId: action.questionId,
                 answer: action.answer,
+                inputId,
                 sender: senderOf(answerer, message.connectionId),
               },
             },
@@ -1694,6 +1689,9 @@ const make = Effect.gen(function* () {
           ? channelEvidenceSentence(task.observed?.result)
           : null;
       const replyTo = turnAnswerReplyTo(task, base.kind);
+      // The attempt the event ended, which a retry since then has moved past.
+      const taskGeneration =
+        "generation" in pending.event.payload ? pending.event.payload.generation : task.generation;
       const told = replyDelivery({
         // The told outcome holds the narration's key, so the work queue waits for the message the
         // person reads; a GOAT outcome's card goes alongside it under its own key.
@@ -1703,9 +1701,12 @@ const make = Effect.gen(function* () {
         text: evidence === null ? worded : worded + "\n\n" + evidence,
         replyTo,
         task,
+        taskGeneration,
         mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
         options: "options" in base ? base.options : undefined,
         questionId: "questionId" in base ? base.questionId : undefined,
+        interim: "interim" in base,
+        questionKind: "questionKind" in base ? base.questionKind : undefined,
       });
       const deliveries =
         goatOutcome && bot !== undefined
@@ -1727,6 +1728,7 @@ const make = Effect.gen(function* () {
             text: worded,
             replyTo,
             task,
+            taskGeneration,
           }),
         );
       }

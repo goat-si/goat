@@ -53,6 +53,7 @@ export const CONTEXT_MENU_ICONS: Readonly<Record<string, IconNode>> = {
   copy: solar.copy,
   folder: solar.folder,
   "git-branch": solar.gitBranch,
+  "git-fork": solar.gitFork,
   hash: solar.hashtag,
   "mail-open": solar.letterOpened,
   "message-square-plus": solar.chatRoundAdd,

@@ -46,6 +46,7 @@ import {
   AuthWebSocketTicketParams,
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
+  type SessionPrincipalKind,
 } from "./auth.ts";
 import {
   ExecutionEnvironmentDescriptor,
@@ -412,6 +413,13 @@ export interface EnvironmentSessionPrincipalShape {
   readonly scopes: ReadonlySet<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt?: DateTime.DateTime;
+  readonly principalKind?: SessionPrincipalKind;
+  readonly penBinding?: {
+    readonly meshId: string;
+    readonly nodeId: string;
+    readonly signPub: string;
+    readonly noisePub: string;
+  };
 }
 
 export class EnvironmentAuthenticatedPrincipal extends Context.Service<
@@ -594,6 +602,11 @@ export const RuntimeDrainRequest = Schema.Struct({
    * ignore the key.
    */
   automatic: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Asks the runtime to start its successor on `targetVersion` after draining. It answers
+   * `relaunch-unavailable` with a reason, without draining, when it cannot.
+   */
+  relaunch: Schema.optionalKey(Schema.Boolean),
 });
 export type RuntimeDrainRequest = typeof RuntimeDrainRequest.Type;
 
@@ -601,12 +614,13 @@ export type RuntimeDrainRequest = typeof RuntimeDrainRequest.Type;
  * `drained`: no work is running and the server exits on its own right after answering; restart
  * recovery persists any interrupted work for the successor. `cancelled`: the grace window expired
  * unconfirmed and the server admits turns again. `instance-changed`: the request named another
- * server start; re-probe.
+ * server start; re-probe. `relaunch-unavailable`: only for a relaunch request; nothing drained.
  */
 export const RuntimeDrainResult = Schema.Struct({
-  status: Schema.Literals(["drained", "cancelled", "instance-changed"]),
+  status: Schema.Literals(["drained", "cancelled", "instance-changed", "relaunch-unavailable"]),
   instanceId: TrimmedNonEmptyString,
   forced: Schema.Boolean,
+  reason: Schema.optionalKey(Schema.String),
 });
 export type RuntimeDrainResult = typeof RuntimeDrainResult.Type;
 

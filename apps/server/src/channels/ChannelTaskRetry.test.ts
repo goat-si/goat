@@ -22,6 +22,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { childWorkIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { nextTaskChange, watchTaskChanges } from "./testkit/taskChanges.ts";
 import {
   goatInput,
   makeHarness,
@@ -500,6 +501,18 @@ describe("a person retries a GOAT Bot task", () => {
           { reruns: 1, generation: 2 },
         ],
       );
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("telling a mounted list that a retry started", () => {
+  it.effect("a retry gives its owner a revision once its own transaction committed", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { task } = yield* failedTask(harness);
+      const seen = yield* watchTaskChanges(owner);
+      assert.strictEqual((yield* retry(task, "tap-changes")).status, "started");
+      assert.strictEqual(yield* nextTaskChange(seen), 1);
     }).pipe(Effect.provide(harness.layer));
   });
 });

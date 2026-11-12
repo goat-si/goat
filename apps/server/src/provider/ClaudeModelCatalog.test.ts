@@ -12,6 +12,7 @@ import {
   resolveClaudeModelCatalog,
   resolveClaudeModelsForVersion,
   resolveClaudeModelSlug,
+  resolveClaudeReportedModelSlug,
   resolveClaudeUpdateRequiredModels,
   scopeClaudeModelCatalog,
 } from "./ClaudeModelCatalog.ts";
@@ -183,6 +184,14 @@ describe("Claude model catalog", () => {
     };
     const catalog = catalogFromManifest(input);
     assert.strictEqual(resolveClaudeModelSlug(catalog, "synthetic"), "claude-synthetic-next");
+    assert.strictEqual(
+      resolveClaudeReportedModelSlug(catalog, "claude-synthetic-next-20251101"),
+      "claude-synthetic-next",
+    );
+    assert.strictEqual(
+      resolveClaudeReportedModelSlug(catalog, "unlisted-20251101"),
+      "unlisted-20251101",
+    );
     assert.strictEqual(
       resolveClaudeModelSlug(catalog, "claude-synthetic-next"),
       "claude-synthetic-next",

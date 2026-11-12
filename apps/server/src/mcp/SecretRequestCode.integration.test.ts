@@ -230,6 +230,7 @@ it.live("authenticator sentinels stay private through MCP and screen cells", () 
               {
                 sessionId,
                 subject: "desktop-bootstrap",
+                principalKind: "person",
                 method: "bearer-access-token",
                 scopes: ["orchestration:operate"],
                 client: { label: "Test", deviceType: "unknown" },

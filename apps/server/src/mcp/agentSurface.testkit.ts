@@ -86,6 +86,7 @@ import * as ThreadSearchMcpService from "./ThreadSearchMcpService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
+import * as ThreadForkWorkspace from "../orchestration-v2/goat/ThreadForkWorkspace.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -311,6 +312,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
   Layer.mock(ThreadResultService.ThreadResultService)({}),
   Layer.mock(WorktreeMcpService.WorktreeMcpService)({}),
+  Layer.mock(ThreadForkWorkspace.ThreadForkWorkspaceService)({}),
   Layer.mock(CloudMachineService.CloudMachineService)({}),
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   NodeCrypto.layer,
@@ -369,10 +371,16 @@ type RpcMessage = {
   readonly error?: unknown;
 };
 
+// A listing that came back as an RPC error is a broken harness; name the error it returned.
+const listingResult = (message: RpcMessage) =>
+  message.result === undefined
+    ? Effect.die(new Error(`tools/list failed: ${encodeJson(message.error)}`))
+    : Effect.succeed(message.result);
+
 /**
  * Registrations served over /mcp the way agents reach it: each caller sends its own bearer token
  * and the auth middleware provides that caller's scope. Needs an HTTP server and client, such as
- * NodeHttpServer.layerTest, and a scope that keeps the server up.
+ * layerTestLoopback, and a scope that keeps the server up.
  */
 /** Registrations served over /mcp the way agents reach it; see serveCatalogOverHttp. */
 export interface ListedTool {
@@ -482,12 +490,9 @@ const serveVia = <ET, RT>(
         const tools: Array<ListedTool> = [];
         let cursor: unknown;
         do {
-          const page = (yield* post(
-            caller,
-            "tools/list",
-            cursor === undefined ? {} : { cursor },
-            rewrite,
-          )).result as { tools: ReadonlyArray<ListedTool>; nextCursor?: unknown };
+          const page = (yield* listingResult(
+            yield* post(caller, "tools/list", cursor === undefined ? {} : { cursor }, rewrite),
+          )) as { tools: ReadonlyArray<ListedTool>; nextCursor?: unknown };
           tools.push(...page.tools);
           cursor = page.nextCursor;
         } while (cursor !== undefined && cursor !== null);
@@ -496,7 +501,7 @@ const serveVia = <ET, RT>(
       /** The _meta of the caller's first tools/list page. */
       listResultMeta: Effect.fn(function* (caller: string) {
         yield* ensureSession(caller);
-        const page = (yield* post(caller, "tools/list", {})).result as {
+        const page = (yield* listingResult(yield* post(caller, "tools/list", {}))) as {
           readonly _meta?: Readonly<Record<string, unknown>>;
         };
         return page._meta;

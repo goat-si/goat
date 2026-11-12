@@ -242,6 +242,10 @@ const layerEnvironmentOwnedDataCleanup = Layer.succeed(
               await import("../features/goat-bot/useMobileGoatBotSession");
             await disposeMobileGoatBotEnvironment(environmentId);
           }),
+          Effect.promise(async () => {
+            const { forgetNewBotEnvironment } = await import("../features/goat-bot/mobileNewBots");
+            forgetNewBotEnvironment(environmentId);
+          }),
           Effect.sync(() => clearThreadComposerErrorsForEnvironment(environmentId)),
         ],
         { concurrency: "unbounded", discard: true },

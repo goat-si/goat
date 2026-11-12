@@ -49,6 +49,7 @@ import * as RemoteReportService from "./remoteReports/RemoteReportService.ts";
 import * as RuntimeAdmission from "./runtimeAdmission.ts";
 import * as RuntimeControl from "./runtimeControl.ts";
 import * as RuntimeDrain from "./runtimeDrain.ts";
+import * as RuntimeRelaunch from "./runtimeRelaunch.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
@@ -275,6 +276,7 @@ import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Ws from "./ws.ts";
+import * as PenServer from "./pen/PenServerLayers.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
@@ -384,10 +386,12 @@ const layerRelayClient = Layer.unwrap(
 export const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const main = yield* PenServer.MainHttpServer;
     yield* Effect.forkScoped(heartbeat);
     return NodeHttpServer.layer(
       () => {
         const server = createGuardedHttpServer();
+        Deferred.doneUnsafe(main.server, Effect.succeed(server));
         if (config.privateNetworkOnly) {
           server.on("connection", (socket) => {
             if (!acceptsPrivateNetworkConnection(socket)) {
@@ -852,6 +856,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       Layer.provideMerge(SshRuntimeAutoUpdate.layer),
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(RuntimeDrain.layerShutdown),
+      Layer.provide(RuntimeRelaunch.layer),
       Layer.provideMerge(RuntimeAdmission.layer),
       Layer.provideMerge(RuntimeIdentity.layer),
     ),
@@ -1014,6 +1019,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
+    PenServer.layer,
   ),
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
@@ -1265,6 +1271,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(layerArchiveGate),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
+      Layer.provideMerge(PenServer.layerMainHttpServer),
       Layer.provide(
         HttpRouter.layer.pipe(
           Layer.provide(Layer.succeed(HttpRouter.RouterConfig, HTTP_ROUTER_CONFIG)),

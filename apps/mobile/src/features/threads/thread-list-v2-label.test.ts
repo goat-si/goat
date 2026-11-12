@@ -29,4 +29,14 @@ describe("thread list screen-reader label (#2394)", () => {
       }),
     ).toBe("Thread, messages queued to send, regenerating title");
   });
+
+  it("includes the distinct local provider name", () => {
+    expect(
+      threadListV2RowAccessibilityLabel({
+        thread: { title: "Thread", worktreePath: null, branch: null },
+        isRegeneratingTitle: false,
+        providerName: "Local ACP",
+      }),
+    ).toBe("Thread, Local ACP");
+  });
 });

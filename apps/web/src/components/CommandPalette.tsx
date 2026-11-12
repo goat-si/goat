@@ -57,7 +57,6 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ActivityIcon,
-  BotIcon,
   BrainIcon,
   CloudDownloadIcon,
   BellIcon,
@@ -101,6 +100,7 @@ import {
 import type { LegendListRef } from "@legendapp/list/react";
 import { notesRpc } from "../rpc/notes/atoms";
 import { notesPaletteItems } from "../notes/notesPaletteItems";
+import { goatBotPaletteItems, useGoatBotPaletteBots } from "./goatBot/goatBotPaletteItems";
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -144,6 +144,7 @@ import {
 } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useCanPromoteThread, usePromoteThread } from "./promoteThread";
+import { useForkPaletteItems } from "../hooks/useForkPaletteItems";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -219,6 +220,7 @@ import {
   reduceCommandPaletteSearchState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
+import { childSearchEscape, useChildSearchEscape } from "./CommandPalette.escape";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteDialogFrame } from "./CommandPaletteDialogFrame";
@@ -310,17 +312,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       ? selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview"
       : false,
   );
-  useEffect(() => {
-    if (!state.open || state.mode === "command") return;
-    const onEscapeKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.isComposing || event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      dispatch({ _tag: "BackToCommand" });
-    };
-    window.addEventListener("keydown", onEscapeKeyDown, true);
-    return () => window.removeEventListener("keydown", onEscapeKeyDown, true);
-  }, [state.mode, state.open]);
+  useChildSearchEscape(state.open, state.mode, dispatch);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -423,9 +415,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
-          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
+          const escape = childSearchEscape(eventDetails, open, state.mode);
+          if (escape !== "ignore") {
             eventDetails.cancel();
-            dispatch({ _tag: "BackToCommand" });
+            if (escape === "back-to-command") dispatch({ _tag: "BackToCommand" });
             return;
           }
           setOpen(open);
@@ -547,6 +540,7 @@ function OpenCommandPaletteDialog(props: {
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canCreateNote = useAtomValue(notesRpc.write.permissionAtom(primaryEnvironmentId));
+  const goatBots = useGoatBotPaletteBots();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -566,6 +560,7 @@ function OpenCommandPaletteDialog(props: {
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
   const canPromoteActiveThread = useCanPromoteThread(activeThread);
+  const forkPaletteItems = useForkPaletteItems(activeThread ?? null);
   const promoteThread = usePromoteThread();
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
@@ -1420,6 +1415,7 @@ function OpenCommandPaletteDialog(props: {
     icon: <CloudDownloadIcon className={ITEM_ICON_CLASS} />,
   });
   if (sshFetchBackItem !== null) actionItems.push(sshFetchBackItem);
+  actionItems.push(...forkPaletteItems);
 
   if (
     activeThread !== null &&
@@ -1689,16 +1685,8 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  actionItems.push({
-    kind: "action",
-    value: "action:goat-bot",
-    searchTerms: ["goat bot", "bot", "assistant", "helper"],
-    title: "Open GOAT Bot",
-    icon: <BotIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({ to: "/bot" });
-    },
-  });
+  const goatBotItems = goatBotPaletteItems(goatBots, navigate);
+  actionItems.push(...goatBotItems.actions);
 
   actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 
@@ -1869,6 +1857,7 @@ function OpenCommandPaletteDialog(props: {
         }
       : {}),
     projectSearchItems: projectSearchItems,
+    botSearchItems: goatBotItems.search,
     settingsSearchItems,
     threadSearchItems:
       isLinkedThreadSearch && linkedThreadSearch?.linkedThreads

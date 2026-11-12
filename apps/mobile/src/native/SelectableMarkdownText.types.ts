@@ -80,6 +80,8 @@ export interface SelectableMarkdownTextProps {
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
   readonly onFileContextMenuAction?: (href: string, actionId: string) => void;
   readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;
+  /** A long press on a link where no file menu takes it; iOS draws its own link menu instead. */
+  readonly onLinkLongPress?: (href: string) => void;
   readonly contextClipboardFragment?: string;
   readonly renderImage?: MarkdownImageRenderer;
   readonly fileEmbedLabel?: (href: string, standalone: boolean) => string | null;

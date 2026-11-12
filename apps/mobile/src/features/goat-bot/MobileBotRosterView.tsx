@@ -2,12 +2,13 @@ import { useRef, useState, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import {
   FACE_MOTION_RANK,
-  botThreadKey,
   goatBotAvatarEmoji,
   goatBotFaceLabel,
-  presentTaskStatus,
+  goatBotFaceSpoken,
+  goatBotPreviewText,
+  goatBotAccent,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, BotThreadRow } from "@goat/contracts";
+import type { BotProfile, ChannelTaskId } from "@goat/contracts";
 import {
   Platform,
   Pressable,
@@ -22,18 +23,16 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
-import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
-import { useMobileMemberWaitingCount } from "./useMobileMemberStatus";
+import { useMobileMemberStatus } from "./useMobileMemberStatus";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
+import { MobileNeedsYouStrip } from "./MobileNeedsYouStrip";
 
 /** Servers without member bots keep New bot disabled. */
 const ignorePress = () => undefined;
-import { DONE_STATUS_LABEL, STATUS_LABEL_BY_STATUS } from "../threads/thread-list-v2-row-meta";
-import type { ThreadListV2Status } from "../threads/threadListV2";
 import type { MobileHomeMode } from "./goatBotHomeMode";
 
 export function MobileHomeSegments(props: {
@@ -85,23 +84,19 @@ export function MobileHomeSegments(props: {
 export function MobileBotRosterView(props: {
   header?: ReactNode;
   bots: ReadonlyArray<BotRosterEntry>;
-  rows: ReadonlyArray<BotThreadRow>;
-  hasMore: boolean;
   selectedKey?: string | null;
-  codingStatuses?: ReadonlyMap<string, ThreadListV2Status | "done">;
-  expanded?: boolean;
-  hiddenCount?: number;
   slackEnabled: boolean;
   preview?: string;
   unread?: boolean;
   onOpenBot: (bot: BotRosterEntry) => void;
-  onOpenChild: (row: BotThreadRow) => void;
-  onTaskAction?: (
-    row: Extract<BotThreadRow, { kind: "task" }>,
-    action: "pin" | "done" | "read",
-  ) => void;
-  onLongPressTask: (row: Extract<BotThreadRow, { kind: "task" }>) => void;
-  onShowMore: () => void;
+  /** Opens one task in its bot's chat, from an ask in the Needs you strip. */
+  onOpenTask?: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
+  /** An ask in the Needs you strip names a bot this list doesn't hold yet. */
+  onUnknownBot?: (() => void) | undefined;
+  /** The roster is on screen; it stays mounted under other pages on some layouts. */
+  visible?: boolean;
+  /** A New bot under way: its Creating…, failure or created row, after the members. */
+  newBotRow?: ReactNode;
   /** Member bots: shown ones are in `bots`; these two lists carry the reverse states. */
   members?: {
     readonly hidden: ReadonlyArray<BotProfile>;
@@ -148,140 +143,80 @@ export function MobileBotRosterView(props: {
       onMomentumScrollEnd={settle}
     >
       {props.header}
-      {props.bots.map((bot) => (
-        <View key={bot.profile?.botId ?? "main"}>
-          <Pressable
-            ref={bot.kind === "main" ? rowRef : undefined}
-            onLayout={bot.kind === "main" ? measure : undefined}
-            accessibilityRole="button"
-            onPress={() => props.onOpenBot(bot)}
-            onLongPress={props.members ? () => props.members?.onLongPressBot(bot) : undefined}
-            accessibilityState={{
-              selected:
-                props.selectedKey === (bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`),
-            }}
-            accessibilityLabel={`${bot.profile?.name ?? "GOAT Bot"}${bot.kind === "main" && mainFaceLabel ? `, ${mainFaceLabel}` : ""}${bot.kind === "main" && props.unread ? ", unread" : ""}`}
-            className={
-              props.selectedKey === (bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`)
-                ? "flex-row items-center gap-3 bg-thread-selected px-4 py-3"
-                : "flex-row items-center gap-3 px-4 py-3"
-            }
-          >
-            {bot.kind === "main" ? (
+      <MobileNeedsYouStrip
+        bots={props.bots}
+        hidden={props.members?.hidden ?? []}
+        visible={props.visible ?? true}
+        onOpenAsk={props.onOpenTask ?? ((bot) => props.onOpenBot(bot))}
+        onUnknownBot={props.onUnknownBot}
+      />
+      {props.bots.map((bot) => {
+        const key = bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`;
+        const selected = props.selectedKey === key;
+        const longPress = props.members ? () => props.members?.onLongPressBot(bot) : undefined;
+        if (bot.kind === "main") {
+          // The main bot leads the list as one tile, like a contact the person returns to most.
+          return (
+            <Pressable
+              key="main"
+              ref={rowRef}
+              onLayout={measure}
+              accessibilityRole="button"
+              onPress={() => props.onOpenBot(bot)}
+              onLongPress={longPress}
+              accessibilityState={{ selected }}
+              accessibilityLabel={[
+                mainFaceLabel,
+                bot.profile?.name ?? "GOAT Bot",
+                props.unread ? "unread" : null,
+              ]
+                .filter((part) => part !== null)
+                .join(", ")}
+              className={
+                selected
+                  ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
+                  : "mx-4 my-2 items-center gap-2 rounded-2xl px-4 py-4"
+              }
+            >
               <GoatBotFaceAvatar
                 state={mainFace.state}
-                size={40}
+                size={88}
                 motion={mainMotion}
                 emoji={mainEmoji}
               />
-            ) : (
-              <MemberRowContent bot={bot.profile} />
-            )}
-            {bot.kind === "main" ? (
-              <BotRowText
-                name={bot.profile?.name ?? "GOAT Bot"}
-                tags={props.slackEnabled ? ["Main", "Slack"] : ["Main"]}
-                unread={props.unread === true}
-                preview={props.preview}
-              />
-            ) : null}
-          </Pressable>
-          {bot.kind === "main"
-            ? props.rows.map((row) => {
-                const codingStatus =
-                  row.kind === "coding" ? props.codingStatuses?.get(botThreadKey(row)) : undefined;
-                const marker =
-                  codingStatus === "done"
-                    ? DONE_STATUS_LABEL
-                    : codingStatus
-                      ? STATUS_LABEL_BY_STATUS[codingStatus]
-                      : undefined;
-                return (
-                  <Pressable
-                    key={botThreadKey(row)}
-                    accessibilityRole="button"
-                    onPress={() => props.onOpenChild(row)}
-                    onLongPress={row.kind === "task" ? () => props.onLongPressTask(row) : undefined}
-                    accessibilityState={{ selected: props.selectedKey === botThreadKey(row) }}
-                    accessibilityLabel={
-                      row.kind === "task"
-                        ? `${row.task.title}, ${presentTaskStatus(row.task.status, row.view.doneAt).label}${row.unread ? ", unread" : ""}${row.view.pinnedAt ? ", pinned" : ""}`
-                        : `${row.title || "GOAT thread"}${marker ? `, ${marker.label}` : ""}`
-                    }
-                    accessibilityActions={
-                      row.kind === "task"
-                        ? [
-                            { name: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
-                            { name: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
-                            { name: "read", label: "Mark read" },
-                          ]
-                        : undefined
-                    }
-                    onAccessibilityAction={
-                      row.kind === "task"
-                        ? (event) => {
-                            const action = event.nativeEvent.actionName;
-                            if (action === "pin" || action === "done" || action === "read")
-                              props.onTaskAction?.(row, action);
-                          }
-                        : undefined
-                    }
-                    className={
-                      props.selectedKey === botThreadKey(row)
-                        ? "ml-10 min-h-[44px] bg-thread-selected px-4 py-3"
-                        : "ml-10 min-h-[44px] px-4 py-3"
-                    }
-                  >
-                    <Text numberOfLines={1} className="text-foreground">
-                      {row.kind === "task" ? row.task.title : row.title || "GOAT thread"}
-                    </Text>
-                    <View className="flex-row items-center gap-1">
-                      {row.kind === "task" && row.view.pinnedAt ? (
-                        <SymbolView
-                          name="pin"
-                          size={12}
-                          tintColorClassName="accent-foreground-muted"
-                        />
-                      ) : null}
-                      {row.kind === "task" && row.unread ? (
-                        <View
-                          accessibilityElementsHidden
-                          className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                        />
-                      ) : null}
-                      {marker ? (
-                        <SymbolView
-                          name={marker.icon}
-                          size={12}
-                          tintColorClassName={marker.iconTintClassName}
-                        />
-                      ) : null}
-                      <Text className={marker?.className ?? "text-xs text-foreground-muted"}>
-                        {row.kind === "task"
-                          ? `${presentTaskStatus(row.task.status, row.view.doneAt).label}${row.unread ? " · Unread" : ""}`
-                          : (marker?.label ?? "GOAT thread")}
-                      </Text>
-                    </View>
-                  </Pressable>
-                );
-              })
-            : null}
-          {bot.kind === "main" &&
-          (props.hasMore || props.expanded) &&
-          (props.hiddenCount ?? 0) > 0 ? (
-            <Pressable
-              accessibilityRole="button"
-              onPress={props.onShowMore}
-              accessibilityState={{ expanded: props.expanded === true }}
-              className="ml-10 px-4 py-3"
-            >
-              <Text className="text-foreground">
-                {props.expanded ? "Show less" : `Show more (${props.hiddenCount})`}
+              <Text numberOfLines={1} className="text-base font-semibold text-foreground">
+                {bot.profile?.name ?? "GOAT Bot"}
               </Text>
+              {props.preview ? (
+                <View className="max-w-full flex-row items-center gap-1">
+                  {props.unread ? (
+                    <View
+                      accessibilityElementsHidden
+                      className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+                    />
+                  ) : null}
+                  <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
+                    {props.preview}
+                  </Text>
+                </View>
+              ) : null}
+              {props.slackEnabled ? (
+                <Text className="text-xs text-foreground-muted">Also in Slack</Text>
+              ) : null}
             </Pressable>
-          ) : null}
-        </View>
-      ))}
+          );
+        }
+        return (
+          <MemberRow
+            key={key}
+            bot={bot.profile}
+            selected={selected}
+            onPress={() => props.onOpenBot(bot)}
+            onLongPress={longPress}
+          />
+        );
+      })}
+      {props.newBotRow}
       {props.members && props.members.hidden.length > 0 ? (
         <View>
           <Pressable
@@ -296,16 +231,13 @@ export function MobileBotRosterView(props: {
           </Pressable>
           {hiddenOpen
             ? props.members.hidden.map((profile) => (
-                <Pressable
+                <MemberRow
                   key={profile.botId}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${profile.name}, hidden`}
+                  bot={profile}
+                  hidden
                   onPress={() => props.onOpenBot({ kind: "member", profile })}
                   onLongPress={() => props.members?.onLongPressBot({ kind: "member", profile })}
-                  className="flex-row items-center gap-3 px-4 py-3"
-                >
-                  <MemberRowContent bot={profile} />
-                </Pressable>
+                />
               ))
             : null}
         </View>
@@ -369,76 +301,91 @@ export function MobileBotRosterView(props: {
 }
 
 /**
- * Every bot row's text: the name with what waits on the person at the end, then one quiet line
- * of tags, unread state and the latest message.
+ * A member's row: its face (still, since only the main row and headers move), its name with what
+ * waits on the person, and the newest message as one line, or its purpose before it has talked.
+ * The spoken label carries the same state, since the button hides its children from VoiceOver.
  */
-function BotRowText(props: {
-  readonly name: string;
-  readonly tags?: ReadonlyArray<string>;
-  readonly waitingCount?: number;
-  readonly unread?: boolean;
-  readonly preview?: string | undefined;
+function MemberRow(props: {
+  readonly bot: BotProfile;
+  readonly selected?: boolean;
+  readonly hidden?: boolean;
+  readonly onPress: () => void;
+  readonly onLongPress: (() => void) | undefined;
 }) {
-  const waiting = props.waitingCount ?? 0;
-  const tags = props.tags ?? [];
-  const detail = [
-    ...tags,
-    ...(props.unread ? ["Unread"] : []),
-    ...(props.preview ? [props.preview] : []),
-  ];
-  return (
-    <View className="min-w-0 flex-1">
-      <View className="flex-row items-center gap-2">
-        <Text numberOfLines={1} className="shrink font-semibold text-foreground">
-          {props.name}
-        </Text>
-        {waiting > 0 ? (
-          <Text
-            accessibilityLabel={`${waiting} waiting for you`}
-            className="text-xs font-semibold text-foreground"
-          >
-            {waiting}
-          </Text>
-        ) : null}
-      </View>
-      {detail.length > 0 ? (
-        <View className="flex-row items-center gap-1">
-          {props.unread ? (
-            <View
-              accessibilityElementsHidden
-              className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-            />
-          ) : null}
-          <Text numberOfLines={1} className="shrink text-xs text-foreground-muted">
-            {detail.join(" · ")}
-          </Text>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-/**
- * A member's face from its own conversation shell and waiting count, then its row text; still,
- * since only the main row and headers move.
- */
-function MemberRowContent({ bot }: { readonly bot: BotProfile }) {
-  const waitingCount = useMobileMemberWaitingCount(bot);
+  const { bot } = props;
+  const { waitingCount, latest, unread, status } = useMobileMemberStatus(bot);
   const face = useMobileGoatBotFace(
     null,
     { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
-    { waitingCount },
+    { status },
   );
+  const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
+  const line =
+    latestText !== ""
+      ? latest?.author === "person"
+        ? `You: ${latestText}`
+        : latestText
+      : bot.purpose.trim();
+  // The state comes first and says waiting once, with its count; the badge stays silent.
+  const label = [
+    goatBotFaceSpoken(face.state, waitingCount),
+    bot.name,
+    props.hidden ? "hidden" : null,
+    unread ? "unread" : null,
+    line || null,
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
   return (
-    <>
+    <Pressable
+      accessibilityRole="button"
+      onPress={props.onPress}
+      onLongPress={props.onLongPress}
+      accessibilityState={{ selected: props.selected === true }}
+      accessibilityLabel={label}
+      className={
+        props.selected
+          ? "min-h-[44px] flex-row items-center gap-3 bg-thread-selected px-4 py-3"
+          : "min-h-[44px] flex-row items-center gap-3 px-4 py-3"
+      }
+    >
       <GoatBotFaceAvatar
         state={face.state}
         size={40}
         motion={null}
         emoji={mobileGoatBotMemberPicture(bot)}
+        accent={goatBotAccent(bot)}
       />
-      <BotRowText name={bot.name} waitingCount={waitingCount} />
-    </>
+      <View className="min-w-0 flex-1 gap-0.5">
+        <View className="min-w-0 flex-row items-center gap-2">
+          <Text numberOfLines={1} className="shrink font-semibold text-foreground">
+            {bot.name}
+          </Text>
+          {waitingCount > 0 ? (
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              className="text-xs font-semibold text-foreground"
+            >
+              {waitingCount}
+            </Text>
+          ) : null}
+        </View>
+        {line ? (
+          <View className="min-w-0 flex-row items-center gap-1">
+            {unread ? (
+              <View
+                accessibilityElementsHidden
+                className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+              />
+            ) : null}
+            <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
+              {line}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </Pressable>
   );
 }
 

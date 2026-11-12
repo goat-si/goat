@@ -139,11 +139,13 @@ export function parityVerdict(input: {
 
   const wiring = target?.wiring;
   const failedWiring = wiring?.filter(({ status }) => status === "failed");
+  // No entry is no evidence: a device whose clients report nothing has not shown its routing.
+  const noWiring = !wiring || wiring.length === 0;
   add(
     "P7",
     failedWiring?.length
       ? "failed"
-      : !wiring || wiring.some(({ status }) => status === "unproven")
+      : noWiring || wiring.some(({ status }) => status === "unproven")
         ? "unproven"
         : "ok",
     failedWiring?.length
@@ -151,11 +153,17 @@ export function parityVerdict(input: {
           .slice(0, 3)
           .map(({ reason }) => reason)
           .join("; ")
-      : wiring?.some(({ status }) => status === "unproven")
-        ? "Some configured client wiring is unproven."
-        : wiring
-          ? "Configured clients use local OpenCodex."
-          : "Client wiring evidence is unavailable.",
+      : !wiring
+        ? "Client wiring evidence is unavailable."
+        : wiring.length === 0
+          ? "No configured client reports wiring to local OpenCodex."
+          : wiring.some(({ status }) => status === "unproven")
+            ? wiring
+                .filter(({ status }) => status === "unproven")
+                .slice(0, 3)
+                .map(({ reason }) => reason)
+                .join("; ")
+            : "Configured clients use local OpenCodex.",
   );
 
   add(

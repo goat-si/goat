@@ -171,7 +171,7 @@ describe("decision cards", () => {
         card?.message.text,
         'deploy staging: the agent wants to run a command.\nReply "Deny A1" or "Approve A1".',
       );
-      assert.deepStrictEqual(card?.message.options, ["Deny A1", "Approve A1"]);
+      assert.deepStrictEqual(card?.message.options, ["Approve A1", "Deny A1"]);
 
       // A number on an approval answers nothing: the card never offered numbers.
       yield* gateway.ingest(slackInput("9", "Ev9"), slackContext);

@@ -21,6 +21,10 @@ import * as Result from "effect/Result";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
+import {
+  isMissingProbeToolResult,
+  providerProbeEnvironment,
+} from "@goat/provider-core/server/snapshotProbe";
 
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
@@ -282,6 +286,16 @@ export function acpRegistryProbeFailure(
   authMethods: ReadonlyArray<AcpRegistryProbeAuthMethod> = [],
   authAction?: AcpRegistryUrlAuthAction,
 ): AcpRegistryOperationError {
+  if (
+    error._tag === "AcpProcessExitedError" &&
+    isMissingProbeToolResult({ code: error.code ?? 1, stdout: "", stderr: error.stderr ?? "" })
+  ) {
+    return new AcpRegistryOperationError({
+      reason: "runner_unavailable",
+      message: "The ACP agent executable is not installed or not available.",
+      cause: error,
+    });
+  }
   const detail = error._tag === "AcpTransportError" && error.detail ? error.detail : error.message;
   const authenticationFailed =
     (error._tag === "AcpRequestError" && error.code === -32000) ||
@@ -330,9 +344,9 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
     const pty = yield* Effect.serviceOption(PtyAdapter.PtyAdapter);
 
     const result = yield* Effect.gen(function* () {
-      // Resolution may install packages; bound it by the probe deadline.
+      // A background probe only resolves agents already prepared on this host.
       const resolved = yield* catalog
-        .resolve(input.settings, input.cwd, input.environment)
+        .resolve(input.settings, input.cwd, input.environment, { allowInstall: false })
         .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
       const authMethodsRef = yield* Ref.make<ReadonlyArray<AcpRegistryProbeAuthMethod>>([]);
       const authActionRef = yield* Ref.make<AcpRegistryUrlAuthAction | undefined>(undefined);
@@ -341,7 +355,10 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       );
       const runtimeContext = yield* Layer.build(
         AcpSessionRuntime.layer({
-          spawn: resolved.spawn,
+          spawn: {
+            ...resolved.spawn,
+            env: providerProbeEnvironment(resolved.spawn.env ?? input.environment),
+          },
           cwd: input.cwd,
           clientCapabilities: {
             auth: { terminal: Option.isSome(pty) },

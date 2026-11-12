@@ -91,6 +91,8 @@ export function useDecisionInbox() {
     const latest = appAtomRegistry.get(decisionInbox.itemsAtom);
     const live = latest.items.find((item) => item.id === id);
     if (!live || inFlight.current.has(id)) return;
+    // An approval handoff's card answers it through the handoff RPCs.
+    if (live.kind === "handoff") return;
     if (live.kind === "decision") {
       if (typeof response === "string" || typeof response.optionId !== "string") return;
       return submitDecision(live, { optionId: response.optionId });

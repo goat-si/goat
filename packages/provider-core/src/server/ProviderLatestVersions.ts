@@ -26,6 +26,7 @@ export class ProviderLatestVersions extends Context.Service<
       options?: { readonly fresh?: boolean },
     ) => Effect.Effect<string | null, E, R>;
     readonly invalidate: (key: string) => Effect.Effect<void>;
+    readonly invalidateAll: Effect.Effect<void>;
   }
 >()("@goat/provider-core/server/ProviderLatestVersions") {}
 
@@ -77,6 +78,7 @@ export const make = Effect.fn("ProviderLatestVersions.make")(function* (
   });
   return ProviderLatestVersions.of({
     cached,
+    invalidateAll: Ref.set(entries, new Map()),
     invalidate: Effect.fn("ProviderLatestVersions.invalidate")(function (key) {
       return Ref.update(entries, (current) => {
         const next = new Map(current);

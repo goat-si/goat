@@ -10,7 +10,14 @@ export function MobileHomeModeSegments() {
   return home.known ? <MobileHomeSegments mode={home.mode} onSelect={home.setMode} /> : null;
 }
 
-export function MobileBotList({ showSegments = true }: { readonly showSegments?: boolean }) {
+export function MobileBotList({
+  showSegments = true,
+  visible = true,
+}: {
+  readonly showSegments?: boolean;
+  /** The list is on screen; a layout that keeps it mounted underneath passes false. */
+  readonly visible?: boolean;
+}) {
   const selectDetail = useSelectWorkspaceDetail();
   const selectedKey = useNavigationState((state) => {
     const route = state.routes[state.index];
@@ -35,15 +42,13 @@ export function MobileBotList({ showSegments = true }: { readonly showSegments?:
             params: bot.kind === "member" ? { botId: bot.profile.botId } : {},
           })
         }
-        onOpenChild={(row) => {
-          if (row.kind === "task")
-            selectDetail({ name: "GoatBot", params: { taskId: row.task.taskId } });
-          else
-            selectDetail({
-              name: "Thread",
-              params: { environmentId: String(row.environmentId), threadId: String(row.threadId) },
-            });
-        }}
+        onOpenTask={(bot, taskId) =>
+          selectDetail({
+            name: "GoatBot",
+            params: bot.kind === "member" ? { botId: bot.profile.botId, taskId } : { taskId },
+          })
+        }
+        visible={visible}
       />
     </View>
   );

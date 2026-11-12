@@ -26,6 +26,12 @@
 // smoke-linux-computer-use builds the Linux computer use helper and runs its live smoke on a
 // private Xvfb display, hosted only since it installs packages: in lane=all, and on a pull request
 // that changes one of LINUX_COMPUTER_USE_PATHS.
+//
+// test-pen runs Pen's suites (the Go node, its install and mesh scripts, and the protocol, relay
+// and login packages) in lane=all and whenever a pull request changes PEN_PATHS. The Go module has
+// no package.json, so path prefixes select it rather than the workspace graph. test-pen-windows runs
+// the Go suite and the PowerShell install check on hosted Windows for the Go paths (PEN_GO_PATHS), in
+// lane=all and in the windows lane.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -54,6 +60,9 @@ const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",
   "apps/server/src/cua/",
   "apps/server/src/memory/imports/MemoryImportReaderWindows",
+  "apps/server/src/runtimeRelaunch",
+  "apps/server/src/cli/updateServerRestart",
+  "apps/server/src/terminal/nodePtyNativeKill",
   "packages/shared/src/cuaDriver",
   "packages/shared/src/computerUse",
   "packages/shared/src/path",
@@ -67,8 +76,10 @@ const WINDOWS_SUITES = [
 ];
 /** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
 const WINDOWS_TRIGGERS = [
+  "apps/desktop/native/computer-use-helper-windows/",
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
+  "patches/node-pty@",
 ];
 const WINDOWS_TASK = "test-windows";
 /** Every workspace package suite no other task owns, listed by packageSuites. */
@@ -83,6 +94,24 @@ const LINUX_COMPUTER_USE_PATHS = [
   "scripts/lib/computer-use-helper-linux-manifest.ts",
 ];
 const LINUX_COMPUTER_USE_TASK = "smoke-linux-computer-use";
+/** Pen's directories; a change under one selects test-pen, which owns their suites. */
+const PEN_PATHS = ["apps/pen/", "packages/pen-protocol/", "infra/pen-relay/", "infra/pen-login/"];
+/** The CI files that define test-pen; changing them runs it too. */
+const PEN_CI_FILES = [".github/workflows/goat-ci.yml", ".github/scripts/goat-ci-scope.cjs"];
+/** Root files the Pen TypeScript packages resolve through: the dependency catalog and lockfile,
+ * the shared tsconfig and the root Vitest config their test configs merge. */
+const PEN_SHARED_FILES = [
+  "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
+  "tsconfig.base.json",
+  "vite.config.ts",
+];
+const PEN_TASK = "test-pen";
+/** Pen's Go node and the vectors its suite reads; a change under one also selects test-pen-windows. */
+const PEN_GO_PATHS = ["apps/pen/", "packages/pen-protocol/"];
+const PEN_WINDOWS_TASK = "test-pen-windows";
+/** Tasks that run on hosted Windows. */
+const WINDOWS_RUNNER_TASKS = new Set([WINDOWS_TASK, PEN_WINDOWS_TASK]);
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
 /** CI script tests use node:test, not Vitest. */
@@ -145,15 +174,18 @@ const TASKS = [
   "test-memory-growth",
   WINDOWS_TASK,
   LINUX_COMPUTER_USE_TASK,
+  PEN_TASK,
+  PEN_WINDOWS_TASK,
   "build",
   "test-server",
 ];
 /** Matrix order: the quick run's test job follows the checks. */
 const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
 /**
- * Minutes of plain Node work with no browsers, native headers or need for many cores. They run on
- * hosted ubuntu-24.04 even when the lidge pool is on, so they never queue behind half-hour
- * server shards.
+ * Tasks that run on hosted ubuntu-24.04 even when the lidge pool is on. Most are minutes of plain
+ * Node work with no browsers, native headers or need for many cores, kept off the queue behind
+ * half-hour server shards. test-relay is here because its Floci tests start a Docker container,
+ * and lidge runners have no Docker.
  */
 const HOSTED_TASKS = new Set([
   "check",
@@ -162,8 +194,10 @@ const HOSTED_TASKS = new Set([
   "test-client-runtime",
   "test-mobile",
   "test-shared",
+  "test-relay",
   "test-ingest",
   LINUX_COMPUTER_USE_TASK,
+  PEN_TASK,
 ]);
 
 /** Workspace packages each task tests or builds. A change in their dependency closure selects the task. */
@@ -181,7 +215,11 @@ const TASK_ROOTS = {
 };
 
 /** Package directories whose suites a task of their own runs, so test-packages leaves them out. */
-const OWNED_SUITES = new Set([...Object.values(TASK_ROOTS).flat(), "infra/ingest"]);
+const OWNED_SUITES = new Set([
+  ...Object.values(TASK_ROOTS).flat(),
+  "infra/ingest",
+  ...PEN_PATHS.map((dir) => dir.slice(0, -1)),
+]);
 
 /** packages/* directories test-packages covers; a change in their dependency closure selects it. */
 const packageSuiteDirs = (workspace) =>
@@ -228,6 +266,8 @@ const isWindowsSensitive = (file) =>
   [...WINDOWS_SUITES, ...WINDOWS_TRIGGERS].some((prefix) => file.startsWith(prefix));
 const isLinuxComputerUse = (file) =>
   LINUX_COMPUTER_USE_PATHS.some((prefix) => file.startsWith(prefix));
+const isPen = (file) => PEN_PATHS.some((prefix) => file.startsWith(prefix));
+const isPenGo = (file) => PEN_GO_PATHS.some((prefix) => file.startsWith(prefix));
 
 /** Prose that only the check task (formatting) reads. */
 function isDocument(file) {
@@ -441,6 +481,12 @@ function selectTasks(
     // The ingest Worker's suite covers its SQL and config and the shared allowlist.
     if (INGEST_SUITE_TRIGGER.test(file)) choose("test-ingest", file);
     if (suiteDirs.some((dir) => file.startsWith(dir))) choose(PACKAGES_TASK, file);
+    if (isPen(file)) {
+      choose(PEN_TASK, file);
+      if (isPenGo(file)) choose(PEN_WINDOWS_TASK, file);
+      choose("typecheck", file);
+      continue;
+    }
     if (TYPECHECK_ONLY_RE.test(file)) {
       choose("typecheck", file);
       continue;
@@ -504,12 +550,20 @@ function selectTasks(
  * The ci job matrix; test-server expands into its shards. Each entry carries the job title and its
  * runner pool, hosted, linux or windows. goat-ci.yml sends a trusted run's linux entries to the
  * lidge pool while LIDGE_RUNNERS is on, and every other entry to a hosted image.
+ * test-changed goes to a hosted runner when it selects relay tests, whose Floci fixtures need Docker.
  */
-function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
+function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }, changedTests) {
+  const changedNeedsDocker =
+    changedTests !== undefined &&
+    changedTests.vitest.some((file) => file.startsWith(TASK_ROOTS["test-relay"][0] + "/"));
   const include = [];
   for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
-    const runner = task === WINDOWS_TASK ? "windows" : HOSTED_TASKS.has(task) ? "hosted" : "linux";
+    const runner = WINDOWS_RUNNER_TASKS.has(task)
+      ? "windows"
+      : HOSTED_TASKS.has(task) || (task === CHANGED_TESTS_TASK && changedNeedsDocker)
+        ? "hosted"
+        : "linux";
     if (task === "test-server") {
       const related = server.mode === "related";
       const count = related ? server.shards : SERVER_SHARDS;
@@ -607,8 +661,8 @@ function laneRun(lane) {
   if (lane === "windows") {
     return {
       full: false,
-      tasks: [WINDOWS_TASK],
-      reasons: reasons([WINDOWS_TASK], why),
+      tasks: [WINDOWS_TASK, PEN_WINDOWS_TASK],
+      reasons: reasons([WINDOWS_TASK, PEN_WINDOWS_TASK], why),
       server: fullServer(why),
     };
   }
@@ -639,6 +693,10 @@ function quickRun(changed, root) {
   if (placed !== undefined) reasons.set("typecheck", placed);
   const code = changed.filter((file) => CODE_RE.test(file));
   let tests = [...testsForChanges(root, code, changed)].sort();
+  // Pen's suites need their own setup (wrangler dev, Go), so test-pen runs them whole.
+  const penTest = tests.find(isPen);
+  if (penTest !== undefined) reasons.set(PEN_TASK, penTest);
+  tests = tests.filter((file) => !isPen(file));
   let server = { mode: "none", files: [], shards: 0, reason: "quick run", reached: new Map() };
   const serverTests = tests.filter(isServerTest);
   const weights = readServerWeights(root);
@@ -743,6 +801,18 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
     tasks.add(LINUX_COMPUTER_USE_TASK);
     reasons.set(LINUX_COMPUTER_USE_TASK, linuxChange);
   }
+  const penChange = changed.find(
+    (file) => isPen(file) || PEN_CI_FILES.includes(file) || PEN_SHARED_FILES.includes(file),
+  );
+  if (penChange !== undefined) {
+    tasks.add(PEN_TASK);
+    reasons.set(PEN_TASK, penChange);
+  }
+  const penGoChange = changed.find((file) => isPenGo(file) || PEN_CI_FILES.includes(file));
+  if (penGoChange !== undefined) {
+    tasks.add(PEN_WINDOWS_TASK);
+    reasons.set(PEN_WINDOWS_TASK, penGoChange);
+  }
   return {
     ...result,
     tasks: MATRIX_ORDER.filter((task) => tasks.has(task)),
@@ -818,7 +888,7 @@ async function main(env = process.env, fetchImpl = fetch) {
     ? JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, "utf8"))
     : {};
   const result = await planRun({ env, payload, root: process.cwd(), fetchImpl });
-  const matrix = matrixFor(result.tasks, result.server);
+  const matrix = matrixFor(result.tasks, result.server, result.changedTests);
   const lines = summaryLines(result);
   console.log(lines.join("\n"));
   if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");

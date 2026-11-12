@@ -32,6 +32,7 @@ import {
 } from "react";
 import * as DateTime from "effect/DateTime";
 import { useEnvironment } from "../../state/environments";
+import { useEnvironmentConnectionPhase } from "../../state/presentation";
 import { useEnvironmentScope } from "../../state/session";
 import { serverEnvironment, sshHost } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -58,6 +59,10 @@ type HandoffCardProps = {
   environmentId: EnvironmentId;
   handoff: Handoff;
   inherited: boolean;
+  /** Above the composer, where the banner around it supplies the surface. */
+  layout?: "dock";
+  /** Its environment's approvals cannot be confirmed yet (feed away); answering waits for it. */
+  offline?: boolean;
 };
 
 export function HandoffCard(props: HandoffCardProps) {
@@ -194,12 +199,16 @@ function HandoffCardContent(props: HandoffCardProps) {
     [],
   );
   const pending = isHandoffPending(handoff.state);
+  // Answers go to the environment that shows the card; without it they cannot be sent.
+  const disconnected = useEnvironmentConnectionPhase(props.environmentId) !== "connected";
+  const offline = disconnected || props.offline === true;
   const act = async (
     action: "opened" | "completed" | "declined" | "cancelled",
     computerUseScope?: "session" | "always",
   ) => {
     if (
       inFlight.current ||
+      offline ||
       (isBrowserClaim && action === "completed" && !canWriteSettings) ||
       (isProvider && (!canTarget || !(action === "opened" ? canOpen : canRespond)))
     )
@@ -248,7 +257,11 @@ function HandoffCardContent(props: HandoffCardProps) {
     <section
       aria-label={handoff.title}
       data-v2-item-type="human_handoff"
-      className="flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-card p-4"
+      className={
+        props.layout === "dock"
+          ? "flex min-w-0 flex-col gap-2"
+          : "flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-card p-4"
+      }
     >
       <div className="flex min-w-0 flex-col gap-1">
         <h3 className="text-sm font-medium text-foreground">{handoff.title}</h3>
@@ -292,10 +305,11 @@ function HandoffCardContent(props: HandoffCardProps) {
         <p className="text-sm text-muted-foreground">Review this request in its original thread.</p>
       ) : (
         <>
+          {offline ? <p className="text-sm text-muted-foreground">Reconnect to answer.</p> : null}
           {human === null ? (
             <div>
               <Button
-                disabled={busy || !canOpen || ((isSsh || isProvider) && !canTarget)}
+                disabled={busy || offline || !canOpen || ((isSsh || isProvider) && !canTarget)}
                 onClick={() => void act("opened")}
               >
                 Review request
@@ -315,7 +329,7 @@ function HandoffCardContent(props: HandoffCardProps) {
               ) : null}
               <HandoffReview
                 human={human}
-                busy={busy}
+                busy={busy || offline}
                 allowed={canRespond && (!(isSsh || isProvider) || canTarget)}
                 approveAllowed={!isBrowserClaim || canWriteSettings}
                 approveLabel={
@@ -349,7 +363,7 @@ function HandoffCardContent(props: HandoffCardProps) {
               {!isRuntimeUpdate ? (
                 <Button
                   variant="ghost-muted"
-                  disabled={busy || !canRespond || ((isSsh || isProvider) && !canTarget)}
+                  disabled={busy || offline || !canRespond || ((isSsh || isProvider) && !canTarget)}
                   onClick={() => void act("declined")}
                 >
                   Decline
@@ -358,7 +372,7 @@ function HandoffCardContent(props: HandoffCardProps) {
               {canCancel ? (
                 <Button
                   variant="ghost-muted"
-                  disabled={busy || !canRespond || ((isSsh || isProvider) && !canTarget)}
+                  disabled={busy || offline || !canRespond || ((isSsh || isProvider) && !canTarget)}
                   onClick={() => void act("cancelled")}
                 >
                   {isRuntimeUpdate ? "Cancel" : "Cancel request"}

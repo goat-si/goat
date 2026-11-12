@@ -29,7 +29,7 @@ export const requirePerson = (resolver: HumanStepResolver) =>
 
 export const makeBrowserClaimsRpcHandlers = (
   grants: Option.Option<BrowserOriginGrants["Service"]>,
-  session: { readonly subject: string },
+  session: Parameters<typeof sessionResolver>[0],
   windows?: () => Effect.Effect<typeof import("@goat/contracts").BrowserClaimWindows.Type, Error>,
 ) => {
   const person = requirePerson(sessionResolver(session));

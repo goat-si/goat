@@ -25,6 +25,7 @@ import {
   wakes,
   resolution,
 } from "./HandoffWakeReactor.testkit.ts";
+import type { World } from "./HandoffWakeReactor.testkit.ts";
 
 it.effect("wakes the asking thread once when a person answers, even while its run is active", () =>
   withWorld((world) =>
@@ -63,6 +64,165 @@ it.effect("tells the agent to continue an approved hub change through goat_call"
       expect(sent[0]!.text).toContain(
         `Call goat_call {path:"hub.device_join"} again with decisionId "${summary.handoffId}"`,
       );
+    }),
+  ),
+);
+
+it.effect("an approval used before its wake is sent produces no call-again wake", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // The agent continued in its turn and the change succeeded before the reactor saw the answer.
+      yield* world.sql`INSERT INTO approval_consumptions (approval_id, action, consumed_at)
+        VALUES (${summary.handoffId}, 'hub.join', '2026-11-11T00:00:00.000Z')`;
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("an approval used while its wake waits behind the running turn withdraws that wake", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      const wakeRun = () =>
+        world.orchestrator
+          .getThreadProjection(threadId)
+          .pipe(
+            Effect.map((projection) =>
+              projection.runs.find(
+                (run) =>
+                  run.userMessageId === `message:handoff-wake:${summary.handoffId}:completed`,
+              ),
+            ),
+          );
+      expect((yield* wakeRun())?.status).toBe("queued");
+      yield* world.approvals.markUsed({
+        threadId,
+        handoffId: summary.handoffId,
+        action: "hub.join",
+      });
+      yield* world.worker.drain();
+      expect((yield* wakeRun())?.status).toBe("cancelled");
+    }),
+  ),
+);
+
+const wakeRunStatus = (world: World, handoffId: string) =>
+  world.orchestrator
+    .getThreadProjection(threadId)
+    .pipe(
+      Effect.map(
+        (projection) =>
+          projection.runs.find(
+            (run) => run.userMessageId === "message:handoff-wake:" + handoffId + ":completed",
+          )?.status,
+      ),
+    );
+
+/** Holds the reactor inside its wake dispatch while the test acts, then lets it finish. */
+const holdWake = (world: World, during: Effect.Effect<void> = Effect.void) =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    world.outage.beforeWake = Deferred.succeed(reached, undefined).pipe(
+      Effect.andThen(Deferred.await(gate)),
+      Effect.andThen(during),
+    );
+    return { reached, release: Deferred.succeed(gate, undefined) };
+  });
+
+it.effect("an approval used while its wake is being sent withdraws that wake once queued", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      const held = yield* holdWake(world);
+      const event = yield* resolution(world, summary.handoffId);
+      const delivering = yield* world.reactor
+        .handle(event)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(held.reached);
+      const using = yield* world.approvals
+        .markUsed({ threadId, handoffId: summary.handoffId, action: "hub.join" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* held.release;
+      yield* Fiber.join(delivering);
+      yield* Fiber.join(using);
+      yield* world.worker.drain();
+      expect(yield* wakeRunStatus(world, summary.handoffId)).toBe("cancelled");
+    }),
+  ),
+);
+
+it.effect("an approval used as its asking turn ends does not start a call-again turn", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // The asking turn ends before the wake is dispatched, so the wake starts at once.
+      const held = yield* holdWake(
+        world,
+        world.orchestrator
+          .dispatch({ type: "thread.stop", commandId: CommandId.make("stop-asking"), threadId })
+          .pipe(Effect.andThen(world.worker.drain()), Effect.asVoid, Effect.orDie),
+      );
+      const event = yield* resolution(world, summary.handoffId);
+      const delivering = yield* world.reactor
+        .handle(event)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(held.reached);
+      const using = yield* world.approvals
+        .markUsed({ threadId, handoffId: summary.handoffId, action: "hub.join" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* held.release;
+      yield* Fiber.join(delivering);
+      yield* Fiber.join(using);
+      yield* world.worker.drain();
+      expect(["cancelled", "interrupted"]).toContain(
+        yield* wakeRunStatus(world, summary.handoffId),
+      );
+    }),
+  ),
+);
+
+it.effect("a used approval's queued wake is withdrawn on the next reconcile", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_join");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      expect(yield* wakeRunStatus(world, summary.handoffId)).toBe("queued");
+      // The use was recorded but withdrawing its wake failed.
+      yield* world.sql`INSERT INTO approval_consumptions (approval_id, action, consumed_at)
+        VALUES (${summary.handoffId}, 'hub.join', ${DateTime.formatIso(yield* DateTime.now)})`;
+      yield* world.reactor.reconcile;
+      yield* world.worker.drain();
+      expect(yield* wakeRunStatus(world, summary.handoffId)).toBe("cancelled");
     }),
   ),
 );
@@ -585,4 +745,21 @@ it.effect(
         expect(yield* wakes(world)).toEqual([]);
       }),
     ),
+);
+
+it.effect("tells the agent to continue an approved move with the old link's values", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, "hub.device_move");
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      const sent = yield* wakes(world);
+      expect(sent[0]!.text).toContain(`again with decisionId "${summary.handoffId}"`);
+      expect(sent[0]!.text).toContain("fromLinkId and fromTunnelPort");
+    }),
+  ),
 );

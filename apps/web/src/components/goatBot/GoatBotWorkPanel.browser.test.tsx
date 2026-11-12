@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type BotProfile } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -7,6 +7,7 @@ import "~/index.css";
 import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({
+  canEdit: false,
   tasks: [] as unknown[],
   routinesError: null as string | null,
   routinesLoaded: true,
@@ -17,10 +18,20 @@ const mocks = vi.hoisted(() => ({
   setEnabled: vi.fn(),
   turnsWaiting: [] as string[],
 }));
+vi.mock("~/state/environments", () => ({
+  useEnvironment: () => ({
+    connection: { phase: "disconnected" },
+    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+  }),
+}));
+vi.mock("./GoatBotEditBotDialog", () => ({
+  GoatBotEditBotDialog: () => <div role="dialog">Edit profile</div>,
+}));
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
   useBotThreads: () => ({
     rows: mocks.rows,
+    remoteWork: [],
     supported: true,
     loaded: mocks.threads.loaded,
     failed: mocks.threads.failed,
@@ -60,6 +71,7 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
+    updateBot: { permissionAtom: () => Atom.make(mocks.canEdit) },
     listBotNotes: () => null,
     listBotArtifacts: () => null,
     readBotArtifact: { execute: vi.fn() },
@@ -67,8 +79,10 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
+import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
+  mocks.canEdit = false;
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
   mocks.rows = rows;
@@ -103,10 +117,65 @@ const digest = {
   lastRunError: null,
 };
 
+it.each(["main", "member"] as const)(
+  "offers profile editing in the panel for an authorized %s bot",
+  async (role) => {
+    setup([]);
+    mocks.canEdit = true;
+    const bot = {
+      botId: role,
+      role,
+      name: "Scout",
+      environmentId: EnvironmentId.make("env"),
+    } as BotProfile;
+    const panel = (
+      <GoatBotWorkPanel
+        environmentId={bot.environmentId}
+        threadId={ThreadId.make("bot")}
+        onOpenFile={() => {}}
+      />
+    );
+    await using screen = await render(
+      role === "main" ? (
+        <GoatBotMainProfileContext value={bot}>{panel}</GoatBotMainProfileContext>
+      ) : (
+        <GoatBotMemberContext value={bot}>{panel}</GoatBotMemberContext>
+      ),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Edit bot" }));
+    await expect.element(screen.getByRole("dialog", { name: "" })).toBeVisible();
+  },
+);
+
+it("does not offer profile editing without permission", async () => {
+  setup([]);
+  const bot = {
+    botId: "main",
+    role: "main",
+    name: "Scout",
+    environmentId: EnvironmentId.make("env"),
+  } as BotProfile;
+  await using screen = await render(
+    <GoatBotMainProfileContext value={bot}>
+      <GoatBotWorkPanel
+        environmentId={bot.environmentId}
+        threadId={ThreadId.make("bot")}
+        onOpenFile={() => {}}
+      />
+    </GoatBotMainProfileContext>,
+  );
+  expect(screen.container.querySelector("button[aria-label='Edit bot']")).toBeNull();
+  expect(screen.container.textContent).not.toContain("Edit bot");
+});
+
 it("Home shows work and routines on one scroll, and Library holds files and memory", async () => {
   setup([]);
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("No tasks yet")).toBeVisible();
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
@@ -118,7 +187,11 @@ it("Home shows work and routines on one scroll, and Library holds files and memo
 it("keeps the machines on Home whether or not work runs", async () => {
   setup([]);
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByRole("heading", { name: "Machines" })).toBeVisible();
   await expect.element(screen.getByText("Machine list")).toBeVisible();
@@ -128,6 +201,7 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   setup([], [], [runningTask]);
   await using screen = await render(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -145,12 +219,35 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   await expect
     .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
     .toHaveFocus();
+  // The return applies once: coming back to Home from Library leaves focus on the tab.
+  await userEvent.click(screen.getByRole("tab", { name: "Library" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
+});
+
+it("steps back from a peek to its row with Escape", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+      onOpenFile={() => {}}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await expect.element(screen.getByRole("button", { name: /Back to Home from/ })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
+    .toHaveFocus();
 });
 
 it("closes the peek when the task leaves the bot's work", async () => {
   setup([], [], [runningTask]);
   await using screen = await render(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -160,6 +257,7 @@ it("closes the peek when the task leaves the bot's work", async () => {
   setup([]);
   await screen.rerender(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -167,10 +265,13 @@ it("closes the peek when the task leaves the bot's work", async () => {
   );
   await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  // Focus was on Back, which is gone; it lands on Home instead of the page.
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   // The task coming back does not reopen a peek nobody asked for.
   setup([], [], [runningTask]);
   await screen.rerender(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       peekRows={() => []}
@@ -179,11 +280,66 @@ it("closes the peek when the task leaves the bot's work", async () => {
   await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
 });
 
+it("leaves focus in the composer when a peeked task leaves the list", async () => {
+  setup([], [], [runningTask]);
+  const panel = () => (
+    <>
+      <textarea aria-label="Message GOAT Bot" />
+      <GoatBotWorkPanel
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        peekRows={() => []}
+        onOpenFile={() => {}}
+      />
+    </>
+  );
+  await using screen = await render(panel());
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  const composer = screen.getByRole("textbox", { name: "Message GOAT Bot" });
+  await userEvent.click(composer);
+  await userEvent.keyboard("still typing");
+  setup([]);
+  await screen.rerender(panel());
+  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(composer).toHaveFocus();
+  await expect.element(composer).toHaveValue("still typing");
+});
+
+it("leaves focus where it was when a peeked task leaves the list after a click on chat text", async () => {
+  setup([], [], [runningTask]);
+  const panel = () => (
+    <>
+      <p>Here is what I found</p>
+      <GoatBotWorkPanel
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        peekRows={() => []}
+        onOpenFile={() => {}}
+      />
+    </>
+  );
+  await using screen = await render(panel());
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await expect.element(screen.getByRole("button", { name: /Back to Home from/ })).toHaveFocus();
+  // Text takes no focus, so the click leaves it on the page body, outside the peek.
+  await userEvent.click(screen.getByText("Here is what I found"));
+  expect(document.activeElement).toBe(document.body);
+  setup([]);
+  await screen.rerender(panel());
+  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(screen.getByRole("tab", { name: "Home" })).not.toHaveFocus();
+  expect(document.activeElement).toBe(document.body);
+});
+
 it("says the task list is loading, not empty, before the first read answers", async () => {
   setup([]);
   mocks.threads = { loaded: false, failed: false };
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Loading tasks…")).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
@@ -193,7 +349,11 @@ it("a failed task read offers a retry and keeps the tasks it already knew", asyn
   setup([], [], [runningTask]);
   mocks.threads = { loaded: false, failed: true };
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Couldn't load GOAT Bot's tasks.")).toBeVisible();
   await expect
@@ -207,7 +367,11 @@ it("a failed first task read never claims there are no tasks", async () => {
   setup([]);
   mocks.threads = { loaded: false, failed: true };
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Couldn't load GOAT Bot's tasks.")).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
@@ -217,7 +381,11 @@ it("says routines are loading, not empty, before the first read answers", async 
   setup([]);
   mocks.routinesLoaded = false;
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Loading routines…")).toBeVisible();
   await expect.element(screen.getByText("No routines yet")).not.toBeInTheDocument();
@@ -227,12 +395,34 @@ it("a failed routine read offers a retry and keeps the routines it already knew"
   setup([digest]);
   mocks.routinesError = "Connection lost";
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Couldn't load routines.")).toBeVisible();
   await expect.element(screen.getByText("Daily at 09:00 · Not scheduled")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
   expect(mocks.refreshRoutines).toHaveBeenCalledOnce();
+});
+
+it("New routine stays offered while the routine list cannot be read", async () => {
+  setup([]);
+  mocks.routinesLoaded = false;
+  mocks.routinesError = "Connection lost";
+  const onDraft = vi.fn<(text: string) => void>();
+  await using screen = await render(
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      onDraft={onDraft}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
+  );
+  await expect.element(screen.getByText("Couldn't load routines.")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "New routine" }));
+  expect(onDraft).toHaveBeenCalledWith("Set up a routine: ");
 });
 
 it("a refused pause keeps the routine's stored state and shows why", async () => {
@@ -253,7 +443,11 @@ it("a refused pause keeps the routine's stored state and shows why", async () =>
   mocks.setEnabled.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Denied"))));
   const environmentId = EnvironmentId.make("env");
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={environmentId} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={environmentId}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect.element(screen.getByText("Daily at 09:00 · Not scheduled")).toBeVisible();
   const toggle = screen.getByRole("switch", { name: "Pause Daily digest" });
@@ -273,6 +467,7 @@ it("points to the chat when the bot asked a question there that no task thread s
   const onShowChat = vi.fn();
   await using screen = await render(
     <GoatBotWorkPanel
+      onOpenFile={() => {}}
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       onShowChat={onShowChat}
@@ -320,7 +515,11 @@ it("opens the worker and the chores that thread lists leave to the bot from its 
     ],
   );
   await using screen = await render(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      onOpenFile={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+    />,
   );
   await expect
     .element(screen.getByRole("link", { name: /Stop the port 3774 server/ }))
