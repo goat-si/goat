@@ -309,6 +309,52 @@ func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	}
 }
 
+// lockProbe is command output that, on every write, checks whether another holder could take the
+// state lock right then.
+type lockProbe struct {
+	path         string
+	writes, held int
+}
+
+func (p *lockProbe) Write(b []byte) (int, error) {
+	p.writes++
+	if unlock, err := state.TryLock(p.path); err != nil {
+		p.held++
+	} else {
+		unlock()
+	}
+	return len(b), nil
+}
+
+// Regression #2934: an offline relay edit releases the state lock before it writes its result, so
+// output nobody reads cannot hold up every other config writer.
+func TestAnOfflineRelayEditReleasesTheStateLockBeforeItPrints(t *testing.T) {
+	for _, args := range [][]string{
+		{"add", "https://b.example"},
+		{"add", "https://a.example"},
+		{"rm", "https://x.example"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PEN_HOME", dir)
+			st, err := state.OpenDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := state.Config{Name: "a"}
+			c.SetRelays([]string{"https://a.example"})
+			if err := st.SaveConfig(c); err != nil {
+				t.Fatal(err)
+			}
+			out := &lockProbe{path: st.Path("state.lock")}
+			RunRelay(args, out, out)
+			if out.writes == 0 || out.held != 0 {
+				t.Fatalf("%d of %d writes ran while the state lock was held", out.held, out.writes)
+			}
+		})
+	}
+}
+
 func TestRelayServeCapFlagsReachTheRelay(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

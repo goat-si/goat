@@ -32,7 +32,7 @@ func mergeEach(t *testing.T, s *Store, recs []*Record) {
 // keptOf counts the kept records of lineage l of one type.
 func keptOf(s *Store, l int, typ string) int {
 	recs := s.Records()
-	lin := Lineages(recs)
+	lin := Lineages(s.MeshID, recs)
 	n := 0
 	for _, r := range recs {
 		if k, ok := lin[r.Hash]; ok && k == l && r.B.Type == typ {

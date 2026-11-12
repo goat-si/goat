@@ -91,21 +91,26 @@ func runRelayEdit(verb string, args []string, stdout, stderr io.Writer) int {
 	cl, err := daemon.Dial(st)
 	switch {
 	case errors.Is(err, daemon.ErrNotRunning):
-		// Under the state lock, as UpdateConfig, but an edit that changes nothing writes nothing.
-		unlock, err := st.Lock()
-		if err != nil {
-			return fail(stderr, err)
-		}
-		defer unlock()
-		c, err := st.LoadConfig()
-		if err != nil {
-			return fail(stderr, err)
-		}
-		if list, already, editErr = edit(c); editErr == nil && !already {
-			c.SetRelays(list)
-			if err := st.SaveConfig(c); err != nil {
-				return fail(stderr, err)
+		// Under the state lock, as UpdateConfig, but an edit that changes nothing writes nothing. The
+		// lock is released before anything is printed: blocked output must not hold other writers.
+		err := func() error {
+			unlock, err := st.Lock()
+			if err != nil {
+				return err
 			}
+			defer unlock()
+			c, err := st.LoadConfig()
+			if err != nil {
+				return err
+			}
+			if list, already, editErr = edit(c); editErr == nil && !already {
+				c.SetRelays(list)
+				return st.SaveConfig(c)
+			}
+			return nil
+		}()
+		if err != nil {
+			return fail(stderr, err)
 		}
 	case err != nil:
 		return fail(stderr, err)

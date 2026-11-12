@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"math/rand"
+	"slices"
 	"testing"
 )
 
@@ -16,7 +17,7 @@ func TestAKeyAdmittedByAMemberJoinsThatMembersLineage(t *testing.T) {
 	ay := b.admit(x, y, ax)
 	named := b.sign(y, TypeName, []*Record{ay}, Fields{Subject: pub(y), Name: "y"})
 	want := nonceLineage(am.B.Card.C.Nonce)
-	got := Lineages(b.recs)
+	got := Lineages(b.meshID, b.recs)
 	for _, c := range []struct {
 		name string
 		r    *Record
@@ -43,10 +44,10 @@ func TestALaterFounderAdmitDoesNotRenumberTheOthers(t *testing.T) {
 		last = b.admit(f, s, last)
 		subjects = append(subjects, b.sign(s, TypeName, []*Record{last}, Fields{Subject: pub(s), Name: "s"}))
 	}
-	all := Lineages(b.recs)
+	all := Lineages(b.meshID, b.recs)
 	// A node that has not received the founder's first five admits yet (each admit is followed by its
 	// subject's name record) gives the remaining subjects the lineages they keep later.
-	partial := Lineages(append([]*Record{found}, b.recs[11:]...))
+	partial := Lineages(b.meshID, append([]*Record{found}, b.recs[11:]...))
 	for _, r := range subjects[5:] {
 		k, ok := partial[r.Hash]
 		if !ok || k != all[r.Hash] {
@@ -63,14 +64,14 @@ func TestASelfAdmitDoesNotMoveAKey(t *testing.T) {
 	am := b.admit(f, m, found)
 	an := b.admit(f, n, am)
 	ak := b.admit(m, k, an)
-	before := Lineages(b.recs)
+	before := Lineages(b.meshID, b.recs)
 	self := b.admit(k, k, ak)
 	named := b.sign(k, TypeName, []*Record{self}, Fields{Subject: pub(k), Name: "k"})
-	keys, _ := introductions(b.recs, false)
+	keys, _ := introductions(b.meshID, b.recs, false)
 	if got := keys[pub(k)]; got.lineage != before[ak.Hash] || got.depth != 2 {
 		t.Fatalf("k moved to lineage %d at depth %d, want lineage %d at depth 2", got.lineage, got.depth, before[ak.Hash])
 	}
-	if l := Lineages(b.recs)[named.Hash]; l != before[ak.Hash] {
+	if l := Lineages(b.meshID, b.recs)[named.Hash]; l != before[ak.Hash] {
 		t.Fatalf("k's record is charged to lineage %d, want %d", l, before[ak.Hash])
 	}
 }
@@ -80,7 +81,7 @@ func TestARecordWhoseSignerWasNeverAdmittedHasNoLineage(t *testing.T) {
 	f, outsider := detID(1), detID(9)
 	b, found := newMesh(t, f)
 	r := b.sign(outsider, TypeName, []*Record{found}, Fields{Subject: pub(outsider), Name: "o"})
-	if k, ok := Lineages(b.recs)[r.Hash]; ok {
+	if k, ok := Lineages(b.meshID, b.recs)[r.Hash]; ok {
 		t.Fatalf("outsider's record got lineage %d", k)
 	}
 }
@@ -95,12 +96,12 @@ func TestLineagesDoNotDependOnRecordOrder(t *testing.T) {
 		last = b.admit(f, s, last)
 		last = b.admit(s, detID(byte(40+i)), last)
 	}
-	want := Lineages(b.recs)
+	want := Lineages(b.meshID, b.recs)
 	rng := rand.New(rand.NewSource(1))
 	for i := 0; i < 20; i++ {
 		recs := append([]*Record(nil), b.recs...)
 		rng.Shuffle(len(recs), func(i, j int) { recs[i], recs[j] = recs[j], recs[i] })
-		got := Lineages(recs)
+		got := Lineages(b.meshID, recs)
 		if len(got) != len(want) {
 			t.Fatalf("shuffle %d: %d records with a lineage, want %d", i, len(got), len(want))
 		}
@@ -109,5 +110,41 @@ func TestLineagesDoNotDependOnRecordOrder(t *testing.T) {
 				t.Fatalf("shuffle %d: record %s lineage %d, want %d", i, h, got[h], k)
 			}
 		}
+	}
+}
+
+// Regression #2979: lineages anchor on the found record of the mesh itself. A set that also holds another mesh's
+// self-signed found record (and an admit by that founder) gives the same lineages whichever comes first, and
+// keeps neither foreign record.
+func TestLineagesAnchorOnTheMeshsOwnFoundRecordWhateverTheOrder(t *testing.T) {
+	f, m, x := detID(1), detID(2), detID(3)
+	b, found := newMesh(t, f)
+	am := b.admit(f, m, found)
+	b.admit(m, x, am)
+	g := detID(7)
+	other, otherFound := newMesh(t, g)
+	otherAdmit := other.admit(g, detID(8), otherFound)
+	want := Lineages(b.meshID, b.recs)
+	for name, recs := range map[string][]*Record{
+		"other mesh first": append([]*Record{otherFound, otherAdmit}, b.recs...),
+		"other mesh last":  append(slices.Clone(b.recs), otherFound, otherAdmit),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := Lineages(b.meshID, recs)
+			if len(got) != len(want) {
+				t.Fatalf("%d records have a lineage, want %d (the mesh's own)", len(got), len(want))
+			}
+			for h, l := range want {
+				if k, ok := got[h]; !ok || k != l {
+					t.Fatalf("record %s: lineage %d (known %v), want %d", h, k, ok, l)
+				}
+			}
+			_, kept := introductions(b.meshID, recs, true)
+			for _, r := range kept {
+				if r == otherFound || r == otherAdmit {
+					t.Fatalf("kept the other mesh's %s record", r.B.Type)
+				}
+			}
+		})
 	}
 }

@@ -38,10 +38,10 @@ func (s *Store) SetLineageShares() {
 	s.mu.Unlock()
 }
 
-// selectShares is the kept set of ADR-0026: a function of the candidates alone, so nodes that have
-// exchanged their records keep the same ones whatever the arrival order.
-func selectShares(cands []*Record) (map[string]*Record, map[string]intro) {
-	keys, admits := introductions(cands, true)
+// selectShares is the kept set of ADR-0026: a function of the mesh id and the candidates alone, so nodes
+// that have exchanged their records keep the same ones whatever the arrival order.
+func selectShares(meshID string, cands []*Record) (map[string]*Record, map[string]intro) {
+	keys, admits := introductions(meshID, cands, true)
 	kept := make(map[string]*Record, len(admits))
 	for _, r := range admits {
 		kept[r.Hash] = r
@@ -131,7 +131,7 @@ func (s *Store) mergeShared(recs []*Record) []*Record {
 	if len(seen) == 0 {
 		return nil
 	}
-	kept, keys := selectShares(cands)
+	kept, keys := selectShares(s.MeshID, cands)
 	// A record whose signer is not introduced yet waits in the bounded pool for its admit; one left out
 	// of a share is dropped. Hash order makes one merge's pool evictions the same everywhere.
 	sortByHash(cands)

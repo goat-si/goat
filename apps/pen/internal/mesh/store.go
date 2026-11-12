@@ -72,13 +72,15 @@ type Store struct {
 	// changes counts edits of the set and saved the count mesh.json last received, so a set
 	// holding records it could not write knows it (Unsaved). onDisk names the files this store
 	// read or wrote; adopt lets the next save replace a file holding another mesh (all under
-	// mu). Retire holds mu; retired is atomic for reads under the state lock (mu comes first).
+	// mu). Retire holds mu; retired is atomic for reads under the state lock (mu comes first). burnGate
+	// and retireSets, when set, run inside an invite admission before its burn and where Retire sets
+	// retired (tests).
 	changes, saved uint64
 	onDisk         map[string]bool
 	adopt          bool
 	retired        atomic.Bool
 	burnGate       func()
-	retireReached  func()
+	retireSets     func()
 }
 
 type pooled struct {
@@ -397,12 +399,13 @@ func (s *Store) Adopt() {
 	s.mu.Unlock()
 }
 
-// Retire stops this store from writing again; the node has moved to another mesh.
+// Retire stops this store from writing again; the node has moved to another mesh. The flag is set under
+// mu, so it never lands inside an admission's check, burn and signature.
 func (s *Store) Retire() {
-	if s.retireReached != nil {
-		s.retireReached()
-	}
 	s.mu.Lock()
+	if s.retireSets != nil {
+		s.retireSets()
+	}
 	s.retired.Store(true)
 	s.mu.Unlock()
 }
@@ -494,7 +497,7 @@ func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*R
 	}
 	if f.Shares {
 		// Another process may have written records this store has not seen: keep the shares of both.
-		kept, _ := selectShares(recs)
+		kept, _ := selectShares(s.MeshID, recs)
 		recs = recs[:0]
 		for _, r := range kept {
 			recs = append(recs, r)

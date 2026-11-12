@@ -19,7 +19,7 @@ const (
 	VersionShared = "2.0"
 )
 
-// announce is the version s announces, and refuse closes l when s is shared and the peer is not.
+// announce is the version s announces: a set of the shared epoch announces VersionShared whatever pen says.
 func announce(s *Store, pen string) string {
 	if s.Shared() {
 		return VersionShared
@@ -27,10 +27,20 @@ func announce(s *Store, pen string) string {
 	return pen
 }
 
-// A peer that holds no records yet (a node joining) cannot know the epoch: it gets the records, and
-// takes the epoch from the found record.
+// own is what this version announces for s. A set holding no records yet (joining) cannot know the epoch;
+// it announces VersionShared, which a 1.1 node never sends, so a shared node serves it and takes the epoch
+// from the found record, and refuses an empty 1.1 node.
+func own(s *Store) string {
+	if s.Len() == 0 {
+		return VersionShared
+	}
+	return Version
+}
+
+// refuseEpoch closes l with 4509 when s is of the shared epoch and the peer did not announce it, whatever
+// the peer holds.
 func refuseEpoch(l Link, s *Store, m *Msg) error {
-	if s.Shared() && m.Pen != VersionShared && len(m.Have) > 0 {
+	if s.Shared() && m.Pen != VersionShared {
 		l.Close(wire.CodeEpoch)
 		return &relay.CloseError{Code: wire.CodeEpoch}
 	}
@@ -94,7 +104,7 @@ func (s *Store) take(l Link, m *Msg, onMerged Merged, received *int) error {
 // SyncInitiate runs the dialing side of a mesh session. It returns once the peer's done arrived,
 // which the responder sends only after it stored everything this side sent (the push was taken).
 func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello) error {
-	return SyncInitiateAs(ctx, l, s, onMerged, onHello, Version)
+	return SyncInitiateAs(ctx, l, s, onMerged, onHello, own(s))
 }
 
 // SyncInitiateAs is SyncInitiate announcing pen in its hello ("" announces none, as v1.0 does).
@@ -147,7 +157,7 @@ func SyncInitiateAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHe
 // SyncRespond runs the accepting side. It sends its done only after the initiator's done, so the
 // initiator learns its records were stored. The caller closes the link afterwards.
 func SyncRespond(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello) error {
-	return SyncRespondAs(ctx, l, s, onMerged, onHello, Version)
+	return SyncRespondAs(ctx, l, s, onMerged, onHello, own(s))
 }
 
 // SyncRespondAs is SyncRespond announcing pen in its hello.
