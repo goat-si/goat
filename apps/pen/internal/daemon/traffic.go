@@ -44,6 +44,11 @@ type MemberTraffic struct {
 
 var errBadTraffic = errors.New("bad traffic report")
 
+// trafficWindow lets daemon.go hold the window without importing traffic.
+type trafficWindow = traffic.Window
+
+var newTrafficWindow = traffic.NewWindow
+
 // reportTraffic adds one traffic.report line to the window. A refusal changes nothing. Only a current or revoked
 // member of the view is counted, and a relay this node does not list counts as "", so the keys a client can
 // create are bounded by the view and the relay list, and the window's cap bounds them again.

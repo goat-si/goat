@@ -18,7 +18,6 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
-	"github.com/goat-si/goat/apps/pen/internal/traffic"
 )
 
 // Options configure a daemon. Zero values pick the production defaults.
@@ -117,7 +116,7 @@ type Daemon struct {
 	// hostKeysErr names the sshd key files the last host key check could not read, shown by pen ls.
 	hostKeysErr string
 	// traffic counts stream bytes per member and relay for the last 24 hours, in memory only (traffic.go).
-	traffic *traffic.Window
+	traffic *trafficWindow
 
 	// svc holds the registered local services (services.go).
 	svc serviceBook
@@ -261,7 +260,7 @@ func New(opt Options) (*Daemon, error) {
 		d.sshUser = opt.SSHUser
 	}
 	d.accept = make(chan relay.Conn, 64)
-	d.traffic = traffic.NewWindow(d.now)
+	d.traffic = newTrafficWindow(d.now)
 	d.lastView = store.View()
 	return d, nil
 }
