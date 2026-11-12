@@ -145,8 +145,26 @@ const buttonText = (label: string) =>
     : label.slice(0, SLACK_BUTTON_TEXT_LIMIT - 1) + "…";
 
 /**
- * Block Kit for a card or question: the fallback text in a section, and one button per option.
- * The button value is the option label, which reception reads as the person's reply.
+ * Splits text into Slack section texts at a line break or space, dropping none of it: a card's
+ * buttons stay, so cutting the text could hide what a button would answer.
+ */
+const sectionTexts = (text: string): Array<string> => {
+  const pieces: Array<string> = [];
+  let rest = text;
+  while (rest.length > SLACK_SECTION_TEXT_LIMIT) {
+    const window = rest.slice(0, SLACK_SECTION_TEXT_LIMIT);
+    const line = window.lastIndexOf("\n");
+    const cut = line > 0 ? line : window.lastIndexOf(" ");
+    const at = cut > 0 ? cut : SLACK_SECTION_TEXT_LIMIT;
+    pieces.push(rest.slice(0, at));
+    rest = rest.slice(at).replace(/^[\n ]/, "");
+  }
+  return rest === "" ? pieces : [...pieces, rest];
+};
+
+/**
+ * Block Kit for a card or question: the text in sections, and one button per option. The button
+ * value is the option label, which reception reads as the person's reply.
  */
 export const slackChoiceBlocks = (
   text: string,
@@ -165,12 +183,11 @@ export const slackChoiceBlocks = (
         ],
   );
   if (elements.length === 0) return undefined;
-  const section =
-    text.length <= SLACK_SECTION_TEXT_LIMIT
-      ? text
-      : text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1) + "…";
   return [
-    { type: "section", text: { type: "mrkdwn", text: section } },
+    ...sectionTexts(text).map((section) => ({
+      type: "section" as const,
+      text: { type: "mrkdwn" as const, text: section },
+    })),
     { type: "actions", block_id: "goat_choices", elements },
   ];
 };

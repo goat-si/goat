@@ -20,7 +20,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { handleSlackEnvelope } from "./slack/SlackChannelAdapter.ts";
-import { slackChoiceBlocks } from "./slack/slackMessageFormatting.ts";
+import { formatSlackOutboundMessages, slackChoiceBlocks } from "./slack/slackMessageFormatting.ts";
 import {
   defaultScript,
   linkSlackUser,
@@ -381,9 +381,9 @@ describe("decision cards", () => {
     },
   );
 
-  // Slack cuts a section at 3,000 characters but keeps every button, so the words for a request
-  // must never outlast the text that says what it is.
-  it.effect("keeps every repeated request's prompt inside Slack's section text", () => {
+  // Slack escapes "&" to "&amp;" and keeps every button, so each request's prompt must survive
+  // the adapter's own formatting: the messages it posts and the section blocks of the last one.
+  it.effect("keeps every repeated request's prompt visible in what Slack shows", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* linkSlackUser();
@@ -394,9 +394,11 @@ describe("decision cards", () => {
       yield* runtime.drain;
       const worker = (yield* onlyTask).worker!.threadId;
       const requests = ["one", "two", "three"].map(approval);
+      // One message of about 3,400 characters once escaped: past the section cut, under the split.
+      const prompts = ["run0 " + "&".repeat(390), "run1 " + "&".repeat(150), "run2 last"];
       harness.world.runtimeRequests.set(worker, requests);
       for (const [index, request] of requests.entries()) {
-        harness.world.approvalPrompts.set(request.id, String(index).repeat(399) + "!");
+        harness.world.approvalPrompts.set(request.id, prompts[index]!);
       }
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
@@ -405,9 +407,14 @@ describe("decision cards", () => {
       yield* runtime.drain;
       const asked = resultsTo(harness.slackSent, "question").at(-1)?.message;
       assert.include(asked?.text ?? "", CHANNEL_COPY.approvalNeedsCode);
-      const [section] = slackChoiceBlocks(asked?.text ?? "", asked?.options ?? []) ?? [];
-      const shown = section?.type === "section" ? section.text.text : "";
-      for (const index of [0, 1, 2]) assert.include(shown, String(index).repeat(399) + "!");
+      const parts = formatSlackOutboundMessages({ text: asked?.text ?? "" });
+      const blocks = slackChoiceBlocks(parts.at(-1) ?? "", asked?.options ?? []) ?? [];
+      const shown = [
+        ...parts.slice(0, -1),
+        ...blocks.flatMap((block) => (block.type === "section" ? [block.text.text] : [])),
+      ].join("\n");
+      assert.lengthOf(parts, 1);
+      for (const prompt of prompts) assert.include(shown, prompt.replaceAll("&", "&amp;"));
     }).pipe(Effect.provide(harness.layer));
   });
 
