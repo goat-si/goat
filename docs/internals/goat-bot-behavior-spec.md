@@ -340,14 +340,22 @@ Acceptance:
 
 ## 12. Decision cards
 
-- Choices, approve/deny, and "which project" questions MUST be shown as buttons in the GOAT app,
-  as Slack interactive buttons or a numbered list, and as a numbered list in iMessage.
+- Choices and "which project" questions MUST be shown as buttons in the GOAT app, as Slack
+  interactive buttons or a numbered list, and as a numbered list in iMessage.
+- An approval card MUST list Deny before Approve, as buttons in the GOAT app and Slack and as the
+  words to reply with ("Deny A1" or "Approve A1") in Slack and iMessage.
+- Only a verb with the card's code MUST answer an approval; a button sends the same words. A bare
+  verb or a number names no request, since which card it meant depends on what the person had
+  seen, so it MUST answer nothing and the bot repeats each open request with its code. While an
+  approval is open, a number answers no question either.
 - A typed answer that matches a choice MUST count as choosing it.
 - A card MUST state what happens on each choice.
 
 Acceptance:
 
-- Replying "2" in iMessage to a numbered list picks the second choice.
+- Replying "2" in iMessage to a numbered list picks the second choice when no approval is open.
+- Replying "approve" or "1" while an approval is open answers nothing and repeats the request with
+  its words; "Deny A1" then declines it.
 - Tapping a choice in the GOAT app sends that choice as the answer.
 - In Slack, a button press (or the matching reply where buttons are unavailable) answers the card.
 - A person who may not answer for the requester cannot decide their approval card.

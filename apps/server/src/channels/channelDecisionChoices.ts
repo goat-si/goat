@@ -1,31 +1,22 @@
 /**
- * Choices a person can answer without a model: the options on an approval card or an open
- * question. Slack and iMessage show them as `1. label`, `2. label`. A reply that is only a
- * number picks from the latest of those still open.
- *
- * "Latest" is derived, not stored. An approval card's time is when its code was issued, which
- * is when the card is built. A question's time is `askedAt`. A higher approval code wins a tie
- * because codes issued in one pass share a timestamp and are issued in order. A later "which
- * approval?" clarification is not its own list: a number answers the latest open card.
+ * Choices a person can answer without a model: an open question's options, which Slack and
+ * iMessage list as `1. label`. A reply that is only a number picks from the latest question
+ * still open, by `askedAt`. Approvals take no number (see channelApprovalReplies).
  *
  * @module channelDecisionChoices
  */
 import type { ChannelQuestionId, ChannelTaskId } from "@goat/contracts";
 
-export type DeliveredChoiceTarget =
-  | { readonly type: "approval" }
-  | {
-      readonly type: "question";
-      readonly taskId: ChannelTaskId;
-      readonly questionId: ChannelQuestionId;
-    };
+export interface DeliveredChoiceTarget {
+  readonly type: "question";
+  readonly taskId: ChannelTaskId;
+  readonly questionId: ChannelQuestionId;
+}
 
 /** One numbered list still open in a conversation. */
 export interface DeliveredChoices {
-  /** When the card or question was issued, ISO-8601. */
+  /** When the question was asked, ISO-8601. */
   readonly at: string;
-  /** Higher means later when `at` ties. Approval codes use their number. */
-  readonly tie: number;
   readonly options: ReadonlyArray<string>;
   readonly target: DeliveredChoiceTarget;
 }
@@ -36,8 +27,11 @@ export const latestDeliveredChoices = (
 ): DeliveredChoices | undefined =>
   choices
     .filter((entry) => entry.options.length > 0)
-    .toSorted((left, right) => left.at.localeCompare(right.at) || left.tie - right.tie)
+    .toSorted((left, right) => left.at.localeCompare(right.at))
     .at(-1);
+
+/** A reply that is only digits, "0" and "2." included. */
+export const isNumericReply = (text: string): boolean => /^\d+\.?$/.test(text.trim());
 
 /** "2" and "2." are choice numbers. Anything else is a normal message. */
 export const parseNumberedReply = (text: string): number | undefined => {
@@ -68,12 +62,12 @@ const matchingOption = (text: string, options: ReadonlyArray<string>): string | 
 export const numberedChoiceLines = (options: ReadonlyArray<string>): string =>
   options.map((option, index) => `${index + 1}. ${option}`).join("\n");
 
-/** Approval codes sort in the order they were issued: A1, then A2. */
-export const approvalCodeOrder = (code: string): number => {
-  const match = /^A(\d+)$/.exec(code);
-  if (match?.[1] === undefined) return 0;
-  const value = Number(match[1]);
-  return Number.isSafeInteger(value) ? value : 0;
+/** Choices answered only by their words: `Reply "Deny A1" or "Approve A1".` */
+export const wordChoiceLine = (options: ReadonlyArray<string>): string => {
+  const quoted = options.map((option) => '"' + option + '"');
+  const last = quoted.at(-1) ?? "";
+  const words = quoted.length > 1 ? quoted.slice(0, -1).join(", ") + " or " + last : last;
+  return "Reply " + words + ".";
 };
 
 export interface OpenQuestionChoice {

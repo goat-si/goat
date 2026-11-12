@@ -34,7 +34,7 @@ import {
   type SlackClassifierConfig,
   type SlackRevocationEvent,
 } from "./slackEventMapping.ts";
-import { formatSlackOutboundMessages, slackChoiceBlocks } from "./slackMessageFormatting.ts";
+import { formatSlackOutboundMessages, slackOutboundPosts } from "./slackMessageFormatting.ts";
 import {
   slackCall,
   type SlackBotApi,
@@ -356,18 +356,13 @@ export function makeSlackChannelTransport(input: {
         if (destination.teamId !== active.teamId) {
           return yield* deliveryFailed("not_sent", "unknown");
         }
-        const parts = formatSlackOutboundMessages({
+        const posts = slackOutboundPosts({
           text: message.text,
           mentionUserId: message.mentionActorId,
+          options: message.options,
         });
         let firstTs: string | undefined;
-        for (const [index, text] of parts.entries()) {
-          const blocks =
-            index < parts.length - 1 ||
-            message.options === undefined ||
-            message.options.length === 0
-              ? undefined
-              : slackChoiceBlocks(text, message.options);
+        for (const [index, { text, blocks }] of posts.entries()) {
           const post = {
             channel: destination.channelId,
             threadTs: destination.rootTs,

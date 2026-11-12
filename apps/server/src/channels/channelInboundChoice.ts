@@ -2,15 +2,12 @@ import type { ChannelInboundMessage, ChannelConversationId, ChannelTask } from "
 import * as Effect from "effect/Effect";
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import {
-  approvalChoiceLabels,
-  openApprovalCards,
-  parseApprovalReply,
-} from "./channelApprovalCards.ts";
+import { openApprovalCards, parseApprovalReply } from "./channelApprovalCards.ts";
+import { pendingApprovals } from "./channelApprovalReplies.ts";
 import { nativeQuestionChoice, type NativeQuestionChoice } from "./channelNativeQuestionCards.ts";
 import {
-  approvalCodeOrder,
   choiceAt,
+  isNumericReply,
   latestDeliveredChoices,
   parseNumberedReply,
   singleQuestionChoice,
@@ -22,15 +19,20 @@ export const makeInboundChoices = (
   threads?: ThreadManagement.ThreadManagementService["Service"],
 ) => {
   /**
-   * The numbered list a Slack or iMessage reply of "2" refers to: the latest open approval
-   * card or question in this conversation. Cards that were never sent have no code and are
-   * skipped. Questions come from the recent tasks plus any older task still needing a person.
+   * What a Slack or iMessage reply of "2" does. While any approval is open it answers nothing:
+   * cards once listed numbers in either order, so a number typed for one must not land on a
+   * question or another card. Otherwise it picks from the latest open question, from the recent
+   * tasks plus any older task still needing a person.
    */
-  const deliveredChoices = Effect.fn("channel.deliveredChoices")(function* (
+  const numberedChoice = Effect.fn("channel.numberedChoice")(function* (
     conversationId: ChannelConversationId,
     tasks: ReadonlyArray<ChannelTask>,
+    number: number | undefined,
   ) {
     const needing = yield* ledger.listConversationNeedsYou(conversationId);
+    const listed = openApprovalCards(needing);
+    const open = threads === undefined ? listed : yield* pendingApprovals(listed, threads);
+    if (open.length > 0) return { type: "approval-number" as const, open };
     const seen = new Set(tasks.map((task) => task.taskId));
     const questions = [...tasks, ...needing.filter((task) => !seen.has(task.taskId))].flatMap(
       (task) =>
@@ -40,7 +42,6 @@ export const makeInboundChoices = (
             : [
                 {
                   at: question.askedAt,
-                  tie: 0,
                   options: question.options,
                   target: {
                     type: "question",
@@ -51,33 +52,26 @@ export const makeInboundChoices = (
               ],
         ),
     );
-    const coded = yield* Effect.forEach(openApprovalCards(needing), (card) =>
-      ledger.approvalCodeForRequest(card.approval.requestId).pipe(
-        Effect.map((found): DeliveredChoices | undefined =>
-          found === undefined
-            ? undefined
-            : {
-                at: found.issuedAt,
-                tie: approvalCodeOrder(found.code),
-                options: approvalChoiceLabels(found.code),
-                target: { type: "approval" },
-              },
-        ),
-      ),
-    );
-    return latestDeliveredChoices([
-      ...questions,
-      ...coded.flatMap((entry) => (entry === undefined ? [] : [entry])),
-    ]);
+    const choices = latestDeliveredChoices(questions);
+    const label =
+      choices === undefined || number === undefined ? undefined : choiceAt(choices, number);
+    return choices === undefined || label === undefined
+      ? undefined
+      : {
+          type: "question" as const,
+          taskId: choices.target.taskId,
+          questionId: choices.target.questionId,
+          answer: label,
+        };
   });
 
   /** A native-question button exists only in the GOAT app. Slack and iMessage cannot answer one. */
   const answersNativeQuestion = (kind: ChannelInboundMessage["kind"]) => kind === "goat";
 
   /**
-   * A choice answered before the model runs. A number on Slack or iMessage selects the latest
-   * open list. A label equal to the only open question's option answers that question. An
-   * approval word is left for the approval parser, which already checks who may answer.
+   * A choice answered before the model runs: a number on Slack or iMessage (see numberedChoice),
+   * or a label equal to the only open question's option. An approval word is left for the
+   * approval parser, which already checks who may answer.
    */
   const inboundChoice = Effect.fn("channel.inboundChoice")(function* (
     message: ChannelInboundMessage,
@@ -85,26 +79,14 @@ export const makeInboundChoices = (
     tasks: ReadonlyArray<ChannelTask>,
   ) {
     if (message.intent !== "message" || message.kind === "mcp") return undefined;
-    if (message.kind === "slack" || message.kind === "imessage") {
+    if ((message.kind === "slack" || message.kind === "imessage") && isNumericReply(message.text)) {
       const number = parseNumberedReply(message.text);
-      if (number !== undefined) {
-        const choices = yield* deliveredChoices(conversationId, tasks);
-        const label = choices === undefined ? undefined : choiceAt(choices, number);
-        if (choices !== undefined && label !== undefined) {
-          return choices.target.type === "approval"
-            ? { type: "approval-label" as const, text: label }
-            : {
-                type: "question" as const,
-                taskId: choices.target.taskId,
-                questionId: choices.target.questionId,
-                answer: label,
-              };
-        }
-      }
+      const picked = yield* numberedChoice(conversationId, tasks, number);
+      if (picked !== undefined) return picked;
     }
     if (parseApprovalReply(message.text) !== undefined) return undefined;
     // The tasks already read for this pass. A label is not worth a second scan of older work;
-    // a number still looks those up, because an old approval card stays answerable.
+    // a number still looks those up, because an older task's question stays answerable.
     const questions = tasks.flatMap((task) =>
       task.openQuestions.map((question) => ({
         taskId: task.taskId,
@@ -130,9 +112,9 @@ export const makeInboundChoices = (
 
   /**
    * A choice pressed in a task's own view of the GOAT app, for a question nobody runs to forward
-   * it to (no worker): it answers that task's one matching question. An approval button or a
-   * native-question option matches first, including while the task is still running. Who may
-   * answer is checked where the answer is recorded.
+   * it to (no worker): it answers that task's one matching question. An approve or deny, typed or
+   * pressed, or a native-question option matches first, including while the task is still
+   * running. Who may answer is checked where the answer is recorded.
    */
   const taskViewChoice = Effect.fn("channel.taskViewChoice")(function* (
     stored: ChannelLedger.ChannelStoredInput,
@@ -148,13 +130,9 @@ export const makeInboundChoices = (
     )
       return undefined;
     const trimmed = message.text.trim();
-    for (const card of openApprovalCards([target.task])) {
-      const found = yield* ledger.approvalCodeForRequest(card.approval.requestId);
-      if (found === undefined) continue;
-      const labels = approvalChoiceLabels(found.code);
-      if (labels[0] === trimmed || labels[1] === trimmed) {
-        return { type: "approval-label" as const, text: trimmed };
-      }
+    // Forwarded, an approval reply would reach an agent that can't answer it.
+    if (openApprovalCards([target.task]).length > 0 && parseApprovalReply(trimmed) !== undefined) {
+      return { type: "approval-label" as const, text: trimmed };
     }
     const hasNativeQuestion = (target.task.observed?.needsYou ?? []).some(
       (need) => need.question !== undefined && need.question.host === undefined,

@@ -382,6 +382,10 @@ describe("approvals held on another machine", () => {
       });
       yield* runtime.drain;
       assert.strictEqual((yield* questionCards).length, 1);
+      // This machine can't read the request's details, so the card says so; its buttons stay.
+      const [card] = yield* questionCards;
+      assert.include(card?.text ?? "", CHANNEL_COPY.approvalDetailNotShown);
+      assert.deepStrictEqual(card?.channel?.options, ["Deny A1", "Approve A1"]);
       const ledger = yield* ChannelLedger.ChannelLedger;
       const state = JSON.parse((yield* ledger.getRemoteWorker(observed.taskId)) ?? "{}") as {
         knownRun?: { observation?: ChannelWorkerObservation };
