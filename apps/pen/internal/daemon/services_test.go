@@ -317,8 +317,8 @@ func TestARegistrationEndsOnlyWithItsOwnConnectionAndAReplacementClosesTheOldHol
 	if !ok || m["t"] != "replaced" || m["id"] != old.reply["id"] {
 		t.Fatalf("old holder got %v, %v; want replaced naming its id", m, ok)
 	}
-	if _, ok := old.next(t); ok {
-		t.Fatal("old holder's connection stayed open after the replacement")
+	if _, err := old.r.ReadBytes('\n'); !errors.Is(err, io.EOF) {
+		t.Fatalf("old holder's connection after the replacement: %v, want a clean EOF", err)
 	}
 	if got := <-ended; got != old.reply["id"] {
 		t.Fatalf("ended %q, want the old registration %v", got, old.reply["id"])

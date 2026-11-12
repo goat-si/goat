@@ -156,6 +156,14 @@ func (b boundedConn) Write(p []byte) (int, error) {
 	return b.Conn.Write(p)
 }
 
+// CloseWrite half-closes the connection when the one it wraps can.
+func (b boundedConn) CloseWrite() error {
+	if cw, ok := b.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errors.ErrUnsupported
+}
+
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 	slots := make(chan struct{}, controlConnCap)
 	for {
@@ -177,7 +185,13 @@ func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 }
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
-	defer c.Close()
+	// A registration's holder queue ends its connection itself, after its last line (holderQueue.failWith).
+	owned := false
+	defer func() {
+		if !owned {
+			c.Close()
+		}
+	}()
 	lr := &io.LimitedReader{R: c, N: 64 << 10}
 	r := bufio.NewReader(lr)
 	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
@@ -201,7 +215,7 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 		return
 	// These two run on the control socket only: the dashboard reaches do, never handleControl.
 	case "service.register":
-		d.controlRegister(ctx, c, r, lr, req, reply, fail)
+		owned = d.controlRegister(ctx, c, r, lr, req, reply, fail)
 		return
 	case "watch.snapshot":
 		d.controlSnapshot(ctx, c, fail)

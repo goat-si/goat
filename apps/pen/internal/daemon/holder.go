@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 // holderQueueCap bounds the lines waiting for a registration's holder: an honest holder has at most one answer and two
@@ -160,7 +162,7 @@ func (q *holderQueue) fail() {
 }
 
 // failWith makes the queue terminal, writes last (when not nil) after any write in progress and without waiting on
-// unready entries, then closes the holder's connection. Each write is bounded by the control write deadline. After a
+// unready entries, then ends the holder's connection. Each write is bounded by the control write deadline. After a
 // failed write it writes nothing, so a partial line is never followed by another.
 func (q *holderQueue) failWith(last []byte) {
 	q.once.Do(func() {
@@ -178,7 +180,23 @@ func (q *holderQueue) failWith(last []byte) {
 		if last != nil && !q.broken {
 			q.conn.Write(last)
 		}
+		// A close with input unread resets the connection, and on Windows the reset can discard lines the holder has
+		// not read yet: half-close and discard what the holder still sends, off this path, before closing.
+		if cw, ok := q.conn.(interface{ CloseWrite() error }); ok && cw.CloseWrite() == nil {
+			q.wmu.Unlock()
+			go discardAndClose(q.conn)
+			return
+		}
 		q.conn.Close()
 		q.wmu.Unlock()
 	})
+}
+
+// discardAndClose reads c until the holder closes its side, holderDrainTime passes or holderDrainCap bytes came,
+// then closes c.
+func discardAndClose(c net.Conn) {
+	defer c.Close()
+	if c.SetReadDeadline(time.Now().Add(holderDrainTime)) == nil {
+		io.Copy(io.Discard, io.LimitReader(c, holderDrainCap))
+	}
 }
