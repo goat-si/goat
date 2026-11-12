@@ -291,11 +291,15 @@ again on its next connect.</p>
 <p>Open <strong>Settings → Connections → Providers on your machines</strong> to compare installed
 provider versions and sign-in status on this machine and connected SSH hosts.
 Choose <strong>Sync to other hosts…</strong> for a provider and select your destination
-machines. GOAT uses the vendor’s official npm package or installer for each
-operating system, matching this machine’s version by default, or installing the
-latest if it is absent here. Codex installs with OpenAI’s installer and needs no
-Node.js. Cursor’s installer, and Codex’s on Windows, always install the latest.
-Each host reports the installer command it ran and the version it then found.
+machines. GOAT installs each CLI from the vendor’s npm package, matching this
+machine’s version by default, or installing the latest if it is absent here, so
+the host needs Node.js and npm. Cursor has no npm package: on macOS and Linux GOAT
+downloads the Cursor release it pins and checks its SHA-256 before unpacking it,
+and stops without installing anything if the download does not match. Install
+Cursor on Windows yourself. GOAT never pipes a vendor’s install script into a
+shell. A host whose GOAT is too old to promise this is not asked to install
+Codex, Claude or Cursor; update GOAT there first. Each host reports what it
+installed and the version it then found.
 Choose <strong>Update runtime</strong> for a host whose GOAT is too old, or <strong>Prepare host</strong>
 if its runtime is stopped, then retry.</p>
 <p>Before a thread starts on another machine, GOAT there checks that the provider’s
@@ -309,10 +313,8 @@ or vendor sign-in page, or finish in GOAT on that host. If a terminal step is
 needed, run it on the destination: <code>claude auth login</code>, <code>agent login</code> (Cursor),
 <code>grok login</code>, <code>opencode auth login</code>, or <code>pi</code> followed by <code>/login</code>. Codex uses
 <code>codex login --device-auth</code>. An agent can request a sync; approve the request in
-its thread before installation starts. An agent thread running with full access
-can install a CLI without asking, only on machines saved in <strong>Settings →
-Connections</strong> and without signing in; with permission profiles on, its profile
-must also allow remote launches there. Signing in always stays with you.
+its thread before installation starts. This holds for every agent thread, full
+access included. Signing in always stays with you.
 Cancelling stops unfinished work; a
 completed installation stays installed.</p>
 <p>GOAT never copies credentials between machines. For headless Codex login,
