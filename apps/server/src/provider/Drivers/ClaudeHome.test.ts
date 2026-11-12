@@ -100,4 +100,26 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         ).toBe("custom");
       }),
   );
+
+  it.effect("the environment Claude is started with keeps following the host environment", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homePath = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-home-" });
+      const host: NodeJS.ProcessEnv = {
+        PATH: "/usr/bin",
+        CLAUDECODE: "1",
+        GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+      };
+      const merged = yield* mergeClaudeProcessEnvironment({ homePath }, undefined, host);
+      const started = yield* makeClaudeEnvironment({ homePath }, merged);
+      host.PATH = "/home/ada/.local/bin:/usr/bin";
+      delete host.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
+
+      expect({ ...started }).toEqual({
+        PATH: "/home/ada/.local/bin:/usr/bin",
+        CLAUDE_CODE_ENTRYPOINT: "t3-code",
+        CLAUDE_CONFIG_DIR: yield* resolveClaudeHomePath({ homePath }),
+      });
+    }),
+  );
 });

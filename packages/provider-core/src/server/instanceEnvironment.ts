@@ -1,4 +1,5 @@
 import type { ProviderInstanceEnvironment } from "@goat/contracts";
+import { overlayEnvironment } from "@goat/shared/environmentOverlay";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
@@ -13,12 +14,13 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   }
 
   const home = yield* HostProcess.HomeDirectory;
-  const next: NodeJS.ProcessEnv = { ...baseEnv };
+  const own: Record<string, string> = {};
   for (const variable of environment) {
-    next[variable.name] =
+    own[variable.name] =
       variable.name === "CODEX_HOME" || variable.name === "CLAUDE_CONFIG_DIR"
         ? expandHomePath(variable.value, home)
         : variable.value;
   }
-  return next;
+  // A view, not a copy: an instance created before the login shell answered still sees its PATH.
+  return overlayEnvironment(baseEnv, own);
 });

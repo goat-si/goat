@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
+import { overlayEnvironment } from "@goat/shared/environmentOverlay";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 import { readClaudeSettingsEnv } from "./ClaudeSkills.ts";
@@ -38,11 +39,10 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   const homePath = config.homePath.trim();
   if (homePath.length === 0) return resolvedBaseEnv;
   const resolvedHomePath = yield* resolveClaudeHomePath(config);
-  return {
-    ...resolvedBaseEnv,
+  return overlayEnvironment(resolvedBaseEnv, {
     // Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep login access.
     CLAUDE_CONFIG_DIR: resolvedHomePath,
-  };
+  });
 });
 
 // A Claude Code session that launched GOAT exports these. A claude spawned with them acts as part of
@@ -71,10 +71,10 @@ export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnviro
   instanceEnvironment: ProviderInstanceEnvironment | undefined,
   hostEnvironment: NodeJS.ProcessEnv,
 ) {
-  const baseEnvironment: NodeJS.ProcessEnv = {
-    ...hostEnvironment,
+  // A view of the host environment: the instance outlives the PATH it was created with.
+  const baseEnvironment = overlayEnvironment(hostEnvironment, {
     CLAUDE_CODE_ENTRYPOINT: "t3-code", // goat-rename: legacy -- Claude integration identifier
-  };
+  });
   for (const name of CLAUDE_HOST_SESSION_VARIABLES) delete baseEnvironment[name];
   // The desktop runs the server as Node through Electron. Commands Claude runs inherit its env, so
   // an Electron app they start (GOAT itself, VS Code) would run as Node and exit.
@@ -83,7 +83,7 @@ export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnviro
   const settingsEntrypoint = (yield* readClaudeSettingsEnv(config, undefined, environment))
     .CLAUDE_CODE_ENTRYPOINT;
   return settingsEntrypoint
-    ? { ...environment, CLAUDE_CODE_ENTRYPOINT: settingsEntrypoint }
+    ? overlayEnvironment(environment, { CLAUDE_CODE_ENTRYPOINT: settingsEntrypoint })
     : environment;
 });
 

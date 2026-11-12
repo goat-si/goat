@@ -17,6 +17,7 @@ import {
 } from "./copilotAcp.ts";
 import { defaultInstanceIdForDriver, ProviderDriverKind } from "@goat/contracts";
 import { readCustomModelEntries } from "@goat/shared/model";
+import { overlayEnvironment } from "@goat/shared/environmentOverlay";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
@@ -209,11 +210,10 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const runtimeOptions = isClaude
     ? {
         ...options,
-        environment: {
-          ...options.environment,
+        environment: overlayEnvironment(options.environment, {
           CLAUDE_AGENT_ACP_EXPERIMENTAL_V2:
             options.environment.CLAUDE_AGENT_ACP_EXPERIMENTAL_V2 ?? "1",
-        },
+        }),
       }
     : options;
   const copilotRouting = isCopilot ? makeCopilotSubagentRouting() : undefined;

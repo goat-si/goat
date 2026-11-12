@@ -71,4 +71,24 @@ describe("mergeProviderInstanceEnvironment", () => {
       });
     }),
   );
+
+  it.effect("an instance with its own variable keeps following the host environment", () =>
+    Effect.gen(function* () {
+      const host: NodeJS.ProcessEnv = {
+        PATH: "/usr/bin",
+        GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+      };
+      const environment = yield* mergeProviderInstanceEnvironment(
+        [{ name: "CUSTOM_VALUE", value: "own", sensitive: false }],
+        host,
+      );
+      host.PATH = "/home/ada/.local/bin:/usr/bin";
+      delete host.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
+
+      expect({ ...environment }).toEqual({
+        PATH: "/home/ada/.local/bin:/usr/bin",
+        CUSTOM_VALUE: "own",
+      });
+    }),
+  );
 });
