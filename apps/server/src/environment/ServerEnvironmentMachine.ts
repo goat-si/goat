@@ -196,51 +196,79 @@ const hashIdentity = Effect.fn("hashServerMachineIdentity")(function* (value: st
   return digest === null ? null : Hex.encode(digest).slice(0, 32);
 });
 
-const machineNoncePath = Effect.fn("machineNoncePath")(function* () {
+/**
+ * Where this server's account keeps its machine nonce: ~/.goat, shared by the desktop app's
+ * server and the headless one SSH launches start. A development server keeps its own in its base
+ * directory, so it never writes the live install and reads as a machine of its own.
+ */
+export const serverMachineNonceDirectory = Effect.fn("serverMachineNonceDirectory")(
+  function* (config: { readonly devUrl: URL | undefined; readonly baseDir: string }) {
+    if (config.devUrl !== undefined) return config.baseDir;
+    const path = yield* Path.Path;
+    return path.join(yield* HostProcess.HomeDirectory, GOAT_HOME_DIR_NAME);
+  },
+);
+
+const nonceFile = Effect.fn("machineNonceFile")(function* (directory: string) {
   const path = yield* Path.Path;
-  const directory = path.join(yield* HostProcess.HomeDirectory, GOAT_HOME_DIR_NAME);
-  return { directory, file: path.join(directory, MACHINE_NONCE_FILE) };
+  return path.join(directory, MACHINE_NONCE_FILE);
 });
 
-const readMachineNonce = Effect.fn("readMachineNonce")(function* () {
-  const nonce = yield* readOptionalFile((yield* machineNoncePath()).file);
-  return nonce !== null && MACHINE_NONCE_PATTERN.test(nonce) ? nonce : null;
-});
+const nonceWarning = (file: string, problem: string) =>
+  Effect.logWarning(
+    `${file} ${problem}; this server cannot tell machines cloned from one image apart.`,
+  );
 
 /**
- * A random value in ~/.goat shared by this account's servers. Images and VM forks copy the OS
- * machine identifier and often the boot id, but a clone gets its own nonce unless ~/.goat was in
- * the image. Only the server command creates it, so tests that build the environment never write.
+ * A random value in the nonce directory shared by this account's servers. Images and VM forks
+ * copy the OS machine identifier and often the boot id, but a clone gets its own nonce unless the
+ * directory was in the image. Only the server command creates it, so tests never write.
  */
-export const ensureServerMachineNonce = Effect.fn("ensureServerMachineNonce")(function* () {
+export const ensureServerMachineNonce = Effect.fn("ensureServerMachineNonce")(function* (
+  directory: string,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
-  const { directory, file } = yield* machineNoncePath();
-  if ((yield* readOptionalFile(file)) !== null) return;
+  const file = yield* nonceFile(directory);
+  const existing = yield* readOptionalFile(file);
+  if (existing !== null) {
+    if (!MACHINE_NONCE_PATTERN.test(existing)) yield* nonceWarning(file, "is not a GOAT nonce");
+    return;
+  }
   // Link a complete file into place so a racing server sees nothing or the winner's nonce.
-  const fresh = Hex.encode(yield* crypto.randomBytes(16));
-  const staged = file + "." + fresh;
-  yield* fileSystem.makeDirectory(directory, { recursive: true });
-  yield* fileSystem.writeFileString(staged, fresh + "\n");
-  yield* fileSystem.link(staged, file).pipe(Effect.ignore);
-  yield* fileSystem.remove(staged);
-}, Effect.ignore);
+  yield* Effect.gen(function* () {
+    const fresh = Hex.encode(yield* crypto.randomBytes(16));
+    const staged = file + "." + fresh;
+    yield* fileSystem.makeDirectory(directory, { recursive: true });
+    yield* fileSystem.writeFileString(staged, fresh + "\n");
+    yield* fileSystem.link(staged, file).pipe(
+      Effect.catchIf(
+        (error) => error.reason._tag === "AlreadyExists",
+        () => Effect.void,
+      ),
+      Effect.ensuring(fileSystem.remove(staged).pipe(Effect.ignore)),
+    );
+  }).pipe(Effect.catch((error) => nonceWarning(file, "could not be created: " + error.message)));
+});
 
 /**
- * Both are the same for every GOAT server one OS account runs on this machine, such as the
- * desktop app's and the headless one SSH launches start in ~/.goat; `machineUserId` also names
- * their shared SSH config. Clients only compare them, so they are salted hashes.
+ * `machineId` is one value for every GOAT server on this machine, such as the desktop app's
+ * server and the headless server SSH launches start in ~/.goat; `machineUserId` narrows it to one
+ * OS account. Clones of one image share both, so `machineInstallId` hashes the account's nonce.
  */
-export const detectServerMachineIdentity = Effect.fn("detectServerMachineIdentity")(function* () {
+export const detectServerMachineIdentity = Effect.fn("detectServerMachineIdentity")(function* (
+  nonceDirectory: string,
+) {
   const identifier = (yield* readOsMachineIdentifier())?.toLowerCase() ?? null;
-  if (identifier === null) return { machineId: null, machineUserId: null };
-  const nonce = yield* readMachineNonce();
-  if (nonce === null) return { machineId: null, machineUserId: null };
+  if (identifier === null) return { machineId: null, machineUserId: null, machineInstallId: null };
   const home = yield* HostProcess.HomeDirectory;
+  const nonce = yield* readOptionalFile(yield* nonceFile(nonceDirectory));
   return {
-    machineId: yield* hashIdentity("goat-machine-id:v2:" + identifier + "\u0000" + nonce),
-    machineUserId: yield* hashIdentity(
-      "goat-machine-user:v2:" + identifier + "\u0000" + nonce + "\u0000" + home,
-    ),
+    machineId: yield* hashIdentity("goat-machine-id:v1:" + identifier),
+    machineUserId: yield* hashIdentity("goat-machine-user:v1:" + identifier + "\u0000" + home),
+    machineInstallId:
+      nonce !== null && MACHINE_NONCE_PATTERN.test(nonce)
+        ? yield* hashIdentity("goat-machine-install:v1:" + nonce)
+        : null,
   };
 });

@@ -389,9 +389,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "goat-server-environment-test-",
         });
-        yield* ensureServerMachineNonce().pipe(
-          Effect.provideService(HostProcess.HomeDirectory, home),
-        );
+        yield* ensureServerMachineNonce(home + "/.goat");
         return yield* Effect.gen(function* () {
           const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
           return yield* serverEnvironment.getDescriptor;
@@ -411,13 +409,15 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(desktop.environmentId).not.toBe(headless.environmentId);
       expect(desktop.machineId).toBe(headless.machineId);
       expect(desktop.machineUserId).toBe(headless.machineUserId);
+      expect(desktop.machineInstallId).toBe(headless.machineInstallId);
+      expect(otherAccount.machineId).toBe(desktop.machineId);
       // Every host GOAT CI and its developers run on exposes an OS machine identifier.
       const platform = yield* HostProcess.Platform;
       if (platform === "darwin" || platform === "linux") {
         expect(desktop.machineId).toMatch(/^[0-9a-f]{32}$/);
-        // Another account's servers have their own ~/.goat, so they read as another machine.
-        expect(otherAccount.machineId).not.toBe(desktop.machineId);
+        expect(desktop.machineInstallId).toMatch(/^[0-9a-f]{32}$/);
         expect(otherAccount.machineUserId).not.toBe(desktop.machineUserId);
+        expect(otherAccount.machineInstallId).not.toBe(desktop.machineInstallId);
       }
     }),
   );

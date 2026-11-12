@@ -10,6 +10,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import {
   detectServerMachineIdentity,
   ensureServerMachineNonce,
+  serverMachineNonceDirectory,
 } from "./ServerEnvironmentMachine.ts";
 
 const layer = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
@@ -18,95 +19,127 @@ const IMAGE_MACHINE_ID = "4f1c0e5a9b2d4c7e8f6a1b3c5d7e9f02";
 const HOME = "/home/ubuntu";
 const NONCE = HOME + "/.goat/machine-nonce";
 
-const missing = (method: string, path: string) =>
-  PlatformError.systemError({
-    _tag: "NotFound",
-    module: "FileSystem",
-    method,
-    pathOrDescriptor: path,
-  });
+const failure = (_tag: "NotFound" | "AlreadyExists" | "PermissionDenied", method: string) =>
+  PlatformError.systemError({ _tag, module: "FileSystem", method });
 
 /** One machine's disk, holding only what the identity reads and writes. */
-function disk(options: { readonly createdByAnotherServer?: string } = {}) {
+function disk(
+  options: {
+    readonly nonce?: string;
+    readonly createdByAnotherServer?: string;
+    readonly linkDenied?: boolean;
+  } = {},
+) {
   const files = new Map([["/etc/machine-id", IMAGE_MACHINE_ID + "\n"]]);
-  let hideOtherServersNonce = options.createdByAnotherServer !== undefined;
-  return FileSystem.makeNoop({
+  if (options.nonce !== undefined) files.set(NONCE, options.nonce);
+  let racing = options.createdByAnotherServer;
+  const fileSystem = FileSystem.makeNoop({
     readFileString: (path) => {
       // Another server creates the file between this server's first read and its own create.
-      if (path === NONCE && hideOtherServersNonce && options.createdByAnotherServer) {
-        hideOtherServersNonce = false;
-        files.set(NONCE, options.createdByAnotherServer);
-        return Effect.fail(missing("readFile", path));
+      if (path === NONCE && racing !== undefined) {
+        files.set(NONCE, racing);
+        racing = undefined;
+        return Effect.fail(failure("NotFound", "readFile"));
       }
       const value = files.get(path);
-      return value === undefined ? Effect.fail(missing("readFile", path)) : Effect.succeed(value);
+      return value === undefined
+        ? Effect.fail(failure("NotFound", "readFile"))
+        : Effect.succeed(value);
     },
     makeDirectory: () => Effect.void,
     writeFileString: (path, data) => Effect.sync(() => void files.set(path, data)),
     link: (from, to) => {
       const value = files.get(from);
-      if (files.has(to) || value === undefined) {
-        return Effect.fail(
-          PlatformError.systemError({
-            _tag: "AlreadyExists",
-            module: "FileSystem",
-            method: "link",
-          }),
-        );
-      }
+      if (options.linkDenied) return Effect.fail(failure("PermissionDenied", "link"));
+      if (files.has(to) || value === undefined)
+        return Effect.fail(failure("AlreadyExists", "link"));
       return Effect.sync(() => void files.set(to, value));
     },
     remove: (path) => Effect.sync(() => void files.delete(path)),
   });
+  return { fileSystem, files };
 }
 
 /** What one GOAT server reports when it starts on this disk. */
-const startServerOn = (fileSystem: FileSystem.FileSystem, home = HOME) =>
+const startServerOn = (
+  fileSystem: FileSystem.FileSystem,
+  options: { readonly home?: string; readonly devBaseDir?: string } = {},
+) =>
   Effect.gen(function* () {
-    yield* ensureServerMachineNonce();
-    return yield* detectServerMachineIdentity();
+    const directory = yield* serverMachineNonceDirectory({
+      devUrl: options.devBaseDir === undefined ? undefined : new URL("http://127.0.0.1:5733"),
+      baseDir: options.devBaseDir ?? "/unused",
+    });
+    yield* ensureServerMachineNonce(directory);
+    return yield* detectServerMachineIdentity(directory);
   }).pipe(
     Effect.provideService(FileSystem.FileSystem, fileSystem),
     Effect.provideService(HostProcess.Platform, "linux"),
-    Effect.provideService(HostProcess.HomeDirectory, home),
+    Effect.provideService(HostProcess.HomeDirectory, options.home ?? HOME),
   );
 
 it.layer(layer)("detectServerMachineIdentity", (it) => {
-  it.effect("clones of one image with the same OS machine id name different machines", () =>
+  it.effect("clones of one image share the OS machine id but report their own install", () =>
     Effect.gen(function* () {
-      const first = yield* startServerOn(disk());
-      const second = yield* startServerOn(disk());
+      const first = yield* startServerOn(disk().fileSystem);
+      const second = yield* startServerOn(disk().fileSystem);
 
-      expect(first.machineId).toMatch(/^[0-9a-f]{32}$/);
-      expect(second.machineId).toMatch(/^[0-9a-f]{32}$/);
-      expect(second.machineId).not.toBe(first.machineId);
-      expect(second.machineUserId).not.toBe(first.machineUserId);
+      // Older clients and servers keep comparing the ids they always had.
+      expect(second.machineId).toBe(first.machineId);
+      expect(second.machineUserId).toBe(first.machineUserId);
+      expect(first.machineInstallId).toMatch(/^[0-9a-f]{32}$/);
+      expect(second.machineInstallId).toMatch(/^[0-9a-f]{32}$/);
+      expect(second.machineInstallId).not.toBe(first.machineInstallId);
     }),
   );
 
-  it.effect("servers of one account on one machine name the same machine and SSH config", () =>
+  it.effect("servers of one account on one machine report the same machine and install", () =>
     Effect.gen(function* () {
-      const machine = disk();
+      const machine = disk().fileSystem;
       // The desktop app's server and the headless server SSH launches start in ~/.goat.
       const desktop = yield* startServerOn(machine);
       const headless = yield* startServerOn(machine);
-      const otherAccount = yield* startServerOn(machine, "/home/someone-else");
+      const otherAccount = yield* startServerOn(machine, { home: "/home/someone-else" });
 
       expect(desktop.machineId).toMatch(/^[0-9a-f]{32}$/);
       expect(headless).toEqual(desktop);
+      expect(otherAccount.machineId).toBe(desktop.machineId);
       expect(otherAccount.machineUserId).not.toBe(desktop.machineUserId);
+      expect(otherAccount.machineInstallId).not.toBe(desktop.machineInstallId);
     }),
   );
 
   it.effect("a server that loses the race to create the machine nonce uses the winner's", () =>
     Effect.gen(function* () {
       const winner = disk();
-      const desktop = yield* startServerOn(winner);
-      const nonce = yield* winner.readFileString(NONCE);
+      const desktop = yield* startServerOn(winner.fileSystem);
+      const nonce = winner.files.get(NONCE);
 
-      const headless = yield* startServerOn(disk({ createdByAnotherServer: nonce }));
+      const headless = yield* startServerOn(disk({ createdByAnotherServer: nonce }).fileSystem);
 
       expect(headless).toEqual(desktop);
+    }),
+  );
+
+  it.effect("a development server keeps its nonce in its base directory, not ~/.goat", () =>
+    Effect.gen(function* () {
+      const machine = disk();
+      yield* startServerOn(machine.fileSystem, { devBaseDir: "/work/goat/.goat" });
+
+      expect(machine.files.get("/work/goat/.goat/machine-nonce")).toMatch(/^[0-9a-f]{32}\n$/);
+      expect(machine.files.has(NONCE)).toBe(false);
+    }),
+  );
+
+  it.effect("an unusable nonce leaves the server grouped by its machine id alone", () =>
+    Effect.gen(function* () {
+      const expected = yield* startServerOn(disk().fileSystem);
+      const corrupt = yield* startServerOn(disk({ nonce: "not a nonce\n" }).fileSystem);
+      const denied = yield* startServerOn(disk({ linkDenied: true }).fileSystem);
+
+      for (const identity of [corrupt, denied]) {
+        expect(identity).toEqual({ ...expected, machineInstallId: null });
+      }
     }),
   );
 });

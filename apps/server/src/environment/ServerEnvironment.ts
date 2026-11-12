@@ -42,6 +42,7 @@ import { makeAppServerLive } from "./hostAppServer.ts";
 import {
   detectServerEnvironmentMachineKind,
   detectServerMachineIdentity,
+  serverMachineNonceDirectory,
 } from "./ServerEnvironmentMachine.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
@@ -217,7 +218,9 @@ export const make = Effect.gen(function* () {
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
   const machine = yield* detectServerEnvironmentMachineKind();
-  const { machineId, machineUserId } = yield* detectServerMachineIdentity();
+  const { machineId, machineUserId, machineInstallId } = yield* detectServerMachineIdentity(
+    yield* serverMachineNonceDirectory(serverConfig),
+  );
   const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
@@ -245,6 +248,7 @@ export const make = Effect.gen(function* () {
     instanceId,
     ...(machineId === null ? {} : { machineId }),
     ...(machineUserId === null ? {} : { machineUserId }),
+    ...(machineInstallId === null ? {} : { machineInstallId }),
     ...(devSshOn ? { devSsh: "on" as const } : {}),
     protocol: servedRuntimeProtocolRanges(),
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,

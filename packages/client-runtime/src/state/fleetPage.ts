@@ -68,6 +68,7 @@ function sameEnvironments(
         environment.machineKind === other.machineKind &&
         environment.machineId === other.machineId &&
         environment.machineUserId === other.machineUserId &&
+        environment.machineInstallId === other.machineInstallId &&
         environment.connected === other.connected
       );
     })
@@ -172,6 +173,7 @@ export function createFleetPageAtoms(input: {
         machineKind: serverConfig ? (machineKinds.get(environmentId) ?? null) : null,
         machineId: serverConfig?.environment.machineId ?? null,
         machineUserId: serverConfig?.environment.machineUserId ?? null,
+        machineInstallId: serverConfig?.environment.machineInstallId ?? null,
         connected: connected.has(environmentId),
       });
     }
