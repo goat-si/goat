@@ -227,7 +227,7 @@ forced_supervise_start() {
     absent)
       printf 'GOAT stopped PID %s on the remote host for the approved forced update, but the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now. Check the host and %s; if nothing runs, update again (no approval is needed).\\n' "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
     *)
-      printf 'GOAT %s is not running on the remote host: after the approved forced stop of PID %s, the detached supervisor reported a failure and no earlier runtime was started again. The reason is in %s. Check the host; if nothing runs, update again (no approval is needed).\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
+      printf 'GOAT did not start %s on the remote host: after the approved forced stop of PID %s, the detached supervisor reported a failure and started no earlier runtime again. The reason is in %s. Check the host; if nothing runs, update again (no approval is needed).\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
   esac
 }
 # A confirmed drain that names an approved process goes only to that process: a runtime started in
