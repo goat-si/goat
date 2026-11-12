@@ -155,18 +155,28 @@ it("the home chip toggles by click and keyboard without losing the draft", async
   ).not.toBeNull();
 });
 
-it("closing the narrow home sheet returns focus and keeps the draft", async () => {
-  const { view } = setup(true);
-  await using screen = await render(view());
-  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
-  const field = composer(screen);
-  await userEvent.type(field, "Draft on mobile");
-  await userEvent.click(chip);
-  await userEvent.click(page.getByRole("button", { name: "Close" }));
-  await expect.element(chip).toHaveFocus();
-  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
-  await expect.element(field).toHaveValue("Draft on mobile");
-});
+it.each([390, 820])(
+  "at %i px Back to chat closes the home sheet, returns focus to the chip and keeps the draft",
+  async (width) => {
+    const { view } = setup(true);
+    await using _window = await windowSize(width, 844);
+    await using screen = await render(view());
+    const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+    const field = composer(screen);
+    await userEvent.type(field, "Draft on mobile");
+    await userEvent.click(chip);
+    await expect.element(homeSheet()).toBeVisible();
+    const back = page.getByRole("button", { name: "Back to chat", exact: true });
+    // First in the sheet, so a click or key that opens it lands here.
+    await expect.element(back).toHaveFocus();
+    await expect.element(page.getByRole("button", { name: "Close" })).not.toBeInTheDocument();
+    await userEvent.click(back);
+    await expect.element(homeSheet()).not.toBeInTheDocument();
+    await expect.element(chip).toHaveFocus();
+    await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+    await expect.element(field).toHaveValue("Draft on mobile");
+  },
+);
 
 it("at 390 px the home sheet fills the window", async () => {
   const { view } = setup(true);
@@ -338,7 +348,7 @@ it("on a narrow screen the work sheet closes and the composer holds the draft", 
   // Opening and dismissing the sheet afterwards still returns focus to the chip.
   const chip = screen.getByRole("button", { name: "GOAT Bot home" });
   await userEvent.click(chip);
-  await userEvent.click(page.getByRole("button", { name: "Close" }));
+  await userEvent.click(page.getByRole("button", { name: "Back to chat", exact: true }));
   await expect.element(chip).toHaveFocus();
 });
 
