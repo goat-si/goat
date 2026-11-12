@@ -66,3 +66,40 @@ it.effect("a launch whose provider CLI is present starts as before", () =>
     assert.deepEqual(yield* Ref.get(checked), [modelSelection.instanceId]);
   }),
 );
+
+it.effect(
+  "regression F1-1: a replay of a created launch returns its thread after the CLI vanished",
+  () =>
+    Effect.gen(function* () {
+      const refuse = yield* Ref.make(false);
+      const checked = yield* Ref.make<ReadonlyArray<string>>([]);
+      const switchable = Layer.succeed(
+        Gate.ProviderCliGate,
+        Gate.ProviderCliGate.of({
+          require: (instanceId) =>
+            Ref.update(checked, (all) => [...all, instanceId]).pipe(
+              Effect.andThen(Ref.get(refuse)),
+              Effect.flatMap((gone) => (gone ? Effect.fail(missing) : Effect.void)),
+            ),
+          probe: () => Effect.die("launches only require"),
+          missing: () => Effect.die("launches only require"),
+        }),
+      );
+      const harness = makeHarness({ providerCliGate: switchable });
+      const { threadId: _serverAllocates, ...input } = launchInput({
+        command: "command:cli-replay",
+        thread: "unused",
+        message: "Only once",
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const first = yield* launches.launch(input);
+        // The response was lost and the CLI disappeared before the client retried.
+        yield* Ref.set(refuse, true);
+        const retry = yield* launches.launch(input);
+        assert.equal(retry.threadId, first.threadId);
+        assert.isTrue(retry.resumed);
+      }).pipe(Effect.provide(harness.layer));
+      assert.deepEqual(yield* Ref.get(checked), [modelSelection.instanceId]);
+    }),
+);

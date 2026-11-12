@@ -1167,7 +1167,8 @@ const make = Effect.gen(function* () {
           commandId: input.commandId,
           instanceId: input.modelSelection.instanceId,
         });
-      if (!linkOnly) yield* requireCli(input.modelSelection.instanceId);
+      const replay = Option.exists(launchReceipt, (prior) => prior.status === "accepted");
+      if (!linkOnly && !replay) yield* requireCli(input.modelSelection.instanceId);
       return yield* Effect.gen(function* () {
         // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
         const reusableLaunchReceipt =
