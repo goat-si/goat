@@ -14,6 +14,7 @@ export interface LiveShellProbes {
   /**
    * Keeps the spawned process counted until its exit is observed. The probe's cleanup ending is
    * not that: the spawner ignores a failed termination, which leaves the process running.
+   * A spawn interrupted before it handed back a process may have started one nobody can watch.
    */
   readonly spawned: <Handle extends ProbeProcess, E, R>(
     spawn: Effect.Effect<Handle, E, R>,
@@ -25,6 +26,8 @@ export const makeLiveShellProbes = Effect.gen(function* () {
   const live = yield* Ref.make(0);
   // Holds one entry per spawned probe of a fixed number of attempts; allGone drops exited ones.
   const processes = yield* Ref.make<ReadonlyArray<ProbeProcess>>([]);
+  // Set for the session by a spawn interrupted before its process could be registered.
+  const exitUnknown = yield* Ref.make(false);
   return {
     track: (probe) =>
       Effect.acquireUseRelease(
@@ -35,11 +38,13 @@ export const makeLiveShellProbes = Effect.gen(function* () {
     spawned: (spawn) =>
       Effect.uninterruptibleMask((restore) =>
         restore(spawn).pipe(
+          Effect.onInterrupt(() => Ref.set(exitUnknown, true)),
           // Only the check is kept, so a finished probe's streams are not held for the session.
           Effect.tap(({ isRunning }) => Ref.update(processes, (all) => [...all, { isRunning }])),
         ),
       ),
     allGone: Effect.gen(function* () {
+      if (yield* Ref.get(exitUnknown)) return false;
       const exited = new Set<ProbeProcess>();
       for (const process of yield* Ref.get(processes)) {
         // A check that fails has not shown the process gone.
@@ -86,7 +91,7 @@ export const discoverWithRetries = Effect.fn("desktop.shellEnvironment.discoverW
     for (const delay of LOGIN_SHELL_RETRY_DELAYS_MS) {
       yield* Effect.sleep(Duration.millis(delay));
       if (!(yield* earlierProbesGone)) {
-        yield* warn("A login shell probe has not exited; GOAT will not probe again this session.");
+        yield* warn("A login shell probe is not known to have exited; no further probes.");
         return false;
       }
       if (yield* discover) return true;

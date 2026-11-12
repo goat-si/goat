@@ -70,7 +70,9 @@ function makeHungProcess(exited?: Deferred.Deferred<void>): ChildProcessSpawner.
     stdout: Stream.never,
     stderr: Stream.never,
     all: Stream.never,
-    exitCode: Effect.never,
+    exitCode: exited
+      ? Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(143)))
+      : Effect.never,
     isRunning: exited ? Effect.map(Deferred.isDone(exited), (done) => !done) : Effect.succeed(true),
     kill: () => Effect.never,
     stdin: Sink.drain,

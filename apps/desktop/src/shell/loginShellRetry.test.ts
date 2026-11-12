@@ -159,6 +159,48 @@ describe("login shell discovery retries", () => {
         assert.isFalse(yield* probes.allGone);
       }),
   );
+
+  it.effect(
+    "never reads as gone once a probe was interrupted while the spawner was acquiring its shell",
+    () =>
+      Effect.gen(function* () {
+        const probes = yield* makeLiveShellProbes;
+        const acquired = yield* Deferred.make<void>();
+        const handle = { isRunning: Effect.succeed(true) };
+        // Like the Node spawner: the acquisition cannot be interrupted, and a failed
+        // termination is ignored, so the cleanup ends with the process still running.
+        const spawn = Effect.acquireRelease(
+          Deferred.await(acquired).pipe(Effect.as(handle)),
+          () => Effect.void,
+        );
+        const probe = yield* probes
+          .track(Effect.scoped(probes.spawned(spawn).pipe(Effect.andThen(Effect.never))))
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        const interrupting = yield* Fiber.interrupt(probe).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        assert.isFalse(yield* probes.allGone);
+
+        yield* Deferred.succeed(acquired, undefined);
+        yield* Fiber.join(interrupting);
+        assert.isFalse(yield* probes.allGone);
+      }),
+  );
+
+  it.effect("does not count a probe that was interrupted before it started", () =>
+    Effect.gen(function* () {
+      const probes = yield* makeLiveShellProbes;
+      let spawns = 0;
+      const spawn = Effect.sync(() => {
+        spawns++;
+        return { isRunning: Effect.succeed(true) };
+      });
+      const probe = yield* probes.track(probes.spawned(spawn)).pipe(Effect.forkChild);
+      yield* Fiber.interrupt(probe);
+      assert.equal(spawns, 0);
+      assert.isTrue(yield* probes.allGone);
+    }),
+  );
 });
 
 const STANDARD_DIRS = "/test-home/.local/bin:/test-home/.bun/bin:/opt/homebrew/bin:/usr/local/bin";
@@ -180,7 +222,11 @@ function fakeProcess(
     stdout,
     stderr: Stream.empty,
     all: stdout,
-    exitCode: hung ? Effect.never : Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+    exitCode: !hung
+      ? Effect.succeed(ChildProcessSpawner.ExitCode(0))
+      : exited
+        ? Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(143)))
+        : Effect.never,
     isRunning: exited ? Effect.map(Deferred.isDone(exited), (done) => !done) : Effect.succeed(hung),
     kill: () => (hung ? Effect.never : Effect.void),
     stdin: Sink.drain,
@@ -200,11 +246,13 @@ interface TimedOutShell {
 /**
  * Runs the desktop service on macOS with a zsh whose first probe never answers and whose later
  * probes answer with /recovered/bin, up to the 10 s timeout of the first one. `cleanup` is what
- * the spawner's scope release does for that probe; `exited` is the process's observed exit.
+ * the spawner's scope release does for that probe; `exited` is the process's observed exit. With
+ * `acquiring`, the spawner does not hand that process back until it completes.
  */
 const afterFirstProbeTimesOut = (input: {
   readonly cleanup: Effect.Effect<unknown>;
   readonly exited?: Deferred.Deferred<void>;
+  readonly acquiring?: Deferred.Deferred<void>;
   readonly then: (shell: TimedOutShell) => Effect.Effect<void, never, Scope.Scope>;
 }) =>
   Effect.gen(function* () {
@@ -219,7 +267,9 @@ const afterFirstProbeTimesOut = (input: {
         ? Deferred.succeed(firstProbe, undefined).pipe(
             Effect.andThen(
               Effect.acquireRelease(
-                Effect.succeed(fakeProcess(undefined, input.exited)),
+                (input.acquiring ? Deferred.await(input.acquiring) : Effect.void).pipe(
+                  Effect.as(fakeProcess(undefined, input.exited)),
+                ),
                 () => input.cleanup,
               ),
             ),
@@ -358,6 +408,27 @@ describe("login shell probes after a timed-out shell, through the desktop servic
               assert.equal(shell.shellProbes(), 1);
               yield* TestClock.adjust("1 second");
               yield* expectRecoveredPath(shell);
+            }),
+        });
+      }),
+  );
+
+  it.effect(
+    "never starts another probe when the timeout came while the shell was being spawned and the kill then failed",
+    () =>
+      Effect.gen(function* () {
+        const acquiring = yield* Deferred.make<void>();
+        const cleaned = yield* Deferred.make<void>();
+        yield* afterFirstProbeTimesOut({
+          acquiring,
+          // The failed termination is ignored: cleanup ends and the shell lives on.
+          cleanup: Deferred.succeed(cleaned, undefined),
+          then: (shell) =>
+            Effect.gen(function* () {
+              // The spawner hands back a running shell only now, after the timeout.
+              yield* Deferred.succeed(acquiring, undefined);
+              yield* Deferred.await(cleaned);
+              yield* expectNoFurtherProbe(shell);
             }),
         });
       }),
