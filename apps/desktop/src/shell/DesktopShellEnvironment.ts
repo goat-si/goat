@@ -267,7 +267,7 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
   const probes = yield* LiveShellProbes;
   const fiber = yield* Effect.scoped(
     Effect.gen(function* () {
-      const child = yield* spawner.spawn(
+      const spawn = spawner.spawn(
         ChildProcess.make(input.command, input.args, {
           shell: input.shell ?? false,
           env: input.env,
@@ -279,6 +279,7 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
           forceKillAfter: PROCESS_TERMINATE_GRACE,
         }),
       );
+      const child = yield* probes.spawned(spawn);
       return yield* Effect.all([Stream.mkString(Stream.decodeText(child.stdout)), child.exitCode], {
         concurrency: 2,
       });
