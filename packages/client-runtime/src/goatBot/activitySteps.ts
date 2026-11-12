@@ -461,10 +461,10 @@ function firstAtOrAfter(rows: TimedRows, time: number): number {
 }
 
 /**
- * Where each line goes. A main-chat step sits above the first reply or question at or after it of
- * the turn its run serves, trails only while that turn runs, and gets no line for a run no turn
- * names. In a task's view a step sits above the first row after it that does not name another
- * attempt. No stretch opens before the source's held history, so no count is partial.
+ * Where each line goes. A main-chat step sits above its run's turn's first reply or question at or
+ * after it, trails only while that turn runs, and gets no line for a run no turn names. In a task's
+ * view a step sits above the first row after it that names no other attempt, or the first row.
+ * No stretch opens before the source's held history, so no count is partial.
  */
 export function goatBotActivityPlacement(input: {
   readonly rows: ReadonlyArray<GoatBotRow>;
@@ -502,7 +502,10 @@ export function goatBotActivityPlacement(input: {
     heldFrom !== null && opening < Date.parse(heldFrom);
   const byTime = (heldFrom: string | null, at: string): number | null => {
     const gap = firstAtOrAfter(all, Date.parse(at));
-    if (gap === 0 || opensBefore(heldFrom, all.times[gap - 1] ?? 0)) return null;
+    // Every step of a task's view is the task's, so one before the first drawn row (a view can
+    // start with the result) still has a line there unless the history was cut.
+    if (gap === 0) return heldFrom === null ? (all.indexes[0] ?? anchors.length) : null;
+    if (opensBefore(heldFrom, all.times[gap - 1] ?? 0)) return null;
     return all.indexes[gap] ?? anchors.length;
   };
   const byTurn = (turn: GoatBotRunTurn, heldFrom: string | null, at: string): number | null => {

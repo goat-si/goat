@@ -527,6 +527,27 @@ describe("goatBotActivityPlacement", () => {
     });
   });
 
+  it("puts a finished task's steps above its result when the task's view starts with the result", () => {
+    const worker = { environmentId: "env", threadId: "worker-1" };
+    const items = [
+      chip("t1", 1, worker, { kind: "work", taskId: "task-1" }),
+      // The task's own result; the reply that started it shows only in the main chat.
+      replied("result", 30, "task-1"),
+    ];
+    // A view that draws the task's card above its list, as mobile does, starts with the result.
+    const rows = timeline(items, [], "task-1").filter((row) => row.kind !== "task");
+    const steps = [ran("a", 5, [], {}, "worker-1"), read("b", 6, "worker-1")];
+    const whole = place(items, [goatBotSourceSteps(steps, false)], { taskId: "task-1", rows });
+    expect(lineBefore(whole, "result")).toMatchObject({
+      live: false,
+      summary: "Ran 1 command and read 1 file",
+    });
+    // With the history cut, the count could be partial, so there is still no line.
+    const cut = place(items, [goatBotSourceSteps(steps, true)], { taskId: "task-1", rows });
+    expect(cut.beforeRow.size).toBe(0);
+    expect(cut.trailing).toBeNull();
+  });
+
   it("names GOAT tools in expanded steps as coding threads do", () => {
     const botItems = [said("u1", 0), chip("c1", 1, local(sessionA)), replied("r1", 9, "task-c1")];
     const steps = goatBotSourceSteps(
