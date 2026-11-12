@@ -23,6 +23,7 @@ import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import { foldLaunchedThreads, type LaunchFoldThread } from "./launchFold.ts";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { findRemoteShell, presentRemoteLaunches } from "./remoteLaunches.ts";
+import { isRunStartHeld } from "./threadListPriority.ts";
 
 /**
  * Fleet: what is running right now across every connected environment, for the
@@ -48,6 +49,7 @@ export type FleetShell = LaunchFoldThread &
     | "hasPendingUserInput"
     | "pendingSubagentRequest"
     | "pendingBackgroundTasks"
+    | "latestRunStartHeld"
     | "nativeSubagents"
     | "archivedAt"
     | "deletedAt"
@@ -84,6 +86,7 @@ export function classifyFleetThread(
     | "deletedAt"
     | "sideChatOf"
     | "lineage"
+    | "latestRunStartHeld"
   >,
 ): FleetThreadState | null {
   if (
@@ -100,6 +103,8 @@ export function classifyFleetThread(
     shell.pendingSubagentRequest != null
   )
     return "attention";
+  // Held behind another Codex turn: the thread lists show it waiting, and Fleet has no waiting count.
+  if (isRunStartHeld(shell)) return null;
   if (threadRuntimeIsActive(shell.runtime)) return "running";
   if (shell.runtime?.status === "idle" && shell.pendingBackgroundTasks.length > 0) {
     return "running";
