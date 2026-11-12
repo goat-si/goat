@@ -46,3 +46,24 @@ it("turns the routine a line names into a chip that opens the bot's home", async
   await userEvent.click(screen.getByRole("button", { name: "Open routine Check in" }));
   expect(onOpenHome).toHaveBeenCalledOnce();
 });
+
+it("a routine named like the line's first word gets its chip on the name, not the first word", async () => {
+  const named: GoatBotRow = {
+    ...event,
+    text: "Routine Routine paused",
+    subject: { kind: "routine", id: "routine-1", name: "Routine" },
+  };
+  await using screen = await render(
+    <GoatBotTimeline
+      environmentId={EnvironmentId.make("env")}
+      rows={[named]}
+      onRetry={() => {}}
+      onOpenHome={() => {}}
+    />,
+  );
+  const note = screen.getByRole("note");
+  await expect.element(note).toHaveTextContent("Routine Routine paused");
+  const chip = screen.getByRole("button", { name: "Open routine Routine" });
+  expect(chip.element().previousSibling?.textContent).toBe("Routine ");
+  expect(chip.element().nextSibling?.textContent).toBe(" paused");
+});
