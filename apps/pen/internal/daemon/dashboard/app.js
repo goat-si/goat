@@ -373,7 +373,7 @@
     $("members").tBodies[0].replaceChildren(...rows);
     const offline = s.members.some((m) => !m.self && !m.online && m.lastSeen);
     const foot = [
-      "릴레이 열은 이 데몬이 본 세션(메시 동기화, 받은 세션)만 보여 줍니다. 이 기기 CLI의 pen pipe, pen forward 세션은 나오지 않습니다. · The relay column shows only sessions this daemon sees (mesh sync and sessions it accepts); pen pipe and pen forward from this machine's CLI are not shown.",
+      "릴레이 열은 이 데몬이 본 세션(메시 동기화, 받은 세션)만 보여 줍니다. 이 기기 CLI의 pen pipe, pen forward 세션은 나오지 않습니다(24시간 열은 셉니다). · The relay column shows only sessions this daemon sees (mesh sync and sessions it accepts); pen pipe and pen forward from this machine's CLI are not shown there (the 24 h column counts them).",
     ];
     if (s.full) {
       foot.unshift(
