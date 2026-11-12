@@ -206,7 +206,10 @@ export function GoatBotFaceAvatar(props: {
         <GoatBotFace state={props.state} size={props.size * 0.86} motion={props.motion ?? null} />
       )}
       {signal.waitingDot ? (
-        <View className="absolute rounded-full bg-warning" style={waitingDotStyle(props.size)} />
+        <View
+          className="absolute rounded-full bg-warning-foreground"
+          style={waitingDotStyle(props.size)}
+        />
       ) : null}
     </View>
   );
