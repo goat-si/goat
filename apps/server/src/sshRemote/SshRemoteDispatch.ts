@@ -1,6 +1,6 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
-import { advertisesMemoryTools, remoteToolName, toolRefusal } from "./remoteToolNames.ts";
+import { advertisesMemoryTools, refusedBy, remoteToolName } from "./remoteToolNames.ts";
 export { refusedByRemote } from "./remoteRefusal.ts";
 import {
   AttachmentCreateUploadUrlInput,
@@ -859,7 +859,7 @@ const make = Effect.gen(function* () {
     );
     const result = readRemoteToolResult(input.tool, raw);
     if (!result.ok)
-      return yield* failure("remote_refused", result.message, toolRefusal(input.tool, result));
+      return yield* failure("remote_refused", ...refusedBy(input.tool, input.target.alias, result));
     return result.value;
   });
 

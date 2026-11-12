@@ -1871,6 +1871,42 @@ it.effect("structured remote refusal is definite", () =>
       }),
   ),
 );
+it.effect.each([
+  {
+    driver: "codex",
+    from: ' From here: goat_call provider.sync {driver:"codex", hosts:["unlisted"], login:false}.',
+  },
+  { driver: undefined, from: "" },
+])(
+  "a remote refusal for a missing CLI names this machine's alias (driver $driver)",
+  ({ driver, from }) =>
+    withLaunchRemote(
+      {
+        refusal: true,
+        launchReply: {
+          code: "provider_unavailable",
+          classification: "provider_cli_missing",
+          ...(driver === undefined ? {} : { driver }),
+          message: "Codex is not installed on vm-1. No thread was created.",
+        },
+      },
+      () =>
+        Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const error = yield* dispatch.launchThread(launchInput, Effect.void).pipe(Effect.flip);
+          expect(error.message).toBe(
+            "On unlisted: Codex is not installed on vm-1. No thread was created." + from,
+          );
+          // Nothing ran there, so a retry after installing cannot start a second thread.
+          expect(error.launchMayHaveStarted).toBeUndefined();
+          expect(hostFailure(error as SshRemoteDispatch.SshRemoteDispatchError)).toMatchObject({
+            code: "provider_unavailable",
+            classification: "provider_cli_missing",
+            ...(driver === undefined ? {} : { driver }),
+          });
+        }),
+    ),
+);
 it.effect("first registration permits an approval-required thread under full-access ceiling", () =>
   withLaunchRemote({ registrationAccess: true }, (record) =>
     Effect.gen(function* () {

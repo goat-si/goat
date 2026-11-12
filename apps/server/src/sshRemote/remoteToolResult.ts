@@ -17,6 +17,7 @@ export function readRemoteToolResult(
       readonly classification?: string;
       readonly mayHaveStarted?: boolean;
       readonly threadId?: string;
+      readonly driver?: string;
     } {
   const result = (typeof raw === "object" && raw !== null ? raw : {}) as CallToolResult;
   const text = result.content?.find((item) => item.type === "text")?.text;
@@ -37,6 +38,7 @@ export function readRemoteToolResult(
             readonly classification?: unknown;
             readonly mayHaveStarted?: unknown;
             readonly threadId?: unknown;
+            readonly driver?: unknown;
           })
         : {};
     const message = "message" in fields ? String(fields.message) : (text ?? "no details");
@@ -51,6 +53,7 @@ export function readRemoteToolResult(
         ? { mayHaveStarted: fields.mayHaveStarted }
         : {}),
       ...(typeof fields.threadId === "string" ? { threadId: fields.threadId } : {}),
+      ...(typeof fields.driver === "string" ? { driver: fields.driver } : {}),
     };
   }
   return { ok: true, value: payload };

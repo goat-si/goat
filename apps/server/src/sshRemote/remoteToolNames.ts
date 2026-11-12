@@ -52,8 +52,16 @@ export const toolRefusal = (
     readonly classification?: string | undefined;
     readonly mayHaveStarted?: boolean | undefined;
     readonly threadId?: string | undefined;
+    readonly driver?: string | undefined;
   },
 ) => {
+  // The destination refused before creating anything because the provider's CLI is missing there.
+  if (tool === "goat_thread_launch" && result.classification === CLI_MISSING)
+    return {
+      ...(result.code === undefined ? {} : { remoteCode: result.code }),
+      remoteClassification: CLI_MISSING,
+      ...(result.driver === undefined ? {} : { remoteDriver: result.driver }),
+    };
   // A placement answer says itself whether the work may have started; absent, it may have.
   if (tool === "goat_thread_launch" && result.classification?.startsWith("placement_") === true)
     return {
@@ -70,3 +78,35 @@ export const toolRefusal = (
       : {}),
   };
 };
+
+const CLI_MISSING = "provider_cli_missing";
+
+/**
+ * A remote refusal as this machine reports it. A missing CLI keeps the destination's own words,
+ * names the alias this machine reached it by, and, when provider.sync is the fix, the call that
+ * installs it from here.
+ */
+export const refusalMessage = (
+  tool: string,
+  alias: string,
+  result: {
+    readonly message: string;
+    readonly classification?: string | undefined;
+    readonly driver?: string | undefined;
+  },
+) => {
+  if (tool !== "goat_thread_launch" || result.classification !== CLI_MISSING) return result.message;
+  const own = result.message.replace(/^The remote \S+ refused: /u, "");
+  const sync =
+    result.driver === undefined
+      ? ""
+      : ` From here: goat_call provider.sync {driver:"${result.driver}", hosts:["${alias}"], login:false}.`;
+  return `On ${alias}: ${own}${sync}`;
+};
+
+/** The message and facts of a remote refusal, as failure(reason, message, facts) takes them. */
+export const refusedBy = (
+  tool: string,
+  alias: string,
+  result: Parameters<typeof refusalMessage>[2] & Parameters<typeof toolRefusal>[1],
+) => [refusalMessage(tool, alias, result), toolRefusal(tool, result)] as const;

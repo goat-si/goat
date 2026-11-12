@@ -21,6 +21,8 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   readonly remoteClassification?: string | undefined;
   /** The idle thread a not-started placement left on the remote. */
   readonly remoteThreadId?: string | undefined;
+  /** With a provider_cli_missing classification: the driver provider.sync installs there. */
+  readonly remoteDriver?: string | undefined;
 }> {}
 
 /**
