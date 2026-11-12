@@ -312,7 +312,7 @@ function HubDevicesList({
           {listed.data === null && !listed.error ? "Loading devices…" : "No devices added yet."}
         </Text>
       ) : null}
-      {rows.map(({ key, label: rowLabel, node, device, childSetup, childOptIn }) => {
+      {rows.map(({ key, label: rowLabel, node, device, childSetup, childOptIn, missingClis }) => {
         const link =
           device !== null
             ? HUB_TRANSPORT_LABEL[device.transport]
@@ -351,6 +351,12 @@ function HubDevicesList({
             {device === null ? null : (
               <Text className="text-sm text-foreground-muted">
                 {hubDeviceFacts(device).join(" · ")}
+              </Text>
+            )}
+            {missingClis === null ? null : (
+              <Text className="text-sm text-warning-foreground">
+                {missingClis}. Install from the hub's Settings → Connections → Providers on your
+                machines.
               </Text>
             )}
             {childSetup === null ? null : (
