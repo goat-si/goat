@@ -144,7 +144,7 @@ export function goalBannerItem(input: {
 export function startHoldBannerItem(input: {
   readonly threadId: ThreadId;
   readonly hold: RunStartHoldPresentation;
-  /** Offered for a turn no run owns; a turn from before the restart stops with its own run. */
+  /** Offered for a turn no run owns; a turn an earlier run started stops with its own run. */
   readonly canStop: boolean;
   readonly stopping: boolean;
   readonly onStop: () => void;
