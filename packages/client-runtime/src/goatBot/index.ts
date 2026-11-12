@@ -17,6 +17,7 @@ export * from "./remoteWork.ts";
 export * from "./face.ts";
 export * from "./avatar.ts";
 export * from "./faceMotion.ts";
+export * from "./faceHead.ts";
 export * from "./botNotes.ts";
 export * from "./diagnostics.ts";
 export * from "./botArtifacts.ts";

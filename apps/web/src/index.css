@@ -294,6 +294,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --color-goat-avatar: color-mix(in oklab, var(--foreground) 6%, transparent);
   --color-goat-avatar-border: color-mix(in oklab, var(--foreground) 12%, transparent);
   --color-goat-avatar-foreground: color-mix(in oklab, var(--foreground) 82%, transparent);
+  /* The bot's eyes on its solid head: the canvas, or a member's color where it fills the circle. */
+  --color-goat-face-eyes: var(--goat-face-eyes, var(--background));
   /* The person's messages in GOAT Bot's conversation; mobile keeps the same values. */
   --color-goat-person-message: var(--goat-person-message);
   --color-goat-person-message-foreground: var(--goat-person-message-foreground);
