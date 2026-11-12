@@ -164,8 +164,11 @@ GOAT_FORCED_RECORDS
     sleep 1; forced_waited=$((forced_waited + 1))
   done
   if server_alive "$FORCE_PID"; then
-    forced_signal_same KILL "$FORCE_PID" "" "$FORCE_START" "$forced_root_ticks" ||
-      printf 'GOAT did not send SIGKILL to PID %s: it exited or no longer matched the approved runtime.\\n' "$FORCE_PID" >>"$LOG_FILE" 2>/dev/null || :
+    # A process still running that no longer passes the checks may be the runtime after a bad read,
+    # so nothing more is signalled or started and its records stay for a person.
+    if ! forced_signal_same KILL "$FORCE_PID" "" "$FORCE_START" "$forced_root_ticks" && server_alive "$FORCE_PID"; then
+      forced_refused "it no longer matched the approved runtime before SIGKILL"
+    fi
     forced_waited=0
     while server_alive "$FORCE_PID" && [ "$forced_waited" -lt 10 ]; do sleep 1; forced_waited=$((forced_waited + 1)); done
     if forced_parent_holds; then

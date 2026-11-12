@@ -137,6 +137,33 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
 
     it.live(
+      "a runtime that no longer matches before SIGKILL is left running with its records",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            ...unverified,
+            ignoreSigterm: true,
+            startChangesOnTerm: true,
+          });
+          const startedAt = yield* startOf(f, f.pid);
+          const before = yield* f.snapshot;
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 1,
+            forceReplace: { pid: f.pid, port: f.port, startedAt },
+          });
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+          assert.isTrue(isAlive(f.pid));
+          assert.deepEqual(yield* f.snapshot, before);
+          assert.include(
+            yield* f.fs.readFileString(`${f.state}/server.log`),
+            `GOAT did not stop PID ${f.pid} for an approved forced update: it no longer matched the approved runtime before SIGKILL.`,
+          );
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live(
       "a runtime that ignores SIGTERM is killed after the grace, and its child is left running and named",
       () =>
         Effect.gen(function* () {

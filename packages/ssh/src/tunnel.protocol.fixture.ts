@@ -49,6 +49,8 @@ export const protocolExecutable = (
     stopBarrier?: boolean;
     /** Log SIGTERM and keep running, as a runtime that ignores it does. */
     ignoreSigterm?: boolean;
+    /** On SIGTERM, ps reports another start time for this process, as when a read goes wrong. */
+    startChangesOnTerm?: boolean;
     /** Start one long-running child, as a provider app-server, and record its PID in .test/child-pid. */
     spawnChild?: boolean;
     /** The spawned child records its parent on SIGTERM and keeps running. */
@@ -305,6 +307,7 @@ server.close(() => process.exit(0));
   }
   process.on("SIGTERM", () => {
 event("stop");
+if (${JSON.stringify(signals.startChangesOnTerm ?? false)}) fs.writeFileSync(path.join(test, "foreign-start"), "Thu Jan  1 00:00:00 1970\\n");
 if (${JSON.stringify(signals.ignoreSigterm ?? false)}) return;
 if (${JSON.stringify(signals.stopBarrier ?? false)}) {
   stopRequested = true;
@@ -360,6 +363,7 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   nodeMode?: boolean;
   stopBarrier?: boolean;
   ignoreSigterm?: boolean;
+  startChangesOnTerm?: boolean;
   spawnChild?: boolean;
   childIgnoresTerm?: boolean;
   contestedPort?: number;
