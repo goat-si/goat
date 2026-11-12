@@ -449,7 +449,9 @@ const superviseReplacement = async (
             ? value.instanceId !== undefined &&
               value.instanceId !== input.oldInstanceId &&
               (input.oldStopped !== true || recordsChild(input.baseDir, pid, input.port))
-            : input.oldStopped === true || !processExists(input.oldPid))
+            : input.oldStopped === true
+              ? recordsChild(input.baseDir, pid, input.port)
+              : !processExists(input.oldPid))
         ) {
           writeLaunchRecords(input.stateDir, identity, pid, input.port, input.platform);
           return pid;

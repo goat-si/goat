@@ -199,60 +199,78 @@ it("after a forced stop the launch saw complete, a live process on the old PID i
   assert.equal(result.status, "failed");
 });
 
-it("after a forced stop, another server answering on the port does not make the replacement ready", async () => {
-  const port = await reserveLoopbackPort();
-  const { baseDir, stateDir, logFile } = tempSuperviseHome();
-  // A GOAT of the target version for other data takes the port; the new child never binds it.
-  const descriptor = {
-    environmentId: "other",
-    label: "Other",
-    platform: { os: "linux", arch: "x64" },
-    serverVersion: "2.0.0",
-    sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
-    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
-    protocol: {
-      ssh: { min: SSH_RUNTIME_PROTOCOL_VERSION, max: SSH_RUNTIME_PROTOCOL_VERSION },
-      orchestration: { min: ORCHESTRATION_PROTOCOL_VERSION, max: ORCHESTRATION_PROTOCOL_VERSION },
-    },
-    capabilities: { drainRestart: true },
-    instanceId: "other-instance",
-  };
-  const other = NodeHttp.createServer((req, res) => {
-    res.writeHead(req.url === "/.well-known/goat/environment" ? 200 : 404, {
-      "content-type": "application/json",
+it.each(["replacement", "rollback"] as const)(
+  "after a forced stop, another server answering on the port does not confirm the %s",
+  async (start) => {
+    const port = await reserveLoopbackPort();
+    const { baseDir, stateDir, logFile } = tempSuperviseHome();
+    // A GOAT of the awaited version for other data takes the port; the child never binds it.
+    const awaited = start === "replacement" ? "2.0.0" : "1.0.0";
+    const descriptor = {
+      environmentId: "other",
+      label: "Other",
+      platform: { os: "linux", arch: "x64" },
+      serverVersion: awaited,
+      sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+      orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+      protocol: {
+        ssh: { min: SSH_RUNTIME_PROTOCOL_VERSION, max: SSH_RUNTIME_PROTOCOL_VERSION },
+        orchestration: { min: ORCHESTRATION_PROTOCOL_VERSION, max: ORCHESTRATION_PROTOCOL_VERSION },
+      },
+      capabilities: { drainRestart: true },
+      instanceId: "other-instance",
+    };
+    const other = NodeHttp.createServer((req, res) => {
+      res.writeHead(req.url === "/.well-known/goat/environment" ? 200 : 404, {
+        "content-type": "application/json",
+      });
+      res.end(JSON.stringify(descriptor));
     });
-    res.end(JSON.stringify(descriptor));
-  });
-  other.listen(port, "127.0.0.1");
-  await NodeEvents.EventEmitter.once(other, "listening");
-  const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
-  NodeFS.writeFileSync(runnerFile, `#!${process.execPath}\nsetInterval(() => {}, 1 << 30);\n`, {
-    mode: 0o700,
-  });
-  try {
-    const result = await superviseSshRuntimeReplacement({
-      oldPid: process.pid,
-      oldInstanceId: "forced",
-      port,
-      baseDir,
-      stateDir,
+    other.listen(port, "127.0.0.1");
+    await NodeEvents.EventEmitter.once(other, "listening");
+    const silent = `#!${process.execPath}\nsetInterval(() => {}, 1 << 30);\n`;
+    const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
+    const previousRunnerFile = NodePath.join(stateDir, "previous-server.mjs");
+    NodeFS.writeFileSync(
       runnerFile,
-      previousRunnerFile: "",
-      targetVersion: "2.0.0",
-      previousVersion: "",
-      identity: "replacement-identity",
-      previousIdentity: "",
-      exitTimeoutMs: 1_000,
-      readyTimeoutMs: 2_000,
-      logFile,
-      forced: true,
-      oldStopped: true,
-    });
-    assert.equal(result.status, "failed");
-  } finally {
-    other.close();
-  }
-});
+      start === "replacement" ? silent : `#!${process.execPath}\nprocess.exit(1);\n`,
+      { mode: 0o700 },
+    );
+    if (start === "rollback") NodeFS.writeFileSync(previousRunnerFile, silent, { mode: 0o700 });
+    let result: Awaited<ReturnType<typeof superviseSshRuntimeReplacement>> | undefined;
+    try {
+      result = await superviseSshRuntimeReplacement({
+        oldPid: process.pid,
+        oldInstanceId: "forced",
+        port,
+        baseDir,
+        stateDir,
+        runnerFile,
+        previousRunnerFile: start === "rollback" ? previousRunnerFile : "",
+        targetVersion: "2.0.0",
+        previousVersion: start === "rollback" ? "1.0.0" : "",
+        identity: "replacement-identity",
+        previousIdentity: start === "rollback" ? "previous-identity" : "",
+        exitTimeoutMs: 1_000,
+        readyTimeoutMs: 2_000,
+        logFile,
+        forced: true,
+        oldStopped: true,
+      });
+      assert.equal(result.status, "failed");
+    } finally {
+      other.close();
+      // A child wrongly confirmed is still running; stop the PID the supervisor returned.
+      if (result !== undefined && "pid" in result) {
+        try {
+          process.kill(result.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  },
+);
 
 it("keeps writes from another server that owned the data since the backup", async () => {
   const { result, database, ran } = await superviseFailedReplacement("foreign");
