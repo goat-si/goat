@@ -483,6 +483,28 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("sweeps of a repo and of all repos keep separate rounds", () =>
+    Effect.gen(function* () {
+      const { service, repo, run, addWorktree, setThreads, setDuringPullRequestLookup } =
+        yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c", "d"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      // Each sweep checks two of the four within its budget. A shared round would let the scoped
+      // sweep finish the all-repos round early and send the next all-repos sweep back to the start.
+      const remaining = [];
+      for (const scope of [{}, { repo }, {}, { repo }])
+        remaining.push((yield* service.cleanup({ ...scope, dryRun: false })).remaining);
+      expect(remaining).toEqual([2, 2, 0, 0]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("a worktree whose check was interrupted still counts in remaining", () =>
     Effect.gen(function* () {
       const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
