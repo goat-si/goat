@@ -72,6 +72,8 @@ export function GoatBotComposer({
 }) {
   const [text, setText] = useState(initialText);
   const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
+  // Files handed to the box and still being prepared (an image is compressed first).
+  const [staging, setStaging] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef(attachments);
   const lifetime = useRef<AbortController | null>(null);
@@ -98,6 +100,8 @@ export function GoatBotComposer({
   const trimmed = text.trim();
   const drafted = trimmed.length > 0 || attachments.length > 0;
   const canSubmit = !disabled && drafted;
+  // Leaving the chat would drop any of these, focused or not.
+  const holdsNavigation = drafted || staging > 0 || replyTo !== null;
   const submit = () => {
     if (!canSubmit) return;
     if (onSend(trimmed, attachments) === false) return;
@@ -110,11 +114,12 @@ export function GoatBotComposer({
     if (attachmentSupport === null || files.length === 0) return false;
     const signal = lifetime.current?.signal;
     if (!signal) return false;
+    setStaging((count) => count + 1);
     const { staged, error } = await stageGoatBotFiles(files, {
       existingCount: draftRef.current.length,
       support: attachmentSupport,
       botName,
-    });
+    }).finally(() => setStaging((count) => count - 1));
     if (signal.aborted) {
       releaseUnownedGoatBotAttachments(staged);
       return false;
@@ -169,8 +174,7 @@ export function GoatBotComposer({
 
   return (
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
-      {/* Leaving the chat would drop the draft, focused or not. */}
-      {drafted ? <HoldsNavigation /> : null}
+      {holdsNavigation ? <HoldsNavigation /> : null}
       <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
         {replyTo !== null ? (
           <div className="mx-2 mt-1 flex min-w-0 items-center gap-1 rounded-md border border-border ps-2 text-xs text-muted-foreground">

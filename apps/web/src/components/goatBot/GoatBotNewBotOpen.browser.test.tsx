@@ -31,6 +31,8 @@ const profile = (botId: string, name: string, environmentId = "env-1") =>
 
 const state = vi.hoisted(() => ({
   create: (() => Promise.resolve({})) as (input: unknown) => Promise<unknown>,
+  /** While set, preparing a pasted image waits for it, as compressing a large photo takes time. */
+  imageGate: null as Promise<void> | null,
 }));
 // The roster's list read, as a store, so a changed list or environment re-renders the roster as
 // a real read does.
@@ -80,6 +82,17 @@ vi.mock("~/state/environments", async (original) => ({
   }),
 }));
 vi.mock("./useGoatBotHome", () => ({ useGoatBotHome: () => undefined }));
+vi.mock("~/lib/imageCompression", async (original) => {
+  const real = await original<typeof import("~/lib/imageCompression")>();
+  return {
+    ...real,
+    prepareImageForAttachment: async (file: File, maxBytes: number) => {
+      if (state.imageGate === null) return real.prepareImageForAttachment(file, maxBytes);
+      await state.imageGate;
+      return { ok: true as const, file, recompressed: false };
+    },
+  };
+});
 vi.mock("./useGoatBotSession", () => ({ useGoatBotEnabled: () => ({ enabled: true }) }));
 vi.mock("./GoatBotNeedsYou", () => ({ GoatBotNeedsYou: () => null }));
 vi.mock("./GoatBotSidebarRow", () => ({ GoatBotSidebarRow: () => null }));
@@ -236,6 +249,7 @@ function setup() {
   forgetNewBotEnvironment(EnvironmentId.make("env-2"));
   resetNavigationHoldsForTests();
   resetNameRowFocusForTests();
+  state.imageGate = null;
   roster.set({ environmentId: "env-1", bots: [ada] });
   const answer = deferred<unknown>();
   const create = vi.fn((_input: unknown) => answer.promise);
@@ -438,6 +452,69 @@ it.each([
     await expect.element(screen.getByRole("link", { name: "New bot", exact: true })).toBeVisible();
   },
 );
+
+it("a create answering while a pasted image is still being prepared opens nothing, and the image is staged after", async () => {
+  const { answer } = setup();
+  const prepared = deferred<void>();
+  state.imageGate = prepared.promise;
+  await using screen = await render(<Roster />, { router: "/bot" });
+  await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+  const field = screen.getByRole("textbox", { name: "Message Ada" });
+  await userEvent.click(screen.getByRole("button", { name: "New bot", exact: true }));
+  await expect.element(screen.getByRole("status").getByText("Creating…")).toBeVisible();
+  const data = new DataTransfer();
+  data.items.add(new File(["png"], "photo.png", { type: "image/png" }));
+  await act(() =>
+    field
+      .element()
+      .dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+      ),
+  );
+  const router = screen.router;
+  if (!router) throw new Error("the roster renders under a router");
+  using navigate = vi.spyOn(router, "navigate");
+  answer();
+  await createdInStore();
+  expect(navigate).not.toHaveBeenCalled();
+  await act(() => prepared.resolve());
+  await expect
+    .element(screen.getByRole("list", { name: "Attachments" }).getByText("photo.png"))
+    .toBeVisible();
+  expect(router.state.location.pathname).toBe("/bot");
+});
+
+/** The chat's message box with a quoted message to reply to, as choosing Reply sets it. */
+function ReplyingComposer() {
+  const [replyTo, setReplyTo] = useState<string | null>(null);
+  return (
+    <>
+      <button type="button" onClick={() => setReplyTo("Ada's earlier answer")}>
+        Reply to Ada
+      </button>
+      <GoatBotComposer
+        disabled={false}
+        botName="Ada"
+        placeholder="Message Ada"
+        replyTo={replyTo}
+        onClearReply={() => setReplyTo(null)}
+        onSend={() => {}}
+      />
+    </>
+  );
+}
+
+it("a reply target alone holds the open, and clearing it lets go", async () => {
+  setup();
+  await using screen = await render(<ReplyingComposer />, { router: false }); // Only the message box.
+  expect(navigationBlocked()).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Reply to Ada" }));
+  await expect.element(screen.getByText("Ada's earlier answer")).toBeVisible();
+  expect(navigationBlocked()).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "Clear reply" }));
+  await expect.element(screen.getByText("Ada's earlier answer")).not.toBeInTheDocument();
+  expect(navigationBlocked()).toBe(false);
+});
 
 it("the roster's New bot opens the chat from the narrow sidebar sheet it lives in, then closes it", async () => {
   const viewport = { width: window.innerWidth, height: window.innerHeight };
