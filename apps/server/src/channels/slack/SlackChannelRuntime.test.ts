@@ -642,3 +642,58 @@ describe("Slack delivery status", () => {
     },
   );
 });
+
+describe("Slack progress writes never mark the connection", () => {
+  it.effect.each([
+    "auth_invalid",
+    "auth_revoked",
+    "not_in_channel",
+    "channel_not_found",
+    "platform",
+    "network",
+    "timeout",
+    "unknown",
+  ] as const)(
+    "a %s failure on chat.update or chat.delete leaves the connection running",
+    (category) => {
+      const h = harness();
+      return run(
+        h,
+        Effect.gen(function* () {
+          yield* apply(connection());
+          yield* awaitStatus("connected");
+          h.sdk.script.updateMessage = () => Promise.reject(h.sdk.failure("chat.update", category));
+          h.sdk.script.deleteMessage = () => Promise.reject(h.sdk.failure("chat.delete", category));
+          const transport = h.registry.registered.get("slack");
+          assert(transport?.edit !== undefined && transport.remove !== undefined);
+          const destination = {
+            kind: "slack" as const,
+            connectionId,
+            teamId: "T0TEAM",
+            channelId: "C0ALLOWED",
+            rootTs: "1760000000.000100",
+          };
+          yield* transport.edit({
+            message: {
+              deliveryId: ChannelDeliveryId.make("edit-1"),
+              destination,
+              kind: "receipt",
+              text: "On it.",
+            },
+            externalMessageId: "1760000001.000100",
+          });
+          yield* transport.remove({ destination, externalMessageId: "1760000001.000100" });
+          const status = yield* statusOf;
+          assert.equal(status.status, "connected");
+          assert.isUndefined(status.lastDeliveryError);
+          yield* send(h.registry);
+          assert.equal(h.sdk.posted.length, 1);
+          assert.deepEqual(
+            h.sdk.calls.filter((call) => call.startsWith("disconnect")),
+            [],
+          );
+        }),
+      );
+    },
+  );
+});
