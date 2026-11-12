@@ -196,7 +196,7 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
       if (method === "tools/list") served = true;
       let given: string | undefined;
       let announcedAt = 0;
-      // The end check and the write are one step, so an end cannot land between them (#1678).
+      // The end check and the write are one step, so an end cannot land between them.
       const write = Effect.suspend(() => {
         if (Deferred.isDoneUnsafe(options.ended)) return whenEnded(id, method);
         const result = method === "ping" ? {} : answers.get(method);
