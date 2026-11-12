@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,5 +126,14 @@ func TestAClockSetBackJustUnder23h45KeepsTheCount(t *testing.T) {
 	w.Add("m", "r", 1, 1)
 	if in, out := totalOf(w, "m", "r"); in != 10 || out != 10 {
 		t.Fatalf("in %d out %d after the clock went back just under 23 h 45 min, want 10 and 10", in, out)
+	}
+}
+
+// Buckets are chosen by the wall clock, so where the totals start must be too: with monotonic readings, Since would
+// keep the daemon's start after the wall clock moved a day ahead.
+func TestSinceIsOnTheWallClock(t *testing.T) {
+	w := NewWindow(time.Now)
+	if s := w.Since().String(); strings.Contains(s, " m=") {
+		t.Fatalf("Since() = %s carries a monotonic reading", s)
 	}
 }

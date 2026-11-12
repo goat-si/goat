@@ -45,12 +45,13 @@ type Window struct {
 
 // NewWindow reads the wall clock through now.
 func NewWindow(now func() time.Time) *Window {
-	return &Window{now: now, made: now(), entries: map[key]*entry{}, pruned: math.MinInt64}
+	return &Window{now: now, made: now().Round(0), entries: map[key]*entry{}, pruned: math.MinInt64}
 }
 
-// Since is where the totals start: when the window was made, or 24 hours ago if that is later.
+// Since is where the totals start: when the window was made, or 24 hours ago if that is later. Both are wall clock
+// readings (Round(0) drops the monotonic one), as the buckets are.
 func (w *Window) Since() time.Time {
-	if s := w.now().Add(-24 * time.Hour); s.After(w.made) {
+	if s := w.now().Round(0).Add(-24 * time.Hour); s.After(w.made) {
 		return s
 	}
 	return w.made
