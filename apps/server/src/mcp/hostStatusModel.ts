@@ -365,16 +365,41 @@ export function quotaRefreshDue(
   return nowMs - checkedAt >= intervalMs;
 }
 
+/** Older than this, a CLI answer may be one a failed refresh kept, so it reads as unknown. */
+const CLI_ANSWER_FRESH_MS = 15 * 60_000;
+
+const cliOf = (
+  provider: Pick<ServerProvider, "cli" | "cliCheckedAt" | "version">,
+  now: number,
+): Pick<HostStatusProvider, "cli" | "version" | "cliCheckedAt"> => {
+  const checkedAt = provider.cliCheckedAt;
+  const age = checkedAt === undefined ? Number.NaN : now - Date.parse(checkedAt);
+  const cli =
+    provider.cli === "none"
+      ? "none"
+      : provider.cli !== undefined && age >= 0 && age < CLI_ANSWER_FRESH_MS
+        ? provider.cli
+        : "unknown";
+  return {
+    cli,
+    ...(checkedAt === undefined ? {} : { cliCheckedAt: checkedAt }),
+    ...(cli === "present" && provider.version ? { version: provider.version } : {}),
+  };
+};
+
 export function hostStatusProviders(
   providers: ReadonlyArray<
-    Pick<ServerProvider, "instanceId" | "driver" | "displayName" | "enabled">
+    Pick<ServerProvider, "instanceId" | "driver" | "displayName" | "enabled"> &
+      Partial<Pick<ServerProvider, "cli" | "cliCheckedAt" | "version">>
   >,
+  now?: number,
 ): Array<HostStatusProvider> {
   return providers.map((provider) => ({
     instanceId: provider.instanceId,
     driver: provider.driver,
     ...(provider.displayName === undefined ? {} : { displayName: provider.displayName }),
     enabled: provider.enabled,
+    ...(now === undefined ? {} : cliOf(provider, now)),
   }));
 }
 

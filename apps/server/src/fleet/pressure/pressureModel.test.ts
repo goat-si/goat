@@ -470,6 +470,44 @@ describe("rankHosts", () => {
       ["linux-box", "runs linux"],
     ]);
   });
+
+  it("skips a host whose CLI is missing and keeps one it has not checked, saying so", () => {
+    const withCli = (host: string, cli?: "present" | "missing" | "unknown") => {
+      const base = entry(host, { load: 0.1 });
+      return {
+        ...base,
+        metrics: {
+          ...base.metrics!,
+          providers: base.metrics!.providers!.map((provider) =>
+            cli === undefined ? provider : { ...provider, displayName: "Codex", cli },
+          ),
+        },
+      } as HostStatusEntry;
+    };
+    const ranking = rankHosts(
+      [
+        withCli("vm-gone", "missing"),
+        withCli("vm-new", "unknown"),
+        withCli("old"),
+        withCli("ok", "present"),
+      ],
+      { driver: "codex" as never },
+      settings,
+      0,
+    );
+    expect(
+      ranking.candidates.map((candidate) => [
+        candidate.host,
+        candidate.eligible,
+        candidate.reasons,
+      ]),
+    ).toEqual([
+      ["vm-new", true, ["load 0.1 per core, 0 threads running or queued", "Codex CLI not checked"]],
+      ["old", true, ["load 0.1 per core, 0 threads running or queued"]],
+      ["ok", true, ["load 0.1 per core, 0 threads running or queued"]],
+      ["vm-gone", false, ["Codex CLI is not installed there"]],
+    ]);
+  });
 });
 
 describe("rankHosts quota verdicts", () => {

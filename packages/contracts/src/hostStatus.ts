@@ -192,6 +192,15 @@ export const HostStatusProvider = Schema.Struct({
   driver: ProviderDriverKind,
   displayName: Schema.optional(TrimmedNonEmptyString),
   enabled: Schema.Boolean,
+  /**
+   * Whether that machine's CLI for this instance is installed, from its own provider probe:
+   * none when the instance runs no CLI from PATH, unknown when it was not checked in the last
+   * 15 minutes. Older hosts omit it.
+   */
+  cli: ForwardCompatibleOptional(Schema.Literals(["present", "missing", "none", "unknown"])),
+  /** The CLI's version, only while present. */
+  version: ForwardCompatibleOptional(TrimmedNonEmptyString),
+  cliCheckedAt: ForwardCompatibleOptional(IsoDateTime),
 });
 export type HostStatusProvider = typeof HostStatusProvider.Type;
 
