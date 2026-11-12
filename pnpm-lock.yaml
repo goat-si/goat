@@ -2329,9 +2329,6 @@ importers:
       '@goat/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@goat/provider-core':
-        specifier: workspace:*
-        version: link:../provider-core
       '@goat/shared':
         specifier: workspace:*
         version: link:../shared
