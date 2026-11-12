@@ -847,8 +847,8 @@ const make = Effect.gen(function* () {
       const deadline = (yield* Clock.currentTimeMillis) + REMOTE_DEADLINE_MS;
       while (true) {
         const remote = current.hosts[0];
-        if (remote !== undefined) yield* update(task, remoteHostState(operation, remote, host));
-        if (current.done) return yield* update(task, {}, true);
+        yield* update(task, remote ? remoteHostState(operation, remote, host) : {}, current.done);
+        if (current.done) return;
         if ((yield* Clock.currentTimeMillis) > deadline)
           return yield* lostTrack(task, `${host} did not finish within 30 minutes.`);
         yield* Effect.sleep(REMOTE_POLL);
@@ -1058,7 +1058,7 @@ const make = Effect.gen(function* () {
           Effect.forEach(
             pending,
             (task) =>
-              cancelTask(task, (host, syncId) =>
+              cancelTask(task, operation, (host, syncId) =>
                 callRemote(remoteCaller, {
                   host,
                   tool: CANCEL_TOOL,

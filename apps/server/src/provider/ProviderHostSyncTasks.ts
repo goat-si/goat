@@ -140,12 +140,16 @@ const startOutcome = (exit: Exit.Exit<ProviderSyncResult, RemoteFailure>) => {
 };
 
 /** What a cancel may say about a remote host: only what it confirmed, else undefined. */
-const afterRemoteCancel = <E>(host: string, reply: Exit.Exit<ProviderSyncState, E>) => {
+const afterRemoteCancel = <E>(
+  request: RemoteRequest,
+  host: string,
+  reply: Exit.Exit<ProviderSyncState, E>,
+) => {
   const remote = Exit.isSuccess(reply) ? reply.value.hosts[0] : undefined;
   if (remote?.phase === "cancelled") return { phase: "cancelled", login: undefined } as const;
   // It finished there before the cancel arrived.
   if (Exit.isSuccess(reply) && reply.value.done && remote !== undefined)
-    return { ...remote, host, login: undefined };
+    return { ...remoteHostState(request, remote, host), login: undefined };
   return undefined;
 };
 
@@ -189,6 +193,7 @@ export const lostTrack = (
  */
 export const cancelTask = Effect.fn("ProviderHostSync.cancelTask")(function* <E>(
   task: HostTask,
+  request: RemoteRequest,
   cancelRemote: (host: string, syncId: string) => Effect.Effect<ProviderSyncState, E>,
 ) {
   if (task.finished) return;
@@ -199,7 +204,11 @@ export const cancelTask = Effect.fn("ProviderHostSync.cancelTask")(function* <E>
   if (host === null || syncId === null)
     return yield* update(task, { phase: "cancelled", login: undefined }, true);
   if (syncId === undefined) return yield* update(task, unconfirmed(host), true);
-  const confirmed = afterRemoteCancel(host, yield* Effect.exit(cancelRemote(host, syncId)));
+  const confirmed = afterRemoteCancel(
+    request,
+    host,
+    yield* Effect.exit(cancelRemote(host, syncId)),
+  );
   if (confirmed !== undefined) return yield* update(task, confirmed, true);
   task.remoteSyncId = syncId;
   task.mayStillRun = true;
@@ -270,18 +279,27 @@ export const cancelsSettled = (operation: SyncOperation): Effect.Effect<void> =>
   );
 
 /**
- * A remote host's sync state as this machine shows it. Its `ran` is text from another machine,
- * so it is kept only when it is one of GOAT's own recipe lines for this request.
+ * A remote host's sync state as this machine shows it. Its `ran` and `message` are text from
+ * another machine: `ran` is kept only when it is one of GOAT's own recipe lines for this request,
+ * and `message` is quoted under the host's name.
  */
+type RemoteRequest = { readonly driver: ProviderHostSyncDriver; readonly version: string | null };
+
 export const remoteHostState = (
-  request: { readonly driver: ProviderHostSyncDriver; readonly version: string | null },
+  request: RemoteRequest,
   remote: ProviderSyncHostState,
   host: string,
 ) => {
-  const { ran, ...rest } = remote;
+  const { ran, message, ...rest } = remote;
   const recipe = (["darwin", "linux", "win32"] as const).some((platform) => {
     const command = installCommand(request.driver, platform, request.version);
     return command !== null && describeInstall(command) === ran;
   });
-  return { ...rest, host, ...(ran !== undefined && recipe ? { ran } : {}) };
+  return {
+    ...rest,
+    host,
+    ...(ran !== undefined && recipe ? { ran } : {}),
+    // Another machine's words, quoted under its name so they never read as GOAT's own.
+    ...(message === undefined ? {} : { message: `${host} reports: ${JSON.stringify(message)}` }),
+  };
 };

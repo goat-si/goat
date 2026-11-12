@@ -20,6 +20,7 @@ import {
   type HostPressureSettings,
   type HostStatusEntry,
   type OrchestrationV2ThreadShell,
+  PROVIDER_DISPLAY_NAMES,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
@@ -682,7 +683,8 @@ function cliVerdict(
   );
   const reported = matching.filter((provider) => provider.cli !== undefined);
   if (reported.length === 0) return undefined;
-  const name = reported[0]?.displayName ?? reported[0]?.driver ?? "provider";
+  const driver = reported[0]?.driver ?? "provider";
+  const name = PROVIDER_DISPLAY_NAMES[driver as never] ?? JSON.stringify(driver.slice(0, 40));
   return {
     name,
     missing: matching.every((provider) => provider.cli === "missing"),

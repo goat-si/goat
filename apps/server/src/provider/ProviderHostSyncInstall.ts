@@ -71,8 +71,8 @@ export const withProbedCli = <
       };
 
 /**
- * Why a pinned install did not take: the CLI still reports another version. Undefined when it
- * matches, when nothing was pinned, or when the installer only installs the latest.
+ * Why a pinned install did not take: the CLI reports another version, or none GOAT can read.
+ * Undefined when it matches, when nothing was pinned, or when the installer only installs latest.
  */
 export const pinnedMismatch = (
   name: string,
@@ -80,10 +80,10 @@ export const pinnedMismatch = (
   found: string | null,
   command: { readonly latestOnly: boolean } | null,
 ): string | undefined =>
-  requested === null ||
-  found === null ||
-  command === null ||
-  command.latestOnly ||
-  versionCore(found) === requested
+  requested === null || command === null || command.latestOnly
     ? undefined
-    : `The installer finished, but ${name} is still ${versionCore(found) ?? found}, not ${requested}.`;
+    : found === null
+      ? `The installer finished, but GOAT could not read ${name}'s version to confirm ${requested}.`
+      : versionCore(found) === requested
+        ? undefined
+        : `The installer finished, but ${name} is still ${versionCore(found) ?? found}, not ${requested}.`;
