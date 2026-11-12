@@ -9,7 +9,7 @@ import { render } from "../../../test/render";
 
 import "~/index.css";
 
-const state = vi.hoisted(() => ({ narrow: false }));
+const state = vi.hoisted(() => ({ narrow: false, matched: 0 }));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -19,10 +19,31 @@ vi.mock("./GoatBotAvatar", () => ({
   GoatBotMainAvatar: () => null,
   GoatBotSessionAvatar: () => null,
 }));
-vi.mock("./GoatBotTimeline", async (original) => ({
-  ...(await original<typeof import("./GoatBotTimeline")>()),
-  GoatBotTimeline: () => <p>Earlier conversation</p>,
-}));
+// The real reply file cards under a stand-in timeline, so the chat's file context reaches them.
+vi.mock("./GoatBotTimeline", async (original) => {
+  const { GoatBotReplyFiles } = await import("./GoatBotReplyFiles");
+  return {
+    ...(await original<typeof import("./GoatBotTimeline")>()),
+    GoatBotTimeline: ({ rows }: { rows: ReadonlyArray<GoatBotRow> }) => (
+      <>
+        <p>Earlier conversation</p>
+        {rows.map((row) =>
+          row.kind === "bot" ? <GoatBotReplyFiles key={row.id} text={row.text} /> : null,
+        )}
+      </>
+    ),
+  };
+});
+vi.mock("@goat/client-runtime/goatBot", async (original) => {
+  const real = await original<typeof import("@goat/client-runtime/goatBot")>();
+  return {
+    ...real,
+    goatBotReplyFiles: (...args: Parameters<typeof real.goatBotReplyFiles>) => {
+      state.matched += 1;
+      return real.goatBotReplyFiles(...args);
+    },
+  };
+});
 vi.mock("~/hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("./useBotRoster", () => ({
@@ -110,12 +131,12 @@ const row: GoatBotRow = {
   groupPosition: "single",
 };
 
-function view(threadId = "bot") {
+function view(threadId = "bot", rows: ReadonlyArray<GoatBotRow> = [row]) {
   return (
     <GoatBotChatView
       availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make(threadId) } }}
       canOperate
-      rows={[row]}
+      rows={rows}
       onSend={() => {}}
       onRetryInput={() => {}}
       legacyAgentRoute={null}
@@ -167,4 +188,18 @@ it("switching to another bot closes the open file instead of showing it over tha
   await screen.rerender(view());
   await expect.element(screen.getByText("Earlier conversation")).toBeVisible();
   expect(screen.getByRole("heading", { name: "Weekly summary" }).query()).toBeNull();
+});
+
+it("rendering the chat again does not match its replies against the Library again", async () => {
+  state.narrow = false;
+  state.matched = 0;
+  const rows = [{ ...row, text: "Saved `reports/summary.md`." }];
+  await using screen = await render(view("bot", rows));
+  await expect.element(screen.getByRole("button", { name: "Open summary.md" })).toBeVisible();
+  const matched = state.matched;
+  expect(matched).toBeGreaterThan(0);
+  await screen.rerender(view("bot", rows));
+  await screen.rerender(view("bot", rows));
+  await screen.rerender(view("bot", rows));
+  expect(state.matched).toBe(matched);
 });
