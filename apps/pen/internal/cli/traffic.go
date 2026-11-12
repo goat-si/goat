@@ -29,9 +29,15 @@ var (
 		t := time.NewTicker(trafficEvery)
 		return t.C, t.Stop
 	}
-	// trafficNow is the clock that ages bytes not yet counted: the wall clock without its monotonic reading, as the
-	// daemon buckets by the wall clock (a monotonic reading would ignore clock jumps and, on Linux, sleep). Tests set it.
-	trafficNow = func() time.Time { return time.Now().Round(0) }
+	// trafficNow reads both clocks for the reporter; tests set it.
+	trafficNow = func() clockReading {
+		t := time.Now()
+		return clockReading{wall: t.Round(0), mono: t.Sub(clockStart)}
+	}
+	// trafficPeriodic bounds one periodic report; tests take the bound away.
+	trafficPeriodic = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		return context.WithTimeout(ctx, trafficWithin)
+	}
 	// trafficShutdown bounds the end of a session: the periodic report in flight, the meter settling and the last
 	// report all end by its deadline. Tests end it by hand.
 	trafficShutdown = func() (context.Context, context.CancelFunc) {
@@ -40,6 +46,19 @@ var (
 	// trafficReported, when set, is told the result of every report a session sends (tests).
 	trafficReported func(error)
 )
+
+// clockReading is one reading of both clocks: wall places bytes in the daemon's buckets, which follow the wall
+// clock; mono (time since clockStart) measures how long bytes have waited, which a clock being set does not change.
+type clockReading struct {
+	wall time.Time
+	mono time.Duration
+}
+
+var clockStart = time.Now()
+
+// clockStep is how far the wall clock may move apart from the monotonic one between two reports before the reporter
+// takes it for a step: a clock set, or a sleep the monotonic clock did not count.
+const clockStep = time.Second
 
 // sessionTraffic counts one session's stream bytes and reports them to this machine's daemon (op traffic.report)
 // every trafficEvery and once at the end. Reports are best effort: no daemon, an older daemon or a failed report
@@ -60,18 +79,18 @@ type sessionTraffic struct {
 	// due, where bytes not yet in a report begin.
 	sentIn, sentOut uint64
 	held            []heldBatch
-	lastTry         time.Time
+	lastTry         clockReading
 	stop, done      chan struct{}
 }
 
 // heldBatch is what one refused or unsent report added: bytes that crossed the relay from since on.
 type heldBatch struct {
 	in, out uint64
-	since   time.Time
+	since   clockReading
 }
 
 // maxHeld bounds the batches held at once. A batch is dropped a bucket after it began and reports come every
-// trafficEvery, so more are held only when the clock goes back.
+// trafficEvery, so the cap is reached only if ticks come faster.
 const maxHeld = int(traffic.Span/trafficEvery) + 2
 
 func startTraffic(st *state.Store, node, relay string) *sessionTraffic {
@@ -84,7 +103,7 @@ func startTraffic(st *state.Store, node, relay string) *sessionTraffic {
 		for {
 			select {
 			case <-ticks:
-				ctx, cancel := context.WithTimeout(s.ctx, trafficWithin)
+				ctx, cancel := trafficPeriodic(s.ctx)
 				s.report(ctx)
 				cancel()
 			case <-s.stop:
@@ -124,15 +143,16 @@ func (s *sessionTraffic) finish() {
 
 func (s *sessionTraffic) report(ctx context.Context) {
 	now := trafficNow()
-	for len(s.held) > 0 && (now.Sub(s.held[0].since) >= traffic.Span || len(s.held) >= maxHeld) {
-		// Dropped: counted now, they would land in a later bucket than the one they crossed the relay in.
-		s.sentIn, s.sentOut, s.held = s.sentIn+s.held[0].in, s.sentOut+s.held[0].out, s.held[1:]
-	}
-	if now.Sub(s.lastTry) >= traffic.Span {
-		// Reports stalled for a bucket or more (the machine slept, or the clock jumped): when in that time the
-		// pending bytes moved is unknown, so they are dropped too.
+	gap := now.mono - s.lastTry.mono
+	if step := now.wall.Sub(s.lastTry.wall) - gap; gap >= traffic.Span || step > clockStep || step < -clockStep {
+		// Where the pending bytes belong is unknown: reports stalled for a bucket or more, or the wall clock stepped
+		// since the last report. They are dropped, never sent.
 		s.sentIn, s.sentOut, s.held, s.lastTry = s.in.Load(), s.out.Load(), nil, now
 		return
+	}
+	for len(s.held) > 0 && (age(s.held[0].since, now) >= traffic.Span || len(s.held) >= maxHeld) {
+		// Dropped: counted now, they would land in a later bucket than the one they crossed the relay in.
+		s.sentIn, s.sentOut, s.held = s.sentIn+s.held[0].in, s.sentOut+s.held[0].out, s.held[1:]
 	}
 	in, out := min(s.in.Load()-s.sentIn, daemon.MaxTrafficCount), min(s.out.Load()-s.sentOut, daemon.MaxTrafficCount)
 	since := s.lastTry
@@ -155,6 +175,11 @@ func (s *sessionTraffic) report(ctx context.Context) {
 	if trafficReported != nil {
 		trafficReported(err)
 	}
+}
+
+// age is how long ago since was by whichever clock says longer, so a batch is never kept past a bucket by either.
+func age(since, now clockReading) time.Duration {
+	return max(now.mono-since.mono, now.wall.Sub(since.wall))
 }
 
 // sendReport sends one report and reads its answer before ctx ends. kept is true when the daemon did not count the

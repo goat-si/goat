@@ -5,13 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -179,6 +179,9 @@ func setTrafficHooks(t *testing.T, ticks chan time.Time, reported func(error)) {
 	t.Cleanup(func() { trafficTicks, trafficReported = oldTicks, oldReported })
 	trafficTicks = func() (<-chan time.Time, func()) { return ticks, func() {} }
 	trafficReported = reported
+	oldPeriodic := trafficPeriodic
+	t.Cleanup(func() { trafficPeriodic = oldPeriodic })
+	trafficPeriodic = func(ctx context.Context) (context.Context, context.CancelFunc) { return context.WithCancel(ctx) }
 }
 
 func TestPipeReportsWhileItRunsAndCountsNothingTwice(t *testing.T) {
@@ -574,12 +577,9 @@ func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
 		}
 		return `{"t":"counted"}`
 	})
-	var now atomic.Int64
 	start := time.Unix(1_800_000_000, 0)
-	now.Store(start.UnixNano())
-	oldNow := trafficNow
-	t.Cleanup(func() { trafficNow = oldNow })
-	trafficNow = func() time.Time { return time.Unix(0, now.Load()) }
+	set := testClock(t)
+	set(start, 0)
 	ticks := make(chan time.Time)
 	reported := make(chan error, 8)
 	setTrafficHooks(t, ticks, func(err error) { reported <- err })
@@ -596,13 +596,13 @@ func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
 	out.wait(100)
-	now.Store(start.Add(2 * time.Minute).UnixNano())
+	set(start.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: those 100 bytes wait
 	inW.Write(make([]byte, 50))
 	out.wait(150)
 	// The daemon answers again only a bucket after the refused bytes began: they are dropped, not counted now.
-	now.Store(start.Add(traffic.Span + time.Minute).UnixNano())
+	set(start.Add(traffic.Span+time.Minute), traffic.Span+time.Minute)
 	ticks <- time.Now()
 	if err := <-reported; err != nil {
 		t.Fatalf("second report: %v", err)
@@ -667,12 +667,9 @@ func TestPipeKeepsNewerRefusedBytesWhenAnOlderBatchExpires(t *testing.T) {
 		}
 		return `{"t":"counted"}`
 	})
-	var now atomic.Int64
 	start := time.Unix(1_800_000_000, 0)
-	now.Store(start.UnixNano())
-	oldNow := trafficNow
-	t.Cleanup(func() { trafficNow = oldNow })
-	trafficNow = func() time.Time { return time.Unix(0, now.Load()) }
+	set := testClock(t)
+	set(start, 0)
 	ticks := make(chan time.Time)
 	reported := make(chan error, 8)
 	setTrafficHooks(t, ticks, func(err error) { reported <- err })
@@ -689,15 +686,15 @@ func TestPipeKeepsNewerRefusedBytesWhenAnOlderBatchExpires(t *testing.T) {
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
 	out.wait(100)
-	now.Store(start.Add(2 * time.Minute).UnixNano())
+	set(start.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: 100 bytes from the start
 	inW.Write(make([]byte, 50))
 	out.wait(150)
-	now.Store(start.Add(14 * time.Minute).UnixNano())
+	set(start.Add(14*time.Minute), 14*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: 150, of which 50 from +2 min
-	now.Store(start.Add(16 * time.Minute).UnixNano())
+	set(start.Add(16*time.Minute), 16*time.Minute)
 	ticks <- time.Now() // the daemon is back; the batch from the start is a bucket old
 	inW.Close()
 	if c := <-code; c != 0 {
@@ -728,12 +725,9 @@ func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
 		reports = append(reports, r)
 		return `{"t":"counted"}`
 	})
-	var now atomic.Int64
 	start := time.Unix(1_800_000_000, 0)
-	now.Store(start.UnixNano())
-	oldNow := trafficNow
-	t.Cleanup(func() { trafficNow = oldNow })
-	trafficNow = func() time.Time { return time.Unix(0, now.Load()) }
+	set := testClock(t)
+	set(start, 0)
 	ticks := make(chan time.Time)
 	setTrafficHooks(t, ticks, nil)
 	port := echoPort(t)
@@ -749,7 +743,7 @@ func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
 	out.wait(100)
-	now.Store(start.Add(traffic.Span + time.Minute).UnixNano())
+	set(start.Add(traffic.Span+time.Minute), traffic.Span+time.Minute)
 	ticks <- time.Now() // the first report comes a bucket late
 	ticks <- time.Now() // taken only once the late report has finished
 	inW.Write(make([]byte, 50))
@@ -772,7 +766,161 @@ func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
 // The daemon buckets bytes by the wall clock, so the reporter ages them by the wall clock too. A time with a monotonic
 // reading would measure elapsed time instead, which on Linux stops while the machine sleeps and ignores clock jumps.
 func TestTheReportClockIsTheWallClock(t *testing.T) {
-	if s := trafficNow().String(); strings.Contains(s, " m=") {
+	if s := trafficNow().wall.String(); strings.Contains(s, " m=") {
 		t.Fatalf("trafficNow() = %s carries a monotonic reading", s)
+	}
+}
+
+// testClock makes the report clock the test's: set moves its wall and monotonic readings independently.
+func testClock(t *testing.T) (set func(wall time.Time, mono time.Duration)) {
+	t.Helper()
+	var mu sync.Mutex
+	var cur clockReading
+	old := trafficNow
+	t.Cleanup(func() { trafficNow = old })
+	trafficNow = func() clockReading {
+		mu.Lock()
+		defer mu.Unlock()
+		return cur
+	}
+	return func(wall time.Time, mono time.Duration) {
+		mu.Lock()
+		cur = clockReading{wall: wall, mono: mono}
+		mu.Unlock()
+	}
+}
+
+// After the wall clock is set back, pending bytes cannot be placed in a bucket: they are dropped, never sent, and
+// bytes that move after that are counted as usual, through a refused report and its retry.
+func TestPipeDropsBytesPendingWhenTheWallClockGoesBack(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	var mu sync.Mutex
+	var reports []daemon.TrafficReport
+	var counted []uint64
+	fakeDaemonFunc(t, b, func(line []byte) string {
+		var r daemon.TrafficReport
+		json.Unmarshal(line, &r)
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, r)
+		if len(reports) == 2 {
+			return `{"error":"unknown op \"traffic.report\""}`
+		}
+		counted = append(counted, r.In)
+		return `{"t":"counted"}`
+	})
+	noon := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	set := testClock(t)
+	set(noon, 0)
+	ticks := make(chan time.Time)
+	reported := make(chan error, 8)
+	setTrafficHooks(t, ticks, func(err error) { reported <- err })
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	in, inW := io.Pipe()
+	defer inW.Close()
+	Stdin = in
+	defer func() { Stdin = os.Stdin }()
+	out := newSignalWriter()
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
+	inW.Write(make([]byte, 100))
+	out.wait(100)
+	set(noon.Add(2*time.Minute), 2*time.Minute)
+	ticks <- time.Now()
+	if err := <-reported; err != nil {
+		t.Fatalf("first report: %v", err)
+	}
+	// The wall clock goes back to 11:58 a minute later; 50 bytes cross at 11:59.
+	inW.Write(make([]byte, 50))
+	out.wait(150)
+	set(noon.Add(-time.Minute), 4*time.Minute)
+	ticks <- time.Now()
+	ticks <- time.Now() // taken once the report above returned
+	inW.Write(make([]byte, 30))
+	out.wait(180)
+	set(noon.Add(time.Minute), 6*time.Minute)
+	ticks <- time.Now()
+	if err := <-reported; err == nil {
+		t.Fatal("the second report was not refused")
+	}
+	set(noon.Add(13*time.Minute), 18*time.Minute)
+	ticks <- time.Now()
+	if err := <-reported; err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	inW.Close()
+	if c := <-code; c != 0 {
+		t.Fatalf("pipe exit %d, stderr %q", c, errOut.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if fmt.Sprint(counted) != "[100 30]" {
+		t.Fatalf("counted reports carried in %v (all reports %+v); want 100, then the 30 bytes after the clock went back, never the 50 pending across it", counted, reports)
+	}
+}
+
+// The end of a session runs in two phases on one deadline: it waits for the periodic report in flight, then sends
+// the last report, and when the deadline passes while the daemon holds that last answer, the pipe ends.
+func TestPipeShutdownWaitsForThePeriodicReportThenEndsTheLastOneOnTheSameDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := founderAndJoiner(t, ctx, rs)
+	lines := make(chan []byte, 4)
+	answers := make(chan string, 4)
+	fakeDaemonFunc(t, b, func(line []byte) string {
+		lines <- line
+		return <-answers
+	})
+	t.Cleanup(func() { answers <- "" })
+	ticks := make(chan time.Time)
+	setTrafficHooks(t, ticks, nil)
+	shutdown, endShutdown := context.WithCancel(context.Background())
+	began := make(chan struct{}, 4)
+	oldShutdown := trafficShutdown
+	t.Cleanup(func() { trafficShutdown = oldShutdown })
+	trafficShutdown = func() (context.Context, context.CancelFunc) {
+		began <- struct{}{}
+		return shutdown, func() {}
+	}
+	port := echoPort(t)
+
+	t.Setenv("PEN_HOME", b.Dir)
+	in, inW := io.Pipe()
+	defer inW.Close()
+	Stdin = in
+	defer func() { Stdin = os.Stdin }()
+	out := newSignalWriter()
+	var errOut bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
+	inW.Write(make([]byte, 100))
+	out.wait(100)
+	ticks <- time.Now()
+	<-lines // the periodic report, held
+	inW.Write(make([]byte, 50))
+	out.wait(150)
+	inW.Close()
+	<-began // the end of the session has begun while the periodic report is still held
+	answers <- `{"t":"counted"}`
+	var last daemon.TrafficReport
+	json.Unmarshal(<-lines, &last) // the last report, held
+	endShutdown()
+	if c := <-code; c != 0 || errOut.Len() != 0 {
+		t.Fatalf("pipe exit %d, stderr %q; want 0 and nothing", c, errOut.String())
+	}
+	if last.In != 50 || last.Out != 50 {
+		t.Fatalf("last report %+v, want the 50 bytes each way after the periodic one", last)
+	}
+	if len(began) != 0 {
+		t.Fatal("the end of the session took more than one shutdown deadline")
 	}
 }
