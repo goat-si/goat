@@ -26,6 +26,7 @@ import * as Deferred from "effect/Deferred";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -52,6 +53,8 @@ import {
   resolveLostThreadLaunches,
 } from "./remoteDispatchRecovery.ts";
 import { recoverUncertainTasks as recoverUncertainTaskDispatches } from "./remoteTaskRecovery.ts";
+import { type DismissSelector, dismissRow, selectDismissable } from "./remoteDispatchDismiss.ts";
+import { makeDeleteClaims } from "./remoteDispatchDeleteClaims.ts";
 import {
   REPORTING_NOTE,
   frameLiteral,
@@ -142,6 +145,10 @@ export class RemoteDispatchCoordinator extends Context.Service<
       threadId: string,
     ) => Effect.Effect<boolean, RemoteDispatchError>;
     readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
+    /** Stops following dismissable thread dispatches without contacting their host. */
+    readonly dismiss: (
+      selector: DismissSelector,
+    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
     readonly claimDelete: (input: {
       readonly originThreadId: ThreadId;
       readonly host: string;
@@ -1094,53 +1101,9 @@ const make = Effect.gen(function* () {
     if (requested._tag === "Failure") return yield* Effect.fail(requested.failure);
     return requested.success;
   });
-  // Typed here because relay calls it and drain reaches relay, which would make it circular.
-  const claimDelete = Effect.fn("RemoteDispatchCoordinator.claimDelete")(function* (input: {
-    readonly originThreadId: ThreadId;
-    readonly host: string;
-    readonly remoteThreadId: string;
-    readonly requestKey: string;
-  }) {
-    const found = yield* rows(sql`SELECT * FROM remote_dispatches
-      WHERE kind = 'thread' AND origin_thread_id = ${input.originThreadId}
-        AND host = ${input.host} AND remote_thread_id = ${input.remoteThreadId}
-      ORDER BY updated_at DESC LIMIT 1`);
-    const first = found[0];
-    if (first === undefined) return { _tag: "missing" as const };
-    return yield* gate(locks, first.correlation_id, 1).withPermits(1)(
-      Effect.gen(function* () {
-        const at = yield* now;
-        const claimed = yield* db(sql<{ readonly read_key: string }>`UPDATE remote_dispatches
-          SET delete_requested_at = ${at}, delete_request_key = ${input.requestKey}, updated_at = ${at}
-          WHERE correlation_id = ${first.correlation_id}
-            AND state IN ('idle','settled','cancelled') AND reports_supported = 1
-            AND (delete_requested_at IS NULL OR delete_request_key = ${input.requestKey})
-          RETURNING read_key`);
-        const row = claimed[0];
-        if (row !== undefined)
-          return {
-            _tag: "claimed" as const,
-            correlationId: first.correlation_id,
-            readKey: row.read_key,
-          };
-        const current = yield* load(first.correlation_id);
-        if (current === null) return { _tag: "missing" as const };
-        if (current.reports_supported !== 1) return { _tag: "reports" as const };
-        if (current.delete_request_key != null && current.delete_request_key !== input.requestKey)
-          return { _tag: "other_key" as const };
-        return { _tag: "state" as const, state: current.state };
-      }),
-    );
-  });
-  const clearDelete = Effect.fn("RemoteDispatchCoordinator.clearDelete")(function* (
-    correlationId: string,
-    requestKey: string,
-  ) {
-    yield* gate(locks, correlationId, 1).withPermits(1)(
-      db(sql`UPDATE remote_dispatches
-        SET delete_requested_at = NULL, delete_request_key = NULL, updated_at = ${yield* now}
-        WHERE correlation_id = ${correlationId} AND delete_request_key = ${requestKey}`),
-    );
+  const { claimDelete, clearDelete } = makeDeleteClaims({
+    sql,
+    withLock: (id, effect) => gate(locks, id, 1).withPermits(1)(effect),
   });
   const resume: RemoteDispatchCoordinator["Service"]["resume"] = Effect.fn(
     "RemoteDispatchCoordinator.resume",
@@ -1164,6 +1127,29 @@ const make = Effect.gen(function* () {
       );
       if (resumed.length > 0) yield* start(r.correlation_id);
     }
+  });
+  const dismiss = Effect.fn("RemoteDispatchCoordinator.dismiss")(function* (
+    selector: DismissSelector,
+  ) {
+    const dismissed: Array<RemoteDispatchRecord> = [];
+    for (const r of yield* rows(selectDismissable(sql, selector))) {
+      const id = r.correlation_id;
+      // The drain is detached under the lock and interrupted outside it, so nothing waits on the
+      // lock for an interruption, and a drain a later send starts has another owner.
+      const drain = yield* gate(locks, id, 1).withPermits(1)(
+        Effect.gen(function* () {
+          const changed = yield* rows(dismissRow(sql, id, yield* now));
+          const row = changed[0];
+          if (row === undefined) return Option.none();
+          owners.delete(id);
+          dismissed.push(publicRow(row));
+          return yield* FiberMap.get(drains, id);
+        }),
+      );
+      resolveRetryAt.delete(id);
+      if (Option.isSome(drain)) yield* Fiber.interrupt(drain.value);
+    }
+    return dismissed;
   });
   const recoverUncertainTasks = taskEffect(recoverUncertainTaskDispatches());
   // Keep recovery synchronous on ordinary starts, without parking acquisition for held copies.
@@ -1212,6 +1198,7 @@ const make = Effect.gen(function* () {
     launch,
     cancel,
     resume,
+    dismiss,
     claimDelete,
     clearDelete,
     resolveLostLaunches,
