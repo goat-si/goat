@@ -1087,7 +1087,18 @@ const make = Effect.gen(function* () {
     respondHandoff: provided(respondHandoff),
     awaitDone: (syncId) =>
       find(syncId).pipe(
-        Effect.tap((operation) => Deferred.await(operation.allFinished)),
+        // A later cancel can reopen finished hosts; it is set in the step that reopens them.
+        Effect.tap((operation) =>
+          Deferred.await(operation.allFinished).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                operation.cancelling === undefined
+                  ? Effect.void
+                  : Fiber.await(operation.cancelling),
+              ),
+            ),
+          ),
+        ),
         Effect.map(view),
       ),
     resumeApprovals: approvedSyncs.resume,

@@ -520,3 +520,46 @@ it.effect("regression S6-1: a remote install Home lost track of can still be can
     }).pipe(Effect.provide(layer));
   }),
 );
+
+it.effect(
+  "regression S7-1: awaitDone waits for a retried cancel of a host Home lost track of",
+  () =>
+    Effect.gen(function* () {
+      const cancelling = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { layer } = harness({
+        answer: (call) =>
+          call.tool === "goat_provider_sync"
+            ? Effect.succeed({ kind: "started", sync: remoteSync(false, { phase: "installing" }) })
+            : call.tool === "goat_provider_sync_status"
+              ? Effect.fail(dropped)
+              : Deferred.succeed(cancelling, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as(remoteSync(true, { phase: "cancelled" })),
+                ),
+      });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", hosts: ["box"], login: false },
+          direct(Effect.void),
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        yield* TestClock.adjust("1 minute");
+        yield* sync.awaitDone(started.sync.syncId);
+        const stopping = yield* sync
+          .cancel({ syncId: started.sync.syncId }, { kind: "client", sessionId: "person" as never })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(cancelling);
+        const waiting = yield* sync
+          .awaitDone(started.sync.syncId)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(stopping);
+        expect(yield* Fiber.join(waiting)).toMatchObject({
+          done: true,
+          hosts: [{ host: "box", phase: "cancelled" }],
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+);
