@@ -74,7 +74,7 @@ export const withProbedCli = <
  * Why a pinned install did not take: the CLI reports another version, or none GOAT can read.
  * Undefined when it matches, when nothing was pinned, or when the installer only installs latest.
  */
-export const pinnedMismatch = (
+const pinnedMismatch = (
   name: string,
   requested: string | null,
   found: string | null,
