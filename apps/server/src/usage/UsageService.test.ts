@@ -1337,11 +1337,36 @@ describe("UsageService", () => {
   it.live("discovers Pi history in its default home and directory overrides", () =>
     Effect.gen(function* () {
       const { home, settings } = yield* setup;
-      for (const [agentDir, sessionDir, relativeDir] of [
-        [undefined, undefined, ".pi/agent/sessions"],
-        ["~/custom-pi", undefined, "custom-pi/sessions"],
-        ["~/ignored-pi", "~/custom-sessions", "custom-sessions"],
-        ["~/ignored-pi", NodePath.join(home, "absolute-sessions"), "absolute-sessions"],
+      for (const [agentDir, sessionDir, relativeDir, launchArgs, instanceHome, platform] of [
+        [undefined, undefined, ".pi/agent/sessions", undefined],
+        ["~/custom-pi", undefined, "custom-pi/sessions", undefined],
+        ["~/ignored-pi", "~/custom-sessions", "custom-sessions", undefined],
+        ["~/ignored-pi", NodePath.join(home, "absolute-sessions"), "absolute-sessions", undefined],
+        ["~/ignored-pi", undefined, "launch-sessions", "--session-dir ~/launch-sessions"],
+        [
+          "~/ignored-pi",
+          undefined,
+          "instance-home /launch-sessions",
+          "--session-dir ~/launch-sessions",
+          "instance-home ",
+        ],
+        [
+          "~/ignored-pi",
+          undefined,
+          "windows-profile/launch-sessions",
+          "--session-dir ~/launch-sessions",
+          "windows-profile",
+          "win32",
+        ],
+        [undefined, undefined, "pi-home/.pi/agent/sessions", undefined, "pi-home"],
+        ["~/custom-pi", undefined, "pi-agent-home/custom-pi/sessions", undefined, "pi-agent-home"],
+        [
+          "~/ignored-pi",
+          "~/custom-sessions",
+          "pi-session-home/custom-sessions",
+          undefined,
+          "pi-session-home",
+        ],
       ] as const) {
         const dir = NodePath.join(home, relativeDir);
         yield* Effect.promise(async () => {
@@ -1380,7 +1405,30 @@ describe("UsageService", () => {
             layerService({
               prefix: "usage-pi-" + relativeDir.replaceAll("/", "-"),
               home,
-              settings,
+              ...(platform === undefined ? {} : { platform }),
+              settings:
+                launchArgs === undefined && instanceHome === undefined
+                  ? settings
+                  : {
+                      ...settings,
+                      providerInstances: {
+                        ...settings.providerInstances,
+                        [ProviderInstanceId.make("pi")]: {
+                          driver: ProviderDriverKind.make("pi"),
+                          config: launchArgs === undefined ? {} : { launchArgs },
+                          environment:
+                            instanceHome === undefined
+                              ? []
+                              : [
+                                  {
+                                    name: platform === "win32" ? "USERPROFILE" : "HOME",
+                                    value: NodePath.join(home, instanceHome),
+                                    sensitive: false,
+                                  },
+                                ],
+                        },
+                      },
+                    },
               environment: {
                 PI_CODING_AGENT_DIR: agentDir,
                 PI_CODING_AGENT_SESSION_DIR: sessionDir,
