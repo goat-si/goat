@@ -99,7 +99,7 @@ it.effect("an answer from the host ends the outage", () =>
 );
 
 it.effect(
-  "a thread unreachable for 24 hours is lost once, its origin told once, and no longer called",
+  "a thread unreachable for 24 hours is lost once, its origin told once, and only probed afterwards",
   () =>
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -130,7 +130,11 @@ it.effect(
         assert.equal(row.endReason, "host_unreachable");
         assert.equal(row.lastError, `box has not answered since ${iso(sinceMs)}.`);
         assert.equal(row.hostUnavailableSince, iso(sinceMs));
-        assert.equal(yield* Queue.size(f.calls), 0);
+        // The drain stopped; what still reaches the host is the read-only probe that returns at once.
+        for (const later of yield* Queue.clear(f.calls)) {
+          assert.equal(later.call.arguments.timeoutMs, 0);
+          assert.equal(later.call.writes, false);
+        }
         assert.equal(yield* Queue.size(f.notifications), 0);
       }).pipe(Effect.provide(f.layer), steadyRandom);
     }).pipe(Effect.provide(database)),
