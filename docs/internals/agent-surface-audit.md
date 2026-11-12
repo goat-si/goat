@@ -232,7 +232,7 @@ The operator CLI has 62 listed commands for server operations. Registry commands
 
 - 0 of 83 commands define usage examples, so `--help` never shows a worked call.
 - 11 of 47 listed leaf commands offer `--json`: `goat auth pairing create`, `goat auth pairing list`, `goat auth session issue`, `goat auth session list`, `goat auth client create`, `goat auth client list`, `goat provider diagnose`, `goat thread list`, `goat thread start`, `goat thread send`, `goat thread show`.
-- 22 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call arguments`, `goat call arguments`, `goat describe arguments`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, and 59 more.
+- 22 commands have no description, all of them unlisted internals. Undescribed parameters: `goat acp-mcp-call arguments`, `goat call arguments`, `goat describe arguments`, `goat imessage enable --allow`, `goat imessage enable --own`, `goat imessage enable --full-access`, and 61 more.
 - `goat auth client revoke` reuses the session revoke command under a second parent, so its help reads "Revoke an active session." (apps/server/src/cli/auth.ts).
 - Server flags such as `--dev-url` repeat on subcommands that start no server, such as `goat auth pairing create`.
 

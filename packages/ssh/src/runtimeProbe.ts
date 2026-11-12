@@ -306,7 +306,22 @@ ${
   reportReplaceTarget
     ? `# The recorded runtime process, alive and this user's: a forced update names it to a person. Only
 # the status probe asks, and only for a runtime that is not the requested one.
+replace_trusted() {
+  [ -e "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -prune -user "$(id -u)" ! -perm -0020 ! -perm -0002 2>/dev/null)" ] || return 1
+  # A + after the mode marks an access list, which could let another user write; with extended
+  # attributes too, macOS shows @ instead, and ls -le lists the access list's entries.
+  replace_mode="$(LC_ALL=C ls -ld "$1" 2>/dev/null)" || return 1
+  case "$replace_mode" in
+    ??????????+*|"") return 1 ;;
+    ??????????@*) replace_mode="$(LC_ALL=C ls -lde "$1" 2>/dev/null)" || return 1
+      printf '%s\\n' "$replace_mode" | awk 'END { exit NR > 1 }' || return 1 ;;
+  esac
+}
 replace_target() {
+  # Records another user could change prove nothing about the process they name.
+  for replace_record in "$HOME/.goat/ssh-launch" "$state" "$state/pid" "$state/port"; do
+    replace_trusted "$replace_record" || return 0
+  done
   fact_slurp "$state/pid" || return 0; replace_pid="$FACT_TEXT"
   fact_slurp "$state/port" || return 0; replace_port="$FACT_TEXT"
   valid_positive "$replace_pid" && valid_port "$replace_port" && kill -0 "$replace_pid" 2>/dev/null || return 0
@@ -314,6 +329,23 @@ replace_target() {
   [ "$#" = 1 ] && [ "$1" = "$(id -u)" ] || return 0
   set -- $(LC_ALL=C TZ=UTC ps -o lstart= -p "$replace_pid" 2>/dev/null)
   [ "$#" = 5 ] || return 0
+  # Only a process GOAT can show it started: the start time (and, on Linux, the start tick) it
+  # recorded at launch and the exact launch command it recorded must both match (a Node entry may
+  # run behind a wrapper, so it ends the command).
+  replace_start="$*"
+  replace_trusted "$state/started" && fact_file_is "$state/started" "$replace_start" || return 0
+  if [ -r "/proc/$replace_pid/stat" ]; then
+    replace_ticks="$(sed 's/^.*) //' "/proc/$replace_pid/stat" 2>/dev/null | awk '{ print $20 }')"
+  else replace_ticks=-; fi
+  replace_trusted "$state/started.ticks" && fact_file_is "$state/started.ticks" "$replace_ticks" || return 0
+  replace_trusted "$state/managed" && replace_trusted "$state/identity" || return 0
+  fact_file_is "$state/managed" managed && fact_slurp "$state/identity" && [ -n "$FACT_TEXT" ] || return 0
+  replace_command="$(ps -o command= -p "$replace_pid" 2>/dev/null)" || return 0
+  case "$FACT_TEXT" in
+    "$HOME/.goat/runtime/goat/versions/"*) [ "$replace_command" = "$FACT_TEXT" ] || return 0 ;;
+    *) case "$replace_command" in *" $FACT_TEXT") ;; *) return 0 ;; esac ;;
+  esac
+  set -- $replace_start
   case "$*" in
     *[!A-Za-z0-9:\\ ]*) ;;
     *) live_fields="$live_fields$(printf ',"replaceTarget":{"pid":%s,"port":%s,"startedAt":"%s"}' "$replace_pid" "$replace_port" "$*")" ;;

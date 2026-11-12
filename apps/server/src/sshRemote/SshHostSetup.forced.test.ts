@@ -52,6 +52,13 @@ it.effect("a forced update approval names the runtime process it may stop", () =
     expect(approval?.reason).toContain("PID 43406");
     expect(approval?.reason).toContain("Tue Nov 11 08:01:02 2026 UTC");
     expect(approval?.reason).toContain("port 3773");
+    // The person reads first what happens if the new version does not start.
+    expect(approval?.reason).toContain("starts the stopped version again when it can");
+    expect(approval?.reason).toContain("no runtime runs on box until you update again");
+    // Children are never signalled; one still running is named for the person.
+    expect(approval?.reason).toContain(
+      "Its child processes are not signalled: any still running are named in that host's GOAT log for you to check.",
+    );
     expect(approval?.args).toMatchObject({ step: "runtime_update", replace: replaceTarget });
     expect(f.updates).toEqual([]);
   }),

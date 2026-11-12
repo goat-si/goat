@@ -46,7 +46,7 @@ export const runtimeUpdateApproval = (host: string, replace: SshForceReplaceTarg
       }
     : {
         title: `Update runtime on ${host}, stopping PID ${replace.pid} if needed?`,
-        reason: `Running agent work gets up to a minute to finish, then continues on the new version. If the running runtime cannot hand over, GOAT stops PID ${replace.pid} (started ${replace.startedAt} UTC, port ${replace.port}) on ${host} and its child processes: SIGTERM, then SIGKILL after that minute.`,
+        reason: `Running agent work gets up to a minute to finish, then continues on the new version. If the running runtime cannot hand over, GOAT stops PID ${replace.pid} (started ${replace.startedAt} UTC, port ${replace.port}) on ${host}: SIGTERM, then SIGKILL after that minute. Its child processes are not signalled: any still running are named in that host's GOAT log for you to check. If the new version then fails to start, GOAT starts the stopped version again when it can; when it cannot, no runtime runs on ${host} until you update again.`,
       };
 
 /** Why an approved forced update must not run: the named process is no longer the live one. */

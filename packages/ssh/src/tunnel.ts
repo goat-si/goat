@@ -870,7 +870,10 @@ REMOTE_MANAGED=""
 # this check would leave the host with nothing to attach to.
 ensure_listener_path
 if ! listener_probe_available; then
-  if [ "$NEEDS_OWNED_UPGRADE" = 1 ] || [ "$LIVE_STATUS" = live ]; then
+  if valid_positive "\${FORCE_PID:-}"; then
+    printf 'GOAT did not stop PID %s for an approved forced update: this host has neither /proc nor lsof to check its listener.\\n' "$FORCE_PID" >>"$LOG_FILE" 2>/dev/null || :
+    printf 'GOAT did not stop PID %s on the remote host: this host needs /proc or lsof to check its listener. It was left running; check it on the host and stop it yourself (kill %s), then update again.\\n' "$FORCE_PID" "$FORCE_PID" >&2
+  elif [ "$NEEDS_OWNED_UPGRADE" = 1 ] || [ "$LIVE_STATUS" = live ]; then
     printf 'Cannot verify the launched GOAT listener: this host needs /proc or lsof. The existing server was left running.\\n' >&2
   else
     printf 'Cannot verify the launched GOAT listener: this host needs /proc or lsof.\\n' >&2
@@ -934,24 +937,28 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   drain_automatic=0
   if [ "$DRAIN_AUTOMATIC" = 1 ] && [ "$REPLACEMENT_REASON" = older ]; then drain_automatic=1; fi
   drain_result="$(GOAT_RUNTIME_DRAIN_AUTOMATIC="$drain_automatic" "$RUNNER_CANDIDATE_FILE.pin" __ssh-helper drain --port "$UPGRADE_PORT" --instance-id "$UPGRADE_INSTANCE" --target-version "$TARGET_VERSION" --grace-seconds "$DRAIN_GRACE_SECONDS" $drain_force --token-file "$DEFAULT_SERVER_HOME/userdata/runtime-control.token" 2>/dev/null || true)"
+  DRAIN_FORCED=0; drain_old_stopped=
   case "$drain_result" in
     drained) ;;
     cancelled) rm -f "$STATE_DIR/draining" "$PREVIOUS_RUNNER"; DRAIN_UNCERTAIN=0; emit_pending busy ;;
     *)
       # A runtime that does not answer its drain is stopped only when a person approved this process.
-      if forced_target_recorded "$UPGRADE_PID" "$UPGRADE_PORT"; then forced_stop_runtime
+      if forced_target_recorded "$UPGRADE_PID" "$UPGRADE_PORT"; then forced_stop_runtime; DRAIN_FORCED=1; drain_old_stopped=--old-stopped
       else DRAIN_UNCERTAIN=1; rm -f "$PREVIOUS_RUNNER"; emit_pending unknown; fi ;;
   esac
   LEGACY_TERMINATED=1
-  rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
-  publish_selected_runner
+  # A forced stop already did both; repeating them on a read-only host would end the script early.
+  if [ "$DRAIN_FORCED" != 1 ]; then
+    rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
+    publish_selected_runner
+  fi
   if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then
     SPAWN_IDENTITY="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
   else
     SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
-  SUPERVISE_RESULT="$STATE_DIR/replacement.result.$$"
-  rm -f "$SUPERVISE_RESULT"
+  SUPERVISE_RESULT="$STATE_DIR/replacement.result.$"
+  rm -f "$SUPERVISE_RESULT" 2>/dev/null || :; supervise_stale=0; [ ! -e "$SUPERVISE_RESULT" ] || supervise_stale=1
   # Detached, so a dropped SSH session cannot leave the host without a server.
   trap '' HUP
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
@@ -966,12 +973,12 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
     # A running replacement may hold server.log; then the supervisor log is kept beside it.
     if cat "$SUPERVISE_LOG" >>"$LOG_FILE" 2>/dev/null; then rm -f "$SUPERVISE_LOG"; fi
   else
-    nohup "$RUNNER_FILE" __ssh-helper supervise --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --previous-runner "$PREVIOUS_RUNNER" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$SUPERVISE_RESULT" >/dev/null 2>>"$LOG_FILE" </dev/null &
+    nohup "$RUNNER_FILE" __ssh-helper supervise $drain_old_stopped --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --previous-runner "$PREVIOUS_RUNNER" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$SUPERVISE_RESULT" >/dev/null 2>>"$LOG_FILE" </dev/null &
     wait "$!" || true
   fi
-  supervise_status=failed; supervise_pid=0; supervise_version=
-  if [ -f "$SUPERVISE_RESULT" ]; then read -r supervise_status supervise_pid supervise_version <"$SUPERVISE_RESULT" || true; fi
-  rm -f "$SUPERVISE_RESULT"
+  supervise_status=absent; supervise_pid=0; supervise_version=
+  if [ "$supervise_stale" = 0 ] && [ -s "$SUPERVISE_RESULT" ]; then read -r supervise_status supervise_pid supervise_version <"$SUPERVISE_RESULT" || true; fi
+  rm -f "$SUPERVISE_RESULT" 2>/dev/null || :
   case "$supervise_status" in
     replaced)
       REMOTE_PID="$supervise_pid"; REMOTE_PORT="$UPGRADE_PORT"; REMOTE_MANAGED=managed
@@ -979,7 +986,7 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
     rolled-back)
       if [ "$LIVE_COMPATIBLE" != 1 ]; then
         # The restored server is a new instance, so the fence for the drained one is done.
-        rm -f "$STATE_DIR/draining"
+        rm -f "$STATE_DIR/draining" 2>/dev/null || printf 'GOAT could not remove %s; the next update treats the old drain as unconfirmed.\\n' "$STATE_DIR/draining" >>"$LOG_FILE" 2>/dev/null || :
         printf 'GOAT %s did not start on the remote host; GOAT %s was restored and is running, but this app cannot attach to it. See %s.\n' "$TARGET_VERSION" "$supervise_version" "$LOG_FILE" >&2; exit 1
       fi
       printf 'GOAT %s did not start on the remote host; GOAT %s was restored.\n' "$TARGET_VERSION" "$supervise_version" >&2
@@ -987,10 +994,15 @@ ${REMOTE_FORCED_STOP_SCRIPT}if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
       SELECTED_VERSION="$supervise_version" ;;
     old-alive)
       printf 'The drained GOAT %s server on the remote host did not exit, so it was left running and not replaced. Reconnect after it stops; see %s.\\n' "$UPGRADE_VERSION" "$LOG_FILE" >&2; exit 1 ;;
+    stuck)
+      printf 'GOAT %s, started as PID %s on the remote host, did not become ready and did not exit after SIGKILL; it was left running and nothing more was started. Check it on the host. See %s.\\n' "$supervise_version" "$supervise_pid" "$LOG_FILE" >&2; exit 1 ;;
     *)
+      if [ "$supervise_status" = absent ] && [ "$DRAIN_FORCED" = 1 ]; then
+        printf 'GOAT stopped PID %s on the remote host for the approved forced update, but the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now. Check the host and %s; if nothing runs, update again (no approval is needed).\\n' "$UPGRADE_PID" "$LOG_FILE" >&2; exit 1
+      fi
       printf 'Remote runtime replacement failed; see %s.\n' "$LOG_FILE" >&2; exit 1 ;;
   esac
-  rm -f "$STATE_DIR/draining"
+  rm -f "$STATE_DIR/draining" 2>/dev/null || printf 'GOAT could not remove %s; the next update treats the old drain as unconfirmed.\\n' "$STATE_DIR/draining" >>"$LOG_FILE" 2>/dev/null || :
 elif [ "$LIVE_STATUS" = live ]; then
   if [ "$LIVE_COMPATIBLE" != 1 ]; then
     printf 'Live GOAT compatibility changed; reconnect.\n' >&2; exit 1
@@ -1009,8 +1021,9 @@ else
       fi
     done
   fi
-  publish_selected_runner
+  [ -n "\${FORCED_STOPPED_PID:-}" ] || publish_selected_runner
 fi
+[ -z "\${FORCED_STOPPED_PID:-}" ] || forced_supervise_start
 # A runtime older than this host's database exits before ready on every start. The marker
 # names that runtime, so later launches report it without starting it again, until another
 # runtime is selected or a newer server writes the database.
@@ -1065,6 +1078,7 @@ while [ -z "$REMOTE_PORT" ]; do
   printf '%s\\n' "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$IDENTITY_NEXT"
   mv "$IDENTITY_NEXT" "$STATE_DIR/identity"
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
+  forced_record_start "$REMOTE_PID"
   printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
   printf 'managed\\n' >"$MANAGED_FILE"
   launch_caps_begin

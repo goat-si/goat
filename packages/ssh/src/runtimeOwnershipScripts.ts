@@ -453,11 +453,15 @@ FORCE_STOP=0
 # Selects only the approved process, and only while the launch records still name it. The
 # launch re-checks liveness, owner, start time and listener under the lock before any signal.
 forced_target_recorded() {
-  [ "$DRAIN_FORCE" = 1 ] && [ "$OWNING_LAUNCH" = 1 ] && valid_positive "$FORCE_PID" &&
-    [ "$1" = "$FORCE_PID" ] && [ "$2" = "$FORCE_PORT" ] &&
-    fact_file_is "$PID_FILE" "$FORCE_PID" && fact_file_is "$PORT_FILE" "$FORCE_PORT"
+  [ "$DRAIN_FORCE" = 1 ] && [ "$OWNING_LAUNCH" = 1 ] && valid_positive "$FORCE_PID" || return 1
+  [ "$1" = "$FORCE_PID" ] && [ "$2" = "$FORCE_PORT" ] &&
+    fact_file_is "$PID_FILE" "$FORCE_PID" && fact_file_is "$PORT_FILE" "$FORCE_PORT" && return 0
+  printf 'GOAT did not stop PID %s for an approved forced update: the launch records no longer name it on port %s.\\n' "$FORCE_PID" "$FORCE_PORT" >>"\${LOG_FILE:-/dev/null}" 2>/dev/null || :
+  return 1
 }
 select_forced_stop() {
+  # A runtime that answered its protocol can be started again if the new one does not start.
+  FORCED_LIVE_VERSION=; [ "$LIVE_STATUS" != live ] || FORCED_LIVE_VERSION="$LIVE_VERSION"
   FORCE_STOP=1; LIVE_STATUS=forced; LIVE_PID="$FORCE_PID"; LIVE_PORT="$FORCE_PORT"
   # The approved stop ends the instance an unconfirmed drain fenced; the stop removes that fence.
   LIVE_COMPATIBLE=0; NEEDS_OWNED_UPGRADE=0; DEFER_NO_DRAIN=0; DRAIN_UNCERTAIN=0
@@ -574,6 +578,8 @@ if ! cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_NEXT"; then
   printf 'Candidate runner changed during validation; reconnect.\n' >&2; exit 1
 fi
 publish_selected_runner() {
+  # A forced stop publishes before its first signal; the launch's later publication is that one.
+  [ "\${FORCED_PUBLISHED:-0}" != 1 ] || return 0
   [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || {
     printf 'Replacement lock ownership changed; runner was preserved.\\n' >&2; exit 1;
   }
